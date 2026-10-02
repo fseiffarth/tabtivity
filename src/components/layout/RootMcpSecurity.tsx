@@ -5,6 +5,8 @@ import { useT } from "../../lib/i18n";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
+import { useSettingsStore } from "../../stores/settings";
+import { MOBILE_HOST_KEY } from "../../lib/brand";
 import { mailAccountsList } from "../../lib/mail";
 import type { MailAccount } from "../../types/mail";
 import { UntestedTag } from "../common/UntestedTag";
@@ -97,6 +99,8 @@ export function RootMcpSecurity() {
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const { confirmAction, dialogs } = useDialogs();
   const rootTabs = useTabsStore((s) => s.tabsByScope.root);
+  // Only Mobile starts tabs with no window open, so only then is the note true.
+  const mobileEnabled = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]?.enabled ?? false);
   const refresh = async () => {
     try { setStatus(await invoke<Status>("root_mcp_security_status")); setError(null); }
     catch (e) { setError(String(e)); }
@@ -143,7 +147,7 @@ export function RootMcpSecurity() {
       control={<button className="settings-btn" disabled={busy} onClick={() => void refresh()}>{t("mcpSecurity.refresh")}</button>} />
     {/* Tabs the Mobile host started with no window hold its tokens, not this
         window's (`docs/headless_mcp_plan.md`), so they are not in this list. */}
-    <p className="settings-help">{t("mcpSecurity.headless")} <UntestedTag id="mcpSecurity.headless" /></p>
+    {mobileEnabled && <p className="settings-help">{t("mcpSecurity.headless")} <UntestedTag id="mcpSecurity.headless" /></p>}
     {error && <SettingsCard><p role="alert">{stripInvisible(error)}</p></SettingsCard>}
     {status?.sessions.length === 0 && <SettingsCard>{t("mcpSecurity.empty")}</SettingsCard>}
     {status?.sessions.map((s) => <SessionCard key={`${s.id}:${JSON.stringify(s.access)}`} session={s} update={update} revoke={revoke} busy={busy} accounts={accounts} />)}

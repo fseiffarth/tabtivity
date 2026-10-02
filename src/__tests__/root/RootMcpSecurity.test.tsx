@@ -119,3 +119,21 @@ it("shows backend refusals without interpreting markup", async () => {
   expect((await screen.findByRole("alert")).textContent).toContain("<img src=x> denied");
   expect(document.querySelector("img")).toBeNull();
 });
+
+it("explains where headless tabs' sessions live only while Mobile is on", async () => {
+  const { useSettingsStore } = await import("../../stores/settings");
+  const { MOBILE_HOST_KEY } = await import("../../lib/brand");
+  const before = useSettingsStore.getState().settings;
+  try {
+    useSettingsStore.setState({ settings: { ...(before ?? {}), [MOBILE_HOST_KEY]: { enabled: false } } as never });
+    render(<RootMcpSecurity />);
+    await heading("Root <script> · Root agent");
+    expect(screen.queryByText(/started while no window was open/)).toBeNull();
+    cleanup();
+    useSettingsStore.setState({ settings: { ...(before ?? {}), [MOBILE_HOST_KEY]: { enabled: true } } as never });
+    render(<RootMcpSecurity />);
+    expect(await screen.findByText(/started while no window was open/)).toBeTruthy();
+  } finally {
+    useSettingsStore.setState({ settings: before });
+  }
+});
