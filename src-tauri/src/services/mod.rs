@@ -100,6 +100,9 @@ pub mod hpc_mode;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Hosted plan §3.3: every registered Tauri command's class (core / client /
+// admin / off) and the test that fails when one is added without a row.
+pub mod command_class;
 // Local-model mail assistant (Group Q, #203–#208): the loopback-only /api/chat
 // helper, prompt builders and defensive JSON parsers. AI never touches the net.
 pub mod mail_ai;
