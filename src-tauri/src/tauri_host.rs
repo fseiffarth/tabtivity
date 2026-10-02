@@ -87,6 +87,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "calendar.rs",
     "crash.rs",
     "default_apps.rs",
+    "disk_usage.rs",
     "exec_trust.rs",
     "format.rs",
     "fs_watch.rs",

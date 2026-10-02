@@ -15,9 +15,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
 
 use crate::duscan::{self, DuDevice, DuScan, Tally};
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 /// Cancel flags for the scans currently in flight, keyed by the frontend's
 /// `scan_id`. An entry lives only for the duration of its scan.
@@ -42,8 +43,8 @@ struct DuProgress {
     bytes: u64,
 }
 
-fn emit(app: &AppHandle, scan_id: &str, phase: &str, path: &str, t: &Tally) {
-    let _ = app.emit(
+fn emit(ctx: &CoreCtx, scan_id: &str, phase: &str, path: &str, t: &Tally) {
+    ctx.emit(
         "disk-scan-progress",
         DuProgress {
             scan_id: scan_id.to_string(),
@@ -64,13 +65,13 @@ fn emit(app: &AppHandle, scan_id: &str, phase: &str, path: &str, t: &Tally) {
 /// project's stored directory is a local state dir, not the tree being measured.
 #[tauri::command]
 pub async fn disk_usage_scan(
-    app: AppHandle,
+    ctx: Ctx,
     scan_id: String,
     root: String,
     project_id: Option<String>,
     confirmed: Option<bool>,
-    state: State<'_, DuScanState>,
 ) -> Result<DuScan, String> {
+    let state = ctx.get::<DuScanState>();
     let remote = project_id
         .as_deref()
         .and_then(crate::services::remote::remote_target_for);
@@ -112,10 +113,10 @@ pub async fn disk_usage_scan(
             .await
             .map_err(|e| e.to_string())?
     } else {
-        let app2 = app.clone();
+        let app2 = ctx.0.clone();
         let id = scan_id.clone();
         let root = root.clone();
-        emit(&app, &scan_id, "start", &root, &Tally::default());
+        emit(&ctx, &scan_id, "start", &root, &Tally::default());
         tokio::task::spawn_blocking(move || {
             let mut on_progress = |t: &Tally, at: &std::path::Path| {
                 emit(&app2, &id, "dir", &at.to_string_lossy(), t);
@@ -138,7 +139,7 @@ pub async fn disk_usage_scan(
             errors: s.errors,
         })
         .unwrap_or_default();
-    emit(&app, &scan_id, "done", &root, &done);
+    emit(&ctx, &scan_id, "done", &root, &done);
 
     result
 }
@@ -148,7 +149,8 @@ pub async fn disk_usage_scan(
 /// `scan_id` — and for a remote scan, which is a single `du` round-trip on the host
 /// with no walk of ours to interrupt.
 #[tauri::command]
-pub fn disk_usage_cancel(scan_id: String, state: State<'_, DuScanState>) {
+pub fn disk_usage_cancel(ctx: Ctx, scan_id: String) {
+    let state = ctx.get::<DuScanState>();
     if let Ok(map) = state.lock() {
         if let Some(flag) = map.get(&scan_id) {
             flag.store(true, Ordering::Relaxed);
