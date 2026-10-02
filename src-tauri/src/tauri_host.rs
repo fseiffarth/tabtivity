@@ -103,6 +103,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "markdown.rs",
     "monitor.rs",
     "net_usage.rs",
+    "network.rs",
     "power.rs",
     "project_runtime.rs",
     "projects.rs",

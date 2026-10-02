@@ -14,9 +14,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::State;
 
 use crate::services::remote::{self, RemotePoolState};
+use crate::tauri_host::Ctx;
 
 const REMOTE_IFACES: &str = concat!("test -r /proc/net/dev || exit 42; \
 printf '__", crate::app_upper!(), "_IFACES__\\n'; cat /proc/net/dev; \
@@ -734,15 +734,16 @@ fn local_snapshot(_include_connections: bool) -> NetworkHostSnapshot {
 
 #[tauri::command]
 pub async fn network_host_snapshot(
-    pool: State<'_, RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     include_connections: bool,
 ) -> Result<NetworkHostSnapshot, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let Some(target) = remote::remote_target_for(&project_id) else {
         return Ok(local_snapshot(include_connections));
     };
     let host_label = target.spec.host.clone();
-    if !remote::is_connected(pool.inner(), &project_id).await {
+    if !remote::is_connected(pool, &project_id).await {
         return Ok(unsupported_host(
             true,
             false,
@@ -1109,13 +1110,14 @@ fn parse_ssh_link_ss(text: &str, master_pid: u32) -> Option<SshLinkSnapshot> {
 
 #[tauri::command]
 pub async fn network_ssh_link_snapshot(
-    pool: State<'_, RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
 ) -> Result<SshLinkSnapshot, String> {
+    let pool = ctx.get::<RemotePoolState>();
     if remote::remote_target_for(&project_id).is_none() {
         return Ok(local_ssh_link(&project_id));
     }
-    if !remote::is_connected(pool.inner(), &project_id).await {
+    if !remote::is_connected(pool, &project_id).await {
         return Ok(SshLinkSnapshot {
             supported: cfg!(any(target_os = "linux", target_os = "macos")),
             connected: false,
