@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import {
@@ -2185,13 +2185,27 @@ async function attachDesktopImage(projectId: string, imageId: string): Promise<D
  * `calendar` the board and month; `schedules` and `prompts` every loaded
  * project's rows. Best-effort — a slice that fails to load is the next
  * poll's problem. */
+/** Broadcast `agent-schedules-changed` to every window of this app; where the
+ * event cannot be sent, at least re-read this window's rows. */
+export async function emitSchedulesChanged(): Promise<void> {
+  try {
+    await emit("agent-schedules-changed");
+  } catch {
+    await useAgentSchedulesStore.getState().refreshLoaded();
+  }
+}
+
 async function refreshSlices(projectId: string | null | undefined, slices: string[]): Promise<DesktopResponse> {
   const jobs: Promise<unknown>[] = [];
   for (const slice of new Set(slices)) {
     if (slice === "workspace" && projectId) jobs.push(refreshWorkspaceScope(projectId));
     else if (slice === "projects") jobs.push(useProjectsStore.getState().load());
     else if (slice === "calendar") jobs.push(useCalendarStore.getState().loaded ? useCalendarStore.getState().reload() : Promise.resolve());
-    else if (slice === "schedules") jobs.push(useAgentSchedulesStore.getState().refreshLoaded());
+    // The window's own `agent-schedules-changed` event, not just a store
+    // re-read: `AgentScheduleHost` also persists the layout and ticks (a new
+    // proposal raises its badge), and popout windows refresh too
+    // (`docs/headless_mcp_plan.md`, the Mobile host's schedule notices).
+    else if (slice === "schedules") jobs.push(emitSchedulesChanged());
     else if (slice === "prompts") jobs.push(useAgentPromptsStore.getState().refreshLoaded());
   }
   await Promise.all(jobs.map((job) => job.catch(() => undefined)));
