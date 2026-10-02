@@ -67,12 +67,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
 
 use crate::paths;
 use crate::schema::projects::ProjectEntry;
 use crate::schema::session::TerminalSession;
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 use super::projects::{
     conflict_message, entry_directory, entry_is_remote, entry_mirror, find_project_conflict,
@@ -934,13 +934,13 @@ fn absolutize(path: &Path) -> PathBuf {
 
 #[tauri::command]
 pub async fn export_project(
-    app: AppHandle,
+    ctx: Ctx,
     req: ExportProjectRequest,
 ) -> Result<ExportReport, String> {
     let project_id = req.project_id.clone();
     tokio::task::spawn_blocking(move || {
         let emit = |phase: &str, done: u64, total: u64| {
-            let _ = app.emit(
+            ctx.emit(
                 PROGRESS_EVENT,
                 ExportProgress {
                     project_id: project_id.clone(),
