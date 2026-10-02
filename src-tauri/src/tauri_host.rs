@@ -101,6 +101,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "net_usage.rs",
     "power.rs",
     "project_runtime.rs",
+    "projects.rs",
     "python.rs",
     "remote.rs",
     "search.rs",

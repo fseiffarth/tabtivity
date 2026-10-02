@@ -5,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use tauri::State;
 
 use crate::paths;
 use crate::schema::project::{
@@ -15,6 +14,7 @@ use crate::schema::project::{
 use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::services::remote_sync::SyncManifestState;
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 /// Local per-project state directory for a **remote** project:
 /// `<state_dir>/remote-projects/<id>`. Mount-free remote projects keep their
@@ -2610,7 +2610,7 @@ pub fn workspace_snapshot(project_id: String) -> Result<crate::services::workspa
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn workspace_sync(
-    app: tauri::AppHandle,
+    ctx: Ctx,
     project_id: String,
     local_file: String,
     base_version: Option<u64>,
@@ -2630,8 +2630,7 @@ pub fn workspace_sync(
     };
     let outcome = crate::services::workspace::sync(&project_id, &local_file, client)?;
     if !outcome.ops.is_empty() {
-        use tauri::Emitter;
-        let _ = app.emit(
+        ctx.emit(
             WORKSPACE_PATCH_EVENT,
             serde_json::json!({ "scope": project_id, "version": outcome.version, "ops": outcome.ops }),
         );
@@ -4536,9 +4535,10 @@ pub struct ExtendProjectRemoteRequest {
 /// (empty) host later via the existing manual sync UI.
 #[tauri::command]
 pub async fn extend_project_to_remote(
+    ctx: Ctx,
     req: ExtendProjectRemoteRequest,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<ProjectEntry, String> {
+    let manifest = ctx.get::<SyncManifestState>();
     let list = read_projects_list()?;
 
     let idx = list
@@ -4607,7 +4607,7 @@ pub async fn extend_project_to_remote(
     // to push to the new one while the file tree reports green. Detach clears it too; this
     // is the belt-and-braces that also rescues a project detached by an older build, which
     // could not clear it (`remove_dir` cannot empty a non-empty directory).
-    clear_host_bound_state(&req.project_id, manifest.inner()).await;
+    clear_host_bound_state(&req.project_id, manifest).await;
 
     // Move project.json from the old (now mirror) tree into the state dir, tagging
     // it remote. Read the existing one so tabs/time/created_at/etc. survive.
@@ -4704,9 +4704,10 @@ pub async fn extend_project_to_remote(
 /// Errors if the project isn't remote, or has no local mirror to fall back to.
 #[tauri::command]
 pub async fn detach_project_from_remote(
+    ctx: Ctx,
     project_id: String,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<ProjectEntry, String> {
+    let manifest = ctx.get::<SyncManifestState>();
     let list = read_projects_list()?;
 
     let idx = list
@@ -4788,7 +4789,7 @@ pub async fn detach_project_from_remote(
     // of detaching, when the old path was wrong — lands on this same state dir and would
     // otherwise inherit a byte-sync manifest whose bases describe the OLD host. See
     // `clear_host_bound_state` for what that silently does to the new one.
-    clear_host_bound_state(&project_id, manifest.inner()).await;
+    clear_host_bound_state(&project_id, manifest).await;
 
     // Remove the old state-dir project.json, its session mirror, and then the state dir.
     // `.tabtivity/` is why the dir used to survive every detach: `remove_dir` is
