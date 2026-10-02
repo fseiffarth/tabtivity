@@ -116,6 +116,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "skills.rs",
     "slurm.rs",
     "sqlite.rs",
+    "ssh.rs",
     "sync.rs",
     "synctex.rs",
     "terminal.rs",

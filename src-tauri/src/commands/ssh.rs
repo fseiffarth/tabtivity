@@ -76,7 +76,7 @@ pub async fn ssh_host_key_preview(
     host: String,
     port: Option<u16>,
 ) -> Result<HostKeyPreview, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         use crate::services::ssh_common as sc;
         let (resolved, resolved_port) = sc::resolve_host_port(&host, port);
         let known = sc::host_key_known(&resolved, resolved_port);
