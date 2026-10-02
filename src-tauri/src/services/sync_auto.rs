@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 use tokio::sync::{mpsc, Mutex, Notify};
 use tokio::time::MissedTickBehavior;
 
@@ -108,7 +108,7 @@ struct AutoSyncEvent {
 /// Spawns a recursive filesystem watcher on the local mirror plus the reconcile
 /// loop. Called after `remote_connect` succeeds.
 pub async fn start(
-    app: AppHandle,
+    ctx: CoreCtx,
     pool: RemotePoolState,
     manifest: SyncManifestState,
     state: &AutoSyncState,
@@ -154,7 +154,7 @@ pub async fn start(
     let cancel = Arc::new(Notify::new());
     let paused = Arc::new(AtomicBool::new(false));
     let join = tokio::spawn(run_loop(
-        app,
+        ctx,
         pool,
         manifest,
         target,
@@ -299,7 +299,7 @@ fn hpc_now(target: &RemoteTarget) -> bool {
 }
 
 async fn run_loop(
-    app: AppHandle,
+    ctx: CoreCtx,
     pool: RemotePoolState,
     manifest: SyncManifestState,
     target: RemoteTarget,
@@ -331,7 +331,7 @@ async fn run_loop(
                 // Cheap once attached; this is what picks up a `sync_set_auto` that
                 // marked the first path after the task was already running.
                 ensure_watcher(&mut watcher, &manifest, &project_id, &mirror, &tx).await;
-                reconcile_pass(Some(&app), &pool, &manifest, &target, &project_id).await;
+                reconcile_pass(Some(&ctx), &pool, &manifest, &target, &project_id).await;
             }
             res = rx.recv() => {
                 if res.is_none() { break; } // watcher gone → stop
@@ -350,7 +350,7 @@ async fn run_loop(
                 // that queued these watcher events are re-based by git_peer before
                 // resume, so dropping this pass loses nothing.
                 if paused.load(Ordering::SeqCst) { continue; }
-                reconcile_pass(Some(&app), &pool, &manifest, &target, &project_id).await;
+                reconcile_pass(Some(&ctx), &pool, &manifest, &target, &project_id).await;
             }
         }
     }
@@ -391,10 +391,10 @@ pub fn drop_tracked(
 /// One reconcile pass over the project's auto-sync paths. Bails gracefully if the
 /// pool is cold/dead. Reuses the `remote_sync` primitives throughout.
 ///
-/// `app` is `None` when the pass is driven outside the app (see [`reconcile_once`]);
+/// `ctx` is `None` when the pass is driven outside the app (see [`reconcile_once`]);
 /// it is used for nothing but the completion event.
 async fn reconcile_pass(
-    app: Option<&AppHandle>,
+    ctx: Option<&CoreCtx>,
     pool: &RemotePoolState,
     manifest: &SyncManifestState,
     target: &RemoteTarget,
@@ -538,8 +538,8 @@ async fn reconcile_pass(
     }
 
     if pulled + pushed > 0 {
-        if let Some(app) = app {
-            let _ = app.emit(
+        if let Some(ctx) = ctx {
+            ctx.emit(
                 "auto-sync",
                 AutoSyncEvent {
                     project_id: project_id.to_string(),

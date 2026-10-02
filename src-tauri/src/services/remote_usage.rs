@@ -48,7 +48,7 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 
 use crate::schema::project::RemoteSpec;
 use crate::services::ssh_exec::run_remote_shell;
@@ -210,7 +210,7 @@ pub fn check_usage(spec: &RemoteSpec) -> Result<RemoteUsageReport, String> {
 /// the dialog can show a section per connected host rather than only the
 /// primary's. Best-effort — a closed window / no listener is not an error.
 pub fn emit_usage_report(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     project_id: &str,
     host_id: &str,
     report: &RemoteUsageReport,
@@ -222,7 +222,7 @@ pub fn emit_usage_report(
         host_id: &'a str,
         report: &'a RemoteUsageReport,
     }
-    let _ = app.emit(
+    ctx.emit(
         "remote-usage-report",
         Event {
             project_id,

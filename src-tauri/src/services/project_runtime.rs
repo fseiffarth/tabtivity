@@ -1,6 +1,6 @@
 use crate::brand::SLUG;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 
 use crate::commands::apps::WindowRegistryState;
 use crate::commands::workspace::WorkspaceStateArc;
@@ -60,7 +60,7 @@ pub struct ProjectRuntimeSwitchedPayload {
 /// `previous_local_file` and `next_local_file` are the paths to the respective
 /// `project.json` files.
 pub fn switch(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     workspace: &WorkspaceStateArc,
     win_registry: &WindowRegistryState,
     project_id: Option<&str>,
@@ -133,7 +133,7 @@ pub fn switch(
         side_panel_folder: next_side_panel_folder,
         opened_window_ids: vec![],
     };
-    let _ = app.emit("project-runtime-switched", payload.clone());
+    ctx.emit("project-runtime-switched", payload.clone());
 
     // 5. Hide previous project-owned windows.
     //    Acquire WindowRegistry before WorkspaceState (lock order).
@@ -210,11 +210,7 @@ pub fn switch(
     //     opened before the warm-up completes, and sandbox's lifecycle lock
     //     serializes rapid switches. Best-effort by design.
     {
-        use tauri::Manager;
-        let registry = app
-            .state::<crate::commands::terminal::RegistryState>()
-            .inner()
-            .clone();
+        let registry = ctx.get::<crate::commands::terminal::RegistryState>().clone();
         let prev = previous_project_id.map(String::from);
         let next = project_id.map(String::from);
         std::thread::spawn(move || {

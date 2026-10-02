@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 use tokio::sync::Mutex;
 
 use crate::services::git_peer::{bundle_create_args, Peer};
@@ -327,7 +327,7 @@ async fn push_once(
     let mirror_owned = mirror.to_path_buf();
     let bundle_owned = bundle_path.clone();
     let exclude_owned = exclude.map(str::to_string);
-    let empty = tauri::async_runtime::spawn_blocking(move || {
+    let empty = app_core::rt::spawn_blocking(move || {
         build_bundle(&mirror_owned, &bundle_owned, exclude_owned.as_deref())
     })
     .await
@@ -338,7 +338,7 @@ async fn push_once(
 
     // 2. Ensure the worker root exists and ship the bundle over its pooled SFTP.
     let spec_for_mkdir = spec.clone();
-    tauri::async_runtime::spawn_blocking(move || ssh_exec::remote_mkdir_p(&spec_for_mkdir))
+    app_core::rt::spawn_blocking(move || ssh_exec::remote_mkdir_p(&spec_for_mkdir))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("could not create worker dir: {e}"))?;
@@ -356,7 +356,7 @@ async fn push_once(
 
     // 3. Apply on the worker (blocking ssh). Tracked files only — never git clean.
     let spec_for_apply = spec.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
+    let out = app_core::rt::spawn_blocking(move || {
         ssh_exec::run_remote_script(&spec_for_apply, &worker_apply_script())
     })
     .await
@@ -389,7 +389,7 @@ fn wants_code_fanout(host: &crate::schema::project::ComputeHost) -> bool {
 /// manual "Push code to machines" entry point (plan §2 triggers). Best-effort per
 /// worker — one worker failing never blocks the others.
 pub async fn fan_out(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     pool: &RemotePoolState,
     state: &WorkerSyncState,
     project_id: &str,
@@ -402,14 +402,14 @@ pub async fn fan_out(
         if !remote::is_connected_host(pool, project_id, &host.id).await {
             continue;
         }
-        sync_worker_guarded(app, pool, state, project_id, &host.id, force).await;
+        sync_worker_guarded(ctx, pool, state, project_id, &host.id, force).await;
     }
 }
 
 /// One worker's fan-out with the in-flight lock + event emit. Skips silently if a
 /// sync to the same worker is already running.
 pub async fn sync_worker_guarded(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     pool: &RemotePoolState,
     state: &WorkerSyncState,
     project_id: &str,
@@ -435,7 +435,7 @@ pub async fn sync_worker_guarded(
         let mut guard = state.lock().await;
         guard.in_flight.remove(&key);
     }
-    let _ = app.emit("worker-sync-report", &report);
+    ctx.emit("worker-sync-report", &report);
     report
 }
 
@@ -533,7 +533,7 @@ async fn list_outputs(
     spec: &crate::schema::project::RemoteSpec,
 ) -> Result<Vec<WorkerOutput>, String> {
     let spec = spec.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
+    let out = app_core::rt::spawn_blocking(move || {
         ssh_exec::run_remote_script(&spec, outputs_list_script())
     })
     .await
@@ -612,13 +612,13 @@ pub async fn pull_outputs(
 /// Kicked by `remote_connect` when a **worker** host connects: bring its tracked
 /// tree up to the current HEAD. Fire-and-forget from the connect path.
 pub async fn on_worker_connect(
-    app: AppHandle,
+    ctx: CoreCtx,
     pool: RemotePoolState,
     state: WorkerSyncState,
     project_id: &str,
     host_id: &str,
 ) {
-    sync_worker_guarded(&app, &pool, &state, project_id, host_id, false).await;
+    sync_worker_guarded(&ctx, &pool, &state, project_id, host_id, false).await;
 }
 
 #[cfg(test)]

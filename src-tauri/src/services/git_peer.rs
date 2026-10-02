@@ -54,7 +54,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use app_core::CoreCtx;
 use tokio::sync::{mpsc, Mutex, Notify};
 use tokio::time::MissedTickBehavior;
 
@@ -3276,8 +3276,8 @@ struct StatusEvent {
 }
 
 /// Emit the current lockstep state to the frontend.
-pub fn emit_status(app: &AppHandle, project_id: &str, state: &GitPeerState) {
-    let _ = app.emit(
+pub fn emit_status(ctx: &CoreCtx, project_id: &str, state: &GitPeerState) {
+    ctx.emit(
         "git-peer-status",
         StatusEvent {
             project_id: project_id.to_string(),
@@ -3290,7 +3290,7 @@ pub fn emit_status(app: &AppHandle, project_id: &str, state: &GitPeerState) {
 /// project whose lockstep toggle is off). Attaches a narrowly-scoped `.git` watcher
 /// on the local mirror and spawns the host-poll loop. Runs one reconcile immediately.
 pub async fn start(
-    app: AppHandle,
+    ctx: CoreCtx,
     pool: RemotePoolState,
     manifest: SyncManifestState,
     auto: AutoSyncState,
@@ -3332,7 +3332,7 @@ pub async fn start(
 
     let cancel = Arc::new(Notify::new());
     let join = tokio::spawn(poll_loop(
-        app,
+        ctx,
         pool,
         manifest,
         auto,
@@ -3366,7 +3366,7 @@ pub async fn stop_all(reg: &GitPeerRegistry) {
 
 #[allow(clippy::too_many_arguments)]
 async fn poll_loop(
-    app: AppHandle,
+    ctx: CoreCtx,
     pool: RemotePoolState,
     manifest: SyncManifestState,
     auto: AutoSyncState,
@@ -3399,11 +3399,11 @@ async fn poll_loop(
     )
     .await;
     drop(reconcile);
-    emit_status(&app, &project_id, &s);
+    emit_status(&ctx, &project_id, &s);
     // The primary now holds the current committed code; push it to any already-
     // connected workers (multi-host, `docs/multi_host_remote_plan.md` §2). Cheap
     // when they are already at HEAD (a mirror-head read, no network).
-    crate::services::worker_sync::fan_out(&app, &pool, &worker_sync, &project_id, false).await;
+    crate::services::worker_sync::fan_out(&ctx, &pool, &worker_sync, &project_id, false).await;
 
     // The mirror's signature as this task last left it — what tells a watcher burst
     // caused by *our own* `.git` writes apart from one caused by the user. Every pass
@@ -3439,7 +3439,7 @@ async fn poll_loop(
                 )
                 .await;
                 drop(reconcile);
-                emit_status(&app, &project_id, &s);
+                emit_status(&ctx, &project_id, &s);
                 own_sig = local_signature(&project_id);
                 drain_events(&mut rx);
             }
@@ -3468,13 +3468,13 @@ async fn poll_loop(
                 )
                 .await;
                 drop(reconcile);
-                emit_status(&app, &project_id, &s);
+                emit_status(&ctx, &project_id, &s);
                 own_sig = local_signature(&project_id);
                 drain_events(&mut rx);
                 // A `.git` change on the mirror = a new commit/ref move; fan the
                 // committed code out to every connected worker (plan §2 trigger).
                 crate::services::worker_sync::fan_out(
-                    &app, &pool, &worker_sync, &project_id, false,
+                    &ctx, &pool, &worker_sync, &project_id, false,
                 )
                 .await;
             }

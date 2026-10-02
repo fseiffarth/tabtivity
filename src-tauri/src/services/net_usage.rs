@@ -54,7 +54,7 @@ const FLUSH_EVERY_TICKS: u64 = 2;
 pub fn start(pool: RemotePoolState) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        tauri::async_runtime::spawn(run(pool));
+        app_core::rt::spawn(run(pool));
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -158,7 +158,7 @@ mod sampler {
             let snaps: Vec<(String, _)> = if ids.is_empty() {
                 Vec::new()
             } else {
-                tauri::async_runtime::spawn_blocking(move || {
+                app_core::rt::spawn_blocking(move || {
                     let mut ss = SsDump::default();
                     ids.into_iter()
                         .map(|id| {
@@ -230,7 +230,7 @@ mod sampler {
         if drained.is_empty() {
             return;
         }
-        let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = app_core::rt::spawn_blocking(move || {
             let mut summary = net_usage::load();
             let hour = storage::hour_utc();
             for (id, c) in &drained {

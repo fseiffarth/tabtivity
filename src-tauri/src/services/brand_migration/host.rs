@@ -29,7 +29,7 @@ impl World for Host {
 fn shut_down_host_in(state_dir: &Path) {
     use crate::services::mobile_control::{admin, protocol::AdminRequest};
     let socket = state_dir.join("mobile-control").join("admin.sock");
-    let _ = tauri::async_runtime::block_on(admin::admin_call(&socket, &AdminRequest::Shutdown));
+    let _ = app_core::rt::block_on(admin::admin_call(&socket, &AdminRequest::Shutdown));
 }
 
 #[cfg(target_os = "linux")]

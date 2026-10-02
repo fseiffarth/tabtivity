@@ -1320,7 +1320,7 @@ pub fn run() {
             commands::subwindow::spawn_monitor_watcher(_app.handle().clone());
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
-            services::agent_turn::start(_app.handle().clone());
+            services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
             // Install the global Claude SessionStart hook so Tabtivity can follow a
             // tab's live session id across `/clear` (see services::agent_session).
             if let Err(e) = services::agent_bin::install() {

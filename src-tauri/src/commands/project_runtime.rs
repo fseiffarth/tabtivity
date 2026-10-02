@@ -1,13 +1,13 @@
 //! Thin Tauri dispatch layer for project-runtime switching.
 //! Business logic lives in `services::project_runtime`.
 
-use tauri::{AppHandle, State};
 
 use crate::commands::apps::WindowRegistryState;
 use crate::commands::workspace::WorkspaceStateArc;
 use crate::schema::projects::ProjectsList;
 use crate::services::project_runtime::PreviousProjectSnapshot;
 use crate::storage;
+use crate::tauri_host::Ctx;
 
 /// Switch the active project runtime.
 ///
@@ -22,17 +22,17 @@ use crate::storage;
 /// return value, which resolves immediately.
 #[tauri::command]
 pub fn switch_project_runtime(
-    app: AppHandle,
-    workspace: State<'_, WorkspaceStateArc>,
-    win_registry: State<'_, WindowRegistryState>,
+    ctx: Ctx,
     project_id: Option<String>,
     previous_project_id: Option<String>,
     previous_snapshot: PreviousProjectSnapshot,
 ) -> Result<(), String> {
+    let workspace = ctx.get::<WorkspaceStateArc>();
+    let win_registry = ctx.get::<WindowRegistryState>();
     // Clone the shared state handles so the worker thread owns them; State
     // references can't outlive the command call.
-    let workspace = workspace.inner().clone();
-    let win_registry = win_registry.inner().clone();
+    let workspace = workspace.clone();
+    let win_registry = win_registry.clone();
 
     std::thread::spawn(move || {
         // A project an older build worked in keeps the app's folder and refs
@@ -60,7 +60,7 @@ pub fn switch_project_runtime(
         let next_local_file = project_id.as_deref().and_then(find_local_file);
 
         if let Err(e) = crate::services::project_runtime::switch(
-            &app,
+            &ctx,
             &workspace,
             &win_registry,
             project_id.as_deref(),
