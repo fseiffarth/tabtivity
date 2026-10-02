@@ -127,6 +127,9 @@ pub enum Category {
     PreflightFailed, PreflightTimeout, UrlUnconfirmed, UrlRewritten, StaleApproval, Dismissed, Expired,
     RateLimited, PendingLimit, AuthFailed, Network, RemoteRejected, TransportFailed, FenceUnavailable,
     NotLocal, Busy, NotFound, InvalidArguments, NotPushed, TagExists, NotGithub, NotAvailable,
+    /// The tab was started by the Mobile host with no window open, whose lane
+    /// never reads the stored token (`docs/headless_mcp_plan.md`).
+    WindowRequired,
 }
 impl Category {
     pub fn as_str(self) -> &'static str {
@@ -144,6 +147,7 @@ impl Category {
             Category::NotFound => "not_found", Category::InvalidArguments => "invalid_arguments",
             Category::NotPushed => "not_pushed", Category::TagExists => "tag_exists",
             Category::NotGithub => "not_github", Category::NotAvailable => "not_available",
+            Category::WindowRequired => "window_required",
         }
     }
     fn from_str(s: &str) -> Option<Category> {
@@ -732,7 +736,33 @@ pub fn remove_for_session(session: &str) -> bool {
     list.len() != before
 }
 
+/// Set once by the Mobile host before its listener starts: this process
+/// serves the lane for the tabs it spawned with no window open and never
+/// reads the user's git token from the OS keychain (`docs/headless_mcp_plan.md`).
+/// The host faces the phone, and on Linux a locked Secret Service collection
+/// would turn a read into an unlock prompt or a parked D-Bus call. Pushes and
+/// releases then answer [`Category::WindowRequired`]; CI reads go without a
+/// token.
+static KEYRING_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn serve_without_keyring() { KEYRING_FREE.store(true, std::sync::atomic::Ordering::Release); }
+pub(crate) fn keyring_free() -> bool {
+    KEYRING_FREE.load(std::sync::atomic::Ordering::Acquire) || KEYRING_FREE_HERE.with(std::cell::Cell::get)
+}
+// The switch for one test thread only: the process-wide one would reach every
+// other test of the lane running beside it.
+thread_local! { static KEYRING_FREE_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+#[cfg(test)]
+pub(crate) fn serve_without_keyring_on_this_thread(on: bool) { KEYRING_FREE_HERE.with(|c| c.set(on)); }
+
+/// What a push or release from a tab of the keyring-free process answers.
+fn window_required(dir: &Path) -> Value {
+    json!({"status":"refused","category":Category::WindowRequired,"message":concat!("This tab was started by ", crate::app_name!(), " Mobile while no window was open, and that background service never uses the stored git token, so it cannot push or tag from here. Ask the user to restart this tab from the ", crate::app_name!(), " window (its pushes then go through the window's approval card), or to push from the git bar."),"output":"","state":local_state(dir)})
+}
+
 pub(crate) fn creds(project: &str) -> (Option<String>, Vec<String>) {
+    if keyring_free() {
+        return (None, crate::commands::git_hosting::token_origins(Some(project), None));
+    }
     let token = crate::commands::git_hosting::effective_git_creds(project).1;
     let origins = crate::commands::git_hosting::token_origins(Some(project), None);
     (token, origins)
@@ -995,6 +1025,8 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
             let args: PushArgs = serde_json::from_value(args).map_err(|e| format!("invalid_arguments: {e}"))?;
             if let Some(branch) = &args.branch { validate_branch(branch).map_err(|e| format!("invalid_arguments: {e}"))?; }
             sanitize_note(args.note)?;
+            // Refused as `window_required` below; a refusal costs nothing.
+            if keyring_free() { return Ok(()); }
             let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| matches!(p.status, Status::Pending | Status::Running)).count();
             if pending >= PENDING_LIMIT { return Err(format!("pending_limit: at most {PENDING_LIMIT} pending push requests per tab; cancel one or wait for the user")); }
             if !session.admit_push_rate() { return Err("rate_limited: six push requests per tab per hour".into()); }
@@ -1004,6 +1036,7 @@ pub fn admit(session: &Session, message: &Value) -> Result<(), String> {
             let args: ReleaseArgs = serde_json::from_value(args).map_err(|e| format!("invalid_arguments: {e}"))?;
             if let Some(tag) = &args.tag { super::git_release::validate_tag(tag).map_err(|e| format!("invalid_arguments: {e}"))?; }
             sanitize_note(args.note)?;
+            if keyring_free() { return Ok(()); }
             let pending = proposals_for(None, Some(&session.identity.tab)).iter().filter(|p| matches!(p.status, Status::Pending | Status::Running)).count();
             if pending >= PENDING_LIMIT { return Err(format!("pending_limit: at most {PENDING_LIMIT} pending requests per tab; cancel one or wait for the user")); }
             if !session.admit_push_rate() { return Err("rate_limited: six push or release requests per tab per hour".into()); }
@@ -1056,6 +1089,7 @@ fn tool_result(p: &Proposal) -> Value {
 
 fn call_push(session: &Session, project: &str, dir: &Path, level: Level, args: PushArgs) -> Result<Value, String> {
     let note = sanitize_note(args.note)?;
+    if keyring_free() { return Ok(window_required(dir)); }
     if level == Level::Off {
         return Ok(json!({"status":"refused","category":Category::LevelOff,"message":"Agent pushes are off for this project. Ask the user to set the project's agent push level (project pill menu, or Settings → Manage CLIs → Agent pushes) to Propose or Apply.","output":"","state":local_state(dir)}));
     }
@@ -1085,6 +1119,7 @@ fn call_push(session: &Session, project: &str, dir: &Path, level: Level, args: P
 
 fn call_release(session: &Session, project: &str, dir: &Path, level: Level, args: ReleaseArgs) -> Result<Value, String> {
     let note = sanitize_note(args.note)?;
+    if keyring_free() { return Ok(window_required(dir)); }
     if level == Level::Off {
         return Ok(json!({"status":"refused","category":Category::LevelOff,"message":"Agent pushes and releases are off for this project. Ask the user to set the project's agent push level (project pill menu, or Settings → Manage CLIs → Agent pushes) to Propose or Apply.","output":"","state":local_state(dir)}));
     }
@@ -1356,6 +1391,33 @@ mod tests {
         assert!(admit(&s, &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).is_ok());
         assert!(admit(&s, &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_push_cancel","arguments":{"id":"a","tab":"x"}}})).is_err());
         assert_eq!(admission_result("rate_limited: six push requests per tab per hour")["retryAfterSecs"], 3600);
+    }
+
+    /// The Mobile host's lane (`docs/headless_mcp_plan.md`) never reads the
+    /// keychain: a push or release answers `window_required` — after argument
+    /// checks, before any git, proposal or budget — and nothing is staged.
+    #[test]
+    fn without_the_keyring_pushes_and_releases_answer_window_required_for_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = session("tab:keyring-free", dir.path());
+        let call = |name: &str, args: Value| json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}});
+        serve_without_keyring_on_this_thread(true);
+        for _ in 0..10 {
+            assert!(admit(&s, &call("git_push", json!({}))).is_ok());
+            assert!(admit(&s, &call("git_release", json!({}))).is_ok());
+        }
+        assert!(admit(&s, &call("git_push", json!({"branch":"+develop"}))).unwrap_err().starts_with("invalid_arguments"));
+        for level in [Level::Propose, Level::Apply] {
+            let push = call_push(&s, "p", dir.path(), level, PushArgs { branch: None, note: Some("ship it".into()) }).unwrap();
+            assert_eq!((push["status"].as_str(), push["category"].as_str()), (Some("refused"), Some("window_required")), "{push}");
+            assert!(push["message"].as_str().is_some_and(|m| m.contains("restart this tab")), "{push}");
+            let release = call_release(&s, "p", dir.path(), level, ReleaseArgs { tag: None, note: None }).unwrap();
+            assert_eq!(release["category"], "window_required");
+        }
+        assert!(proposals_for(None, Some("tab:keyring-free")).is_empty(), "nothing was staged");
+        assert_eq!(Category::from_str("window_required"), Some(Category::WindowRequired));
+        serve_without_keyring_on_this_thread(false);
+        for _ in 0..6 { assert!(admit(&s, &call("git_push", json!({}))).is_ok(), "the refusals cost no budget"); }
     }
 
     #[test]
