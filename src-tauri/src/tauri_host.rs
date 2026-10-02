@@ -82,6 +82,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for Ctx {
 /// per conversion (hosted plan §3.2); `converted_command_files_stay_tauri_free`
 /// keeps a converted file from sliding back.
 pub const CONVERTED_COMMAND_FILES: &[&str] = &[
+    "agent_prompts.rs",
     "boxes.rs",
     "brand_migration.rs",
     "caldav.rs",
