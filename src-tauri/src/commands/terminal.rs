@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, State};
 
 use crate::terminal::{PtyOptions, PtyRegistry};
+use crate::tauri_host::Ctx;
 
 pub type RegistryState = Arc<Mutex<PtyRegistry>>;
 
@@ -19,17 +19,17 @@ pub struct PtySpawned {
 
 #[tauri::command]
 pub async fn pty_spawn(
-    app: AppHandle,
-    registry: State<'_, RegistryState>,
-    pool: State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
     opts: PtyOptions,
     session_name: Option<String>,
 ) -> Result<PtySpawned, String> {
+    let registry = ctx.get::<RegistryState>();
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     // The launch assembly is shared with the Mobile sidecar's headless spawn
     // (`services::launch_prep`); this command keeps what needs the window:
     // the registry's crash-loop guard, the PTY itself and its event.
     let prepared =
-        crate::services::launch_prep::prepare(opts, session_name, Some(pool.inner())).await?;
+        crate::services::launch_prep::prepare(opts, session_name, Some(pool)).await?;
 
     // Crash-loop guard.
     {
@@ -45,15 +45,15 @@ pub async fn pty_spawn(
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted) = (prepared.named, prepared.interrupted);
     let result = crate::terminal::spawn_pty(
-        crate::tauri_host::system_ctx(&app),
-        registry.inner().clone(),
+        ctx.0.clone(),
+        registry.clone(),
         prepared.opts.clone(),
     );
     if result.is_ok() {
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
-            let _ = tauri::Emitter::emit(&app, crate::commands::root_mcp::SESSIONS_EVENT, ());
+            ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
     }
     result.map(|()| PtySpawned { named, interrupted })
@@ -77,7 +77,7 @@ pub async fn copilot_fence_auth_status() -> crate::services::copilot_auth::Copil
 /// Forget the Copilot sign-in Tabtivity holds for fenced tabs.
 #[tauri::command]
 pub async fn copilot_fence_sign_out() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(crate::services::copilot_auth::sign_out)
+    app_core::rt::spawn_blocking(crate::services::copilot_auth::sign_out)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -88,11 +88,11 @@ pub async fn copilot_fence_sign_out() -> Result<(), String> {
 /// spawn decided (see `agent_fence::HostAgentTab`).
 #[tauri::command]
 pub async fn agent_fence_marks(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     project_ids: Vec<String>,
 ) -> Result<std::collections::HashMap<String, crate::services::agent_fence::AgentFenceMark>, String> {
-    let registry = registry.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let registry = ctx.get::<RegistryState>().clone();
+    app_core::rt::spawn_blocking(move || {
         let live = crate::services::agent_fence::live_unfenced_by_scope(|id| {
             registry.lock().unwrap().pid(id)
         });
@@ -109,7 +109,7 @@ pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSess
     if !crate::services::tmux_local::tmux_available() {
         return Ok(Vec::new());
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         let out = crate::paths::command_no_window("tmux")
             .args(crate::services::tmux_local::local_tmux_ls_args())
             .output();
@@ -129,7 +129,7 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let output = crate::paths::command_no_window("tmux")
             .args(crate::services::tmux_local::local_tmux_kill_args(&session))
             .output()
@@ -170,7 +170,7 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    tauri::async_runtime::spawn_blocking(crate::services::tmux_local::kill_app_sessions)
+    app_core::rt::spawn_blocking(crate::services::tmux_local::kill_app_sessions)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -186,7 +186,7 @@ pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String
     {
         return Ok(None);
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let output = crate::paths::command_no_window("tmux")
             .args(crate::services::tmux_local::local_tmux_screen_args(&session))
             .output()
@@ -209,7 +209,7 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let _ = crate::paths::command_no_window("tmux")
             .args(crate::services::tmux_local::local_tmux_rename_args(
                 &session, &new_name,
@@ -222,10 +222,11 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
 
 #[tauri::command]
 pub async fn pty_write(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
+    let registry = ctx.get::<RegistryState>();
     // Watch for a Tabtivity-minted interactive login command being typed in, which is
     // what marks this PTY as a legitimate destination for the matching saved
     // credential (see `commands::credentials`).
@@ -242,12 +243,13 @@ pub async fn pty_write(
 
 #[tauri::command]
 pub async fn pty_resize(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    crate::terminal::resize_pty(registry.inner(), &id, cols, rows)
+    let registry = ctx.get::<RegistryState>();
+    crate::terminal::resize_pty(registry, &id, cols, rows)
 }
 
 /// A pane's visibility report (visible-only streaming): a hidden pane's PTY
@@ -257,25 +259,22 @@ pub async fn pty_resize(
 /// See the routing block in `terminal/mod.rs`.
 #[tauri::command]
 pub async fn pty_set_visible(
-    app: AppHandle,
-    window: tauri::Window,
+    ctx: Ctx,
     id: String,
     viewer_id: String,
     visible: bool,
     update_seq: u64,
 ) -> Result<(), String> {
-    // The window label comes from the CALLING window, never from the payload —
-    // a view may only ever speak for itself (the rule `webview_renderer_claim`
-    // follows). It is what lets the `Destroyed` hook drop the registrations of a
-    // window that died without unmounting (Group B #238).
-    crate::terminal::route_set_visible(
-        &crate::tauri_host::system_ctx(&app),
-        &id,
-        &viewer_id,
-        visible,
-        update_seq,
-        window.label(),
-    );
+    // The window label is the CALLER's (`Ctx` takes it from the calling
+    // webview), never payload data — a view may only ever speak for itself
+    // (the rule `webview_renderer_claim` follows). It is what lets the
+    // `Destroyed` hook drop the registrations of a window that died without
+    // unmounting (Group B #238).
+    let window = ctx
+        .caller
+        .client()
+        .ok_or_else(|| "pty_set_visible: no calling client".to_string())?;
+    crate::terminal::route_set_visible(&ctx, &id, &viewer_id, visible, update_seq, window.as_str());
     Ok(())
 }
 
@@ -304,8 +303,8 @@ pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> 
 /// visible, for the login flows that scan a possibly-hidden terminal's raw
 /// stream (`useRemoteSession`/`useRemoteReconnect`).
 #[tauri::command]
-pub async fn pty_watch(app: AppHandle, id: String) -> Result<(), String> {
-    crate::terminal::route_watch(&crate::tauri_host::system_ctx(&app), &id);
+pub async fn pty_watch(ctx: Ctx, id: String) -> Result<(), String> {
+    crate::terminal::route_watch(&ctx, &id);
     Ok(())
 }
 
@@ -316,7 +315,8 @@ pub async fn pty_unwatch(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<(), String> {
+pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
+    let registry = ctx.get::<RegistryState>();
     // The terminal is gone, so its login marking must not outlive it and bless a
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);
@@ -324,7 +324,7 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
     // keystroke's path, the teardown walks the process table.
     let taken = registry.lock().unwrap().take(&id);
     if let Some(taken) = taken {
-        tauri::async_runtime::spawn_blocking(move || taken.teardown())
+        app_core::rt::spawn_blocking(move || taken.teardown())
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -339,9 +339,10 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
 /// projects cannot affect each other.
 #[tauri::command]
 pub async fn pty_kill_scope(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     scope: String,
 ) -> Result<Vec<String>, String> {
+    let registry = ctx.get::<RegistryState>();
     // Every PTY of the scope is taken in one short hold of the registry lock
     // (it is on every keystroke's path) and torn down after it, with one
     // process-table walk for the lot instead of one per tab.
@@ -355,7 +356,7 @@ pub async fn pty_kill_scope(
         crate::commands::credentials::forget_login_pty(id);
         crate::terminal::route_remove_all_views(id);
     }
-    tauri::async_runtime::spawn_blocking(move || crate::terminal::teardown_taken(taken))
+    app_core::rt::spawn_blocking(move || crate::terminal::teardown_taken(taken))
         .await
         .map_err(|e| e.to_string())?;
     for id in &ids {
@@ -374,9 +375,10 @@ pub async fn pty_kill_scope(
 /// OSes) the ticks are always 0, so this returns 0.0 and the UI hides the figure.
 #[tauri::command]
 pub async fn project_cpu_percent(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     pty_ids: Vec<String>,
 ) -> Result<f64, String> {
+    let registry = ctx.get::<RegistryState>();
     use crate::sysstat;
 
     let roots: Vec<u32> = {

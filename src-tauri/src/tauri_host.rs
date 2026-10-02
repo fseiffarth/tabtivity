@@ -75,3 +75,95 @@ impl<'de, R: Runtime> CommandArg<'de, R> for Ctx {
         Ok(Ctx(system.with_caller(Caller::Local(ClientId::new(webview.label())))))
     }
 }
+
+/// The `commands/*.rs` files whose bodies are Tauri-free: nothing of `tauri`
+/// but the `#[tauri::command]` attribute itself, so each takes [`Ctx`] (or
+/// nothing) and can be dispatched by a host that is not Tauri. Grows one file
+/// per conversion (hosted plan §3.2); `converted_command_files_stay_tauri_free`
+/// keeps a converted file from sliding back.
+pub const CONVERTED_COMMAND_FILES: &[&str] = &[
+    "boxes.rs",
+    "brand_migration.rs",
+    "calendar.rs",
+    "crash.rs",
+    "default_apps.rs",
+    "exec_trust.rs",
+    "format.rs",
+    "git_fork.rs",
+    "git_hosting.rs",
+    "git_peer.rs",
+    "git_publish.rs",
+    "git_pull.rs",
+    "global_machines.rs",
+    "local_loss.rs",
+    "markdown.rs",
+    "monitor.rs",
+    "net_usage.rs",
+    "power.rs",
+    "project_runtime.rs",
+    "python.rs",
+    "remote.rs",
+    "search.rs",
+    "settings.rs",
+    "sheets.rs",
+    "skills.rs",
+    "slurm.rs",
+    "sqlite.rs",
+    "synctex.rs",
+    "terminal.rs",
+    "timer.rs",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::CONVERTED_COMMAND_FILES;
+
+    /// Every line of a converted file that is not a comment and not the
+    /// `#[tauri::command]` attribute must be free of the word `tauri` — the
+    /// `use tauri::…` line is what every `State`, `AppHandle` or `Window`
+    /// parameter needs, so its absence is the whole check. (`src-tauri` in a
+    /// path string does not count.)
+    #[test]
+    fn converted_command_files_stay_tauri_free() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+        let mut offenders = Vec::new();
+        for file in CONVERTED_COMMAND_FILES {
+            let text = std::fs::read_to_string(dir.join(file))
+                .unwrap_or_else(|e| panic!("{file}: {e}"));
+            for (n, line) in text.lines().enumerate() {
+                let code = match line.find("//") {
+                    Some(i) if !line.contains("://") => &line[..i],
+                    _ => line,
+                };
+                let trimmed = code.trim();
+                if trimmed.starts_with("#[tauri::command") {
+                    continue;
+                }
+                let names_tauri = code.match_indices("tauri").any(|(i, _)| {
+                    let before = code[..i].chars().next_back();
+                    let after = code[i + 5..].chars().next();
+                    !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                        && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                });
+                if names_tauri {
+                    offenders.push(format!("{file}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "converted command files reach for Tauri again:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn converted_list_has_no_duplicates_and_names_real_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+        let mut seen = std::collections::HashSet::new();
+        for file in CONVERTED_COMMAND_FILES {
+            assert!(seen.insert(*file), "{file} listed twice");
+            assert!(dir.join(file).is_file(), "{file} is not a command file");
+        }
+    }
+}
