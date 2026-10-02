@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::remote::{remote_target_for_dir, PRIMARY_HOST};
 use crate::services::ssh_exec::shell_quote;
+use crate::tauri_host::Ctx;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -895,12 +896,13 @@ pub fn set_project_hpc(
 /// failing the batch. Returns how many files were copied.
 #[tauri::command]
 pub async fn hpc_ws_pull_logs(
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
     project_id: String,
     logs_dir: String,
 ) -> Result<u32, String> {
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     let dir = validate_abs_path("logs folder", &logs_dir)?;
-    let sftp = crate::services::remote::pooled_sftp(pool.inner(), &project_id)
+    let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
         .await
         .ok_or_else(|| "remote project is not connected".to_string())?;
     let entries = crate::services::sftp::list_dir_on(&sftp, &dir).await?;
