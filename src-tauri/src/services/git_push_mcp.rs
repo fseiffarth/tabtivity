@@ -1202,8 +1202,14 @@ pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(),
         "ping" => (ok(json!({})), false),
         "tools/list" => (ok(json!({"tools":tools()})), false),
         "tools/call" => {
-            let policy = match policy(project) { Ok(p) => p, Err(e) => return (error(id, -32000, &e), false) };
             let name = message["params"]["name"].as_str().unwrap_or_default();
+            // The keyring-free process (the Mobile host) refuses pushes and
+            // releases whatever the project's policy says; arguments first.
+            if keyring_free() && admission.is_ok() && matches!(name, "git_push" | "git_release") {
+                let value = window_required(&binding.dir);
+                return (ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})), false);
+            }
+            let policy = match policy(project) { Ok(p) => p, Err(e) => return (error(id, -32000, &e), false) };
             let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
             let result: Result<Value, String> = match admission {
                 Err(reason) => Ok(admission_result(&reason)),
@@ -1413,6 +1419,16 @@ mod tests {
             assert!(push["message"].as_str().is_some_and(|m| m.contains("restart this tab")), "{push}");
             let release = call_release(&s, "p", dir.path(), level, ReleaseArgs { tag: None, note: None }).unwrap();
             assert_eq!(release["category"], "window_required");
+        }
+        // Through the RPC as the listener calls it: a normal tool result whose
+        // category the audit ring records, nothing marked changed.
+        for name in ["git_push", "git_release"] {
+            let (reply, changed) = handle_message(&s, &call(name, json!({"note":"ship it"})));
+            let reply = reply.expect("a reply");
+            assert!(!changed);
+            assert_eq!(reply["result"]["isError"], false, "{reply}");
+            assert_eq!(reply["result"]["structuredContent"]["category"], "window_required", "{reply}");
+            assert_eq!(refusal_reason(&reply), Some("window_required"));
         }
         assert!(proposals_for(None, Some("tab:keyring-free")).is_empty(), "nothing was staged");
         assert_eq!(Category::from_str("window_required"), Some(Category::WindowRequired));
