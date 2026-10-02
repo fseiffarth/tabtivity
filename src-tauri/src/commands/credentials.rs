@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::commands::terminal::RegistryState;
 use crate::services::remote_credentials::{self as creds, KeyringState};
-use tauri::State;
+use crate::tauri_host::Ctx;
 
 // ── Login-PTY registry (which terminals may receive a secret) ────────────────
 //
@@ -214,11 +214,12 @@ impl PasteCredential {
 /// caller can say "nothing saved" instead of appearing to paste an empty secret.
 #[tauri::command]
 pub async fn credential_paste_to_pty(
-    registry: State<'_, RegistryState>,
+    ctx: Ctx,
     pty: String,
     target: PasteCredential,
     submit: Option<bool>,
 ) -> Result<bool, String> {
+    let registry = ctx.get::<RegistryState>();
     let account = target.account();
     // The destination must be a terminal the backend has *seen* run the login this
     // credential belongs to (see the login-PTY registry above). Without this the

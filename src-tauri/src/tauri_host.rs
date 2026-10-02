@@ -87,6 +87,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "caldav.rs",
     "calendar.rs",
     "crash.rs",
+    "credentials.rs",
     "default_apps.rs",
     "disk_usage.rs",
     "exec_trust.rs",
