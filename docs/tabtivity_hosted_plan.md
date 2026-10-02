@@ -1143,7 +1143,8 @@ comes.
 - ~~Write the command class table and its completeness test (§3.3).~~ Done
   2026-10-03, `161b41a0` on branch `hosted`:
   `src-tauri/src/services/command_class.rs` classifies all 683 registered
-  commands (539 `core`, 84 `client`, 51 `admin`, 9 `off`); its tests parse
+  commands (536 `core`, 84 `client`, 54 `admin`, 9 `off` after the P0
+  review, `e4ce7f26`); its tests parse
   `generate_handler!` out of `lib.rs`, so a command added without a row
   fails `cargo test`. Handoff: [`hosted_handoff.md`](hosted_handoff.md).
 - The desktop prerequisites that used to sit here (#171, #172, the sidecar

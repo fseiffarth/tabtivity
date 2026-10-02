@@ -37,7 +37,8 @@ need it:
 - `class_of(name) -> Option<CommandClass>`, `all()`, `names_in(class)`.
 
 **Counts, from the actual registration, not the plan's 658:** 683 commands
-→ 539 `core`, 84 `client`, 51 `admin`, 9 `off`. The plan's §1, §3.3, §4.3 and
+→ 539 `core`, 84 `client`, 51 `admin`, 9 `off` (after the review below:
+536 / 84 / 54 / 9). The plan's §1, §3.3, §4.3 and
 §14 still say 658 (and 388/57/211); those are the 2026-09-29 numbers and were
 left as history — the P0 bullet carries the current count.
 
@@ -89,12 +90,14 @@ The module header documents the rows that look misplaced. The short list:
   with the rest of OpenVPN.
 - **Rust-raised file dialogs stay `core`** (`mail_attach_pick`,
   `mail_pgp_import_pick`, `mail_contacts_import`, `mail_contacts_export`,
-  `mail_attachment_save`, `export_project`, `remote_download_to`,
-  `calendar_read_ics`/`calendar_write_ics`): the bytes are the daemon's. P2's
-  server-side file picker (§3.5 transport table) must replace the dialog in
-  these bodies — they take an `AppHandle` today for the dialog alone. Grep
-  `dialog` in `commands/mail.rs` and `commands/project_transfer.rs` when you
-  get there.
+  `mail_attachment_save`): the bytes are the daemon's. P2's server-side file
+  picker (§3.5 transport table) must replace the dialog in these five bodies
+  (`app.dialog()` in `commands/mail.rs`). *Corrected in review:* this list
+  originally also named `export_project`, `remote_download_to` and
+  `calendar_read_ics`/`calendar_write_ics`; those take a path the **frontend**
+  picked through `@tauri-apps/plugin-dialog` (`ProjectExportDialog.tsx`,
+  `FileTree.tsx`, `CalendarPane.tsx`), so P2 replaces the picker on the
+  frontend side for them, not in Rust.
 - **`system_monitor_snapshot` is `core`** (host-aware: a project's remote host,
   else the daemon's machine); the bare this-machine `monitor` readings
   (`gpu_memory_snapshot`, `gpu_process_snapshot`, `machine_load_snapshot`),
@@ -107,10 +110,17 @@ The module header documents the rows that look misplaced. The short list:
   `set_project_sandbox_spec`) per §9 ("the Docker socket is root on the host";
   rootless Podman is P5). `register_host_bound_tab` is `core` (a grant file in
   the state dir).
-- **`install_ollama` is `admin`** (sudo + systemd service); `install_vibe`
-  and the agent CLI installs (`install_agent`, `update_agent`, …) are `core`
-  because they install into the user's own state dir.
-- **`dev_build_*` are `admin`**, `dev_todo_*` and `app_build_commit` `core`.
+- **`install_ollama` is `admin`** (sudo + systemd service); the agent CLI
+  installs (`install_agent`, `update_agent`, …) are `core` because they
+  install into Tabtivity's own install home (`services::agent_install`).
+  *Corrected in review:* `install_vibe` is `core` too but **not** for that
+  reason — it runs `curl … | bash` into the daemon user's own `$HOME`
+  (`~/.vibe`, `ensure_vibe_ollama_model` appends to `~/.vibe/config.toml`);
+  still bounded by that uid.
+- **`dev_build_*` are `admin`**, `app_build_commit` `core`. *Corrected in
+  review:* `dev_todo_*` are `admin` as well — they read and write `todo/*.md`
+  under `dev_build::SOURCE_ROOT`, a checkout path baked into the binary at
+  build time (the server's, not a user's).
 - **Mobile host plumbing is `admin`** (`mobile_host_apply`,
   `mobile_host_status`, `mobile_tailscale_serve_status`,
   `mobile_verify_tailscale_serve`): starting the per-user unit is the admin
@@ -162,3 +172,90 @@ stopped.
   too (the stale-row test tells you).
 - Gotcha: `rtk` rewrites what Bash prints; read `command_class.rs` through
   `rtk proxy cat` or the Read tool when checking rows.
+
+## P0 review
+
+*Written 2026-10-03 by the P0 reviewer. Range reviewed `f3efd50b..8d4e4384`;
+fix `e4ce7f26`; this section the commit after it. Nothing run live.*
+
+### What was checked
+
+- **Classification**, by reading command bodies, not names: every command
+  in `agents`, `apps`, `browser`, `calendar` (fetch/ics), `credentials`,
+  `debug`, `exec_trust`, `fs` (external paths), `markdown`, `mobile_control`,
+  `monitor`, `net_usage`, `network`, `ollama` (install/run/model management),
+  `openvpn`, `projects` (sandbox, remote-control, compute hosts, saves),
+  `project_runtime`, `remote`, `root_mcp`, `skills`, `spell`, `ssh`,
+  `terminal` (`pty_spawn`, `register_host_bound_tab`, tmux), `vm`
+  (`remote_download_to`), plus a sweep of the remaining modules and the
+  services behind them (`agent_install`, `sandbox`, `spell`, `dev_todo`,
+  `mobile_control::protocol::AdminRequest`, `browser_engine`'s hop gate).
+  Also: every `opener::open` / `app.dialog()` / `arboard` call site in
+  `commands/` against its row (all `client`, or one of the five documented
+  mail dialogs); `exec_trust::require` sits in `format_source` and
+  `compile_tex`. The four `Off(WholeDocumentSave)` rows are exactly the saves
+  `headless_owner_plan.md` H1 refuses or replaces by CAS.
+- **The completeness test**, with three mutations, each reverted: a
+  `#[cfg(unix)]` line inside `generate_handler!`, a `crate::commands::…`
+  path, and a renamed table row. All three fail loudly (the first two on the
+  `unexpected entry` assert, the third naming the row). The `> 600` floor
+  guards the zero-parse case; the handler list has no `#[cfg]` today (686
+  `commands::` tokens in the range = 683 entries + 3 in comments).
+- Code: `AppHandle`-free, matches `services/` style, file-map row accurate.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | medium | `dev_todo_groups/read/write` were `core`: they read and write `todo/*.md` under `dev_build::SOURCE_ROOT`, a checkout path baked in at build time — the server's filesystem, same lane as `dev_build_*`. | fixed `e4ce7f26` → `admin` |
+| 2 | low (docs) | Module notes and handoff said `export_project`, `remote_download_to`, `calendar_read_ics`/`write_ics` raise Rust-side dialogs; only the five `mail_*` ones do, the others take a frontend-picked path. P2 would have looked in the wrong place. | fixed `e4ce7f26` + this section |
+| 3 | low (docs) | Handoff said `install_vibe` installs into the state dir like `install_agent`; it is `curl … \| bash` into the daemon user's `$HOME`. Class unchanged (uid-bounded). | fixed `e4ce7f26` + this section |
+
+No `core` row was found that reaches another user's data, machine-wide
+state, or runs project code outside `exec_trust`. Raw paths and ids in
+`core` commands are the §4.3 relaxation (own user, own daemon); the phone
+API's `mobile_control` invariant is untouched (`mobile_opaque_id` mints, the
+sidecar's admin socket is per user).
+
+### Open judgment calls (not flipped)
+
+- **Ollama model management** (`pull_ollama_model`, `delete_ollama_model`,
+  `load_ollama_model`, `stop_ollama_model`, `pause_ollama_pull`) is `core`.
+  Against a *per-user* `ollama serve` that is right; against one shared
+  system `ollama.service` (which `ensure_ollama_running` tries to
+  `systemctl start` first on Linux) one user deletes everyone's models. The
+  §4.4 loopback inventory already has "per-user ollama on 11434" as an open
+  item — decide there, then revisit these rows (→ `admin` if shared).
+- **`list_recent_downloads(paths)`** is `core` but the frontend feeds it the
+  *desktop's* Downloads folder; on a server it lists the server-side path. A
+  browser cannot list the client's downloads either, so P2 probably hides
+  the feature (→ `client`) rather than serving it.
+- **`switch_project_runtime`** is `client` (hides/shows OS windows) but its
+  body also runs `brand_migration::project::on_project_open` and reads
+  `projects.json`. A browser adapter that hides it drops the per-project
+  migration — P2 should split the daemon half out. Not a class error, a
+  mixed body.
+- **`install_agent_remote*`** (`core`) resolve their target through
+  `global_machines::find_by_id`, whose module is `admin`. Fine if admin
+  machines are visible to users; otherwise these two fail on a server.
+- **Fetchers** (`browser_reader_fetch`, `markdown_remote_image`,
+  `calendar_fetch_ics`, `caldav_*`) fetch from the daemon. `browser_engine`
+  blocks loopback/private *redirect* hops but allows the user's own hop 0,
+  so a user can point the daemon at another user's loopback listener. §4.4
+  files that under "every user has a shell" — same residual, nothing new.
+- **`ensure_ollama_running`** attempts `systemctl start ollama` (system
+  unit) before a user-level `ollama serve`; harmless without polkit rights,
+  left `core`.
+
+### Gates (worktree, 2026-10-03, after `e4ce7f26`)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` (alone) | 691 files, 7045 tests, all pass |
+| `cargo test -q` | 3408 passed, 2 ignored |
+| `npm run lint` | 0 errors, 31 warnings — the same pre-existing ones P0 listed, none in P0/review files |
+| `cargo clippy --all-targets -- -D warnings` | No issues found |
+| `scripts/brand-check.sh` | green |
+| `scripts/privacy-check.sh` | green (and in the pre-commit hook) |
+| `git diff --check f3efd50b HEAD` | clean |
