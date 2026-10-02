@@ -1140,8 +1140,12 @@ comes.
 **P0: decisions and the command table.**
 - ~~Answer §12 Q1, Q3 and Q4.~~ Answered 2026-09-29; all three confirm the
   shape this plan already assumes (§14).
-- Write the command class table and its completeness test (§3.3). This is
-  cheap, and it forces the per-command conversation early.
+- ~~Write the command class table and its completeness test (§3.3).~~ Done
+  2026-10-03, `161b41a0` on branch `hosted`:
+  `src-tauri/src/services/command_class.rs` classifies all 683 registered
+  commands (539 `core`, 84 `client`, 51 `admin`, 9 `off`); its tests parse
+  `generate_handler!` out of `lib.rs`, so a command added without a row
+  fails `cargo test`. Handoff: [`hosted_handoff.md`](hosted_handoff.md).
 - The desktop prerequisites that used to sit here (#171, #172, the sidecar
   serving persisted-state kinds with the window closed) are H0 of
   [`headless_owner_plan.md`](headless_owner_plan.md).
