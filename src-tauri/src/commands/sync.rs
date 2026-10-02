@@ -18,7 +18,6 @@ use std::sync::Arc;
 use futures_util::{stream, StreamExt};
 use openssh_sftp_client::Sftp;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
 
 use crate::schema::net_usage;
 use crate::services::big_folders;
@@ -29,6 +28,8 @@ use crate::services::remote_sync::{
     PushDecision, SyncManifestState, SyncState,
 };
 use crate::services::sftp;
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 /// Max concurrent host re-stats during a `sync_status` refresh. The SFTP client
 /// pipelines these over the one pooled channel; this bounds the in-flight count
@@ -178,20 +179,20 @@ async fn resolve(
 /// files transferred. Streams `sync-progress` as it goes.
 #[tauri::command]
 pub async fn sync_pull(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<usize, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     pull_subtree(
-        &app,
+        &ctx,
         &project_id,
         &target,
         &sftp,
         &rel_path,
-        manifest.inner(),
+        manifest,
     )
     .await
 }
@@ -200,13 +201,13 @@ pub async fn sync_pull(
 /// project"). Equivalent to `sync_pull` with an empty `rel_path`.
 #[tauri::command]
 pub async fn sync_whole_project(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<usize, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
-    pull_subtree(&app, &project_id, &target, &sftp, "", manifest.inner()).await
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
+    pull_subtree(&ctx, &project_id, &target, &sftp, "", manifest).await
 }
 
 /// Toggle the `selected` flag for one or more project-relative paths WITHOUT
@@ -215,12 +216,13 @@ pub async fn sync_whole_project(
 /// records intent. Mirror bytes are left in place on deselect.
 #[tauri::command]
 pub async fn sync_mark_selected(
+    ctx: Ctx,
     project_id: String,
     rel_paths: Vec<String>,
     selected: bool,
     is_dir: bool,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<(), String> {
+    let manifest = ctx.get::<SyncManifestState>();
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
     for rel in &rel_paths {
@@ -244,12 +246,13 @@ pub async fn sync_mark_selected(
 /// background reconcile engine (`services::sync_auto`) acts on its next pass.
 #[tauri::command]
 pub async fn sync_set_auto(
+    ctx: Ctx,
     project_id: String,
     rel_paths: Vec<String>,
     auto: bool,
     is_dir: bool,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<(), String> {
+    let manifest = ctx.get::<SyncManifestState>();
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
     for rel in &rel_paths {
@@ -300,11 +303,12 @@ pub struct AutoSyncPreview {
 /// and reports a single entry, which is never large enough to warn on anyway.
 #[tauri::command]
 pub async fn sync_auto_preview(
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
-    pool: State<'_, RemotePoolState>,
 ) -> Result<AutoSyncPreview, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     let files = remote_sync::walk_host_files(&sftp, &target.spec.remote_path, &rel_path).await?;
     Ok(AutoSyncPreview {
         files: files.len(),
@@ -380,12 +384,13 @@ pub struct BigFolderScan {
 /// `confirmed: true`. Per run, never remembered, exactly as the other gate.
 #[tauri::command]
 pub async fn sync_big_folders(
+    ctx: Ctx,
     project_id: String,
     scan_host: Option<bool>,
     confirmed: Option<bool>,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<BigFolderScan, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
     let target =
         remote_target_for(&project_id).ok_or_else(|| "not a remote project".to_string())?;
 
@@ -427,7 +432,7 @@ pub async fn sync_big_folders(
     // check is skipped entirely when the caller doesn't want the host half, so a
     // careful host is never even dialled for it.
     let scan_host = wants_host;
-    let connected = scan_host && pooled_sftp(pool.inner(), &project_id).await.is_some();
+    let connected = scan_host && pooled_sftp(pool, &project_id).await.is_some();
     let mut host_error = None;
     let host = if connected {
         let spec = target.spec.clone();
@@ -504,11 +509,12 @@ pub async fn sync_big_folders(
 /// already present stay exactly where they are.
 #[tauri::command]
 pub async fn sync_set_excluded(
+    ctx: Ctx,
     project_id: String,
     rel_paths: Vec<String>,
     excluded: bool,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<(), String> {
+    let manifest = ctx.get::<SyncManifestState>();
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
     for rel in &rel_paths {
@@ -532,10 +538,11 @@ pub async fn sync_set_excluded(
 /// the explicit "refresh" the plan calls out — there is no live watcher.
 #[tauri::command]
 pub async fn sync_status(
+    ctx: Ctx,
     project_id: String,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<Vec<SyncStatusEntry>, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
     // A local project has no sync; return empty rather than erroring (callers may
     // probe indiscriminately).
     let Some(target) = remote_target_for(&project_id) else {
@@ -554,7 +561,7 @@ pub async fn sync_status(
         .collect();
     // Re-stat selected files when the pool is live; if cold, fall back to the
     // stored base (green for selected) rather than erroring out the whole panel.
-    let sftp = pooled_sftp(pool.inner(), &project_id).await;
+    let sftp = pooled_sftp(pool, &project_id).await;
     // With lockstep on, the git-tracked tree is lockstep's (#28p D1): those files
     // travel as commits, byte-sync never touches them, and their manifest bases
     // (seeded at pairing, re-stamped after a checkout) go stale the moment a
@@ -907,12 +914,13 @@ pub struct SyncFileMeta {
 /// pool errors via `resolve` (the popup only opens for a connected project).
 #[tauri::command]
 pub async fn sync_file_meta(
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<SyncFileMeta, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     let host = match sftp::metadata_on(&sftp, &host_abs).await {
         Ok((size, mtime)) => SideMeta {
@@ -975,12 +983,13 @@ pub async fn sync_file_meta(
 /// cost the heuristic exists to avoid.
 #[tauri::command]
 pub async fn sync_resolve_if_identical(
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<bool, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Read both sides fully. A side that can't be read (deleted on the host, never
     // pulled locally) is not "identical" — leave it amber for the merge viewer.
@@ -1034,19 +1043,20 @@ pub async fn sync_resolve_if_identical(
 /// the file keeps its fresh base.
 #[tauri::command]
 pub async fn sync_apply_delete(
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
     side: String,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
     if rel_path.is_empty() {
         return Err("a deletion names one file, never the project root".to_string());
     }
     if side != "host" && side != "local" {
         return Err(format!("unknown delete side: {side}"));
     }
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     let mirror_path = mirror_local_path(&project_id, &rel_path);
     // Snapshot the entry now: the removal below is guarded on it being unchanged,
@@ -1224,15 +1234,16 @@ fn drop_tracked_files<T>(
 /// to state.
 #[tauri::command]
 pub async fn sync_transfer_preview(
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
     direction: String,
     force: bool,
     rel_paths: Option<Vec<String>>,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<SyncTransferPreview, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     match direction.as_str() {
         "pull" => {
             preview_pull(
@@ -1241,7 +1252,7 @@ pub async fn sync_transfer_preview(
                 &sftp,
                 &rel_path,
                 rel_paths,
-                manifest.inner(),
+                manifest,
             )
             .await
         }
@@ -1253,7 +1264,7 @@ pub async fn sync_transfer_preview(
                 &rel_path,
                 rel_paths,
                 force,
-                manifest.inner(),
+                manifest,
             )
             .await
         }
@@ -1458,14 +1469,14 @@ pub struct SyncPushResult {
 /// (the user chose "keep local"), which overwrites it. Never silently clobbers.
 #[tauri::command]
 pub async fn sync_push(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
     force: bool,
-    pool: State<'_, RemotePoolState>,
-    manifest: State<'_, SyncManifestState>,
 ) -> Result<SyncPushResult, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     let files = remote_sync::walk_mirror_files(&project_id, &rel_path)?;
     let walked = files.len();
     // Excluded folders are excluded in BOTH directions: a mirror-side copy of an
@@ -1499,7 +1510,7 @@ pub async fn sync_push(
         });
     }
     let total = files.len();
-    emit(&app, &project_id, "start", &rel_path, 0, total);
+    emit(&ctx, &project_id, "start", &rel_path, 0, total);
     let mut pushed = 0usize;
     let mut conflicts = Vec::new();
     let mut failed: Vec<String> = Vec::new();
@@ -1582,12 +1593,12 @@ pub async fn sync_push(
             }
         }
         done += 1;
-        emit(&app, &project_id, "file", &rel, done, total);
+        emit(&ctx, &project_id, "file", &rel, done, total);
         if stalled {
             break;
         }
     }
-    emit(&app, &project_id, "done", &rel_path, done, total);
+    emit(&ctx, &project_id, "done", &rel_path, done, total);
     Ok(SyncPushResult {
         pushed,
         conflicts,
@@ -1606,11 +1617,12 @@ pub async fn sync_push(
 /// connection (reads the host over SFTP); a cold pool errors via `resolve`.
 #[tauri::command]
 pub async fn sync_diff(
+    ctx: Ctx,
     project_id: String,
     rel_path: String,
-    pool: State<'_, RemotePoolState>,
 ) -> Result<String, String> {
-    let (target, sftp) = resolve(&project_id, pool.inner()).await?;
+    let pool = ctx.get::<RemotePoolState>();
+    let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Host bytes now (empty if the host no longer has the file → shown as a full
     // deletion by the diff).
@@ -1694,7 +1706,7 @@ fn warn_overwritten(project_id: &str, op: &str, paths: Vec<String>) {
 /// missing or rsync fails. Either way the manifest bases come from the host walk
 /// (metadata only — no extra byte transfer) plus a local stat.
 async fn pull_subtree(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     project_id: &str,
     target: &RemoteTarget,
     sftp: &Sftp,
@@ -1755,7 +1767,7 @@ async fn pull_subtree(
     }
 
     let total = files.len();
-    emit(app, project_id, "start", rel, 0, total);
+    emit(ctx, project_id, "start", rel, 0, total);
 
     // #28q: whichever transport wins below, a pull writes the host's bytes over the
     // mirror's. Name the local edits that destroys before either of them runs — after the
@@ -1802,9 +1814,9 @@ async fn pull_subtree(
             }
         }
         done += 1;
-        emit(app, project_id, "file", &file.rel, done, total);
+        emit(ctx, project_id, "file", &file.rel, done, total);
     }
-    emit(app, project_id, "done", rel, done, total);
+    emit(ctx, project_id, "done", rel, done, total);
     Ok(done)
 }
 
@@ -1925,8 +1937,8 @@ fn rewrite_diff_labels(diff: &str, rel: &str) -> String {
 }
 
 /// Emit one `sync-progress` event (best-effort).
-fn emit(app: &AppHandle, project_id: &str, phase: &str, rel_path: &str, done: usize, total: usize) {
-    let _ = app.emit(
+fn emit(ctx: &CoreCtx, project_id: &str, phase: &str, rel_path: &str, done: usize, total: usize) {
+    ctx.emit(
         "sync-progress",
         SyncProgress {
             project_id: project_id.to_string(),
