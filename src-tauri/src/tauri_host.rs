@@ -89,6 +89,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "default_apps.rs",
     "exec_trust.rs",
     "format.rs",
+    "fs_watch.rs",
     "git_fork.rs",
     "git_hosting.rs",
     "git_peer.rs",
