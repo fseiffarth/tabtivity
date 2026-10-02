@@ -11,9 +11,8 @@
 //! the download staged — so a compromised renderer cannot nominate a file to
 //! fetch or a binary to run.
 
-use tauri::{AppHandle, Emitter};
-
 use crate::services::app_update::{self, InstallOutcome, UpdateCheck};
+use crate::tauri_host::Ctx;
 
 /// Emitted while an update downloads.
 const EV_PROGRESS: &str = "app-update-progress";
@@ -75,7 +74,7 @@ pub fn app_update_staged() -> Option<StagedInfo> {
 /// Re-checks first: the asset URL is never taken from the renderer, and a check
 /// that has been sitting open in the panel for an hour may be stale.
 #[tauri::command]
-pub async fn download_app_update(app: AppHandle) -> Result<StagedInfo, String> {
+pub async fn download_app_update(ctx: Ctx) -> Result<StagedInfo, String> {
     let check = app_update::check().await?;
     if !check.update_available {
         return Err("already up to date".to_string());
@@ -92,7 +91,7 @@ pub async fn download_app_update(app: AppHandle) -> Result<StagedInfo, String> {
             return;
         }
         last_emitted = received;
-        let _ = app.emit(EV_PROGRESS, Progress { received, total });
+        ctx.emit(EV_PROGRESS, Progress { received, total });
     })
     .await?;
     Ok(describe(&staged))
@@ -102,7 +101,7 @@ pub async fn download_app_update(app: AppHandle) -> Result<StagedInfo, String> {
 /// platform — none of the branches restart Tabtivity themselves.
 #[tauri::command]
 pub async fn install_app_update() -> Result<InstallOutcome, String> {
-    tauri::async_runtime::spawn_blocking(app_update::install)
+    app_core::rt::spawn_blocking(app_update::install)
         .await
         .map_err(|e| format!("install task: {e}"))?
 }
