@@ -116,6 +116,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "synctex.rs",
     "terminal.rs",
     "timer.rs",
+    "usage_stats.rs",
 ];
 
 #[cfg(test)]

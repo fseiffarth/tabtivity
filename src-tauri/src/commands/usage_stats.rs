@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::schema::usage_stats::{self, Counters};
 use crate::services::remote::remote_target_for_dir;
+use crate::tauri_host::Ctx;
 
 /// The rollup handed to the frontend: the same two bucket maps the store holds,
 /// already folded to one project (or summed across all of them).
@@ -126,10 +127,11 @@ fn known_scope_ids() -> Vec<String> {
 /// file stats.
 #[tauri::command]
 pub fn usage_watch_project(
-    state: tauri::State<'_, crate::services::usage_stats::UsageWatchState>,
+    ctx: Ctx,
     project_id: String,
 ) -> Result<(), String> {
-    crate::services::usage_stats::watch_project(&state, &project_id)
+    let state = ctx.get::<crate::services::usage_stats::UsageWatchState>();
+    crate::services::usage_stats::watch_project(state, &project_id)
 }
 
 /// Commits and line churn attributable to *you*, in a time window.
