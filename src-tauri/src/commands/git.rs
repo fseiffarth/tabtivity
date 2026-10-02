@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
+use crate::tauri_host::Ctx;
 
 // Every git invocation goes through the single `run_git` helper, which dispatches
 // on whether the project is local or remote:
@@ -1260,11 +1261,12 @@ pub struct FileChange {
 /// The frontend folds these flat paths into a navigable folder tree.
 #[tauri::command]
 pub async fn git_change_stats(
+    ctx: Ctx,
     project_dir: String,
     scope: String,
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<Vec<FileChange>, String> {
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     let dir = Path::new(&project_dir);
     if local_non_repo(target.as_ref(), &project_dir) {
@@ -1339,7 +1341,7 @@ pub async fn git_change_stats(
                     // than failing the whole listing.
                     let (added, binary) = match &target {
                         None => count_added_lines(&dir.join(&rel)),
-                        Some(t) => count_added_lines_remote(&pool, t, &rel).await,
+                        Some(t) => count_added_lines_remote(pool, t, &rel).await,
                     };
                     changes.push(FileChange {
                         path: rel,
@@ -5012,7 +5014,7 @@ filename note.txt
         let head = plain_git(&dir, &["rev-parse", "HEAD"]);
         fs::write(git.join("MERGE_HEAD"), &head.stdout).expect("MERGE_HEAD");
         fs::write(dir.join("f.txt"), "d\n").expect("edit");
-        let state = tauri::async_runtime::block_on(crate::commands::git_pull::git_merge_state(d.clone(), None))
+        let state = app_core::rt::block_on(crate::commands::git_pull::git_merge_state(d.clone(), None))
             .expect("merge state");
         assert!(state.merging, "setup is stale: MERGE_HEAD not seen");
         assert!(!planted.exists(), "planted hook ran on the merge-state probe");
