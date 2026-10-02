@@ -99,10 +99,27 @@ const CHANGED_EVENT: &str = "root-mcp-changed";
 /// re-granted. No payload; the settings fold re-reads `root_mcp_security_status`.
 pub const SESSIONS_EVENT: &str = "root-mcp-sessions-changed";
 
+/// What a lane changed, for whoever shows it: the window turns it into its
+/// Tauri event; the Mobile host pokes an open window over its control socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Notice {
+    /// A schedule proposal was made or a row changed (`agent_tasks.json`).
+    Schedules,
+    /// A push or release proposal changed (`services::git_push_mcp`).
+    GitPush,
+}
+pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
+
 #[derive(Clone)]
 struct ServerState {
-    app: AppHandle,
+    /// The window's handle: the root lane's mail and events. `None` in the
+    /// Mobile host, whose listener serves the schedule, push and help lanes
+    /// only (`docs/headless_mcp_plan.md`) — `/mcp` is not even routed there.
+    app: Option<AppHandle>,
     port: u16,
+    /// The process's token store, the only one this listener accepts.
+    store: &'static root_mcp::TokenStore,
+    notify: NoticeSink,
 }
 
 static REQUESTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -112,7 +129,7 @@ const PERMIT_WAIT: Duration = Duration::from_secs(8);
 
 /// Runs before body collection or JSON parsing. Kept independent of Tauri for
 /// adversarial transport tests using real request bodies.
-async fn admit(request: Request, port: u16) -> Result<(root_mcp::Session, Value, tokio::sync::OwnedSemaphorePermit, tokio::sync::OwnedSemaphorePermit), StatusCode> {
+async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Result<(root_mcp::Session, Value, tokio::sync::OwnedSemaphorePermit, tokio::sync::OwnedSemaphorePermit), StatusCode> {
     if !matches!(request.version(), axum::http::Version::HTTP_10 | axum::http::Version::HTTP_11) {
         return Err(StatusCode::HTTP_VERSION_NOT_SUPPORTED);
     }
@@ -127,7 +144,7 @@ async fn admit(request: Request, port: u16) -> Result<(root_mcp::Session, Value,
         return Err(StatusCode::FORBIDDEN);
     }
     if headers.get_all(header::AUTHORIZATION).iter().count() != 1 { return Err(StatusCode::UNAUTHORIZED); }
-    let session = root_mcp::authenticate(headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()))
+    let session = store.authenticate(headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()))
         .ok_or(StatusCode::UNAUTHORIZED)?;
     if !path_serves(request.uri().path(), session.identity.caller) { return Err(StatusCode::UNAUTHORIZED); }
     if authority == Some(guest.as_str()) && session.identity.caller != root_mcp::Caller::Reader {
@@ -175,7 +192,7 @@ fn admission_reason(status: StatusCode) -> Option<&'static str> {
 
 async fn handle(State(state): State<ServerState>, request: Request) -> Response {
     let started = Instant::now();
-    let (session, message, global, own) = match admit(request, state.port).await {
+    let (session, message, global, own) = match admit(request, state.port, state.store).await {
         Ok(admitted) => admitted,
         Err(status) => {
             if let Some(reason) = admission_reason(status) { security::audit_admission(reason); }
@@ -230,7 +247,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let Ok((reply, changed)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         let failed = reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reply.as_ref().and_then(crate::services::schedule_mcp::refusal_reason));
-        if changed { let _ = state.app.emit("agent-schedules-changed", ()); }
+        if changed { (state.notify)(Notice::Schedules); }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
     if session.identity.caller == root_mcp::Caller::Pusher {
@@ -250,11 +267,17 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let reason = reply.as_ref().and_then(crate::services::git_push_mcp::refusal_reason);
         let failed = reason.is_some() || reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reason);
-        if changed { let _ = state.app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
+        if changed { (state.notify)(Notice::GitPush); }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
-    let mail = state
-        .app
+    // The root lane is the window's: its mail, review and session controls
+    // live there. The Mobile host does not route `/mcp` and holds no root,
+    // local-model or reader token, so this is a second wall, not the first.
+    let Some(app) = state.app.clone() else {
+        security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("window_required"));
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let mail = app
         .try_state::<crate::commands::mail::MailState>()
         .map(|s| crate::commands::mail::AgentMail(s.inner().clone()));
     let outcome = tokio::task::spawn_blocking(move || {
@@ -310,10 +333,10 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
     security::audit(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed());
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
-        let _ = state.app.emit(CHANGED_EVENT, change);
+        let _ = app.emit(CHANGED_EVENT, change);
     }
     if security::tool(&tool).is_some_and(|t| t.write) {
-        let _ = state.app.emit("root-mcp-review-changed",
+        let _ = app.emit("root-mcp-review-changed",
             crate::services::root_mcp_review::pending_count(&storage::state_dir()));
     }
     match reply {
@@ -381,32 +404,66 @@ pub fn start(app: AppHandle) {
     crate::services::git_push_mcp::set_change_hook(Box::new(move || {
         let _ = push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     }));
+    let events = app.clone();
+    let notify: NoticeSink = Arc::new(move |notice| {
+        let _ = match notice {
+            Notice::Schedules => events.emit("agent-schedules-changed", ()),
+            Notice::GitPush => events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()),
+        };
+    });
     let handle = tauri::async_runtime::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
-            Ok(listener) => listener,
-            Err(error) => {
-                eprintln!("[root-mcp] bind failed: {error}");
-                return;
-            }
-        };
-        let Ok(addr) = listener.local_addr() else {
-            return;
-        };
-        root_mcp::set_runtime(Runtime { port: addr.port() });
-        let router = Router::new()
-            .route("/mcp", post(handle))
-            .route("/mcp/schedule", post(handle))
-            .route("/mcp/git", post(handle))
-            .route("/mcp/help", post(handle))
-            .layer(axum::middleware::map_response(close_connection))
-            .with_state(ServerState { app, port: addr.port() });
-        let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
-        let serve = axum::serve(listener, router).with_graceful_shutdown(async { SHUTDOWN.notified().await });
-        if let Err(error) = serve.await {
-            eprintln!("[root-mcp] server stopped: {error}");
+        match bind_and_serve(Some(app), notify, async { SHUTDOWN.notified().await }).await {
+            Ok((_, serve)) => serve.await,
+            Err(error) => eprintln!("[root-mcp] {error}"),
         }
     });
     *SERVER.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
+}
+
+/// The Mobile host's listener (`docs/headless_mcp_plan.md`): the schedule,
+/// push and help lanes for the tabs it spawns with no window open, on its own
+/// loopback port and token store; never the root lane. Bound before this
+/// returns, so a spawn after it is wired; the server runs until `shutdown`.
+/// A bind failure leaves headless tabs without the tools, as before.
+pub async fn start_headless(
+    notify: NoticeSink,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<u16, String> {
+    let (port, serve) = bind_and_serve(None, notify, shutdown).await?;
+    tokio::spawn(serve);
+    Ok(port)
+}
+
+/// The routes a listener answers: the three side lanes everywhere, the root
+/// lane only where there is a window to serve it.
+fn router(state: ServerState) -> Router {
+    let mut router = Router::new()
+        .route("/mcp/schedule", post(handle))
+        .route("/mcp/git", post(handle))
+        .route("/mcp/help", post(handle));
+    if state.app.is_some() {
+        router = router.route("/mcp", post(handle));
+    }
+    router.layer(axum::middleware::map_response(close_connection)).with_state(state)
+}
+
+/// Bind a loopback port, publish it as this process's [`Runtime`] and hand
+/// back the port and the server, which stops on `shutdown`.
+async fn bind_and_serve(
+    app: Option<AppHandle>,
+    notify: NoticeSink,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("bind failed: {e}"))?;
+    let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
+    root_mcp::set_runtime(Runtime { port, serves_root: app.is_some() });
+    let router = router(ServerState { app, port, store: root_mcp::tokens(), notify });
+    let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
+    Ok((port, async move {
+        if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
+            eprintln!("[root-mcp] server stopped: {error}");
+        }
+    }))
 }
 
 #[derive(Serialize)]
@@ -682,6 +739,17 @@ pub fn git_push_mcp_clear(app: AppHandle, id: String) -> Result<crate::services:
     result
 }
 
+/// Whether a listener over `store` admits `token` on `path`, as far as a
+/// well-formed `ping` body — the question a test of another module asks
+/// (`mobile_control::host`'s headless create).
+#[cfg(test)]
+pub(crate) async fn admission(store: &root_mcp::TokenStore, path: &str, token: &str) -> Result<(), StatusCode> {
+    let request = Request::builder().method("POST").uri(path).header(header::HOST, "127.0.0.1:8765")
+        .header(header::CONTENT_TYPE, "application/json").header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(axum::body::Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#)).expect("request");
+    admit(request, 8765, store).await.map(|_| ())
+}
+
 fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
     match path {
         "/mcp" => !matches!(caller, root_mcp::Caller::Scheduler | root_mcp::Caller::Pusher | root_mcp::Caller::Helper),
@@ -702,7 +770,7 @@ mod security_tests {
             let req = Request::builder().method("POST").uri(wrong).header("host", "127.0.0.1:8765")
                 .header("authorization", format!("Bearer {token}"))
                 .body(axum::body::Body::from("not json")).unwrap();
-            assert!(matches!(admit(req, 8765).await, Err(StatusCode::UNAUTHORIZED)));
+            assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)));
             let own = match caller { root_mcp::Caller::Scheduler => "/mcp/schedule", root_mcp::Caller::Pusher => "/mcp/git", _ => "/mcp" };
             assert!(path_serves(own, caller));
             assert!(!path_serves("/mcp/git", caller) || caller == root_mcp::Caller::Pusher, "{caller:?}");
@@ -718,26 +786,72 @@ mod security_tests {
             .body(axum::body::Body::from("not json")).unwrap();
         let (token, helper) = root_mcp::test_session(root_mcp::Caller::Helper);
         for path in ["/mcp", "/mcp/schedule", "/mcp/other"] {
-            assert!(matches!(admit(post(path, &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "{path}");
+            assert!(matches!(admit(post(path, &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "{path}");
         }
         // Right lane: admitted as far as the body, which is not JSON.
-        assert!(matches!(admit(post("/mcp/help", &token), 8765).await, Err(StatusCode::BAD_REQUEST)));
+        assert!(matches!(admit(post("/mcp/help", &token), 8765, root_mcp::tokens()).await, Err(StatusCode::BAD_REQUEST)));
         // A browser Origin or a foreign Host never gets that far.
         let mut req = post("/mcp/help", &token);
         req.headers_mut().insert(header::ORIGIN, "http://127.0.0.1:8765".parse().unwrap());
-        assert!(matches!(admit(req, 8765).await, Err(StatusCode::FORBIDDEN)));
+        assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::FORBIDDEN)));
         let mut req = post("/mcp/help", &token);
         req.headers_mut().insert(header::HOST, format!("{}:{}", root_mcp::READER_GUEST_HOST, root_mcp::READER_GUEST_PORT).parse().unwrap());
-        assert!(matches!(admit(req, 8765).await, Err(StatusCode::FORBIDDEN)));
-        assert!(matches!(admit(post("/mcp/help", "0".repeat(64).as_str()), 8765).await, Err(StatusCode::UNAUTHORIZED)));
+        assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::FORBIDDEN)));
+        assert!(matches!(admit(post("/mcp/help", "0".repeat(64).as_str()), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)));
         root_mcp::revoke_tab(&helper.identity.tab);
-        assert!(matches!(admit(post("/mcp/help", &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "a closed tab's token");
+        assert!(matches!(admit(post("/mcp/help", &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "a closed tab's token");
         for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher] {
             let (token, session) = root_mcp::test_session(caller);
-            assert!(matches!(admit(post("/mcp/help", &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "{caller:?}");
+            assert!(matches!(admit(post("/mcp/help", &token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "{caller:?}");
             root_mcp::revoke_tab(&session.identity.tab);
         }
     }
+    /// Two processes, two stores (`docs/headless_mcp_plan.md`): a listener
+    /// admits only the tokens its own process minted. The window refuses a
+    /// Mobile host's schedule and help tokens, and so does the Mobile host
+    /// itself after a restart (a fresh store).
+    #[tokio::test]
+    async fn a_token_is_admitted_only_by_the_listener_whose_process_minted_it() {
+        let host: &'static root_mcp::TokenStore = Box::leak(Box::default());
+        let window: &'static root_mcp::TokenStore = Box::leak(Box::default());
+        let runtime = Runtime { port: 8765, serves_root: false };
+        let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
+            "id": "headless:t", "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
+            "local_only": false, "sandbox": false, "agent": true, "project_id": "p", "schedule_target_id": "target-1",
+            "remote_host_id": null, "tmux_session": null, "tmux_attach": null, "host_bound_uid": null, "host_session": false,
+        })).expect("options");
+        root_mcp::grant_schedule(&mut opts, &runtime, host, &[]);
+        root_mcp::grant_help(&mut opts, &runtime, host, &[]);
+        let schedule = opts.env[root_mcp::SCHEDULE_TOKEN_ENV].clone();
+        let help = opts.env[root_mcp::HELP_TOKEN_ENV].clone();
+        assert_eq!(admission(host, "/mcp/schedule", &schedule).await, Ok(()));
+        assert_eq!(admission(host, "/mcp/help", &help).await, Ok(()));
+        let restarted: &'static root_mcp::TokenStore = Box::leak(Box::default());
+        for other in [window, restarted] {
+            assert_eq!(admission(other, "/mcp/schedule", &schedule).await, Err(StatusCode::UNAUTHORIZED));
+            assert_eq!(admission(other, "/mcp/help", &help).await, Err(StatusCode::UNAUTHORIZED));
+        }
+        // Nor does the process-wide store know them.
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {schedule}"))).is_none());
+    }
+
+    /// The Mobile host's listener has no root lane at all: `/mcp` is not
+    /// routed (404 before any handler), while the window's is.
+    #[tokio::test]
+    async fn the_headless_router_does_not_route_the_root_lane() {
+        use tower::ServiceExt;
+        let state = ServerState { app: None, port: 8765, store: root_mcp::tokens(), notify: Arc::new(|_| {}) };
+        let req = |path: &str| Request::builder().method("POST").uri(path).header("host", "127.0.0.1:8765")
+            .header("content-type", "application/json").header("authorization", "Bearer x")
+            .body(axum::body::Body::from("{}")).unwrap();
+        let root = router(state.clone()).oneshot(req("/mcp")).await.unwrap();
+        assert_eq!(root.status(), StatusCode::NOT_FOUND);
+        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help"] {
+            let side = router(state.clone()).oneshot(req(path)).await.unwrap();
+            assert_eq!(side.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
+    }
+
     use super::*;
     use axum::body::Body;
     fn request(token: &str, body: Body) -> Request {
@@ -786,30 +900,30 @@ mod security_tests {
     #[tokio::test]
     async fn a_batch_is_admitted_for_a_json_rpc_refusal() {
         let (token, session) = root_mcp::test_session(root_mcp::Caller::Agent);
-        let (_, message, ..) = admit(request(&token, Body::from(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#)), 4321).await.unwrap();
+        let (_, message, ..) = admit(request(&token, Body::from(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#)), 4321, root_mcp::tokens()).await.unwrap();
         assert!(message.is_array());
-        assert_eq!(admit(request(&token, Body::from("\"just a string\"")), 4321).await.err(), Some(StatusCode::BAD_REQUEST));
+        assert_eq!(admit(request(&token, Body::from("\"just a string\"")), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::BAD_REQUEST));
         root_mcp::revoke_tab(&session.identity.tab);
     }
 
     #[tokio::test(start_paused = true)]
     async fn transport_rejects_before_reading_unauthorized_bodies_and_bounds_valid_uploads() {
         let (token, session) = root_mcp::test_session(root_mcp::Caller::Agent);
-        assert_eq!(admit(request("invalid", pending()), 4321).await.err(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(admit(request("invalid", pending()), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::UNAUTHORIZED));
         let mut origin = request(&token, pending());
         origin.headers_mut().insert("origin", "null".parse().unwrap());
-        assert_eq!(admit(origin, 4321).await.err(), Some(StatusCode::FORBIDDEN));
+        assert_eq!(admit(origin, 4321, root_mcp::tokens()).await.err(), Some(StatusCode::FORBIDDEN));
         let mut host = request(&token, pending());
         host.headers_mut().insert("host", "attacker.invalid:4321".parse().unwrap());
-        assert_eq!(admit(host, 4321).await.err(), Some(StatusCode::FORBIDDEN));
-        assert_eq!(admit(request(&token, pending()), 4321).await.err(), Some(StatusCode::REQUEST_TIMEOUT));
-        assert_eq!(admit(request(&token, Body::from("x".repeat(security::MAX_BODY + 1))), 4321).await.err(), Some(StatusCode::PAYLOAD_TOO_LARGE));
+        assert_eq!(admit(host, 4321, root_mcp::tokens()).await.err(), Some(StatusCode::FORBIDDEN));
+        assert_eq!(admit(request(&token, pending()), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::REQUEST_TIMEOUT));
+        assert_eq!(admit(request(&token, Body::from("x".repeat(security::MAX_BODY + 1))), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::PAYLOAD_TOO_LARGE));
         let body = || Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#);
-        let first = admit(request(&token, body()), 4321).await.unwrap();
-        let second = admit(request(&token, body()), 4321).await.unwrap();
-        assert_eq!(admit(request(&token, body()), 4321).await.err(), Some(StatusCode::TOO_MANY_REQUESTS));
+        let first = admit(request(&token, body()), 4321, root_mcp::tokens()).await.unwrap();
+        let second = admit(request(&token, body()), 4321, root_mcp::tokens()).await.unwrap();
+        assert_eq!(admit(request(&token, body()), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::TOO_MANY_REQUESTS));
         drop((first, second));
         root_mcp::revoke_tab(&session.identity.tab);
-        assert_eq!(admit(request(&token, body()), 4321).await.err(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(admit(request(&token, body()), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::UNAUTHORIZED));
     }
 }

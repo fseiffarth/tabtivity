@@ -11,7 +11,9 @@
 //!
 //! - minted per agent spawn from the OS CSPRNG, held in memory, **never written to
 //!   disk** — a project agent's fence sees `/` read-only, so a token in a file
-//!   would be a token it can read;
+//!   would be a token it can read. Each process keeps its own ([`TokenStore`]):
+//!   the Mobile host serves the tabs it spawns with no window open on a
+//!   listener of its own, never the root lane (`docs/headless_mcp_plan.md`);
 //! - handed out in exactly one place, [`apply_to_spawn`], which the PTY spawn
 //!   path calls only for a *local agent whose scope is root* (`project_id ==
 //!   None`). The scope comes from the spawn request, the same trusted input
@@ -71,8 +73,14 @@ pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 const PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// The listener endpoint. Secrets belong to individual root-agent spawns.
+///
+/// Each process that spawns agent tabs runs its own listener and serves the
+/// tabs it spawned (`docs/headless_mcp_plan.md`): the window, and the Mobile
+/// host for the tabs it starts with no window open. `serves_root` is false in
+/// the Mobile host, which serves the schedule, push and help lanes only — so
+/// [`apply_to_spawn`] and [`apply_reader_to_spawn`] hand out nothing there.
 #[derive(Debug, Clone)]
-pub struct Runtime { pub port: u16 }
+pub struct Runtime { pub port: u16, pub serves_root: bool }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -109,8 +117,53 @@ fn lane(caller: Caller) -> u8 {
         Caller::Helper => 3,
     }
 }
-static TOKENS: OnceLock<std::sync::Mutex<HashMap<String, Session>>> = OnceLock::new();
-fn tokens() -> &'static std::sync::Mutex<HashMap<String, Session>> {
+/// One process's bearer tokens and the sessions they open, in memory only.
+/// Each process has exactly one ([`tokens`]) and its listener authenticates
+/// against it alone, so a token is accepted only where it was minted: a
+/// Mobile host's token is refused by the window's listener, and by the Mobile
+/// host's own after a restart (`docs/headless_mcp_plan.md`).
+#[derive(Default)]
+pub struct TokenStore(std::sync::Mutex<HashMap<String, Session>>);
+impl TokenStore {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// The session `header` (the raw `Authorization` value) opens here.
+    pub fn authenticate(&self, header: Option<&str>) -> Option<Session> {
+        let map = self.map();
+        let mut found = None;
+        for (token, session) in map.iter() {
+            if authorized(header, token) { found = Some(session.clone()); }
+        }
+        found
+    }
+    /// See [`register_token`].
+    fn register(&self, token: String, identity: Identity, read_mail: bool) {
+        let mut map = self.map();
+        let new_lane = lane(identity.caller);
+        map.retain(|_, old| {
+            if old.identity.tab == identity.tab && lane(old.identity.caller) == new_lane {
+                old.revoked.store(true, Ordering::Release);
+                false
+            } else { true }
+        });
+        let session = Session {
+            id: super::root_mcp_review::hash(token.as_bytes()),
+            access: Access::initial(identity.caller), identity,
+            revoked: Arc::new(AtomicBool::new(false)),
+            read_mail: Arc::new(AtomicBool::new(read_mail)),
+            projects_grant: Arc::new(std::sync::Mutex::new(ProjectsGrant::Hidden)),
+            permits: Arc::new(tokio::sync::Semaphore::new(2)),
+            rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
+            schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        };
+        map.insert(token, session);
+    }
+}
+static TOKENS: OnceLock<TokenStore> = OnceLock::new();
+/// This process's token store.
+pub fn tokens() -> &'static TokenStore {
     TOKENS.get_or_init(Default::default)
 }
 /// `read_mail` seeds the taint: `true` for a tab that read mail in an earlier
@@ -120,26 +173,15 @@ fn tokens() -> &'static std::sync::Mutex<HashMap<String, Session>> {
 /// and push identities ride beside a tab's root or reader token, so a respawn
 /// replaces only the session of its own lane.
 fn register_token(token: String, identity: Identity, read_mail: bool) {
-    let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
-    let new_lane = lane(identity.caller);
-    map.retain(|_, old| {
-        if old.identity.tab == identity.tab && lane(old.identity.caller) == new_lane {
-            old.revoked.store(true, Ordering::Release);
-            false
-        } else { true }
-    });
-    let session = Session {
-        id: super::root_mcp_review::hash(token.as_bytes()),
-        access: Access::initial(identity.caller), identity,
-        revoked: Arc::new(AtomicBool::new(false)),
-        read_mail: Arc::new(AtomicBool::new(read_mail)),
-        projects_grant: Arc::new(std::sync::Mutex::new(ProjectsGrant::Hidden)),
-        permits: Arc::new(tokio::sync::Semaphore::new(2)),
-        rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
-        schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-        push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-    };
-    map.insert(token, session);
+    tokens().register(token, identity, read_mail);
+}
+/// Every tab that holds a token in this process, once each — what the Mobile
+/// host's sweep checks against the tmux server.
+pub fn token_tabs() -> Vec<String> {
+    let mut tabs: Vec<String> = tokens().map().values().map(|s| s.identity.tab.clone()).collect();
+    tabs.sort();
+    tabs.dedup();
+    tabs
 }
 /// Record that `tab`'s fence lets it read the projects
 /// ([`Session::projects_grant`]): a root spawn with
@@ -148,7 +190,7 @@ fn register_token(token: String, identity: Identity, read_mail: bool) {
 /// Called from the spawn path before the agent process exists, so nothing can
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
-    for s in tokens().lock().unwrap_or_else(|p| p.into_inner()).values() {
+    for s in tokens().map().values() {
         if s.identity.tab == tab && s.identity.caller != Caller::Helper {
             *s.projects_grant.lock().unwrap_or_else(|p| p.into_inner()) = grant.clone();
         }
@@ -171,7 +213,7 @@ pub enum ProjectsGrant {
 /// Whether the tab held a token.
 pub fn revoke_tab(tab: &str) -> bool {
     let mut held = false;
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).retain(|_, s| {
+    tokens().map().retain(|_, s| {
         if s.identity.tab == tab { s.revoked.store(true, Ordering::Release); held = true; false } else { true }
     });
     held
@@ -179,7 +221,7 @@ pub fn revoke_tab(tab: &str) -> bool {
 /// Whether a spawn of `tab` still holds a root-lane session (the help lane
 /// owns no sandbox view, so it never keeps one alive).
 pub fn tab_active(tab: &str) -> bool {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values()
+    tokens().map().values()
         .any(|s| s.identity.tab == tab && s.identity.caller != Caller::Helper)
 }
 
@@ -350,14 +392,14 @@ pub struct SessionInfo {
 /// Help sessions are left out: one per agent tab, nothing to grant, and they
 /// end with their tab or the `help_mcp` switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values().filter(|s| s.identity.caller != Caller::Helper).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| s.identity.caller != Caller::Helper).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
 /// Tauri-only: replacing a grant invalidates all requests queued under the old grant.
 pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
-    let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
     if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
@@ -369,7 +411,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     Ok(())
 }
 pub fn revoke_session(id: &str) -> Result<String, String> {
-    let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = tokens().map();
     let key = map.iter().find(|(_, s)| s.id == id).map(|(k, _)| k.clone()).ok_or("MCP session is closed")?;
     let s = map.remove(&key).unwrap();
     s.revoked.store(true, Ordering::Release);
@@ -378,16 +420,11 @@ pub fn revoke_session(id: &str) -> Result<String, String> {
 /// Whether the session `id` (a [`Session::id`]) still holds an unrevoked
 /// token — what a record bound to a session checks before it trusts it.
 pub fn session_alive(id: &str) -> bool {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values()
+    tokens().map().values()
         .any(|s| s.id == id && !s.revoked.load(Ordering::Acquire))
 }
 pub fn authenticate(header: Option<&str>) -> Option<Session> {
-    let map = tokens().lock().unwrap_or_else(|p| p.into_inner());
-    let mut found = None;
-    for (token, session) in map.iter() {
-        if authorized(header, token) { found = Some(session.clone()); }
-    }
-    found
+    tokens().authenticate(header)
 }
 pub fn caller(header: Option<&str>) -> Option<Identity> {
     authenticate(header).map(|s| s.identity)
@@ -581,7 +618,7 @@ impl Drop for SpawnTokenGuard {
     }
 }
 pub fn revoke_token(token: &str) -> Option<Identity> {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).remove(token).map(|s| {
+    tokens().map().remove(token).map(|s| {
         s.revoked.store(true, Ordering::Release);
         s.identity
     })
@@ -611,7 +648,7 @@ pub fn enabled() -> bool {
 /// [`apply_to_spawn_with`] against the live listener; a no-op while none is up
 /// or while the tools are switched off.
 pub fn apply_to_spawn(opts: &mut PtyOptions) {
-    let Some(runtime) = runtime() else { return };
+    let Some(runtime) = runtime().filter(|r| r.serves_root) else { return };
     let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(
         &crate::storage::state_dir().join("settings.json"),
     ) else { return };
@@ -658,15 +695,23 @@ pub fn apply_schedule_to_spawn(opts: &mut PtyOptions) {
         || super::sandbox::sandbox_spec_for(project).is_some_and(|s| s.enabled)
         || super::vm::vm_spec_for(project).is_some()
         || super::schedule_mcp::level(project).is_err() { return; }
-    let Some(target) = opts.schedule_target_id.clone() else { return };
-    if super::agent_tasks::validate_id("schedule target", &target).is_err() { return; }
     let Some(runtime) = runtime() else { return };
     let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
+    grant_schedule(opts, runtime, tokens(), &settings.ollama_mcp_models.unwrap_or_default());
+}
+
+/// The half of [`apply_schedule_to_spawn`] after its gates: mint a token,
+/// wire the spawn and register the token in `store` — the store the listener
+/// at `runtime` authenticates against. Split out so a test can drive a spawn
+/// against a store of its own.
+pub fn grant_schedule(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
+    let Some(target) = opts.schedule_target_id.clone() else { return };
+    if super::agent_tasks::validate_id("schedule target", &target).is_err() { return; }
     let Some(token) = mint_token() else { return };
     let agent = basename(&opts.cmd).to_string();
-    apply_schedule_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_schedule_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(SCHEDULE_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Scheduler, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Scheduler, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
     }
 }
 
@@ -720,10 +765,16 @@ pub fn apply_git_push_to_spawn(opts: &mut PtyOptions) {
     let Some(dir) = super::remote::project_directory(project).and_then(|d| std::fs::canonicalize(d).ok()) else { return };
     let Some(runtime) = runtime() else { return };
     let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
+    grant_git_push(opts, runtime, tokens(), dir, &settings.ollama_mcp_models.unwrap_or_default());
+}
+
+/// The half of [`apply_git_push_to_spawn`] after its gates, as
+/// [`grant_schedule`]: `dir` is the trusted entry's canonical directory.
+pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, dir: std::path::PathBuf, tool_models: &[String]) {
     let Some(token) = mint_token() else { return };
-    apply_git_push_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir }), endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir }), endpoint: None }, false);
     }
 }
 
@@ -787,10 +838,15 @@ pub fn apply_help_to_spawn(opts: &mut PtyOptions) {
     let Some(runtime) = runtime() else { return };
     let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
     if !settings.help_mcp() { return; }
+    grant_help(opts, runtime, tokens(), &settings.ollama_mcp_models.unwrap_or_default());
+}
+
+/// The half of [`apply_help_to_spawn`] after its gates, as [`grant_schedule`].
+pub fn grant_help(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
     let Some(token) = mint_token() else { return };
-    apply_help_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_help_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(HELP_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None }, false);
     }
 }
 
@@ -820,7 +876,7 @@ pub fn apply_reader_to_spawn(
     agent_cmd: &str,
     agent_args: &mut Vec<String>,
 ) -> Option<Vec<(String, String)>> {
-    runtime()?;
+    runtime().filter(|r| r.serves_root)?;
     let settings = crate::storage::read_json::<crate::schema::Settings>(
         &crate::storage::state_dir().join("settings.json"),
     )
@@ -3196,7 +3252,7 @@ mod tests {
 
     #[test]
     fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
-        let runtime = Runtime { port: 8765 };
+        let runtime = Runtime { port: 8765, serves_root: true };
         for cli in WIRED_CLIS {
             let mut spawn = opts(cli, &[], Some("p"));
             apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
@@ -3219,7 +3275,7 @@ mod tests {
     }
 
     fn rt() -> Runtime {
-        Runtime { port: 4321 }
+        Runtime { port: 4321, serves_root: true }
     }
 
     /// Every agent CLI gets the help pair; Claude and Codex are also named the

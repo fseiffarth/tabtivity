@@ -1495,7 +1495,7 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
     // while the listener is up; every other VM has no route to it at all.
     let mcp_port = spec
         .mail_reader
-        .then(|| crate::services::root_mcp::runtime().map(|rt| rt.port))
+        .then(|| crate::services::root_mcp::runtime().filter(|rt| rt.serves_root).map(|rt| rt.port))
         .flatten();
     let netdev = netdev_arg(spec.egress, ssh_port, proxy_port, mcp_port);
     let machine = machine_args()?;

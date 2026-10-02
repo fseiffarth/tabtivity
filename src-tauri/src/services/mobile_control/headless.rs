@@ -696,6 +696,11 @@ const HEADLESS_ROWS: u16 = 50;
 /// window's `TerminalView` hands `pty_spawn`, at a fixed
 /// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
 /// project's or a box's).
+/// What a headless launch's PTY id starts with: the tab is `headless:<tmux>`,
+/// the identity its MCP tokens are registered under in the Mobile host
+/// (`docs/headless_mcp_plan.md`), so they can be revoked by tmux name.
+pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
+
 pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     let strings = |key: &str| -> Vec<String> {
         tab.extra
@@ -716,7 +721,7 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         .unwrap_or_default();
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
     PtyOptions {
-        id: format!("headless:{tmux}"),
+        id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),
         env,
