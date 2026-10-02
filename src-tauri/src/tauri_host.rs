@@ -84,6 +84,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for Ctx {
 pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "boxes.rs",
     "brand_migration.rs",
+    "caldav.rs",
     "calendar.rs",
     "crash.rs",
     "default_apps.rs",
