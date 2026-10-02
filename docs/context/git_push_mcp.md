@@ -130,6 +130,12 @@ the git bar (`ProjectFilesView`) and the Agents view. Everything carries the
 - Hooks other than `pre-push` do not run for agent pushes. Global
   `insteadOf` rewrites are the user's own and apply as they do to the Push
   button.
+- **Tabs the Mobile host started with no window** (`docs/headless_mcp_plan.md`)
+  get the lane from the host's own listener, which never reads the keychain
+  (`git_push_mcp::serve_without_keyring`): `git_push` / `git_release` answer
+  `window_required` (after argument checks, costing no budget), CI reads go
+  without the token, and a private repo's `not_available` says why. Queuing
+  those requests for the window's card is phase 2 of that plan.
 - Out of v1: phone approval cards, remote/mirror projects, creating remote
   branches, other forges' token quirks, a typed outcome notice.
 

@@ -29,6 +29,8 @@ Why it is shaped this way:
   loopback is not Tabtivity's, and a tunnel would expose the listener. The VM
   `guestfwd` address stays `Reader`-only.
 - **`tabtivity_help_status` leaks nothing**: compile-time constants and OS/arch.
+- **Headless tabs too.** A tab the Mobile host starts with no window gets the
+  server from the host's own listener (`docs/headless_mcp_plan.md`).
 
 Frontend hooks: `root_mcp_status.help` (`enabled`, `wiredClis`, `topics`) and
 the Tauri commands `help_search`, `help_read`, `help_topics` (camelCase).
