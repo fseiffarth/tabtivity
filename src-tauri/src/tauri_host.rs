@@ -83,6 +83,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for Ctx {
 /// keeps a converted file from sliding back.
 pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "agent_prompts.rs",
+    "agent_tasks.rs",
     "boxes.rs",
     "brand_migration.rs",
     "caldav.rs",

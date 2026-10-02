@@ -1,4 +1,5 @@
-use tauri::{AppHandle, Emitter};
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 use crate::{
     schema::{AgentScheduleResult, AgentScheduleTargetBinding, ScheduledAgentPrompt},
@@ -7,8 +8,8 @@ use crate::{
 
 const CHANGED_EVENT: &str = "agent-schedules-changed";
 
-fn changed(app: &AppHandle) {
-    let _ = app.emit(CHANGED_EVENT, ());
+fn changed(ctx: &CoreCtx) {
+    ctx.emit(CHANGED_EVENT, ());
 }
 
 /// Take or renew the single-client timer lease for this window
@@ -36,7 +37,7 @@ pub fn agent_schedules_list(
 
 #[tauri::command]
 pub fn agent_schedule_upsert(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     schedule_target_id: String,
     schedule: ScheduledAgentPrompt,
@@ -51,13 +52,13 @@ pub fn agent_schedule_upsert(
         schedule,
         expect_existing_on.as_deref(),
     )?;
-    changed(&app);
+    changed(&ctx);
     Ok(result)
 }
 
 #[tauri::command]
 pub fn agent_schedule_delete(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     schedule_target_id: String,
     schedule_id: String,
@@ -69,18 +70,18 @@ pub fn agent_schedule_delete(
         &schedule_id,
         expect_undelivered.unwrap_or(false),
     )?;
-    changed(&app);
+    changed(&ctx);
     Ok(())
 }
 
 #[tauri::command]
 pub fn agent_schedules_delete_target(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     schedule_target_id: String,
 ) -> Result<(), String> {
     agent_tasks::delete_target(&project_id, &schedule_target_id)?;
-    changed(&app);
+    changed(&ctx);
     Ok(())
 }
 
@@ -96,7 +97,7 @@ pub fn agent_schedule_claim(
 
 #[tauri::command]
 pub fn agent_schedule_complete(
-    app: AppHandle,
+    ctx: Ctx,
     project_id: String,
     schedule_target_id: String,
     schedule_id: String,
@@ -110,18 +111,18 @@ pub fn agent_schedule_complete(
         &occurrence,
         result,
     )?;
-    changed(&app);
+    changed(&ctx);
     Ok(schedules)
 }
 
 #[tauri::command]
 pub fn agent_schedules_cleanup_orphans(
-    app: AppHandle,
+    ctx: Ctx,
     live: Vec<AgentScheduleTargetBinding>,
 ) -> Result<usize, String> {
     let removed = agent_tasks::cleanup_orphans(&live)?;
     if removed > 0 {
-        changed(&app);
+        changed(&ctx);
     }
     Ok(removed)
 }
