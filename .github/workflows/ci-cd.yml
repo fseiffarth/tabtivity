@@ -170,6 +170,9 @@ jobs:
       - name: Lint backend
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - name: Lint core crate
+        run: cargo clippy --manifest-path src-core/Cargo.toml --all-targets -- -D warnings
+
   test:
     name: test
     runs-on: ubuntu-24.04
@@ -216,6 +219,9 @@ jobs:
       - name: Run backend tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
+
   test-windows:
     name: test-windows
     runs-on: windows-latest
@@ -249,6 +255,9 @@ jobs:
 
       - name: Run backend tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
 
   test-macos:
     name: test-macos
@@ -285,6 +294,9 @@ jobs:
 
       - name: Run backend tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Run core crate tests
+        run: cargo test --manifest-path src-core/Cargo.toml
 
       # Staged gate: the macOS-only arms have never been linted (nothing that
       # lints on Linux can compile them), so the first runs are expected to

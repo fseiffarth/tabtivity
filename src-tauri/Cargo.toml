@@ -32,6 +32,10 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# The Tauri-free core (docs/tabtivity_hosted_plan.md §3.2): `CoreCtx`, the
+# event sink and runtime seams, and the services that have moved out of this
+# crate. This crate is its desktop host; `tauri_host.rs` is the adapter.
+app-core = { path = "../src-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 # Desktop notifications for calendar reminders. The in-app alarm popup

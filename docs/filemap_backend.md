@@ -19,7 +19,16 @@ only when breaking it does damage. The *why* goes in code comments or
 | `brand.rs` | The app's name: the one backend place it is spelled. Display/slug/upper forms, literal macros for `concat!` (`app_name!`, `app_slug!`, `app_env!`, `app_tab_command!`), and every name the app persists or puts on the wire as a current constant plus its `LEGACY_*` twin (old brand). `build.rs` includes it by path. Twin of `src/lib/brand.ts`. The dev scripts read the same names through the sourced `scripts/lib/brand.sh` (parses this file and `Cargo.toml`'s `[[bin]]`; a test here sources it and compares). |
 | `sysstat.rs` | Per-process CPU via `/proc` (`descendant_pids`), whole-system `SystemSnapshot`, and `machine_load()` — aggregate-only, no process table (cheap enough to poll). Unsupported target answers `supported: false`, never zeros. |
 | `gpustat.rs` | Whole-device GPU memory as two pools (dedicated VRAM + shared/GTT; callers sum) plus sensors, from DRM sysfs or `nvidia-smi`; ~1 s cache. Missing readings are `None`, never 0. Per-process GPU is separate (monitor only). Remote hosts parsed by the same parsers. |
+| `tauri_host.rs` | The desktop app as a host of `app_core` (hosted plan §3.2): `TauriEvents` (Tauri's `emit_str`/`emit_str_to` as the core's `EventSink`; a client id is a window label), `install` (builds the system `CoreCtx` from `lib.rs`'s `core_state`, manages it, points `app_core::rt` at Tauri's runtime), `system_ctx(&app)`, and `Ctx` — the `CommandArg` newtype a converted command takes in place of `AppHandle`/`State`/`Window`; its caller is the CALLING webview's label, never payload data. The one module that knows a client is a window. |
 | `../patches/tauri-runtime-wry/` | Vendored tauri-runtime-wry 2.11.3 via root `[patch.crates-io]`; one `TABTIVITY PATCH` (`Context.main_thread` behind an `Arc`) stops off-thread `AppHandle` clones racing tao's Linux `Rc` — re-apply on every tauri bump. |
+
+**Core crate (`../../src-core/`, package `app-core`, lib `app_core`)** — the Tauri-free core of the hosted plan (§3.2); nothing in it may name `tauri`. Both hosts build its `CoreState` and implement its `EventSink`.
+
+| File | Purpose |
+|------|---------|
+| `src/lib.rs` | Module list and re-exports; the crate's doc says what has moved so far. |
+| `src/ctx.rs` | `CoreCtx { state, events, caller }` — what a command body or service gets instead of Tauri. `CoreState`: the managed singletons keyed by type (`manage` builder, `get` panics like Tauri's `State`; a host hands Tauri and the core clones of ONE `Arc`, never two values). `EventSink`: `emit_json`/`emit_json_to(ClientId)` take one pre-serialized payload; `emit`/`emit_to` on `dyn EventSink` serialize once. `Caller::{System, Local, Client}`; `ClientId` (desktop: the window label, `MAIN`). `NullEvents`, `RecordingEvents` for tests. |
+| `src/rt.rs` | The runtime seam: `spawn`/`spawn_blocking`/`block_on` on the handle the host `install`ed, else the current runtime, else a lazily built fallback (Tauri's `async_runtime` semantics, so the §3.2 swap is mechanical). |
 
 **Commands (`commands/`)** — Tauri command handlers exposed to the frontend.
 

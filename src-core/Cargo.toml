@@ -1,0 +1,21 @@
+[package]
+name = "app-core"
+# Not bumped with the app (`scripts/bump-version.sh` tracks src-tauri): this
+# crate is only ever built as a path dependency of the hosts in this workspace.
+version = "0.1.0"
+edition = "2021"
+description = "The Tauri-free core every host of the app links: contexts, services, command bodies."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "app_core"
+
+# No `tauri` here, ever: that is the point of the crate (docs/tabtivity_hosted_plan.md
+# §3.2). A host (the desktop app in src-tauri, later the per-user daemon)
+# implements `EventSink` and builds `CoreState`; everything in here reaches the
+# outside world through those two.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.52.3", features = ["full"] }

@@ -19,6 +19,7 @@ pub mod schema;
 pub mod services;
 pub mod storage;
 pub mod sysstat;
+pub mod tauri_host;
 pub mod terminal;
 
 use commands::apps::{WindowRegistry, WindowRegistryState};
@@ -1010,6 +1011,47 @@ fn restore_main_window(app: &tauri::App) {
     let _ = win.show();
 }
 
+
+/// The managed singletons as the core sees them (`app_core::CoreState`,
+/// hosted plan §3.2). Every value is a clone of the `Arc` Tauri manages too,
+/// so a converted command (`tauri_host::Ctx`) and an unconverted one
+/// (`State<'_, T>`) share one instance. Keyed by type: two singletons of one
+/// type cannot both be managed, and `manage` panics at startup if they are —
+/// `core_state_types_are_distinct` holds the list to that.
+#[allow(clippy::too_many_arguments)]
+fn core_state(
+    pty_registry: &RegistryState,
+    win_registry: &WindowRegistryState,
+    workspace: &WorkspaceStateArc,
+    fs_watch: &commands::fs_watch::FsWatchState,
+    remote_pool: &services::remote::RemotePoolState,
+    sync_manifest: &services::remote_sync::SyncManifestState,
+    auto_sync: &services::sync_auto::AutoSyncState,
+    git_peer: &services::git_peer::GitPeerRegistry,
+    worker_sync: &services::worker_sync::WorkerSyncState,
+    disk_scans: &commands::disk_usage::DuScanState,
+    mail_state: &commands::mail::MailState,
+    caldav_state: &commands::caldav::CalDavState,
+    usage_watch: &services::usage_stats::UsageWatchState,
+    mobile_desktop: &commands::mobile_control::MobileDesktopState,
+) -> app_core::CoreState {
+    app_core::CoreState::new()
+        .manage(pty_registry.clone())
+        .manage(win_registry.clone())
+        .manage(workspace.clone())
+        .manage(fs_watch.clone())
+        .manage(remote_pool.clone())
+        .manage(sync_manifest.clone())
+        .manage(auto_sync.clone())
+        .manage(git_peer.clone())
+        .manage(worker_sync.clone())
+        .manage(disk_scans.clone())
+        .manage(mail_state.clone())
+        .manage(caldav_state.clone())
+        .manage(usage_watch.clone())
+        .manage(mobile_desktop.clone())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKit's DMA-BUF renderer SIGBUSes inside Mesa on some driver stacks
@@ -1109,6 +1151,25 @@ pub fn run() {
     // seen since the last flush (see `services::usage_stats`).
     let usage_watch = services::usage_stats::new_state();
     let mobile_desktop = commands::mobile_control::MobileDesktopState::default();
+    // The core's view of the same singletons (`app_core::CoreState`):
+    // clones of the Arcs Tauri manages below, never second instances. Becomes
+    // the system `CoreCtx` in `setup`, once the AppHandle exists.
+    let core_state = core_state(
+        &pty_registry,
+        &win_registry,
+        &workspace,
+        &fs_watch,
+        &remote_pool,
+        &sync_manifest,
+        &auto_sync,
+        &git_peer,
+        &worker_sync,
+        &disk_scans,
+        &mail_state,
+        &caldav_state,
+        &usage_watch,
+        &mobile_desktop,
+    );
 
     with_macos_menu(with_webview_crash_reporter(tauri::Builder::default()))
         .manage(pty_registry)
@@ -1129,6 +1190,9 @@ pub fn run() {
         .manage(usage_watch.clone())
         .manage(mobile_desktop.clone())
         .setup(move |_app| {
+            // First: converted commands and services read their `CoreCtx`
+            // from here, and `rt::spawn` needs Tauri's runtime installed.
+            tauri_host::install(_app.handle(), core_state);
             commands::mobile_control::start_desktop_bridge(
                 _app.handle().clone(),
                 mobile_desktop.clone(),
@@ -2315,6 +2379,33 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `core_state` keys the singletons by type. Two aliases over one
+    /// underlying type (`Arc<Mutex<HashMap<String, …>>>` twice, say) would
+    /// make `manage` panic at startup — which this build cannot observe, so
+    /// hold the list here. Keep it in step with `core_state`'s parameters.
+    #[test]
+    fn core_state_types_are_distinct() {
+        use std::any::TypeId;
+        let ids = [
+            TypeId::of::<RegistryState>(),
+            TypeId::of::<WindowRegistryState>(),
+            TypeId::of::<WorkspaceStateArc>(),
+            TypeId::of::<commands::fs_watch::FsWatchState>(),
+            TypeId::of::<services::remote::RemotePoolState>(),
+            TypeId::of::<services::remote_sync::SyncManifestState>(),
+            TypeId::of::<services::sync_auto::AutoSyncState>(),
+            TypeId::of::<services::git_peer::GitPeerRegistry>(),
+            TypeId::of::<services::worker_sync::WorkerSyncState>(),
+            TypeId::of::<commands::disk_usage::DuScanState>(),
+            TypeId::of::<commands::mail::MailState>(),
+            TypeId::of::<commands::caldav::CalDavState>(),
+            TypeId::of::<services::usage_stats::UsageWatchState>(),
+            TypeId::of::<commands::mobile_control::MobileDesktopState>(),
+        ];
+        let distinct: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "two managed singletons share a type");
+    }
 
     /// tauri-utils merges `tauri.macos.conf.json` over the base config with RFC
     /// 7396 merge-patch, which REPLACES arrays: a `windows` array there drops
