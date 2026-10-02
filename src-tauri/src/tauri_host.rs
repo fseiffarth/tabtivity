@@ -109,6 +109,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "monitor.rs",
     "net_usage.rs",
     "network.rs",
+    "os_clock.rs",
     "pdf_markup.rs",
     "power.rs",
     "project_runtime.rs",

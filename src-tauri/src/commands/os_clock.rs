@@ -27,7 +27,7 @@ pub struct OsClockFormat {
 /// `{ use24h: null, locale: null }` and the frontend falls back to the language.
 #[tauri::command]
 pub async fn os_clock_format() -> OsClockFormat {
-    tauri::async_runtime::spawn_blocking(detect)
+    app_core::rt::spawn_blocking(detect)
         .await
         .unwrap_or_default()
 }
