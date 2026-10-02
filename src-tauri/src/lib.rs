@@ -9,7 +9,13 @@
 // change nothing about the call site the lint is worried about.
 #![allow(clippy::too_many_arguments)]
 
-pub mod brand;
+// The brand module lives in the core crate; re-exported with its macros so
+// `crate::brand::…` and `crate::app_slug!()` resolve here unchanged.
+pub use app_core::brand;
+pub use app_core::{
+    app_env, app_name, app_repo, app_slug, app_tab_command, app_upper, legacy_name, legacy_slug,
+    legacy_upper,
+};
 pub mod commands;
 pub mod duscan;
 pub mod gpustat;

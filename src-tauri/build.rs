@@ -1,7 +1,7 @@
 // The brand module is shared with the crate it builds, so the names this
 // script exports are spelled where every other name is.
 #[allow(dead_code)]
-#[path = "src/brand.rs"]
+#[path = "../src-core/src/brand.rs"]
 mod brand;
 
 use crate::brand::UPPER;

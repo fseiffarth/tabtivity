@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The app's name is spelled in ONE place per language — src-tauri/src/brand.rs,
+# The app's name is spelled in ONE place per language — src-core/src/brand.rs,
 # src/lib/brand.ts, and the scripts read it through scripts/lib/brand.sh. This
 # fails when a tracked file outside the allowlist below spells it itself, so a
 # hard-coded name cannot creep back in between the rename's phases.
@@ -49,7 +49,7 @@ COMMENTS_ARE_PROSE=0
 ALLOW=(
   # --- The brand modules: the one place per language the name is written. ---
   # Stays. They hold the current name and the LEGACY_* old one.
-  'src-tauri/src/brand.rs'
+  'src-core/src/brand.rs'
   'src/lib/brand.ts'
 
   # --- Prose: documentation and notes. Stays. -------------------------------
@@ -297,7 +297,7 @@ if [ "$bad" -gt 0 ]; then
   cat >&2 <<MSG
 
 brand-check: $bad place(s) spell the app's name outside the brand modules.
-  Rust: use a constant or macro from src-tauri/src/brand.rs (crate::brand::…).
+  Rust: use a constant or macro from src-core/src/brand.rs (crate::brand::…).
   TypeScript: use BRAND / NAMES / storageKey(…) from src/lib/brand.ts.
   Shell: source scripts/lib/brand.sh and use \$APP_DISPLAY, \$APP_SLUG, ….
   Where no constant can reach (a serde key, an include path), put

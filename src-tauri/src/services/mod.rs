@@ -19,12 +19,8 @@ pub mod git_push_mcp;
 pub mod git_release;
 pub mod git_ci;
 pub mod help_mcp;
-pub mod schedule_usage;
-// One agent CLI's own usage panel (Claude's `/usage`), read in print mode
-// without a tab: recipe table, envelope parsing, and the short-lived cache
-// that keeps a phone reopening the status sheet from spawning a CLI each
-// time.
-pub mod agent_usage;
+pub use app_core::services::schedule_usage;
+pub use app_core::services::agent_usage;
 // Which release of each agent CLI is installed vs. the one Tabtivity's parsers
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
@@ -36,7 +32,7 @@ pub mod agent_latest;
 pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
-pub mod fence_scope;
+pub use app_core::services::fence_scope;
 // The Claude credential mirror: one Tabtivity-owned inode mounted into every
 // fenced/contained tab in place of `~/.claude/.credentials.json`, kept in step
 // with the host file by in-place writes — a file bind mount pins an inode, and
@@ -54,7 +50,7 @@ pub mod copilot_auth;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
-pub mod big_folders;
+pub use app_core::services::big_folders;
 // Ask-once approval for project-supplied programs Tabtivity runs on the host
 // (git hooks, latexmkrc, a project's own prettier), re-asked when they change.
 pub mod exec_trust;
@@ -86,8 +82,7 @@ pub mod codex_bind;
 pub mod codex_store;
 pub mod copilot;
 pub mod git_credentials;
-// The `.git` control files a sandbox keeps its occupant from writing (#158).
-pub mod git_guard;
+pub use app_core::services::git_guard;
 // The default branch (`main`) for repositories Tabtivity creates, and the
 // unpublished-`master` rename that runs just before a publish.
 pub mod git_init;
@@ -129,7 +124,7 @@ pub mod openvpn;
 pub mod project_runtime;
 pub mod prompt_blame;
 pub mod remote;
-pub mod remote_agents;
+pub use app_core::services::remote_agents;
 pub mod remote_credentials;
 pub mod remote_sync;
 pub mod remote_usage;
@@ -181,18 +176,11 @@ pub mod usage_stats;
 // plus its allowlisting egress proxy and the built-in cloud-init seed writer.
 pub mod iso9660;
 pub mod vm;
-pub mod vm_proxy;
-// Shared web-safety primitives (URL policy, host display, filename sanitizing)
-// used by BOTH the mail client and the in-app browser. `mail_sanitize`
-// re-exports what it used to own.
-pub mod web_safety;
-// The WebKitGTK accessibility (AT-SPI) opt-out: WebKit 2.48's ATSPI text
-// handler aborts the whole web process on an out-of-range offset, which a
-// continuously rewriting UI hands it routinely. Installed before the first
-// webview, stripped from spawned children.
-pub mod webkit_a11y;
+pub use app_core::services::vm_proxy;
+pub use app_core::services::web_safety;
+pub use app_core::services::webkit_a11y;
 pub mod window_service;
 pub mod window_state;
 pub mod worker_sync;
 
-pub mod text_completion;
+pub use app_core::services::text_completion;

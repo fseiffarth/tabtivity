@@ -868,7 +868,7 @@ mod tests {
 
     /// `name = "…"` of the first `[[bin]]` table in the crate's manifest.
     fn manifest_bin_name() -> String {
-        let manifest = include_str!("../Cargo.toml");
+        let manifest = include_str!("../../src-tauri/Cargo.toml");
         let table = manifest.split("[[bin]]").nth(1).expect("Cargo.toml has a [[bin]] table");
         let line = table
             .lines()

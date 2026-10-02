@@ -101,8 +101,8 @@ flip_macro() { # macro, old literal, new literal
     inside && /^}/ { inside = 0 }
     { print }
     END { if (!done) exit 3 }
-  ' src-tauri/src/brand.rs > src-tauri/src/brand.rs.flip || { rm -f src-tauri/src/brand.rs.flip; echo "brand-flip: $1 not found in brand.rs" >&2; exit 1; }
-  mv src-tauri/src/brand.rs.flip src-tauri/src/brand.rs
+  ' src-core/src/brand.rs > src-core/src/brand.rs.flip || { rm -f src-core/src/brand.rs.flip; echo "brand-flip: $1 not found in brand.rs" >&2; exit 1; }
+  mv src-core/src/brand.rs.flip src-core/src/brand.rs
 }
 flip_macro app_name "$OLD_DISPLAY" "$NEW_DISPLAY"
 flip_macro app_slug "$OLD_SLUG" "$NEW_SLUG"

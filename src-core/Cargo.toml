@@ -19,3 +19,28 @@ name = "app_core"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.52.3", features = ["full"] }
+chrono = "0.4"
+chrono-tz = "0.10"
+regex = "1"
+# The one URL parser (`services::web_safety`); see src-tauri/Cargo.toml.
+url = "2"
+idna = "1"
+ipnet = "2"
+# Same spec as src-tauri's: `rustls-no-provider` takes the process-wide
+# CryptoProvider the host installs (`mail_engine::install_crypto_provider`).
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
+    "http2",
+    "charset",
+    "gzip",
+    "brotli",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+# The crypto provider the tests install before building a `reqwest` client
+# (see `text_completion::tests::client`); same spec as src-tauri's.
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std", "logging"] }

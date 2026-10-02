@@ -721,7 +721,7 @@ mod tests {
             ),
             (
                 "services/web_safety.rs",
-                include_str!("../services/web_safety.rs"),
+                include_str!("../../../src-core/src/services/web_safety.rs"),
             ),
         ]
     }

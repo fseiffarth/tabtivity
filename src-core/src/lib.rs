@@ -8,7 +8,9 @@
 //! `docs/hosted_handoff.md` (P1); the rest of the services and the command
 //! bodies still live in `src-tauri/src` and migrate one file at a time.
 
+pub mod brand;
 pub mod ctx;
 pub mod rt;
+pub mod services;
 
 pub use ctx::{Caller, ClientId, CoreCtx, CoreState, EventSink, NullEvents, RecordingEvents};
