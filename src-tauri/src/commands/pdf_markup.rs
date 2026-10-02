@@ -91,7 +91,7 @@ pub async fn pdf_markup_submit(
     pages: Vec<PdfMarkupPage>,
     instruction: Option<String>,
 ) -> Result<PdfMarkupSubmitted, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let root = local_root(
             remote::remote_target_for(&project_id).is_some(),
             remote::project_directory(&project_id),
