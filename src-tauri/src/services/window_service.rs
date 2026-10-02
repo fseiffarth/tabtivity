@@ -25,8 +25,9 @@ pub fn monitor_rects(
         .collect()
 }
 
-/// The Tauri label of Tabtivity's primary window (`tauri.conf.json`).
-pub const MAIN_WINDOW_LABEL: &str = "main";
+/// The Tauri label of Tabtivity's primary window (`tauri.conf.json`) — the
+/// core's `ClientId::MAIN`, which is the one definition.
+pub const MAIN_WINDOW_LABEL: &str = app_core::ClientId::MAIN;
 
 /// Labels of the windows that must be torn down when the MAIN window closes.
 ///

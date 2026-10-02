@@ -44,7 +44,11 @@ pub async fn pty_spawn(
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted) = (prepared.named, prepared.interrupted);
-    let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone());
+    let result = crate::terminal::spawn_pty(
+        crate::tauri_host::system_ctx(&app),
+        registry.inner().clone(),
+        prepared.opts.clone(),
+    );
     if result.is_ok() {
         prepared.commit();
         if mcp_token_handed_out {
@@ -264,7 +268,14 @@ pub async fn pty_set_visible(
     // a view may only ever speak for itself (the rule `webview_renderer_claim`
     // follows). It is what lets the `Destroyed` hook drop the registrations of a
     // window that died without unmounting (Group B #238).
-    crate::terminal::route_set_visible(&app, &id, &viewer_id, visible, update_seq, window.label());
+    crate::terminal::route_set_visible(
+        &crate::tauri_host::system_ctx(&app),
+        &id,
+        &viewer_id,
+        visible,
+        update_seq,
+        window.label(),
+    );
     Ok(())
 }
 
@@ -294,7 +305,7 @@ pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> 
 /// stream (`useRemoteSession`/`useRemoteReconnect`).
 #[tauri::command]
 pub async fn pty_watch(app: AppHandle, id: String) -> Result<(), String> {
-    crate::terminal::route_watch(&app, &id);
+    crate::terminal::route_watch(&crate::tauri_host::system_ctx(&app), &id);
     Ok(())
 }
 

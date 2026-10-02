@@ -20,9 +20,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
-
-use crate::services::window_service::MAIN_WINDOW_LABEL;
+use app_core::{ClientId, CoreCtx};
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -177,7 +175,7 @@ impl OutputRoute {
     fn viewer_windows(&self) -> Vec<String> {
         let mut windows: Vec<String> = Vec::new();
         for v in self.visible_viewers.values() {
-            if v.window != MAIN_WINDOW_LABEL && !windows.contains(&v.window) {
+            if v.window != ClientId::MAIN && !windows.contains(&v.window) {
                 windows.push(v.window.clone());
             }
         }
@@ -499,9 +497,9 @@ fn route_close(id: &str, seq: u64) -> bool {
 /// Emit a rising edge's replay while STILL holding the routes lock: every live
 /// chunk emit also takes this lock first (`route_chunk`), so the replay is
 /// guaranteed to precede any output produced after the flip.
-fn emit_replay(app: &AppHandle, id: &str, route: &mut OutputRoute) {
+fn emit_replay(ctx: &CoreCtx, id: &str, route: &mut OutputRoute) {
     if let Some(slice) = route.take_pending() {
-        emit_output(app, "terminal-replay", id, slice);
+        emit_output(ctx, "terminal-replay", id, slice);
     }
 }
 
@@ -511,8 +509,10 @@ fn emit_replay(app: &AppHandle, id: &str, route: &mut OutputRoute) {
 /// name made each popout parse every chunk of every PTY the main window
 /// streams. The main window keeps the plain name: it receives every chunk, as
 /// its activity classifier needs. A popout listens on `<event>:<its label>`
-/// (`terminalBus.ts`) and gets only the PTYs it has a view of.
-fn emit_output(app: &AppHandle, event: &str, id: &str, slice: OutputSlice) {
+/// (`terminalBus.ts`) and gets only the PTYs it has a view of. (Both are
+/// broadcasts by name, the desktop's way of addressing a window; a server
+/// host's sink can target the client instead — hosted plan P2.)
+fn emit_output(ctx: &CoreCtx, event: &str, id: &str, slice: OutputSlice) {
     let payload = TerminalOutput {
         id: id.to_string(),
         data: slice.text,
@@ -520,9 +520,9 @@ fn emit_output(app: &AppHandle, event: &str, id: &str, slice: OutputSlice) {
         end_offset: Some(slice.end_offset),
     };
     for window in &slice.windows {
-        let _ = app.emit(&format!("{event}:{window}"), &payload);
+        ctx.emit(&format!("{event}:{window}"), &payload);
     }
-    let _ = app.emit(event, payload);
+    ctx.emit(event, payload);
 }
 
 /// One TerminalView instance's visibility report (`pty_set_visible`). `window`
@@ -531,7 +531,7 @@ fn emit_output(app: &AppHandle, event: &str, id: &str, slice: OutputSlice) {
 /// itself — and so `route_drop_window_views` can clean up after a window that
 /// died without unmounting.
 pub fn route_set_visible(
-    app: &AppHandle,
+    ctx: &CoreCtx,
     id: &str,
     viewer_id: &str,
     visible: bool,
@@ -558,7 +558,7 @@ pub fn route_set_visible(
         },
     );
     if !was && route.subscribed() {
-        emit_replay(app, id, route);
+        emit_replay(ctx, id, route);
     }
 }
 
@@ -616,13 +616,13 @@ pub fn route_remove_all_views(id: &str) {
 }
 
 /// A marker-watcher's hold (`pty_watch`): stream this PTY as if visible.
-pub fn route_watch(app: &AppHandle, id: &str) {
+pub fn route_watch(ctx: &CoreCtx, id: &str) {
     let mut map = routes().lock().unwrap();
     let route = map.entry(id.to_string()).or_default();
     let was = route.subscribed();
     route.watchers += 1;
     if !was {
-        emit_replay(app, id, route);
+        emit_replay(ctx, id, route);
     }
 }
 
@@ -1081,11 +1081,11 @@ fn pty_id_in_scope(id: &str, scope: &str) -> bool {
 
 // ── Spawn ─────────────────────────────────────────────────────────────────
 
-/// Spawn a PTY and wire up Tauri event emission.
+/// Spawn a PTY and wire up its event emission (`ctx.events`).
 /// The read loop runs in a std::thread (blocking I/O) and passes chunks
 /// through an mpsc channel to a Tokio task that batches and emits events.
 pub fn spawn_pty(
-    app: AppHandle,
+    ctx: CoreCtx,
     registry: Arc<Mutex<PtyRegistry>>,
     opts: PtyOptions,
 ) -> Result<(), String> {
@@ -1137,7 +1137,7 @@ pub fn spawn_pty(
         reg.insert(opts.id.clone(), pair.master, writer, child, dead.clone());
     }
 
-    let _ = app.emit(
+    ctx.emit(
         "terminal-ready",
         TerminalReady {
             id: opts.id.clone(),
@@ -1184,11 +1184,11 @@ pub fn spawn_pty(
     let help_token = opts.env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned();
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
     tokio::spawn(async move {
-        let emitter = app.clone();
+        let emitter = ctx.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
             Routed::Data(slice) => emit_output(&emitter, "terminal-output", &id, slice),
             Routed::Activity(text) => {
-                let _ = emitter.emit(
+                emitter.emit(
                     "terminal-activity",
                     TerminalOutput {
                         id: id.clone(),
@@ -1202,12 +1202,12 @@ pub fn spawn_pty(
                 // A short-lived task per digest window, only while a hidden PTY
                 // is mid-burst — an idle or visible PTY arms nothing, keeping
                 // the zero-idle-wakeups discipline of `batch_output` intact.
-                let app2 = emitter.clone();
+                let ctx2 = emitter.clone();
                 let id2 = id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
                     if let Some(text) = route_digest_take(&id2) {
-                        let _ = app2.emit(
+                        ctx2.emit(
                             "terminal-activity",
                             TerminalOutput {
                                 id: id2,
@@ -1225,7 +1225,7 @@ pub fn spawn_pty(
         match route_finish(&id, route_seq) {
             Routed::Data(slice) => emit_output(&emitter, "terminal-output", &id, slice),
             Routed::Activity(text) => {
-                let _ = emitter.emit(
+                emitter.emit(
                     "terminal-activity",
                     TerminalOutput {
                         id: id.clone(),
@@ -1258,14 +1258,14 @@ pub fn spawn_pty(
             }
             if let Some(token) = push_token {
                 crate::services::root_mcp::revoke_token(&token);
-                let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+                ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
             }
             if let Some(token) = mcp_token {
                 let state = crate::storage::state_dir();
                 crate::services::root_mcp_review::on_spawn_gone(&state, &token);
-                let _ = app.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+                ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
             }
-            let _ = app.emit("terminal-exit", TerminalExit { id, code: None });
+            ctx.emit("terminal-exit", TerminalExit { id, code: None });
         }
     });
 
