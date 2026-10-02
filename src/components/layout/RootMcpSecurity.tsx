@@ -141,6 +141,9 @@ export function RootMcpSecurity() {
   return <>
     <SettingRow label={<>{t("mcpSecurity.title")} <UntestedTag id="mcpSecurity.title" /></>} help={t("mcpSecurity.help")}
       control={<button className="settings-btn" disabled={busy} onClick={() => void refresh()}>{t("mcpSecurity.refresh")}</button>} />
+    {/* Tabs the Mobile host started with no window hold its tokens, not this
+        window's (`docs/headless_mcp_plan.md`), so they are not in this list. */}
+    <p className="settings-help">{t("mcpSecurity.headless")} <UntestedTag id="mcpSecurity.headless" /></p>
     {error && <SettingsCard><p role="alert">{stripInvisible(error)}</p></SettingsCard>}
     {status?.sessions.length === 0 && <SettingsCard>{t("mcpSecurity.empty")}</SettingsCard>}
     {status?.sessions.map((s) => <SessionCard key={`${s.id}:${JSON.stringify(s.access)}`} session={s} update={update} revoke={revoke} busy={busy} accounts={accounts} />)}

@@ -251,6 +251,7 @@ export const UNTESTED = {
   "settings.rootMcp": { area: "layout", what: "SettingsPanel · Tabtivity's tools (MCP) for root-console agents" },
   "scheduleMcp": { area: "agents", what: "Schedule MCP · local agent proposals, approval, quotas and delivery" },
   "gitPushMcp": { area: "agents", what: "Git push MCP · agent push requests, fenced preflight, approval card, levels and URL confirmation; on by default at Propose; ci_runs / ci_run / ci_security_alerts reads" },
+  "mcpSecurity.headless": { area: "agents", what: "MCP session access · note on tabs Mobile started with no window (#2339): such a tab gets the schedule, git and help MCP servers from the Mobile host's own listener (`/mcp` in the tab lists them); a schedule proposal it makes waits in agent_tasks.json and shows in the window (at once if one is open, via the refresh poke); its git_push / git_release answer window_required; its sessions are not listed in this panel" },
   "gitRelease": { area: "files", what: "Release button in the git bar + agent git_release card · annotated tag on the pushed tip, one-tag push, version suggestion" },
   "setDefaultApp.patch": { area: "files", what: "Set default app dialog (global scope) and Settings → File types · each change is saved as a patch of one entry (`patch_default_apps`, under the file's lock), not the whole map, so two windows or the phone saving at once keep each other's entries; falls back to the whole save on an older backend" },
   "settings.rootMcpLocalOnly": { area: "layout", what: "SettingsPanel · Only local models get these tools" },

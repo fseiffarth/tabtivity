@@ -4615,6 +4615,7 @@ export const enSource = {
   "mcpSecurity.help": "Grants apply to this running session only. New root sessions keep the existing defaults; mail readers start with mail only. Turning writes off gives read-only access. Data shared with a network-capable agent can leave this computer. Scoped calendar and board writes always require review. Revoking is final for the tab: its agent is refused from then on, and only reopening the tab hands out a new token.",
   "mcpSecurity.refresh": "Refresh",
   "mcpSecurity.empty": "No active MCP sessions.",
+  "mcpSecurity.headless": "Tabs that {app} Mobile started while no window was open get their schedule, push and help tools from the Mobile background service, not from this window. Their sessions are not listed here. They end when the tab closes or the service stops. Their push and release requests are refused until the tab is restarted from this window.",
   "mcpSecurity.write": "Allow calendar, board and draft changes",
   "mcpSecurity.revoke": "Revoke access",
   "mcpSecurity.all": "All, including future entries",

@@ -674,6 +674,7 @@ export const dict: Dict = {
   "mcpSecurity.help": "Les autorisations ne concernent que cette session en cours. Les nouvelles sessions racine gardent les valeurs par défaut ; les lecteurs de courrier commencent avec le courrier seulement. Désactiver l'écriture donne un accès en lecture seule. Les données partagées avec un agent ayant accès au réseau peuvent quitter cet ordinateur. Les écritures restreintes du calendrier et du tableau exigent toujours une revue. La révocation est définitive pour l'onglet : son agent est refusé dès lors, et seule la réouverture de l'onglet délivre un nouveau jeton.",
   "mcpSecurity.refresh": "Actualiser",
   "mcpSecurity.empty": "Aucune session MCP active.",
+  "mcpSecurity.headless": "Les onglets que {app} Mobile a lancés sans fenêtre ouverte reçoivent leurs outils de planification, de push et d'aide du service d'arrière-plan Mobile, pas de cette fenêtre. Leurs sessions ne sont pas listées ici. Elles prennent fin à la fermeture de l'onglet ou à l'arrêt du service. Leurs demandes de push et de release sont refusées jusqu'à ce que l'onglet soit relancé depuis cette fenêtre.",
   "mcpSecurity.write": "Autoriser les modifications de calendriers, tableaux et brouillons",
   "mcpSecurity.revoke": "Révoquer l’accès",
   "mcpSecurity.all": "Tous, y compris les futures entrées",
