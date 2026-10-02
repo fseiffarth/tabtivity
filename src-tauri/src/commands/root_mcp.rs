@@ -412,8 +412,12 @@ pub fn start(app: AppHandle) {
         };
     });
     let handle = tauri::async_runtime::spawn(async move {
-        match bind_and_serve(Some(app), notify, async { SHUTDOWN.notified().await }).await {
-            Ok((_, serve)) => serve.await,
+        let served = match bind(LOOPBACK).await {
+            Ok(listener) => serve(listener, Some(app), notify, async { SHUTDOWN.notified().await }),
+            Err(error) => Err(error),
+        };
+        match served {
+            Ok((_, server)) => server.await,
             Err(error) => eprintln!("[root-mcp] {error}"),
         }
     });
@@ -423,15 +427,73 @@ pub fn start(app: AppHandle) {
 /// The Mobile host's listener (`docs/headless_mcp_plan.md`): the schedule,
 /// push and help lanes for the tabs it spawns with no window open, on its own
 /// loopback port and token store; never the root lane. Bound before this
-/// returns, so a spawn after it is wired; the server runs until `shutdown`.
-/// A bind failure leaves headless tabs without the tools, as before.
+/// returns, so a spawn after it is wired; the server runs until `shutdown`
+/// turns true. When the first bind fails, the error is returned (for the
+/// journal) and a task keeps retrying with [`bind_retry_delay`] until a bind
+/// succeeds or the host shuts down — tabs spawned meanwhile go without tools.
 pub async fn start_headless(
     notify: NoticeSink,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
-    let (port, serve) = bind_and_serve(None, notify, shutdown).await?;
-    tokio::spawn(serve);
-    Ok(port)
+    start_headless_on(LOOPBACK, notify, shutdown).await
+}
+
+/// Any free loopback port.
+const LOOPBACK: std::net::SocketAddr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
+
+/// [`start_headless`] on a chosen address (a test occupies one).
+async fn start_headless_on(
+    addr: std::net::SocketAddr,
+    notify: NoticeSink,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<u16, String> {
+    let first = match bind(addr).await {
+        Ok(listener) => serve(listener, None, notify.clone(), until_true(shutdown.clone())),
+        Err(error) => Err(error),
+    };
+    match first {
+        Ok((port, server)) => {
+            tokio::spawn(server);
+            Ok(port)
+        }
+        Err(error) => {
+            tokio::spawn(async move {
+                let mut attempt = 0;
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(bind_retry_delay(attempt)) => {}
+                        changed = shutdown.changed() => {
+                            if changed.is_err() || *shutdown.borrow() { return; }
+                            continue;
+                        }
+                    }
+                    attempt = attempt.saturating_add(1);
+                    let Ok(listener) = bind(addr).await else { continue };
+                    if let Ok((port, server)) = serve(listener, None, notify.clone(), until_true(shutdown.clone())) {
+                        eprintln!("[root-mcp] bound on port {port} after {attempt} retries");
+                        server.await;
+                        return;
+                    }
+                }
+            });
+            Err(error)
+        }
+    }
+}
+
+/// How long the Mobile host waits before its `attempt`-th bind retry: 5 s,
+/// doubling, at most five minutes.
+fn bind_retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs(5u64.saturating_mul(1u64 << attempt.min(6)).min(300))
+}
+
+/// Resolves once `flag` turns true (or its sender is gone).
+async fn until_true(mut flag: tokio::sync::watch::Receiver<bool>) {
+    while !*flag.borrow() {
+        if flag.changed().await.is_err() {
+            break;
+        }
+    }
 }
 
 /// The routes a listener answers: the three side lanes everywhere, the root
@@ -447,14 +509,18 @@ fn router(state: ServerState) -> Router {
     router.layer(axum::middleware::map_response(close_connection)).with_state(state)
 }
 
-/// Bind a loopback port, publish it as this process's [`Runtime`] and hand
-/// back the port and the server, which stops on `shutdown`.
-async fn bind_and_serve(
+async fn bind(addr: std::net::SocketAddr) -> Result<tokio::net::TcpListener, String> {
+    tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind failed: {e}"))
+}
+
+/// Publish a bound listener as this process's [`Runtime`] and hand back its
+/// port and the server, which stops on `shutdown`.
+fn serve(
+    listener: tokio::net::TcpListener,
     app: Option<AppHandle>,
     notify: NoticeSink,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("bind failed: {e}"))?;
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     root_mcp::set_runtime(Runtime { port, serves_root: app.is_some() });
     let router = router(ServerState { app, port, store: root_mcp::tokens(), notify });
@@ -833,6 +899,28 @@ mod security_tests {
         }
         // Nor does the process-wide store know them.
         assert!(root_mcp::authenticate(Some(&format!("Bearer {schedule}"))).is_none());
+    }
+
+    /// A Mobile host whose first bind fails says so (a fixed prefix for the
+    /// journal, no runtime published) and leaves a retry running that backs
+    /// off to five minutes and ends with the host's shutdown.
+    #[tokio::test]
+    async fn a_failed_headless_bind_is_reported_and_retried_until_shutdown() {
+        let taken = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
+        let addr = taken.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let error = start_headless_on(addr, Arc::new(|_| {}), stopped).await.unwrap_err();
+        assert!(error.starts_with("bind failed:"), "{error}");
+        assert!(root_mcp::runtime().is_none_or(|r| r.port != addr.port()), "nothing was published for the taken port");
+        assert_eq!(bind_retry_delay(0), Duration::from_secs(5));
+        assert_eq!(bind_retry_delay(1), Duration::from_secs(10));
+        assert_eq!(bind_retry_delay(5), Duration::from_secs(160));
+        assert_eq!(bind_retry_delay(6), Duration::from_secs(300));
+        assert_eq!(bind_retry_delay(u32::MAX), Duration::from_secs(300));
+        stop.send(true).unwrap();
+        // The retry task sees the shutdown and ends without binding.
+        tokio::task::yield_now().await;
+        drop(taken);
     }
 
     /// The Mobile host's listener has no root lane at all: `/mcp` is not

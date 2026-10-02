@@ -4620,13 +4620,19 @@ const MCP_SWEEP_EVERY: Duration = Duration::from_secs(60);
 const MCP_SWEEP_MISSES: u8 = 3;
 
 /// Revoke the MCP tokens of tabs this host started whose tmux session is gone
-/// (`docs/headless_mcp_plan.md`): the window closed the tab, or its CLI
-/// exited. The window revokes on its own PTY's exit; here no PTY is ours, so
-/// the session is asked. Several misses in a row, so a tmux server that is
-/// briefly unreachable does not cost a live tab its tools.
+/// (`docs/headless_mcp_plan.md`): the window closed the tab, or something
+/// killed the session. A CLI that merely exits does not end it — the session
+/// runs a login shell after it — so its tokens live as long as the session,
+/// as a window tab's live as long as its PTY. The window revokes on its own
+/// PTY's exit; here no PTY is ours, so the tmux server is asked. Several
+/// misses in a row, so a briefly unreachable server does not cost a live tab
+/// its tools; counted per token generation, so a tab the scheduler restarts
+/// meanwhile keeps its new tokens.
 async fn sweep_mcp_tokens(runner: Arc<dyn scheduler::Runner>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     let mut missed = HashMap::new();
     let mut every = tokio::time::interval(MCP_SWEEP_EVERY);
+    // After a suspend, one look, not a burst that spends every miss at once.
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = every.tick() => {}
@@ -4635,18 +4641,22 @@ async fn sweep_mcp_tokens(runner: Arc<dyn scheduler::Runner>, mut shutdown: toki
                 continue;
             }
         }
-        let tabs = crate::services::root_mcp::token_tabs();
+        let held = crate::services::root_mcp::token_generations();
         let probe = runner.clone();
-        let checked = tabs.clone();
+        let tabs: Vec<String> = held.iter().map(|(tab, _)| tab.clone()).collect();
         let Ok(alive) = tokio::task::spawn_blocking(move || {
-            checked.into_iter().filter(|tab| headless_session_alive(tab, |tmux| probe.probe(tmux).is_some())).collect::<std::collections::HashSet<_>>()
+            tabs.into_iter().filter(|tab| headless_session_alive(tab, |tmux| probe.probe(tmux).is_some())).collect::<std::collections::HashSet<_>>()
         })
         .await
         else {
             continue;
         };
-        for tab in mcp_sweep_step(&mut missed, &tabs, |tab| alive.contains(tab)) {
-            crate::services::root_mcp::revoke_tab(&tab);
+        for (_, sessions) in mcp_sweep_step(&mut missed, &held, |tab| alive.contains(tab)) {
+            // Only the generation that was missing: a token registered after
+            // this look's snapshot (a restart) has another session id.
+            for id in sessions {
+                let _ = crate::services::root_mcp::revoke_session(&id);
+            }
         }
     }
 }
@@ -4657,22 +4667,26 @@ fn headless_session_alive(tab: &str, probe: impl Fn(&str) -> bool) -> bool {
     tab.strip_prefix(headless::LAUNCH_ID_PREFIX).is_none_or(probe)
 }
 
-/// One look of the sweep: the tabs whose session has now been missing
-/// [`MCP_SWEEP_MISSES`] times in a row. `missed` carries the count between
-/// looks and forgets tabs that hold no token any more.
-fn mcp_sweep_step(missed: &mut HashMap<String, u8>, tabs: &[String], alive: impl Fn(&str) -> bool) -> Vec<String> {
-    missed.retain(|tab, _| tabs.contains(tab));
+/// One tab's tokens at one look: its id and the session ids it holds.
+type Generation = (String, Vec<String>);
+
+/// One look of the sweep: the generations whose tab's session has now been
+/// missing [`MCP_SWEEP_MISSES`] looks in a row. `missed` carries the count
+/// between looks, keyed by generation, and forgets what is no longer held —
+/// a restarted tab's new tokens start from zero.
+fn mcp_sweep_step(missed: &mut HashMap<Generation, u8>, held: &[Generation], alive: impl Fn(&str) -> bool) -> Vec<Generation> {
+    missed.retain(|generation, _| held.contains(generation));
     let mut gone = Vec::new();
-    for tab in tabs {
-        if alive(tab) {
-            missed.remove(tab);
+    for generation in held {
+        if alive(&generation.0) {
+            missed.remove(generation);
             continue;
         }
-        let count = missed.entry(tab.clone()).or_insert(0);
+        let count = missed.entry(generation.clone()).or_insert(0);
         *count += 1;
         if *count >= MCP_SWEEP_MISSES {
-            missed.remove(tab);
-            gone.push(tab.clone());
+            missed.remove(generation);
+            gone.push(generation.clone());
         }
     }
     gone
@@ -4722,24 +4736,17 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     // This process never reads the git token from the keychain.
     crate::services::git_push_mcp::serve_without_keyring();
     let notice_dir = config.control_dir.clone();
-    let mut mcp_shutdown = shutdown_tx.subscribe();
     let listener = crate::commands::root_mcp::start_headless(
         Arc::new(move |notice| {
             if notice == crate::commands::root_mcp::Notice::Schedules {
                 poke_desktop(&notice_dir, None, &["schedules"]);
             }
         }),
-        async move {
-            while !*mcp_shutdown.borrow() {
-                if mcp_shutdown.changed().await.is_err() {
-                    break;
-                }
-            }
-        },
+        shutdown_tx.subscribe(),
     )
     .await;
     if let Err(error) = listener {
-        eprintln!("mobile: the agent MCP servers are unavailable to tabs started here: {error}");
+        eprintln!("mobile: the agent MCP servers are unavailable to tabs started here until a retry binds: {error}");
     }
     tokio::spawn(sweep_mcp_tokens(state.runner.clone(), shutdown_tx.subscribe()));
     // The owner's timers (headless owner plan, H2): scheduled prompts fire
@@ -6060,27 +6067,80 @@ mod tests {
         assert!(shell.tmux_session.as_deref().is_some_and(|n| n.starts_with(&format!("{}{RAW_PROJECT}--shell-", crate::brand::TMUX_PREFIX))));
     }
 
-    /// #2339 (`docs/headless_mcp_plan.md`): a Claude tab the phone creates
-    /// with no window open is handed the schedule and help servers of the
-    /// Mobile host's own listener. The spawn seam runs the grant
-    /// `launch_prep::prepare` runs after its gates, against the host's token
-    /// store; the recorded `PtyOptions` name both servers on Claude's command
-    /// line (the tokens only in the environment), and the tokens are admitted
-    /// by the host's listener and refused by any other process's — the
-    /// window's, or this host's own after a restart.
+    /// What a raw HTTP POST of a `ping` to `127.0.0.1:port` answers: the status.
+    async fn mcp_status(port: u16, path: &str, token: &str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.expect("connect");
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(request.as_bytes()).await.expect("write");
+        let mut answer = Vec::new();
+        tcp.read_to_end(&mut answer).await.expect("read");
+        String::from_utf8_lossy(&answer).get(9..12).and_then(|code| code.parse().ok()).expect("status line")
+    }
+
+    /// #2339 (`docs/headless_mcp_plan.md`), end to end in this process:
+    /// a) the Mobile host's `start_headless` binds a listener and publishes it
+    ///    as the process's `runtime()`, with no root lane;
+    /// b) a Claude tab the phone creates with no window goes through the spawn
+    ///    seam into `root_mcp::grant_lanes` — the call `launch_prep::prepare`
+    ///    makes — against the fixture's state dir, passes the real gates
+    ///    (agent, `schedule_mcp` and the project's level, `git_push_mcp`,
+    ///    `help_mcp`) and records `PtyOptions` naming the schedule, git and
+    ///    help servers; the listener admits each token on its own route over
+    ///    HTTP, and a fresh store (the window, or this host after a restart)
+    ///    refuses them;
+    /// c) the same grant with this runtime withholds the root and reader
+    ///    lanes, which a root-serving runtime would hand out;
+    /// d) closing the tab from the phone with no window revokes its tokens.
     #[tokio::test]
-    async fn a_headless_claude_tab_is_handed_the_hosts_schedule_and_help_servers() {
-        use crate::services::root_mcp::{self, Runtime, TokenStore};
-        let store: &'static TokenStore = Box::leak(Box::default());
+    async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
+        use crate::services::root_mcp::{self, TokenStore};
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let port = crate::commands::root_mcp::start_headless(Arc::new(|_| {}), stopped).await.expect("the host's listener binds");
+        let runtime = root_mcp::runtime().expect("a) the host publishes its runtime");
+        assert_eq!(runtime.port, port);
+        assert!(!runtime.serves_root, "the host serves no root lane");
+
         let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = recorded.clone();
-        let host = headless_host(Arc::new(move |mut opts: PtyOptions| {
-            let runtime = Runtime { port: 8765, serves_root: false };
-            root_mcp::grant_schedule(&mut opts, &runtime, store, &[]);
-            root_mcp::grant_help(&mut opts, &runtime, store, &[]);
-            sink.lock().unwrap().push(opts);
-            Box::pin(async { Ok(()) })
-        }));
+        let mut host = headless_host(Arc::new(|_: PtyOptions| Box::pin(async { Ok(()) })));
+        let state_dir = host.state.config.state_dir.clone();
+        let grant_dir = state_dir.clone();
+        host.state.spawner = HeadlessSpawner {
+            launch: Arc::new(move |mut opts: PtyOptions| {
+                let agent = crate::services::agent_fence::is_agent(&opts);
+                root_mcp::grant_lanes(&mut opts, agent, root_mcp::runtime(), root_mcp::tokens(), &grant_dir);
+                sink.lock().unwrap().push(opts);
+                Box::pin(async { Ok(()) })
+            }),
+            installed: Arc::new(|_| true),
+        };
+        // The switches the gates read: scheduled prompts on (off by default),
+        // and what would give a root or reader spawn its tools.
+        std::fs::write(
+            state_dir.join("settings.json"),
+            json!({
+                crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true },
+                "schedule_mcp": true,
+                "root_mcp_agents": ["claude"],
+                "root_mcp_mail": true,
+            })
+            .to_string(),
+        )
+        .expect("settings");
+        let mut projects: Vec<Value> = serde_json::from_slice(&std::fs::read(state_dir.join("projects.json")).expect("projects")).expect("json");
+        projects.push(json!({ "id": "vm-reader", "name": "Reader", "status": "active", "vm": { "enabled": true, "mail_reader": true } }));
+        // The trusted list as the window writes it: every entry has these.
+        for (position, entry) in projects.iter_mut().enumerate() {
+            entry["position"] = json!(position);
+            entry["local_file"] = json!(format!("/nonexistent/{position}/project.json"));
+        }
+        std::fs::write(state_dir.join("projects.json"), serde_json::to_vec(&projects).expect("json")).expect("projects");
+
         let cookie = host.pair_device(&signing_key(43)).await.0;
         let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
         let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
@@ -6090,64 +6150,107 @@ mod tests {
         let request = json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "idempotency_key": "mcp-2339-0123456789abcdef" });
         let (status, _, body) = host.send(create_request(&project_id, &cookie, request)).await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
+        let tab_id = json(&body)["tab"]["id"].as_str().expect("tab id").to_string();
 
+        // b) The recorded launch names the three servers; tokens only in env.
         let spawned = recorded.lock().unwrap().clone();
         assert_eq!(spawned.len(), 1);
         let opts = &spawned[0];
         assert_eq!(opts.cmd, "claude");
-        let schedule = opts.env.get(root_mcp::SCHEDULE_TOKEN_ENV).expect("schedule token").clone();
-        let help = opts.env.get(root_mcp::HELP_TOKEN_ENV).expect("help token").clone();
-        assert_eq!(opts.env.get(root_mcp::SCHEDULE_URL_ENV).map(String::as_str), Some("http://127.0.0.1:8765/mcp/schedule"));
-        assert_eq!(opts.env.get(root_mcp::HELP_URL_ENV).map(String::as_str), Some("http://127.0.0.1:8765/mcp/help"));
+        let token = |key: &str| opts.env.get(key).unwrap_or_else(|| panic!("{key} missing: {:?}", opts.env.keys())).clone();
+        let (schedule, git, help) = (token(root_mcp::SCHEDULE_TOKEN_ENV), token(root_mcp::GIT_TOKEN_ENV), token(root_mcp::HELP_TOKEN_ENV));
+        assert_eq!(opts.env[root_mcp::SCHEDULE_URL_ENV], format!("http://127.0.0.1:{port}/mcp/schedule"));
+        assert_eq!(opts.env[root_mcp::HELP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/help"));
         assert!(!opts.env.contains_key(root_mcp::TOKEN_ENV), "never the root lane");
         let argv = opts.args.join(" ");
-        assert!(opts.args.iter().any(|a| a == "--mcp-config"), "{argv}");
-        for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME] {
+        assert_eq!(opts.args.iter().filter(|a| *a == "--mcp-config").count(), 1, "{argv}");
+        for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::git_push_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME] {
             assert!(argv.contains(&format!("\"{server}\":")), "{server} missing: {argv}");
         }
-        assert!(argv.contains("http://127.0.0.1:8765/mcp/schedule") && argv.contains("http://127.0.0.1:8765/mcp/help"), "{argv}");
-        assert!(!argv.contains(&schedule) && !argv.contains(&help), "a token is never in argv");
-
-        // Bound to the tab the owner minted, and to its schedule target.
-        let session = store.authenticate(Some(&format!("Bearer {schedule}"))).expect("the host knows its token");
+        for token in [&schedule, &git, &help] {
+            assert!(!argv.contains(token.as_str()), "a token is never in argv");
+        }
+        let session = root_mcp::tokens().authenticate(Some(&format!("Bearer {schedule}"))).expect("the host knows its token");
         assert_eq!(session.identity.tab, opts.id);
         assert_eq!(session.identity.project.as_deref(), Some(RAW_PROJECT));
         assert_eq!(session.identity.schedule_target.as_ref().map(|b| b.target.as_str()), opts.schedule_target_id.as_deref());
 
-        // The host's listener admits them on their own routes, nowhere else.
-        let admission = crate::commands::root_mcp::admission;
-        assert_eq!(admission(store, "/mcp/schedule", &schedule).await, Ok(()));
-        assert_eq!(admission(store, "/mcp/help", &help).await, Ok(()));
-        assert_eq!(admission(store, "/mcp/help", &schedule).await, Err(StatusCode::UNAUTHORIZED));
-        // Another process's listener refuses them: the window's, or this
-        // host's after a restart (a fresh store).
-        let window: &'static TokenStore = Box::leak(Box::default());
-        let restarted: &'static TokenStore = Box::leak(Box::default());
-        for other in [window, restarted, root_mcp::tokens()] {
-            assert_eq!(admission(other, "/mcp/schedule", &schedule).await, Err(StatusCode::UNAUTHORIZED));
-            assert_eq!(admission(other, "/mcp/help", &help).await, Err(StatusCode::UNAUTHORIZED));
+        // The bound listener admits each token on its own route, over HTTP
+        // (past admission: whatever the handler then answers, never 401) …
+        for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+            assert_ne!(mcp_status(port, path, token).await, 401, "{path}");
         }
+        assert_eq!(mcp_status(port, "/mcp/help", &schedule).await, 401, "a token is good on its own route only");
+        assert_eq!(mcp_status(port, "/mcp", &schedule).await, 404, "no root route on the host");
+        // … and no other process's listener does: the window's, or this host's
+        // after a restart (a fresh store).
+        let admission = crate::commands::root_mcp::admission;
+        assert_eq!(admission(root_mcp::tokens(), "/mcp/schedule", &schedule).await, Ok(()));
+        let other: &'static TokenStore = Box::leak(Box::default());
+        for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+            assert_eq!(admission(other, path, token).await, Err(StatusCode::UNAUTHORIZED), "{path}");
+        }
+
+        // c) Root and reader spawns get nothing from this runtime; a runtime
+        //    that serves the root lane would hand both out under these settings.
+        let spawn = |id: &str, project: Option<&str>| -> PtyOptions {
+            serde_json::from_value(json!({
+                "id": id, "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
+                "agent": true, "project_id": project,
+            }))
+            .expect("options")
+        };
+        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true };
+        for project in [None, Some("vm-reader")] {
+            let mut here = spawn("headless:c", project);
+            root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
+            assert!(!here.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: {:?}", here.env.keys());
+            let mut window = spawn("window:c", project);
+            root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
+            assert!(window.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: the settings do grant it");
+        }
+
+        // d) The phone's close with no window takes the tokens with the tab.
+        let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(host.runner.killed.lock().unwrap().len(), 1, "the session was ended");
+        for token in [&schedule, &git, &help] {
+            assert!(root_mcp::tokens().authenticate(Some(&format!("Bearer {token}"))).is_none(), "revoked on close");
+        }
+        assert_eq!(mcp_status(port, "/mcp/help", &help).await, 401);
+        let _ = stop.send(true);
     }
 
-    /// The sweep revokes a headless tab's tokens only once its session has
-    /// been missing several looks in a row, and keeps what it cannot check.
+    /// The sweep revokes a generation of a tab's tokens only once its session
+    /// has been missing several looks in a row, keeps what it cannot check,
+    /// and never counts a restarted tab's new tokens against the old misses.
     #[test]
-    fn the_token_sweep_waits_for_repeated_misses() {
-        let tabs = vec!["headless:a".to_string(), "headless:b".to_string(), "pty:window".to_string()];
+    fn the_token_sweep_waits_for_repeated_misses_of_one_generation() {
+        let generation = |tab: &str, ids: &[&str]| (tab.to_string(), ids.iter().map(|i| i.to_string()).collect::<Vec<_>>());
+        let held = vec![generation("headless:a", &["a1"]), generation("headless:b", &["b1", "b2"]), generation("pty:window", &["w1"])];
         let alive = |tab: &str| headless_session_alive(tab, |tmux| tmux == "a");
         let mut missed = HashMap::new();
         for _ in 1..MCP_SWEEP_MISSES {
-            assert!(mcp_sweep_step(&mut missed, &tabs, alive).is_empty());
+            assert!(mcp_sweep_step(&mut missed, &held, alive).is_empty());
         }
-        assert_eq!(mcp_sweep_step(&mut missed, &tabs, alive), vec!["headless:b".to_string()]);
+        assert_eq!(mcp_sweep_step(&mut missed, &held, alive), vec![generation("headless:b", &["b1", "b2"])], "only the old ids go");
         // A session back between looks resets its count.
         let mut missed = HashMap::new();
-        mcp_sweep_step(&mut missed, &tabs, alive);
-        mcp_sweep_step(&mut missed, &tabs, |_| true);
+        mcp_sweep_step(&mut missed, &held, alive);
+        mcp_sweep_step(&mut missed, &held, |_| true);
         for _ in 1..MCP_SWEEP_MISSES {
-            assert!(mcp_sweep_step(&mut missed, &tabs, alive).is_empty());
+            assert!(mcp_sweep_step(&mut missed, &held, alive).is_empty());
         }
-        // A tab whose token went elsewhere is forgotten.
+        // A restart between looks (new session ids under the same tab) starts
+        // from zero: the last look before the old count ran out revokes nothing.
+        let mut missed = HashMap::new();
+        for _ in 1..MCP_SWEEP_MISSES {
+            mcp_sweep_step(&mut missed, &held, alive);
+        }
+        let restarted = vec![generation("headless:b", &["b3", "b4"])];
+        assert!(mcp_sweep_step(&mut missed, &restarted, alive).is_empty(), "the new tokens are not the old misses'");
+        assert_eq!(missed.len(), 1, "the old generation is forgotten");
+        // A generation no longer held is forgotten.
         assert!(mcp_sweep_step(&mut missed, &[], alive).is_empty());
         assert!(missed.is_empty());
     }

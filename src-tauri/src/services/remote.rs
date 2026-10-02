@@ -144,7 +144,7 @@ fn read_projects_list() -> Option<Arc<ProjectsList>> {
 }
 
 /// A `projects.json` entry's stored `directory` (its flattened `extra` field).
-fn entry_directory(entry: &ProjectEntry) -> Option<&str> {
+pub(crate) fn entry_directory(entry: &ProjectEntry) -> Option<&str> {
     entry.extra.get("directory").and_then(|v| v.as_str())
 }
 
@@ -189,6 +189,17 @@ pub fn compute_hosts_for(project_id: &str) -> Vec<ComputeHost> {
                 .map(compute_hosts_from_entry)
         })
         .unwrap_or_default()
+}
+
+/// Whether [`remote_target_for_host`] would find a target, over one
+/// `projects.json` entry already read (`root_mcp::grant_lanes` reads its
+/// entry from an explicit state dir).
+pub(crate) fn entry_is_remote_for_host(entry: &ProjectEntry, host_id: &str) -> bool {
+    if host_id == PRIMARY_HOST {
+        spec_from_entry(entry).is_some()
+    } else {
+        compute_hosts_from_entry(entry).iter().any(|h| h.id == host_id)
+    }
 }
 
 /// Resolve `(project_id, host_id)` to a [`RemoteTarget`]: the primary spec

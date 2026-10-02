@@ -375,41 +375,21 @@ pub async fn prepare(
     // per-run token. Decided here from the same `project_id` that picks the
     // fence roots above, while `cmd`/`args` still describe the agent itself, so
     // the config rides into the bubblewrap argv unchanged.
-    let root_agent = crate::services::root_mcp::is_root_agent(&opts, agent_spawn);
-    if root_agent {
-        crate::services::root_mcp::apply_to_spawn(&mut opts);
-    }
+    //
     // The contained reader (`services::mail_reader`): an agent spawn into a VM
     // project whose TRUSTED record carries `mail_reader` gets a per-tab token of
     // class `Reader` and the guest-side URL, riding the remote command's
-    // environment. Every other project agent spawn — VM or not — is handed
-    // nothing. Whether the box is actually narrow is checked per mail call, not
-    // here: the flag is a request, not a fact.
-    let reader_project = opts
-        .project_id
-        .clone()
-        .filter(|_| agent_spawn && !root_agent && !opts.local_only)
-        .filter(|id| crate::services::vm::vm_spec_for(id).is_some_and(|spec| spec.mail_reader));
-    if let Some(project) = reader_project.as_deref() {
-        let cmd = opts.cmd.clone();
-        if let Some(env) =
-            crate::services::root_mcp::apply_reader_to_spawn(&opts.id, project, &cmd, &mut opts.args)
-        {
-            opts.env.extend(env);
-        }
-    }
-    if agent_spawn && !root_agent && reader_project.is_none() {
-        crate::services::root_mcp::apply_schedule_to_spawn(&mut opts);
-        // Agent-requested pushes (`services::git_push_mcp`), beside the
-        // schedule lane: same qualifying spawns, its own token.
-        crate::services::root_mcp::apply_git_push_to_spawn(&mut opts);
-    }
-    // The read-only help server (`services::help_mcp`): every LOCAL agent tab,
-    // root or project, beside whatever the lines above handed out. Last, since
-    // it merges into the Vibe env the root/schedule wiring sets outright.
-    if agent_spawn {
-        crate::services::root_mcp::apply_help_to_spawn(&mut opts);
-    }
+    // environment. Every other local project agent gets the schedule and push
+    // lanes, every local agent the read-only help lane. All of it is decided
+    // in `grant_lanes` against this process's listener (`runtime()`: the
+    // window's, or the Mobile host's, which serves no root or reader lane).
+    let root_agent = crate::services::root_mcp::grant_lanes(
+        &mut opts,
+        agent_spawn,
+        crate::services::root_mcp::runtime(),
+        crate::services::root_mcp::tokens(),
+        &storage::state_dir(),
+    );
     let mcp_spawn_guard = agent_spawn
         .then(|| crate::services::root_mcp::SpawnTokenGuard::new(&opts));
 

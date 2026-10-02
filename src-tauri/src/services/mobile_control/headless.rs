@@ -692,15 +692,15 @@ fn epoch_ms_now() -> i64 {
 const HEADLESS_COLS: u16 = 200;
 const HEADLESS_ROWS: u16 = 50;
 
-/// The launch of a stored tab record, for the detached spawn: what the
-/// window's `TerminalView` hands `pty_spawn`, at a fixed
-/// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
-/// project's or a box's).
 /// What a headless launch's PTY id starts with: the tab is `headless:<tmux>`,
 /// the identity its MCP tokens are registered under in the Mobile host
 /// (`docs/headless_mcp_plan.md`), so they can be revoked by tmux name.
 pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
 
+/// The launch of a stored tab record, for the detached spawn: what the
+/// window's `TerminalView` hands `pty_spawn`, at a fixed
+/// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
+/// project's or a box's).
 pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     let strings = |key: &str| -> Vec<String> {
         tab.extra
