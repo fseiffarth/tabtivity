@@ -25,10 +25,18 @@
 //! Rows that look misplaced, and why they are where they are:
 //! - `pty_set_visible`, `complete_text` and the `copilot_*` commands take a
 //!   `Window` today but only to identify the caller (§3.2); they are `Core`.
-//! - Commands raising a Rust-side file dialog (`mail_attach_pick`,
-//!   `mail_contacts_export`, `export_project`, …) stay `Core`: the data they
-//!   read or write is the daemon's, and P2's server-side file picker replaces
-//!   the dialog.
+//! - The five mail commands raising a Rust-side file dialog (`mail_attach_pick`,
+//!   `mail_pgp_import_pick`, `mail_contacts_import`, `mail_contacts_export`,
+//!   `mail_attachment_save`) stay `Core`: the bytes they read or write are the
+//!   daemon's, and P2's server-side file picker replaces the dialog. Every
+//!   other path-taking command (`export_project`, `remote_download_to`,
+//!   `calendar_read_ics`, …) gets its path from the frontend's own picker.
+//! - `dev_todo_*` are `Admin` with `dev_build_*`: they read and write
+//!   `todo/*.md` under `dev_build::SOURCE_ROOT`, a checkout path baked into the
+//!   binary at build time — the server's, not any user's daemon data.
+//! - `install_vibe` and `ensure_vibe_ollama_model` are `Core` although they
+//!   install into the daemon user's own `$HOME` (`curl … | bash`, `~/.vibe`),
+//!   not the state dir like `install_agent`: still bounded by the user's uid.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -291,9 +299,10 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("dev_build_relaunch", Admin),
     ("dev_build_set_paused", Admin),
     ("dev_build_status", Admin),
-    ("dev_todo_groups", Core),
-    ("dev_todo_read", Core),
-    ("dev_todo_write", Core),
+    // The checkout under `dev_build::SOURCE_ROOT`, a build-time host path.
+    ("dev_todo_groups", Admin),
+    ("dev_todo_read", Admin),
+    ("dev_todo_write", Admin),
     ("webview_renderer_claim", Client),
     ("webview_renderer_memory", Client),
     ("webview_renderer_restart", Client),
