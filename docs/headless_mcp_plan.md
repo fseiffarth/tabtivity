@@ -81,9 +81,18 @@ attaches (a CLI reads its MCP config only at startup).
 ### Hygiene
 
 - The sidecar revokes a headless tab's tokens when the phone closes it, and a
-  sweep revokes the tokens of tabs whose tmux session has been gone at two
-  consecutive sweeps (the window closed it, or the CLI exited).
+  sweep (every 60 s, missed ticks delayed, not bursted) revokes a tab's
+  tokens once its tmux session has been gone at three consecutive looks —
+  the window closed the tab, or something killed the session. A CLI that
+  merely exits does **not** end the session (it runs a login shell after
+  the CLI), so the tokens live as long as the session, as a window tab's
+  live as long as its PTY. Misses count per token generation (the tab's
+  session ids), and only that generation is revoked, so a tab the
+  scheduler restarts meanwhile keeps its new tokens.
 - The listener stops with the sidecar's shutdown watch; nothing outlives it.
+  A failed first bind is logged and retried with backoff (5 s doubling to
+  5 min) until it binds or the sidecar stops; tabs spawned meanwhile go
+  without the tools.
 
 ## Phases
 
@@ -93,13 +102,17 @@ attaches (a CLI reads its MCP config only at startup).
      processes; the listener authenticates against the store it was given.
    - `commands::root_mcp`: `ServerState` holds an optional `AppHandle` (root
      lane, window only) and a `Notice` sink; `start` (window) and
-     `start_headless` (sidecar) share `bind_and_serve`.
+     `start_headless` (sidecar) share `bind` + `serve`.
    - `services::mobile_control::host::run` starts the headless listener before
-     the scheduler, pokes the window on schedule changes, runs the sweep.
+     the scheduler, pokes the window on schedule changes, runs the sweep. The
+     window turns a `schedules` poke into its own `agent-schedules-changed`
+     event, so `AgentScheduleHost` and popouts react as to a window notice.
    - `git_push_mcp::serve_without_keyring()` (set by the sidecar):
      `creds()` withholds the token, push/release answer `window_required`.
-   - `launch_prep`: the MCP grant split into gates (global reads) and a pure
-     `root_mcp::grant_lanes` the test can drive.
+   - `launch_prep` makes one call, `root_mcp::grant_lanes(opts, agent,
+     runtime(), tokens(), state_dir)`, which reads every gate from that state
+     dir (settings, the scope's `projects.json` entry) — so a test drives the
+     real gates against a fixture.
    - Docs: `docs/context/agent_schedule_mcp.md`, `git_push_mcp.md`,
      `help_mcp.md`; filemap rows; `UntestedTag` row `mcpSecurity.headless`
      (a note in MCP session access, where the window says these sessions are
@@ -120,11 +133,13 @@ attaches (a CLI reads its MCP config only at startup).
 
 ## Tests (phase 1)
 
-- `host.rs`: a headless `Create` of a Claude tab whose spawn seam runs the
-  MCP grant against a "sidecar" store records `PtyOptions` carrying the
-  schedule and help `--mcp-config` entries and env tokens; the sidecar
-  listener's admission accepts each token on its own route and a second
-  store (the window, or the sidecar after a restart) refuses them.
+- `host.rs`: `start_headless` publishes the runtime (no root lane); a
+  headless `Create` of a Claude tab runs `grant_lanes` against the fixture's
+  state dir and records `PtyOptions` carrying the schedule, git and help
+  servers; the bound listener admits each token over HTTP on its own route
+  and a fresh store refuses them; root and reader spawns get nothing from
+  that runtime; the phone's close revokes the tokens. The sweep's
+  per-generation counting has its own test.
 - `commands::root_mcp`: the headless router has no root route; a token from
   one store is refused by a listener over another.
 - `root_mcp`: `serves_root = false` hands a root spawn nothing.

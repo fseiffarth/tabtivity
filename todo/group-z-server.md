@@ -140,8 +140,15 @@ the desktop groundwork the hosted plan's P1 builds on.*
       `PtyOptions` carrying the schedule/help MCP config and a token the
       sidecar's listener accepts; a token minted by one process is refused by
       the other's listener after a restart.
-      (`host.rs` `a_headless_claude_tab_is_handed_the_hosts_schedule_and_help_servers`,
-      `commands::root_mcp` `a_token_is_admitted_only_by_the_listener_whose_process_minted_it`.)
+      (`host.rs` `a_headless_claude_tab_is_handed_the_hosts_mcp_servers`: the
+      host's `start_headless` publishes its runtime; a headless create runs
+      `root_mcp::grant_lanes` — the call `launch_prep::prepare` makes, not
+      `prepare` itself, whose fence and tmux steps need a live host —
+      against the fixture's state dir through the real gates and gets the
+      schedule, git and help servers; the bound listener admits the tokens
+      over HTTP and a fresh store refuses them; root and reader lanes are
+      withheld; the phone's close revokes them. `commands::root_mcp`
+      `a_token_is_admitted_only_by_the_listener_whose_process_minted_it`.)
     - [ ] 🖐️ Manual test — with no window open, create a Claude tab from the
       phone; in it, `/mcp` lists `tabtivity-schedule` and `tabtivity-help`;
       a schedule proposal waits for approval and the card appears once a
