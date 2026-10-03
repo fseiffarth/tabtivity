@@ -136,4 +136,17 @@ fn addresses_and_names_are_strict() {
     assert_eq!(file_name_of("attachment; filename=\"a/b\\\\c.txt\""), Some("c.txt".into()));
     assert_eq!(file_name_of("attachment; filename=\"..\""), None);
     assert_eq!(file_name_of("inline"), None);
+    // P5 review: nothing Windows reads as a stream, a device or a dropped dot.
+    assert_eq!(file_name_of("attachment; filename=\"notes.txt:hidden\""), Some("notes.txt_hidden".into()));
+    assert_eq!(file_name_of("attachment; filename=\"CON.txt\""), Some("_CON.txt".into()));
+    assert_eq!(file_name_of("attachment; filename=\"com1\""), Some("_com1".into()));
+    assert_eq!(file_name_of("attachment; filename=\"report.pdf. \""), Some("report.pdf".into()));
+    assert_eq!(file_name_of("attachment; filename=\"...\""), None);
+    assert_eq!(file_name_of("attachment; filename=\"compose.yaml\""), Some("compose.yaml".into()));
+    for program in ["setup.EXE", "run.bat", "x.ps1", "a.desktop", "b.AppImage", "s.sh", "l.lnk"] {
+        assert!(opens_as_program(program), "{program}");
+    }
+    for document in ["report.pdf", "notes.md", "photo.jpeg", "Makefile", "data.csv"] {
+        assert!(!opens_as_program(document), "{document}");
+    }
 }

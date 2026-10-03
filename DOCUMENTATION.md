@@ -489,7 +489,8 @@ administrator (`name:12345678`) and a name for this computer → **Pair**.
 Then **Open the server window**. Everything in that window — projects,
 terminals, agents, mail — lives on the server, as in the browser; copy and
 paste, notifications and the window itself are this computer's, and opening
-a server file downloads it into your Downloads folder and opens it here.
+a server file downloads it into your Downloads folder and opens it here
+(a program — `.exe`, `.bat`, `.sh`, … — is saved there but not opened).
 **Forget this server** removes this computer's key; remove the device in the
 server's Mobile settings as well.
 

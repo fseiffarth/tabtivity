@@ -176,6 +176,9 @@ pub async fn connect_open_download(window: tauri::Window, url: String) -> Result
     let paired = connect::paired_in(&crate::storage::state_dir()).ok_or("this computer is not paired with a server")?;
     let dir = crate::paths::home_dir().join("Downloads");
     let path = connect::download_ticket(&paired.origin, &url, &dir).await?;
+    if path.file_name().and_then(|n| n.to_str()).is_none_or(connect::opens_as_program) {
+        return Err(format!("Saved to {}; not opened, because it would run as a program on this computer", path.display()));
+    }
     opener::open(&path).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
 }

@@ -191,8 +191,11 @@ own standalone workspace (Q12). As built:
   clock, Super key, power) and the window and notification plugins natively;
   `open_file` asks the server for a download ticket and
   `connect_open_download` fetches it (the server's host, `/content/` only,
-  a safe file name, never overwriting) into `~/Downloads` and opens it with
-  the system's default app. Every other command routes exactly as in a
+  a safe file name — no Windows stream, device or trailing dot either —
+  never overwriting) into `~/Downloads` and opens it with the system's
+  default app, unless its name is a program's (`connect::opens_as_program`:
+  `.exe`, `.bat`, `.desktop`, `.sh`, …), which is kept but not opened — the
+  server or a co-member named it. Every other command routes exactly as in a
   browser (`core` to the server, other `client` commands to the browser
   adapters).
 - **Not built**: popouts and the presenter of the Connect window (the adapter

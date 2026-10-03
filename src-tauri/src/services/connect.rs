@@ -269,12 +269,31 @@ pub async fn download_ticket(origin: &str, url: &str, dir: &Path) -> Result<Path
 }
 
 /// The file name a `Content-Disposition` names, cut to its last component
-/// and stripped of anything that could leave the download folder.
+/// and stripped of anything that could leave the download folder — or, on
+/// Windows, name a stream (`a:b`), a device (`CON`) or lose a trailing dot.
 pub fn file_name_of(disposition: &str) -> Option<String> {
     let raw = disposition.split(';').map(str::trim).find_map(|p| p.strip_prefix("filename=")).map(|v| v.trim_matches('"').to_string())?;
     let leaf = raw.rsplit(['/', '\\']).next().unwrap_or("").trim().to_string();
-    let clean: String = leaf.chars().filter(|c| !c.is_control()).collect();
-    (!clean.is_empty() && clean != "." && clean != "..").then_some(clean)
+    let clean: String = leaf.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') { '_' } else { c }).collect();
+    let clean = clean.trim_end_matches(['.', ' ']).to_string();
+    if clean.is_empty() {
+        return None;
+    }
+    let stem = clean.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    Some(if device { format!("_{clean}") } else { clean })
+}
+
+/// Would the system's default app *run* a file of this name rather than
+/// show it? Such a download is kept but not opened: the server — or a
+/// co-member of a shared project — named it, and on Windows a downloaded
+/// `.exe` or `.bat` opened "with its default app" is a program started.
+pub fn opens_as_program(name: &str) -> bool {
+    const PROGRAMS: &[&str] = &[
+        "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "msc", "cpl", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "lnk", "url", "scf", "reg", "inf", "jar",
+        "application", "appref-ms", "gadget", "appimage", "desktop", "sh", "bash", "zsh", "csh", "run", "bin", "command", "app", "pkg", "dmg", "mpkg", "deb", "rpm", "flatpakref", "py", "pyw", "pl", "rb",
+    ];
+    name.rsplit_once('.').is_some_and(|(_, ext)| PROGRAMS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 fn unique(dir: &Path, name: &str) -> PathBuf {
