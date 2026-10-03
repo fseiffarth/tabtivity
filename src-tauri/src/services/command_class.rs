@@ -34,9 +34,24 @@
 //! - `dev_todo_*` are `Admin` with `dev_build_*`: they read and write
 //!   `todo/*.md` under `dev_build::SOURCE_ROOT`, a checkout path baked into the
 //!   binary at build time — the server's, not any user's daemon data.
-//! - `install_vibe` and `ensure_vibe_ollama_model` are `Core` although they
-//!   install into the daemon user's own `$HOME` (`curl … | bash`, `~/.vibe`),
-//!   not the state dir like `install_agent`: still bounded by the user's uid.
+//! - **Agent CLIs are installed, updated and removed by the admin only** (user
+//!   decision 2026-10-03): `install_agent`, `update_agent`, `uninstall_agent`,
+//!   `install_agent_remote*` and `install_vibe` are `Admin`. On a server the
+//!   CLIs live in the server-wide install root (plan §5.1) and users run what
+//!   is there; a CLI's own self-updater must not install per user. Reading
+//!   what is installed (`agent_versions`, `check_agent_updates`,
+//!   `agent_is_installed`) and the per-user `~/.vibe` model alias
+//!   (`ensure_vibe_ollama_model`) stay `Core`.
+//! - **One shared Ollama per server; only the admin changes or starts models**
+//!   (same decision): `pull_ollama_model`, `pause_ollama_pull`,
+//!   `delete_ollama_pull`, `delete_ollama_model`, `delete_partial_blob`,
+//!   `load_ollama_model`, `stop_ollama_model` and `ensure_ollama_running` (a
+//!   user-level `ollama serve` would take over the shared port with its own
+//!   store) are `Admin`. Completion, chat and local-model tabs stay `Core`;
+//!   because Ollama auto-loads whatever a request names, P2 limits those
+//!   requests to the admin-allowed model list server-side (plan §3.3).
+//! - **`list_recent_downloads` is `Client`**: Recent Downloads are always the
+//!   device the user sits at, never the server's folders.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -169,14 +184,14 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("claude_folder_trusted", Core),
     ("codex_hook_status", Core),
     ("dismiss_agent_version", Core),
-    ("install_agent", Core),
-    ("install_agent_remote", Core),
-    ("install_agent_remote_command", Core),
+    ("install_agent", Admin),
+    ("install_agent_remote", Admin),
+    ("install_agent_remote_command", Admin),
     ("list_agents", Core),
     ("node_runtime_status", Core),
     ("probe_binaries", Core),
-    ("uninstall_agent", Core),
-    ("update_agent", Core),
+    ("uninstall_agent", Admin),
+    ("update_agent", Admin),
     // commands/agent_tasks.rs
     ("agent_schedule_claim", Core),
     ("agent_schedule_complete", Core),
@@ -339,7 +354,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_dirs", Core),
     ("list_project_endings", Core),
     ("list_project_paths", Core),
-    ("list_recent_downloads", Core),
+    ("list_recent_downloads", Client),
     ("move_path", Core),
     ("project_path_exists", Core),
     ("read_file_bytes", Core),
@@ -551,20 +566,20 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("cancel_text_completion", Core),
     ("clear_pending_ollama_pull", Core),
     ("complete_text", Core),
-    ("delete_ollama_model", Core),
-    ("delete_ollama_pull", Core),
-    ("delete_partial_blob", Core),
-    ("ensure_ollama_running", Core),
+    ("delete_ollama_model", Admin),
+    ("delete_ollama_pull", Admin),
+    ("delete_partial_blob", Admin),
+    ("ensure_ollama_running", Admin),
     ("ensure_vibe_ollama_model", Core),
     ("install_ollama", Admin),
-    ("install_vibe", Core),
+    ("install_vibe", Admin),
     ("list_installable_models", Core),
     ("list_local_drivers", Core),
     ("list_ollama_models", Core),
     ("list_ollama_models_detailed", Core),
     ("list_orphan_partial_blobs", Core),
     ("list_pending_ollama_pulls", Core),
-    ("load_ollama_model", Core),
+    ("load_ollama_model", Admin),
     ("ollama_check_updates", Core),
     ("ollama_gpu_status", Core),
     ("ollama_install_strategy", Core),
@@ -575,13 +590,13 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ollama_registry_size", Core),
     ("ollama_status", Core),
     ("ollama_version_status", Core),
-    ("pause_ollama_pull", Core),
+    ("pause_ollama_pull", Admin),
     ("prepare_local_agent", Core),
     ("prepare_local_launch", Core),
     ("prepare_text_completion", Core),
-    ("pull_ollama_model", Core),
+    ("pull_ollama_model", Admin),
     ("search_ollama_registry", Core),
-    ("stop_ollama_model", Core),
+    ("stop_ollama_model", Admin),
     ("vibe_install_strategy", Core),
     ("vibe_is_installed", Core),
     // commands/openvpn.rs

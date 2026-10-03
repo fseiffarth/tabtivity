@@ -345,15 +345,39 @@ network (P0).**
 
 | Class | Runs where | Examples | On the server |
 |---|---|---|---|
-| `core` | the user's daemon | projects, fs, git, terminal (incl. `pty_set_visible`), agents, search, tex, viewers' backends, skills, schedules, copilot, ollama completion, the root console **Host** session (under the user's own uid, no sudo, **Q6**) | exposed |
-| `client` | the machine the user sits at | clipboard, native print, screenshot, subwindows/popouts, os clock, power, sysstat/gpustat of *this* machine, IDE launch, open-outside | not exposed; browser adapter or hidden |
-| `admin` | the server as a whole | OpenVPN (machine-wide), global machines, VMs, Docker, app update, dev build, admin-provided agent credentials and server-wide CLI installs | admin role only, or disabled (§9) |
+| `core` | the user's daemon | projects, fs, git, terminal (incl. `pty_set_visible`), agents, search, tex, viewers' backends, skills, schedules, copilot, ollama completion and local-model tabs (admin-allowed models only, see below), the root console **Host** session (under the user's own uid, no sudo, **Q6**) | exposed |
+| `client` | the machine the user sits at | clipboard, native print, screenshot, subwindows/popouts, os clock, power, sysstat/gpustat of *this* machine, IDE launch, open-outside, Recent Downloads (`list_recent_downloads`: the device's own folder, never the server's) | not exposed; browser adapter or hidden |
+| `admin` | the server as a whole | OpenVPN (machine-wide), global machines, VMs, Docker, app update, dev build, admin-provided agent credentials, **every** agent CLI install/update/remove (`install_agent*`, `update_agent`, `uninstall_agent`, `install_vibe`), and the shared Ollama's model management (`pull_ollama_model`, `pause_ollama_pull`, `delete_ollama_pull`, `delete_ollama_model`, `delete_partial_blob`, `load_ollama_model`, `stop_ollama_model`, `ensure_ollama_running`) | admin role only, or disabled (§9) |
 | `off` | nowhere in server mode | keychain unlock, anything D-Bus-session-bound, the whole-document saves that §3.4 replaces | refused with a named reason |
 
 The class also drives the UI. The frontend asks once (`server_capabilities`,
 following the `browser_capabilities` precedent) and hides a control whose
 command is unavailable, naming why, instead of letting it fail. The same call
 carries `HOST_OS`.
+
+**Decided (user, 2026-10-03), applied in the P1 review** — the table in
+`services/command_class.rs` stands at 683 commands: 521 `core`, 85 `client`,
+68 `admin`, 9 `off`.
+
+- **One shared Ollama per server; only the admin changes or starts models.**
+  There is no per-user `ollama serve`: one `ollama.service` on the host's
+  loopback (§4.4) serves every user's daemon. Pull, pause, delete, load, stop
+  and starting the service are `admin`. Because Ollama auto-loads whatever
+  model a request names, the `core` requests that reach it — `complete_text`,
+  mail AI, the local-model tabs (`prepare_local_agent`, `prepare_local_launch`,
+  `ensure_vibe_ollama_model`), embeddings — are limited to an **admin-allowed
+  model list**, checked server-side in the dispatcher before the request
+  leaves the daemon (not a UI filter; the user's model picker shows that list).
+  Not built in P1: P2 adds the list and the check with the dispatcher, P3 the
+  admin UI for it.
+- **Only the admin installs, updates or removes agent CLIs**, local and
+  remote: users run what is in the server-wide install root (§5.1). A CLI's
+  own self-updater (Claude's native updater, `npm -g` updates, …) must not
+  install per user on a server; the server homes get the CLI's "no auto-update"
+  switch where one exists and a read-only install root otherwise (§5.1, P3).
+- **Recent Downloads are the client device's** (`list_recent_downloads` →
+  `client`): a browser cannot list its own downloads folder, so the browser
+  client hides the section.
 
 ### 3.4 Live state: from the window to one headless owner
 
@@ -565,7 +589,7 @@ The consequences:
 | Adversary | Can | Denied by | Residual |
 |---|---|---|---|
 | **Another user** (B, about A) | Anything their uid can, including an unfenced shell | Separate uid, `0700` homes, `0660` daemon sockets with a peer-uid check, gateway routing | Anything world-readable on the host; shared-project content by design (§6) |
-| **Another user, through host-shared channels** | Loopback TCP ports, abstract unix sockets, other users' `/proc/*/cmdline`, `/tmp`, `/dev/shm` | An inventory of every loopback listener: each needs a token or moves to a unix socket (root MCP `commands/root_mcp.rs:385` has a token; `vm_proxy.rs:178`, CLI OAuth callbacks, per-user ollama on `127.0.0.1:11434` must be checked). Also `/proc` mounted `hidepid=invisible`, `PrivateTmp=` on the units, and the sign-in relay (`sign_in.rs:57-60`, which today fetches any loopback port ≥ 1024) restricted to a listener owned by the caller's uid (§5.1) | Abstract sockets have no permissions (the fence's Landlock helper covers agents, not shells); kernel privilege escalation, since every user has a shell |
+| **Another user, through host-shared channels** | Loopback TCP ports, abstract unix sockets, other users' `/proc/*/cmdline`, `/tmp`, `/dev/shm` | An inventory of every loopback listener: each needs a token or moves to a unix socket (root MCP `commands/root_mcp.rs:385` has a token; `vm_proxy.rs:178` and CLI OAuth callbacks must be checked). **Ollama is one shared listener on `127.0.0.1:11434`** (decided 2026-10-03, §3.3) that every user's daemon — and every user's shell — reaches without a token: model changes are `admin` commands and the daemon only forwards requests for admin-allowed models, but a shell can still `curl` the port directly, so what it protects is the model store and the GPU budget, not any user's data (Ollama persists nothing per user). Also `/proc` mounted `hidepid=invisible`, `PrivateTmp=` on the units, and the sign-in relay (`sign_in.rs:57-60`, which today fetches any loopback port ≥ 1024) restricted to a listener owned by the caller's uid (§5.1) | Abstract sockets have no permissions (the fence's Landlock helper covers agents, not shells); a shell can drive the shared Ollama past the allowlist (load any pulled model, burn GPU time); kernel privilege escalation, since every user has a shell |
 | **A co-member of a shared project** | Push commits to their own branch in the hub | Their writes land only in the hub, through `tabtivity-hub`'s ref rules; nobody else's tree or `.git` is writable to them; `exec_trust` is per user | Content you merge. Instruction-level steering of your agent through `CLAUDE.md` etc. once merged (§6.5, gate 2) |
 | **A co-member, via a file served to the browser** | Author HTML/SVG in the project | Separate user-content origin with `CSP: sandbox`, active types as attachment (§3.5) | None known |
 | **A web page the user visits** | Make the browser send requests with the user's cookie | `SameSite=Strict`, Origin check on WS and on every state-changing POST, CSP | A browser 0-day |
@@ -612,16 +636,23 @@ still *offer* a credential per CLI (§5.4), but a user never depends on it.
 - **Account guard, refresh write-back, sign-out:** unchanged from the desktop,
   because each user's `agent_auth` is exactly the single-user case it was
   built for.
-- **Installing CLIs.** A user can install a CLI for themselves, as today, into
-  `<state_dir>/agents/install/` (`agent_install.rs:1-13`). The admin can also
-  install a CLI once for everyone into the **server-wide install root**,
+- **Installing CLIs (decided 2026-10-03: admin only).** On a server a user
+  never installs, updates or removes a CLI — `install_agent`, `update_agent`,
+  `uninstall_agent`, `install_agent_remote*` and `install_vibe` are `admin`
+  (§3.3); the desktop's per-user `<state_dir>/agents/install/`
+  (`agent_install.rs:1-13`) is not offered in server mode. The admin installs
+  a CLI once for everyone into the **server-wide install root**,
   `/opt/tabtivity/agents/`, owned by `tabtivity-cli`:
   - the install runs as `tabtivity-cli` through a helper verb, never as root,
     because vendor install scripts are code;
   - the root is readable by every user and bound read-only into every fence;
-  - its version pins (`services::agent_versions`) are server-wide.
-
-  When both exist, a user's own install wins, as a per-user override.
+  - its version pins (`services::agent_versions`) are server-wide;
+  - **no CLI self-updates per user**: a CLI's own updater (Claude's native
+    updater, `npm -g` updates, Codex's) is switched off in every server agent home where the CLI offers a switch
+    (`DISABLE_AUTOUPDATER`-style environment or config), and the read-only
+    install root stops the rest. Users see "ask your admin" where the
+    desktop shows Update. Remote-machine installs (`install_agent_remote*`)
+    are the admin's too, since the machines are the server's (§4.3).
 - **Rate limits and terms** are each user's own. The provider sees each user
   as themselves, and one heavy user no longer uses up anyone else's quota.
 
@@ -1174,6 +1205,9 @@ comes.
   the transport of §3.5: binary frames, per-client size, offset resume,
   bounded queues and the poller pause.
 - The user-content origin for ticketed files.
+- The admin-allowed Ollama model list and its server-side check in the
+  dispatcher (§3.3): a `core` request naming another model is refused before
+  it reaches the shared Ollama.
 - **Localhost first.** Nothing is reachable beyond localhost until the CSP
   review and the §11 security review are done.
 - *Exit, live:*
@@ -1190,8 +1224,10 @@ comes.
 - The admin helper and its hard rules, the per-user slices and units, the
   tmux unit, `0700` homes, the invite flow, per-user device keys verified by
   the daemon, and the audit log.
-- The deployment prerequisite checks (§8), the server-wide CLI install root,
-  and the host-channel inventory (§4.4).
+- The deployment prerequisite checks (§8), the server-wide CLI install root
+  with its admin-only installs and the per-home self-updater switches (§5.1),
+  the admin UI for the Ollama model list, and the host-channel inventory
+  (§4.4).
 - Per-user sign-in (§5.1): sign-in tabs from browser and phone, and the
   callback relay restricted to the caller's own listeners.
 - Per-user mail, calendar and todo (§6.7), with the admin's and users'

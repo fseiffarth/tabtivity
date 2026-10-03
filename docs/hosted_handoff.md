@@ -38,7 +38,8 @@ need it:
 
 **Counts, from the actual registration, not the plan's 658:** 683 commands
 → 539 `core`, 84 `client`, 51 `admin`, 9 `off` (after the review below:
-536 / 84 / 54 / 9). The plan's §1, §3.3, §4.3 and
+536 / 84 / 54 / 9; after the P1 review applied the user's three decisions of
+2026-10-03: **521 / 85 / 68 / 9**). The plan's §1, §3.3, §4.3 and
 §14 still say 658 (and 388/57/211); those are the 2026-09-29 numbers and were
 left as history — the P0 bullet carries the current count.
 
@@ -111,8 +112,11 @@ The module header documents the rows that look misplaced. The short list:
   rootless Podman is P5). `register_host_bound_tab` is `core` (a grant file in
   the state dir).
 - **`install_ollama` is `admin`** (sudo + systemd service); the agent CLI
-  installs (`install_agent`, `update_agent`, …) are `core` because they
+  installs (`install_agent`, `update_agent`, …) were `core` because they
   install into Tabtivity's own install home (`services::agent_install`).
+  *Flipped in the P1 review (user decision 2026-10-03): every CLI
+  install/update/remove is `admin`, and so is the shared Ollama's model
+  management — see § P1 review.*
   *Corrected in review:* `install_vibe` is `core` too but **not** for that
   reason — it runs `curl … | bash` into the daemon user's own `$HOME`
   (`~/.vibe`, `ensure_vibe_ollama_model` appends to `~/.vibe/config.toml`);
