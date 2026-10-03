@@ -1702,6 +1702,8 @@ async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> im
             "unlocked": status.unlocked,
             "enrolled": enrolled,
             "recoveryCode": status.recovery_code,
+            // A device was revoked since the code was made: make a new one.
+            "newCodeRecommended": status.new_code_recommended,
             "identity": identity,
         })),
     )

@@ -69,7 +69,7 @@ fn k_opens_only_after_a_device_releases_it_and_survives_a_restart_not_a_flush() 
     let code = vault.set_up(&[phone.key()]).unwrap();
     assert_eq!(code.len(), 39);
     let k = vault.key().expect("held after set-up");
-    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1, recovery_code: true });
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1, recovery_code: true, new_code_recommended: false });
     assert!(vault.set_up(&[phone.key()]).is_err(), "never a second K over the first");
     vault.set_credential("imap:alice@mail.example", Some("hunter2")).unwrap();
 
@@ -116,7 +116,7 @@ fn a_copy_of_the_home_opens_nothing_and_the_recovery_code_does() {
     let copy = tempfile::tempdir().unwrap();
     copy_tree(dir.path(), copy.path());
     let thief = vault_in(copy.path(), Arc::new(MemoryHold::default()));
-    assert_eq!(thief.status(), VaultStatus { set_up: true, unlocked: false, wrapped_devices: 1, recovery_code: true });
+    assert_eq!(thief.status(), VaultStatus { set_up: true, unlocked: false, wrapped_devices: 1, recovery_code: true, new_code_recommended: false });
     assert_eq!(thief.credential("ssh:alice@host.example:22"), None);
     // A device key the thief made up has no wrap; the right device's wrap
     // needs that device's secret.
@@ -182,7 +182,7 @@ fn devices_enrolled_later_get_wraps_and_revoked_ones_lose_theirs() {
     let laptop = Device::new("dev_laptop_00001");
     assert_eq!(vault.wrap_missing(&[laptop.key()]), 1, "a device paired later is wrapped while unlocked");
     vault.forget_devices(&[]).unwrap();
-    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: true });
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: true, new_code_recommended: true });
 }
 
 // ── Rotation on revoke (user decision 2026-10-03) ──────────────────────────
@@ -231,10 +231,11 @@ fn revoking_rotates_k_and_a_revoked_device_with_old_wraps_opens_nothing_new() {
     let old_wraps = WrapFile::load(dir.path()).unwrap();
     assert_eq!(offline_k(&phone, &old_wraps).bytes(), k1.bytes(), "the old copy did open the old K");
 
+    assert!(!vault.status().new_code_recommended, "nothing revoked yet");
     vault.revoke(&phone.id, &[phone.key(), tablet.key()]).unwrap();
     let k2 = vault.key().expect("still unlocked");
     assert_ne!(k2.bytes(), k1.bytes(), "a new K");
-    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1, recovery_code: true });
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1, recovery_code: true, new_code_recommended: true });
     assert_opens(&vault, dir.path(), &mail);
     vault.set_credential("smtp:alice@mail.example", Some("n3w")).unwrap();
 
@@ -390,7 +391,7 @@ fn a_v1_recovery_wrap_is_upgraded_when_used_and_flagged_when_it_cannot_follow() 
     file.recovery = Some(secrets::wrap_with_recovery_v1(&k, &code));
     file.save(dir.path()).unwrap();
     vault.forget_devices(&[]).unwrap();
-    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: false });
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: false, new_code_recommended: true });
     // Set up still, with no recovery wrap: a second set-up would orphan K,
     // and a device wrapped later still gets a locked start, not "not set up".
     assert!(vault.set_up(&[]).is_err(), "no second K");
@@ -452,6 +453,46 @@ fn a_retired_key_and_a_stale_device_list_change_nothing() {
     assert_ne!(vault.key().unwrap().bytes(), k2.bytes(), "rotated at the release");
     assert_eq!(dev(&WrapFile::load(dir.path()).unwrap()), vec![tablet.id.clone()], "the stale list wrapped nobody revoked");
     assert_opens(&vault, dir.path(), &mail);
+}
+
+/// User decision 2026-10-03: a revoke flags "make a new recovery code" (the
+/// code's A outlives rotations, and a revoked device with an old
+/// `wraps.json` knows it). The flag follows rotations, a restart and an
+/// offline revoke; only a new code clears it, and a re-enrolment (a wrap
+/// dropped for the same device) does not set it.
+#[test]
+fn a_revoke_recommends_a_new_recovery_code_until_one_is_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let tablet = Device::new("dev_tablet_00001");
+    let laptop = Device::new("dev_laptop_00001");
+    let vault = vault_in(dir.path(), hold.clone());
+    vault.set_up(&[phone.key(), tablet.key(), laptop.key()]).unwrap();
+    vault.drop_wrap(&laptop.id);
+    assert!(!vault.status().new_code_recommended, "a re-enrolment is no revoke");
+    vault.wrap_missing(&[laptop.key()]);
+
+    vault.revoke(&phone.id, &[tablet.key(), laptop.key()]).unwrap();
+    assert!(vault.status().new_code_recommended, "set by the revoke");
+    assert!(vault_in(dir.path(), hold.clone()).status().new_code_recommended, "kept over a restart");
+    vault.new_recovery_code().unwrap();
+    assert!(!vault.status().new_code_recommended, "cleared by a new code");
+
+    // Revoked while locked: set at once, kept through the rotation at the release.
+    hold.clear().unwrap();
+    vault.revoke(&tablet.id, &[laptop.key()]).unwrap();
+    assert!(vault.status().new_code_recommended);
+    release(&vault, &laptop).unwrap();
+    assert!(WrapFile::load(dir.path()).unwrap().kid.is_some() && !WrapFile::load(dir.path()).unwrap().rotate, "rotated");
+    assert!(vault.status().new_code_recommended, "the rotation carries it");
+    vault.new_recovery_code().unwrap();
+
+    // An offline revoke sets it too.
+    let spare = Device::new("dev_spare_000001");
+    vault.wrap_missing(&[spare.key()]);
+    revoke_offline(dir.path(), &spare.id).unwrap();
+    assert!(vault.status().new_code_recommended);
 }
 
 // ── Re-pinning a lost identity key (user decision 2026-10-03) ──────────────

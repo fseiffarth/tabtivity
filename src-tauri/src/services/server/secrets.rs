@@ -153,6 +153,13 @@ pub struct WrapFile {
     /// A device was revoked while K was locked: rotate at the next release.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rotate: bool,
+    /// A device was revoked since the recovery code was made (user decision
+    /// 2026-10-03). The code's A outlives rotations, so a revoked device with
+    /// an old `wraps.json` knows it and, from the gateway's position, could
+    /// fake a re-pin prompt; the Server settings ask for a new code until one
+    /// is made ([`super::vault::Vault::new_recovery_code`] clears it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub new_code_recommended: bool,
 }
 
 impl WrapFile {

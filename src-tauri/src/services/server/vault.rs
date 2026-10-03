@@ -16,7 +16,9 @@
 //!   device's pairing key, like enrolment (the route checks it).
 //! * **Revoking a device rotates K** ([`rotation`]): a new K, everything
 //!   sealed under the old one re-sealed beside it, one atomic switch; locked,
-//!   the wrap goes at once and the rotation runs at the next release.
+//!   the wrap goes at once and the rotation runs at the next release. The
+//!   Server settings then ask for a new recovery code
+//!   ([`VaultStatus::new_code_recommended`]).
 //! * **Enrolment**: a signed-in device registers its ECDH public key with a
 //!   signature of its pairing key (the session cookie alone cannot), and
 //!   pins this daemon's identity key ([`Vault::identity_public`]).
@@ -133,6 +135,9 @@ pub struct VaultStatus {
     /// A recovery code opens the current K (false only after a rotation that
     /// could not carry a v1 recovery wrap along: make a new code).
     pub recovery_code: bool,
+    /// A device was revoked since the recovery code was made: make a new
+    /// one (user decision 2026-10-03).
+    pub new_code_recommended: bool,
 }
 
 /// What a device needs to re-pin a changed identity key with the recovery
@@ -286,7 +291,13 @@ impl Vault {
 
     pub fn status(&self) -> VaultStatus {
         let file = WrapFile::load(&self.state_dir).unwrap_or_default();
-        VaultStatus { set_up: file.is_set_up(), unlocked: self.key().is_some(), wrapped_devices: file.devices.len(), recovery_code: file.recovery.is_some() }
+        VaultStatus {
+            set_up: file.is_set_up(),
+            unlocked: self.key().is_some(),
+            wrapped_devices: file.devices.len(),
+            recovery_code: file.recovery.is_some(),
+            new_code_recommended: file.is_set_up() && file.new_code_recommended,
+        }
     }
 
     /// A key derived from K for one purpose (`"mail-kek"`, `"credentials"`).
@@ -364,6 +375,7 @@ impl Vault {
             kid: Some(rotation::new_kid()),
             check: Some(secrets::key_check(&key)),
             rotate: false,
+            new_code_recommended: false,
         };
         for device in &self.live(devices) {
             if let Ok(public) = secrets::device_key(&device.ecdh) {
@@ -383,7 +395,8 @@ impl Vault {
     }
 
     /// While unlocked: a fresh recovery code replaces the old one (the old
-    /// wrap is gone, so a lost or leaked code stops working). Returned once.
+    /// wrap is gone, so a lost or leaked code stops working) and clears
+    /// "new code recommended". Returned once.
     pub fn new_recovery_code(&self) -> Result<Zeroizing<String>, String> {
         // K read under the lock: one read before a rotation would wrap the
         // retired K for the new code.
@@ -395,6 +408,8 @@ impl Vault {
         }
         let code = secrets::recovery_code();
         file.recovery = Some(secrets::wrap_with_recovery(&key, &code)?);
+        // A fresh A: no revoked device knows this code's.
+        file.new_code_recommended = false;
         file.save(&self.state_dir)?;
         Ok(code)
     }

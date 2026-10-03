@@ -184,7 +184,7 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "available": true, "setUp": false, "unlocked": false, "enrolled": false, "recoveryCode": false, "identity": null })
+        json!({ "available": true, "setUp": false, "unlocked": false, "enrolled": false, "recoveryCode": false, "newCodeRecommended": false, "identity": null })
     );
 
     // Enrol an ECDH key: the session alone is not enough.
@@ -318,6 +318,11 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     assert_eq!(remote_credentials::get("imap:alice@mail.example").as_deref(), Some("hunter2"));
     let (status, _, _) = raw(&socket, "GET", "/api/v1/secrets", Some(&cookie), None).await;
     assert_eq!(status, 401, "the phone's session went with it");
+    // The tablet's Server settings: a new recovery code is recommended.
+    let (status, _, body) = raw(&socket, "GET", "/api/v1/secrets", Some(&tablet_cookie), None).await;
+    assert_eq!(status, 200, "{body}");
+    let state: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(state["newCodeRecommended"], true, "{state}");
     // A reboot: the tablet releases the new K; the recovery code still fits.
     hold.clear().unwrap();
     let (status, body) = unlock(&socket, &tablet_cookie, &tablet_id, &tablet_ecdh, &identity).await;
@@ -330,4 +335,11 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/recover", Some(&tablet_cookie), Some(&json!({ "code": code }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(hold.get().unwrap().unwrap().bytes(), k_after.bytes());
+
+    // A new recovery code (signed, by the remaining tablet) clears the advice.
+    let body = signed(&socket, &tablet_cookie, &tablet_signing, &tablet_id, "secrets-recovery-code").await;
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/recovery-code", Some(&tablet_cookie), Some(&body)).await;
+    assert_eq!(status, 200, "{body}");
+    let (_, _, body) = raw(&socket, "GET", "/api/v1/secrets", Some(&tablet_cookie), None).await;
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["newCodeRecommended"], false);
 }

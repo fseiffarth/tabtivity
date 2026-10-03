@@ -6,7 +6,8 @@
 //! device-mode mail `key.json` (the mail store's own master key stays; only
 //! its wrap changes), the recovery wrap (to the code's public key `R`, so the
 //! code stays valid without being known here) and a wrap per remaining
-//! device. Nothing in the new files opens with the old K.
+//! device. Nothing in the new files opens with the old K. A revoke also
+//! flags "make a new recovery code" (`new_code_recommended`).
 //!
 //! **Crash safety.** One commit point, the rename of `wraps.json.next` over
 //! `wraps.json`:
@@ -106,6 +107,7 @@ pub fn revoke_offline(state_dir: &Path, device_id: &str) -> Result<(), String> {
     let mut file = WrapFile::load(state_dir)?;
     if file.revoke(device_id) {
         file.rotate = true;
+        file.new_code_recommended |= file.is_set_up();
         file.save(state_dir)?;
     }
     Ok(())
@@ -209,6 +211,9 @@ impl Vault {
             return file.save(&self.state_dir);
         }
         file.rotate = true;
+        if file.devices.len() != before {
+            file.new_code_recommended = true;
+        }
         // The revoke itself: from here the device's wrap is gone, whatever
         // happens to the rotation.
         file.save(&self.state_dir)?;
@@ -268,7 +273,14 @@ impl Vault {
             // so and the panel offers a new code.
             _ => None,
         };
-        let mut next = WrapFile { devices: Vec::new(), recovery, kid: Some(kid), check: Some(secrets::key_check(&new)), rotate: false };
+        let mut next = WrapFile {
+            devices: Vec::new(),
+            recovery,
+            kid: Some(kid),
+            check: Some(secrets::key_check(&new)),
+            rotate: false,
+            new_code_recommended: file.new_code_recommended,
+        };
         for device in devices {
             if let Ok(public) = secrets::device_key(&device.ecdh) {
                 next.put(secrets::wrap_for_device(&new, &device.id, &public));
