@@ -15,12 +15,14 @@
 # a CLI's own sign-in listener: see docs/context/server_gateway.md), checks
 # that the key keeper answers by uid (P3b), checks the share hub (P4: a
 # non-member cannot read a hub, a viewer cannot push or write one, a revoked
-# member loses access at once), and runs the admin helper's prerequisite
-# check.
+# member loses access at once; an editor moves only its own branches),
+# checks the shared-calendar service (P4c: non-members and a viewer's writes
+# refused, mail links stripped, a revoke stops the next read), and runs the
+# admin helper's prerequisite check.
 #
-# It changes nothing but one throwaway share the first user makes and
-# deletes again (it waits out the hub's retention window in its holding
-# area): no account or unit is created, modified or stopped (root's connect
+# It changes nothing but one throwaway share and one throwaway shared
+# calendar the first user makes and takes back again (the share waits out
+# the hub's retention window in its holding area): no account or unit is created, modified or stopped (root's connect
 # to the first user's socket starts that user's daemon by socket
 # activation, as any gateway request would). Exit status:
 # 0 when every assertion held, 1 otherwise.
@@ -254,6 +256,14 @@ else
       zero=0000000000000000000000000000000000000000
       out="$(hub_says "$B" "{\"op\":\"push\",\"share\":\"$id\",\"updates\":[{\"ref\":\"refs/heads/$B/x\",\"old\":\"$zero\",\"new\":\"1111111111111111111111111111111111111111\"}],\"bytes\":0}")"
       if said "$out" '"error":"ref-refused"'; then pass "a viewer cannot push"; else fail "a viewer cannot push" "got: $(printf '%s' "$out" | head -c 200)"; fi
+      # An editor moves only refs/heads/<himself>/*: never main, never another's.
+      out="$(hub_says "$A" "{\"op\":\"grant\",\"share\":\"$id\",\"user\":\"$B\",\"role\":\"editor\"}")"
+      if said "$out" '"ok":true'; then pass "$A makes $B an editor"; else fail "$A makes $B an editor" "got: $(printf '%s' "$out" | head -c 200)"; fi
+      for ref in refs/heads/main "refs/heads/$A/x" refs/tags/v1; do
+        out="$(hub_says "$B" "{\"op\":\"push\",\"share\":\"$id\",\"updates\":[{\"ref\":\"$ref\",\"old\":\"$zero\",\"new\":\"1111111111111111111111111111111111111111\"}],\"bytes\":0}")"
+        if said "$out" '"error":"ref-refused"'; then pass "an editor cannot move $ref"; else fail "an editor cannot move $ref" "got: $(printf '%s' "$out" | head -c 200)"; fi
+      done
+      expect_eacces "an editor cannot write the hub either" "$B" sh -c "printf x >> '$hubdir/HEAD'"
       out="$(hub_says "$A" "{\"op\":\"revoke\",\"share\":\"$id\",\"user\":\"$B\"}")"
       if said "$out" '"ok":true'; then pass "$A revokes $B"; else fail "$A revokes $B" "got: $(printf '%s' "$out" | head -c 200)"; fi
       expect_eacces "a revoked member cannot read the hub" "$B" cat "$hubdir/HEAD"
@@ -267,6 +277,44 @@ else
   fi
   out="$(hub_says nobody '{"op":"list"}')"
   if said "$out" '"error":"refused"'; then pass "the hub refuses a non-server account"; else fail "the hub refuses a non-server account" "got: $(printf '%s' "$out" | head -c 200)"; fi
+fi
+
+echo "── shared calendars: the service decides by uid and part ──"
+# Hosted plan §6.7 (P4c): a non-member's request is refused, a viewer's
+# write too, a task's mail link never reaches a member, and a revoke stops
+# the next read. One throwaway calendar the first user shares and takes
+# back; nothing of theirs is moved.
+CAL="/run/$APP_SLUG/calendar.sock"
+cal_says() { printf '%s\n' "$2" | runuser -u "$1" -- nc -U -N "$CAL" 2>&1; }
+if [ ! -S "$CAL" ]; then
+  fail "the shared-calendar socket exists" "$CAL is missing: systemctl enable --now ${APP_SLUG}-calendar.socket"
+elif ! command -v nc >/dev/null; then
+  fail "nc is installed (for the calendar checks)" "apt install netcat-openbsd"
+else
+  A="$1" B="$2"
+  expect_eacces "$B cannot read the calendar service's store" "$B" ls "/var/lib/${APP_SLUG}-calendar"
+  out="$(cal_says "$A" '{"op":"share","name":"isolation test","color":"#000000","origin":"isolation-test","events":[{"id":"e1","title":"t","start":"2026-01-01","end":"2026-01-02"}],"tasks":[{"id":"t1","title":"t","mail":{"message_id":"<isolation@example.invalid>","subject":"private subject"}}],"columns":[]}')"
+  cid="$(printf '%s' "$out" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p' | head -n 1)"
+  if [ -z "$cid" ]; then
+    fail "$A can share a calendar" "got: $(printf '%s' "$out" | head -c 200)"
+  else
+    pass "$A can share a calendar"
+    out="$(cal_says "$B" "{\"op\":\"get\",\"id\":\"$cid\"}")"
+    if said "$out" '"error":"unknown-calendar"'; then pass "$B (no member) cannot read it"; else fail "$B (no member) cannot read it" "got: $(printf '%s' "$out" | head -c 200)"; fi
+    out="$(cal_says "$A" "{\"op\":\"grant\",\"id\":\"$cid\",\"user\":\"$B\",\"events\":\"viewer\",\"tasks\":\"viewer\"}")"
+    if said "$out" '"ok":true'; then pass "$A opens it to $B as viewer"; else fail "$A opens it to $B as viewer" "got: $(printf '%s' "$out" | head -c 200)"; fi
+    out="$(cal_says "$B" "{\"op\":\"get\",\"id\":\"$cid\"}")"
+    if said "$out" '"ok":true' && ! said "$out" 'private subject'; then pass "$B reads it, without the task's mail link"; else fail "$B reads it, without the task's mail link" "got: $(printf '%s' "$out" | head -c 300)"; fi
+    out="$(cal_says "$B" "{\"op\":\"apply\",\"id\":\"$cid\",\"change\":{\"kind\":\"put-event\",\"record\":{\"title\":\"x\"},\"base_rev\":0}}")"
+    if said "$out" '"error":"read-only"'; then pass "a viewer cannot write"; else fail "a viewer cannot write" "got: $(printf '%s' "$out" | head -c 200)"; fi
+    out="$(cal_says "$A" "{\"op\":\"revoke\",\"id\":\"$cid\",\"user\":\"$B\"}")"
+    out="$(cal_says "$B" "{\"op\":\"get\",\"id\":\"$cid\"}")"
+    if said "$out" '"error":"unknown-calendar"'; then pass "a revoke stops the next read"; else fail "a revoke stops the next read" "got: $(printf '%s' "$out" | head -c 200)"; fi
+    out="$(cal_says "$A" "{\"op\":\"unshare\",\"id\":\"$cid\"}")"
+    if said "$out" '"ok":true'; then pass "$A takes the throwaway calendar back"; else fail "$A takes the throwaway calendar back" "got: $(printf '%s' "$out" | head -c 200)"; fi
+  fi
+  out="$(cal_says nobody '{"op":"list"}')"
+  if said "$out" '"error":"refused"'; then pass "the calendar service refuses a non-server account"; else fail "the calendar service refuses a non-server account" "got: $(printf '%s' "$out" | head -c 200)"; fi
 fi
 
 echo
