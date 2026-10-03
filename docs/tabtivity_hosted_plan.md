@@ -1376,6 +1376,11 @@ Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
   `Settings.ollama_allowed_models` (unset = what the admin pulled), checked in
   `core_dispatch::dispatch` for `complete_text`, `prepare_local_agent`,
   `prepare_local_launch`, `ensure_vibe_ollama_model`. No admin UI (P3).
+  *Final review (2026-10-04, `36c3726a`):* server-only and at the request —
+  the policy's list, else the shared Ollama's installed models (2 s, cached
+  5 s, off the async workers) — for the dispatcher and `mail_ai` (classify on
+  sync included); a user's `ollama_host` is ignored on a server; the root
+  MCP's local-model lane (#2339) must call it once served from the daemon.
 - **Localhost first.** Done as built: every `/desktop/*` route and the content
   origin refuse a non-loopback `Host`, the socket an inexact `Origin`; a
   request through Tailscale Serve is a 404. **Open:** the CSP review (the web
