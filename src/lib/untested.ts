@@ -452,6 +452,8 @@ export const UNTESTED = {
   "mobile.mailRead": { area: "mobile", what: "MobileSettings · Read mail on the phone" },
   "mobile.mailReply": { area: "mobile", what: "MobileSettings · Reply from the phone" },
   "mobile.stayAfterQuit": { area: "mobile", what: "MobileSettings · Keep running when Tabtivity is closed (default off): a quit leaves the Mobile host up so the phone, schedules and reminders go on with no window", tested: "2026-10-02" },
+  "mobile.browserClient": { area: "mobile", what: "MobileSettings · Browser access toggle (default off): the Mobile host serves the desktop app at /desktop/ to a loopback browser; takes effect at the host's next start" },
+  "mobile.browserClientLink": { area: "mobile", what: "MobileSettings · Show sign-in link: the loopback URL carrying the web-client token (minted 0600 in the control dir), with Copy" },
   "mobile.noShells": { area: "mobile", what: "MobileSettings · No shells on the phone (host-wide switch, default on): shell tabs are unlisted, an open one detaches, the new-tab sheet offers no Shell; off lists and opens them again" },
   "mobile.projectFiles": { area: "mobile", what: "MobileSettings · Project files on the phone (host-wide switch, default off; the sidecar reads it per request)" },
   "mobile.files.browse": { area: "mobile", what: "ProjectFiles · left drawer, opened by a left→right swipe on the project screen, left edge included, or from the left third of a tab's Focus view (right→left or a tap beside it closes): walk the project's folders read-only by sealed token, open a picture/text/PDF in the outbox viewer (Save, Share, step through a folder's pictures; a PDF's Open goes on to the browser)" },

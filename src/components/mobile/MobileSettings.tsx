@@ -133,6 +133,10 @@ export function MobileSettings() {
   const rootDir = useProjectsStore((state) => state.rootDir);
   const setProjectMobileAccess = useProjectsStore((state) => state.setProjectMobileAccess);
   const stored = settings?.[MOBILE_HOST_KEY];
+  // The browser client's sign-in link, shown on request (it carries the token).
+  const [browserLink, setBrowserLink] = useState<string | null>(null);
+  const [browserLinkError, setBrowserLinkError] = useState<string | null>(null);
+  const [browserLinkCopied, setBrowserLinkCopied] = useState(false);
   // The sidecar's `discovery::root_open`, repeated so the switch can say why
   // root is missing from the phone while it is on.
   const [reviewEnforced, setReviewEnforced] = useState(true);
@@ -261,7 +265,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs" | "browser_client", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -620,6 +624,51 @@ export function MobileSettings() {
         onChange={(event) => void setMailGate("stay_after_quit", event.target.checked)}
       />
       <p className="settings-help">{t("mobile.stayAfterQuitHelp")}</p>
+
+      <div className="settings-subheader">{t("mobile.browserClientHeader")}</div>
+      <ToggleRow
+        label={<>{t("mobile.browserClient")} <UntestedTag id="mobile.browserClient" /></>}
+        checked={stored?.browser_client ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("browser_client", event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.browserClientHelp")}</p>
+      {stored?.browser_client && (
+        <div className="settings-link-row">
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBrowserLinkError(null);
+              setBrowserLinkCopied(false);
+              invoke<string>("mobile_browser_client_link")
+                .then((link) => setBrowserLink(link))
+                .catch((reason) => setBrowserLinkError(String(reason)));
+            }}
+          >
+            {t("mobile.browserClientLink")} <UntestedTag id="mobile.browserClientLink" />
+          </button>
+          {browserLink && (
+            <>
+              <code className="settings-help" style={{ userSelect: "all" }}>{browserLink}</code>
+              <button
+                type="button"
+                className="settings-btn sm"
+                onClick={() => {
+                  invoke("copy_text_to_clipboard", { text: browserLink })
+                    .then(() => setBrowserLinkCopied(true))
+                    .catch((reason) => setBrowserLinkError(String(reason)));
+                }}
+              >
+                {browserLinkCopied ? t("mobile.browserClientCopied") : t("mobile.browserClientCopy")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {browserLinkError && <ErrorNote className="project-dialog-error" error={browserLinkError} />}
+      {stored?.browser_client && <p className="settings-help">{t("mobile.browserClientLinkHelp")}</p>}
 
       <div className="settings-subheader">{t("mobile.mailWrites")}</div>
       <ToggleRow

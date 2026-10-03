@@ -162,6 +162,10 @@ export interface Settings {
     /** Quitting Tabtivity leaves the Mobile host running (headless owner). Unset
      * is off; read by the quit path. */
     stay_after_quit?: boolean;
+    /** Serve the desktop app to a browser on this machine (hosted plan P2,
+     * Settings → Mobile → Browser access). Unset is off; loopback only; read
+     * by the sidecar at start. */
+    browser_client?: boolean;
     /** A paired phone may see and open shell tabs. Unset is off (the phone is
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
