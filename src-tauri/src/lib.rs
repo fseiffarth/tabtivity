@@ -1437,6 +1437,7 @@ pub fn run() {
             commands::markup_mcp::markup_mcp_list,
             commands::markup_mcp::markup_mcp_answer,
             commands::markup_mcp::markup_mcp_dismiss,
+            commands::markup_mcp::markup_mcp_reopen,
             commands::projects::set_project_mobile_access,
             commands::projects::sandbox_preflight,
             commands::python::python_interpreters,

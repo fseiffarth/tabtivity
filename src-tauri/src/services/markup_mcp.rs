@@ -116,6 +116,9 @@ struct Ask {
     created: Instant,
     created_at: String,
     state: State,
+    /// Set when answered: what [`reopen`] must be shown to undo exactly that
+    /// answer when its prompt could not be delivered.
+    receipt: Option<String>,
 }
 
 /// An open ask as the views get it: no session, tab or project id.
@@ -285,10 +288,23 @@ fn answer_text(question: &Question, answer: &Answer) -> Result<String, AnswerErr
     Ok(parts.join("; "))
 }
 
+/// A taken answer: the prompt to queue into the tab, and the receipt that
+/// lets [`reopen`] undo this very answer when the prompt could not be queued.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Answered {
+    pub prompt: String,
+    pub receipt: String,
+}
+
+fn mint_receipt() -> String {
+    super::root_mcp::mint_token().map(|t| t[..16].to_string())
+        .unwrap_or_else(|| format!("{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()))
+}
+
 /// The user's answer to the open ask `id`: checks every answer against its
 /// question, marks the ask answered and returns the prompt to queue into the
 /// tab. A refused answer changes nothing.
-pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Result<String, AnswerError> {
+pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Result<Answered, AnswerError> {
     let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
     let gone = prune(&mut asks);
     let result = (|| {
@@ -299,12 +315,45 @@ pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Resu
             .map(|(q, a)| answer_text(q, a).map(|text| (q.question.clone(), text)))
             .collect::<Result<Vec<_>, _>>()?;
         let prompt = answer_prompt(ask.file.as_deref(), &lines);
+        let receipt = mint_receipt();
         asks[at].state = State::Answered;
-        Ok(prompt)
+        asks[at].receipt = Some(receipt.clone());
+        Ok(Answered { prompt, receipt })
     })();
     drop(asks);
     if gone || result.is_ok() { changed(); }
     result
+}
+
+/// Undo the answer `receipt` names because its prompt never reached the tab:
+/// the ask is open again, so the card stays usable and a retry is not told
+/// `answered`. Only that answer is undone — another view's answer
+/// (`answered`), an ask a newer one of this tab has replaced since
+/// (`superseded`), or one withdrawn, expired or whose tab is gone (`gone`)
+/// stays closed. Reopening an ask already open again is not an error.
+pub fn reopen(project: &str, target: &str, id: &str, receipt: &str) -> Result<(), AnswerError> {
+    let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
+    let gone = prune(&mut asks);
+    let result = (|| {
+        let at = asks.iter().position(|a| a.id == id && a.project == project && a.target == target).ok_or(AnswerError::Gone)?;
+        match asks[at].state {
+            State::Open => return Ok(false),
+            State::Answered if asks[at].receipt.as_deref() == Some(receipt) => {}
+            State::Answered => return Err(AnswerError::Answered),
+            State::Superseded => return Err(AnswerError::Superseded),
+            State::Withdrawn | State::Dismissed => return Err(AnswerError::Gone),
+        }
+        // A newer ask of this tab came in after the answer: it is the open one.
+        if asks[at + 1..].iter().any(|a| a.project == project && a.target == target) {
+            return Err(AnswerError::Superseded);
+        }
+        asks[at].state = State::Open;
+        asks[at].receipt = None;
+        Ok(true)
+    })();
+    drop(asks);
+    if gone || result == Ok(true) { changed(); }
+    result.map(|_| ())
 }
 
 /// **Answer in chat instead**: close the open ask `id` without a prompt.
@@ -592,6 +641,7 @@ fn call_ask(session: &Session, project: &str, target: &str, ctx: &Context, args:
     asks.push(Ask {
         id: id.clone(), session: session.id.clone(), project: project.to_string(), target: target.to_string(),
         file, questions: parsed.questions, created: Instant::now(), created_at: chrono::Local::now().to_rfc3339(), state: State::Open,
+        receipt: None,
     });
     prune(&mut asks);
     drop(asks);
@@ -799,7 +849,7 @@ mod tests {
         }
         assert_eq!(list(&project, &target, Shown::All).len(), 1, "a refused answer changes nothing");
         assert_eq!(answer("p-elsewhere", &target, id, &[a(vec![1], None), a(vec![2, 0], Some("D"))]), Err(AnswerError::Gone));
-        let prompt = answer(&project, &target, id, &[a(vec![1], None), a(vec![2, 0], Some("  D\nplease "))]).unwrap();
+        let prompt = answer(&project, &target, id, &[a(vec![1], None), a(vec![2, 0], Some("  D\nplease "))]).unwrap().prompt;
         assert_eq!(prompt, "My answers to your markup questions:\n1. One? → y\n2. Which? → A; C; Other: D please");
         assert_eq!(answer(&project, &target, id, &[a(vec![1], None), a(vec![0], None)]), Err(AnswerError::Answered));
         assert!(list(&project, &target, Shown::All).is_empty());
@@ -888,7 +938,7 @@ mod tests {
         assert_eq!(list(&project, &target, Shown::File(&outboxed)).len(), 1, "the outbox copy matches by leaf");
         assert!(list(&project, &target, Shown::File("docs/other.pdf")).is_empty());
         assert_eq!(list(&project, &target, Shown::All).len(), 1);
-        let prompt = answer(&project, &target, &shown[0].id, &[Answer { options: vec![1], other: None }]).unwrap();
+        let prompt = answer(&project, &target, &shown[0].id, &[Answer { options: vec![1], other: None }]).unwrap().prompt;
         assert!(prompt.starts_with("My answers to your markup questions on `docs/paper/draft.pdf`:\n"));
         // An ask without a file shows on every view.
         call(&s, TOOL_ASK, json!({"questions": [q("a?", &["x", "y"])]}), &ctx);
@@ -925,6 +975,42 @@ mod tests {
         let (s2, ..) = tab("dismiss");
         assert!(list(&project, &target, Shown::All).is_empty());
         root_mcp::revoke_tab(&s2.identity.tab);
+    }
+
+    #[test]
+    fn reopen_undoes_only_the_answer_whose_prompt_was_not_delivered() {
+        let (s, project, target) = tab("reopen");
+        let pick = [Answer { options: vec![0], other: None }];
+        let id = call(&s, TOOL_ASK, json!({"questions": [q("a?", &["x", "y"])]}), &ctx_on())["id"].as_str().unwrap().to_string();
+        assert_eq!(reopen(&project, &target, &id, "nope"), Ok(()), "an open ask: nothing to undo");
+        let first = answer(&project, &target, &id, &pick).unwrap();
+        assert!(list(&project, &target, Shown::All).is_empty());
+        // Another receipt, another target or an unknown id undo nothing.
+        assert_eq!(reopen(&project, &target, &id, "not-the-receipt"), Err(AnswerError::Answered));
+        assert_eq!(reopen("p-elsewhere", &target, &id, &first.receipt), Err(AnswerError::Gone));
+        assert_eq!(reopen(&project, &target, "ask-unknown", &first.receipt), Err(AnswerError::Gone));
+        assert!(list(&project, &target, Shown::All).is_empty());
+        // The delivery failed: the card is back and the retry is taken.
+        assert_eq!(reopen(&project, &target, &id, &first.receipt), Ok(()));
+        assert_eq!(list(&project, &target, Shown::All).len(), 1);
+        assert_eq!(reopen(&project, &target, &id, &first.receipt), Ok(()), "twice is harmless");
+        let second = answer(&project, &target, &id, &pick).unwrap();
+        assert_eq!(second.prompt, first.prompt);
+        assert_ne!(second.receipt, first.receipt);
+        assert_eq!(reopen(&project, &target, &id, &first.receipt), Err(AnswerError::Answered), "a spent receipt");
+        // A newer ask came in meanwhile: the answered one stays closed.
+        let newer = call(&s, TOOL_ASK, json!({"questions": [q("b?", &["x", "y"])]}), &ctx_on());
+        assert!(newer.get("replaced").is_none(), "an answered ask is not replaced");
+        assert_eq!(reopen(&project, &target, &id, &second.receipt), Err(AnswerError::Superseded));
+        let open = list(&project, &target, Shown::All);
+        assert_eq!((open.len(), open[0].id.as_str()), (1, newer["id"].as_str().unwrap()));
+        // A withdrawn ask is not brought back either.
+        let newer_id = newer["id"].as_str().unwrap();
+        call(&s, TOOL_WITHDRAW, json!({"id": newer_id}), &ctx_on());
+        assert_eq!(reopen(&project, &target, newer_id, "x"), Err(AnswerError::Gone));
+        root_mcp::revoke_tab(&s.identity.tab);
+        sweep();
+        assert_eq!(reopen(&project, &target, &id, &second.receipt), Err(AnswerError::Gone), "the tab is gone");
     }
 
     #[test]
