@@ -253,25 +253,26 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-prompts { margin-right:26px; }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-foot { padding-right:26px; }
 .tab-card.home-project-card:has(.tab-card-grip) .card { padding-right:28px; }
-/* Non-working tab cards carry a hexagonal status mark on the left
+/* The project screen's tab cards carry a hexagonal status mark on the left
    border. Its inset face leaves a coloured edge around the glyph. The card's
    outline and face have a round hole punched where the mark sits (centre 1px
    left of the card's edge, 1.2px wider than the 12.3px the pulsing hexagon
    reaches), so the page shows between mark and card, as the disc's dark ring
    once did. Each layer places the hole from its own left edge. Taps pass
    through the mark. */
-.tab-card:has(> .tab-card-status:not(.working))::before,.tab-card:has(> .tab-card-status:not(.working))::after { --hole:radial-gradient(circle at calc(-1px - var(--hole-left, 0px)) 50%, transparent 13.5px, #000 14px); -webkit-mask:var(--hole); mask:var(--hole); }
-.tab-card:has(> .tab-card-status:not(.working))::after { --hole-left:1px; }
-.project-screen .tab-card.has-tab-color:has(> .tab-card-status:not(.working))::after { --hole-left:3px; }
+.tab-card:has(> .tab-card-status)::before,.tab-card:has(> .tab-card-status)::after { --hole:radial-gradient(circle at calc(-1px - var(--hole-left, 0px)) 50%, transparent 13.5px, #000 14px); -webkit-mask:var(--hole); mask:var(--hole); }
+.tab-card:has(> .tab-card-status)::after { --hole-left:1px; }
+.project-screen .tab-card.has-tab-color:has(> .tab-card-status)::after { --hole-left:3px; }
 .tab-card > .tab-card-status { position:absolute; top:50%; left:-12px; z-index:2; display:grid; place-items:center; width:22px; height:22px; padding:0; border:0; border-radius:0; background:currentColor; clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); font-size:.72rem; line-height:1; transform:translateY(-50%); pointer-events:none; }
 .tab-card > .tab-card-status::before { content:""; position:absolute; inset:1.5px; background:var(--status-face); clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); }
 .tab-card > .tab-card-status.working { --status-face:#173827; font-size:.56rem; }
 .tab-card > .tab-card-status.question { --status-face:#493b1d; }
 .tab-card > .tab-card-status.done { --status-face:#193a29; }
 .tab-card > .tab-card-status.interrupted { --status-face:#46202a; }
-/* The Activity pill breathes. Working cards carry four travelling highlights
-   on a continuous green outline, so all four edges stay visible throughout
-   the sweep. The working glyph has no frame or cutout. The asking hexagon pulses — it
+/* The Activity pill breathes; the working hexagon is hollow — only its
+   dimmed edge ring is drawn, and a bright line runs around it: a conic sweep
+   whose start angle turns (registered `--hex-run`, so the ring itself stays
+   still), clipped to the same ring. The asking hexagon pulses — it
    swells and a faint fill glows inside it; the pill's ? tips its head. ✓ and
    ■ land once. The mark's own transform places it on the border, so the pulse
    repeats it. */
@@ -280,16 +281,15 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .agent-status.question .agent-status-glyph { animation:agent-status-ask 2.6s ease-in-out infinite; transform-origin:50% 85%; }
 .agent-status.done .agent-status-glyph { animation:agent-status-pop .5s cubic-bezier(.3,1.6,.5,1) both; }
 .agent-status.interrupted .agent-status-glyph { animation:agent-status-stop .45s cubic-bezier(.3,1.5,.5,1) both; }
-@property --card-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
-.project-screen .tab-card:has(> .tab-card-status.working)::before { background:repeating-conic-gradient(from var(--card-run), transparent 0deg, #6fe29c 65deg, #b0ffd0 80deg, transparent 90deg), linear-gradient(90deg, var(--working-left, #326b49) calc(var(--oct) + 3px), #326b49 0); animation:agent-status-card-run 2.8s linear infinite; }
-.project-screen .tab-card.has-tab-color:has(> .tab-card-status.working)::before { --working-left:var(--tab-color); }
-.tab-card > .tab-card-status.working { left:-16px; width:16px; background:none; clip-path:none; }
-.tab-card > .tab-card-status.working::before { display:none; }
+@property --hex-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
+.tab-card > .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
+.tab-card > .tab-card-status.working::before { inset:0; background:color-mix(in srgb, currentColor 30%, var(--status-face)); clip-path:var(--hex-ring); }
+.tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 60%, currentColor 100%); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
 .tab-card > .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question .agent-status-glyph { animation:none; }
 @keyframes agent-status-breathe { 50% { opacity:.55; } }
-@keyframes agent-status-card-run { to { --card-run:360deg; } }
+@keyframes agent-status-hex-run { to { --hex-run:360deg; } }
 @keyframes agent-status-hex-pulse { 0%,100% { transform:translateY(-50%) scale(1); } 50% { transform:translateY(-50%) scale(1.12); } }
 @keyframes agent-status-hex-glow { 0%,100% { opacity:0; } 50% { opacity:.22; } }
 @keyframes agent-status-ask { 0%,64%,100% { transform:rotate(0); } 72% { transform:rotate(-16deg); } 80% { transform:rotate(13deg); } 88% { transform:rotate(-7deg); } 94% { transform:rotate(3deg); } }
@@ -297,7 +297,7 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 @keyframes agent-status-stop { 0% { transform:scale(1.8); opacity:0; } 55% { transform:scale(.85); opacity:1; } 100% { transform:scale(1); } }
 @media (prefers-reduced-motion:reduce) {
   .agent-status .agent-status-glyph { animation:none; }
-  .project-screen .tab-card:has(> .tab-card-status.working)::before,.tab-card > .tab-card-status.question,.tab-card > .tab-card-status.question::after { animation:none; }
+  .tab-card > .tab-card-status.working::after,.tab-card > .tab-card-status.question,.tab-card > .tab-card-status.question::after { animation:none; }
   .tab-card > .tab-card-status.question::after { display:none; }
 }
 small { color:#9498aa; }
