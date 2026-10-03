@@ -2249,6 +2249,7 @@ pub fn run() {
             commands::share::share_fetch,
             commands::share::share_presence,
             commands::share::share_review,
+            commands::share::share_review_page,
             commands::share::share_merge,
             commands::share::share_pending,
             commands::share::share_accept,

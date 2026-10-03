@@ -220,6 +220,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("share_fetch", Core),
     ("share_presence", Core),
     ("share_review", Core),
+    ("share_review_page", Core),
     ("share_merge", Core),
     ("share_pending", Core),
     ("share_accept", Core),

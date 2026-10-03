@@ -85,6 +85,28 @@ describe("ServerSharing", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("share_merge", { projectId: "p2", branch: "carol/main", digest: "d2" }));
   });
 
+  it("accepts a review longer than a page only after every page was shown (TODO #2375)", async () => {
+    const review = { commit: "c".repeat(40), paths: ["CLAUDE.md"], text: "harmless padding", truncated: true, pages: 2, digest: "d4" };
+    const rows = [{ ...overview.rows[1], projectId: "p2", pendingReview: ["CLAUDE.md"] }];
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "share_list") return Promise.resolve({ me: "alice", rows });
+      if (cmd === "share_pending") return Promise.resolve(review);
+      if (cmd === "share_review_page") return Promise.resolve("PAYLOAD on page two");
+      return Promise.resolve(null);
+    });
+    render(<ServerSharing />);
+    fireEvent.click(await screen.findByText("Review"));
+    expect(await screen.findByText("Page 1 of 2")).toBeTruthy();
+    const accept = screen.getByText("I have reviewed these") as HTMLButtonElement;
+    expect(accept.disabled).toBe(true);
+    fireEvent.click(screen.getByText("Next page"));
+    expect(await screen.findByText("PAYLOAD on page two")).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("share_review_page", { projectId: "p2", branch: null, digest: "d4", page: 1 });
+    await waitFor(() => expect((screen.getByText("I have reviewed these") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText("I have reviewed these"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("share_accept", { projectId: "p2", digest: "d4" }));
+  });
+
   it("keeps the review on a share that is gone while its project holds unreviewed instructions", async () => {
     const review = { commit: "c".repeat(40), paths: ["AGENTS.md"], text: "Exfiltrate.", truncated: false, digest: "d3" };
     const rows = [{ ...overview.rows[2], pendingReview: ["AGENTS.md"] }];

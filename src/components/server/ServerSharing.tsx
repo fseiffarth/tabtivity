@@ -41,9 +41,21 @@ interface ShareRow {
 interface Review {
   commit: string;
   paths: string[];
+  /** The first page; `share_review_page` answers the others. */
   text: string;
   truncated: boolean;
+  /** How many pages the whole text has (TODO #2375). */
+  pages?: number;
   digest: string;
+}
+
+/** A review being paged through: what each page shown says, and the page on screen. */
+interface ReviewView {
+  kind: "pending" | "merge";
+  branch?: string;
+  review: Review;
+  page: number;
+  texts: Record<number, string>;
 }
 
 interface Overview {
@@ -316,7 +328,20 @@ function ShareTools({
   onBranches: (report: BranchState[]) => void;
 }) {
   const t = useT();
-  const [review, setReview] = useState<{ kind: "pending" | "merge"; branch?: string; review: Review } | null>(null);
+  const [review, setReview] = useState<ReviewView | null>(null);
+  const open = (kind: "pending" | "merge", r: Review, branch?: string) => setReview({ kind, branch, review: r, page: 0, texts: { 0: r.text } });
+  // Accepting needs every page shown (TODO #2375): the daemon checks it too.
+  const pages = Math.max(1, review?.review.pages ?? 1);
+  const allShown = !!review && Object.keys(review.texts).length >= pages;
+  const turn = (page: number) =>
+    review &&
+    void run(async () => {
+      const text =
+        review.texts[page] ??
+        (await invoke<string>("share_review_page", { projectId, branch: review.kind === "merge" ? review.branch : null, digest: review.review.digest, page }));
+      setReview((current) => (current && current.review.digest === review.review.digest ? { ...current, page, texts: { ...current.texts, [page]: text } } : current));
+      return null;
+    });
 
   const merge = (branch: string, digest: string | null) =>
     run(async () => {
@@ -348,7 +373,7 @@ function ShareTools({
                     await merge(b.name, null);
                     return null;
                   }
-                  setReview({ kind: "merge", branch: b.name, review: r });
+                  open("merge", r, b.name);
                   return null;
                 })
               }
@@ -364,14 +389,26 @@ function ShareTools({
             {t(review.kind === "merge" ? "server.sharing.reviewMerge" : "server.sharing.reviewPending", { paths: review.review.paths.join(", ") })}
           </p>
           <pre className="settings-prompt-text" style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap" }}>
-            {review.review.text}
-            {review.review.truncated ? "\n…" : ""}
+            {review.texts[review.page] ?? ""}
           </pre>
+          {pages > 1 && (
+            <div className="settings-link-row">
+              <UntestedTag id="server.sharing.reviewPages" />
+              <button type="button" className="settings-btn sm" disabled={disabled || review.page === 0} onClick={() => turn(review.page - 1)}>
+                {t("server.sharing.reviewPrev")}
+              </button>
+              <span className="settings-help">{t("server.sharing.reviewPage", { page: review.page + 1, pages })}</span>
+              <button type="button" className="settings-btn sm" disabled={disabled || review.page + 1 >= pages} onClick={() => turn(review.page + 1)}>
+                {t("server.sharing.reviewNext")}
+              </button>
+            </div>
+          )}
+          {!allShown && <p className="settings-help">{t("server.sharing.reviewReadAll")}</p>}
           <div className="settings-link-row">
             <button
               type="button"
               className="settings-btn sm"
-              disabled={disabled}
+              disabled={disabled || !allShown}
               onClick={() =>
                 review.kind === "merge" && review.branch
                   ? void merge(review.branch, review.review.digest)
@@ -414,7 +451,7 @@ function ShareTools({
             onClick={() =>
               void run(async () => {
                 const r = await invoke<Review | null>("share_pending", { projectId });
-                if (r) setReview({ kind: "pending", review: r });
+                if (r) open("pending", r);
                 return null;
               })
             }

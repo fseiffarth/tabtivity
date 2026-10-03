@@ -55,6 +55,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["share_fetch", "core"],
   ["share_presence", "core"],
   ["share_review", "core"],
+  ["share_review_page", "core"],
   ["share_merge", "core"],
   ["share_pending", "core"],
   ["share_accept", "core"],

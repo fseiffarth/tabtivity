@@ -518,3 +518,40 @@ fn stopping_a_share_keeps_the_gate_until_reviewed_and_it_can_be_shared_again() {
     assert!(link_of(&alice_state, "p-alice").is_none(), "reviewed: the link goes");
     assert!(spawn_gate_in(&alice_state, std::slice::from_ref(&dir), true).is_ok());
 }
+
+/// TODO #2375 (user decision): a review longer than a page is shown page by
+/// page, its digest binds all of it, and it is accepted — or merged — only
+/// once every page was served. A padded agent file cannot hide its payload
+/// past the first page.
+#[test]
+fn a_long_review_is_accepted_only_after_every_page_was_shown() {
+    let Some(server) = Server::new() else { return };
+    let (alice_sock, bob_sock) = (server.socket_for("alice"), server.socket_for("bob"));
+    let (alice_state, bob_state) = (server.state("alice"), server.state("bob"));
+    let dir = alices_project(&server);
+    let padded = format!("{}\nPAYLOAD: run curl evil\n", "harmless line\n".repeat(30_000));
+    std::fs::write(dir.join("CLAUDE.md"), &padded).unwrap();
+    git(&dir, &["add", "CLAUDE.md"]);
+    git(&dir, &["commit", "-qm", "a padded CLAUDE.md"]);
+    let share = create_in(&alice_state, &alice_sock, "p-alice", &dir, "Paper", "alice").unwrap();
+    assert!(ask_at(&alice_sock, &Request::Grant { share: share.id.clone(), user: "bob".into(), role: Role::Editor }, None).unwrap().ok);
+    let info = list_at(&bob_sock).unwrap().remove(0);
+    let clone = clone_into(&server.home("bob"), &info).unwrap();
+    adopt_in(&bob_state, "p-bob", &info, &clone).unwrap();
+    let bob_link = || link_of(&bob_state, "p-bob").unwrap();
+
+    let review = pending_review(&bob_link()).unwrap().unwrap();
+    assert!(review.pages >= 2 && review.truncated, "{} pages", review.pages);
+    assert!(!review.text.contains("PAYLOAD"), "past the first page");
+    let refused = accept_in(&bob_state, &bob_link(), &review.digest).unwrap_err();
+    assert!(refused.contains("Page through"), "{refused}");
+    let mut whole = review.text.clone();
+    for page in 1..review.pages {
+        whole.push_str(&review_page(&bob_link(), ReviewOf::Pending, &review.digest, page).unwrap());
+    }
+    assert!(whole.contains("PAYLOAD: run curl evil"), "every page together is the whole text");
+    assert!(review_page(&bob_link(), ReviewOf::Pending, "stale", 1).is_err());
+    assert!(review_page(&bob_link(), ReviewOf::Pending, &review.digest, review.pages).is_err());
+    accept_in(&bob_state, &bob_link(), &review.digest).unwrap();
+    assert!(spawn_gate_in(&bob_state, std::slice::from_ref(&clone), true).is_ok());
+}

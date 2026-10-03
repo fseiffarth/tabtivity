@@ -711,12 +711,25 @@ the desktop groundwork the hosted plan's P1 builds on.*
     command`, `include*.path`.
     - [x] 🤖 Automated test — `commands::git::tests::strict_sanitizing_refuses_every_program_running_key`.
 
-2375. **Decide: accepting a review that was cut at 256 KB.**
-    `share::review_of` caps the text at 256 KB and binds the digest to what
-    was shown; the panel marks the cut with "…" and still offers **I have
-    reviewed these** / **Merge after review**. A padded `CLAUDE.md` can put
-    its payload past the cut. Refuse acceptance of a cut review (review in a
-    terminal instead), or page the whole text. (P4 review, 2026-10-03.)
+2375. **A review longer than 256 KB.** ✅ **Done** (final fix round,
+    2026-10-04, never live; user decision: accepted only after the whole
+    diff was shown). The review is paged (`share::review_page`,
+    `share_review_page`, 256 KB a page), its digest binds the whole text,
+    and both the panel and the daemon refuse **I have reviewed these** /
+    **Merge after review** until every page was served (the daemon keeps
+    the served pages per digest in memory). Was (P4 review): the text was
+    cut at 256 KB and could still be accepted, so a padded `CLAUDE.md` hid
+    its payload past the cut.
+    - [x] 🤖 Automated test — `share::tests::a_long_review_is_accepted_only_after_every_page_was_shown`, `ServerSharing.test.tsx`.
+    - [ ] 🖐️ Manual test — UntestedTag `server.sharing.reviewPages`.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
 
 2376. **Calendar service: per-user quotas and a cheaper wait.**
     A calendar is bounded (12 MB) but the number a user may share is not,

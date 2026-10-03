@@ -127,6 +127,10 @@ never paths.
    (fenced or in a container, failing closed when the check cannot run) and so
    is a push (a push would mark it reviewed). A merge through the app shows the
    diff first and runs only with that review's digest; a conflict is aborted.
+   A review is shown in 256 KB pages and its digest binds the whole text; an
+   acceptance or a reviewed merge is refused until every page was served
+   (TODO #2375, user decision), so a padded file cannot hide a payload past
+   the first page.
    Per-author trust (Q9) is #2371.
 3. **`exec_trust` never crosses users** (each daemon's own state dir) and is
    bound to content, so a merged `latexmkrc` or prettier config asks again; a

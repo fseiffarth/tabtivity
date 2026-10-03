@@ -693,8 +693,10 @@ pub const AGENT_PATHSPEC: &[&str] = &[
 ];
 /// Reviewed commits remembered per link.
 const KEEP_REVIEWED: usize = 16;
-/// The most diff text a review shows (and binds its digest to).
-const MAX_REVIEW_BYTES: usize = 256 * 1024;
+/// One page of a review's text. A review is shown page by page and its
+/// digest binds the whole text (TODO #2375, user decision: a review can be
+/// accepted only after all of it was shown).
+const REVIEW_PAGE_BYTES: usize = 256 * 1024;
 
 fn with_pathspec(mut args: Vec<&str>) -> Vec<&str> {
     args.push("--");
@@ -788,29 +790,109 @@ pub struct Review {
     /// commit for a review of what is already there.
     pub commit: String,
     pub paths: Vec<String>,
-    /// The changes as text (a diff, or the files' content), capped.
+    /// The changes as text (a diff, or the files' content): the first page;
+    /// [`review_page`] answers the others.
     pub text: String,
+    /// More pages follow (`pages > 1`).
     pub truncated: bool,
-    /// Binds an approval to exactly what was shown.
+    /// How many pages the whole text has.
+    pub pages: usize,
+    /// Binds an approval to exactly the whole text, every page of it.
     pub digest: String,
 }
 
-fn review_of(commit: String, paths: Vec<String>, mut text: String) -> Review {
-    let truncated = text.len() > MAX_REVIEW_BYTES;
-    if truncated {
-        let mut end = MAX_REVIEW_BYTES;
+/// Where each page of `text` ends: about [`REVIEW_PAGE_BYTES`] each, cut at
+/// a character boundary. Pure.
+fn page_bounds(text: &str) -> Vec<(usize, usize)> {
+    let mut bounds = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = (start + REVIEW_PAGE_BYTES).min(text.len());
         while !text.is_char_boundary(end) {
             end -= 1;
         }
-        text.truncate(end);
+        bounds.push((start, end));
+        start = end;
     }
-    let digest = sha256_hex(format!("{commit}\n{}\n{text}", paths.join("\n")).as_bytes());
-    Review { commit, paths, text, truncated, digest }
+    if bounds.is_empty() {
+        bounds.push((0, 0));
+    }
+    bounds
+}
+
+/// The pages of each review this process handed out, by digest: an
+/// acceptance or a reviewed merge needs every page of its review served
+/// (TODO #2375). In memory, a few reviews deep: a restart means paging
+/// through again.
+#[allow(clippy::type_complexity)]
+static SERVED_PAGES: std::sync::Mutex<Vec<(String, usize, std::collections::BTreeSet<usize>)>> = std::sync::Mutex::new(Vec::new());
+
+fn note_served(digest: &str, pages: usize, page: usize) {
+    let mut served = SERVED_PAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, _, seen)) = served.iter_mut().find(|(d, ..)| d == digest) {
+        seen.insert(page);
+        return;
+    }
+    served.push((digest.to_string(), pages, std::iter::once(page).collect()));
+    let excess = served.len().saturating_sub(32);
+    served.drain(..excess);
+}
+
+/// Was every page of the review `digest` served?
+fn all_pages_served(digest: &str) -> bool {
+    let served = SERVED_PAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    served.iter().any(|(d, pages, seen)| d == digest && seen.len() >= *pages)
+}
+
+/// What an acceptance answers while some page was never shown.
+const UNREAD_PAGES: &str = "Page through the whole change before accepting it: every page has to be shown first";
+
+fn digest_of_review(commit: &str, paths: &[String], text: &str) -> String {
+    sha256_hex(format!("{commit}\n{}\n{text}", paths.join("\n")).as_bytes())
+}
+
+fn review_of(commit: String, paths: Vec<String>, text: String) -> Review {
+    let digest = digest_of_review(&commit, &paths, &text);
+    let bounds = page_bounds(&text);
+    let pages = bounds.len();
+    note_served(&digest, pages, 0);
+    let first = text[bounds[0].0..bounds[0].1].to_string();
+    Review { commit, paths, text: first, truncated: pages > 1, pages, digest }
+}
+
+/// Which review a page is asked of.
+pub enum ReviewOf<'a> {
+    /// The merge of the hub's branch ([`review_merge`]).
+    Merge(&'a str),
+    /// What is already there ([`pending_review`]).
+    Pending,
+}
+
+/// Page `page` of the review `digest` — refused when the change moved on
+/// since (`digest` no longer matches).
+pub fn review_page(link: &Link, of: ReviewOf<'_>, digest: &str, page: usize) -> Result<String, String> {
+    let (commit, paths, text) = match of {
+        ReviewOf::Merge(branch) => merge_review_parts(link, branch)?,
+        ReviewOf::Pending => pending_review_parts(link)?.ok_or("Nothing is waiting for review any more")?,
+    };
+    if digest_of_review(&commit, &paths, &text) != digest {
+        return Err("The files changed after they were shown; review them again".into());
+    }
+    let bounds = page_bounds(&text);
+    let (start, end) = *bounds.get(page).ok_or("No such page")?;
+    note_served(digest, bounds.len(), page);
+    Ok(text[start..end].to_string())
 }
 
 /// What merging the hub's `branch` would change in agent-facing files —
 /// shown before the merge (§6.5 gate 2).
 pub fn review_merge(link: &Link, branch: &str) -> Result<Review, String> {
+    let (commit, paths, text) = merge_review_parts(link, branch)?;
+    Ok(review_of(commit, paths, text))
+}
+
+/// [`review_merge`]'s commit, paths and whole text.
+fn merge_review_parts(link: &Link, branch: &str) -> Result<(String, Vec<String>, String), String> {
     if link.state != "active" {
         return Err("This project is no longer shared".into());
     }
@@ -820,7 +902,7 @@ pub fn review_merge(link: &Link, branch: &str) -> Result<Review, String> {
     let range = format!("HEAD...{commit}");
     let paths: Vec<String> = git_in(&link.dir, None, &with_pathspec(vec!["diff", "--name-only", &range]))?.lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
     let text = if paths.is_empty() { String::new() } else { git_in(&link.dir, None, &with_pathspec(vec!["diff", &range]))? };
-    Ok(review_of(commit, paths, text))
+    Ok((commit, paths, text))
 }
 
 /// Merge the hub's `branch` into the checked-out one — refused when it
@@ -833,6 +915,9 @@ pub fn merge_in(state_dir: &Path, link: &Link, branch: &str, digest: Option<&str
     let review = review_merge(link, branch)?;
     if !review.paths.is_empty() && digest != Some(review.digest.as_str()) {
         return Err(format!("Review the agent instructions this merge brings in first ({})", review.paths.join(", ")));
+    }
+    if !review.paths.is_empty() && !all_pages_served(&review.digest) {
+        return Err(UNREAD_PAGES.into());
     }
     let dir = &link.dir;
     if let Err(e) = git_in(dir, None, &["merge", "--no-edit", "--no-verify", &review.commit]) {
@@ -854,6 +939,11 @@ pub fn merge_in(state_dir: &Path, link: &Link, branch: &str, digest: Option<&str
 /// unreviewed (a fresh clone, a merge made outside the app), with their
 /// current content.
 pub fn pending_review(link: &Link) -> Result<Option<Review>, String> {
+    Ok(pending_review_parts(link)?.map(|(commit, paths, text)| review_of(commit, paths, text)))
+}
+
+/// [`pending_review`]'s commits, paths and whole text.
+fn pending_review_parts(link: &Link) -> Result<Option<(String, Vec<String>, String)>, String> {
     let paths = unreviewed(link)?;
     if paths.is_empty() {
         return Ok(None);
@@ -873,7 +963,7 @@ pub fn pending_review(link: &Link) -> Result<Option<Review>, String> {
         }
     }
     let commits: Vec<&str> = heads.iter().map(|(_, oid)| oid.as_str()).collect();
-    Ok(Some(review_of(commits.join(" "), paths, text)))
+    Ok(Some((commits.join(" "), paths, text)))
 }
 
 /// The user reviewed [`pending_review`]: mark the checked-out commit.
@@ -881,6 +971,9 @@ pub fn accept_in(state_dir: &Path, link: &Link, digest: &str) -> Result<(), Stri
     if let Some(review) = pending_review(link)? {
         if review.digest != digest {
             return Err("The files changed after they were shown; review them again".into());
+        }
+        if !all_pages_served(digest) {
+            return Err(UNREAD_PAGES.into());
         }
         for commit in review.commit.split(' ').filter(|c| hub_wire::valid_oid(c)) {
             mark_reviewed(state_dir, &link.dir, commit)?;

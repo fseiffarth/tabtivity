@@ -220,6 +220,23 @@ pub async fn share_review(project_id: String, branch: String) -> Result<Review, 
     off_thread(move || share::review_merge(&link(&project_id)?, &branch)).await
 }
 
+/// Page `page` of a review (`branch`: of that merge; none: of what is
+/// already there) the user is paging through — every page must have been
+/// shown before the review can be accepted (TODO #2375).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn share_review_page(project_id: String, branch: Option<String>, digest: String, page: usize) -> Result<String, String> {
+    me()?;
+    off_thread(move || {
+        let link = link(&project_id)?;
+        let of = match branch.as_deref() {
+            Some(branch) => share::ReviewOf::Merge(branch),
+            None => share::ReviewOf::Pending,
+        };
+        share::review_page(&link, of, &digest, page)
+    })
+    .await
+}
+
 /// Merge the hub's `branch` (hookless; a conflict is aborted and reported).
 /// `digest` is the review the user saw, required when the merge brings
 /// agent-facing changes.
