@@ -1418,3 +1418,91 @@ per client on a shared tab", "The window follows the client in use",
 - `PtyRegistry::resolve` takes `&mut self` (it probes the tab PTY's child
   with `try_wait`); `pty_write` from a server client takes the registry lock
   once more than before. Desktop calls skip it.
+
+## #2347 review
+
+*Reviewer, 2026-10-03, on branch `hosted` over `cf642779..1c75e5d3` (the four
+#2347 commits). Nothing run live; no app, sidecar or daemon started; the
+tmux-backed test runs on a private `-L t2347-<pid>` server it kills and
+unlinks. The user's default tmux server was never touched.*
+
+### What was checked
+
+- **Desktop single window.** Every `pty_*` id command goes through
+  `pty_id_for`, which returns the id untouched for any caller but
+  `Caller::Client` — desktop windows are `Local`, so resolve, write,
+  resize, visibility, scrollback, remove-view, watch/unwatch and kill run
+  exactly as before; the three commands that gained a `Ctx` take it as an
+  extractor, payloads unchanged. `emit_output`/`emit_pty_event` keep the
+  plain broadcast and the `:<label>` popout copies for `Local`/`System`
+  contexts (`a_desktop_windows_chunk_is_still_broadcast_with_popout_copies`);
+  `terminal-ready`/`-exit`/`-activity` names and payloads are unchanged.
+  `route_move_window_views` and `join_tab` are reached only by a server
+  client. `spawn_pty` → `launch(…, Some(&opts))` runs the same bookkeeping
+  (Codex binding, route, MCP tokens, fence) for every tab PTY. The phone
+  bridge (`pty_bridge`) has its own tmux client outside the registry —
+  only comments changed. The headless owner and scheduler spawn detached
+  through `HeadlessSpawner` (no registry entry), so nothing of theirs can
+  be "released". `kill_all` and `teardown_taken` still reap every subtree
+  (the walk runs before the attach-PTY `continue`); an attach PTY's child is
+  a tmux client with no children, so its end never touches the session or
+  the agent. The sidecar/daemon's clean stop still runs `kill_all`.
+- **`window-size latest`.** Gated on the same probe as session env (tmux ≥
+  3.2; `latest` exists since 3.1), else `largest`. Set with
+  `set-window-option -t <session>` in the wrap's trailing commands, so it
+  touches only Tabtivity's own sessions — on the default server for the
+  desktop and `-L <socket>` in server mode — never the user's other
+  sessions, and an older Tabtivity session picks it up at its next attach.
+  Desktop alone: one client, no change. Desktop + phone: the phone opens at
+  the window's size and only ever resizes to it, so `latest` cannot shrink
+  the window to anything the window was not already; a phone typing while
+  its adopted size lags a desktop resize flips the window back until the
+  desktop types (transient; `largest` held the larger size permanently).
+- **Ownership, races, routing** — the findings below. Also verified:
+  `attach_argv`'s `-t =<session>` never creates (exact match, no `-A`);
+  remote/container/Windows tabs never reach the attach (no `local_tmux`);
+  a resume keeps the client id and so its registry ownership; per-stream
+  offsets resolve to the client's own PTY; a page's output reaches only
+  clients with a view of that route (#2345).
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **Medium** (pre-existing bug (b), widened by nothing but kept by #2347) | The last page of a tab leaving ended the tab PTY while its tmux session lived on: the agent's MCP tokens revoked, fence registration dropped, and the next page's ordinary respawn minted grants the agent never saw — and could type its launch line into the running program. | **Fixed** `a6e47290`: a local-tmux tab PTY nobody looks at is left to nobody (`PtyMeta::client = None`); it ends with its session (tab close, agent exit), at a clean stop or by `pty_kill_scope`; the next page attaches to it (`attachable` accepts an owner-less PTY); exited left-overs are swept on the next release. The tmux test now covers leave → orphan → a later page attaches → the session's end → swept. |
+| 2 | **Medium** (live terminal killed) | A shared PTY (remote, container, Windows — or any tab no local tmux holds) spawned by page A and viewed by page B was torn down when A left for good; B's terminal died under it. | **Fixed** `a6e47290`: it passes to a page still viewing it (`a_shared_pty_passes_to_a_page_still_viewing_it`). |
+| 3 | Low (functional, browser only) | A login command typed in an attached page marks the page's attach PTY (`pty_write` resolves), but `credential_paste_to_pty` looked up the tab id: the saved-credential paste was refused. A killed attach PTY's login marking also outlived it, and the reap never forgot markings. | **Fixed** `6fe4636b` (paste resolves like `pty_write`; `pty_kill` of an attach forgets it) and `a6e47290` (the reap forgets the markings of what it ends). |
+| 4 | Low (one user, hardening) | `<tab>@web-n` ids are guessable: a page could write to, resize or kill another page's attach PTY by naming it, or spawn over it (killing it), or pre-empt another page's attach id with a tab PTY that page's join would then take. Not a cross-user hole (each user has their own daemon and registry). | **Fixed** `a6e47290`: a foreign attach id resolves to an id that names nothing; `join_tab` refuses a spawn over an attach PTY or onto an attach id another client holds. |
+| 5 | Low (test flake) | The real-tmux test calls `route_drop_window_views("web-1")` on the process-global router while other `client_tests` hold `web-1` views — a parallel run could drop theirs mid-assert. | **Fixed** `a6e47290`: the tmux and the new test use their own client names. |
+| 6 | Info (pre-existing (a)) | "Two pages each deliver scheduled prompts": not so — `AgentScheduleHost`, `AgentContinueHost` and `AgentCronHost` tick only while the page holds the timer lease, one holder per state dir. What remains is a page re-typing a **shared-PTY** tab's initial input on its respawn (`claimInitialInput` is per page). | **Open — TODO #2358** (verify for remote tabs first). |
+| 7 | Info | A browser page that `pty_watch`es a PTY without having a view on it gets no output since #2345 (watchers carry no window). Today's only watchers (the VPN terminals) always have a view, so nothing breaks. | Open, noted; record the watcher's window in `route_watch` if a view-less watch ever appears. |
+| 8 | Info | A page that closes a tab whose tab PTY it was handed (it also has an attach) ends only its attach on `pty_kill`; the tab PTY ends when the frontend's `local_tmux_kill` ends the session. `agent_turn::on_tab_gone` then runs only via the task end's cleanups, as for any tab whose program exits on its own. | Accepted. |
+
+Judgment calls: an owner-less tab PTY keeps streaming into its route
+buffers (capped, no viewers) while the agent works — the cost the desktop
+already pays per open tab; under tmux < 3.2 (`largest`) its last size still
+counts toward the window's. A handed-over or left-over PTY is never resized
+again until someone owns it.
+
+### Gates (worktree, 2026-10-03, at `6fe4636b`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **697 files, 7073 tests**, all pass |
+| `cargo test --workspace -q --no-fail-fast` | **3571 passed**, 0 failed, 2 ignored, 22 suites (+1: `a_shared_pty_passes_to_a_page_still_viewing_it`; two tests extended) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3131 passed**, 2 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh cf642779..HEAD` | green |
+| `git diff --check cf642779 HEAD` | clean |
+
+### For the live run
+
+Live steps 3–4 of § #2347 change: after **both** pages close and 90 s
+pass, `tmux list-clients` still lists one client (the left-over tab PTY)
+and an agent tab's MCP tools still answer when a new page opens the tab;
+closing the tab (×) ends it.

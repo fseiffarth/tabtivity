@@ -447,3 +447,22 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2358. **A second browser page re-types a shared-PTY tab's launch input.**
+    Scheduled prompts, auto-continue and the warm-up cron are *not* doubled
+    by two pages: their hosts tick only while the page holds the timer lease
+    (`stores/timerLease.ts`, one holder per state dir). What two pages can
+    still both do is type a tab's **initial input** (a command tab's run
+    line, an agent's launch line or `/rename`): `claimInitialInput` is per
+    page, and a page that re-spawns a tab no local tmux holds — a remote
+    (ssh, `new-session -A -D` re-attaches the running remote session), a
+    container or a Windows tab, which keep one shared PTY (#2347) — types it
+    again into what may be the running program. A local tmux tab is safe
+    since #2347 (`pty_spawn` answers `attached`; a tab whose last page left
+    is attached to as well since the #2347 review). Check whether a remote
+    tab's respawn really re-types (the desktop's webview reload takes the
+    same path), and if so let the backend answer `attached` for a re-attach
+    the remote wrap reports, or keep the claim server-side per tab.
+    (#2347 review, 2026-10-03.)
+    - [ ] 🤖 Automated test — a second page's respawn of a remote tab types
+      no launch input.
