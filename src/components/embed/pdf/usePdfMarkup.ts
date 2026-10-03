@@ -10,8 +10,15 @@
  * for an agent tab of the same project as a send-now schedule and holds it for
  * the CLI's own queue (`holdPhonePrompt`), exactly as a phone prompt sent
  * mid-turn: typed in at once, never waiting an hour for an idle point.
+ *
+ * The agent's markup questions (`markup_ask`, `docs/markup_questions_mcp_plan.md`
+ * P2) are listed here too: the target tab's open ask for this file, re-read on
+ * `markup-mcp-changed` while the pane is on screen and once more when it shows
+ * again. An answer goes out the Submit's way; when it cannot be queued the ask
+ * is reopened with the answer's receipt, so the card stays and a retry works.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { fileMtime } from "../fileAccess";
 import { useT } from "../../../lib/i18n";
 import { holdPhonePrompt } from "../../../lib/agents/phoneHolds";
@@ -24,6 +31,16 @@ import {
   submitPdfMarkup,
   type PdfMarkupPage,
 } from "../../../lib/viewers/pdfMarkup";
+import {
+  answerMarkupQuestions,
+  dismissMarkupQuestions,
+  listMarkupQuestions,
+  MARKUP_MCP_CHANGED,
+  questionReasonKey,
+  reopenMarkupQuestions,
+  type MarkupAnswer,
+  type MarkupAsk,
+} from "../../../lib/viewers/markupQuestions";
 import { useSettingsStore } from "../../../stores/settings";
 import { agentTabStateOf, lastTabReadAt, useActivityStore } from "../../../stores/activity";
 import { queuePromptForTab } from "../../../stores/agents/agentPrompts";
@@ -104,6 +121,27 @@ export function defaultTarget(
   return best;
 }
 
+/** The agent's open markup questions for this file and target tab
+ * (`PdfMarkupQuestions` renders them). */
+export type MarkupQuestions = {
+  asks: MarkupAsk[];
+  /** The ask whose answer is on its way: its card waits. */
+  answering: string | null;
+  /** Why the last answer or dismissal did not go through; `prompt` is the
+   *  answer's text when it was taken but could not be delivered or undone. */
+  failure: { text: string; prompt?: string } | null;
+  dismissFailure: () => void;
+  /** `true` once the answer is queued into the tab. */
+  answer: (ask: MarkupAsk, answers: MarkupAnswer[]) => Promise<boolean>;
+  /** **Answer in chat instead**. */
+  dismiss: (ask: MarkupAsk) => Promise<void>;
+  /** A question picked on the page (`on: "card"` scrolls the card to it) or in
+   *  the card (`on: "page"` scrolls the page to its pin); `nonce` repeats it. */
+  focus: QuestionFocus | null;
+  show: (askId: string, index: number, on: QuestionFocus["on"]) => void;
+};
+export type QuestionFocus = { askId: string; index: number; on: "card" | "page"; nonce: number };
+
 /** The layer's undo history and the strokes in flight on top of it. */
 export type MarkupEdit = {
   /** What is drawn: a gesture's scratch layer while one is in flight. */
@@ -178,6 +216,12 @@ export function usePdfMarkup({
   /** Reloaded since the agent last finished: Reload steps back to secondary. */
   const [reloaded, setReloaded] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
+  /** The target's open asks, with the target and file they were listed for. */
+  const [listed, setListed] = useState<{ key: string; asks: MarkupAsk[] } | null>(null);
+  const [asksChanged, setAsksChanged] = useState(0);
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [askFailure, setAskFailure] = useState<MarkupQuestions["failure"]>(null);
+  const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
 
   const skipSave = useRef(false);
   const pendingSave = useRef(false);
@@ -287,7 +331,47 @@ export function usePdfMarkup({
     if (next !== chosen) setChosen(next);
   }, [active, targets, chosen]);
   const target = targets.find((entry) => entry.scheduleTargetId === chosen) ?? null;
-  const agent = useActivityStore((s) => (target ? agentTabStateOf(s, target.ptyId) : "idle"));
+  const tabAgent = useActivityStore((s) => (target ? agentTabStateOf(s, target.ptyId) : "idle"));
+
+  // ── The agent's questions (`markup_ask`) ─────────────────────────────────
+  const asksKey = active && projectId && target ? `${projectId}\n${target.scheduleTargetId}\n${path}` : null;
+  const asks = useMemo(() => (listed && listed.key === asksKey ? listed.asks : []), [listed, asksKey]);
+  const listening = asksKey !== null;
+  useEffect(() => {
+    if (!listening) return;
+    let live = true;
+    let unlisten: (() => void) | null = null;
+    void listen(MARKUP_MCP_CHANGED, () => setAsksChanged((n) => n + 1)).then(
+      (stop) => {
+        if (live) unlisten = stop;
+        else stop();
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, [listening]);
+  // Read while the pane is on screen — a change heard while hidden is caught
+  // up on show — and never while an answer is on its way: the card it is
+  // about stays put until the answer is queued or the ask reopened.
+  useEffect(() => {
+    if (!asksKey || !projectId || !target || !visible || answering) return;
+    let live = true;
+    const key = asksKey;
+    void listMarkupQuestions(projectId, target.scheduleTargetId, path).then(
+      (rows) => {
+        if (live) setListed({ key, asks: rows });
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [asksKey, projectId, target, path, visible, answering, asksChanged]);
+  // An open ask is the agent asking: the round's pill says so.
+  const agent = asks.length > 0 && tabAgent === "idle" ? "question" : tabAgent;
 
   // ── The round: what the agent does with the last Submit ──────────────────
   const layer = scratchLayer ?? history.present;
@@ -310,6 +394,80 @@ export function usePdfMarkup({
     const timer = window.setTimeout(() => setRoundTick((tick) => tick + 1), wait);
     return () => window.clearTimeout(timer);
   }, [round, agent, active, sentShown, roundTick]);
+
+  const roundRef = useRef(round);
+  roundRef.current = round;
+  const answerAsk = useCallback(
+    async (ask: MarkupAsk, answers: MarkupAnswer[]) => {
+      if (!projectId || !target || answering) return false;
+      const reason = (error: unknown) => {
+        const code = markupErrorCode(error);
+        return t(questionReasonKey(code), { code });
+      };
+      setAnswering(ask.id);
+      setAskFailure(null);
+      const queued = agentTabStateOf(useActivityStore.getState(), target.ptyId) === "working";
+      let prompt: string;
+      let receipt: string;
+      try {
+        ({ prompt, receipt } = await answerMarkupQuestions(projectId, target.scheduleTargetId, ask.id, answers));
+      } catch (error) {
+        setAskFailure({ text: t("pdfMarkup.questions.answerFailed", { reason: reason(error) }) });
+        setAnswering(null);
+        return false;
+      }
+      try {
+        const { id } = await queuePromptForTab(projectId, target.scheduleTargetId, prompt);
+        holdPhonePrompt(id);
+      } catch (error) {
+        // Taken but not delivered: open the ask again so the card stays and a
+        // retry is not refused as `answered`.
+        const why = reason(error);
+        try {
+          await reopenMarkupQuestions(projectId, target.scheduleTargetId, ask.id, receipt);
+          setAskFailure({ text: t("pdfMarkup.questions.queueFailed", { reason: why }) });
+        } catch {
+          setAskFailure({ text: t("pdfMarkup.questions.queueFailedClosed", { reason: why }), prompt });
+        }
+        setAnswering(null);
+        return false;
+      }
+      setListed((now) => (now ? { ...now, asks: now.asks.filter((entry) => entry.id !== ask.id) } : now));
+      setQuestionFocus(null);
+      setReloaded(false);
+      setRound(startRound(queued, Date.now(), roundRef.current?.applied ?? false));
+      setAnswering(null);
+      return true;
+    },
+    [projectId, target, answering, t],
+  );
+  const dismissAsk = useCallback(
+    async (ask: MarkupAsk) => {
+      if (!projectId || !target || answering) return;
+      setAskFailure(null);
+      try {
+        await dismissMarkupQuestions(projectId, target.scheduleTargetId, ask.id);
+      } catch (error) {
+        const code = markupErrorCode(error);
+        setAskFailure({ text: t("pdfMarkup.questions.dismissFailed", { reason: t(questionReasonKey(code), { code }) }) });
+        return;
+      }
+      setListed((now) => (now ? { ...now, asks: now.asks.filter((entry) => entry.id !== ask.id) } : now));
+      setQuestionFocus(null);
+    },
+    [projectId, target, answering, t],
+  );
+  const questions: MarkupQuestions = {
+    asks,
+    answering,
+    failure: askFailure,
+    dismissFailure: () => setAskFailure(null),
+    answer: answerAsk,
+    dismiss: dismissAsk,
+    focus: questionFocus,
+    show: (askId, index, on) =>
+      setQuestionFocus((was) => ({ askId, index, on, nonce: (was?.nonce ?? 0) + 1 })),
+  };
 
   // ── Editing ───────────────────────────────────────────────────────────────
   const historyRef = useRef(history);
@@ -477,8 +635,9 @@ export function usePdfMarkup({
     redo: () => setHistory(redoHistory),
     clearPage: (n: number) => setHistory((now) => commit(now, clearLayerPage(now.present, n, showSent))),
     clearSent: () => setHistory((now) => commit(now, clearLayerSent(now.present))),
-    /** **Make these changes** fits: the agent is done with a Submit's marks. */
-    canApply: target !== null && canApply(round),
+    /** **Make these changes** fits: the agent is done with a Submit's marks
+     *  and asks nothing more. */
+    canApply: target !== null && canApply(round) && asks.length === 0,
     apply,
     hasUnsent: !isEmpty(history.present),
     sentShown,
@@ -488,6 +647,7 @@ export function usePdfMarkup({
     target,
     chooseTarget: setChosen,
     agent,
+    questions,
     round,
     reloaded,
     stale: pdfStale,

@@ -65,7 +65,9 @@ export function PdfMarkupBar({
   const roundWords = round
     ? round.phase === "finished"
       ? t(markup.stale ? "mobile.markup.round.finishedChanged" : "mobile.markup.round.finished")
-      : t(ROUND_KEYS[round.phase])
+      : round.phase === "question" && markup.questions.asks.length > 0
+        ? t("pdfMarkup.round.asks")
+        : t(ROUND_KEYS[round.phase])
     : null;
   const mark = round ? ROUND_MARK[round.phase] : undefined;
   /** Reload is offered once a round went out, or the file changed under the

@@ -4494,7 +4494,8 @@
 /* The strip's tools and colours show which one is armed — the selected state
    of the generic toolbar button (`.toolbar-btn.active`). */
 .file-viewer-pdf-markup-bar .file-viewer-zoom-btn[aria-pressed="true"],
-.file-viewer-pdf-markup-status .file-viewer-zoom-btn.active {
+.file-viewer-pdf-markup-status .file-viewer-zoom-btn.active,
+.file-viewer-pdf-markup-questions .file-viewer-zoom-btn.active {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -4516,6 +4517,93 @@
   align-items: center;
   gap: 6px;
   color: var(--text-primary);
+}
+/* The agent's markup questions (`PdfMarkupQuestions`): the reader's question
+   card (`terminal-reader-question`, `subwindows.css`) on the markup strip's
+   ground, scrolling on its own so a long ask never pushes the pages away.
+   Positioned so a row's `offsetTop` is measured from here (pin → question). */
+.file-viewer-pdf-markup-questions {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow: auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--control-bg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.file-viewer-pdf-markup-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: var(--radius);
+}
+/* The question a pin was clicked for. */
+.file-viewer-pdf-markup-question.is-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+/* A picked row: the answered card's chosen row (`.terminal-reader-question.asked`). */
+.file-viewer-pdf-markup-questions .terminal-reader-option.chosen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.file-viewer-pdf-markup-question-other,
+.file-viewer-pdf-markup-question-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.file-viewer-pdf-markup-question-other input {
+  flex: 1;
+  min-width: 12em;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+/* A question's pin (`?1`…): the remark marker's fixed-size pin (#pdf-notes), in
+   the accent rather than the comment yellow — it is the agent asking, not a
+   remark in the file. Above the markup layer (7), so it takes its click while
+   marking. `is-inline` is the same badge as the question's chip in the card. */
+.file-viewer-pdf-question-pin {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  cursor: var(--cur-pointer, pointer);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, #000);
+  border-radius: 4px 4px 4px 0;
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  z-index: 8;
+}
+.file-viewer-pdf-question-pin:hover,
+.file-viewer-pdf-question-pin:focus-visible {
+  background: color-mix(in srgb, var(--accent) 80%, #fff);
+}
+.file-viewer-pdf-question-pin.is-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.file-viewer-pdf-question-pin.is-inline {
+  position: static;
+  flex: none;
+  box-shadow: none;
 }
 
 .file-viewer-pdf-copy-bar {
