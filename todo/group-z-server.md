@@ -137,6 +137,14 @@ the desktop groundwork the hosted plan's P1 builds on.*
     sandboxes. The move has to be a move — one listener, in the sidecar, the
     window a client of it — not a second copy. Agents a browser starts
     through the sidecar today get no `tabtivity-*` MCP tools.
+    *Final review (2026-10-04), for the merge of the #2339 branch:* merge it
+    into `develop` first, then `develop` into `hosted`; resolve
+    `commands/root_mcp.rs` once in `hosted`'s `start(CoreCtx)` form, with
+    `start_headless` started from `host::run_with` (it then serves the
+    daemon too) and **never sweeping** the review sandboxes. Its local-model
+    lane (`ollama_mcp_models`, read from user-writable settings) must call
+    `model_allowlist::check_model` before a request reaches the shared
+    Ollama on a server (the `TODO(#2339)` in `model_allowlist.rs`).
     - [ ] 🤖 Automated test — a headless `Create` of a Claude tab records
       `PtyOptions` carrying the schedule/help MCP config and a token the
       sidecar's listener accepts; a token minted by one process is refused by
