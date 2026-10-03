@@ -3300,3 +3300,159 @@ switch cannot be flipped in a unit test) and the window wiring of finding 7
   connection of the app's left; **Open** on a server file named `x.sh` → saved in Downloads,
   not run. Broker step 6: also press Esc mid-answer → the month still grows
   by the streamed part.
+
+## Final fix round
+
+*Written 2026-10-04 by the final implementer, over `5c87d3ed..` (base
+`5c87d3ed`). Inputs: the two final reviews (A: security and isolation; B:
+correctness, desktop behaviour, integration) and each reviewer's reading of
+the other's, plus the user's queued decisions. Nothing run live, as root, on
+a server, or against a real state dir, port, `/srv`, `/run`, provider, key
+or container; no merge, rebase or push. Every fix has a test that fails
+without it unless the table says otherwise.*
+
+### Findings and queued items
+
+| Item | What | Commit |
+|---|---|---|
+| B1 (high) | Windows test targets did not compile: the share/shared-calendar tests used the Linux-only gateway services, `UnixListener`, `PermissionsExt`; plus develop's `tmux_local` test gate. Gated to Linux/Unix. | `51dac2f4` |
+| B2 (high) | `app-gateway` did not compile on macOS (`hub` called Linux-only ACL code; `getgrouplist` types). Every service module and both binaries are `cfg(target_os = "linux")`; `app-gateway` is a Linux-only dev-dependency. CI's Windows and macOS jobs now run `cargo check --workspace --all-targets`. | `51dac2f4` |
+| B3 (high) | The server daemon ran none of the window's agent start-up work. `daemon::start_agent_work`: hook + hint scripts, `agent_auth::start`, the ControlMaster and askpass sweeps; `host::enable_background_relays`: `agent_turn::start` for browser clients (the desktop sidecar too) and, on a server, the usage samplers. Not on a server, on purpose: the stage wipe and the container/VM orphan sweeps (tabs live in the tmux unit across daemon restarts) and the `import_once`s (a desktop's own CLI files). TODO #2362 done; phone push for windowless turn edges is #2384. Wiring only, no unit test (real state dir). | `bccc75e5` |
+| A1 + B6 + A2 (medium) | One fix: `model_allowlist::check_model`, server-only, at the request — policy list, else the shared Ollama's installed models (2 s timeout, 5 s cache); the dispatcher runs it on a blocking thread (`ollama-unreachable` on a timeout); `mail_ai::chat` runs it (classify on sync included); `ollama::host_setting` ignores `ollama_host`/`ollama_allow_remote_host` on a server (installed list and every request go to the shared loopback Ollama). `patch_settings` stays `core`. `TODO(#2339)` in `model_allowlist.rs` for the root-MCP lane. The P2 review's "`save_settings` is off, so the browser cannot write the model" was wrong — `patch_settings` is the path; corrected in `context/web_client.md`. | `36c3726a` |
+| A5 (info) | A server's inbox sync hands the classifier at most 5 new messages, not 20. | `2d1a3d93` |
+| B4 (medium) | Window and sidecar on one state dir. `services::process_lease` (file locks under `<state>/leases/`): containers held (shared) by each process with tabs in them and removed — switch, exit, start-up sweep, recreate — only when no other holds them; VMs claimed by the booting process (the other is refused, and never reaps it); a remote project's `sync_auto` and `git_peer` loops run in the one process that claims them. `sync.json` compare-and-swap across processes under its file lock (`CHANGED_ELSEWHERE`). Agent home preparation, every `agent_auth` adopt/place step and `exec_trust` approvals locked across processes. Not covered: a browser tab attaching to a local-tmux tab the window runs (#2358 is only the shared-PTY case). | `22c18b4b` |
+| B5 (medium) | Browser box edits: new `core` command `patch_box` (one edit on the box as stored, under the file lock); the store saves through it and reverts with a toast on failure. Every refusal (`client`, `off` + reason, `admin`, `unknown`, `unsupported`, `feature-off`, `model-not-allowed`, `ollama-unreachable`) becomes a `RefusalError` reading as one i18n sentence (`transport/refusal.ts`, 5 languages). | `baca98f7` |
+| B8 (medium) | Reconnect catch-up cut UTF-8 byte offsets as UTF-16 indexes; now cuts the encoded bytes. Non-ASCII test. (B13's `lastEndOffset` pruning in the same commit.) | `55af2184` |
+| B7 (process) | AGENTS.md: the command attribute (`cfg_attr(feature = "desktop", tauri::command)`, `Ctx`, no `use tauri`), the class row + `commandClasses.ts` regeneration, `MODEL_ARG`, no whole-document saves; the gate list (workspace tests, no-desktop lib test, clippy ×3, Windows/macOS all-targets checks, `app-serverd` build + `ldd`). | `4786e3e2` |
+| B9 (low) | Flaky tests: terminal batcher on tokio's clock throughout; sysstat cache test re-seeds when the generation moved; compat test retries a busy (ETXTBSY) script; codex_bind watch test skips without an inotify watcher (cause unconfirmed: instance exhaustion) and waits longer. | `d4e09f2c` |
+| B10 (low) | **Not done**: the 31 lint warnings are on `develop` too, in 18 files this branch never touched; fixing them here means hook-dependency changes and 18 merge conflicts. TODO #2385 (fix on `develop`, then `--max-warnings 0`). | — |
+| B11 (low) | VM proxy credentials on a server only; a desktop VM gets an empty token: an open proxy and byte-identical user-data (no re-provision). | `9f4be14e` |
+| B12 (low) | Connect mode's Server → Secrets says the key is set up, renewed and released from the phone app or a browser; the Rust enrol/release exchange is in #2379. | `ca2afe3d` |
+| B13 (low) | Browser access documented (DOCUMENTATION.md, `docs/help/mobile.md`; the token is the whole perimeter — A's addition); `PickGrantsState` in `core_state_types_are_distinct`; `--serverd` dev verb in the context file; `lastEndOffset` pruned (`55af2184`). The mail attachment write under the store lock is left as is (acceptable; unmeasured). | `b77df1ed` |
+| B14 (merge) | Merge order and the `root_mcp.rs` resolution (CoreCtx form, `start_headless` in `run_with`, never sweeping, its local-model lane through `check_model`) written into TODO #2339. The merge itself is not this round's job. | `4be64689` |
+| A3 (low) | The broker no longer gets the keeper's `StateDirectory=`: under `ProtectSystem=strict` + `ReadOnlyPaths=/var/lib/<slug>-auth` it reads keys, lists and tokens but cannot write them; its own `StateDirectory=<slug>-broker` holds the month counts and its audit rows (the keeper reads the counts there). A's `MemoryDenyWriteExecute` sub-point dropped (it was set). | `775faa9a` |
+| A4 (low) | Connect opens a download only when it is an inert viewer type (allowlist: documents, pictures, plain text, media); anything else is shown in its folder. Windows downloads get the Mark of the Web. | `39f73d2b` |
+| A6 (info) / queued | Keeper fingerprints only for listed users; unlisted = `no-key`, exactly a never-keyed CLI's answer. The daemon reads `no-key` as "holds none", so unlisted users' own logins keep moving between their homes. | `50121789` |
+| A7 (info) | Already #2353; nothing changed. | — |
+| Queued: Funnel | `admin-helper check` fails while Tailscale Funnel publishes a name proxying or TCP-forwarding to the gateway's listeners (`server.env`, else 8740/8741); no `tailscale` answer is a warning. | `dee7e363`, `b7f4b51e` |
+| Queued: mail re-key gaps | `secure_delete` on during the re-key, `wal_checkpoint(TRUNCATE)` before the retire; reply-link digests moved to the current key in the messages batch; an unreferenced old blob re-sealed in place under its old name. | `ee81b0c0` |
+| Queued: prune on `user-remove` | `user-remove` runs `<slug>-gateway keys-forget USER` → the keeper's root-only `forget`: off every key's list, with broker token and budget, audited. | `745257a6` |
+| Queued: Manage CLIs help | Claude has its own help (API key helper, running Claude loses the key within ~5 min); the other CLIs' help names the variable and says running tabs keep the key until restarted. 5 languages. | `37b25329` |
+| Queued: #2374 | Every other program-running git key refuses (never strips) a shared clone's git, naming the key (`SHARED_PROGRAM_KEYS`); `core.hooksPath`/`core.fsmonitor` pass. | `8b3a20d5` |
+| Queued: #2375 | Reviews paged at 256 KB, digest over the whole text; panel and daemon refuse acceptance or a reviewed merge until every page was served. | `9a58ac6a` |
+| Queued: Connect manifest | Own capability `connect.json` (window controls, notifications, events; `default.json` no longer reaches it) and a Rust gate on the invoke handler admitting only `CONNECT_WINDOW_COMMANDS`: socket bridge, `connect_open_download`, `open_external_url`, clipboard. | `edccb164` |
+| Queued: OIDC by `sub` | `user-oidc --email` removed; a stored non-`sub` link is invalid and pairs nobody; docs and tests. | `5d7c3cc6` |
+| Queued: decisions | Pair mode dropped for now, kept as a documented option (#2382); shared consumer login won't do (#2383). Plan Q2, §6.3, P5 list. | `0f3e1a29` |
+
+### Design notes
+
+- **Leases, not refusal-while-a-window-runs (B4).** A file lock dies with
+  its process, so a crash leaves nothing held and no pid can be reused into
+  a false owner; shared locks let the window and the browser both use one
+  container. The manifest compare-and-swap makes a stale cache's write a
+  retry instead of a lost update, so user commands in the non-owning process
+  stay safe even while the other runs the loops.
+- **The Connect narrowing is a wrapper, not Tauri's app-manifest ACL.**
+  Declaring an app ACL makes *every* app command need a permission in every
+  window — ~1000 commands to list for the main windows, generated files, and
+  a wrong list would kill the main window's IPC, which cannot be checked
+  here without running the app. The wrapper rejects in Rust before any
+  command body for the `connect` webview only; plugins are narrowed by the
+  new capability. `open_external_url` is on the list beside the decided
+  five classes (links from server content); the clock, Super-key and power
+  reads moved to the browser adapters.
+- **`no-key` means "holds none" (A6).** Reading it as "unknown" would have
+  stopped adopting every unlisted user's own login (agent_auth adopts
+  nothing on unknown). A key file left from while a user was listed is now
+  treated as theirs; withdrawing someone is a reason to rotate the key.
+- **Server daemon start-up (B3)** deliberately skips the stage wipe and the
+  container/VM orphan sweeps: tabs survive a daemon restart in the tmux
+  unit, so a previous daemon's container is not an orphan.
+- **#2374 refuses rather than strips**: stripping would silently break
+  signing, merge drivers and credential helpers; the refusal says which key
+  and how to unset it.
+
+### New live steps (in addition to every earlier section's)
+
+Desktop (the frozen dev build at or after this round):
+1. **Browser access, one state dir (B4):** with the window running a
+   container agent in project X, switch the browser from X to Y →
+   `docker ps` still lists X's container; quit and reopen the window while
+   the browser has a container tab → it survives. Boot a project VM in the
+   window → opening it from the browser says the VM runs in another window.
+   A remote project active in both → only one process logs auto-sync; flip a
+   file's sync marker in both at once → one says "changed by another window".
+2. **Boxes in the browser (B5):** add/remove a project, recolour, hide a
+   pill → still so after a reload, and the window shows the same. (The
+   revert-and-toast on a refusal is covered by `BoxAssignment.test.ts`.)
+3. **Reconnect (B8):** in the browser, a Claude tab printing `⏺`/box drawing;
+   drop the network for a few seconds → after reconnecting no character is
+   doubled or missing.
+4. **Desktop VM proxy (B11):** an existing Proxy-egress VM boots without
+   re-provisioning (its host key unchanged) and Claude/Codex reach their APIs.
+5. **Connect (A4, narrowing):** terminal, agents, files, clipboard copy,
+   notifications, minimise/maximise/close and Open on a server PDF still work;
+   Open on `x.terminal` / an extensionless file → saved and shown in its
+   folder; in the devtools console of the Connect window,
+   `__TAURI_INTERNALS__.invoke('get_settings')` is refused ("may not call");
+   Windows: a downloaded file's Properties say it came from another computer.
+
+Server (after § P5's):
+6. **Agent start-up (B3):** an agent tab's turn state shows in the browser
+   and follows `/clear`; restart the daemon → no dead ControlMaster in the
+   unit's `/tmp/<slug>-ssh-<uid>`, `<state>/hooks/` holds the hook script.
+7. **Allowlist (A1/B6/A2):** policy list without the mail model → Summarize
+   says the model is not allowed; a sync classifies nothing; `ollama_host`
+   set to another machine in a user's settings → ignored; stop Ollama → a
+   completion answers "did not answer in time" within seconds, the terminal
+   stays live.
+8. **Broker (A3):** `systemctl cat <slug>-keybroker.service` shows
+   `StateDirectory=<slug>-broker` and `ReadOnlyPaths=/var/lib/<slug>-auth`;
+   a brokered prompt grows `/var/lib/<slug>-broker/claude/usage/<user>.json`;
+   the admin card still shows the month.
+9. **Funnel:** `tailscale funnel --https=<gateway https port> on` →
+   `admin-helper check` fails `funnel` naming the name; off → passes.
+10. **user-remove:** remove a listed user → their name is gone from every
+    Agent credentials list (audit `agent-key-user-remove` by `root`).
+11. **Fingerprints:** as an unlisted user, the keeper answers `no-key` to
+    `fingerprints` (isolation script's keeper section, or `socat`).
+12. **#2374:** in a shared clone `git config merge.ours.driver true` → the
+    app's git refuses, naming the key; unset → works.
+13. **#2375:** a co-member's ~400 KB `CLAUDE.md` → the review pages; accept
+    stays disabled until the last page.
+14. **Mail re-key:** after a revoke, the Sent replies strip of an older
+    message still lists its reply; `mail.db-wal` is empty after the re-key.
+15. **OIDC:** `user-oidc NAME --email x` is refused; `--sub` works.
+
+### Needs the user
+
+- `open_external_url` kept in the Connect window's command list (links
+  would otherwise go through `window.open`); drop it if links may break.
+- B10's 31 lint warnings belong to `develop` (#2385).
+- A6's consequence: a removed user's saved copy of the admin key is now
+  treated as their own login — rotate the key when removing someone.
+- The merge into `develop` and #2339 (B14's order in TODO #2339).
+
+### Gates (worktree, 2026-10-04, at `bb83faf2`, run alone in sequence; then `git diff --check`'s one finding fixed in `61bb561b`)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile, web bundles) |
+| `npm test -- --reporter=dot` | **705 files, 7117 tests**, all pass (+1 file, +6 tests) |
+| `cargo test --workspace -q --no-fail-fast` | **3719 passed, 0 failed, 3 ignored**, 22 binaries (src-tauri lib 3316, src-gateway 133, src-core 100, integration) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3218 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (pre-existing, on `develop` too; #2385) |
+| clippy `--workspace --all-targets -D warnings`, `-p tabtivity --no-default-features --lib`, `-p app-serverd --all-targets` | clean (rustc 1.97.1) |
+| `cargo build -p app-serverd` + `ldd` | vdso, libgcc_s, libm, libc, ld-linux only |
+| `cargo check --workspace --all-targets --target x86_64-pc-windows-msvc` (RC/AR shims) | **green** (was 13 errors, B1); only pre-existing non-Linux dead-code warnings |
+| `cargo check --workspace --all-targets --target aarch64-apple-darwin` (CC/AR shims so `ring`'s build script completes) | **green** (was red, B2); pre-existing warnings (`tauri-runtime-wry` patch, two `agent_fence` items) |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 5c87d3ed HEAD` | green (2718 added lines, 94 paths, 0 binaries, 27 commits) |
+| `git diff --check 5c87d3ed HEAD` | one blank line at EOF in `BoxAssignment.test.ts`, fixed; clean after |
+| `npm run mobile:bundle` | not needed: `mobile-web/` unchanged (`npm run build` builds the phone app anyway) |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+Red commits: `dee7e363` left one clippy finding in the gateway crate (fixed by
+`b7f4b51e`); `baca98f7`…`bb83faf2` carried a trailing blank line in a test
+file (diff-check only, fixed by `61bb561b`). Every other commit was checked with the gates that
+cover what it touched.
