@@ -3005,3 +3005,47 @@ unverified, for routing only (it came from the token endpoint over TLS).
 Spent nonces live in the daemon's memory: a daemon restart forgets them,
 bounded by the 10-minute token age. The gateway's static `SIGN_IN_PAGE`
 still names only the invite code.
+
+### 4. The Tauri shell's Connect mode (§7.2)
+
+| Commit | Content |
+|---|---|
+| `7e86d0ed` | `services::connect` (+ tests against a fake server: pairing, sign-in with a raw `r‖s` signature, both cookies + exact `Origin` + subprotocol on the upgrade, ticket download), `commands::connect` (`connect_status/_pair/_forget/_open`, the bridge `connect_ws_open/_send/_close`, `connect_open_download`; all `Client`, `commandClasses.ts` regenerated), the `connect` webview in the default capability (local origin; `capability_scope.rs` pins it), `tokio-tungstenite` moved from dev to normal dependency (no TLS feature: the app's tokio-rustls stream, `mail_engine::tls_config` now `pub(crate)`); `bridgeSocket.ts`, `installConnectTransport`, `wsInternals` native routing (`CONNECT_NATIVE`, window/webview/notification plugins, `open_file` via ticket), `main-connect.tsx` + `main.tsx` branch, `ConnectToServer.tsx` in Settings → Mobile; i18n ×5 (10 keys); UntestedTag `connect.window`; tests `ConnectTransport.test.ts`, `ConnectToServer.test.tsx`. Also fixes a type error the OIDC commit `45ef8ed0` left in `MobileAuth.test.ts` (a second argument to `toBe`; vitest ran, `tsc` failed — that commit's `npm run build` was red). |
+| `d2a109d2` | Docs (context `web_client.md` § The desktop's Connect mode, plan §7.2 as built, user docs, file maps, TODO #2379). |
+
+**Design and the deviation** (rationale in `context/web_client.md`): the
+Connect window runs this binary's own frontend, not the bundle the gateway
+serves — a remote origin with the window's IPC would let the server (or an
+XSS on it) run native commands on the user's desktop. The socket is opened
+in Rust because the window's origin cannot carry the server's
+`SameSite=Strict` session or pass its exact-`Origin` check; frames are
+bridged as events on a name the window registered before asking. Client
+commands that belong to this machine run natively; everything else routes as
+in a browser.
+
+**Live steps** (TODO #2379; a real server with Bob as a user):
+1. Desktop (frozen dev build at or after `7e86d0ed`): Settings → Mobile →
+   Connect to a server: `https://<server>`, an invite code for bob
+   (`sudo …admin-helper invite bob`), a name → Pair → "Paired with …";
+   `ls -l ~/.local/share/tabtivity/connect/device.key` → `-rw-------`.
+2. **Open the server window** → a second window titled with the server's
+   host shows Bob's server workspace; the desktop's own window is unchanged.
+3. In it: open a project, a terminal (`hostname` = the server), an agent tab.
+   Copy text from the terminal and paste it into a local app (native
+   clipboard); a notification from the server appears as a desktop
+   notification; maximize/minimize work.
+4. Open a PDF of a server project with **Open** (open outside): it lands in
+   `~/Downloads` and opens in the local viewer.
+5. Restart Bob's daemon (`sudo systemctl restart` its `tabtivity-serverd@` instance for bob): the window shows
+   the link down, then reconnects and its terminals continue.
+6. Server: Mobile settings list the desktop as a device; revoke it → the
+   Connect window's next sign-in fails (link stays down). **Forget this
+   server** on the desktop closes the window and removes `connect/`.
+
+**Gotchas for the reviewer**: the bridge's frames go through Tauri events (a
+JSON + base64 hop per binary frame — fine for terminals, not tuned for big
+file reads). `WebShell`'s sign-out navigates to `/desktop/`, meaningless in
+the Connect window. On macOS the window shares the main profile (no
+`data_directory` there). The pairing key is a file, not the OS keychain —
+the same choice as the daemon's identity key; flag if the keychain is
+wanted.
