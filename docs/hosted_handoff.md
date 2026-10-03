@@ -1655,3 +1655,124 @@ signs with the same origin's IndexedDB pairing key.
 | `scripts/privacy-check.sh 7d604a95..HEAD` | green |
 | `git diff --check` | clean |
 | `npm run mobile:bundle` | built (`mobile-dist/` is git-ignored, nothing to commit) |
+
+## Vault decisions review
+
+*Written 2026-10-03 by the vault-decisions reviewer. Range
+`7d604a95..00c94684` (`0e6ba828`, `f49778aa`, `00c94684`), worktree
+`hosted`. Nothing run live, nothing as root, no daemon/gateway against a
+real state dir or port; `keyctl` is EPERM in this fence (expected), so the
+keyring is exercised through `KeyHold`.*
+
+### What was checked
+
+- **Rotation crash safety.** Every step (`Journal`, `Sealed`, `Wraps`,
+  `Commit`, `Moved`, `Held`) against `settle`: `store::write_bytes_atomic`
+  fsyncs the file and its directory, `move_in` fsyncs the directory after
+  each rename, so every `.next` and the journal are durable before the
+  commit rename, and the commit is durable before any `.next` moves in. All
+  renames stay in one directory (atomic); the temp names (`wraps.json.tmp`
+  for `.next`, `wraps.tmp` for the original) never collide. A failed
+  `.next` write (disk full) errors before the commit and `settle` deletes
+  the `.next` files (a stray `*.tmp` holds ciphertext under a K that was
+  never persisted — harmless). The old K is `Zeroizing` and leaves the
+  hold by being replaced (`add_key` on the same description). The key
+  check is HKDF(K), so clearing on a mismatch never locks a correct K, and
+  files without a check skip it.
+- **Concurrency.** Unlock vs rotation, two revokes, mail writes during a
+  rotation, revoke vs a release/enrolment in flight, crash between the
+  auth store's save and the vault. Findings 1–4, 6, 7.
+- **Recovery code.** 128 random bits, HKDF (no slow KDF needed: 2¹²⁸
+  offline against `wraps.json`). Binding = HKDF(sealed A, context ‖
+  origin ‖ identity). A gateway alone cannot forge it (needs AES-GCM of A
+  under `subkey(K)`: the code or `wraps.json`). With the *current*
+  `wraps.json` plus the gateway's position it can — as it already could
+  with the backed-up `identity.key`. **Old `wraps.json` + revoked device**
+  gives the old K → A, and A is the same for the code's whole life
+  (`rewrap_recovery` keeps it): with the gateway's position *and* the user
+  typing the code into a forged prompt, that pins an attacker identity.
+  What that buys is a d·X oracle on the device; turning it into the current
+  K still needs the current device wrap's ciphertext, i.e. the current
+  `wraps.json` — which with the gateway's position suffices on its own. So
+  the residual adds no new route to the current K; it is a forged prompt
+  until a new code is made. Replay: the binding names origin and identity;
+  an old binding names the old identity only.
+- **Signed actions.** Nonce 24 random bytes, single use (spent on any
+  verify, also a failed one), 60 s, bound to device and action (the stored
+  payload), its own table apart from login challenges; text
+  domain-separated (`context("action")` vs `MOBILE_AUTH_CONTEXT` vs
+  `context("enrol")`), fields fixed-order, the device accepts only a
+  base64url nonce and a safe integer. The browser signs with the
+  same-origin IndexedDB pairing key, generated non-extractable. Every
+  route that changes K, the code, wraps or identity enumerated: `/setup`
+  and `/recovery-code` signed; `/enrol` pairing-signed; `/unlock{,/finish}`
+  the exchange; `/recover` needs the code; `/repin` read-only; revoke and
+  forget-all only through the admin socket (no HTTP route).
+- **Rust ↔ WebCrypto.** `REPIN_VECTOR` is checked by
+  `vault::tests::the_repin_vector_checks` (cargo, CI) and
+  `MobileSecretsRelease.test.ts` (vitest, CI); HKDF with an empty salt,
+  SEC1 uncompressed points, big-endian scalars agree. The browser imports
+  `R` with `d` (WebCrypto may check they match), Rust ignores `R` —
+  harmless either way.
+- **Mail.** Device mode opens, enables and rewraps to device under
+  `with_key`; a locked K is `Unavailable(DEVICE_LOCKED)`, never plaintext;
+  no vault (desktop) → keychain path unchanged.
+- i18n (10 keys × 5 languages), UntestedTag rows `server.secrets` /
+  `server.secrets.repin`, `DOCUMENTATION.md` § "Hosted server: the secrets
+  key", context file, plan §6.8, live steps.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **medium** | `released` put whatever K a wrap opened into the hold, unchecked. Two releases around a pending rotation (one read its wrap before the commit) left the **retired K held**; `set_credential`, `new_recovery_code` and `wrap_missing` also read K *before* taking the lock. Then a first saved password was sealed under the retired K (unopenable with the current one, openable by the revoked device with old wraps), a device was wrapped with it, or a new code bound to it. | fixed `69ba6884`: a release holds K only if it matches `wraps.json`'s check, under the lock; every K read that seals takes the lock first. Test `a_retired_key_and_a_stale_device_list_change_nothing`. |
+| 2 | **medium** | Routes read the device list outside the vault's lock; a revoke racing a release or an enrolment let `wrap_missing`, or the release's pending rotation, **wrap the new K for the revoked device**. | fixed `69ba6884`: `Vault::revoked` remembers devices revoked while it runs (forget-all passes every id); rotation and `wrap_missing` skip them. Same test. |
+| 3 | low | `AuthStore::revoke`/`forget_all` saved `devices.json` *after* the vault: a crash between left the device paired on disk with K rotated away, and the next release wrapped it again (revoke silently undone). | fixed `69ba6884`: saved first; a crash now leaves an unlisted wrap the next release drops and rotates for. |
+| 4 | low | Daemon start read an unreadable `devices.json` as "no devices": `resume` would drop every device's wrap and rotate. | fixed `69ba6884`: `read_secrets_device_keys` returns `Result` (missing file = none); start skips `resume` on an error. Test `an_unreadable_device_file_is_an_error_not_an_empty_list`. |
+| 5 | low (v1 wraps only, branch builds) | `start_unlock` and `set_up` keyed "set up" on a recovery wrap: after a rotation dropped a v1 wrap, devices got `not-set-up` and a second set-up was accepted (would orphan K). | fixed `69ba6884`: `is_set_up()`. Extended `a_v1_recovery_wrap_…` test. |
+| 6 | low | A rotation whose post-commit moves failed was settled only at the next daemon start; a release in between held K' with the credential store still under K. | fixed `69ba6884`: a release settles first. |
+| 7 | low | `mail_crypt::forget` removed `key.json` outside the vault's lock: a concurrent rotation moved `key.json.next` back in and the reset's enable failed "already encrypted". | fixed `604acfc2`. |
+
+### Judgment calls (open, not changed)
+
+- **A stale list can also drop a wrap**: a device enrolling at the moment
+  another device's release runs is missing from the release's list, so
+  `catch_up` drops its fresh wrap and rotates (needless); that device has
+  no wrap until another enrolment or release while unlocked. Benign.
+- **`mail_crypt::rewrap` away from device mode** is not under the vault's
+  lock (its keychain/passphrase branches call `remote_credentials`, which
+  takes the same lock). Nothing calls `rewrap` today; whoever wires it
+  must split the file write out first.
+- **A recovery code's A outlives rotations** (finding-free residual above):
+  suggesting "make a new recovery code" after revoking a *lost* device
+  would close it — the handoff's open question to the user stands.
+- A gateway answering `enrolled: false` makes the device re-enrol a new
+  ECDH key, dropping its wrap (pre-existing; availability only).
+- The tombstones are in memory; after a restart every list is read fresh
+  from the saved device file (finding 3 makes that file authoritative).
+
+### Gates (worktree, 2026-10-03, at `604acfc2` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **698 files, 7080 tests**, all pass (unchanged: no frontend change) |
+| `cargo test --workspace -q --no-fail-fast` | **3583 passed**, 0 failed (src-tauri lib 3237, +2), 3 ignored; the `sysstat` race did not fire this run |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3142 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 00c94684..HEAD` | green |
+| `git diff --check 7d604a95 HEAD` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change in the review) |
+
+### Live steps added to § Vault decisions' list
+
+- After step 4: with the server locked, revoke a device and at once sign
+  in on a remaining one: `wraps.json` lists no wrap for the revoked device
+  and has a new `kid`; mail and the saved password open.
+- `systemctl stop` the daemon, put `{` into
+  `mobile-control/devices.json` (keep a copy), start it: the log says the
+  rotation waits; `wraps.json` still lists every device. Restore the file.
