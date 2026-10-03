@@ -471,3 +471,105 @@ module tests per batch, the full lib suite three times). Remaining P1 work for
 whoever continues: `fs.rs`'s 17 `State` params (leave the five binary-frame
 commands), the core halves of `apps.rs` and `browser.rs`, and the three class
 flips under *Open for the P1 reviewer*.
+
+## P1 review
+
+*Written 2026-10-03 by the P1 reviewer. Range reviewed `a2f9f7f5..71751236`
+(33 commits); fixes and decisions in the commits listed below; this section the
+commit after them. Nothing run live.*
+
+### What was checked
+
+- **Behaviour preservation on the desktop**, by reading the diffs of
+  `terminal/mod.rs`, the seven services, `commands/{terminal, projects, sync,
+  remote, git_peer, mobile_control, root_mcp, agents, copilot, ollama, mail}.rs`
+  in full and the other 15 converted command files hunk by hunk. Every `app.emit`
+  became `ctx.emit` (Tauri `emit` = `EventTarget::Any`, and `TauriEvents::emit_json`
+  is `emit_str` to the same target); event names and payload types are unchanged
+  (the sink serializes the same `Serialize` value once; `json!` payloads are the
+  same objects). The two targeted emits kept their target: `complete_text` went
+  from `window.emit_to(window.label(), …)` to `emit_to_caller` → `emit_str_to(<label>)`,
+  the mobile bridge from `emit_to("main", …)` to `emit_json_to(ClientId::main())`.
+  `Ctx`'s caller is the calling **webview's** label; the old `Window` arg was the
+  **window's**. They are the same string here: every webview the app builds is a
+  `WebviewWindowBuilder` (browser.rs too, no `unstable` multi-webview), so
+  `pty_set_visible`'s viewer identity and `copilot`'s editor key are unchanged.
+- **Startup order.** Config windows are built and `setup` runs before Tauri's
+  event loop processes any IPC (`tauri-2.11.3/src/app.rs:2525-2531`), so no command
+  can extract `Ctx` before `tauri_host::install` has managed the `CoreCtx`. Every
+  `app_core::rt::spawn` caller in `lib.rs::run` (`net_usage`, `usage_stats`,
+  `start_host_on_launch`, `root_mcp`, `brand_migration::sweep_at_launch`) sits in
+  `setup` after `install`, so nothing lands on the fallback runtime; `block_on`
+  callers (`root_mcp::stop_for_exit`, `copilot_auth`, `AgentMail`) run on plain or
+  blocking-pool threads as before. The `--mobile-host` sidecar path
+  (`main.rs`, `mobile_control/host.rs`, `HeadlessSpawner`) is untouched by the
+  range and links nothing that now needs a `CoreCtx`.
+- **State sharing.** Every type `core_state` manages is an `Arc<…>` or wraps one
+  (`UsageWatchState`'s two fields, `MobileDesktopState.pending`), so Tauri's
+  `State<T>` and `ctx.get::<T>()` see one instance; `core_state_types_are_distinct`
+  covers the type keying. No lock is held across an `await` that was not before
+  (`ctx.get` returns a borrow of the owned context, like `State<'_, T>` did).
+- **The guard test** (`converted_command_files_stay_tauri_free`): checked that
+  `use tauri::State;`, `tauri::Window` in a signature and a `::tauri::` path all
+  trip it, that `tauri_host`, `src-tauri` in strings and `//` comments do not.
+  The P0 completeness test is unchanged and still parses `lib.rs`'s handler list.
+- **Build/CI plumbing**: `build.rs` includes the brand module by its new path;
+  `scripts/{brand-check,brand-flip,lib/brand,rename-codemods/prose-pass}.sh`
+  follow it; CI tests and lints `src-core` on all three OSes; `package-dev.sh`
+  builds from a detached worktree of the whole tree (so `src-core/` is in a frozen
+  build); `Cargo.lock` carries `app-core`.
+- **Windows/macOS**: `cargo check --target x86_64-pc-windows-msvc` (the RC/lib
+  shims of `docs`/memory) on the range's tip, then on the fixes.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **high** (Windows/macOS build) | `src-core/src/services/mod.rs` declared `pub mod fence_scope;` unconditionally; in `src-tauri` it was `#[cfg(target_os = "linux")]`. The module uses `libc`, `PermissionsExt::mode` and `CommandExt::exec`, so `app-core` failed to compile for `x86_64-pc-windows-msvc` (14 errors) and would for macOS — CI's `test-windows`/`test-macos` jobs red. | fixed ``41aff999``: gated like the desktop's re-export |
+| 2 | **high** (Windows build) | `commands/mobile_control.rs`, the `#[cfg(windows)]` arm of `start_desktop_bridge`: the conversion left `let app = ctx.clone();` unused and moved `ctx` into the per-connection task inside the accept loop (E0382 on the second iteration). The `#[cfg(not(any(unix, windows)))]` stub still named the removed `AppHandle` import. | fixed ``9f644149`` |
+| 3 | medium (tooling) | `scripts/backend-stale.sh` scanned only `src-tauri/`; an edit under `src-core/`, or to the root `Cargo.toml`/`Cargo.lock` (which the workspace moved up), was a backend edit the window could not pick up and the script called current. | fixed `add3f1c0` |
+| 4 | low (CI) | `rust-cache`'s `workspaces: ./src-tauri -> target` named a target dir that does not exist (the workspace root's `target/` is the real one, and so is `Cargo.lock`), so the cache never hit. Pre-existing, flagged by the P1 handoff. | fixed `b183fb3a`: `. -> target` |
+
+No behaviour change was found in the converted desktop paths. Noted, not
+changed: `complete_text` used to turn an `emit_to` error into the completion's
+`Err`; the sink is best-effort by contract, so a failed delivery now ends the
+stream silently — Tauri's `emit_to` only fails on serialization, which a
+`String` payload cannot. `handle_desktop_stream` likewise answers "unavailable"
+only when serialization fails (the one thing that could fail before, too).
+
+### The three user decisions (2026-10-03), applied in `b4fab29e`
+
+| Decision | Rows flipped | Where written |
+|---|---|---|
+| One shared Ollama per server; only the admin changes or starts models | `pull_ollama_model`, `pause_ollama_pull`, `delete_ollama_pull`, `delete_ollama_model`, `delete_partial_blob`, `load_ollama_model`, `stop_ollama_model` → `admin`; **also `ensure_ollama_running`** (its fallback is a user-level `ollama serve`, which on a server would take the shared port with that user's own store — the reviewer's extension of "start models", flagged in the report). `clear_pending_ollama_pull` (a record in the caller's own state) and the read-only `list_*`/`ollama_*_status` rows stay `core`. The admin-allowed model list for completion/chat/local-model tabs is written into §3.3 and P2 of §10, not built. | plan §3.3 (table rows + decided block), §4.4 (one shared loopback listener, its residual), §10 P2/P3; `command_class.rs` module doc |
+| `list_recent_downloads` is the client device's | → `client` | §3.3 |
+| Only the admin installs, updates or removes agent CLIs | `install_agent`, `install_agent_remote`, `install_agent_remote_command`, `update_agent`, `uninstall_agent`, `install_vibe` → `admin`. `check_agent_updates`, `agent_versions`, `agent_is_installed`, `dismiss_agent_version` (reads and a per-user dismissal) and `ensure_vibe_ollama_model` (the user's own `~/.vibe` alias; allowlist-bound later) stay `core`. | §3.3, §5.1 (per-user install root gone in server mode; self-updaters switched off per home; remote installs are the admin's), §10 P3 |
+
+Counts: 683 commands → **521 `core`, 85 `client`, 68 `admin`, 9 `off`** (were
+536 / 84 / 54 / 9). `the_examples_of_the_plan_hold` and the completeness tests
+pass; the P0 section's counts carry the new numbers.
+
+### Gates (worktree, 2026-10-03, at ``9f644149``, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `cargo check --target x86_64-pc-windows-msvc` (src-tauri, pulls in src-core) | green (36 s incremental; 5 pre-existing warnings in files the range did not touch: `home_io.rs`, `agent_auth.rs`, `copilot/process.rs`, `headless.rs`). Red before finding 1 (14 errors in `app-core`). |
+| `npm run build` | green (tsc + both bundles) |
+| `npm test -- --reporter=dot` | **691 files, 7045 tests, all pass** (105 s) |
+| `cargo test -q` (src-tauri) | 3155 lib (2 ignored) + 168 integration = 3323 passed, 0 failed, 14 binaries |
+| `cargo test -q` (src-core) | 97 passed |
+| `npm run lint` | 0 errors, 31 warnings — the same pre-existing ones P0/P1 listed (via `rtk proxy`; the RTK wrapper garbles eslint's output) |
+| `cargo clippy --all-targets -- -D warnings` (src-tauri) | clean |
+| `cargo clippy --all-targets -- -D warnings` (src-core) | clean |
+| `scripts/brand-check.sh` | green (48 entries) |
+| `scripts/privacy-check.sh` | green, and in the pre-commit hook on every commit |
+| `git diff --check` | clean |
+
+### Left for P2
+
+- The handoff's own P1 list (`fs.rs`'s 17 `State` params, the core halves of
+  `apps.rs`/`browser.rs`) stands.
+- `switch_project_runtime` (P0 review) is still a mixed body.
+- When a non-`WebviewWindow` webview ever invokes a command, `Ctx` should take
+  `webview.window().label()` to keep the `Window` semantics; today the two
+  labels coincide everywhere.
