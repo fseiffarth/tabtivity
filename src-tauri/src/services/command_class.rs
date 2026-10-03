@@ -142,6 +142,42 @@ pub fn names_in(class: CommandClass) -> impl Iterator<Item = &'static str> {
         .map(|(name, _)| *name)
 }
 
+/// The TypeScript twin of the table for the browser shim
+/// (`src/lib/transport/commandClasses.ts`): one `name: class` entry per row,
+/// in table order, plus the `off` reasons. The test
+/// `the_generated_command_classes_ts_is_current` holds the file to this.
+pub fn command_classes_ts() -> String {
+    let mut out = String::from(
+        "// Generated from src-tauri/src/services/command_class.rs — do not edit.\n\
+         // Regenerate: UPDATE_COMMAND_CLASSES=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_command_classes_ts_is_current\n\
+         //\n\
+         // Every registered backend command's class (hosted plan §3.3): `core` runs\n\
+         // on the server, `client` on the machine the user sits at, `admin` for the\n\
+         // server's admin only, `off` nowhere in server mode. The browser shim\n\
+         // (`wsInternals.ts`) routes an `invoke` by it.\n\n\
+         export type CommandClass = \"core\" | \"client\" | \"admin\" | \"off\";\n\n\
+         // Rows, not object keys: a credential-looking key followed by a colon and\n\
+         // a string reads as a secret to the repo's privacy check.\n\
+         /** The named reason an `off` command is refused with (`OffReason::as_str`). */\n\
+         export const OFF_REASON_ROWS: readonly (readonly [string, string])[] = [\n",
+    );
+    for (name, class) in TABLE {
+        if let Off(reason) = class {
+            out.push_str(&format!("  [\"{name}\", \"{}\"],\n", reason.as_str()));
+        }
+    }
+    out.push_str("];\n\nexport const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = [\n");
+    for (name, class) in TABLE {
+        out.push_str(&format!("  [\"{name}\", \"{}\"],\n", class.as_str()));
+    }
+    out.push_str(
+        "];\n\n\
+         export const OFF_REASONS: Record<string, string> = Object.fromEntries(OFF_REASON_ROWS);\n\
+         export const COMMAND_CLASSES: Record<string, CommandClass> = Object.fromEntries(COMMAND_CLASS_ROWS);\n",
+    );
+    out
+}
+
 use CommandClass::{Admin, Client, Core, Off};
 
 /// One row per registered command. Grouped by the `commands/*.rs` file that
@@ -352,6 +388,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("import_external_file", Core),
     ("list_dir", Core),
     ("list_dirs", Core),
+    ("list_dir_all", Core),
     ("list_project_endings", Core),
     ("list_project_paths", Core),
     ("list_recent_downloads", Client),
@@ -981,6 +1018,25 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), registered_commands().len());
+    }
+
+    /// `src/lib/transport/commandClasses.ts`, the browser shim's copy of this
+    /// table (hosted plan §3.2: "the macro also generates commandClasses.ts").
+    /// Rendered here and compared with the committed file, like the untested
+    /// register: a table change without the regenerated file fails this test,
+    /// which prints the one command that rewrites it.
+    #[test]
+    fn the_generated_command_classes_ts_is_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/transport/commandClasses.ts");
+        let expected = command_classes_ts();
+        if std::env::var_os("UPDATE_COMMAND_CLASSES").is_some() {
+            std::fs::write(&path, &expected).expect("write commandClasses.ts");
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            actual, expected,
+            "src/lib/transport/commandClasses.ts is stale; regenerate with\n  UPDATE_COMMAND_CLASSES=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_command_classes_ts_is_current"
+        );
     }
 
     #[test]

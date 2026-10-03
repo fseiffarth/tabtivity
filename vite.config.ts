@@ -50,6 +50,7 @@ export default defineConfig(async () => ({
         "**/src/__tests__/**",
         "**/dist/**",
         "**/mobile-dist/**",
+        "**/web-dist/**",
       ],
     },
   },

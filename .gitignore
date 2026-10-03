@@ -9,6 +9,7 @@ __pycache__/
 *.egg-info/
 dist/
 mobile-dist/
+web-dist/
 build/
 # tsc's incremental build cache (npm run build writes it beside the config).
 tsconfig.tsbuildinfo

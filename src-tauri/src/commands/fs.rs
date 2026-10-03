@@ -2340,12 +2340,83 @@ pub fn list_dirs(path: String) -> Result<DirListing, String> {
     })
 }
 
+/// One file in a [`FileListing`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRow {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+}
+
+/// A LOCAL directory's folders and files, for the browser client's
+/// server-side file picker (hosted plan §3.5): the desktop's OS dialog has
+/// no counterpart in a browser, and a browser `<input type=file>` would pick
+/// from the wrong machine. Same reach as [`list_dirs`] — the whole local
+/// filesystem the daemon's user can read, deliberately not project-confined,
+/// because what it replaces (the OS picker) was not either.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub dirs: Vec<DirEntry>,
+    pub files: Vec<FileRow>,
+}
+
+/// Folders and files of a local directory (see [`FileListing`]). Empty `path`
+/// starts at the user's home; unreadable entries are skipped.
+#[tauri::command]
+pub fn list_dir_all(path: String) -> Result<FileListing, String> {
+    let trimmed = path.trim();
+    let base = if trimmed.is_empty() {
+        crate::paths::home_dir()
+    } else {
+        PathBuf::from(trimmed)
+    };
+    let base = fs::canonicalize(&base).unwrap_or(base);
+    let read = fs::read_dir(&base).map_err(|e| format!("cannot read '{}': {e}", base.display()))?;
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in read.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = display_path(&entry.path());
+        if meta.is_dir() {
+            dirs.push(DirEntry { name, path });
+        } else if meta.is_file() {
+            files.push(FileRow { name, path, size: meta.len() });
+        }
+    }
+    dirs.sort_by_key(|d| d.name.to_lowercase());
+    files.sort_by_key(|f| f.name.to_lowercase());
+    Ok(FileListing {
+        path: display_path(&base),
+        parent: base.parent().map(display_path),
+        dirs,
+        files,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn list_dir_all_splits_folders_from_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("b.txt"), b"xy").unwrap();
+        std::fs::write(dir.path().join("A.md"), b"x").unwrap();
+        let listing = list_dir_all(dir.path().to_string_lossy().into_owned()).unwrap();
+        assert_eq!(listing.dirs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["sub"]);
+        assert_eq!(listing.files.iter().map(|f| (f.name.as_str(), f.size)).collect::<Vec<_>>(), [("A.md", 1), ("b.txt", 2)]);
+        assert!(listing.parent.is_some());
+        assert!(list_dir_all("/definitely/not/here".into()).is_err());
+    }
 
     // ── The raw-body write's two decoders ──────────────────────────────────
     // `write_file_bytes` takes its path from a header (a header is ASCII; a project

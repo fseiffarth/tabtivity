@@ -1937,6 +1937,7 @@ pub fn run() {
             commands::fs::dir_size,
             commands::fs::dir_size_breakdown,
             commands::fs::list_dirs,
+            commands::fs::list_dir_all,
             commands::fs::list_project_endings,
             commands::fs::list_project_paths,
             commands::fs::rename_path,

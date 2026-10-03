@@ -1837,3 +1837,27 @@
   opacity: 0.4;
   cursor: var(--cur-not-allowed, not-allowed);
 }
+
+/* ── The browser desktop client (hosted plan P2) ─────────────────────────── */
+/* The one "connection lost" banner, mounted outside the app's root. */
+.server-link-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  padding: 6px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-elevated, var(--bg-secondary));
+  border-bottom: 1px solid var(--border);
+}
+.server-link-banner[data-state="down"] {
+  background: color-mix(in srgb, var(--danger, #c0392b) 18%, var(--bg-secondary));
+}
+/* A picked file row in the server-side picker. */
+.server-file-picker .folder-picker-item.is-selected {
+  background: var(--pill-active-bg);
+  outline: 1px solid var(--pill-active-border);
+}

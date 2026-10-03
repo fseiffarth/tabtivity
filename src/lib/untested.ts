@@ -56,6 +56,10 @@ export const UNTESTED = {
   "terminal.signIn.title": { area: "agents", what: "Terminal sign-in card · open/copy an agent's login link, paste the code back; wrapped URLs click and copy whole" },
   "terminal.keySelect.title": { area: "agents", what: "Terminal keyboard select (Ctrl+Shift+X) · arrows/hjkl move, Shift/v select, V lines, Enter/y/Ctrl+C copy, Esc leaves; right-click copies a selection; a selection survives hovering an agent TUI; copies go through the backend clipboard" },
 
+  // --- server — The browser desktop client (hosted plan P2) ----------
+  "server.banner.down": { area: "server", what: "Browser client · the one connection-lost banner; pollers pause while down, calls reject with a disconnected error, the socket reconnects with ?resume so terminals keep their PTYs" },
+  "filePicker.title": { area: "server", what: "Browser client · server-side file picker standing in for the OS dialog (open one/many, folder, save with a name; filters by extension)" },
+
   // --- browser — The built-in browser -------------------------------
   "browser.downloadTitle": { area: "browser", what: "BrowserDownloadDialog · Download this file?" },
   "browser.resumeTitle": { area: "browser", what: "BrowserStartPage · This tab was left on a page" },

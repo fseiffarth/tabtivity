@@ -6,10 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && npm run mobile:build",
+    "build": "tsc && vite build && npm run mobile:build && npm run web:bundle",
     "mobile:build": "tsc -p tsconfig.mobile.json && npm run mobile:bundle",
     "mobile:bundle": "vite build --config vite.mobile.config.ts && vite build --config vite.pdf-frame.config.ts",
     "mobile:dev": "vite --config vite.mobile.config.ts",
+    "web:bundle": "vite build --config vite.web.config.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "pretauri:dev": "./scripts/guard-single-instance.sh",
