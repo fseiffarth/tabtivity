@@ -193,17 +193,15 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
     }
     let vault = crate::services::server::vault::vault();
     let had_key = vault.is_some_and(|v| v.key().is_some());
-    let opened = open_store(&mail_dir())?;
-    let rekeying = opened.keys.as_ref().is_some_and(|k| k.rekeying());
-    set_session_keys(opened.keys.clone());
-    rt.store = Some(opened.store.clone());
-    let waiting = waits_for_release(&opened.note, had_key);
-    rt.unlock_note = opened.note;
-    drop(rt);
     // On a server, a rotation (a device revoked) gives the store a fresh
-    // master key: switch to it and re-key in the background. A store whose
-    // key file still lists a previous master (a re-key a restart cut short)
-    // resumes now.
+    // master key: switch to it and re-key in the background. Listening
+    // *before* the open: a rotation that commits while the open reads the
+    // key file (an open can take long — a migration, a vacuum) would
+    // otherwise go unheard, and the store would go on sealing new mail
+    // under the revoked device's master until the next restart. The
+    // listener's refresh waits for this runtime lock, so it reads the key
+    // file after the open. A store whose key file still lists a previous
+    // master (a re-key a restart cut short) resumes below.
     if let Some(vault) = vault {
         let rotated = state.clone();
         vault.on_rotate("mail", move || {
@@ -211,6 +209,13 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
             std::thread::spawn(move || after_rotation(&state));
         });
     }
+    let opened = open_store(&mail_dir())?;
+    let rekeying = opened.keys.as_ref().is_some_and(|k| k.rekeying());
+    set_session_keys(opened.keys.clone());
+    rt.store = Some(opened.store.clone());
+    let waiting = waits_for_release(&opened.note, had_key);
+    rt.unlock_note = opened.note;
+    drop(rt);
     if rekeying {
         start_rekey(state);
     }
@@ -560,7 +565,20 @@ fn open_persistent_store(state: &MailState) -> Option<Arc<MailStore>> {
 /// Whether a re-key is (still) due.
 fn refresh_keys(state: &MailState) -> Result<bool, String> {
     let _serial = REFRESH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(store) = open_persistent_store(state) else { return Ok(false) };
+    let Some(store) = open_persistent_store(state) else {
+        // No store open, but the files beside it may have published keys
+        // (`silent_unlock`): those follow the key file too, or an account or
+        // filter edit would go on sealing under the revoked device's master
+        // until the store opens. The re-key itself starts with the store.
+        if session_keys().is_some() {
+            if let mail_crypt::Unlock::Ready(keys) = mail_crypt::unlock(&mail_dir()) {
+                let mut side = mail_crypt::side_files();
+                *side += 1;
+                set_session_keys(Some(Arc::new(keys)));
+            }
+        }
+        return Ok(false);
+    };
     let keys = match mail_crypt::unlock(store.dir()) {
         mail_crypt::Unlock::Ready(keys) => Arc::new(keys),
         mail_crypt::Unlock::Unavailable(why) => return Err(why),
@@ -1673,6 +1691,12 @@ pub async fn mail_encryption_reset(
         // opened now and re-sealed under the new key below. Without that, the
         // account list was deleted and the keyring left behind unreadable — the
         // user's private keys lost, silently, by a button labelled "start over".
+        //
+        // Under the side-file lock until the new files are written: a server's
+        // re-key re-seals these files under it (`mail_rekey::reseal_side_files`),
+        // and one that read a file before the removal below and wrote it back
+        // after the carried copy would leave it sealed under the destroyed key.
+        let side = mail_crypt::side_files();
         let old_keys = session_keys();
         let carried = match &old_keys {
             Some(old) => Some(CarriedConfig {
@@ -1750,6 +1774,8 @@ pub async fn mail_encryption_reset(
                 mail_pgp::write_keyring_plaintext(&dir, &keys, &plain)?;
             }
         }
+        // `adopt_keys` takes it again to publish the new keys.
+        drop(side);
         adopt_keys(&rt, &dir, Arc::new(keys))?;
         set_encrypt_preference(Some(true));
         encryption_state(&rt)
