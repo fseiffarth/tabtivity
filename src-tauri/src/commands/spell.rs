@@ -33,7 +33,7 @@ pub async fn spell_check(
     language: String,
     doc: String,
 ) -> Result<Vec<GrammarIssue>, String> {
-    tauri::async_runtime::spawn_blocking(move || spell::check(&text, &language, &doc))
+    app_core::rt::spawn_blocking(move || spell::check(&text, &language, &doc))
         .await
         .map_err(|e| format!("spell task failed: {e}"))?
         .map(|issues| {
@@ -57,7 +57,7 @@ pub async fn spell_check(
 /// `dictionaries/` folder), for the settings dropdown.
 #[tauri::command]
 pub async fn spell_languages() -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         spell::available_languages_in(&spell::dict_dirs())
     })
     .await
@@ -68,7 +68,7 @@ pub async fn spell_languages() -> Result<Vec<String>, String> {
 /// `<state_dir>/dictionaries/personal.dic`, folded into every language).
 #[tauri::command]
 pub async fn spell_add_word(word: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || spell::add_personal_word(&word))
+    app_core::rt::spawn_blocking(move || spell::add_personal_word(&word))
         .await
         .map_err(|e| format!("spell task failed: {e}"))?
 }
@@ -84,7 +84,7 @@ pub struct SpellDictionaries {
 
 #[tauri::command]
 pub async fn spell_dictionaries() -> Result<SpellDictionaries, String> {
-    tauri::async_runtime::spawn_blocking(|| SpellDictionaries {
+    app_core::rt::spawn_blocking(|| SpellDictionaries {
         installed: spell::installed_in(&spell::dict_dirs()),
         catalog: spell::catalog(),
     })
@@ -103,7 +103,7 @@ pub async fn spell_install_language(code: String) -> Result<(), String> {
 /// Delete a dictionary pair from the state dir (never a system one).
 #[tauri::command]
 pub async fn spell_remove_language(code: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || spell::remove_language(&code))
+    app_core::rt::spawn_blocking(move || spell::remove_language(&code))
         .await
         .map_err(|e| format!("spell task failed: {e}"))?
 }

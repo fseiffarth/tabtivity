@@ -123,6 +123,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "sheets.rs",
     "skills.rs",
     "slurm.rs",
+    "spell.rs",
     "sqlite.rs",
     "ssh.rs",
     "sync.rs",
