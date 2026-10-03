@@ -1114,12 +1114,14 @@ fn vm_hostname_for(names: &VmNames, project_name: &str) -> String {
 /// The per-project NoCloud `user-data`: the `tabtivity` account with the per-VM
 /// public key, the project dir, and — under `Proxy` egress — the proxy env
 /// pointing at the fixed guest-side `guestfwd` address. Pure.
-pub fn cloud_init_user_data(hostname: &str, pubkey: &str, proxy: bool) -> String {
+/// `proxy` is the VM's egress-proxy token under `Proxy` egress, `None`
+/// otherwise.
+pub fn cloud_init_user_data(hostname: &str, pubkey: &str, proxy: Option<&str>) -> String {
     cloud_init_user_data_for(&VmNames::of(&crate::brand::CURRENT), hostname, pubkey, proxy)
 }
 
 /// [`cloud_init_user_data`] with the names of the VM it is for.
-fn cloud_init_user_data_for(names: &VmNames, hostname: &str, pubkey: &str, proxy: bool) -> String {
+fn cloud_init_user_data_for(names: &VmNames, hostname: &str, pubkey: &str, proxy: Option<&str>) -> String {
     let slug = names.slug.as_str();
     let mut doc = format!(
         r#"#cloud-config
@@ -1138,8 +1140,11 @@ ssh_pwauth: false
         user = names.user,
         pubkey = pubkey.trim(),
     );
-    if proxy {
-        let addr = crate::services::vm_proxy::GUEST_PROXY_ADDR;
+    if let Some(token) = proxy {
+        // `vm_proxy::guest_proxy_url`: the credentials every CONNECT
+        // must carry (`vm_proxy`, TODO #2355).
+        let url = crate::services::vm_proxy::guest_proxy_url(token);
+        let addr = url.trim_start_matches("http://");
         doc.push_str(&format!(
             r#"write_files:
   - path: /etc/profile.d/{slug}-proxy.sh
@@ -1167,8 +1172,9 @@ ssh_pwauth: false
         dir = names.project_dir,
         user = names.user,
     ));
-    if proxy {
-        let addr = crate::services::vm_proxy::GUEST_PROXY_ADDR;
+    if let Some(token) = proxy {
+        let url = crate::services::vm_proxy::guest_proxy_url(token);
+        let addr = url.trim_start_matches("http://");
         doc.push_str(&format!(
             "  - [sh, -c, \"printf 'http_proxy=http://{addr}\\nhttps_proxy=http://{addr}\\nHTTP_PROXY=http://{addr}\\nHTTPS_PROXY=http://{addr}\\nno_proxy=localhost,127.0.0.1,::1\\nNO_PROXY=localhost,127.0.0.1,::1\\n' >> /etc/environment\"]\n",
         ));
@@ -1347,13 +1353,33 @@ fn ensure_overlay(dir: &Path, disk_gb: u32) -> Result<(PathBuf, String), String>
     Ok((disk, base.display().to_string()))
 }
 
+/// The VM's egress-proxy token (`<vm dir>/proxy.token`, `0600`), made once
+/// and then stable: it is baked into the guest's proxy env by cloud-init,
+/// and a changing token would move the seed's instance id at every boot. A
+/// VM made before tokens existed gets one at its next boot; the new user-data
+/// moves its instance id once, so cloud-init re-applies the proxy env.
+fn ensure_proxy_token(dir: &Path) -> Result<String, String> {
+    let path = dir.join("proxy.token");
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let token = text.trim().to_string();
+        if token.len() >= 32 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(token);
+        }
+    }
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    crate::services::mobile_control::store::write_bytes_atomic(&path, token.as_bytes(), 0o600)?;
+    Ok(token)
+}
+
 fn ensure_seed(
     dir: &Path,
     names: &VmNames,
     project_id: &str,
     hostname: &str,
     pubkey: &str,
-    proxy: bool,
+    proxy: Option<&str>,
 ) -> Result<PathBuf, String> {
     let seed_dir = dir.join("seed");
     std::fs::create_dir_all(&seed_dir).map_err(|e| e.to_string())?;
@@ -1458,12 +1484,17 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
 
     // Egress proxy first — the seed bakes whether proxy env exists, and the
     // netdev needs the listener's port.
-    let proxy_port = match spec.egress {
-        VmEgress::Proxy => Some(crate::services::vm_proxy::ensure_proxy(
+    let proxy_token = match spec.egress {
+        VmEgress::Proxy => Some(ensure_proxy_token(&dir)?),
+        _ => None,
+    };
+    let proxy_port = match &proxy_token {
+        Some(token) => Some(crate::services::vm_proxy::ensure_proxy(
             project_id,
             crate::services::vm_proxy::allowlist_for(&spec.allow_hosts, spec.allow_github),
+            token,
         )?),
-        _ => None,
+        None => None,
     };
 
     // The names this VM was created under (see [`VmNames`]): they decide
@@ -1476,7 +1507,7 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
         project_id,
         &hostname,
         &pubkey,
-        matches!(spec.egress, VmEgress::Proxy),
+        proxy_token.as_deref(),
     )?;
 
     let ssh_port = alloc_loopback_port()?;
@@ -2118,7 +2149,7 @@ mod tests {
 
     #[test]
     fn user_data_carries_user_key_and_project_dir() {
-        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", false);
+        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", None);
         assert!(doc.starts_with("#cloud-config\n"));
         assert!(doc.contains(concat!("name: ", crate::app_slug!())));
         assert!(doc.contains("ssh-ed25519 AAAA test"));
@@ -2129,8 +2160,9 @@ mod tests {
 
     #[test]
     fn user_data_proxy_mode_sets_the_guest_proxy_env() {
-        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", true);
-        assert!(doc.contains("export https_proxy=http://10.0.2.100:3128")); // privacy-check: ok — QEMU slirp, not a real host
+        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", Some("0123456789abcdef0123456789abcdef"));
+        assert!(doc.contains("export https_proxy=http://vm:0123456789abcdef0123456789abcdef@10.0.2.100:3128")); // privacy-check: ok — QEMU slirp, not a real host
+        assert!(doc.contains("Acquire::https::Proxy \"http://vm:0123456789abcdef0123456789abcdef@"));
         assert!(doc.contains(concat!("/etc/apt/apt.conf.d/95", crate::app_slug!(), "-proxy")));
         assert!(doc.contains("/etc/environment"));
     }
@@ -2159,7 +2191,7 @@ mod tests {
         let key = "ssh-ed25519 AAAA test";
         // What the older build wrote at every boot of this VM.
         let old_names = VmNames::of(&LEGACY);
-        for proxy in [false, true] {
+        for proxy in [None, Some("0123456789abcdef0123456789abcdef")] {
             let was_data = cloud_init_user_data_for(&old_names, "vm-proj", key, proxy);
             let was_id = seed_instance_id_for(&old_names, "project-1234", &was_data);
 
@@ -2167,7 +2199,7 @@ mod tests {
             let names = VmNames::of_existing(&renamed, Some(LEGACY.name(crate::brand::Name::VM_USER).as_str()));
             assert_eq!(names, old_names);
             let data = cloud_init_user_data_for(&names, "vm-proj", key, proxy);
-            assert_eq!(data, was_data, "user-data moved (proxy: {proxy})");
+            assert_eq!(data, was_data, "user-data moved (proxy: {proxy:?})");
             assert_eq!(seed_instance_id_for(&names, "project-1234", &data), was_id);
             assert_eq!(vm_hostname_for(&names, "---"), vm_hostname_for(&old_names, "---"));
 
@@ -2187,8 +2219,8 @@ mod tests {
         assert_eq!(production.user, VM_USER);
         assert_eq!(production.project_dir, VM_PROJECT_DIR);
         assert_eq!(
-            cloud_init_user_data_for(&production, "vm-proj", key, true),
-            cloud_init_user_data("vm-proj", key, true)
+            cloud_init_user_data_for(&production, "vm-proj", key, Some("0123456789abcdef0123456789abcdef")),
+            cloud_init_user_data("vm-proj", key, Some("0123456789abcdef0123456789abcdef"))
         );
     }
 

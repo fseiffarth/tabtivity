@@ -13,6 +13,13 @@
 //! endpoints* — e.g. inside a model prompt. Proxy narrows the channel; it
 //! cannot close it while a cloud agent runs.
 //!
+//! **A token, not just loopback** (hosted plan §4.4, TODO #2355): the
+//! listener is on `127.0.0.1`, which every local account can reach — on a
+//! server, every user. Each proxy has a per-VM token
+//! ([`guest_proxy_url`] bakes it into the guest's proxy env as
+//! `vm:<token>@…`), and a CONNECT without `Proxy-Authorization: Basic`
+//! of exactly those credentials is refused `407` and logged.
+//!
 //! Threads, not tokio: VM egress is a handful of long-lived agent-API
 //! connections, not a fan-out workload, and a thread per tunnel keeps the
 //! module free of any runtime handle (bootable from `spawn_blocking`).
@@ -34,6 +41,39 @@ use serde::Serialize;
 // QEMU slirp's synthetic guest subnet: identical on every machine, reachable
 // only from inside the emulator, and names no real host.
 pub const GUEST_PROXY_ADDR: &str = "10.0.2.100:3128"; // privacy-check: ok — QEMU slirp, not a real host
+
+/// The user name of the proxy credentials (the token is the secret).
+pub const PROXY_USER: &str = "vm";
+
+/// The guest's proxy URL: the fixed guest address with the VM's credentials.
+pub fn guest_proxy_url(token: &str) -> String {
+    format!("http://{PROXY_USER}:{token}@{GUEST_PROXY_ADDR}")
+}
+
+/// `Basic base64(vm:<token>)`, the `Proxy-Authorization` value a guest sends.
+pub fn basic_credentials(token: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let raw = format!("{PROXY_USER}:{token}");
+    let bytes = raw.as_bytes();
+    let mut out = String::from("Basic ");
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Equal, in time independent of where they differ.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
 
 /// The built-in allowlist: the cloud agents' own API/auth endpoints. Exact
 /// hostnames, or `.suffix` entries matching any subdomain. Deliberately does
@@ -95,6 +135,8 @@ struct ProxyShared {
     blocked_total: AtomicU64,
     started: Instant,
     stop: AtomicBool,
+    /// The `Proxy-Authorization` value every CONNECT must carry.
+    credentials: Mutex<String>,
 }
 
 struct ProxyHandle {
@@ -166,11 +208,15 @@ pub fn parse_connect_line(line: &str) -> Option<(String, u16)> {
 /// Start (or reuse) the egress proxy for a project, with the given standing
 /// allowlist. Returns the localhost port the `guestfwd` should target.
 /// Idempotent: a live proxy just has its allowlist replaced.
-pub fn ensure_proxy(project_id: &str, allow: Vec<String>) -> Result<u16, String> {
+pub fn ensure_proxy(project_id: &str, allow: Vec<String>, token: &str) -> Result<u16, String> {
+    if token.len() < 16 || !token.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err("VM egress proxy: the token must be at least 16 letters or digits".into());
+    }
     let mut map = proxies().lock().unwrap();
     if let Some(handle) = map.get(project_id) {
         if !handle.shared.stop.load(Ordering::SeqCst) {
             *handle.shared.allow.lock().unwrap() = allow;
+            *handle.shared.credentials.lock().unwrap() = basic_credentials(token);
             return Ok(handle.port);
         }
         map.remove(project_id);
@@ -189,6 +235,7 @@ pub fn ensure_proxy(project_id: &str, allow: Vec<String>) -> Result<u16, String>
         blocked_total: AtomicU64::new(0),
         started: Instant::now(),
         stop: AtomicBool::new(false),
+        credentials: Mutex::new(basic_credentials(token)),
     });
 
     let accept_shared = Arc::clone(&shared);
@@ -362,6 +409,23 @@ fn handle_conn(mut stream: TcpStream, shared: Arc<ProxyShared>) {
         return;
     };
 
+    // The VM's own credentials, or nothing: the listener is on loopback,
+    // which every local account (every user of a server) can reach.
+    let expected = shared.credentials.lock().unwrap().clone();
+    let authorized = head
+        .split(|&b| b == b'\n')
+        .skip(1)
+        .filter_map(|l| std::str::from_utf8(l).ok())
+        .filter_map(|l| l.split_once(':'))
+        .any(|(name, value)| name.trim().eq_ignore_ascii_case("proxy-authorization") && same(value.trim().as_bytes(), expected.as_bytes()));
+    if !authorized {
+        record_blocked(&shared, format!("{host}:{port} (no VM credentials)"));
+        let _ = stream.write_all(
+            format!("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"{SLUG}-vm\"\r\nProxy-Agent: {SLUG}-vm\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+        );
+        return;
+    }
+
     // Every built-in and user-configured endpoint is a TLS service. Restricting
     // the tunnel to HTTPS prevents an allowlisted hostname from becoming an SSH
     // or arbitrary-service escape hatch (for example `allowed-host:22`).
@@ -508,6 +572,43 @@ mod tests {
 
     // ── end-to-end over a real socket ──────────────────────────────────────
 
+    const TOKEN: &str = "testtoken0123456789abcdef";
+
+    /// A CONNECT with the VM's credentials, as the guest sends it.
+    fn connect(target: &str) -> String {
+        format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Authorization: {}\r\n\r\n", basic_credentials(TOKEN))
+    }
+
+    #[test]
+    fn credentials_encode_like_a_client_sends_them() {
+        // curl -x http://vm:abc@… sends `Basic dm06YWJj`.
+        assert_eq!(basic_credentials("abc"), "Basic dm06YWJj");
+        assert_eq!(basic_credentials("abcd"), "Basic dm06YWJjZA==");
+        assert_eq!(guest_proxy_url("abc"), format!("http://vm:abc@{GUEST_PROXY_ADDR}"));
+        assert!(ensure_proxy("test-proxy-weak", Vec::new(), "short").is_err());
+    }
+
+    /// TODO #2355: another local account (another user of a server) reaching
+    /// the loopback port gets nothing without the VM's credentials.
+    #[test]
+    fn a_connect_without_the_vms_credentials_is_refused_and_reported() {
+        let port = ensure_proxy("test-proxy-auth", allow(&["allowed.example"]), TOKEN).unwrap();
+        for request in [
+            "CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example\r\n\r\n".to_string(),
+            format!("CONNECT allowed.example:443 HTTP/1.1\r\nProxy-Authorization: {}\r\n\r\n", basic_credentials("someoneelsestoken0000")),
+        ] {
+            let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            conn.write_all(request.as_bytes()).unwrap();
+            let mut response = String::new();
+            conn.read_to_string(&mut response).unwrap();
+            assert_eq!(status(&response), Some(407));
+        }
+        let report = blocked_report("test-proxy-auth");
+        assert_eq!(report.total, 2);
+        assert_eq!(report.recent[0].target, "allowed.example:443 (no VM credentials)");
+        stop_proxy("test-proxy-auth");
+    }
+
     /// The status code of a proxy reply. Compared as a number, so a failing
     /// assert never echoes raw socket bytes into the test log.
     fn status(response: &str) -> Option<u16> {
@@ -516,9 +617,9 @@ mod tests {
 
     #[test]
     fn denies_disallowed_connect_and_reports_it() {
-        let port = ensure_proxy("test-proxy-deny", allow(&["allowed.example"])).unwrap();
+        let port = ensure_proxy("test-proxy-deny", allow(&["allowed.example"]), TOKEN).unwrap();
         let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        conn.write_all(b"CONNECT evil.example:443 HTTP/1.1\r\nHost: evil.example\r\n\r\n")
+        conn.write_all(connect("evil.example:443").as_bytes())
             .unwrap();
         let mut response = String::new();
         conn.read_to_string(&mut response).unwrap();
@@ -531,13 +632,13 @@ mod tests {
 
     #[test]
     fn temporary_allow_admits_then_can_expire() {
-        let port = ensure_proxy("test-proxy-temp", Vec::new()).unwrap();
+        let port = ensure_proxy("test-proxy-temp", Vec::new(), TOKEN).unwrap();
         allow_temporarily("test-proxy-temp", "clone.example", Duration::from_secs(60));
         // The tunnel target doesn't resolve, so an admitted CONNECT answers 502
         // (dial failed) rather than 403 (denied) — which is the distinction
         // under test.
         let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        conn.write_all(b"CONNECT clone.example:443 HTTP/1.1\r\n\r\n")
+        conn.write_all(connect("clone.example:443").as_bytes())
             .unwrap();
         let mut response = String::new();
         conn.read_to_string(&mut response).unwrap();
@@ -548,9 +649,9 @@ mod tests {
 
     #[test]
     fn allowed_host_on_non_https_port_is_denied_and_reported() {
-        let port = ensure_proxy("test-proxy-port", allow(&["allowed.example"])).unwrap();
+        let port = ensure_proxy("test-proxy-port", allow(&["allowed.example"]), TOKEN).unwrap();
         let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        conn.write_all(b"CONNECT allowed.example:22 HTTP/1.1\r\n\r\n")
+        conn.write_all(connect("allowed.example:22").as_bytes())
             .unwrap();
         let mut response = String::new();
         conn.read_to_string(&mut response).unwrap();
@@ -564,7 +665,7 @@ mod tests {
 
     #[test]
     fn plain_http_forwarding_is_refused() {
-        let port = ensure_proxy("test-proxy-http", allow(&["allowed.example"])).unwrap();
+        let port = ensure_proxy("test-proxy-http", allow(&["allowed.example"]), TOKEN).unwrap();
         let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
         conn.write_all(b"GET http://allowed.example/ HTTP/1.1\r\nHost: allowed.example\r\n\r\n")
             .unwrap();
