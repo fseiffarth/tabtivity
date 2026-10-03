@@ -13,6 +13,8 @@ use crate::storage;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
 
 fn settings_path() -> PathBuf {
     storage::state_dir().join("settings.json")
@@ -62,11 +64,13 @@ async fn session(project_id: &str) -> Result<(Arc<Session>, PathBuf), String> {
 
 /// Editors are per window: one window can never cancel, close or report
 /// feedback for another's documents.
-fn editor_key(window: &tauri::Window, editor: &str) -> Result<String, String> {
+fn editor_key(ctx: &CoreCtx, editor: &str) -> Result<String, String> {
     if editor.is_empty() || editor.len() > 64 {
         return Err("copilot_document_limit".into());
     }
-    Ok(format!("{}:{editor}", window.label()))
+    // The calling client (on the desktop: the window's label), never payload.
+    let client = ctx.caller.client().ok_or("copilot_no_client")?;
+    Ok(format!("{client}:{editor}"))
 }
 
 fn request_owner(project_id: &str, editor: &str) -> String {
@@ -74,9 +78,9 @@ fn request_owner(project_id: &str, editor: &str) -> String {
 }
 
 #[tauri::command]
-pub fn copilot_prepare(window: tauri::Window, project_id: String, editor: String) -> Result<String, String> {
+pub fn copilot_prepare(ctx: Ctx, project_id: String, editor: String) -> Result<String, String> {
     authorize(&project_id)?;
-    requests::reserve(request_owner(&project_id, &editor_key(&window, &editor)?))
+    requests::reserve(request_owner(&project_id, &editor_key(&ctx, &editor)?))
 }
 
 #[tauri::command]
@@ -128,7 +132,7 @@ pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn copilot_complete(
-    window: tauri::Window,
+    ctx: Ctx,
     project_id: String,
     path: String,
     editor: String,
@@ -141,7 +145,7 @@ pub async fn copilot_complete(
     tab_size: u32,
     insert_spaces: bool,
 ) -> Result<Vec<Value>, String> {
-    let editor = editor_key(&window, &editor)?;
+    let editor = editor_key(&ctx, &editor)?;
     let mut lease = requests::start(&request_owner(&project_id, &editor), &request_id)?;
     // Detached: a keystroke cancels this request, never the server launch
     // behind it. Dropping the launch would kill the starting server, and three
@@ -169,15 +173,15 @@ pub async fn copilot_complete(
 }
 
 #[tauri::command]
-pub async fn copilot_cancel(window: tauri::Window, project_id: String, editor: String, request_id: String) -> Result<(), String> {
-    let editor = editor_key(&window, &editor)?;
+pub async fn copilot_cancel(ctx: Ctx, project_id: String, editor: String, request_id: String) -> Result<(), String> {
+    let editor = editor_key(&ctx, &editor)?;
     requests::cancel(&request_owner(&project_id, &editor), &request_id);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn copilot_close_editor(window: tauri::Window, project_id: String, editor: String) -> Result<(), String> {
-    let editor = editor_key(&window, &editor)?;
+pub async fn copilot_close_editor(ctx: Ctx, project_id: String, editor: String) -> Result<(), String> {
+    let editor = editor_key(&ctx, &editor)?;
     requests::cancel_owner(&request_owner(&project_id, &editor));
     if let Some(session) = sessions().existing(&project_id).await {
         session.close_editor(&editor).await;
@@ -186,8 +190,8 @@ pub async fn copilot_close_editor(window: tauri::Window, project_id: String, edi
 }
 
 #[tauri::command]
-pub async fn copilot_shown(window: tauri::Window, project_id: String, editor: String, candidate: String) -> Result<(), String> {
-    let editor = editor_key(&window, &editor)?;
+pub async fn copilot_shown(ctx: Ctx, project_id: String, editor: String, candidate: String) -> Result<(), String> {
+    let editor = editor_key(&ctx, &editor)?;
     match sessions().existing(&project_id).await {
         Some(session) => session.shown(&editor, &candidate).await,
         None => Ok(()),
@@ -197,13 +201,13 @@ pub async fn copilot_shown(window: tauri::Window, project_id: String, editor: St
 /// `accepted_length` omitted is the full acceptance.
 #[tauri::command]
 pub async fn copilot_accepted(
-    window: tauri::Window,
+    ctx: Ctx,
     project_id: String,
     editor: String,
     candidate: String,
     accepted_length: Option<u32>,
 ) -> Result<(), String> {
-    let editor = editor_key(&window, &editor)?;
+    let editor = editor_key(&ctx, &editor)?;
     match sessions().existing(&project_id).await {
         Some(session) => session.accepted(&editor, &candidate, accepted_length).await,
         None => Ok(()),

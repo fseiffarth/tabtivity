@@ -90,6 +90,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "brand_migration.rs",
     "caldav.rs",
     "calendar.rs",
+    "copilot.rs",
     "crash.rs",
     "credentials.rs",
     "default_apps.rs",
