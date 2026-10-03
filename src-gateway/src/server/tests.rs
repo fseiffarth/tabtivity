@@ -100,6 +100,7 @@ async fn fixture() -> Fixture {
         state_dir: state,
         socket_dir: sockets,
         pwa_dir: pwa,
+        keeper_socket: dir.path().join("auth.sock"),
     };
     let gw = Gateway::open(config).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -345,6 +346,59 @@ async fn only_an_admin_writes_the_policy() {
     assert_eq!((alice["socket"].as_str(), alice["devices"].as_u64()), (Some("present"), Some(1)));
     let zed = v["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "root_admin").unwrap();
     assert_eq!(zed["socket"], "missing", "looked at, not connected to");
+}
+
+/// The admin's agent API keys (plan §5.4): only an admin offers or
+/// withdraws, from the app's own origin; the key reaches the keeper and is
+/// never answered back, logged or audited.
+#[tokio::test]
+async fn only_an_admin_offers_an_agent_key_and_it_never_comes_back() {
+    struct GatewayPeer;
+    impl crate::keeper::Peers for GatewayPeer {
+        fn classify(&self, _: u32) -> crate::keeper::Peer {
+            crate::keeper::Peer::Gateway
+        }
+    }
+    let f = fixture().await;
+    let keys = f._dir.path().join("keys");
+    std::fs::create_dir(&keys).unwrap();
+    let listener = UnixListener::bind(&f.gw.config.keeper_socket).unwrap();
+    tokio::spawn(crate::keeper::serve(Arc::new(crate::keeper::Keeper::new(keys.clone(), Box::new(GatewayPeer))), listener));
+    let cookie = sign_in_alice(&f).await;
+    const KEY: &str = "fake-key-GATEWAYTEST0123456789";
+    let body = json!({ "key": KEY }).to_string();
+    let (status, _, _) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&body)).await;
+    assert_eq!(status, 403, "a user offers no key");
+    let (status, _, _) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
+    assert_eq!(status, 403, "nor sees who uses one");
+    assert!(!keys.join("claude").exists());
+    db::update(&f.gw.config.state_dir, |db| db.set_role("alice", Role::Admin)).unwrap();
+    *f.gw.db_stamp.lock().unwrap() = None;
+    f.gw.reload();
+    let (status, _, _) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", "https://evil.example")], Some(&body)).await;
+    assert_eq!(status, 403);
+    for (path, bad) in [("/gateway/v1/agent-keys/Claude", body.as_str()), ("/gateway/v1/agent-keys/claude", r#"{"key":"short"}"#), ("/gateway/v1/agent-keys/claude", r#"{"key":"sk-0123456789abcdef","x":1}"#)] {
+        let (status, _, answer) = raw(f.addr, "PUT", path, &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(bad)).await;
+        assert_eq!(status, 400, "{path} {bad}: {answer}");
+    }
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&body)).await;
+    assert_eq!(status, 200, "{answer}");
+    assert!(!answer.contains(KEY));
+    assert_eq!(std::fs::read_to_string(keys.join("claude").join(crate::keeper::KEY_FILE)).unwrap(), KEY);
+    let (status, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
+    assert_eq!(status, 200, "{answer}");
+    assert!(!answer.contains(KEY), "{answer}");
+    let v: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!((v["keys"][0]["cli"].as_str(), v["keys"][0]["by"].as_str()), (Some("claude"), Some("alice")));
+    let (status, _, _) = raw(f.addr, "DELETE", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", ORIGIN)], None).await;
+    assert_eq!(status, 200);
+    assert!(!keys.join("claude").join(crate::keeper::KEY_FILE).exists());
+    let audit = std::fs::read_to_string(f.gw.config.state_dir.join(crate::audit::AUDIT_FILE)).unwrap();
+    assert!(audit.contains("agent-key-set") && audit.contains("agent-key-remove") && !audit.contains(KEY), "{audit}");
+    // The keeper gone: a clear refusal, not a hang.
+    std::fs::remove_file(&f.gw.config.keeper_socket).unwrap();
+    let (status, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
+    assert_eq!(status, 502, "{answer}");
 }
 
 #[tokio::test]

@@ -12,6 +12,7 @@ pub const CONTENT_LISTEN_ENV: &str = "GATEWAY_CONTENT_LISTEN";
 pub const STATE_DIR_ENV: &str = "GATEWAY_STATE_DIR";
 pub const SOCKET_DIR_ENV: &str = "GATEWAY_SOCKET_DIR";
 pub const PWA_DIR_ENV: &str = "GATEWAY_PWA_DIR";
+pub const KEEPER_SOCKET_ENV: &str = "GATEWAY_KEEPER_SOCKET";
 
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8740";
 pub const DEFAULT_CONTENT_LISTEN: &str = "127.0.0.1:8741";
@@ -29,6 +30,9 @@ pub struct GatewayConfig {
     pub socket_dir: PathBuf,
     /// The phone PWA's built files (`mobile-dist`), served before sign-in.
     pub pwa_dir: PathBuf,
+    /// The key keeper's socket (`/run/<slug>/auth.sock`): the admin's agent
+    /// API keys are offered and withdrawn through it (plan §5.4).
+    pub keeper_socket: PathBuf,
 }
 
 /// `https://host[:port]` with no path; anything else is refused.
@@ -86,6 +90,7 @@ impl GatewayConfig {
             state_dir: get(STATE_DIR_ENV).map(PathBuf::from).unwrap_or_else(crate::names::gateway_state_dir),
             socket_dir: get(SOCKET_DIR_ENV).map(PathBuf::from).unwrap_or_else(crate::names::socket_dir),
             pwa_dir: get(PWA_DIR_ENV).map(PathBuf::from).unwrap_or_else(|| crate::names::share_dir().join("mobile-dist")),
+            keeper_socket: get(KEEPER_SOCKET_ENV).map(PathBuf::from).unwrap_or_else(crate::names::keeper_socket),
         })
     }
 

@@ -203,6 +203,74 @@ PrivateTmp=yes\n\
     )
 }
 
+/// The key keeper's socket (plan §5.4, P3b): systemd makes it in the
+/// root-owned `/run/<slug>`, so nobody can squat the path; `0666` because the
+/// keeper decides by each caller's uid (`keeper::Peers`), and the gateway's
+/// account and every server user must reach it. Fenced agents never do: the
+/// fence mounts a fresh tmpfs over `/run`.
+pub fn keeper_socket() -> String {
+    format!(
+        "[Unit]\n\
+Description={DISPLAY} key keeper socket\n\
+\n\
+[Socket]\n\
+ListenStream={path}\n\
+SocketUser=root\n\
+SocketGroup=root\n\
+SocketMode=0666\n\
+DirectoryMode=0755\n\
+Accept=no\n\
+\n\
+[Install]\n\
+WantedBy=sockets.target\n",
+        path = names::keeper_socket().display(),
+    )
+}
+
+/// The key keeper: the administrator's agent API keys, `0600` in its own
+/// `0700` state directory, as `<slug>-auth`. It runs no fence and needs no
+/// network, so it is hardened like the gateway and more (`PrivateNetwork=`,
+/// unix sockets only).
+pub fn keeper_service() -> String {
+    format!(
+        "[Unit]\n\
+Description={DISPLAY} key keeper (the administrator's agent API keys)\n\
+Requires={socket}\n\
+After={socket}\n\
+\n\
+[Service]\n\
+Type=simple\n\
+User={auth}\n\
+Group={auth}\n\
+ExecStart={bin} keeper\n\
+StateDirectory={state}\n\
+StateDirectoryMode=0700\n\
+UMask=0077\n\
+Restart=on-failure\n\
+RestartSec=2\n\
+NoNewPrivileges=yes\n\
+ProtectSystem=strict\n\
+ProtectHome=yes\n\
+PrivateTmp=yes\n\
+PrivateDevices=yes\n\
+PrivateNetwork=yes\n\
+ProtectProc=invisible\n\
+ProtectKernelTunables=yes\n\
+ProtectKernelModules=yes\n\
+ProtectControlGroups=yes\n\
+RestrictAddressFamilies=AF_UNIX\n\
+RestrictNamespaces=yes\n\
+LockPersonality=yes\n\
+MemoryDenyWriteExecute=yes\n\
+SystemCallArchitectures=native\n\
+CapabilityBoundingSet=\n",
+        socket = names::keeper_unit("socket"),
+        auth = names::auth_account(),
+        bin = names::gateway_binary().display(),
+        state = names::keeper_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+    )
+}
+
 /// The drop-in giving a system unit the `/proc` exception group.
 pub fn proc_dropin() -> String {
     format!("# {DISPLAY}: /proc is hidepid=invisible; this service must see every process.\n[Service]\nSupplementaryGroups={}\n", names::proc_group())
@@ -258,6 +326,8 @@ pub fn render_all(d: &Deployment) -> Rendered {
         (unit(format!("{prefix}serverd@.service")), serverd_service(), 0o644),
         (unit(format!("{prefix}tmux@.service")), tmux_service(), 0o644),
         (PathBuf::from("/etc/tmpfiles.d").join(format!("{SLUG}.conf")), tmpfiles(), 0o644),
+        (unit(names::keeper_unit("socket")), keeper_socket(), 0o644),
+        (unit(names::keeper_unit("service")), keeper_service(), 0o644),
     ]
 }
 
@@ -292,13 +362,23 @@ mod tests {
     #[test]
     fn the_install_set_is_complete_and_the_env_file_names_the_deployment() {
         let all = render_all(&deployment());
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 9);
         let env_file = &all[0].1;
         assert!(env_file.contains("SERVER_ORIGIN=https://desk.example.ts.net\n"), "{env_file}");
         assert!(env_file.contains("SERVER_GATEWAY_UID=990\n"));
         assert!(env_file.contains(&format!("SERVER_CLI_ROOT=/opt/{SLUG}/agents")));
         assert!(tmpfiles().contains(&format!("d /run/{SLUG}/users 0750 root {SLUG}-gw")));
         assert!(all.iter().all(|(p, _, mode)| p.is_absolute() && *mode == 0o644));
+    }
+
+    #[test]
+    fn the_key_keeper_is_its_own_hardened_account_on_a_root_made_socket() {
+        let socket = keeper_socket();
+        assert!(socket.contains(&format!("ListenStream=/run/{SLUG}/auth.sock\n")) && socket.contains("SocketUser=root\n") && socket.contains("SocketMode=0666\n"), "{socket}");
+        let service = keeper_service();
+        for needed in ["StateDirectoryMode=0700\n", &format!("User={SLUG}-auth\n"), &format!("StateDirectory={SLUG}-auth\n"), "UMask=0077\n", "PrivateNetwork=yes\n", "RestrictAddressFamilies=AF_UNIX\n", "ProtectSystem=strict\n", "-gateway keeper\n"] {
+            assert!(service.contains(needed), "{needed} missing:\n{service}");
+        }
     }
 
     #[test]

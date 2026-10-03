@@ -11,6 +11,9 @@
 //! * **Admin helper** ([`helper`]): the only root code — accounts, units,
 //!   invites, the CLI install root — as a fixed verb set with hard rules,
 //!   every verb a [`helper::Plan`] that `--dry-run` prints.
+//! * **Key keeper** ([`keeper`]): the administrator's agent API keys
+//!   (plan §5.4, P3b), held by `<slug>-auth`, handed to a server user's own
+//!   daemon by uid; the gateway offers and withdraws, never reads one back.
 //! * [`units`] renders the systemd units and slices; [`prereq`] checks the
 //!   deployment prerequisites of §8.
 //!
@@ -20,6 +23,8 @@
 pub mod brand;
 
 pub mod wire;
+/// The key keeper's protocol, shared with the daemon by `#[path]`.
+pub mod keys_wire;
 
 pub mod audit;
 pub mod config;
@@ -42,6 +47,8 @@ pub mod limits;
 
 #[cfg(unix)]
 pub mod helper;
+#[cfg(unix)]
+pub mod keeper;
 pub mod sudoers;
 #[cfg(unix)]
 pub mod proxy;

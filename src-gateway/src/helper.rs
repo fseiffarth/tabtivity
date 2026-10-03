@@ -203,6 +203,12 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
         steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", &cli_root.to_string_lossy(), "--shell", nologin, &cli]));
     }
     steps.push(Step::OwnedDir { path: cli_root, mode: 0o755, owner: cli });
+    // The key keeper's account (plan §5.4): holds the administrator's agent
+    // API keys; its state directory is systemd's (`StateDirectory=`, 0700).
+    let auth = names::auth_account();
+    if accounts.lookup(&auth).is_none() {
+        steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", nologin, &auth]));
+    }
     // `/proc` hidepid=invisible with an exception group for the system
     // services that must see every process (polkit, on a desktop machine).
     if !accounts.group_exists(&names::proc_group()) {
@@ -219,6 +225,7 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     steps.push(run(&["systemd-tmpfiles", "--create"]));
     steps.push(run(&["systemctl", "daemon-reload"]));
     steps.push(run(&["systemctl", "enable", "--now", &names::gateway_unit()]));
+    steps.push(run(&["systemctl", "enable", "--now", &names::keeper_unit("socket")]));
     for unit in names::PROC_EXCEPTION_UNITS {
         steps.push(run(&["systemctl", "try-restart", unit]));
     }

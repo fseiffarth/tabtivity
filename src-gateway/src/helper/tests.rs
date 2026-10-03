@@ -260,6 +260,13 @@ fn install_creates_only_what_is_missing_and_never_runs_installers_as_root() {
     assert!(!text.contains(&format!("--shell /usr/sbin/nologin {}\n", names::gateway_account())), "the gateway account exists");
     assert!(text.contains(&names::cli_account()));
     assert!(text.contains("systemd-tmpfiles --create") && text.contains(&format!("enable --now {SLUG}-gateway.service")));
+    // The key keeper (plan §5.4): its own system account, its socket unit
+    // enabled, its key directory left to systemd (`StateDirectory=`, 0700).
+    assert!(text.contains(&format!("--shell /usr/sbin/nologin {}\n", names::auth_account())), "{text}");
+    assert!(text.contains(&format!("enable --now {SLUG}-auth-keeper.socket")));
+    assert!(!text.contains(&names::keeper_state_dir().display().to_string()), "the helper never makes or chowns the key directory");
+    let with_auth = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }.with(&names::auth_account(), 992, &[]);
+    assert!(!plan_install(&with_auth, "https://desk.example.ts.net", None).unwrap().to_string().contains(&format!("nologin {}\n", names::auth_account())));
     assert!(plan_install(&accounts, "http://plain.example", None).is_err());
     let cli = plan_cli_install("codex").unwrap();
     let accounts = accounts.with(&names::cli_account(), 991, &[]);

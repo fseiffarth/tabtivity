@@ -21,6 +21,12 @@ pub fn cli_account() -> String {
     format!("{SERVER_ACCOUNT_PREFIX}cli")
 }
 
+/// The account that holds the administrator's agent API keys
+/// (`<slug>-auth`, the key keeper's; plan §5.4).
+pub fn auth_account() -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}auth")
+}
+
 /// The `/proc` exception group (`<slug>-proc`): `/proc` is mounted
 /// `hidepid=invisible,gid=<this group>`, and only the system services that
 /// must see every process are in it — never a server user. On a machine with
@@ -61,6 +67,11 @@ pub fn gateway_unit() -> String {
 /// `<slug>-serverd@<user>.socket` (or `.service` with `kind = "service"`).
 pub fn serverd_unit(user: &str, kind: &str) -> String {
     format!("{SERVER_ACCOUNT_PREFIX}serverd@{user}.{kind}")
+}
+
+/// `<slug>-auth-keeper.socket` / `.service`: the key keeper.
+pub fn keeper_unit(kind: &str) -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}auth-keeper.{kind}")
 }
 
 pub fn tmux_unit(user: &str) -> String {
@@ -110,6 +121,18 @@ pub fn gateway_state_dir() -> PathBuf {
     PathBuf::from("/var/lib").join(format!("{SERVER_ACCOUNT_PREFIX}gateway"))
 }
 
+/// `/var/lib/<slug>-auth`: the key keeper's state (the administrator's API
+/// keys, `0700`, and its audit log).
+pub fn keeper_state_dir() -> PathBuf {
+    PathBuf::from("/var/lib").join(format!("{SERVER_ACCOUNT_PREFIX}auth"))
+}
+
+/// `/run/<slug>/auth.sock`: the key keeper's socket (systemd's, `0666`;
+/// the keeper decides by the caller's uid).
+pub fn keeper_socket() -> PathBuf {
+    PathBuf::from("/run").join(SLUG).join(crate::keys_wire::SOCKET_NAME)
+}
+
 /// `/opt/<slug>/agents`: the server-wide CLI install root (§5.1).
 pub fn cli_root() -> PathBuf {
     PathBuf::from("/opt").join(SLUG).join("agents")
@@ -134,5 +157,7 @@ mod tests {
         assert_eq!(parent, population_slice());
         assert_eq!(serverd_unit("bob", "socket"), [&format!("{SLUG}-serverd"), "bob.socket"].join("@"));
         assert_eq!(crate::wire::socket_path(&socket_dir(), "bob"), PathBuf::from(format!("/run/{SLUG}/users/bob.sock")));
+        assert_eq!(keeper_socket(), PathBuf::from(format!("/run/{SLUG}/auth.sock")));
+        assert_eq!((auth_account(), keeper_unit("socket")), (format!("{SLUG}-auth"), format!("{SLUG}-auth-keeper.socket")));
     }
 }

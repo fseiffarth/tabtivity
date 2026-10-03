@@ -15,6 +15,9 @@
 //! * Without one: `/api/*` is `401`, `/desktop*` a sign-in page, other `GET`s
 //!   the PWA's files from disk.
 //! * `/gateway/v1/{audit,policy,status}` — the gateway's own small API.
+//! * `/gateway/v1/agent-keys[/<cli>]` — the administrator's agent API keys
+//!   (plan §5.4): listed, offered and withdrawn through the key keeper
+//!   ([`crate::keeper`]); a key goes in, never comes back out.
 //! * The user-content listener: `/content/<user>/<ticket>` → that user's
 //!   daemon's `/content/<ticket>`, cookies stripped.
 //!
@@ -32,7 +35,7 @@ use axum::extract::{DefaultBodyLimit, Extension, Path as RoutePath, Request, Sta
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -44,7 +47,7 @@ use crate::cookie::{self, RoutingKey};
 use crate::db::{self, Account, Db, DbError, Role};
 use crate::policy::Policy;
 use crate::rate::Limits;
-use crate::{proxy, statics, wire};
+use crate::{keys_wire, proxy, statics, wire};
 
 /// Largest body the gateway itself reads (pair, challenge, session, policy).
 const MAX_OWN_BODY: usize = 64 * 1024;
@@ -485,6 +488,87 @@ async fn policy_put(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -
     }
 }
 
+/// The administrator's agent API keys as the key keeper holds them: per
+/// offered CLI, when, by whom, and who fetched it lately. Never a key.
+async fn agent_keys_get(State(gw): State<Shared>, headers: HeaderMap) -> Response {
+    let Some((account, _)) = gw.routed(&headers) else {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthenticated");
+    };
+    if account.role != Role::Admin {
+        return api_error(StatusCode::FORBIDDEN, "admin");
+    }
+    match crate::keeper::ask(&gw.config.keeper_socket, &keys_wire::Request::Status).await {
+        Ok(reply) if reply.ok => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({ "keys": reply.status }))).into_response(),
+        Ok(reply) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": "keeper", "detail": reply.error }))).into_response(),
+        Err(error) => {
+            eprintln!("gateway: key keeper: {error}");
+            api_error(StatusCode::BAD_GATEWAY, "keeper_unreachable")
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyBody {
+    key: String,
+}
+
+/// Offer (`PUT`, body `{"key": …}`) or withdraw (`DELETE`) the key of one
+/// CLI. Admin only, exact origin; audited here (who, which CLI) and by the
+/// keeper. The body is never logged.
+async fn agent_key_change(gw: &Gateway, cli: &str, headers: &HeaderMap, key: Option<Bytes>) -> Response {
+    if !exact_origin(gw, headers) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some((account, device)) = gw.routed(headers) else {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthenticated");
+    };
+    if account.role != Role::Admin {
+        gw.audit.record(Row::new(&account.name, Some(&device), "agent-key", "refused"));
+        return api_error(StatusCode::FORBIDDEN, "admin");
+    }
+    if !keys_wire::valid_cli_id(cli) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_cli");
+    }
+    let request = match key {
+        Some(body) => {
+            let Ok(KeyBody { key }) = serde_json::from_slice::<KeyBody>(&body) else {
+                return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+            };
+            let key = key.trim().to_string();
+            if !keys_wire::valid_key(&key) {
+                return api_error(StatusCode::BAD_REQUEST, "invalid_key");
+            }
+            keys_wire::Request::Set { cli: cli.to_string(), key, by: account.name.clone() }
+        }
+        None => keys_wire::Request::Remove { cli: cli.to_string(), by: account.name.clone() },
+    };
+    let verb = if matches!(request, keys_wire::Request::Set { .. }) { "agent-key-set" } else { "agent-key-remove" };
+    match crate::keeper::ask(&gw.config.keeper_socket, &request).await {
+        Ok(reply) if reply.ok => {
+            gw.audit.record(Row::new(&account.name, Some(&device), verb, "ok").resource(cli));
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Ok(reply) => {
+            gw.audit.record(Row::new(&account.name, Some(&device), verb, "failed").resource(cli));
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": "keeper", "detail": reply.error }))).into_response()
+        }
+        Err(error) => {
+            eprintln!("gateway: key keeper: {error}");
+            gw.audit.record(Row::new(&account.name, Some(&device), verb, "failed").resource(cli));
+            api_error(StatusCode::BAD_GATEWAY, "keeper_unreachable")
+        }
+    }
+}
+
+async fn agent_key_put(State(gw): State<Shared>, RoutePath(cli): RoutePath<String>, headers: HeaderMap, body: Bytes) -> Response {
+    agent_key_change(&gw, &cli, &headers, Some(body)).await
+}
+
+async fn agent_key_delete(State(gw): State<Shared>, RoutePath(cli): RoutePath<String>, headers: HeaderMap) -> Response {
+    agent_key_change(&gw, &cli, &headers, None).await
+}
+
 /// Per account, with no content: name, role, how many devices route, and
 /// whether its daemon socket exists. Admins only. The socket is looked at,
 /// never connected to: a connect is what socket activation starts a daemon
@@ -547,6 +631,8 @@ pub fn router(gw: Shared) -> Router {
         .route("/gateway/v1/audit", get(own_audit))
         .route("/gateway/v1/policy", get(policy_get).put(policy_put))
         .route("/gateway/v1/status", get(status))
+        .route("/gateway/v1/agent-keys", get(agent_keys_get))
+        .route("/gateway/v1/agent-keys/{cli}", put(agent_key_put).delete(agent_key_delete))
         .layer(DefaultBodyLimit::max(MAX_OWN_BODY));
     own.fallback(routed_or_static)
         .with_state(gw.clone())
