@@ -476,3 +476,77 @@ the desktop groundwork the hosted plan's P1 builds on.*
     (#2347 review, 2026-10-03.)
     - [ ] 🤖 Automated test — a second page's respawn of a remote tab types
       no launch input.
+
+### Z.4 — Left by P3b (the administrator's agent API keys; `docs/hosted_handoff.md` § P3b)
+
+2359. **Deliver an administrator's key to a CLI that takes one only in its login file (Codex).**
+    P3b delivers by environment only (the registry's `api_key_env`):
+    Claude, Gemini and Mistral Vibe. Codex's interactive session takes an
+    API key only from `~/.codex/auth.json` (`codex login --with-api-key`),
+    which is exactly the file `agent_auth` shares as the user's own login —
+    writing the admin's key there would need its own path through the
+    keeper loop (placed per spawn, never adopted, removed on withdraw and
+    on switching back). Plan §5.4 allows "the CLI's own key file"; check
+    first whether a current Codex reads `OPENAI_API_KEY`/`CODEX_API_KEY` in
+    its TUI, which would make it an `api_key_env` row instead. (P3b,
+    2026-10-03.)
+    - [ ] 🤖 Automated test — a Codex tab on the admin's key gets it, the
+      user's own `auth.json` never holds it, and switching back restores it.
+
+2360. **Verify the three `api_key_env` rows live (plan Q2) and the CLIs' first-use prompts.**
+    The variables come from the vendors' documentation, not from a run:
+    Claude asks once per home whether to use `ANTHROPIC_API_KEY` ("No" is
+    its recommended answer, which leaves the tab signed out on a server
+    where the own login is taken out); Gemini may need "Gemini API key"
+    picked once in `/auth`; Vibe should start without its key prompt. If
+    the prompts get in the way, pre-answer them per home (Claude:
+    `customApiKeyResponses.approved` holds the key's last 20 characters —
+    a fragment in a user-writable file; or an `apiKeyHelper` that reads the
+    variable), or drop the row. (P3b, 2026-10-03.)
+    - [ ] 🖐️ Manual test — on a server, each of Claude, Gemini and Vibe on the admin's key starts a session that answers a prompt.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2361. **Decide: does the admin's key reach remote and container agents?**
+    P3b injects it at local spawns only (fenced tabs, the Host session, a
+    typed CLI through the shim). A remote project's agent runs on the far
+    host with its own logins; a container agent gets the env of
+    `sandbox.rs`'s auth pass-through. Sending the admin's key to a machine
+    the admin does not run, or into a container, widens §5.4's exposure;
+    leaving it out means those agents need the user's own login. Default
+    kept: local only. (P3b, 2026-10-03.)
+
+2362. **The daemon runs no `agent_auth` keeper loop, no first-start import, no SessionStart hook.**
+    Found during P3b: the per-user daemon (`server::daemon::main` →
+    `host::run_with`) starts none of what the window's setup starts for
+    agents — `agent_auth::start` (the 5 s reconcile that carries a token
+    refresh to every running tab), `agent_auth`/`agent_global::import_once`,
+    `agent_session::install_session_start_hook`, `agent_turn::start`. Logins
+    still reconcile at every spawn (and at a key switch, P3b), so nothing is
+    lost, but a refresh reaches other running tabs only at their next spawn,
+    and session tracking across `/clear` may not follow. P3b added only the
+    shell tabs' agent shims (`agent_bin::install`). Check each and start
+    what a server needs from `daemon::main`. (P3b, 2026-10-03.)
+
+2363. **Run P3b live on a real server.** The steps are in
+    `docs/hosted_handoff.md` § P3b "Live steps": install (the keeper's
+    account and socket), the admin offers a key, Alice stays on her own
+    login and Bob picks the admin's key for the same CLI at once, the key
+    reaches only Bob's agents, a withdraw fails Bob's next spawn, the audit
+    rows, `scripts/server-isolation-test.sh`'s keeper checks. (P3b,
+    2026-10-03.)
+    - [ ] 🖐️ Manual test — the whole § P3b live list on one server with two users.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

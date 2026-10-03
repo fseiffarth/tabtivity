@@ -705,6 +705,16 @@ credentials** panel. Users opt in per CLI (§5.2).
     `agent_bin` shim sets it the same way for a CLI typed into a shell tab.
   - **Exposure:** every agent of an opted-in user can read the key, and
     direct mode has no per-user budget.
+  - *As built (P3b, `docs/context/server_gateway.md` § Admin-provided API
+    keys):* the key keeper is a subcommand of the gateway binary, socket
+    `/run/tabtivity/auth.sock` made by systemd (`0666` in the root-owned run
+    dir) and answered by caller uid alone — the gateway's account offers,
+    withdraws and lists (never reads back), a server user fetches; fenced
+    agents never see the socket (`/run` is a tmpfs in the fence). The
+    choice is the user's own file; while a CLI is on the admin's key the
+    user's own login copies leave the agent homes. A withdraw fails the
+    next spawn; running agents keep the key. Audit rows in the keeper's and
+    the gateway's logs, never the key.
 - **API key through a broker (P5).** `tabtivity-keybroker`, running as
   `tabtivity-auth`, holds the key. Agents get a base URL pointing at the broker
   plus a **per-user broker token** (for Claude Code, `ANTHROPIC_BASE_URL`).
@@ -1397,11 +1407,24 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   of the home can't open the mail store (`vault::tests`).
 
 **P3b: admin-provided API keys (optional).**
-- The admin-only Agent credentials panel, direct API-key delivery, and the
-  per-user, per-CLI choice between one's own login and the admin's key
-  (§5.2, §5.4).
+- ~~The admin-only Agent credentials panel~~ `b7c5f4b0` (Server settings,
+  `role: admin`, through the gateway's `/gateway/v1/agent-keys`), ~~direct
+  API-key delivery~~ `ccadf849`, `acceb24a` (the key keeper
+  `<slug>-auth-keeper` as `<slug>-auth` on `/run/<slug>/auth.sock`, by
+  caller uid; the daemon fetches the key at each local agent spawn into the
+  registry's `api_key_env` — Claude, Gemini, Vibe; the shell tabs' shims
+  too), and ~~the per-user, per-CLI choice between one's own login and the
+  admin's key~~ `acceb24a`, `b7c5f4b0` (Manage CLIs → Agent logins; "never
+  both": the own login leaves the homes while the key is chosen) (§5.2,
+  §5.4). Isolation checks of the keeper `787b7c61`. **Open:** Codex (key
+  file only, #2359), the CLIs' first-use prompts (#2360), remote/container
+  agents (#2361), the live run (#2363).
 - *Exit:* one user on their own login and one on the admin's key, for the
-  same CLI at once, with neither affecting the other.
+  same CLI at once, with neither affecting the other (built: per-user
+  choice in each user's own state dir, `agent_keys::tests::
+  one_user_on_the_admin_key_and_one_on_their_own_login_at_once`,
+  `agent_auth::tests::a_cli_on_the_admin_key_keeps_no_own_login_in_the_homes`;
+  not run on a server, #2363).
 
 **P4: sharing.**
 - *P4a, viewer shares:* hub creation, named-user ACLs, clone-to-add, "Shared
@@ -1502,7 +1525,10 @@ both options stay: admin API keys (P3b) and the at-risk shared consumer login
 research, not a decision: each CLI's row below is verified before that
 option is enabled for it (§5.4):
 - *API keys (P3b):* which variable or file carries the key, and does the CLI
-  accept a base-URL override (needed for the broker)?
+  accept a base-URL override (needed for the broker)? *As of P3b (vendor
+  docs, not verified live — #2360):* Claude `ANTHROPIC_API_KEY`, Gemini
+  `GEMINI_API_KEY`, Mistral Vibe `MISTRAL_API_KEY`; Codex only through its
+  login file (`codex login --with-api-key`), not offered yet (#2359).
 - *A shared consumer login (P5):* does a refresh rotate the refresh token? Do
   two holders refreshing at once invalidate each other? Does the CLI run on a
   replica it can't write back, or on an access token alone? How is a leaked

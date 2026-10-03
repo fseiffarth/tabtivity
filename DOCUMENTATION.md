@@ -496,6 +496,38 @@ your home directory or a backup cannot open it: it holds only sealed wraps,
 which need a paired device or the recovery code. The server's administrator
 (root) can read a running service's memory and keyring.
 
+### Hosted server: the administrator's agent API keys
+
+Every user signs in to their agent CLIs with their own login; that is the
+default and always available. The administrator may additionally offer an
+API key per CLI (plan §5.4), and each user decides per CLI which one their
+agents run on.
+
+- **The administrator** offers keys in Settings → Mobile → Server → **Agent
+  credentials** (shown to the administrator only). Each CLI that can take a
+  key has a card — today Claude (`ANTHROPIC_API_KEY`), Google Gemini
+  (`GEMINI_API_KEY`) and Mistral Vibe (`MISTRAL_API_KEY`); Codex takes a key
+  only through its own login file and is not offered yet. **Save key**
+  offers or replaces a key, **Withdraw** takes it back. A saved key is never
+  shown again; the card says since when and by whom it is offered and which
+  users fetched it lately. The keys are kept by a separate service account
+  of the server (`tabtivity-auth`), never in anyone's settings or home.
+- **A user** picks per CLI in Settings → Manage CLIs → Agent logins: **Use
+  the administrator's key** or **Use my own login**. While the
+  administrator's key is chosen, that CLI's agents — agent tabs, the root
+  console's Host session, and the CLI typed into a shell tab — get the key
+  in their environment at start, and your own login for that CLI is taken
+  out of the agent homes (it stays saved and comes back when you switch
+  back), so the CLI never has two credentials to choose from. Tabs already
+  running keep what they started with. Claude asks once per project whether
+  to use a key from the environment: answer **Yes**.
+- **What a key costs.** Every agent of a user who chose it can read the key,
+  and there is no per-user budget: usage counts against the administrator's
+  account. Withdrawing a key stops new agents at once (their start fails
+  with a note to switch back to your own login); agents already running keep
+  it, so to take a key from them revoke it at the provider. Remote and
+  container agents do not get the administrator's key.
+
 ### Workspace Apps
 
 Each of these replaced a global-app role, on the same reasoning: what sits

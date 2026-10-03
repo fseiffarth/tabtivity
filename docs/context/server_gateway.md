@@ -1,7 +1,7 @@
 # Server gateway, per-user daemons, admin helper
 
-*Design rationale for hosted plan P3 (`docs/tabtivity_hosted_plan.md` §3.1,
-§4, §5.1, §6.7, §6.8, §8), as built on branch `hosted`. Nothing here has run
+*Design rationale for hosted plan P3 and P3b (`docs/tabtivity_hosted_plan.md` §3.1,
+§4, §5.1, §5.4, §6.7, §6.8, §8), as built on branch `hosted`. Nothing here has run
 on a real server yet; the live steps are in `docs/hosted_handoff.md` § P3.*
 
 ## Shape
@@ -294,6 +294,75 @@ keyring. `services::server::vault` wires them:
   the gateway in clear on `recover` (not on re-pin). The "mail locked
   since reboot" push is not built.
 
+## Admin-provided API keys (P3b, §5.2, §5.4)
+
+```
+admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, role check)
+                                                        │ set/remove/status, by uid
+                                                        ▼
+   /run/<slug>/auth.sock (systemd, 0666) ─► <slug>-gateway keeper (<slug>-auth)
+                                                        │ /var/lib/<slug>-auth/<cli>/api-key 0600
+                                                        ▲ get, by uid
+   user's daemon / shim (user's uid) ── at each local agent spawn of a chosen CLI
+```
+
+- **A keeper of its own, not the gateway.** The plan puts the keys under
+  `<slug>-auth`; the gateway is the tailnet-facing process and holds no
+  secret but its cookie key. The keeper is a subcommand of the gateway
+  binary (`<slug>-gateway keeper`, no new binary name), started by its
+  socket unit, hardened past the gateway (`PrivateNetwork=`, unix sockets
+  only, `UMask=0077`, state dir `0700`).
+- **By uid, nothing else.** `SO_PEERCRED` → name: the gateway's account may
+  `set`/`remove`/`status`/`offered` and never `get`; an account passing the
+  helper's own `check_account` (in `<slug>-users`, uid ≥ 1000, in no
+  root-equivalent group — so `user-remove`'s `gpasswd --delete` also ends
+  its access) may `offered`/`get`; anyone else is refused. The admin's
+  name in a `set` is the gateway's word, as the role header is to a daemon:
+  a compromised gateway can replace or withdraw keys, not read one. The
+  socket is systemd's in the root-owned `/run/<slug>` (nobody squats it);
+  `0666` because the gateway and every user must reach it. Fenced agents
+  never do: the fence mounts a tmpfs over `/run`.
+- **The choice is the user's own** (`<state>/agent-auth/admin-keys.json`),
+  written only by `agent_login_use_admin_key`, which refuses off a server
+  and, switching on, without a key on offer. No admin allowlist of users:
+  an offered key is offered to every server user (§5.4 has none).
+- **Never both.** For a chosen CLI `agent_auth`'s place step removes the
+  user's own login copies (and Claude's `oauthAccount`) from every home
+  instead of placing them; the store keeps them, switching back places
+  them again. The adopt step still runs, so a tab from before the switch
+  refreshing its token is not lost — but a file holding the admin's
+  current key (asked of the keeper) is never adopted, and nothing is
+  adopted when that cannot be told: the admin's key never becomes the
+  user's own login.
+- **Delivery at spawn, never stored.** `agent_keys::inject_env` runs where
+  `copilot_auth` injects its token — the Linux and macOS fence wraps (so an
+  agent tab *and* the shell tabs' shim, which builds the same fence), and
+  the root console's Host session. It fetches the key per spawn (no cache:
+  a withdraw or rotation applies to the next spawn) into the registry's
+  `api_key_env`. The three variables are in `tmux_local::SECRET_ENV`, so
+  tmux ≥ 3.2 copies them from the client's environment (`0400`), never an
+  argv or a launcher script. Withdrawn or keeper down → the spawn fails
+  naming the way back; never a silent fall-back to a login the home no
+  longer has. Remote and container agents get nothing (#2361).
+- **Shims on a server.** The daemon now writes the shell tabs' agent shims
+  (`agent_bin::install`, in `main`), and `<slug>-serverd --agent-shim`
+  marks server mode for that process only (`mark_server_process`): a tab
+  in tmux has tmux's environment, not the unit's, and a marker in the
+  environment would leak into a desktop app started from that tab.
+- **Audit.** The keeper's `audit.jsonl` (set, remove, and fetches at most
+  once per user and CLI per 10 minutes, so a user cannot flood the log)
+  and the gateway's own rows for the admin's requests; no key, no
+  fragment. The admin panel's "used lately by" is read from the keeper's
+  rows (30 days).
+- **Residuals, as §5.4 accepts them.** Every agent of a user who chose the
+  key can read it (its environment). Every server user's own unfenced
+  processes can fetch it from the keeper, chosen or not: the choice picks
+  what the agents run on, it is no access control — an offered key is
+  offered to every server user. Direct mode has no per-user budget (the
+  broker is P5). A withdraw does not reach agents already
+  running — rotate the key at the provider. Claude asks once per home
+  whether to use an environment key (#2360).
+
 ## Host-channel inventory (§4.4)
 
 | Listener | Who opens it | Protection | Server status |
@@ -302,6 +371,7 @@ keyring. `services::server::vault` wires them:
 | Gateway `127.0.0.1:8740/8741` | `<slug>-gw` | routing cookie / pairing; the daemon's own auth behind it | reachable by every local user, same as through Tailscale |
 | Sidecar loopback port + content port | desktop only | token link, loopback Host/Origin checks | **not opened** by a daemon (`Listen::Unix`) |
 | tmux server | tmux unit | `/run/<slug>/tmux/<u>` `0700` | closed |
+| Key keeper `/run/<slug>/auth.sock` | systemd (socket unit) | `0666`, decided per caller uid (`SO_PEERCRED`): gateway sets/lists, a server user fetches, others refused; hidden from fences (`/run` tmpfs) | open to every local account by design; a server user can read an offered key |
 | Daemon admin socket | daemon | `<state>/mobile-control/admin.sock` in a `0700` dir | closed |
 | Root MCP listener (`root_mcp.rs`) | desktop window | bearer token | not started by a daemon (#2339) |
 | Shared Ollama `127.0.0.1:11434` | admin's system service | none (decided 2026-10-03) | residual: any shell can drive it; model changes are `admin` |
