@@ -69,15 +69,15 @@ function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-/** The outbox poll, the stored-session read and the usage read the screen
- * runs on mount answer empty here and stay out of the counted calls — these
- * tests are about the inbox. */
+/** The outbox poll, the stored-session read, the usage read and the markup
+ * questions poll the screen runs on mount answer empty here and stay out of
+ * the counted calls — these tests are about the inbox. */
 function routeOutbox(inner: (url: string, init?: RequestInit) => Promise<Response>) {
   return (url: string, init?: RequestInit) => url.endsWith("/outbox")
     ? Promise.resolve(jsonResponse(200, { images: [] }))
     : url.includes("/transcript")
       ? Promise.resolve(jsonResponse(200, { transcript: { available: false, reason: "no_session", entries: [], truncated: false } }))
-      : url.endsWith("/status")
+      : url.endsWith("/status") || url.includes("/markup/questions")
         ? Promise.resolve(jsonResponse(503, { error: "desktop_unavailable" }))
         : inner(url, init);
 }

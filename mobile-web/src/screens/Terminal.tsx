@@ -3,10 +3,12 @@ import { AgentStatusMark } from "../components/AgentStatusPill";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { QuestionRows } from "../components/QuestionRows";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab, type MarkupSend, type MarkupTarget } from "../components/OutboxViewer";
 import type { AgentSignal } from "../markup/submitState";
+import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -630,9 +632,6 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
   onStep: (from: number, to: number) => void;
 }) {
   const t = useT();
-  /** The free-text row tapped: its field is open under it until sent. */
-  const [typing, setTyping] = useState<number | null>(null);
-  const [typed, setTyped] = useState("");
   /** A question that asks several: its headers are steps of the dialog's tab
    * row, walked with ←/→ or a tap, so an answer can be changed before Submit. */
   const last = tabs.length - (tabSubmit ? 0 : 1);
@@ -660,37 +659,22 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
     {question.length > 0 && <div className="question-ask">
       {question.map((line) => <ReadableRow key={line.key} line={line} plain />)}
     </div>}
-    <ul className="option-list question-list">{prompt.options.map((option) => {
-      const recommended = RECOMMENDED.exec(option.label);
-      const label = prompt.review ? t("terminal.reader.questionSubmitStep")
-        : recommended ? option.label.slice(0, recommended.index) : option.label;
-      const freeText = freeTextRow(option);
-      const send = () => {
-        if (!typed.trim()) return;
-        onType(option, typed);
-        setTyping(null);
-        setTyped("");
-      };
-      return <li key={option.number}>
-        <button
-          className={option.index === prompt.current ? "current" : ""}
-          aria-current={option.index === prompt.current || undefined}
-          aria-expanded={freeText ? typing === option.number : undefined}
-          disabled={sent !== undefined}
-          onClick={() => freeText ? setTyping((open) => open === option.number ? null : option.number) : onPick(option)}>
-          <span>
-            <strong>{label}{recommended && <em className="question-recommended">{recommended[1]}</em>}</strong>
-            {option.description && <small>{option.description}</small>}
-          </span>
-          {sent === option.number && <span className="sheet-pending" role="status">{sendingLabel}</span>}
-        </button>
-        {freeText && typing === option.number && sent === undefined && <form className="question-type" onSubmit={(event) => { event.preventDefault(); send(); }}>
-          <input autoFocus value={typed} placeholder={t("mobile.question.typePlaceholder")} aria-label={t("mobile.question.typePlaceholder")} enterKeyHint="send" onChange={(event) => setTyped(event.target.value)} />
-          <button className="primary" disabled={!typed.trim()}>{t("mobile.question.typeSend")}</button>
-          {isUntested("mobile.question.freeText") && <em>{t("mobile.focus.untested")}</em>}
-        </form>}
-      </li>;
-    })}</ul>
+    <QuestionRows
+      rows={prompt.options.map((option) => ({
+        key: option.number,
+        label: option.label,
+        ...(prompt.review ? { title: t("terminal.reader.questionSubmitStep") } : {}),
+        description: option.description,
+        current: option.index === prompt.current,
+        freeText: freeTextRow(option),
+        pending: sent === option.number,
+      }))}
+      disabled={sent !== undefined}
+      sendingLabel={sendingLabel}
+      onPick={(row) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onPick(option); }}
+      onType={(row, text) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onType(option, text); }}
+      typeNote={isUntested("mobile.question.freeText") && <em>{t("mobile.focus.untested")}</em>}
+    />
   </>;
 }
 
@@ -3467,6 +3451,14 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       : undefined),
     [tab.kind, tab.id, project, sendMarkup, markupAgent, refreshOutboxFile],
   );
+  /** The agent's open markup question (`markup_ask`), for the banner over the
+   * composer: read on the markup views' own poll, only while the Focus chat
+   * is on screen (no viewer over it) and on each agent edge. */
+  const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" ? tab.id : undefined, undefined,
+    view === "focus" && !outboxOpen && !filesOpen && !gallery, markupAgent);
+  const markupAsk = markupAsks.find((ask) => ask.questions.length > 0);
+  /** The file it is about, if this tab's outbox has it — the newest copy. */
+  const markupAskFile = markupAsk?.file_name ? outbox.find((file) => sentName(file) === markupAsk.file_name) : undefined;
   /** A shell tab has no chat to send marks to: Mark up's Submit opens a new
    * tab of the desktop's default agent and shows it in place of this one. */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
@@ -4001,6 +3993,15 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
         </span>
         <button className="primary" onClick={signInWay.start} disabled={openingSignIn}>{openingSignIn ? t("mobile.signIn.opening") : t("mobile.signIn.open")}</button>
         <button className="sign-in-hide" onClick={() => setSignedOutHidden(true)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}>✕</button>
+      </div>}
+      {view === "focus" && markupAsk && <div className="sign-in-notice markup-ask-notice" role="status">
+        <span>
+          {!markupAsk.file_name ? t("mobile.markup.questions.bannerAny")
+            : markupAskFile ? t("mobile.markup.questions.banner", { file: markupAsk.file_name })
+              : t("mobile.markup.questions.bannerElsewhere", { file: markupAsk.file_name })}
+          {isUntested("mobile.markup.questions") && <> · <em>{t("mobile.focus.untested")}</em></>}
+        </span>
+        {markupAskFile && <button className="primary" onClick={() => setOutboxOpen(markupAskFile)}>{t("mobile.markup.questions.bannerOpen")}</button>}
       </div>}
       {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}>✕</button></div>}
       {(tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">

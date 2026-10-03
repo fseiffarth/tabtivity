@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ApiError, holdPrompt, MAX_INBOX_FILE, sentName, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type OutboxFile, type TabRow, type ViewerScope } from "../api";
@@ -17,6 +17,8 @@ import { sizeLabel } from "../terminal/fileLabels";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
+import { useMarkupAsks } from "../markup/questions";
+import { MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
 
 type Tool = "ink" | "box" | "text" | "eraser";
 type Size = [number, number];
@@ -336,6 +338,22 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const [reloadNote, setReloadNote] = useState<TranslationKey | null>(null);
   /** Reloaded since the agent last finished: Reload steps back to secondary. */
   const [reloaded, setReloaded] = useState(false);
+  /** The agent's markup questions (`markup_ask`) for this file: an agent
+   * tab's view only — the card answers into that tab. Polled while the view
+   * is up and the page visible, and on each agent edge. */
+  const asksOn = givenTabId !== "" && onSend !== undefined;
+  const [questionBusy, setQuestionBusy] = useState(false);
+  const { asks, refresh: refreshAsks, drop: dropAsk } = useMarkupAsks(asksOn ? givenTabId : undefined, source, asksOn, agent, questionBusy);
+  /** Where each question's quote was found on its page (`findText`), by
+   * `page\nquote`; absent while the frame has not answered. */
+  const [found, setFound] = useState<Record<string, { x: number; y: number; w: number; h: number }[]>>({});
+  const findAsked = useRef(new Map<string, number>());
+  const findKeys = useRef(new Map<number, string>());
+  const findId = useRef(0);
+  /** A pin tapped: the card opens at its question. */
+  const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
+  /** A question's chip tapped: its words on the page light up a moment. */
+  const [pinFlash, setPinFlash] = useState<string | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -536,6 +554,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
           return { ...known, [message.n]: { bitmap: message.bitmap, width: message.width } };
         });
         setRenderTick((tick) => tick + 1);
+      } else if (message.type === "found") {
+        const key = findKeys.current.get(message.id);
+        if (key !== undefined) setFound((known) => ({ ...known, [key]: message.rects }));
       } else if (message.n !== undefined) {
         renderFailed(message.n);
       } else {
@@ -568,6 +589,23 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     window.clearTimeout(renderTimer.current);
     renderTimer.current = window.setTimeout(() => renderFailed(wanted), RENDER_TIMEOUT);
   }, [isPdf, sizes, failure, reopening, alive, pictures, pageFailures, pixelWidth, post, renderTick, renderFailed]);
+
+  // Each question's quote is looked for once per document: the sealed frame
+  // reads the page's text and answers boxes (`findText`), never the text.
+  useEffect(() => {
+    if (!isPdf || !sizes || failure || reopening) return;
+    for (const ask of asks) {
+      for (const question of ask.questions) {
+        if (!question.quote || question.page === undefined || question.page > sizes.length) continue;
+        const key = `${question.page}\n${question.quote}`;
+        if (findAsked.current.has(key)) continue;
+        const id = ++findId.current;
+        findAsked.current.set(key, id);
+        findKeys.current.set(id, key);
+        post({ type: "findText", id, page: question.page, quote: question.quote });
+      }
+    }
+  }, [isPdf, sizes, failure, reopening, asks, post]);
 
   useEffect(() => () => {
     // Bitmaps are GPU memory; hand them back as the view goes.
@@ -1042,6 +1080,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       return {};
     });
     setPageFailures(new Set());
+    // The new document's text is looked through afresh.
+    findAsked.current.clear();
+    findKeys.current.clear();
+    setFound({});
     setFailure(null);
     setChanged(false);
     setCheck(null);
@@ -1064,9 +1106,73 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Reload as the pill's own button: the agent is done, or nothing says
    * what it does — primary unless the file is known to be unchanged. */
   const pillReload = canReload && submitted && (submitted.phase === "finished" || submitted.phase === "unconfirmed");
-  const applyNow = canMark && canApply(submitted);
+  // Not while the agent waits on its own questions: those are answered first.
+  const applyNow = canMark && canApply(submitted) && asks.length === 0;
   const reloadPrimary = submitted?.phase === "finished" && check !== "unchanged" && !reloaded && (!applyNow || check === "changed");
   const glyph = submitted ? ROUND_GLYPH[submitted.phase] : undefined;
+  /** The questions' pins, by page: at the quote's first box once the frame
+   * found it, else in the page's top margin, one slot each. A picture has
+   * no text to find, so its questions stay in the card. */
+  const pinsByPage = useMemo(() => {
+    const byPage = new Map<number, { askId: string; index: number; rects: { x: number; y: number; w: number; h: number }[]; slot: number }[]>();
+    if (!isPdf) return byPage;
+    for (const ask of asks) {
+      ask.questions.forEach((question, index) => {
+        if (question.page === undefined) return;
+        const rects = question.quote ? found[`${question.page}\n${question.quote}`] ?? [] : [];
+        const list = byPage.get(question.page) ?? [];
+        const slot = rects.length ? 0 : list.filter((pin) => !pin.rects.length).length;
+        list.push({ askId: ask.id, index, rects, slot });
+        byPage.set(question.page, list);
+      });
+    }
+    return byPage;
+  }, [isPdf, asks, found]);
+  const cardShown = asksOn && asks.some((ask) => ask.questions.length > 0);
+  /** A question's chip: the page scrolls to its pin, whose words light up. */
+  const showPin = (askId: string, index: number) => {
+    const question = asks.find((ask) => ask.id === askId)?.questions[index];
+    const element = scroller.current;
+    if (question?.page === undefined || !element || !sizes) return;
+    const place = places[question.page - 1];
+    const size = sizes[question.page - 1];
+    if (!place || !size) return;
+    const hit = question.quote ? found[`${question.page}\n${question.quote}`]?.[0] : undefined;
+    const top = Math.max(0, place.top + (hit ? hit.y * cssWidth / size[0] : 0) - viewHeight / 3);
+    if (typeof element.scrollTo === "function") element.scrollTo({ top });
+    else element.scrollTop = top;
+    setPinFlash(`${askId}/${index}`);
+  };
+  useEffect(() => {
+    if (!pinFlash) return;
+    const timer = window.setTimeout(() => setPinFlash(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [pinFlash]);
+  /** Taken by the desktop and queued: the pill follows the agent's turn, as
+   * after a Submit, keeping the round's applied mark. */
+  const questionsAnswered = (askId: string) => {
+    dropAsk(askId);
+    setCheck(null);
+    setReloadNote(null);
+    setSubmitted((was) => startRound(agent !== "idle", Date.now(), was?.applied ?? false));
+  };
+  const pinLayer = (n: number, size: Size) => {
+    const pins = pinsByPage.get(n);
+    if (!pins?.length) return null;
+    const scale = cssWidth / size[0];
+    return pins.map((pin) => {
+      const key = `${pin.askId}/${pin.index}`;
+      const at = pin.rects[0];
+      const left = at ? Math.max(0, at.x * scale - 12) : 6 + pin.slot * 32;
+      const top = at ? Math.max(0, at.y * scale - 26) : 6;
+      return <Fragment key={key}>
+        {pinFlash === key && pin.rects.map((rect, i) => <span key={i} className="markup-pin-hit" aria-hidden="true"
+          style={{ left: rect.x * scale, top: rect.y * scale, width: rect.w * scale, height: rect.h * scale }} />)}
+        <button className="markup-pin" style={{ left, top }} aria-label={t("mobile.markup.questions.pinTitle", { n: pin.index + 1 })}
+          onClick={() => setQuestionFocus({ askId: pin.askId, index: pin.index, nonce: Date.now() })}>?{pin.index + 1}</button>
+      </Fragment>;
+    });
+  };
   const register = useCallback((n: number, canvas: HTMLCanvasElement | null) => {
     if (canvas) overlays.current.set(n, canvas);
     else overlays.current.delete(n);
@@ -1089,7 +1195,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const noteEditor = (n: number, size: Size) => note?.n === n
     && <NoteEditor note={note} size={size} width={cssWidth} onChange={editNote} onSave={saveNote} onCancel={() => setNote(null)} />;
 
-  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}`} role="dialog" aria-modal="true"
+  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}`} role="dialog" aria-modal="true"
     aria-label={marking ? t("mobile.markup.title", { name: sentName(file) }) : sentName(file)}>
     <div className="outbox-viewer-head">
       {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}>✕</button>}
@@ -1149,6 +1255,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
                 {!pictures[n] && <span className="markup-page-note">{t(pageFailures.has(n) ? "mobile.markup.pageFailed" : "mobile.markup.pageLoading", { n })}</span>}
                 {layerCanvas(n, size)}
               </>}
+              {pinLayer(n, size)}
               {noteEditor(n, size)}
             </div>;
           })}
@@ -1168,7 +1275,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         </div>
       </div>}
     </div>
-    {marking && <div className="markup-palette">
+    {(marking || cardShown) && <div className="markup-palette">
+      {cardShown && <MarkupQuestionsCard tabId={givenTabId} asks={asks} online={online} focus={questionFocus}
+        onShowPin={isPdf ? showPin : undefined} onAnswered={questionsAnswered} onClosed={dropAsk} onRefresh={refreshAsks} onBusy={setQuestionBusy} />}
+      {marking && <>
       {popover === "colors" && <div className="markup-popover markup-colors" role="group" aria-label={t("mobile.markup.color")}>
         {MARK_COLORS.map((name) => <button key={name} className={`markup-color${color === name ? " selected" : ""}`} aria-pressed={color === name}
           style={{ background: INK[name] }} onClick={() => { setColor(name); setPopover(null); }} aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
@@ -1207,6 +1317,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <button aria-expanded={popover === "more"} onClick={() => setPopover((open) => (open === "more" ? null : "more"))}
           aria-label={t("mobile.markup.more")} title={t("mobile.markup.more")}><span aria-hidden="true">⋯</span></button>
       </div>
+      </>}
     </div>}
   </div>;
 }

@@ -1055,6 +1055,53 @@ export async function submitMarkup(tabId: string, body: MarkupBody): Promise<Mar
   return answer;
 }
 
+/** One question of an agent's markup ask (`markup_ask`,
+ * `docs/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
+ * `quote` of that page's words it is about. */
+export interface PhoneMarkupQuestion {
+  question: string;
+  header?: string;
+  options: { label: string; description?: string }[];
+  multi_select: boolean;
+  page?: number;
+  quote?: string;
+}
+/** An agent's open markup ask: its random id, its questions, and the leaf
+ * name of the file it is about (absent: any file). Never a path. */
+export interface PhoneMarkupAsk { id: string; file_name?: string; questions: PhoneMarkupQuestion[] }
+/** One question's answer: option indices and/or a typed **Other…**. */
+export interface PhoneMarkupAnswer { options: number[]; other?: string }
+
+function markupBase(tabId: string): string {
+  return `/api/v1/tabs/${encodeURIComponent(tabId)}/markup`;
+}
+
+/** `GET /api/v1/tabs/{id}/markup/questions[?source=…]` — the agent tab's
+ * open markup question for the file a markup view shows (`source`), or every
+ * open one (the Focus banner). `503 desktop_unavailable` with the window
+ * closed: there is then no ask to show. A malformed answer reads as none. */
+export async function listMarkupQuestions(tabId: string, source?: MarkupSource, signal?: AbortSignal): Promise<PhoneMarkupAsk[]> {
+  const query = !source ? "" : `?source=${encodeURIComponent("files" in source ? `files:${source.files}` : `outbox:${source.outbox}`)}`;
+  const { asks } = await api<{ asks?: unknown }>(`${markupBase(tabId)}/questions${query}`, { signal });
+  if (!Array.isArray(asks)) return [];
+  return asks.filter((ask): ask is PhoneMarkupAsk => !!ask && typeof ask === "object"
+    && typeof (ask as PhoneMarkupAsk).id === "string" && Array.isArray((ask as PhoneMarkupAsk).questions));
+}
+
+/** `POST /api/v1/tabs/{id}/markup/answer` — one answer per question, in
+ * order. The desktop builds the prompt and queues it into the tab; `409` with
+ * `superseded` / `answered` / `gone` when the ask no longer takes it,
+ * `delivery_failed` when it could not be queued (the ask is open again),
+ * `not_delivered` when it could not and has closed. */
+export function answerMarkupQuestions(tabId: string, askId: string, answers: PhoneMarkupAnswer[]): Promise<unknown> {
+  return api(`${markupBase(tabId)}/answer`, { method: "POST", body: JSON.stringify({ ask_id: askId, answers }) });
+}
+
+/** `POST /api/v1/tabs/{id}/markup/dismiss` — **Answer in chat instead**. */
+export function dismissMarkupQuestions(tabId: string, askId: string): Promise<unknown> {
+  return api(`${markupBase(tabId)}/dismiss`, { method: "POST", body: JSON.stringify({ ask_id: askId }) });
+}
+
 /** A file the phone sent to the desktop's global inbox: its stored name and
  * size only — it belongs to no project, so there is nothing to reference. */
 export interface DesktopInboxFile { name: string; size: number }

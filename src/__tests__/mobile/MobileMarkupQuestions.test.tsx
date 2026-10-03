@@ -108,7 +108,7 @@ describe("Mobile bridge — the agent's markup questions", () => {
   });
 
   it("lists the tab's open ask with its leaf name, never its path", async () => {
-    const answer = await ask({ type: "markup_questions", request_id: "q1", project_id: project.id, tmux_session: TMUX, path: ".tabtivity/outbox/20261003-101500-draft.pdf" });
+    const answer = await ask({ type: "markup_questions", request_id: "q1", project_id: project.id, tmux_session: TMUX, path: `${NAMES.outboxDir}/20261003-101500-draft.pdf` });
     expect(answer).toEqual({
       status: "markup_questions",
       asks: [{
@@ -121,7 +121,7 @@ describe("Mobile bridge — the agent's markup questions", () => {
       }],
     });
     expect(JSON.stringify(answer)).not.toContain("docs/paper");
-    expect(called("markup_mcp_list")[0]).toEqual({ projectId: project.id, scheduleTargetId: "target-1", path: ".tabtivity/outbox/20261003-101500-draft.pdf" });
+    expect(called("markup_mcp_list")[0]).toEqual({ projectId: project.id, scheduleTargetId: "target-1", path: `${NAMES.outboxDir}/20261003-101500-draft.pdf` });
 
     // No path: every open ask of the tab (the Focus banner).
     await ask({ type: "markup_questions", request_id: "q2", project_id: project.id, tmux_session: TMUX });
