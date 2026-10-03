@@ -1,7 +1,7 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, files, browse, project files, read-only, mark up, markup, annotate, pdf, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, files, browse, project files, read-only, mark up, markup, annotate, pdf, markup_ask, questions about marks, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
 ---
 
 Tabtivity Mobile is a small companion web app for your phone. It shows the
@@ -89,11 +89,43 @@ reopen, because the phone attaches to its terminal session.
   tap **Make these changes** to let it go ahead (both prompts: Home → This
   phone → **Mark up prompt**). The desktop's PDF viewer has the same **Mark up**
   for local projects, with its own prompts in Settings → Agents → **PDF markup**.
+  When a mark leaves the agent a choice it can ask you right there (see
+  "The agent's questions about your marks" below).
 - **No shells on the phone** (under **Project access**, on by default) keeps
   the phone to agent tabs: shell tabs are left off its lists, an open one
   disconnects within seconds, and **＋** offers no shell. Switch it off to
   see and open shells from the phone — they run as you, with no agent's
   permission prompts in between.
+
+## The agent's questions about your marks
+
+When a mark is ambiguous ("does this arrow move the paragraph or the
+figure?"), a local Claude or Codex tab (or a Local Model tab with the
+**MCP** chip on) can ask you with its `markup_ask` tool instead of in its
+chat. The questions show in the markup view of that tab's PDF:
+
+- On the desktop, as a card under the **Mark up** bar while marking is on.
+- On the phone, as a card at the top of the markup view ("The agent asks ·
+  2"), which also shows while you only read the PDF. While a question is
+  open, the tab's Chat shows a line "The agent asks about …" naming the
+  file; **Open** opens it when the agent sent that file to the phone.
+- Each question gets a numbered pin (`?1`, `?2`…) on the page, at the words
+  it is about. Tap the pin to find the question, or **Show on page N** to
+  find the place.
+
+Tap an option to answer. With several questions, or one that takes more
+than one option, pick and then tap **Send answers**. **Other…** lets you type
+your own answer. **Answer in chat instead** closes the questions so you can
+reply in the tab. Your answer is typed into the tab as your next message (it
+waits in the queue if the agent is still busy), and the card goes away on
+the desktop and the phone. If it could not be sent, the questions stay open
+so you can try again.
+
+A newer question from the same tab replaces the open one. The desktop must be
+running: with it closed, the phone shows no questions. Remote, VM and
+container tabs don't have the tool. It is on by default; turn it off in
+Settings → Agents → Manage CLIs, under Advanced: **Let project agents ask
+about your PDF marks** (it applies to newly opened tabs).
 
 ## Project files on the phone
 

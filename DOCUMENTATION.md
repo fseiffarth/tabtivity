@@ -445,6 +445,15 @@ has, the pill offers **Make these changes**, which sends the go-ahead (edit the
 sources, rebuild, send the PDF back) — its wording is the second field of Home →
 This phone → **Mark up prompt**.
 
+When a mark leaves the agent a choice, a local Claude, Codex or MCP-enabled
+Vibe tab can ask with its `markup_ask` tool (`docs/context/markup_mcp.md`;
+on by default, Manage CLIs → Advanced). The questions show as a card in that
+tab's markup view, phone and desktop alike, each with a `?n` pin at the words
+it quotes; a tap (or **Other…** with typed words) sends the answer into the tab
+as the next prompt and closes the card everywhere, and **Answer in chat
+instead** closes it unanswered. The phone's chat shows a one-line banner while
+a question is open.
+
 ### Workspace Apps
 
 Each of these replaced a global-app role, on the same reasoning: what sits

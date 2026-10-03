@@ -3625,6 +3625,51 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop — the agent's markup questions beside the PDF (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `desktop.markup.questions`; ✅ automated: `PdfMarkupQuestions.test.tsx`, Rust `services::markup_mcp`, `commands::markup_mcp`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): a local project with a fresh Claude tab → its PDF → **✎ Mark up** → draw an ambiguous arrow (or circle two words and write "which?") → **Submit**. The agent calls `markup_ask` (Claude asks to approve the tool the first time) and ends its turn; a card "The agent asks" appears under the markup strip, the pill reads "The agent asks about your marks — answer below" and **Make these changes** is off. Each question has a `?n` pin at the quoted words (in the page's top margin when the quote is not found). Click a pin → the card scrolls to its question and flashes it; **Show on page N** → the page scrolls to the pin and lights the quoted words. Click an option of a single question → the answer appears in the agent tab as your prompt ("My answers to your markup questions on `…`: 1. … → …"), the card goes, the pill follows the turn. Several questions or a "Pick any that apply." one: rows tick, **Send answers** sends them all. **Other…** → type → it goes out as `Other: …`. **Answer in chat instead** → the card goes, nothing is typed. Ask the agent to ask again before answering → the first card is replaced. Same flow in a Codex tab. Turn markup off → the card goes; back on → it is back.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, phone — the agent's markup questions in the markup view (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx`, `MobileMarkupQuestions.test.tsx`, Rust host `markup_questions_cross_as_leaf_names_and_answers_as_indices`, `protocol::markup_questions_cross_by_tab_pair_and_answers_stay_strict`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): as above, but Submit from the phone's **Mark up** on a PDF the agent sent (chat bubble → viewer). A card "The agent asks · n" docks at the top of the palette within ~3 s; it also shows while just reading the PDF. Pins come from the sealed frame at the quoted words (check at high zoom and on a two-column page); tap a pin → the card opens and flashes that question; **Show on page N** → the page scrolls there and the words light up briefly. Tap an option → the answer appears in the chat as your prompt and the card goes on the phone **and** the desktop. Fold the card with its head; a new ask opens it again. **Other…** with the keyboard up on a small phone: the card stays usable. Answer the same ask on the desktop first, then on the phone → "they were already answered", nothing typed. Close the desktop window (sidecar keeps running) → no card, no error.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, phone — the Focus banner for an open markup question (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx` (banner cases); ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): while an ask is open, the tab's Chat shows a one-line banner over the session facts. The agent sent the PDF to the phone: "The agent asks about <file>" with **Open** → the PDF opens in the markup view with the card. The PDF lives only in the project: "… about <file> in its markup view", no Open. An ask without a file: "… about your marks in the markup view". Answer it → the banner goes. The banner never shows while a viewer, the gallery or the file browser covers the chat.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — an answer that could not be delivered reopens its questions (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested ids `desktop.markup.questions`, `mobile.markup.questions`; ✅ automated: `reopen_undoes_only_the_answer_whose_prompt_was_not_delivered`, the delivery-failure cases in `PdfMarkupQuestions.test.tsx` and `MobileMarkupQuestionsCard.test.tsx`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): make queueing into the tab fail (e.g. fill the tab's scheduled prompts up to its cap) and answer: the desktop card stays and says the questions are still open — try again; the phone says it could not be sent and the questions are still open. Free the queue and answer again → delivered once. If the agent asked anew meanwhile, the old answer is not reopened: the desktop shows the prompt text to paste, the phone says the questions have closed.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, the Manage CLIs switch for markup questions (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `markupMcp`; ✅ automated: Rust `services::root_mcp` wiring tests, `services::markup_mcp` `off` case; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): Settings → Agents → Manage CLIs → Advanced → **Let project agents ask about your PDF marks (MCP)** is on in fresh settings. Turn it off → a newly opened Claude tab lists no `markup_ask` (`/mcp`); a tab opened before still has the tool, and a call answers `off` naming the setting, no card appears. Turn it on → a new tab has the tool again. A remote project's tab, a VM project and a container tab never have it.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bu — A plain `opencode` tab's chat fills its facts and shows it working** (2026-10-01;
   ✅ code-complete, automated tests passing — `MobileOpenCodeMini.test.ts`
@@ -3646,6 +3691,47 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     context left; send a prompt → a "… is working" row shows until the answer
     lands; the status-line swipe shows the composer's two rows. Tab in the
     terminal to Plan → the mode follows.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31bv — A typed Other… answer in a multi-pick markup question can be
+  unticked** (open, 2026-10-03; from the markup questions MCP,
+  `docs/context/markup_mcp.md`). In the phone's markup questions card
+  (`MarkupQuestionsCard.tsx`), once Other… holds typed words on a
+  "Pick any that apply." question, tapping its row again does not untick
+  it; the reader can only retype it or use **Answer in chat instead**. The
+  pick model already supports it (`toggleOther` clears a set Other…); the
+  row's tap goes to the text field instead. Make a second tap on a ticked
+  Other… row untick it, as the desktop card's row does.
+  - [ ] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31bw — The Focus banner can open a markup question's project file**
+  (open, 2026-10-03; from the markup questions MCP,
+  `docs/context/markup_mcp.md`). The banner "The agent asks about <file>"
+  has **Open** only when the tab's outbox holds the file: the phone gets the
+  ask's leaf name, never a path, and the project file browser walks sealed
+  folder tokens, so a leaf cannot find a project file. Let the sidecar mint
+  a files token for the ask's file (it knows the project-relative path when
+  it asks the window) behind the file browser's own gates, so Open works for
+  a project PDF too. Also: a picture opened from the banner opens read-only
+  and needs a tap on **Mark up** before the card shows.
+  - [ ] 🤖 Automated test
+  - [ ] 🖐️ Manual test
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

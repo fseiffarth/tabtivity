@@ -2912,3 +2912,23 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2341. **The desktop PDF viewer hints at an open markup question while marking
+    is off.** The agent's markup questions (`docs/context/markup_mcp.md`,
+    `PdfMarkupQuestions.tsx`) show only while **✎ Mark up** is on, because the
+    target tab is chosen when the mode comes on. With the mode off nothing on
+    the toolbar says an ask is waiting, so a reader who closed the strip after
+    Submit never sees it. Give the Mark up button a dot (the phone's Mark up
+    carries one for unsent marks) when the PDF's project has an open ask for
+    this file, listed per agent tab of the project without choosing one, and
+    open the strip on the asking tab when clicked.
+    - [ ] 🤖 Automated test
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
