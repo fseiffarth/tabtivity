@@ -187,8 +187,8 @@ fi
 echo "── the key keeper answers by uid ──"
 # Hosted plan §5.4 (P3b): the administrator's agent API keys sit in a 0700
 # directory of <slug>-auth; its socket offers and lists keys only to the
-# gateway's account, hands a key only to a server user, refuses everyone
-# else. Probed with requests that change nothing (a refused set writes
+# gateway's account (and only it sets who may use a key), hands a key only
+# to a server user on that key's list, refuses everyone else. Probed with requests that change nothing (a refused set writes
 # nothing; the fake key never reaches a file).
 KEEPER="/run/$APP_SLUG/auth.sock"
 keeper_says() { printf '%s\n' "$2" | runuser -u "$1" -- nc -U -N "$KEEPER" 2>&1; }
@@ -199,7 +199,7 @@ elif ! command -v nc >/dev/null; then
 else
   for u in "$1" "$2"; do
     expect_eacces "$u cannot list the keeper's key directory"  "$u" ls "/var/lib/${APP_SLUG}-auth"
-    for request in '{"op":"status"}' "{\"op\":\"remove\",\"cli\":\"claude\",\"by\":\"$u\"}"; do
+    for request in '{"op":"status"}' "{\"op\":\"remove\",\"cli\":\"claude\",\"by\":\"$u\"}" "{\"op\":\"users\",\"cli\":\"claude\",\"users\":[\"$u\"],\"by\":\"$u\"}"; do
       out="$(keeper_says "$u" "$request")"
       if printf '%s' "$out" | grep -q '"error":"refused"'; then
         pass "the keeper refuses $u an administrator's request (${request%%,*})"

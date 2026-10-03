@@ -11,11 +11,21 @@
 //!   ([`Peers`]): the gateway's account may offer, withdraw and list keys —
 //!   never read one back; a server user (the helper's own linkable-account
 //!   rule, [`crate::helper::check_account`]: in `<slug>-users`, uid ≥ 1000, in no
-//!   root-equivalent group) may list the offer and fetch a key; anyone else
+//!   root-equivalent group) may list the offer and fetch a key — only a key
+//!   whose list names it ([`Meta::users`], set by the administrator; a new
+//!   key's list is empty) — and ask for the keys' fingerprints; anyone else
 //!   is refused. Fenced agents never reach it: the fence mounts a fresh
 //!   tmpfs over `/run`.
+//! * **Fair share**: at most [`MAX_CONNECTIONS`] connections at once and
+//!   [`MAX_PER_UID`] of them per caller uid, each bounded by [`DEADLINE`], so
+//!   one user holding connections open cannot fail another's spawns.
+//! * **Earlier keys** are remembered as fingerprints only
+//!   (`<cli>/previous.json`, [`keys_wire::Fingerprint`]), so a daemon can tell
+//!   that a login file holds a key the administrator has since rotated or
+//!   withdrawn, and never adopts it as the user's own login.
 //! * **Audit**: `audit.jsonl` beside the keys (the gateway's [`AuditLog`]
-//!   format): who set or withdrew which CLI's key, and who fetched one (at
+//!   format): who set or withdrew which CLI's key, who added or removed which
+//!   user on its list (resource `<cli>/<user>`), and who fetched one (at
 //!   most one row per user and CLI per [`DELIVERY_AUDIT_EVERY`], so a user
 //!   cannot flood the log). Never the key, never a fragment of it.
 //!
@@ -33,21 +43,30 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::audit::{AuditLog, Row};
-use crate::keys_wire::{self, KeyStatus, Offer, Reply, Request, MAX_LINE};
+use crate::keys_wire::{self, Fingerprint, KeyStatus, Offer, Reply, Request, MAX_LINE};
 use crate::{names, wire};
 
 pub const KEY_FILE: &str = "api-key";
 pub const META_FILE: &str = "meta.json";
+/// Fingerprints of the CLI's earlier keys (never a key).
+pub const PREVIOUS_FILE: &str = "previous.json";
 /// Connections served at once; more are closed unanswered (local users can
 /// connect; none may hold the keeper).
 pub const MAX_CONNECTIONS: usize = 32;
+/// Connections served at once per caller uid: one user keeping connections
+/// open leaves the other slots to everyone else (P3b review, finding 6).
+pub const MAX_PER_UID: usize = 4;
 /// The whole exchange — read, answer, write — or the connection is dropped.
-pub const DEADLINE: Duration = Duration::from_secs(5);
+/// A request is one short line and the answer a file read: an honest caller
+/// is done in milliseconds.
+pub const DEADLINE: Duration = Duration::from_secs(2);
 /// A fetch is audited at most this often per user and CLI.
 pub const DELIVERY_AUDIT_EVERY: u64 = 10 * 60;
 pub const VERB_SET: &str = "agent-key-set";
 pub const VERB_REMOVE: &str = "agent-key-remove";
 pub const VERB_DELIVERED: &str = "agent-key-delivered";
+pub const VERB_USER_ADD: &str = "agent-key-user-add";
+pub const VERB_USER_REMOVE: &str = "agent-key-user-remove";
 
 /// Who is on the other end, by uid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +118,17 @@ fn name_of_uid(uid: u32) -> Option<String> {
 struct Meta {
     updated: u64,
     by: String,
+    /// The accounts allowed to fetch this key. Empty for a new key: the
+    /// administrator names its users explicitly; replacing the key keeps the
+    /// list, withdrawing it forgets the list.
+    #[serde(default)]
+    users: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Previous {
+    #[serde(default)]
+    fingerprints: Vec<Fingerprint>,
 }
 
 pub struct Keeper {
@@ -132,10 +162,13 @@ impl Keeper {
             return Reply::error("invalid");
         };
         match (peer, request) {
-            (_, Request::Offered) => Reply { offered: self.offered(), ..Reply::ok() },
+            (Peer::Gateway, Request::Offered) => Reply { offered: self.offered(), ..Reply::ok() },
+            (Peer::User(user), Request::Offered) => Reply { offered: self.offered_to(&user), ..Reply::ok() },
             (Peer::User(user), Request::Get { cli }) => self.get(&user, &cli),
+            (Peer::User(_), Request::Fingerprints { cli }) => self.fingerprints(&cli),
             (Peer::Gateway, Request::Set { cli, key, by }) => self.set(&cli, &key, &by),
             (Peer::Gateway, Request::Remove { cli, by }) => self.remove(&cli, &by),
+            (Peer::Gateway, Request::Users { cli, users, by }) => self.set_users(&cli, &users, &by),
             (Peer::Gateway, Request::Status) => Reply { status: self.status(crate::now()), ..Reply::ok() },
             _ => Reply::error("refused"),
         }
@@ -167,16 +200,32 @@ impl Keeper {
         ids.into_iter().filter_map(|cli| self.meta_of(&cli).map(|m| Offer { cli, updated: m.updated })).collect()
     }
 
-    fn get(&self, user: &str, cli: &str) -> Reply {
-        let Some(dir) = self.cli_dir(cli) else { return Reply::error("invalid") };
-        let key = match crate::read_regular(&dir.join(KEY_FILE)) {
-            Ok(bytes) => String::from_utf8(bytes).ok().map(|k| k.trim().to_string()).filter(|k| keys_wire::valid_key(k)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+    /// The offered CLIs whose list names `user`.
+    pub fn offered_to(&self, user: &str) -> Vec<Offer> {
+        self.offered().into_iter().filter(|o| self.meta_of(&o.cli).is_some_and(|m| m.users.contains(user))).collect()
+    }
+
+    /// The current key of `cli`, if one is on offer. `Err` only when the
+    /// file is there but cannot be read.
+    fn read_key(&self, dir: &Path, cli: &str) -> Result<Option<String>, ()> {
+        match crate::read_regular(&dir.join(KEY_FILE)) {
+            Ok(bytes) => Ok(String::from_utf8(bytes).ok().map(|k| k.trim().to_string()).filter(|k| keys_wire::valid_key(k))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => {
                 eprintln!("keeper: {cli}: {e}");
-                return Reply::error("failed");
+                Err(())
             }
-        };
+        }
+    }
+
+    fn get(&self, user: &str, cli: &str) -> Reply {
+        let Some(dir) = self.cli_dir(cli) else { return Reply::error("invalid") };
+        // Not on the list reads exactly like no key at all: a user learns
+        // nothing about keys offered to others.
+        if !self.meta_of(cli).is_some_and(|m| m.users.contains(user)) {
+            return Reply::error("no-key");
+        }
+        let Ok(key) = self.read_key(&dir, cli) else { return Reply::error("failed") };
         let Some(key) = key else { return Reply::error("no-key") };
         let now = crate::now();
         let due = {
@@ -194,6 +243,33 @@ impl Keeper {
         Reply { key: Some(key), ..Reply::ok() }
     }
 
+    /// Fingerprints of the current key and the remembered earlier ones.
+    fn fingerprints(&self, cli: &str) -> Reply {
+        let Some(dir) = self.cli_dir(cli) else { return Reply::error("invalid") };
+        let Ok(current) = self.read_key(&dir, cli) else { return Reply::error("failed") };
+        let mut fingerprints = self.previous_of(&dir).fingerprints;
+        fingerprints.extend(current.as_deref().map(keys_wire::fingerprint));
+        Reply { fingerprints, ..Reply::ok() }
+    }
+
+    fn previous_of(&self, dir: &Path) -> Previous {
+        crate::read_regular(&dir.join(PREVIOUS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    /// Remember the current key's fingerprint before it is replaced or
+    /// withdrawn (the newest [`keys_wire::MAX_HISTORY`] are kept).
+    fn remember_current(&self, dir: &Path, cli: &str) -> std::io::Result<()> {
+        let Ok(Some(current)) = self.read_key(dir, cli) else { return Ok(()) };
+        let print = keys_wire::fingerprint(&current);
+        let mut previous = self.previous_of(dir);
+        previous.fingerprints.retain(|p| *p != print);
+        previous.fingerprints.push(print);
+        let excess = previous.fingerprints.len().saturating_sub(keys_wire::MAX_HISTORY);
+        previous.fingerprints.drain(..excess);
+        let bytes = serde_json::to_vec(&previous).map_err(std::io::Error::other)?;
+        crate::write_atomic(&dir.join(PREVIOUS_FILE), &bytes, 0o600)
+    }
+
     fn set(&self, cli: &str, key: &str, by: &str) -> Reply {
         let (Some(dir), true, true) = (self.cli_dir(cli), keys_wire::valid_key(key), wire::valid_account_name(by)) else {
             return Reply::error("invalid");
@@ -208,8 +284,11 @@ impl Keeper {
                     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
                 }
             }
+            // A replaced key keeps its list; a new offer starts with nobody.
+            let users = self.meta_of(cli).map(|m| m.users).unwrap_or_default();
+            self.remember_current(&dir, cli)?;
             crate::write_atomic(&dir.join(KEY_FILE), key.as_bytes(), 0o600)?;
-            let meta = serde_json::to_vec(&Meta { updated: crate::now(), by: by.to_string() }).map_err(std::io::Error::other)?;
+            let meta = serde_json::to_vec(&Meta { updated: crate::now(), by: by.to_string(), users }).map_err(std::io::Error::other)?;
             crate::write_atomic(&dir.join(META_FILE), &meta, 0o600)
         })();
         match result {
@@ -231,6 +310,13 @@ impl Keeper {
         };
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
         let had = std::fs::symlink_metadata(dir.join(KEY_FILE)).is_ok();
+        if had {
+            if let Err(e) = self.remember_current(&dir, cli) {
+                eprintln!("keeper: remove {cli}: {e}");
+                self.audit.record(Row::new(by, None, VERB_REMOVE, "failed").resource(cli));
+                return Reply::error("failed");
+            }
+        }
         for file in [KEY_FILE, META_FILE] {
             match std::fs::remove_file(dir.join(file)) {
                 Ok(()) => {}
@@ -242,9 +328,40 @@ impl Keeper {
                 }
             }
         }
+        // The directory stays while it remembers earlier keys' fingerprints.
         let _ = std::fs::remove_dir(&dir);
         self.audit.record(Row::new(by, None, VERB_REMOVE, if had { "ok" } else { "none" }).resource(cli));
         Reply::ok()
+    }
+
+    /// Replace the list of users who may fetch `cli`'s key; one audit row
+    /// per user added or removed (resource `<cli>/<user>`).
+    fn set_users(&self, cli: &str, users: &[String], by: &str) -> Reply {
+        let valid = users.len() <= keys_wire::MAX_USERS && users.iter().all(|u| wire::valid_account_name(u));
+        let (Some(dir), true, true) = (self.cli_dir(cli), valid, wire::valid_account_name(by)) else {
+            return Reply::error("invalid");
+        };
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut meta) = self.meta_of(cli) else { return Reply::error("no-key") };
+        let wanted: BTreeSet<String> = users.iter().cloned().collect();
+        let added: Vec<String> = wanted.difference(&meta.users).cloned().collect();
+        let removed: Vec<String> = meta.users.difference(&wanted).cloned().collect();
+        meta.users = wanted;
+        let written = serde_json::to_vec(&meta).map_err(std::io::Error::other).and_then(|bytes| crate::write_atomic(&dir.join(META_FILE), &bytes, 0o600));
+        let result = if written.is_ok() { "ok" } else { "failed" };
+        if let Err(e) = written {
+            eprintln!("keeper: users {cli}: {e}");
+        }
+        for (verb, names) in [(VERB_USER_ADD, &added), (VERB_USER_REMOVE, &removed)] {
+            for name in names {
+                self.audit.record(Row::new(by, None, verb, result).resource(&format!("{cli}/{name}")));
+            }
+        }
+        if result == "ok" {
+            Reply::ok()
+        } else {
+            Reply::error("failed")
+        }
     }
 
     /// The admin panel's view: per offered key, when and by whom, and which
@@ -261,16 +378,52 @@ impl Keeper {
                     .filter(|r| r.verb == VERB_DELIVERED && r.time >= since && r.resource.as_deref() == Some(offer.cli.as_str()))
                     .map(|r| r.user.clone())
                     .collect();
-                KeyStatus { cli: offer.cli, updated: meta.updated, by: meta.by, users: users.into_iter().collect() }
+                KeyStatus { cli: offer.cli, updated: meta.updated, by: meta.by, users: users.into_iter().collect(), allowed: meta.users.into_iter().collect() }
             })
             .collect()
     }
 }
 
+/// Connections in flight per caller uid; a [`UidSlot`] gives its one back
+/// when dropped.
+#[derive(Default)]
+struct PerUid(Mutex<HashMap<u32, usize>>);
+
+struct UidSlot {
+    table: Arc<PerUid>,
+    uid: u32,
+}
+
+impl PerUid {
+    fn take(table: &Arc<PerUid>, uid: u32) -> Option<UidSlot> {
+        let mut map = table.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let used = map.entry(uid).or_insert(0);
+        if *used >= MAX_PER_UID {
+            return None;
+        }
+        *used += 1;
+        Some(UidSlot { table: table.clone(), uid })
+    }
+}
+
+impl Drop for UidSlot {
+    fn drop(&mut self) {
+        let mut map = self.table.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(used) = map.get_mut(&self.uid) {
+            *used = used.saturating_sub(1);
+            if *used == 0 {
+                map.remove(&self.uid);
+            }
+        }
+    }
+}
+
 /// Serve `listener` until it fails: one task per connection, at most
-/// [`MAX_CONNECTIONS`], each bounded by [`DEADLINE`].
+/// [`MAX_CONNECTIONS`] and [`MAX_PER_UID`] per caller uid, each bounded by
+/// [`DEADLINE`]. A connection over either cap is closed unanswered.
 pub async fn serve(keeper: Arc<Keeper>, listener: tokio::net::UnixListener) -> Result<(), String> {
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let per_uid = Arc::new(PerUid::default());
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -280,13 +433,17 @@ pub async fn serve(keeper: Arc<Keeper>, listener: tokio::net::UnixListener) -> R
                 continue;
             }
         };
+        let Ok(uid) = stream.peer_cred().map(|c| c.uid()) else { continue };
+        let Some(uid_slot) = PerUid::take(&per_uid, uid) else {
+            continue;
+        };
         let Ok(permit) = slots.clone().try_acquire_owned() else {
             continue;
         };
         let keeper = keeper.clone();
         tokio::spawn(async move {
-            let _permit = permit;
-            let _ = tokio::time::timeout(DEADLINE, one(&keeper, stream)).await;
+            let _slots = (permit, uid_slot);
+            let _ = tokio::time::timeout(DEADLINE, one(&keeper, uid, stream)).await;
         });
     }
 }
@@ -311,8 +468,7 @@ async fn read_line<R: AsyncReadExt + Unpin>(reader: &mut R) -> std::io::Result<V
     Ok(line)
 }
 
-async fn one(keeper: &Keeper, mut stream: tokio::net::UnixStream) -> std::io::Result<()> {
-    let uid = stream.peer_cred()?.uid();
+async fn one(keeper: &Keeper, uid: u32, mut stream: tokio::net::UnixStream) -> std::io::Result<()> {
     let line = read_line(&mut stream).await?;
     let reply = keeper.answer(uid, &line);
     let mut out = serde_json::to_vec(&reply).map_err(std::io::Error::other)?;
@@ -376,6 +532,76 @@ mod tests {
         k.answer(1000, &serde_json::to_vec(&request).unwrap())
     }
 
+    fn allow(gw: &Keeper, cli: &str, users: &[&str]) {
+        let reply = ask_line(gw, Request::Users { cli: cli.into(), users: users.iter().map(|u| u.to_string()).collect(), by: "admin".into() });
+        assert!(reply.ok, "{reply:?}");
+    }
+
+    #[test]
+    fn only_users_on_a_keys_list_see_or_fetch_it_and_the_list_is_audited() {
+        let dir = tempfile::tempdir().unwrap();
+        let gw = keeper(dir.path(), Peer::Gateway);
+        let alice = keeper(dir.path(), Peer::User("alice".into()));
+        let bob = keeper(dir.path(), Peer::User("bob".into()));
+        let users = |names: &[&str]| Request::Users { cli: "claude".into(), users: names.iter().map(|u| u.to_string()).collect(), by: "admin".into() };
+        assert_eq!(ask_line(&gw, users(&["alice"])).error.as_deref(), Some("no-key"), "no list without a key");
+        assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: KEY.into(), by: "admin".into() }).ok);
+        assert_eq!(ask_line(&alice, users(&["alice"])).error.as_deref(), Some("refused"), "a user cannot put themselves on it");
+        assert_eq!(ask_line(&gw, users(&["Not Valid"])).error.as_deref(), Some("invalid"));
+        allow(&gw, "claude", &["alice", "bob"]);
+        assert_eq!(ask_line(&gw, Request::Status).status[0].allowed, ["alice", "bob"]);
+        assert!(ask_line(&bob, Request::Get { cli: "claude".into() }).ok);
+        allow(&gw, "claude", &["alice"]);
+        assert!(ask_line(&bob, Request::Offered).offered.is_empty(), "taken off the list: not offered to bob");
+        assert_eq!(ask_line(&bob, Request::Get { cli: "claude".into() }).error.as_deref(), Some("no-key"), "and not fetched by bob");
+        assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).key.as_deref(), Some(KEY));
+        // Replacing the key keeps its list; withdrawing forgets it.
+        assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: "fake-key-ROTATED0123456789ab".into(), by: "admin".into() }).ok);
+        assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).key.as_deref(), Some("fake-key-ROTATED0123456789ab"));
+        assert!(ask_line(&gw, Request::Remove { cli: "claude".into(), by: "admin".into() }).ok);
+        assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: KEY.into(), by: "admin".into() }).ok);
+        assert!(ask_line(&alice, Request::Offered).offered.is_empty(), "a re-offered key starts with nobody");
+        let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
+        let rows: Vec<&str> = audit.lines().filter(|l| l.contains("agent-key-user")).collect();
+        assert_eq!(rows.len(), 3, "{audit}");
+        assert!(rows[0].contains(VERB_USER_ADD) && rows[0].contains("claude/alice") && rows[0].contains(r#""user":"admin""#), "{}", rows[0]);
+        assert!(rows[2].contains(VERB_USER_REMOVE) && rows[2].contains("claude/bob"), "{}", rows[2]);
+        assert!(!audit.contains(KEY), "{audit}");
+    }
+
+    #[test]
+    fn earlier_keys_are_remembered_by_fingerprint_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let gw = keeper(dir.path(), Peer::Gateway);
+        let carol = keeper(dir.path(), Peer::User("carol".into()));
+        let old = "fake-key-FIRST0123456789abcdef";
+        assert!(ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints.is_empty());
+        assert!(ask_line(&gw, Request::Set { cli: "vibe".into(), key: old.into(), by: "admin".into() }).ok);
+        assert!(ask_line(&gw, Request::Set { cli: "vibe".into(), key: KEY.into(), by: "admin".into() }).ok);
+        // Any server user may ask, listed or not: a fingerprint calls no provider.
+        let prints = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints;
+        assert_eq!(prints, [keys_wire::fingerprint(old), keys_wire::fingerprint(KEY)]);
+        assert_eq!(ask_line(&gw, Request::Fingerprints { cli: "vibe".into() }).error.as_deref(), Some("refused"));
+        assert!(ask_line(&gw, Request::Remove { cli: "vibe".into(), by: "admin".into() }).ok);
+        let prints = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints;
+        assert_eq!(prints.len(), 2, "a withdrawn key is still recognised: {prints:?}");
+        let on_disk = std::fs::read_to_string(dir.path().join("vibe").join(PREVIOUS_FILE)).unwrap();
+        assert!(!on_disk.contains(old) && !on_disk.contains(KEY), "{on_disk}");
+        let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
+        assert!(!audit.contains(VERB_DELIVERED), "asking for fingerprints is no delivery: {audit}");
+    }
+
+    #[test]
+    fn one_uid_cannot_hold_every_slot() {
+        let table = Arc::new(PerUid::default());
+        let held: Vec<UidSlot> = (0..MAX_PER_UID).map(|_| PerUid::take(&table, 1001).unwrap()).collect();
+        assert!(PerUid::take(&table, 1001).is_none(), "the hog is capped");
+        assert!(PerUid::take(&table, 1002).is_some(), "another user still gets in");
+        drop(held);
+        assert!(PerUid::take(&table, 1001).is_some(), "slots come back when connections end");
+        assert!(table.0.lock().unwrap().get(&1002).is_none(), "an idle uid leaves no entry");
+    }
+
     #[test]
     fn only_the_gateway_offers_and_only_a_user_fetches() {
         let dir = tempfile::tempdir().unwrap();
@@ -387,6 +613,9 @@ mod tests {
         assert!(ask_line(&gw, set).ok);
         assert_eq!(ask_line(&gw, Request::Get { cli: "claude".into() }).error.as_deref(), Some("refused"), "the gateway never reads a key back");
         assert_eq!(ask_line(&stranger, Request::Offered).error.as_deref(), Some("refused"));
+        assert!(ask_line(&alice, Request::Offered).offered.is_empty(), "a new key is offered to nobody");
+        assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).error.as_deref(), Some("no-key"));
+        allow(&gw, "claude", &["alice"]);
         let offered = ask_line(&alice, Request::Offered).offered;
         assert_eq!(offered.iter().map(|o| o.cli.as_str()).collect::<Vec<_>>(), ["claude"]);
         let got = ask_line(&alice, Request::Get { cli: "claude".into() });
@@ -407,6 +636,7 @@ mod tests {
         let alice = keeper(dir.path(), Peer::User("alice".into()));
         let bob = keeper(dir.path(), Peer::User("bob".into()));
         assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: KEY.into(), by: "admin".into() }).ok);
+        allow(&gw, "claude", &["alice", "bob"]);
         for _ in 0..5 {
             assert!(ask_line(&alice, Request::Get { cli: "claude".into() }).ok);
         }
@@ -420,7 +650,7 @@ mod tests {
         assert!(ask_line(&gw, Request::Remove { cli: "claude".into(), by: "admin".into() }).ok);
         assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).error.as_deref(), Some("no-key"), "withdrawn: the next fetch gets nothing");
         assert!(ask_line(&gw, Request::Offered).offered.is_empty());
-        assert!(!dir.path().join("claude").exists());
+        assert!(!dir.path().join("claude").join(KEY_FILE).exists() && !dir.path().join("claude").join(META_FILE).exists());
         let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
         assert!(audit.contains(VERB_SET) && audit.contains(VERB_REMOVE));
     }

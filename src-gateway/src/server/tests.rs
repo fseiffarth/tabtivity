@@ -390,11 +390,24 @@ async fn only_an_admin_offers_an_agent_key_and_it_never_comes_back() {
     assert!(!answer.contains(KEY), "{answer}");
     let v: Value = serde_json::from_str(&answer).unwrap();
     assert_eq!((v["keys"][0]["cli"].as_str(), v["keys"][0]["by"].as_str()), (Some("claude"), Some("alice")));
+    assert_eq!(v["keys"][0]["allowed"], json!([]), "a new key is offered to nobody");
+    assert!(v["accounts"].as_array().unwrap().iter().any(|a| a == "alice"), "{answer}");
+    // Who may use it: accounts of this gateway only, from the admin's origin.
+    let users = |names: &[&str]| json!({ "users": names }).to_string();
+    let (status, _, _) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", "https://evil.example")], Some(&users(&["alice"]))).await;
+    assert_eq!(status, 403);
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&users(&["mallory"]))).await;
+    assert_eq!((status, answer.contains("unknown_user")), (400, true), "{answer}");
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&users(&["alice"]))).await;
+    assert_eq!(status, 200, "{answer}");
+    let (_, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
+    let v: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(v["keys"][0]["allowed"], json!(["alice"]), "{answer}");
     let (status, _, _) = raw(f.addr, "DELETE", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", ORIGIN)], None).await;
     assert_eq!(status, 200);
     assert!(!keys.join("claude").join(crate::keeper::KEY_FILE).exists());
     let audit = std::fs::read_to_string(f.gw.config.state_dir.join(crate::audit::AUDIT_FILE)).unwrap();
-    assert!(audit.contains("agent-key-set") && audit.contains("agent-key-remove") && !audit.contains(KEY), "{audit}");
+    assert!(audit.contains("agent-key-set") && audit.contains("agent-key-remove") && audit.contains("agent-key-users") && !audit.contains(KEY), "{audit}");
     // The keeper gone: a clear refusal, not a hang.
     std::fs::remove_file(&f.gw.config.keeper_socket).unwrap();
     let (status, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;

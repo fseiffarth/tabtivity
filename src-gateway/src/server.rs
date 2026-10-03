@@ -15,9 +15,9 @@
 //! * Without one: `/api/*` is `401`, `/desktop*` a sign-in page, other `GET`s
 //!   the PWA's files from disk.
 //! * `/gateway/v1/{audit,policy,status}` — the gateway's own small API.
-//! * `/gateway/v1/agent-keys[/<cli>]` — the administrator's agent API keys
-//!   (plan §5.4): listed, offered and withdrawn through the key keeper
-//!   ([`crate::keeper`]); a key goes in, never comes back out.
+//! * `/gateway/v1/agent-keys[/<cli>[/users]]` — the administrator's agent API
+//!   keys (plan §5.4): listed, offered, withdrawn and given their users through
+//!   the key keeper ([`crate::keeper`]); a key goes in, never comes back out.
 //! * The user-content listener: `/content/<user>/<ticket>` → that user's
 //!   daemon's `/content/<ticket>`, cookies stripped.
 //!
@@ -489,7 +489,8 @@ async fn policy_put(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -
 }
 
 /// The administrator's agent API keys as the key keeper holds them: per
-/// offered CLI, when, by whom, and who fetched it lately. Never a key.
+/// offered CLI, when, by whom, who may fetch it and who did lately — and the
+/// account names the panel picks users from. Never a key.
 async fn agent_keys_get(State(gw): State<Shared>, headers: HeaderMap) -> Response {
     let Some((account, _)) = gw.routed(&headers) else {
         return api_error(StatusCode::UNAUTHORIZED, "unauthenticated");
@@ -498,7 +499,10 @@ async fn agent_keys_get(State(gw): State<Shared>, headers: HeaderMap) -> Respons
         return api_error(StatusCode::FORBIDDEN, "admin");
     }
     match crate::keeper::ask(&gw.config.keeper_socket, &keys_wire::Request::Status).await {
-        Ok(reply) if reply.ok => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({ "keys": reply.status }))).into_response(),
+        Ok(reply) if reply.ok => {
+            let accounts: Vec<String> = gw.db().accounts.iter().map(|a| a.name.clone()).collect();
+            (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({ "keys": reply.status, "accounts": accounts }))).into_response()
+        }
         Ok(reply) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": "keeper", "detail": reply.error }))).into_response(),
         Err(error) => {
             eprintln!("gateway: key keeper: {error}");
@@ -569,6 +573,57 @@ async fn agent_key_delete(State(gw): State<Shared>, RoutePath(cli): RoutePath<St
     agent_key_change(&gw, &cli, &headers, None).await
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UsersBody {
+    users: Vec<String>,
+}
+
+/// Who may use one CLI's key (`PUT`, body `{"users": [names]}`): accounts
+/// of this gateway only. Admin only, exact origin; audited here (who, which
+/// CLI) and by the keeper (each user added or removed).
+async fn agent_key_users(State(gw): State<Shared>, RoutePath(cli): RoutePath<String>, headers: HeaderMap, body: Bytes) -> Response {
+    if !exact_origin(&gw, &headers) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some((account, device)) = gw.routed(&headers) else {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthenticated");
+    };
+    if account.role != Role::Admin {
+        gw.audit.record(Row::new(&account.name, Some(&device), "agent-key-users", "refused"));
+        return api_error(StatusCode::FORBIDDEN, "admin");
+    }
+    if !keys_wire::valid_cli_id(&cli) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_cli");
+    }
+    let Ok(UsersBody { users }) = serde_json::from_slice::<UsersBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let known = {
+        let db = gw.db();
+        users.len() <= keys_wire::MAX_USERS && users.iter().all(|u| db.accounts.iter().any(|a| &a.name == u))
+    };
+    if !known {
+        return api_error(StatusCode::BAD_REQUEST, "unknown_user");
+    }
+    let request = keys_wire::Request::Users { cli: cli.clone(), users, by: account.name.clone() };
+    match crate::keeper::ask(&gw.config.keeper_socket, &request).await {
+        Ok(reply) if reply.ok => {
+            gw.audit.record(Row::new(&account.name, Some(&device), "agent-key-users", "ok").resource(&cli));
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Ok(reply) => {
+            gw.audit.record(Row::new(&account.name, Some(&device), "agent-key-users", "failed").resource(&cli));
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": "keeper", "detail": reply.error }))).into_response()
+        }
+        Err(error) => {
+            eprintln!("gateway: key keeper: {error}");
+            gw.audit.record(Row::new(&account.name, Some(&device), "agent-key-users", "failed").resource(&cli));
+            api_error(StatusCode::BAD_GATEWAY, "keeper_unreachable")
+        }
+    }
+}
+
 /// Per account, with no content: name, role, how many devices route, and
 /// whether its daemon socket exists. Admins only. The socket is looked at,
 /// never connected to: a connect is what socket activation starts a daemon
@@ -633,6 +688,7 @@ pub fn router(gw: Shared) -> Router {
         .route("/gateway/v1/status", get(status))
         .route("/gateway/v1/agent-keys", get(agent_keys_get))
         .route("/gateway/v1/agent-keys/{cli}", put(agent_key_put).delete(agent_key_delete))
+        .route("/gateway/v1/agent-keys/{cli}/users", put(agent_key_users))
         .layer(DefaultBodyLimit::max(MAX_OWN_BODY));
     own.fallback(routed_or_static)
         .with_state(gw.clone())
