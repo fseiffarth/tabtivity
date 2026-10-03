@@ -280,7 +280,7 @@ impl Keeper {
             (Peer::Gateway, Request::Offered) => Reply { offered: self.offered(), ..Reply::ok() },
             (Peer::User(user), Request::Offered) => Reply { offered: self.offered_to(&user), ..Reply::ok() },
             (Peer::User(user), Request::Get { cli }) => self.get(&user, &cli),
-            (Peer::User(_), Request::Fingerprints { cli }) => self.fingerprints(&cli),
+            (Peer::User(user), Request::Fingerprints { cli }) => self.fingerprints(&user, &cli),
             (Peer::Gateway, Request::Set { cli, key, by }) => self.set(&cli, &key, &by),
             (Peer::Gateway, Request::Remove { cli, by }) => self.remove(&cli, &by),
             (Peer::Gateway, Request::Users { cli, users, by }) => self.set_users(&cli, &users, &by),
@@ -506,12 +506,26 @@ impl Keeper {
         }
     }
 
-    /// Fingerprints of the current key and the remembered earlier ones.
-    fn fingerprints(&self, cli: &str) -> Reply {
+    /// Fingerprints of the current key and the remembered earlier ones — for
+    /// a user on the key's list only (user decision, final review A6). Off
+    /// the list, and with nothing to recognise, the answer is the one a CLI
+    /// that never had a key gets (`no-key`): an unlisted user cannot learn
+    /// that a key exists, its length or how often it was rotated. The daemon
+    /// reads `no-key` as "holds none of them", so an unlisted user's own
+    /// logins move between their homes as before; a key file left from while
+    /// they were listed is then treated as theirs (they held it; withdrawing
+    /// someone is a reason to rotate the key at the provider).
+    fn fingerprints(&self, user: &str, cli: &str) -> Reply {
         let Some(dir) = self.cli_dir(cli) else { return Reply::error("invalid") };
+        if !self.meta_of(cli).is_some_and(|m| m.users.contains(user)) {
+            return Reply::error("no-key");
+        }
         let Ok(current) = self.read_key(cli) else { return Reply::error("failed") };
         let mut fingerprints = self.previous_of(&dir).fingerprints;
         fingerprints.extend(current.as_deref().map(keys_wire::fingerprint));
+        if fingerprints.is_empty() {
+            return Reply::error("no-key");
+        }
         Reply { fingerprints, ..Reply::ok() }
     }
 
@@ -916,17 +930,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let gw = keeper(dir.path(), Peer::Gateway);
         let carol = keeper(dir.path(), Peer::User("carol".into()));
+        let dave = keeper(dir.path(), Peer::User("dave".into()));
         let old = "fake-key-FIRST0123456789abcdef";
-        assert!(ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints.is_empty());
+        let never = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() });
+        assert_eq!((never.ok, never.error.as_deref()), (false, Some("no-key")));
         assert!(ask_line(&gw, Request::Set { cli: "vibe".into(), key: old.into(), by: "admin".into() }).ok);
         assert!(ask_line(&gw, Request::Set { cli: "vibe".into(), key: KEY.into(), by: "admin".into() }).ok);
-        // Any server user may ask, listed or not: a fingerprint calls no provider.
+        allow(&gw, "vibe", &["carol"]);
+        // A listed user's daemon recognises the current and earlier keys.
         let prints = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints;
         assert_eq!(prints, [keys_wire::fingerprint(old), keys_wire::fingerprint(KEY)]);
+        // An unlisted user gets exactly what a CLI that never had a key gets.
+        let unlisted = ask_line(&dave, Request::Fingerprints { cli: "vibe".into() });
+        assert_eq!(serde_json::to_value(&unlisted).unwrap(), serde_json::to_value(&never).unwrap());
         assert_eq!(ask_line(&gw, Request::Fingerprints { cli: "vibe".into() }).error.as_deref(), Some("refused"));
         assert!(ask_line(&gw, Request::Remove { cli: "vibe".into(), by: "admin".into() }).ok);
-        let prints = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() }).fingerprints;
-        assert_eq!(prints.len(), 2, "a withdrawn key is still recognised: {prints:?}");
+        let after = ask_line(&carol, Request::Fingerprints { cli: "vibe".into() });
+        assert_eq!(after.error.as_deref(), Some("no-key"), "withdrawn with its list: nobody is listed any more");
         let on_disk = std::fs::read_to_string(dir.path().join("vibe").join(PREVIOUS_FILE)).unwrap();
         assert!(!on_disk.contains(old) && !on_disk.contains(KEY), "{on_disk}");
         let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();

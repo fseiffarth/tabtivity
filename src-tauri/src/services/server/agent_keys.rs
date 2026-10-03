@@ -661,6 +661,11 @@ pub fn holds_admin_key(cli: &str, bytes: &[u8]) -> Option<bool> {
 
 pub fn holds_key_at(socket: &Path, cli: &str, bytes: &[u8]) -> Option<bool> {
     let reply = ask_at(socket, &Request::Fingerprints { cli: cli.to_string() }).ok()?;
+    // `no-key`: nothing this user may recognise — no key ever, or not on its
+    // list (the keeper answers both alike) — so the file holds none of them.
+    if reply.error.as_deref() == Some("no-key") {
+        return Some(false);
+    }
     if !reply.ok {
         return None;
     }
@@ -699,7 +704,8 @@ pub(crate) mod tests {
 
     /// A keeper on a temp socket: `offered` (to whoever asks — the uid and
     /// list rules are the keeper's own tests') with `key`, or nothing on
-    /// offer when `key` is `None`; fingerprints of [`OLD_KEY`] and the key.
+    /// offer when `key` is `None`; fingerprints of [`OLD_KEY`] and the key for
+    /// an offered CLI, `no-key` for the rest (the keeper's unlisted answer).
     pub(crate) fn fake_keeper(socket: &Path, offered: &'static [&'static str], key: Option<&'static str>) {
         let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
         std::thread::spawn(move || {
@@ -719,14 +725,13 @@ pub(crate) mod tests {
                         Some(k) if on_offer(&cli) => Reply { key: Some(k.to_string()), ..Reply::ok() },
                         _ => Reply::error("no-key"),
                     },
-                    Ok(Request::Fingerprints { cli }) => Reply {
-                        fingerprints: if offered.contains(&cli.as_str()) {
-                            std::iter::once(OLD_KEY).chain(key).map(super::super::keys_wire::fingerprint).collect()
-                        } else {
-                            Vec::new()
-                        },
+                    // Like the real keeper: off the list (here: not offered),
+                    // the answer of a CLI that never had a key.
+                    Ok(Request::Fingerprints { cli }) if offered.contains(&cli.as_str()) => Reply {
+                        fingerprints: std::iter::once(OLD_KEY).chain(key).map(super::super::keys_wire::fingerprint).collect(),
                         ..Reply::ok()
                     },
+                    Ok(Request::Fingerprints { .. }) => Reply::error("no-key"),
                     _ => Reply::error("refused"),
                 };
                 let mut out = serde_json::to_vec(&reply).unwrap();

@@ -327,8 +327,9 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   `set`/`remove`/`status`/`offered` and never `get`; an account passing the
   helper's own `check_account` (in `<slug>-users`, uid ≥ 1000, in no
   root-equivalent group — so `user-remove`'s `gpasswd --delete` also ends
-  its access) may `offered`/`get` — for keys whose list names it — and
-  `fingerprints`; anyone else is refused. The admin's
+  its access) may `offered`/`get`/`fingerprints` — for keys whose list
+  names it; off the list every answer is the one of a CLI that never had a
+  key (`no-key`) — anyone else is refused. The admin's
   name in a `set` is the gateway's word, as the role header is to a daemon:
   a compromised gateway can replace or withdraw keys, not read one. The
   socket is systemd's in the root-owned `/run/<slug>` (nobody squats it);
@@ -359,8 +360,13 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   that cannot be told: the admin's key never becomes the user's own login.
   The keeper answers that by fingerprints (length + SHA-256 of the current
   key and the last 32 replaced or withdrawn ones, `<cli>/previous.json`),
-  which any server user may ask for — no key travels, and the comparison is
-  not audited as a delivery (P3b review findings 7, 8). Such an undecidable file also stays in the home until
+  which a user on the key's list may ask for — no key travels, and the
+  comparison is not audited as a delivery (P3b review findings 7, 8). Off
+  the list the keeper answers `no-key`, as for a CLI that never had a key
+  (user decision, final review A6: an unlisted user learns nothing of a
+  key's existence, length or rotations); the daemon reads that as "holds
+  none", so a key file left from while the user was listed is treated as
+  theirs — withdrawing someone is a reason to rotate the key. Such an undecidable file also stays in the home until
   it can be told (it may be the only copy of a rotated refresh token); the
   same keeper answer fails every new spawn meanwhile (P3b review).
 - **Delivery at spawn, never stored.** `agent_keys::prepare_spawn` runs in
