@@ -1,6 +1,6 @@
 import { ApiError, api, traceConnect } from "./api";
 import { classifyUnavailable, unavailableDetail, type UnavailableReason } from "./connection";
-import { loadDevice as load, saveDevice as save, type AuthRecord } from "./authStore";
+import { loadDevice as load, loadPendingKey, saveDevice as save, savePendingKey, type AuthRecord } from "./authStore";
 
 function b64url(bytes: ArrayBuffer): string {
   const raw = String.fromCharCode(...new Uint8Array(bytes));
@@ -210,4 +210,54 @@ export async function pair(code: string, deviceName: string): Promise<void> {
   });
   const record = { deviceId: paired.device_id, privateKey: keys.privateKey };
   await save(record);
+}
+
+/** A hosted server's identity provider (P5), when it offers sign-in there:
+ * its button label. `null` on the desktop's Mobile host (no gateway route)
+ * and when the server has none. */
+export async function oidcProvider(): Promise<string | null> {
+  try {
+    const answer = await api<{ enabled?: boolean; name?: string }>("/gateway/v1/oidc", { method: "GET" }, AUTH_REQUEST_TIMEOUT);
+    return answer.enabled && answer.name ? answer.name : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign in at the identity provider to pair this device: a new key, kept
+ * across the redirect, and the provider's page. The server binds the
+ * sign-in to this key (its `nonce`) and to this browser (a cookie). */
+export async function startOidc(deviceName: string, go: (url: string) => void = (url) => location.assign(url)): Promise<void> {
+  const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const spki = await crypto.subtle.exportKey("spki", keys.publicKey);
+  await savePendingKey(keys.privateKey);
+  const started = await api<{ url: string }>("/gateway/v1/oidc/start", {
+    method: "POST",
+    body: JSON.stringify({ public_key: b64url(spki), device_name: deviceName }),
+  });
+  go(started.url);
+}
+
+/** How a provider sign-in came back (`/?oidc=…`), if this page load is one. */
+export type OidcOutcome = "paired" | "refused" | "unknown" | "expired" | "provider" | "busy";
+
+/** Finish a provider sign-in this page load returns from: with `paired`, the
+ * pending key becomes this device's pairing record under the id the server
+ * gave. The query is taken off the address either way, so a reload never
+ * repeats it. */
+export async function finishOidcReturn(): Promise<OidcOutcome | null> {
+  const params = new URLSearchParams(location.search);
+  const outcome = params.get("oidc") as OidcOutcome | null;
+  if (!outcome) return null;
+  const device = params.get("device");
+  history.replaceState(null, "", location.pathname + location.hash);
+  if (outcome === "paired" && device && /^[A-Za-z0-9_-]{8,128}$/.test(device)) {
+    const privateKey = await loadPendingKey();
+    if (!privateKey) return "expired";
+    await save({ deviceId: device, privateKey });
+    await savePendingKey(null);
+    return "paired";
+  }
+  await savePendingKey(null);
+  return outcome === "paired" ? "refused" : outcome;
 }

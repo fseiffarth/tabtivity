@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../mobile-web/src/auth", () => ({ pair: vi.fn() }));
+vi.mock("../../../mobile-web/src/auth", () => ({ pair: vi.fn(), oidcProvider: vi.fn(async () => null), startOidc: vi.fn(async () => undefined) }));
 vi.mock("../../../mobile-web/src/localLock", () => ({
   MIN_NEW_PIN: 6,
   validPin: (pin: string) => /^\d{4,12}$/.test(pin),
@@ -9,9 +9,9 @@ vi.mock("../../../mobile-web/src/localLock", () => ({
   platformBiometricAvailable: vi.fn(async () => true),
 }));
 
-import { pair } from "../../../mobile-web/src/auth";
+import { oidcProvider, pair, startOidc } from "../../../mobile-web/src/auth";
 import { configureLocalUnlock } from "../../../mobile-web/src/localLock";
-import { Pair } from "../../../mobile-web/src/screens/Pair";
+import { Pair, noteOidcOutcome } from "../../../mobile-web/src/screens/Pair";
 
 const paired = vi.mocked(pair);
 const configured = vi.mocked(configureLocalUnlock);
@@ -61,5 +61,26 @@ describe("phone connection", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
     expect(paired).toHaveBeenCalledTimes(1);
     expect(configured).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("phone connection through a server's identity provider (hosted P5)", () => {
+  it("offers the provider's sign-in beside the code and starts it with the device name", async () => {
+    vi.mocked(oidcProvider).mockResolvedValueOnce("Lab SSO");
+    render(<Pair setupLock={false} onDone={vi.fn()} />);
+    const button = await screen.findByRole("button", { name: /Sign in with Lab SSO/ });
+    expect(screen.getByLabelText("Pairing code")).toBeTruthy();
+    fireEvent.click(button);
+    await waitFor(() => expect(startOidc).toHaveBeenCalledWith("Mobile device"));
+  });
+
+  it("says why a returning sign-in paired nothing, once", async () => {
+    noteOidcOutcome("unknown");
+    render(<Pair setupLock={false} onDone={vi.fn()} />);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/not linked to an account/);
+    cleanup();
+    render(<Pair setupLock={false} onDone={vi.fn()} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Sign in with/ })).toBeNull();
   });
 });

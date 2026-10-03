@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AppMark } from "./AppMark";
-import { hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
+import { finishOidcReturn, hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
 import { newCodeAdvised, releaseSecrets } from "./secrets";
 import { SecretsNewCodeSheet } from "./screens/SecretsNewCodeSheet";
 import { SecretsRepinSheet } from "./screens/SecretsRepinSheet";
@@ -14,7 +14,7 @@ import { clearConnectReload, isConnectReload, noteUnlockedLeave, takeConnectRelo
 import { noteDesktopTheme } from "./theme";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
 import { useT } from "../../src/lib/i18n";
-import { Pair } from "./screens/Pair";
+import { Pair, noteOidcOutcome } from "./screens/Pair";
 import { LocalUnlock } from "./screens/LocalUnlock";
 import { LockedHomeShell } from "./screens/LockedHomeShell";
 import { Home } from "./screens/Home";
@@ -314,7 +314,14 @@ export function App() {
     traceConnect("app started", true);
     if (isConnectReload()) traceConnect("reloaded after a failed connect");
     primeConnection();
-    void Promise.all([hasPairedDevice(), hasLocalUnlock()]).then(([paired, locked]) => {
+    // Back from an identity provider's sign-in (a hosted server, P5): a
+    // paired outcome stores this device's key first, so the open below sees
+    // a paired device and goes on to the lock set-up; anything else is shown
+    // on the pairing screen.
+    void Promise.resolve(finishOidcReturn()).then((outcome) => {
+      noteOidcOutcome(outcome ?? null);
+      return Promise.all([hasPairedDevice(), hasLocalUnlock()]);
+    }).then(([paired, locked]) => {
       if (!paired) {
         forgetLastPlace();
         setPairNeedsLock(!locked);

@@ -59,3 +59,24 @@ export async function saveDevice(record: AuthRecord): Promise<void> {
     request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
   });
 }
+
+const PENDING_OIDC = "oidc-pending";
+
+/** The key a started identity-provider sign-in (hosted plan P5) asks the
+ * server to pair: kept across the provider's redirect, until it returns. */
+export async function savePendingKey(privateKey: CryptoKey | null): Promise<void> {
+  const database = await openAuthDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const request = database.transaction(STORE, "readwrite").objectStore(STORE).put(privateKey, PENDING_OIDC);
+    request.onsuccess = () => resolve(); request.onerror = () => reject(request.error);
+  });
+}
+
+export async function loadPendingKey(): Promise<CryptoKey | null> {
+  const database = await openAuthDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(STORE).objectStore(STORE).get(PENDING_OIDC);
+    request.onsuccess = () => resolve((request.result as CryptoKey | null | undefined) ?? null);
+    request.onerror = () => reject(request.error);
+  });
+}
