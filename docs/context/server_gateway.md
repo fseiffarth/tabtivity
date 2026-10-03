@@ -43,6 +43,19 @@ Tailscale Serve (TLS) ─► 127.0.0.1:8740  tabtivity-gateway  (user tabtivity-
   `GuardedListener` (compiled in by `#[path]`): a connection cap and
   handshake/body/idle deadlines, so idle connections from a tailnet peer or
   a local user cannot exhaust the gateway for everyone.
+- **Strangers never spend a known user's budget** (`rate.rs`). Pair and
+  challenge/session requests are sorted first: a request naming nobody the
+  gateway knows (an unknown account, an account with no invite pending and
+  no recent use, an unknown device id) is counted per source and in one
+  shared stranger window; a paired device is counted per device, per account
+  and under its own ceiling — never per source, because the source is the
+  rightmost `X-Forwarded-For` of a loopback peer (Tailscale Serve writes it)
+  and a local account can forge that header. A pair reaches a daemon only
+  while the helper's invite is pending (`gateway.json` `invite_until`) or the
+  account was routed lately, so a pair attempt never starts an idle daemon
+  and otherwise answers exactly like an unknown account. What remains: a
+  stranger who knows a name can still burn that user's invite (five wrong
+  codes, the daemon's rule) or fill that account's pair window.
 
 ## Why socket activation instead of the helper starting daemons
 
@@ -73,6 +86,15 @@ gateway unit, which runs no fence, is hardened (`ProtectSystem=strict`, …).
 ## The admin helper's rules (the only root code)
 
 - Names, never paths; every path is built from fixed roots.
+- **The machine may be someone's desktop** (user decision 2026-10-03).
+  `install` creates `<slug>-proc`, gives `polkit.service` that group by a
+  `SupplementaryGroups=` drop-in and prints — never applies — the fstab
+  line `hidepid=invisible,gid=<that gid>`; `check` fails `hidepid` on a
+  machine with an active display manager unless the gid and the drop-in
+  are in place, and fails `proc_group` when a server user is in the group;
+  the helper never links a member. Only polkit is listed: logind, GDM's
+  workers, accounts-daemon and colord run as root or look at their own
+  processes — add a unit only for a failure seen with hidepid on.
 - Links an existing account only if uid ≥ 1000 (not 65534), already in
   `<slug>-users` (the admin's deliberate step), not a service account, and
   **not root-equivalent** — re-checked at execution, after `useradd`:
@@ -115,14 +137,48 @@ and contacts only a listening socket owned by the daemon's own uid. The other
 condition of §5.1 ("a sign-in tab of that user is open") is the route's
 existing agent-tab check, which only knows this user's tabs.
 
-## Secrets (§6.8), primitives only
+## Secrets (§6.8): the device-released key
 
-`services::server::secrets`: per-device wraps (ephemeral P-256 ECDH →
-HKDF-SHA256 → AES-256-GCM, device id as AAD), a 128-bit recovery-code wrap,
-`wraps.json` `0600`, and K in the kernel persistent keyring. From a fenced
-agent tab `keyctl(KEYCTL_GET_PERSISTENT)` fails with EPERM (observed on the
-development machine, 2026-10-03), which is the seccomp filter of `f55f070f`
-doing its job. The exchange and `mail_crypt` integration are TODO #2350.
+`services::server::secrets` holds the primitives: per-device wraps
+(ephemeral P-256 ECDH → HKDF-SHA256 → AES-256-GCM, device id as AAD), a
+128-bit recovery-code wrap, `wraps.json` `0600`, K in the kernel persistent
+keyring. `services::server::vault` wires them:
+
+- **Only a daemon has a vault** (`serverd`'s `main` installs it, never
+  `run`, so a test serving a daemon cannot turn its test binary into a
+  server). Every caller asks `vault::vault()`; `None` is the desktop, whose
+  keychain and mail encryption are untouched.
+- **K is read from its `KeyHold` on every use** — the kernel keyring on a
+  server — never cached: a daemon restart finds it, a keyring flush (reboot)
+  locks at once. `PR_SET_DUMPABLE=0` is set before K can enter memory.
+- **Enrolment, not pairing.** After each sign-in the PWA enrols a
+  non-extractable ECDH key with a signature of its pairing key (a stolen
+  session cookie cannot enrol an attacker's key) and pins the daemon's
+  identity key (`<state>/secrets/identity.key`, P-256). Enrolling after
+  pairing also covers every device paired before this existed.
+- **The exchange.** `POST /api/v1/secrets/unlock` → X (the device's wrap's
+  ephemeral key) and a fresh transport key E, both under the identity
+  key's signature over context, origin, device id and exchange id; the
+  device answers `ECDH(device, X)` sealed under `HKDF(E‖T, ECDH(T, E))`
+  (AES-GCM, AAD device id + exchange id). Single use, 60 s, bound to the
+  session's device. The TLS-terminating gateway sees only ciphertext. The
+  HKDF vector is pinned on both sides (`vault::tests`, the vitest).
+- **What K opens:** `mail_crypt`'s `Device` mode (KEK = `HKDF(K,
+  "mail-kek")`; on a server new stores are only ever sealed — locked or not
+  set up, mail waits in memory and reopens on release) and the sealed
+  credential store (`<state>/secrets/credentials.json`, `HKDF(K,
+  "credentials")`) behind `remote_credentials`/`git_credentials`, where
+  "locked" reads like a locked OS keyring.
+- **Set-up and recovery** are the Server settings' secrets panel: the
+  recovery code is shown once and stored nowhere; a new code retires the
+  old wrap.
+- **Residuals.** The identity key sits in the home unsealed (it must work
+  while locked): a backup plus the gateway's position on a live connection
+  could impersonate the daemon to a device. Root reads a live daemon's
+  memory and the keyring (§4.4). Same-uid unfenced processes (the user's
+  own shell, a desktop app of the same account) can read the keyring entry;
+  the fence's seccomp keeps every agent out (EPERM observed from a fenced
+  tab, 2026-10-03). The "mail locked since reboot" push is not built.
 
 ## Host-channel inventory (§4.4)
 
@@ -135,9 +191,31 @@ doing its job. The exchange and `mail_crypt` integration are TODO #2350.
 | Daemon admin socket | daemon | `<state>/mobile-control/admin.sock` in a `0700` dir | closed |
 | Root MCP listener (`root_mcp.rs`) | desktop window | bearer token | not started by a daemon (#2339) |
 | Shared Ollama `127.0.0.1:11434` | admin's system service | none (decided 2026-10-03) | residual: any shell can drive it; model changes are `admin` |
-| VM egress proxy (`vm_proxy.rs`) | admin's VMs | none | residual, TODO #2355 |
+| VM egress proxy (`vm_proxy.rs`) | admin's VMs | per-VM `Proxy-Authorization` credentials (`<vm dir>/proxy.token`), `407` without | closed to other users (`45d1920d`, never booted) |
 | VM SSH forward (`vm.rs` `alloc_loopback_port`) | admin's VMs | SSH key auth | acceptable |
 | OpenVPN management port | admin | password file | acceptable (admin-only feature) |
 | CLI OAuth callback listeners | a user's CLI | the CLI's `state` | the relay only reaches the caller's own (this phase) |
 | CLIs' own IDE/helper ports | a user's CLI | per CLI | unknown; `server-isolation-test.sh` lists each user's listeners |
 | Abstract unix sockets | anyone | none | residual (§4.4); no session bus or X server on a headless server |
+
+## Side by side with the desktop app (plan Q12)
+
+One account may run the desktop app and have a server daemon on the same
+machine. They are separate apps: the daemon's `main` sets its own state dir
+and app home (`daemon::server_dirs`: `~/.local/share/<slug>-server`,
+`~/<slug>-server`) unless the unit's environment names others, so
+`projects.json`, sessions, the mobile control dir (admin socket, device
+keys, token), agent homes and logins, the agent-global layer, calendar and
+the mail store are never shared (two writers would corrupt each; the
+daemon could not open a keychain-sealed desktop mailbox anyway). tmux:
+the desktop's default server vs. the daemon's `-L <slug>` under
+`/run/<slug>/tmux/<user>`. Ports: the desktop sidecar's 8742/8743 vs the
+gateway's 8740/8741; the daemon only listens on its unix socket. Units: the
+desktop's user unit `<slug>-mobile-host` vs the system units
+`<slug>-serverd@`/`<slug>-tmux@`/`<slug>-gateway`. Tailscale Serve is the one
+shared resource: the gateway takes HTTPS 443 and 8443, so a desktop Mobile
+host on the same machine needs the third Serve port (`--https=10000`,
+origin `https://HOST:10000`). Shared Ollama: the admin's service owns
+11434; the desktop's own `ensure_ollama_running` only starts a user-level
+one when nothing answers. Not run live.
+

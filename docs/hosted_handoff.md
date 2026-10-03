@@ -1005,3 +1005,168 @@ every attempt above.
 | `scripts/privacy-check.sh d5b08338..HEAD` | green |
 | `git diff --check df55687c HEAD` | clean |
 | `npm run backend:stale` | the open window predates the build — expected: branch `hosted` is not what the window runs |
+
+## P3 part 2
+
+*Written 2026-10-03 by the P3 part-2 agent. Base `418d6f61` (P3 part 1 + its
+review). Nothing run on a real server, nothing run as root, no daemon or
+gateway started against a real state dir or port: root steps are plans,
+`--dry-run` text and fake-machine tests; the daemon ran only inside tests on
+temp sockets. The fence of this tab blocks `keyctl` (EPERM, expected), so the
+keyring is exercised through the `KeyHold` abstraction. Rationale, as built:
+[`context/server_gateway.md`](context/server_gateway.md).*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `2e2e70b5` | #2353 / review findings 12+13: `src-gateway/src/rate.rs` — strangers (unknown account, account with no pending invite and no recent use, unknown device id) counted per source + one shared window; known devices per device, per account, own ceiling; source = rightmost `X-Forwarded-For` behind loopback (`PeerAddr` connect info). `gateway.json` `invite_until` (written by the helper's `invite`); a pair reaches a daemon only while an invite is pending or the account was routed in the last 15 min — never wakes an idle daemon, answers like an unknown account otherwise. |
+| `c23b3a57` | #2350 daemon half: `services::server::vault` (`KeyHold`: `KernelKeyring`/`MemoryHold`; set-up + recovery code; ECDH enrolment checked against the pairing key; identity key; signed unlock exchange; wraps follow devices; `subkey`; sealed credential store; `on_unlock`); `/api/v1/secrets{,/enrol,/unlock,/unlock/finish,/setup,/recover}`; `mail_crypt::UnlockMode::Device` + `enable_default`; mail never opens plaintext on a server and reopens on release; `remote_credentials` → vault on a server; `serverd` installs the vault in `main`; finding 15 (no stack copies of K, zeroizing recovery code, private `TMPDIR` for CLI installs). `tests/server_secrets.rs` (own binary: installs the global vault). |
+| `8f41c8b8` | Review finding 11 (user decision): `src-gateway/src/sudoers.rs` + helper refuses any account a sudoers rule names (read-only parse of sudoers + includes; fail closed; nsswitch non-`files` refuses) and members of docker/lxd/incus-admin/libvirt/disk — admin role too, re-checked at execution. Closes #2351 (idle daemons keep running). **Not brand-check green** (a test literal); fixed in `00b2bc4a`. |
+| `fbf124c9` | #2350 device half: `mobile-web/src/secrets.ts` (enrol + release after each sign-in), `ServerSecrets.tsx` in Server settings (set-up shows the code once, new code, unlock with code), `recovery-code` rotation route, device-mode label in the mail encryption dialog; i18n ×5; UntestedTag `server.secrets`. |
+| `3c090785` | #2349: the crate split, as a feature split (see Design). `src-serverd/` (`app-serverd`, bin `<slug>-serverd`); `src-tauri/src/bin/serverd.rs` removed; CI lint of the no-desktop library + `ldd` step; brand tools follow. |
+| `00b2bc4a` | brand-check fix for `8f41c8b8`. |
+| `a1802cd8` | Server on someone's desktop (user decision): `<slug>-proc` exception group, polkit drop-in, printed fstab line; `check` fails hidepid on a machine with a display manager without them, and `proc_group` when a server user is a member; daemon's own state dir and app home (`daemon::server_dirs`); isolation script follows. |
+| `44a1db52` | #2354: `cliInstalls` in the hello; Manage CLIs shows versions + `sudo <slug>-admin-helper cli-install <id>` instead of buttons; UntestedTag `agents.askAdmin`. **Not npm-test green** (BrandMirror knew no `serverAdminHelper`); fixed in `285fd61b`. |
+| `45d1920d` | #2355: VM egress proxy requires per-VM `Proxy-Authorization` (`<vm dir>/proxy.token`, baked into the guest's proxy URL); `407` + blocked-log otherwise. |
+| `285fd61b` | BrandMirror fix for `44a1db52`. |
+| the commit after | this section, plan P3/§3.6/§8/§8.1, TODO rows, file maps, context file. |
+
+### Design (short)
+
+- **Rate limits.** The rule is "a request naming nobody known never spends a
+  known user's budget". Known-device sign-ins are never limited by source,
+  because a local account can forge `X-Forwarded-For` to 127.0.0.1:8740.
+  Residual: a stranger who knows an account name can still exhaust that
+  account's pair window or burn its invite (five misses — the daemon's rule).
+- **Secrets wiring.** K lives only in the kernel persistent keyring (read
+  through `KeyHold` on every use, never cached), so a daemon restart keeps
+  mail and saved passwords open and a reboot locks them. The ECDH key is
+  **enrolled after sign-in** (signed by the pairing key), not made at pairing
+  as §6.8 says — same trust (TOFU of the identity key over the gateway), but
+  it also covers devices paired before this. The identity key
+  (`<state>/secrets/identity.key`) is unsealed by necessity. The unlock
+  exchange is the PWA's: after a reboot every session is gone, so the
+  browser client at `/desktop/` sends the user through `/` anyway.
+- **Crate split as a feature split (deviation from §3.2).** Moving the
+  command bodies into `app-core` would have meant the whole 126-reference
+  services→commands closure; instead the library got a default `desktop`
+  feature holding Tauri, its plugins, WebKitGTK/GTK, xcb, arboard, keyring
+  and dbus-secret-service. Command attributes are
+  `#[cfg_attr(feature = "desktop", tauri::command)]` (sed over 688 sites; the
+  generator in `build.rs` reads both forms and the cfg of a gated module);
+  the window/OS-only modules (clipboard, ide, pdf_clip, presenter,
+  print_native, printing, screenshot, subwindow) and every command whose
+  signature names a Tauri type are compiled out without it; `lib.rs`'s
+  window host (`run`, crash reporter hooks, menus, scrollbar theme) too;
+  `platform::x11` and the X11 bits of `apps.rs` fall back to the
+  non-Linux stubs; credentials fall back to the vault only. Commands lost
+  from the daemon were all `client` or already undispatchable (Tauri-typed),
+  except `dev_build_relaunch` (admin, window-only). The daemon is
+  `src-serverd/` with `app-lib = { package = "<slug>", default-features =
+  false }`; built alone Cargo resolves no desktop feature.
+- **Side by side.** The daemon's state dir is `~/.local/share/<slug>-server`
+  and app home `~/<slug>-server` unless the environment names others; this
+  also changes plan §3.6's layout for every server. Tailscale Serve is the
+  only shared resource (desktop Mobile → `--https=10000`).
+- **/proc on a desktop.** Only polkit gets the exception group (drop-in, not
+  `/etc/group`); the fstab line is printed, never written.
+- **VM proxy.** Token, not a unix socket: slirp's `guestfwd` chardev
+  semantics for unix sockets could not be verified here, and every client of
+  the guest (curl, git, apt, Node/undici, reqwest) sends credentials from the
+  proxy URL. An existing VM is re-provisioned once at its next boot (the
+  user-data changes → new instance id → cloud-init re-applies; the
+  `/etc/environment` line is appended again).
+
+### Done / remaining
+
+Done: #2349, #2350 (except the push), #2353's rate limits and finding 13,
+finding 11, finding 15, #2354, #2355's VM proxy, the server-on-a-desktop
+work, #2351 closed as decided. Remaining: the "mail locked since reboot" Web
+Push (#2350; depends on #2352 Web Push in the gateway); #2353's helper
+review and a gateway body cap; finding 14 (helper invite vs pending in-memory
+code); the daemon's `--no-default-features` library is linted but its tests
+run only in the desktop configuration; `dev_build_relaunch` is not on a
+server. Not touched as instructed: #2356, #2339, #2347, the idle stop.
+
+### New live steps for a real server (in addition to § P3's)
+
+1. Build the daemon **alone**: `cargo build --release -p app-serverd`
+   (replaces `-p tabtivity --bin tabtivity-serverd`); `ldd
+   target/release/tabtivity-serverd` must name no gtk/gdk/webkit/xcb/dbus.
+   `libgtk-3-0` is no longer a server package. Install it with the gateway
+   binaries as in § P3 step 1.
+2. On a machine with a desktop session: `sudo …/tabtivity-admin-helper
+   --dry-run install …` lists `groupadd --system tabtivity-proc`, the
+   `polkit.service.d/tabtivity-proc.conf` drop-in and the printed fstab line;
+   after the real install put that line in `/etc/fstab`, `sudo mount -o
+   remount /proc`, then `… check`: `hidepid` ok; log out and in to the
+   desktop and run something that needs polkit (e.g. `pkexec true`, a
+   network change in Settings) — it must still ask/work. Without the drop-in
+   `check` must say `hidepid` FAIL.
+3. Root-equivalent refusal: `sudo usermod -aG docker bob` → `… user-add bob`
+   fails naming docker; a file `/etc/sudoers.d/bob` with `bob ALL=(root)
+   NOPASSWD: /usr/bin/true` → fails naming the rule; remove both again.
+4. Secrets: Alice signs in on her phone at `/` (the PWA enrols her device),
+   then in the browser Settings → Mobile → Server → Secrets key: **Set up**,
+   write down the code. Mail → set up an account (opt into saving the
+   password). `sudo systemctl restart tabtivity-serverd@alice`: mail and the
+   saved password still open. Reboot the server: mail shows the locked note;
+   open the PWA on the phone → mail opens without typing anything. Unlock
+   with the recovery code from a fresh browser after revoking every device.
+   As Alice in a fenced agent tab: `keyctl show @u` fails (EPERM).
+5. Backup check: `sudo cp -a ~alice/.local/share/tabtivity-server /tmp/x`,
+   then nothing in it opens the mail store (key.json mode `device`).
+6. Side by side: as a user who also runs the desktop app on the server
+   machine, open both; `ls ~/.local/share/` shows `tabtivity` and
+   `tabtivity-server`; a project created in one is absent from the other's
+   list; the desktop's Mobile host on `--https=10000` and the gateway on 443
+   both answer.
+7. Manage CLIs in the browser as Bob: no Install/Update/Remove buttons,
+   the `sudo tabtivity-admin-helper cli-install <id>` line instead.
+8. A VM project with Proxy egress (admin): boots, the agent reaches its API;
+   from another account `curl -x http://127.0.0.1:<proxy port>
+   https://api.anthropic.com` gets `407` and the pill lists "(no VM
+   credentials)".
+9. Rate limits: from a second tailnet device, loop 700 challenge POSTs with
+   made-up device ids; Alice's phone still signs in.
+
+### Gotchas for the reviewer and P3b/P4
+
+- **Build the daemon alone.** `cargo build --workspace` (and `cargo test
+  --workspace`) unify features, so the workspace's `tabtivity-serverd` links
+  GTK; only `-p app-serverd` on its own is the real daemon. CI's `ldd` step
+  does that.
+- **New command attribute.** Write `#[cfg_attr(feature = "desktop",
+  tauri::command)]`; a command whose signature needs Tauri also gets
+  `#[cfg(feature = "desktop")]`. A new window/OS-only module goes under
+  `#[cfg(feature = "desktop")]` in `commands/mod.rs` (the generator copies
+  that cfg). `cargo clippy -p tabtivity --no-default-features --lib` catches
+  a slip.
+- **The vault is global and installed only by `serverd`'s `main`.** Tests
+  that need it go in their own integration binary (`tests/server_secrets.rs`
+  pattern); never call `vault::install` from a lib test.
+- `mail_crypt::enable_default` is now the silent-enable path (device mode on
+  a server, keychain elsewhere); new callers should use it.
+- The daemon's state dir moved (`<slug>-server`); P3 part 1's live steps
+  that name `~/.local/share/tabtivity` mean the `-server` one now.
+- Privacy-check false positives met: documentation IPs (use RFC 5737 /
+  `2001:db8::`), a proxy URL with credentials in a comment.
+- P3b's auth-keeper and P4's hub join `units.rs`/`names.rs`; a system
+  service that must see all processes goes into `PROC_EXCEPTION_UNITS`.
+
+### Gates (worktree, 2026-10-03, at `285fd61b` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile, web bundles) |
+| `npm test -- --reporter=dot` | **697 files, 7071 tests, all pass** (was 694 / 7063) |
+| `cargo test -q --workspace --no-fail-fast` | src-tauri **3213 lib (2 ignored) + 169 integration** (+1: `server_secrets`); src-core **99**; src-gateway **78**; **3559 passed, 0 failed**, 22 test binaries |
+| `npm run lint` | 0 errors, **31 warnings** — the same pre-existing ones |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings` / `-p app-serverd` | clean (new CI steps) |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (the two shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries: `src-serverd/Cargo.toml` added) |
+| `scripts/privacy-check.sh 418d6f61..HEAD` | green (10 commits, 4445 added lines); pre-commit hook on every commit |
+| `git diff --check 418d6f61 HEAD` | clean |
+| `ldd target/debug/tabtivity-serverd` (built with `cargo build -p app-serverd` alone) | `linux-vdso.so.1`, `libgcc_s.so.1`, `libm.so.6`, `libc.so.6`, `/lib64/ld-linux-x86-64.so.2` — nothing else |

@@ -337,15 +337,15 @@ the desktop groundwork the hosted plan's P1 builds on.*
 
 ### Z.3 — Left by P3 (multi-user; `docs/hosted_handoff.md` § P3)
 
-2349. **Finish the crate split; the daemon still links GTK.** `tabtivity-serverd` is a second `[[bin]]` of `src-tauri`, so it links the
+2349. **Finish the crate split; the daemon still links GTK.** ✅ **Done** (2026-10-03, `3c090785`): the library's toolkit deps sit behind a default `desktop` feature; the daemon is its own crate `src-serverd/` built with `default-features = false`, `ldd` shows libc/libm/libgcc_s only, and CI's test job fails on a desktop library (the box below is that step). Was: `tabtivity-serverd` is a second `[[bin]]` of `src-tauri`, so it links the
     desktop library: `ldd` shows `libgtk-3`, `libgdk-3`, `libxcb*` and
     `libdbus-1` (no WebKit). A headless server must install them until the
     command bodies move into `app-core` and the daemon becomes its own crate
     (plan §3.2; the 126 `services → commands` back-references of the P1
     handoff). (P3, 2026-10-03.)
-    - [ ] 🤖 Automated test — a CI step runs `ldd` on the daemon binary and fails on any GTK/X library.
+    - [x] 🤖 Automated test — a CI step runs `ldd` on the daemon binary and fails on any GTK/X library (`ci-cd.yml`, "Daemon links no desktop libraries").
 
-2350. **Wire the device-released secrets key (§6.8).** `services::server::secrets` has the primitives (per-device wraps, the
+2350. **Wire the device-released secrets key (§6.8).** ✅ **Built** (2026-10-03, `c23b3a57`, `fbf124c9`; never on a server): `services::server::vault`, the PWA's `secrets.ts`, `mail_crypt`'s device mode, the sealed credential store, the Server settings' secrets panel (UntestedTag `server.secrets`). **Still open:** the "mail locked since reboot" push. Was: `services::server::secrets` has the primitives (per-device wraps, the
     recovery code, the persistent keyring). Missing: the device's ECDH key
     made at pairing (PWA and browser, next to the signing key), the unlock
     exchange on connect (X's public key out, the shared value back encrypted
@@ -353,7 +353,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
     taking K as its KEK in a device-released mode, the sealed opt-in password
     store (IMAP/SMTP/CalDAV/SSH), the recovery-code dialog, and the "mail
     locked since reboot" push. (P3, 2026-10-03.)
-    - [ ] 🤖 Automated test — the §11 secrets tests: the store opens only after a device releases K; K survives a daemon restart, not a keyring flush; a copy of the home plus the gateway database cannot open it; the recovery code does.
+    - [x] 🤖 Automated test — the §11 secrets tests: the store opens only after a device releases K; K survives a daemon restart, not a keyring flush; a copy of the home plus the gateway database cannot open it; the recovery code does (`vault::tests`, `tests/server_secrets.rs`, `mail_crypt::tests::a_device_mode_store_opens_only_with_the_released_key`, `MobileSecretsRelease.test.ts`).
     - [ ] 🖐️ Manual test — on a server: pair a phone, set up mail, restart the daemon (mail stays unlocked), reboot (mail locked until the phone connects).
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -376,14 +376,14 @@ the desktop groundwork the hosted plan's P1 builds on.*
     would then forward ciphertext only; until then every daemon needs
     outbound HTTPS. (P3, 2026-10-03.)
 
-2353. **Security review of the gateway and the admin helper before any user logs in.** §11: the helper is the only root code and gets a review of its own
+2353. **Security review of the gateway and the admin helper before any user logs in.** Partly done 2026-10-03: the P3 review (`docs/hosted_handoff.md` § P3 review); rate limits per device/account/source with strangers kept off known users' budget, and no pair to an account without a pending invite or recent use (`2e2e70b5`); root-equivalent accounts refused (sudoers + docker/lxd/incus-admin/libvirt/disk, `8f41c8b8`). **Still open:** the helper's own review (argument validation, `runuser` environment, `gpasswd`/`useradd`) and a body cap at the gateway. §11: the helper is the only root code and gets a review of its own
     (argument validation, `runuser` environment, the `O_NOFOLLOW` walks,
     `gpasswd`/`useradd` arguments); the gateway's rate limits are
     server-wide windows (20 pairings and 240 challenge/session calls a
     minute), not per device or per account; proxied request bodies are not
     size-capped at the gateway (the daemon caps them). (P3, 2026-10-03.)
 
-2354. **Manage CLIs on a server: "ask your admin".** Install, update and uninstall are `admin` and, on a server, refused for
+2354. **Manage CLIs on a server: "ask your admin".** ✅ **Done** (2026-10-03, `44a1db52`, never live; UntestedTag `agents.askAdmin`). Install, update and uninstall are `admin` and, on a server, refused for
     every daemon with the helper command to run (`cli-install`). The panel
     still shows the buttons and surfaces the refusal as an error; show the
     installed versions read-only and the sentence instead. (P3,
@@ -398,7 +398,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2355. **Loopback listeners every server user can reach.** The §4.4 inventory (`docs/context/server_gateway.md`): the VM egress
+2355. **Loopback listeners every server user can reach.** VM egress proxy ✅ **done** (2026-10-03, `45d1920d`): per-VM credentials, `407` without them; never booted. The other rows of the inventory stand as decided/acceptable. The §4.4 inventory (`docs/context/server_gateway.md`): the VM egress
     proxy (`vm_proxy`, no token; admin VMs only), the VM SSH forward (key
     auth), OpenVPN's management port (password file; admin), the shared
     Ollama (decided, no token), CLI sign-in listeners (the relay now only

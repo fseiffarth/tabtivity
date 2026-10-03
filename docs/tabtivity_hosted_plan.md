@@ -489,12 +489,13 @@ checklist row in `docs/third_party_update_checklist.md`.
 
 ```
 /home/<user>/                                0700 — other users see nothing
-  .local/share/tabtivity/                        state_dir: projects.json, sessions/, agent-homes/,
+  .local/share/tabtivity-server/                 state_dir (`-server`: apart from a desktop app's, P3 part 2):
+                                              projects.json, sessions/, agent-homes/,
                                               agent-auth/ (the user's own logins), agent-global/,
                                               exec_trust.json, calendar.json (events + tasks),
                                               mail/ + secrets/ (sealed, §6.8), devices/ (device
                                               signing keys, ECDH keys and key wraps, §3.1, §6.8) …
-  tabtivity/projects/<slug>/                     own projects and clones of shared ones
+  tabtivity-server/projects/<slug>/              own projects and clones of shared ones
 /srv/tabtivity/shared/<id>.git                   bare hub, owned by tabtivity-hub; config/hooks/info
                                               root-owned read-only; members get named-user ACLs
 /opt/tabtivity/agents/                           server-wide CLI installs, owned by tabtivity-cli,
@@ -1088,7 +1089,29 @@ terminal on the phone takes that tab over from any other viewer (§3.5).
   - Unprivileged user namespaces must work for bubblewrap. Ubuntu's AppArmor
     restriction, or unit hardening such as `RestrictNamespaces=` and
     `ProtectSystem=`, would make every agent fail closed.
-  - `/proc` is mounted `hidepid=invisible`.
+  - `/proc` is mounted `hidepid=invisible`. **The server may run on a
+    machine that is someone's desktop** (user decision 2026-10-03): then
+    `/proc` also needs `gid=<the tabtivity-proc group>`, the exception group
+    of the system services that must see every process — polkit, by a
+    `SupplementaryGroups=` drop-in, since it reads the subject's `/proc/<pid>`
+    for every authorization of a desktop session. Never a server user. The
+    helper's `install` makes the group and the drop-in and *prints* the
+    fstab line (remounting `/proc` on a live desktop is the admin's step);
+    `check` fails on a machine with a display manager unless the gid and
+    the drop-in are there, and when a server user is in the group. *(Built
+    in P3 part 2.)*
+  - **Standalone and server side by side** (Q12) on one machine, for the
+    same account: the daemon keeps its own `state_dir` and app home
+    (`~/.local/share/tabtivity-server`, `~/tabtivity-server`), its own tmux
+    server (`-L tabtivity` under `/run/tabtivity/tmux/<user>`), and listens
+    on a unix socket only, so it shares no `projects.json`, session state,
+    mobile control dir, agent home, login or mail store with the desktop
+    app, and no port with its `--mobile-host` sidecar (8742/8743 against
+    the gateway's 8740/8741). Tailscale Serve: the gateway takes HTTPS 443
+    and 8443, so the desktop's Mobile on the same machine uses the third
+    Serve port, `--https=10000` (origin `https://HOST:10000`). The kernel
+    persistent keyring is per uid and shared, under distinct descriptions;
+    the fence keeps both apps' agents out of it. *(P3 part 2; not run.)*
   - `kernel.yama.ptrace_scope` ≥ 1, and the kernel persistent keyring is
     available (`CONFIG_PERSISTENT_KEYRINGS`) (§6.8).
   - Units run with `PrivateTmp=`.
@@ -1127,7 +1150,8 @@ terminal on the phone takes that tab over from any other viewer (§3.5).
 
 ### 8.1 Install and packaging
 
-- **Build targets:** `tabtivity-gateway`, `tabtivity-serverd`, `tabtivity-admin-helper`,
+- **Build targets:** `tabtivity-gateway`, `tabtivity-serverd` (its own crate, `src-serverd/`,
+  built alone so it links no GTK/WebKit/X11/libdbus — P3 part 2), `tabtivity-admin-helper`,
   `tabtivity-hub`, `tabtivity-calendar` and `tabtivity-auth-keeper`, all Linux x86_64 and aarch64, plus
   the web bundle. Until P3 the single-user server is the existing `tabtivity`
   binary in `--mobile-host` mode.
@@ -1254,9 +1278,10 @@ Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
   - keystroke latency is inside the §3.5 budget.
 - *This alone answers "operations run on the server" for one person.*
 
-**P3: multi-user.** *Partly built 2026-10-03 on branch `hosted`
-(`cf02b197`, `3e01a6f7`, `53d70ef5`…`2ba65cd2` + the docs commit); nothing run
-on a server. Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P3;
+**P3: multi-user.** *Built 2026-10-03 on branch `hosted` (part 1:
+`cf02b197`, `3e01a6f7`, `53d70ef5`…`2ba65cd2` + review; part 2:
+`2e2e70b5`…`45d1920d` + the docs commit); nothing run on a server.
+Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P3, § P3 review, § P3 part 2;
 rationale: [`context/server_gateway.md`](context/server_gateway.md).*
 - Finish the crate split. ~~Split `host.rs` into the gateway (auth, router,
   push) and the daemon (data paths), and build `tabtivity-serverd` on
@@ -1265,9 +1290,14 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   gateway crate `src-gateway/`: routing by code prefix / device owner /
   HMAC routing cookie, revocation closes live sockets, PWA statics, audit,
   policy; links no core service), `fa351c32` (socket activation, content
-  tickets per user). **Open:** the crate split itself — the daemon is still
-  a `[[bin]]` of `src-tauri` and links GTK (#2349); Web Push delivery is
-  still the daemon's (#2352).
+  tickets per user). ~~The crate split itself~~ `3c090785`: the library's
+  window toolkit sits behind a default `desktop` feature and the daemon is
+  its own crate (`src-serverd/`, `app-serverd`) that builds the library
+  without it — `ldd` names libc, libm and libgcc_s only; CI lints that build
+  and fails on a desktop library. Deviation from §3.2: the command bodies
+  did not move into `app-core` (the services→commands closure stays one
+  crate); a feature split gives the same binary for a fraction of the
+  churn. **Open:** Web Push delivery is still the daemon's (#2352).
 - ~~The admin helper and its hard rules, the per-user slices and units, the
   tmux unit, `0700` homes, the invite flow, per-user device keys verified by
   the daemon, and the audit log.~~ `53d70ef5` (`tabtivity-admin-helper`:
@@ -1276,7 +1306,15 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   `/tmp`, invites written by the user's own uid), `cf02b197`/`3e01a6f7`
   (device keys checked by the daemon, roles from the gateway). Deviation: no
   polkit rule — socket activation starts daemons, the admin runs the helper
-  with `sudo`. Account admin from the browser: #2356.
+  with `sudo`. Account admin from the browser: #2356 (stays sudo-only, user
+  decision 2026-10-03). ~~Root-equivalent accounts refused~~ `8f41c8b8`:
+  sudoers parsed read-only (any rule naming the account, fail closed) and
+  `docker`/`lxd`/`incus-admin`/`libvirt`/`disk` beside the sudo groups,
+  admin role included. ~~Per-device/per-account rate limits~~ `2e2e70b5`
+  (strangers cannot spend a known user's budget; a pair never wakes an idle
+  daemon). Idle daemons keep running (#2351, decided). ~~The server on
+  someone's desktop~~ `a1802cd8`: the `/proc` exception group for polkit,
+  the daemon's own state dir beside the desktop app (§8).
 - ~~The deployment prerequisite checks (§8), the server-wide CLI install root
   with its admin-only installs and the per-home self-updater switches (§5.1),
   the admin UI for the Ollama model list, and the host-channel inventory
@@ -1285,7 +1323,8 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   `<slug>-cli`; every daemon refuses installs; the per-spawn updater switch
   already applied), `3b88c63d` (Server settings: the admin's policy editor),
   [`context/server_gateway.md`](context/server_gateway.md) (the inventory;
-  residuals #2355). "Ask your admin" in Manage CLIs: #2354.
+  ~~the VM egress proxy's open listener~~ `45d1920d`: per-VM credentials).
+  ~~"Ask your admin" in Manage CLIs~~ `44a1db52`.
 - Per-user sign-in (§5.1): sign-in tabs from browser and phone, and ~~the
   callback relay restricted to the caller's own listeners~~ `56a64754`. The
   sign-in tabs themselves are unchanged (the phone's QA 31bk flow and the
@@ -1295,18 +1334,22 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   `feature-off`, phone routes 403, alarms pause), `3b88c63d` (the switches in
   Settings). The device-released secrets key (§6.8): ~~the primitives —
   wraps, the kernel persistent keyring, the recovery code~~ `1d9cec4e`,
-  `PR_SET_DUMPABLE` `3e01a6f7`; **open:** the per-device ECDH key at pairing,
-  the unlock exchange, `mail_crypt`'s device-released mode, sealed opt-in
-  passwords (#2350).
+  `PR_SET_DUMPABLE` `3e01a6f7`; ~~the per-device ECDH key, the unlock
+  exchange, `mail_crypt`'s device-released mode, sealed opt-in passwords,
+  the recovery-code dialog~~ `c23b3a57`, `fbf124c9` (`services::server::vault`;
+  the ECDH key is enrolled after pairing with a signature of the pairing
+  key rather than at pairing itself, so devices paired earlier enrol too).
+  **Open:** the "mail locked since reboot" push (#2350).
 - *Exit:* two users on one server. Each user's attempt at the other's paths,
   sockets, tmux, loopback listeners and `/proc` fails, and a test runs that
   attempt, including each other's calendar, tasks and mail
   (`scripts/server-isolation-test.sh`, `2ba65cd2` — not yet run on a server,
   #2357). Each user signs in to a CLI from the phone and runs an agent on
   their own login. A daemon restart leaves both users' agents running, and
-  mail stays unlocked across it (needs #2350). A fenced tab can't read the
+  mail stays unlocked across it (built: K in the persistent keyring,
+  `tests/server_secrets.rs`; not run on a server). A fenced tab can't read the
   keyring entry (observed: `keyctl` is EPERM in a fenced tab), and a backup
-  of the home can't open the mail store (needs #2350).
+  of the home can't open the mail store (`vault::tests`).
 
 **P3b: admin-provided API keys (optional).**
 - The admin-only Agent credentials panel, direct API-key delivery, and the
