@@ -1156,7 +1156,14 @@ comes.
   Its exit is this phase's exit.
 - In parallel: start the crate extraction (§3.2). Fix the seven services and
   `terminal/mod.rs` first, then convert one `commands/*.rs` file at a time,
-  keeping all five gates green after each.
+  keeping all five gates green after each. *Started 2026-10-03 on branch
+  `hosted` (`8c4e689a`…): the Tauri-free crate is `src-core/` (package
+  `app-core` — the brand may not appear in code), with `CoreCtx`,
+  `CoreState`, `EventSink`, `rt`; the seven services and the terminal core
+  take `CoreCtx`; `tauri_host::CONVERTED_COMMAND_FILES` lists the converted
+  command files and a test holds them Tauri-free. Handoff:
+  [`hosted_handoff.md`](hosted_handoff.md) § P1. P3 finishes the physical
+  move.*
 
 **P2: single-user server, "my box, thin clients".**
 - The sidecar grows a `core` dispatcher and serves the web bundle. There is

@@ -259,3 +259,211 @@ sidecar's admin socket is per user).
 | `scripts/brand-check.sh` | green |
 | `scripts/privacy-check.sh` | green (and in the pre-commit hook) |
 | `git diff --check f3efd50b HEAD` | clean |
+
+## P1 (crate split, part 1) (partial)
+
+*Written 2026-10-03 by the P1 crate-split agent. Base `a2f9f7f5` (P0 + review).
+The headless-owner half of P1 (H0–H3) was already on `develop`; this section is
+only the §3.2 extraction. Nothing run live.*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `8c4e689a` | The `app-core` crate (`src-core/`): `CoreCtx`, `CoreState`, `EventSink`, `Caller`, `ClientId`, `rt`; `src-tauri/src/tauri_host.rs` (Tauri as the sink, `Ctx` extractor, `install`); `lib.rs` builds `CoreState`; CI tests/lints the crate. |
+| `f3477d51` | `brand.rs` and the ten leaf services move into the crate; the desktop re-exports them. Brand tooling follows the file. |
+| `84d3991d` | `terminal/mod.rs` emits through `CoreCtx`. |
+| `d160cd70` | The seven services → `CoreCtx`; `commands/{git_peer,remote,project_runtime}.rs` → `Ctx`; the `tauri::async_runtime` users among services → `app_core::rt`. |
+| `e174948e` | `commands/terminal.rs` → `Ctx`; `CONVERTED_COMMAND_FILES` + its guard test. |
+| `e59074e0` … `643d17a0` | One commit per command file (17): projects, sync, fs_watch, disk_usage, usage_stats, caldav, credentials, network, hpc_ws, ssh, git, agent_prompts, agent_tasks, app_update, project_transfer, pdf_markup, os_clock. |
+| `331f5403` … `0b8baf43` | One commit per file: agents, spell, tex, vm, openvpn, copilot (`Window` → `ctx.caller`), ollama (`complete_text` → `emit_to_caller`). |
+| `a23d0185` | `mobile_control.rs` + `root_mcp.rs` together with the `lib.rs` change that hands both the system `CoreCtx` at setup. |
+| `be19e3f5` | `mail.rs`: 69 commands → `Ctx`; the five Rust-raised dialogs keep an `AppHandle`, so the file is not in the guard list. |
+| `f1f8a761` | the frontend tests and tooling follow the moved files (see Gates). |
+| the commit after | this section, the plan's P1 bullet. |
+
+### Crate layout
+
+```
+Cargo.toml                 workspace: members = ["src-core", "src-tauri"]
+src-core/                  package `app-core`, lib `app_core`   ← the plan's "tabtivity-core"
+  Cargo.toml               no `tauri`, ever; deps the moved modules need (+ rustls as a dev-dep)
+  src/lib.rs               brand, ctx, rt, services; re-exports the ctx types
+  src/brand.rs             moved as-is (the ONE place the name is spelled; build.rs includes it by path)
+  src/ctx.rs               CoreCtx / CoreState / EventSink / Caller / ClientId / NullEvents / RecordingEvents
+  src/rt.rs                spawn / spawn_blocking / block_on over the host-installed tokio handle
+  src/services/mod.rs      agent_usage big_folders fence_scope git_guard remote_agents
+                           schedule_usage text_completion vm_proxy web_safety webkit_a11y
+src-tauri/                 the desktop host (unchanged package `tabtivity`, lib `app_lib`)
+  src/tauri_host.rs        TauriEvents, install, system_ctx, Ctx (CommandArg), CONVERTED_COMMAND_FILES
+  src/lib.rs               `pub use app_core::brand;` + the macros; `core_state(...)`; `tauri_host::install` first in setup
+  src/services/mod.rs      `pub use app_core::services::<x>;` for each moved module
+```
+
+**Why `app-core`, not `tabtivity-core`.** `scripts/brand-check.sh` forbids the
+app's name in code, and every `tabtivity_core::` path would be a hit; the
+desktop lib is `app_lib` for the same reason. Rename when the brand rule says
+so, not before.
+
+**Why only ten services moved.** `scripts`-free dependency closure
+(`deps.py`, not committed): 126 `crate::commands::…` references from
+`services/` (plus `storage → brand_migration → commands::git`,
+`paths → agent_bin → commands::agents`) pin almost everything to the desktop
+crate until the command bodies move too. Moving a module means: nothing it
+reaches via `crate::` is still in `src-tauri`. P3's finishing move is therefore
+mostly one big closure, not many small ones — convert bodies first (this
+section's pattern), then move whole subtrees.
+
+### `CoreCtx` design (as built)
+
+```rust
+pub struct CoreCtx { pub state: Arc<CoreState>, pub events: Arc<dyn EventSink>, pub caller: Caller }
+pub enum Caller { System, Local(ClientId), Client(ClientId) }      // client() -> Option<&ClientId>
+pub struct ClientId(String);  // desktop: the window label; ClientId::MAIN == "main"
+pub trait EventSink: Send + Sync {
+    fn emit_json(&self, event: &str, payload: String);            // broadcast
+    fn emit_json_to(&self, client: &ClientId, event: &str, payload: String);
+}
+impl dyn EventSink { fn emit<S: Serialize>(..); fn emit_to<S: Serialize>(..) }  // serialize ONCE
+impl CoreCtx { fn get<T>(&self) -> &T; fn emit(..); fn emit_to(..); fn emit_to_caller(..); fn with_caller(..); fn system(..) }
+```
+
+- `CoreState` is a **type-keyed map** (`manage` builder / `get` panics like
+  Tauri's `State` / `try_get`), not named fields: the singleton types still
+  live in `commands/*.rs` (`RegistryState`, `MailState`, …) and could not be
+  named from the core. `lib.rs::core_state` fills it with **clones of the same
+  `Arc`s Tauri manages** — never two values, or the two halves of the app see
+  different state. `core_state_types_are_distinct` guards the keying (two
+  aliases over one `Arc<Mutex<HashMap<String, …>>>` would collide). P3 may turn
+  the hot ones into fields once their types are in the core.
+- The plan's `ClientTarget` is `ClientId`: a broadcast is `emit`, one client is
+  `emit_to`. Nothing needed a third shape yet.
+- Payloads cross the sink **already serialized** (`emit_str`/`emit_str_to` on
+  the Tauri side), so the terminal output path pays no second serialization.
+- `rt::install(handle)` is called from `tauri_host::install` with Tauri's
+  runtime; with nothing installed `rt` uses the current runtime, else a lazy
+  fallback — `tauri::async_runtime`'s own semantics, so `block_on` from a
+  runtime worker still panics exactly as before.
+- **`Ctx` (src-tauri) is a newtype over `CoreCtx`** because the orphan rule
+  forbids `impl CommandArg for CoreCtx` outside Tauri. It derefs; a body that
+  needs the owned context writes `ctx.0.clone()`. Its caller is
+  `Caller::Local(<calling webview's label>)` — the window label comes from the
+  invoke, never from payload (the `pty_set_visible` rule, now the extractor's).
+- `tauri_host::system_ctx(&app)` is the bridge for `lib.rs` hooks and the
+  not-yet-converted callers.
+
+### What "converted" means, and the guard
+
+A `commands/*.rs` file is converted when nothing of `tauri` is left in it but
+the `#[tauri::command]` attribute: no `use tauri::…`, so no `State`,
+`AppHandle`, `Window`, `Emitter`, `Manager`, `async_runtime`. The body then
+depends only on `Ctx`/`CoreCtx`, and P2's dispatcher can call it as a plain
+function (`#[tauri::command]` leaves the fn callable) with a `Caller::Client`
+context — the attribute is the only thing P3 removes when the body moves.
+`tauri_host::CONVERTED_COMMAND_FILES` lists them;
+`converted_command_files_stay_tauri_free` fails if one slides back. Add a file
+to the list in the commit that converts it, never before.
+
+Conversion was mechanical (`convert_cmds.py`, scratch, not committed):
+`app: AppHandle` → `ctx: Ctx`; `x: State<'_, T>` → removed, `let x =
+ctx.get::<T>();` first in the body, `x.inner()` → `x`; `&app` → `&ctx`,
+by-value `app` → `ctx.0.clone()`, `app.emit` → `ctx.emit`;
+`tauri::async_runtime::` → `app_core::rt::`; helper fns `app: &AppHandle` →
+`ctx: &CoreCtx`. Hand work: `Window`-taking commands (`pty_set_visible`,
+`complete_text`, the six `copilot_*`) read `ctx.caller`; commands that call
+another command directly pass `ctx` on (`mail_search → mail_headers`); a
+spawned thread that outlives the call clones the context first (`watch_dir`).
+
+### Converted / remaining
+
+**Converted (in `CONVERTED_COMMAND_FILES`, 56 files):** `agent_prompts.rs`, `agent_tasks.rs`, `agents.rs`, `app_update.rs`, `boxes.rs`, `brand_migration.rs`, `caldav.rs`, `calendar.rs`, `copilot.rs`, `crash.rs`, `credentials.rs`, `default_apps.rs`, `disk_usage.rs`, `exec_trust.rs`, `format.rs`, `fs_watch.rs`, `git.rs`, `git_fork.rs`, `git_hosting.rs`, `git_peer.rs`, `git_publish.rs`, `git_pull.rs`, `global_machines.rs`, `hpc_ws.rs`, `local_loss.rs`, `markdown.rs`, `mobile_control.rs`, `monitor.rs`, `net_usage.rs`, `network.rs`, `ollama.rs`, `openvpn.rs`, `os_clock.rs`, `pdf_markup.rs`, `power.rs`, `project_runtime.rs`, `project_transfer.rs`, `projects.rs`, `python.rs`, `remote.rs`, `root_mcp.rs`, `search.rs`, `settings.rs`, `sheets.rs`, `skills.rs`, `slurm.rs`, `spell.rs`, `sqlite.rs`, `ssh.rs`, `sync.rs`, `synctex.rs`, `terminal.rs`, `tex.rs`, `timer.rs`, `usage_stats.rs`, `vm.rs`.
+
+Of these, 30 needed nothing (their bodies never touched Tauri); the plan's
+"388 move as they are" is them.
+
+**Remaining (`commands/*.rs` still reaching Tauri):**
+
+| File | What is left | Class / note |
+|---|---|---|
+| `mail.rs` | 5 Rust-raised dialogs (`app.dialog()`) keep an `AppHandle`; the other 69 commands take `Ctx` | core — P2's server-side picker replaces the five bodies |
+| `fs.rs` | 17 `State` params are convertible; 4 commands return `tauri::ipc::Response` and 1 takes `ipc::Request` (`fs.rs:1580/1702`) | core — the binary-frame transport of §3.5 (P2) decides their shape; convert the rest then |
+| `apps.rs` | `start_file_drag(Window)` + the drag plugin; the default-app map and `run_script_detached` are core | mixed — split the file or convert the core part |
+| `browser.rs` | live-window commands build webviews; `browser_check_url`, `browser_reader_fetch` are core | mixed — same |
+| `debug.rs` | webview/renderer introspection | client |
+| `workspace.rs`, `subwindow.rs`, `presenter.rs`, `screenshot.rs`, `clipboard.rs`, `printing.rs`, `print_native.rs`, `pdf_clip.rs`, `ide.rs` | window / OS / dialog work | client — stay in `src-tauri` by the table |
+
+Services still taking Tauri: only `window_service.rs` (`WebviewWindow`,
+client by design). `grep -rn 'tauri' src-tauri/src/services` finds nothing
+else but prose.
+
+### Gotchas for P2 / P3
+
+- **A Tauri `emit` is a broadcast to every webview**, and the terminal uses
+  that: `terminal-output:<label>` is a *name*, not a target. Keep the names
+  until the browser client speaks; the daemon's sink can then route by
+  `ClientId` and drop the suffixing (`terminal/mod.rs::emit_output`).
+- **`Caller::System` has no client.** `pty_set_visible` and the `copilot_*`
+  commands refuse it; `emit_to_caller` degrades to a broadcast. A dispatcher
+  must always build `Caller::Client(id)` for an incoming call.
+- **`CoreState::get` panics for an unmanaged type** (Tauri's contract). The
+  daemon must manage every type `lib.rs::core_state` manages, or `try_get`.
+  The mobile desktop bridge already uses `try_get` for `MailState`.
+- **Sync commands may spawn**: `app_core::rt::spawn` works from any thread
+  once `install` ran; in a daemon call `rt::install` before serving.
+- **The lib tests take ~12 min** on this machine; run them alone, never beside
+  `npm test`.
+- The `text_completion` tests need a rustls provider in whichever binary
+  runs them (`tests::client` installs ring); a future daemon binary must call
+  `mail_engine::install_crypto_provider()` before any `reqwest` client, as
+  `lib.rs::run` does.
+- `scripts/backend-stale.sh` only looks under `src-tauri/`; a `src-core/` edit
+  is a backend edit too but is not yet reported as stale. Small follow-up.
+- The `rust-cache` step in CI still says `workspaces: ./src-tauri -> target`
+  (pre-existing; the real target dir is the workspace root's). Harmless but
+  worth correcting to `. -> target` when someone touches CI.
+- `command_class.rs` stayed in `src-tauri` on purpose: its test parses
+  `generate_handler!` out of `lib.rs`. It goes wherever the
+  `tabtivity_commands!` macro goes (P2).
+
+### Open for the P1 reviewer — user decisions (2026-10-03)
+
+Recorded here as the user stated them; not yet applied to
+`services/command_class.rs` or the plan. The reviewer (or P2) flips the rows
+and updates §3.3/§4.4:
+
+1. **One shared Ollama per server; only the admin changes or starts models.**
+   `pull_ollama_model`, `delete_ollama_model`, `pause_ollama_pull`,
+   `load_ollama_model`, `stop_ollama_model` → `Admin` (the P0 review's open
+   call, decided). Because Ollama auto-loads whatever a request names, user
+   requests (`complete_text`, chat, embeddings) must be limited to the
+   admin-allowed models — a server-side allowlist check before the request
+   reaches Ollama, not a UI filter. Plan §3.3 and the §4.4 loopback inventory
+   assumed a per-user `ollama serve` on 11434 and need updating.
+2. **`list_recent_downloads` → `Client`**: it means the client device's own
+   downloads, never the server's.
+3. **Only the admin installs, updates or removes agent CLIs.** `install_agent`,
+   `install_agent_remote*`, `install_vibe`, and the CLI update/uninstall
+   commands → `Admin`. A CLI's self-updater must not install per user on a
+   server (the server-wide install root of §5.1 is admin-owned); the
+   `claude_native_updater`-style flows need a server-mode guard.
+
+### Gates (worktree, 2026-10-03, at the final commit)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + both bundles) |
+| `npm test -- --reporter=dot` (alone) | **691 files, 7045 tests, all pass** at `f1f8a761`. **Not green between `f3477d51` and `be19e3f5`**: four files read `brand.rs`/`web_safety.rs` by their old path (ENOENT); `f1f8a761` repoints them. Run `npm test` after every backend file move, not only at the end — the lesson of this section. |
+| `cargo test -q` (src-tauri) | 3155 lib (2 ignored) + 168 integration, all pass; `codex_bind::a_watched_tree_is_walked_only_after_a_change` failed once while a second test binary ran beside it, 3/3 alone |
+| `cargo test -q` (src-core) | 97 passed |
+| `npm run lint` | 0 errors, 31 warnings — the same pre-existing ones P0 listed, none in P1 files |
+| `cargo clippy --all-targets -- -D warnings` | clean for both crates |
+| `scripts/brand-check.sh` | green (48 entries; `src-core/src/brand.rs` is the brand module now) |
+| `scripts/privacy-check.sh` | green on every commit (pre-commit hook) |
+| `git diff --check` | clean |
+
+The frontend gates were run at the end rather than per commit; every
+Rust gate ran per commit (`cargo check --all-targets` and clippy on each, the
+module tests per batch, the full lib suite three times). Remaining P1 work for
+whoever continues: `fs.rs`'s 17 `State` params (leave the five binary-frame
+commands), the core halves of `apps.rs` and `browser.rs`, and the three class
+flips under *Open for the P1 reviewer*.
