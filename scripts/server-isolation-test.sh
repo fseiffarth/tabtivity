@@ -13,7 +13,8 @@
 # checks that root (not the gateway's account) is refused by a daemon socket,
 # lists every loopback listener each user owns (each must need a token or be
 # a CLI's own sign-in listener: see docs/context/server_gateway.md), checks
-# that the key keeper answers by uid (P3b), checks the share hub (P4: a
+# that the key keeper answers by uid (P3b), that the key broker needs a
+# token and holds its port through systemd (P5), checks the share hub (P4: a
 # non-member cannot read a hub, a viewer cannot push or write one, a revoked
 # member loses access at once; an editor moves only its own branches),
 # checks the shared-calendar service (P4c: non-members and a viewer's writes
@@ -218,6 +219,28 @@ else
   done
   out="$(keeper_says nobody '{"op":"offered"}')"
   if printf '%s' "$out" | grep -q '"error":"refused"'; then pass "the keeper refuses a non-server account"; else fail "the keeper refuses a non-server account" "got: $(printf '%s' "$out" | head -c 200)"; fi
+fi
+
+echo "── the key broker: systemd holds its port, a token is needed ──"
+# Hosted plan §5.4 (P5): the broker listens on loopback, so every local
+# process reaches it; systemd holds the port from boot (no account can listen
+# there first and collect other users' tokens) and nothing is forwarded
+# without a user's broker token, nor for a browser page. Probes that reach
+# no provider: each one is refused before the broker calls out.
+BROKER_PORT=8739
+if ! command -v curl >/dev/null; then
+  fail "curl is installed (for the broker checks)" "apt install curl"
+elif ! systemctl is-active --quiet "${APP_SLUG}-keybroker.socket"; then
+  fail "the key broker's port is held by systemd" "systemctl enable --now ${APP_SLUG}-keybroker.socket"
+else
+  pass "the key broker's port is held by systemd"
+  for u in "$1" "$2"; do
+    code="$(runuser -u "$u" -- curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$BROKER_PORT/claude/v1/messages" -H 'x-api-key: broker-not-a-token' -d '{}')"
+    if [ "$code" = 401 ]; then pass "the broker refuses $u without a valid token"; else fail "the broker refuses $u without a valid token" "HTTP $code"; fi
+    code="$(runuser -u "$u" -- curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$BROKER_PORT/claude/v1/messages" -H 'Origin: https://example.invalid' -d '{}')"
+    if [ "$code" = 403 ]; then pass "the broker refuses a browser page ($u)"; else fail "the broker refuses a browser page ($u)" "HTTP $code"; fi
+    expect_eacces "$u cannot read the broker tokens" "$u" cat "/var/lib/${APP_SLUG}-auth/claude/tokens.json"
+  done
 fi
 
 echo "── shared projects: the hub decides by uid, read access by named ACL ──"

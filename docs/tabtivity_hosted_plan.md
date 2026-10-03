@@ -749,6 +749,18 @@ credentials** panel. Users opt in per CLI (§5.2).
   (`project_fence_abstract_sockets`), so a loopback port reaches the broker.
   That is also why the token is needed: any local process can reach a
   loopback port.
+  - *As built (P5, § P5 of the handoff, `docs/context/server_gateway.md` §
+    The key broker):* `<slug>-gateway broker` as `<slug>-auth` on
+    `127.0.0.1:8739`, the port held by `<slug>-keybroker.socket` from boot
+    (no squatting). Per key, the administrator picks direct or broker
+    delivery (broker only for a CLI with a documented base-URL override:
+    Claude). The keeper mints a token per listed user and hands it out
+    through the existing channel (Claude's `apiKeyHelper`); the spawn sets
+    `ANTHROPIC_BASE_URL`. Budgets are monthly billed tokens per user or a
+    key default; usage is metered from the provider's answers into per-user
+    month files the user's daemon reads back. Only the messages, token
+    counting and model paths are forwarded. Containers cannot reach it
+    (refused). Not run against the provider.
 - **A shared consumer login (P5, at the admin's own risk).** Anthropic's
   Consumer Terms (§2) forbid sharing a login or making an account available
   to anyone else, and OpenAI's terms are similar. One suspension stops every

@@ -536,6 +536,21 @@ per CLI which one their agents run on.
   Claude loses it within minutes, other agents already running keep it — to
   take it from them, revoke the key at the provider. Remote agents and Codex
   never get the administrator's key.
+- **Through the key broker (Claude).** On a Claude key's card the
+  administrator can press **Deliver through the key broker**. Users on its
+  list then never receive the key: each gets a token of their own, and the
+  server's key broker (`tabtivity-keybroker`, on the server itself) calls
+  Anthropic with the key on their behalf. The card then takes a **monthly
+  budget** per user (or one default for everyone; empty means no cap),
+  counted in tokens — input, output and cache writes in full, cache reads at
+  a tenth — and shows each user's use this month. A user over budget gets a
+  clear error in Claude until next month (or a higher budget). **Renew
+  *name*'s token** cuts that user's running agents off at their next
+  request without changing the key; **Deliver directly** goes back to
+  handing out the key. Users see their own month next to the switch in
+  Manage CLIs. Project containers cannot reach the broker, so a brokered
+  Claude does not start inside one. Gemini and Vibe keys are always
+  delivered directly.
 
 ### Hosted server: sharing projects and calendars
 

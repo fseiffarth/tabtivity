@@ -1,6 +1,6 @@
 # Server gateway, per-user daemons, admin helper
 
-*Design rationale for hosted plan P3 and P3b (`docs/tabtivity_hosted_plan.md` §3.1,
+*Design rationale for hosted plan P3, P3b and P5's key broker and OIDC (`docs/tabtivity_hosted_plan.md` §3.1,
 §4, §5.1, §5.4, §6.7, §6.8, §8), as built on branch `hosted`. Nothing here has run
 on a real server yet; the live steps are in `docs/hosted_handoff.md` § P3.*
 
@@ -443,6 +443,88 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   The helper verb needs the daemon binary outside `$HOME` (a system
   install); a dev build run from the home is hidden by the fence.
 
+## The key broker (P5, §5.4)
+
+```
+agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─►
+   <slug>-gateway broker (<slug>-auth, port held by <slug>-keybroker.socket)
+      token → user (<cli>/tokens.json) · list/broker/budget (meta.json)
+      the key in the provider's header ──HTTPS──► the provider
+      usage from the answer ──► <cli>/usage/<user>.json (month counts)
+```
+
+- **What changes for a user**: nothing they choose. The administrator
+  switches a key's delivery to the broker (per CLI, Agent credentials
+  panel); the keeper then answers a listed user's `get` with that user's
+  **broker token** (minted at the first fetch, `<cli>/tokens.json` `0600`)
+  plus the broker's URL, and its `offered` names the URL. The daemon sets
+  the CLI's base-URL variable at spawn (Claude's `ANTHROPIC_BASE_URL`,
+  not a secret) and the existing helper channel hands out the token where
+  it handed out the key. The key never leaves `<slug>-auth`.
+- **Which CLIs**: only rows of `keys_wire::BROKER_CLIS`, i.e. a CLI whose
+  base-URL override the vendor documents (Q2's broker question): Claude.
+  Gemini CLI and Mistral Vibe stay direct-only until their overrides are
+  verified; the keeper refuses `delivery: broker` for them (`unsupported`).
+- **Why loopback HTTP, and why systemd holds the port.** Fenced agents share
+  the host's network namespace (`project_fence_abstract_sockets`), so a
+  loopback port is the one place every user's fenced agent can reach
+  without a bind mount; plain HTTP because it never leaves the host. Any
+  local process can connect, hence the per-user token. The port belongs to
+  `<slug>-keybroker.socket` from boot: if the broker were down and the port
+  free, another account could listen there and collect the tokens other
+  users' agents send. A request with an `Origin` header (a browser page
+  aiming at loopback) is refused before anything else.
+- **What is forwarded**: `POST v1/messages`, `POST v1/messages/count_tokens`,
+  `GET v1/models[/<id>]` — nothing else (no Files, Batches or admin API on
+  the administrator's key); a fixed list of request headers, the token
+  replaced by the key in the provider's key header (the client's `x-api-key` and
+  `Authorization` both dropped), cookies and everything else stay behind.
+  Answers stream back as they arrive (`reqwest` `chunk()` → axum body).
+- **Budgets and metering.** Monthly (UTC calendar month), in *billed
+  tokens*: input, cache writes and output in full, cache reads at a tenth
+  (`keys_wire::billed`, roughly the price ratio; one number whatever the
+  model). Per user, else the key's default, else no cap. Checked before a
+  `messages` request is forwarded — so the cap is soft by the requests in
+  flight — and a refusal is the provider's error shape (`403
+  permission_error`, so Claude shows it rather than retrying). Usage is
+  read from the provider's own answer: the JSON `usage`, or the stream's
+  `message_start` / `message_delta` events (each field the larger seen).
+  The meter records on drop, so a client gone mid-stream still pays for
+  what was produced until then. Twelve months kept per user.
+- **"Into the user's own stats"**: the user's daemon asks the keeper for
+  its own month (`Request::Usage`, listed users only) and Manage CLIs shows
+  it beside the switch; the transcripts the token-stats recap already reads
+  count the same tokens, as for any Claude session.
+- **Revocation without rotating the key**: taking a user off the list,
+  **Renew token** (drops one user's token), withdrawing the key or
+  switching back to direct delivery all remove tokens; the broker looks the
+  token up per request, so the next request is a `401` — and Claude runs its
+  `apiKeyHelper` again on a 401, getting the user's current answer.
+- **Fair share**: 256 requests in flight in all, 16 per user (`429
+  rate_limit_error` beyond, which the CLI retries); 32 MiB per request
+  body; 10-minute read timeout towards the provider.
+- **Hardening**: the unit runs as `<slug>-auth` (the keeper's account — it
+  reads the key and the token file directly), `ProtectSystem=strict`, no
+  capabilities, `AF_UNIX AF_INET AF_INET6` only; not `PrivateNetwork`
+  (it calls the provider). TLS through the app's own `reqwest`/rustls stack
+  with the platform verifier; redirects never followed.
+- **Containers**: a project container's network namespace does not reach
+  the host's loopback, so a brokered CLI's container spawn fails, naming the
+  way out (container off, or the user's own login). Direct keys still go to
+  containers as decided in § P3b decisions.
+- **Audit**: the broker appends to the keeper's `audit.jsonl` — a user's
+  brokered use at most once per 10 minutes per CLI
+  (`agent-key-brokered`), a budget refusal likewise
+  (`agent-key-over-budget`); the keeper adds `agent-key-delivery`,
+  `agent-key-budget`, `agent-key-token-renew`, `agent-key-token-delivered`.
+  Never a key, a token or a prompt.
+- **Residuals**: a user's token is readable by every agent of that user
+  that runs the CLI (as the key was) — but it spends only that user's
+  budget and dies on its own. The broker sees prompts and answers in
+  transit (it is the administrator's process, like the key). A user over
+  budget can still run on their own login. Not run against the provider:
+  the broker was tested against a fake provider on loopback only (#2377).
+
 ## Host-channel inventory (§4.4)
 
 | Listener | Who opens it | Protection | Server status |
@@ -452,6 +534,7 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
 | Sidecar loopback port + content port | desktop only | token link, loopback Host/Origin checks | **not opened** by a daemon (`Listen::Unix`) |
 | tmux server | tmux unit | `/run/<slug>/tmux/<u>` `0700` | closed |
 | Key keeper `/run/<slug>/auth.sock` | systemd (socket unit) | `0666`, decided per caller uid (`SO_PEERCRED`): gateway sets/lists, a server user fetches, others refused; hidden from fences (`/run` tmpfs) | open to every local account by design; a server user can read an offered key |
+| Key broker `127.0.0.1:8739` | systemd (`<slug>-keybroker.socket`, held from boot) | per-user broker token per request; `Origin` refused; fixed paths only | reachable by every local account by design; spends only the token holder's budget |
 | Share hub `/run/<slug>/hub.sock` | systemd (socket unit) | `0666`, per caller uid (`SO_PEERCRED`): server users only, owner/member rules per share; hidden from fences (`/run` tmpfs) | open to every local account by design; a non-member learns nothing about a share ([`sharing.md`](sharing.md)) |
 | Shared-calendar service `/run/<slug>/calendar.sock` | systemd (socket unit) | `0666`, per caller uid and per calendar part; hidden from fences | open to every local account by design; a non-member learns nothing ([`sharing.md`](sharing.md)) |
 | Daemon admin socket | daemon | `<state>/mobile-control/admin.sock` in a `0700` dir | closed |

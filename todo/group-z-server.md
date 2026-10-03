@@ -697,3 +697,27 @@ the desktop groundwork the hosted plan's P1 builds on.*
     per daemon since the review). Bound calendars per owner and keep each
     file's owner/members/revision in memory by mtime. (P4 review,
     2026-10-03.)
+
+### Z.6 — Left by P5 (options; `docs/hosted_handoff.md` § P5)
+
+2377. **Run the key broker live (P5, §5.4).** The steps are in
+    `docs/hosted_handoff.md` § P5 "Key broker — live steps": install (the
+    `<slug>-keybroker.socket` holding `127.0.0.1:8739`), a real Anthropic
+    key switched to broker delivery, Bob on its list and on the key: his
+    Claude tab answers with `ANTHROPIC_BASE_URL` pointing at the broker and
+    no key anywhere in his processes; the card counts his month; a small
+    budget refuses the next prompt; Renew token cuts a running Claude off
+    once and it continues on the new token; Deliver directly restores the
+    P3b behaviour; the isolation script's broker section. Also the open
+    research of Q2: that Claude Code accepts a plain-HTTP loopback base URL
+    with an `apiKeyHelper` and re-runs the helper on a 401. (P5,
+    2026-10-03.)
+    - [ ] 🖐️ Manual test — the § P5 broker live list on one server with two users.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
