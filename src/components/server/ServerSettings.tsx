@@ -25,7 +25,7 @@ const FEATURES: Feature[] = ["mail", "calendar", "todo"];
 
 interface Policy {
   schema: number;
-  features: { mail: boolean; calendar: boolean; todo: boolean; calendar_sharing: boolean; project_sharing?: boolean };
+  features: { mail: boolean; calendar: boolean; todo: boolean; calendar_sharing: boolean; project_sharing?: boolean; containers?: boolean };
   ollama_allowed_models?: string[];
 }
 
@@ -140,6 +140,13 @@ export function ServerSettings() {
             disabled={busy}
             onChange={(event) => void save({ ...policy, features: { ...policy.features, project_sharing: event.target.checked } })}
           />
+          <ToggleRow
+            label={<>{t("server.settings.containers")} <UntestedTag id="server.containers" /></>}
+            checked={policy.features.containers === true}
+            disabled={busy}
+            onChange={(event) => void save({ ...policy, features: { ...policy.features, containers: event.target.checked } })}
+          />
+          <p className="settings-help">{t("server.settings.containersHelp")}</p>
           <SettingsCard>
             <label className="settings-card-label" htmlFor="server-allowed-models">{t("server.settings.models")}</label>
             <textarea

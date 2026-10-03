@@ -157,6 +157,71 @@ fn sanitize_key(id: &str) -> String {
     crate::storage::project_key(id)
 }
 
+// ── The engine ────────────────────────────────────────────────────────────
+
+/// The container engine. Docker on a desktop (the user's own machine, the
+/// user's own daemon). On a hosted server **rootless Podman, as the user**
+/// (plan §9, P5): the Docker socket is root on the host, so no server user
+/// may have it, whereas a rootless Podman container runs in the user's own
+/// user namespace with the user's own uid on the host — "Alice's container
+/// touched Bob's file" stays a kernel refusal, as for every other process of
+/// hers. Its CLI is Docker's for everything this module runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    Docker,
+    Podman,
+}
+
+impl Engine {
+    pub fn current() -> Engine {
+        if crate::services::server::is_server() {
+            Engine::Podman
+        } else {
+            Engine::Docker
+        }
+    }
+
+    pub fn program(self) -> &'static str {
+        match self {
+            Engine::Docker => "docker",
+            Engine::Podman => "podman",
+        }
+    }
+
+    /// Flags before the subcommand. A server's daemon is a system service with
+    /// no systemd user session (no user bus), so Podman's cgroups are managed
+    /// as plain files — its containers stay inside the daemon's own cgroup,
+    /// under the user's slice and its limits — and its events go to a file.
+    pub fn global_args(self) -> &'static [&'static str] {
+        match self {
+            Engine::Docker => &[],
+            Engine::Podman => &["--cgroup-manager=cgroupfs", "--events-backend=file"],
+        }
+    }
+
+    /// `run …` for this engine: Podman also maps the user's own uid into the
+    /// container (`--userns=keep-id`), so the `--user uid:gid` the argv
+    /// carries is the user on the host too and project files stay theirs.
+    pub fn create_args(self, docker_args: Vec<String>) -> Vec<String> {
+        let mut out: Vec<String> = self.global_args().iter().map(|s| s.to_string()).collect();
+        let mut args = docker_args.into_iter();
+        if let Some(first) = args.next() {
+            out.push(first);
+            if self == Engine::Podman {
+                out.push("--userns=keep-id".into());
+            }
+        }
+        out.extend(args);
+        out
+    }
+}
+
+/// Is `cmd` a tab already wrapped into the project container (an engine
+/// client), which no tmux or fence wrap may wrap again?
+pub fn is_engine_cmd(cmd: &str) -> bool {
+    cmd == Engine::Docker.program() || cmd == Engine::Podman.program()
+}
+
 /// Name of the session container for a project: `tabtivity-<sanitized-id>`.
 pub fn container_name_for(project_id: &str) -> String {
     format!("{}{}", crate::brand::CONTAINER_PREFIX, sanitize_key(project_id))
@@ -689,6 +754,12 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     if !opts.sandbox {
         return Ok(());
     }
+    // A hosted server runs containers only while the administrator allows
+    // them (P5); a project switched on before keeps its spec, but no tab
+    // starts in it — never silently on the host instead.
+    if crate::services::server::is_server() && !crate::services::server::feature_on(crate::services::server::Feature::Containers) {
+        return Err("Project container: containers are switched off on this server (the administrator's Server settings), or by you. Turn the container toggle off to run this project's tabs without one.".into());
+    }
     // A shared project's unreviewed agent instructions stop a container agent
     // too (hosted plan §6.5 gate 2), not only a fenced one.
     if let Some(dir) = opts.project_id.as_deref().and_then(project_dir_for) {
@@ -751,8 +822,11 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     let auth_env = host_auth_env();
     let pidfile = register_exec_tab(&opts.id, &name);
 
-    opts.args = docker_exec_args(&name, &opts.cwd, &env, &auth_env, &pidfile, &cmd, &cmd_args);
-    opts.cmd = "docker".to_string();
+    let engine = Engine::current();
+    let mut args: Vec<String> = engine.global_args().iter().map(|s| s.to_string()).collect();
+    args.extend(docker_exec_args(&name, &opts.cwd, &env, &auth_env, &pidfile, &cmd, &cmd_args));
+    opts.args = args;
+    opts.cmd = engine.program().to_string();
     // Env now rides inside the docker argv as `-e` flags; the docker client
     // itself needs nothing from opts.env — except the secrets, which the argv
     // only names (`-e NAME`) and docker reads from the client's own env (#864).
@@ -965,11 +1039,14 @@ pub fn up(
         &harden,
         Some(&fingerprint),
     );
+    let engine = Engine::current();
+    let args = engine.create_args(args);
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = docker(&argv)?;
+    let out = engine_output(engine, &argv, false)?;
     if !out.status.success() {
         return Err(format!(
-            "Project container: docker run failed: {}",
+            "Project container: {} run failed: {}",
+            engine.program(),
             stderr_tail(&out)
         ));
     }
@@ -1041,7 +1118,7 @@ pub fn sweep_orphans() {
     // What must not happen is a `docker --version`/`docker ps` spawn at every
     // startup on a machine with no Docker at all — hence the PATH walk first,
     // which spawns nothing.
-    if !sweep_should_probe(crate::paths::binary_on_path("docker")) || preflight_docker().is_err() {
+    if !sweep_should_probe(crate::paths::binary_on_path(Engine::current().program())) || preflight_docker().is_err() {
         return;
     }
     remove_all_owned();
@@ -1206,13 +1283,19 @@ fn ensure_image(spec: Option<&SandboxSpec>, project_dir: &str, image: &str) -> R
 
 // ── Preflight ─────────────────────────────────────────────────────────────
 
-/// `docker` binary present and runnable?
+/// The engine's binary present and runnable?
 fn preflight_docker() -> Result<(), String> {
-    match crate::paths::command_no_window("docker")
+    let engine = Engine::current();
+    match crate::paths::command_no_window(engine.program())
         .arg("--version")
         .output()
     {
         Ok(o) if o.status.success() => Ok(()),
+        _ if engine == Engine::Podman => Err(
+            "Project container: 'podman' is not installed on this server. Ask the administrator \
+             (rootless Podman, the uidmap package), or turn the container toggle off for this project."
+                .to_string(),
+        ),
         _ => Err(
             "Project container: 'docker' not found. Install Docker, or turn the container \
              toggle off for this project."
@@ -1225,8 +1308,17 @@ fn preflight_docker() -> Result<(), String> {
 /// daemon must be diagnosed separately — "image missing" and "Docker isn't
 /// running" are different user actions.
 fn preflight_daemon() -> Result<(), String> {
-    match docker(&["info", "--format", "{{.ServerVersion}}"]) {
+    let engine = Engine::current();
+    // Rootless Podman has no daemon; `info` checks its user namespace and
+    // storage (a missing subordinate uid range fails here).
+    let format = if engine == Engine::Podman { "{{.Host.Security.Rootless}}" } else { "{{.ServerVersion}}" };
+    match docker(&["info", "--format", format]) {
         Ok(o) if o.status.success() => Ok(()),
+        Ok(o) if engine == Engine::Podman => Err(format!(
+            "Project container: rootless Podman cannot run for this account ({}). The administrator \
+             gives each server user a subordinate uid/gid range (/etc/subuid, /etc/subgid).",
+            stderr_tail(&o)
+        )),
         _ => Err(if cfg!(target_os = "linux") {
             "Project container: Docker isn't running. Start the Docker service (e.g. \
              `systemctl start docker`), or turn the container toggle off for this project."
@@ -1736,10 +1828,17 @@ fn host_auth_env() -> BTreeMap<String, String> {
 }
 
 fn docker(args: &[&str]) -> Result<std::process::Output, String> {
-    crate::paths::command_no_window("docker")
-        .args(args)
-        .output()
-        .map_err(|e| format!("run docker: {e}"))
+    engine_output(Engine::current(), args, true)
+}
+
+/// Run the engine; `global` puts its global flags first (a create argv from
+/// [`Engine::create_args`] carries them already).
+fn engine_output(engine: Engine, args: &[&str], global: bool) -> Result<std::process::Output, String> {
+    let mut command = crate::paths::command_no_window(engine.program());
+    if global {
+        command.args(engine.global_args());
+    }
+    command.args(args).output().map_err(|e| format!("run {}: {e}", engine.program()))
 }
 
 /// Last non-empty stderr line — docker's errors are one-liners at the tail.
@@ -1765,6 +1864,21 @@ fn host_uid_gid() -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
+
+    /// P5: on a server the engine is rootless Podman — its global flags come
+    /// first, the user's own uid is kept inside (`--userns=keep-id`), and a
+    /// tab running either engine's client is never wrapped again.
+    #[test]
+    fn rootless_podman_keeps_the_users_uid_and_its_flags_come_first() {
+        let docker = vec!["run".to_string(), "-d".into(), "--user".into(), "1000:1000".into(), "img".into()];
+        assert_eq!(Engine::Docker.create_args(docker.clone()), docker, "Docker's argv is unchanged");
+        let podman = Engine::Podman.create_args(docker);
+        assert_eq!(podman[..4], ["--cgroup-manager=cgroupfs", "--events-backend=file", "run", "--userns=keep-id"]);
+        assert_eq!(podman[4..], ["-d", "--user", "1000:1000", "img"]);
+        assert_eq!((Engine::Docker.program(), Engine::Podman.program()), ("docker", "podman"));
+        assert!(is_engine_cmd("docker") && is_engine_cmd("podman") && !is_engine_cmd("ssh") && !is_engine_cmd(""));
+        assert_eq!(Engine::current(), Engine::Docker, "a desktop (this test process) keeps Docker");
+    }
 
     #[test]
     fn host_trust_is_read_per_exact_folder() {

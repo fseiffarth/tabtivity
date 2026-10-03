@@ -212,10 +212,33 @@ pub fn socket_dir(p: &dyn Probe) -> Check {
     }
 }
 
+/// Rootless Podman for project containers (P5, optional): Podman itself,
+/// the setuid `newuidmap`/`newgidmap` (package `uidmap`), and a subordinate
+/// uid and gid range for every server user. Only a warning: containers stay
+/// off until the administrator switches them on.
+pub fn podman(p: &dyn Probe, users: &[String]) -> Check {
+    if p.run(&["podman", "--version"]).is_err() {
+        return check("podman", Verdict::Warn, "podman is not installed: project containers stay unavailable (optional; apt install podman uidmap)");
+    }
+    // Setuid or with file capabilities (Ubuntu's): present is what is checked.
+    if ["/usr/bin/newuidmap", "/usr/bin/newgidmap"].iter().any(|bin| p.mode_owner(Path::new(bin)).is_none()) {
+        return check("podman", Verdict::Warn, "newuidmap/newgidmap are missing (package uidmap): rootless Podman cannot map ids");
+    }
+    let ranges = |file: &str| p.read(Path::new(file)).unwrap_or_default();
+    let (subuid, subgid) = (ranges("/etc/subuid"), ranges("/etc/subgid"));
+    let has = |text: &str, user: &str| text.lines().any(|l| l.split(':').next() == Some(user));
+    let missing: Vec<&str> = users.iter().map(String::as_str).filter(|u| !has(&subuid, u) || !has(&subgid, u)).collect();
+    if missing.is_empty() {
+        check("podman", Verdict::Ok, "podman, newuidmap and a subordinate id range for every server user")
+    } else {
+        check("podman", Verdict::Warn, format!("no subordinate uid/gid range in /etc/subuid, /etc/subgid for: {} (usermod --add-subuids … --add-subgids …)", missing.join(", ")))
+    }
+}
+
 /// Every check, in order.
 pub fn all(p: &dyn Probe, user_homes: &[(String, PathBuf)]) -> Vec<Check> {
     let users: Vec<String> = user_homes.iter().map(|(u, _)| u.clone()).collect();
-    vec![userns(p), hidepid(p), proc_group_members(p, &users), ptrace_scope(p), persistent_keyring(p), private_tmp(p), homes(p, user_homes), tmux(p), socket_dir(p)]
+    vec![userns(p), hidepid(p), proc_group_members(p, &users), ptrace_scope(p), persistent_keyring(p), private_tmp(p), homes(p, user_homes), tmux(p), socket_dir(p), podman(p, &users)]
 }
 
 /// The real machine.
@@ -313,7 +336,28 @@ mod tests {
         f.modes.insert(names::socket_dir(), (0o40750, 0));
         f.commands.insert("bwrap".into(), Ok(String::new()));
         f.commands.insert("tmux".into(), Ok("tmux 3.4\n".into()));
+        f.commands.insert("podman".into(), Ok("podman version 4.9.3\n".into()));
+        f.modes.insert("/usr/bin/newuidmap".into(), (0o100755, 0));
+        f.modes.insert("/usr/bin/newgidmap".into(), (0o100755, 0));
+        f.files.insert("/etc/subuid".into(), "alice:100000:65536\n".into());
+        f.files.insert("/etc/subgid".into(), "alice:100000:65536\n".into());
         f
+    }
+
+    /// P5: rootless Podman is optional — each gap is a warning naming it.
+    #[test]
+    fn rootless_podman_gaps_are_warnings_that_name_the_fix() {
+        let users = ["alice".to_string(), "bob".to_string()];
+        let mut f = good();
+        let c = podman(&f, &users[..1]);
+        assert_eq!(c.verdict, Verdict::Ok, "{c:?}");
+        let c = podman(&f, &users);
+        assert!(c.verdict == Verdict::Warn && c.detail.contains("bob") && c.detail.contains("--add-subuids"), "{c:?}");
+        f.modes.remove(&PathBuf::from("/usr/bin/newgidmap"));
+        assert!(podman(&f, &users[..1]).detail.contains("uidmap"));
+        f.commands.remove("podman");
+        let c = podman(&f, &users[..1]);
+        assert!(c.verdict == Verdict::Warn && c.detail.contains("not installed"), "{c:?}");
     }
 
     #[test]

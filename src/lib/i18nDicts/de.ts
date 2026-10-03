@@ -2715,6 +2715,8 @@ export const dict: Dict = {
   "server.settings.adminHelp": "Gilt für alle Nutzer dieses Servers. Hier Abgeschaltetes wird für alle verweigert; die Daten bleiben.",
   "server.settings.sharing": "Kalender und Aufgaben teilen",
   "server.settings.projectSharing": "Projekte teilen",
+  "server.settings.containers": "Projekt-Container (rootless Podman, pro Benutzer)",
+  "server.settings.containersHelp": "Aus, bis du es einschaltest. Die Container jedes Benutzers laufen als dieser Benutzer, in seinem eigenen User-Namespace — nie über Dockers Root-Socket. Braucht Podman, das Paket uidmap und einen untergeordneten UID/GID-Bereich pro Benutzer: führe zuerst den check des Admin-Helpers aus.",
   "server.sharing.header": "Geteilte Projekte",
   "server.sharing.help": "Eines deiner Git-Projekte mit anderen Nutzern dieses Servers teilen, als Betrachter (darf abrufen) oder Bearbeiter (darf zusätzlich Branches unter dem eigenen Namen pushen). Jedes Mitglied arbeitet in einem eigenen Klon; nur du bewegst deine Branches. Entziehen beendet den Zugriff eines Mitglieds sofort, die bereits geklonte Kopie bleibt aber seine. Remote-, VM- und Container-Projekte können nicht geteilt werden, die eigenen Sitzungsdateien der App nie.",
   "server.sharing.pickProject": "Projekt wählen",

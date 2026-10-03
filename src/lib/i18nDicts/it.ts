@@ -2712,6 +2712,8 @@ export const dict: Dict = {
   "server.settings.adminHelp": "Valgono per tutti gli utenti di questo server. Ciò che è disattivato qui viene rifiutato a tutti; i dati restano.",
   "server.settings.sharing": "Condivisione di calendario e attività",
   "server.settings.projectSharing": "Condivisione di progetti",
+  "server.settings.containers": "Container di progetto (Podman rootless, per utente)",
+  "server.settings.containersHelp": "Spento finché non lo attivi. I container di ogni utente girano come quell'utente, nel suo user namespace — mai tramite il socket root di Docker. Servono Podman, il pacchetto uidmap e un intervallo subordinato di uid/gid per utente: esegui prima il check dell'helper di amministrazione.",
   "server.sharing.header": "Progetti condivisi",
   "server.sharing.help": "Condividi uno dei tuoi progetti git con altri utenti di questo server, come lettore (può scaricare) o editor (può anche inviare branch con il proprio nome). Ogni membro lavora in un clone tutto suo; solo tu sposti i tuoi branch. Revocare toglie subito l'accesso a un membro, ma la copia già clonata resta sua. I progetti remoti, di VM e di container non si possono condividere, e i file di sessione dell'app non vengono mai condivisi.",
   "server.sharing.pickProject": "Scegli un progetto",

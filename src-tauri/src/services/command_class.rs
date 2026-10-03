@@ -58,7 +58,10 @@
 //! - Saved-password `*_password_state` / `*_forget_password` commands are
 //!   `Core`: §6.8 moves the opt-in store off the OS keychain, the commands'
 //!   meaning survives. Only the keychain *unlock* pair is `Off`.
-//! - Containers are `Admin` in v1 (§9: the Docker socket is root on the host).
+//! - Containers were `Admin` in v1 (§9: the Docker socket is root on the
+//!   host). Since P5 they are the user's own — rootless Podman under their
+//!   uid (`sandbox::Engine`) — so `Core`, behind the administrator's
+//!   `containers` switch (`server::Feature::Containers`, off by default).
 
 /// Where a command runs once the backend is a daemon (hosted plan §3.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -754,7 +757,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("repair_project_scaffold", Core),
     ("restore_archived_project", Core),
     ("root_work_dir", Core),
-    ("sandbox_preflight", Admin),
+    ("sandbox_preflight", Core),
     ("save_project", Core),
     ("save_projects", Core),
     ("save_tab_layout", Off(OffReason::WholeDocumentSave)),
@@ -772,8 +775,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_project_remote_label", Core),
     ("set_project_remote_user", Core),
     ("set_project_run_host", Core),
-    ("set_project_sandbox", Admin),
-    ("set_project_sandbox_spec", Admin),
+    ("set_project_sandbox", Core),
+    ("set_project_sandbox_spec", Core),
     ("set_project_schedule_mcp", Core),
     ("set_remote_mirror_dir", Core),
     ("workspace_snapshot", Core),

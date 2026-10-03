@@ -31,11 +31,15 @@ pub struct Features {
     /// no new share and no new member; existing shares keep working until
     /// their owners stop them.
     pub project_sharing: bool,
+    /// Project containers as rootless Podman, per user (P5). **Off by
+    /// default**: it needs Podman and a subordinate uid range per user,
+    /// which the administrator sets up first (`<slug>-admin-helper check`).
+    pub containers: bool,
 }
 
 impl Default for Features {
     fn default() -> Self {
-        Self { mail: true, calendar: true, todo: true, calendar_sharing: true, project_sharing: true }
+        Self { mail: true, calendar: true, todo: true, calendar_sharing: true, project_sharing: true, containers: false }
     }
 }
 
@@ -72,7 +76,7 @@ impl Policy {
     pub fn fail_closed() -> Policy {
         Policy {
             schema: 1,
-            features: Features { mail: false, calendar: false, todo: false, calendar_sharing: false, project_sharing: false },
+            features: Features { mail: false, calendar: false, todo: false, calendar_sharing: false, project_sharing: false, containers: false },
             ollama_allowed_models: Some(Vec::new()),
         }
     }
@@ -112,6 +116,7 @@ mod tests {
         assert!(Policy::load(&path).is_err());
         assert!(!Policy::fail_closed().features.todo && !Policy::fail_closed().features.project_sharing);
         assert!(policy.features.project_sharing, "a policy written before project sharing existed allows it");
+        assert!(!policy.features.containers && !Policy::default().features.containers, "containers wait for the administrator");
         let mut p = Policy { ollama_allowed_models: Some(vec!["llama3:8b".into(), "hf.co/x/y".into()]), ..Policy::default() };
         assert!(p.validate().is_ok());
         p.ollama_allowed_models = Some(vec!["bad model".into()]);

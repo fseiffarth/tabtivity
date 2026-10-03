@@ -14,7 +14,8 @@
 # lists every loopback listener each user owns (each must need a token or be
 # a CLI's own sign-in listener: see docs/context/server_gateway.md), checks
 # that the key keeper answers by uid (P3b), that the key broker needs a
-# token and holds its port through systemd (P5), checks the share hub (P4: a
+# token and holds its port through systemd (P5), that project containers
+# are rootless Podman per user (P5), checks the share hub (P4: a
 # non-member cannot read a hub, a viewer cannot push or write one, a revoked
 # member loses access at once; an editor moves only its own branches),
 # checks the shared-calendar service (P4c: non-members and a viewer's writes
@@ -241,6 +242,24 @@ else
     if [ "$code" = 403 ]; then pass "the broker refuses a browser page ($u)"; else fail "the broker refuses a browser page ($u)" "HTTP $code"; fi
     expect_eacces "$u cannot read the broker tokens" "$u" cat "/var/lib/${APP_SLUG}-auth/claude/tokens.json"
   done
+fi
+
+echo "── project containers: rootless Podman per user ──"
+# Hosted plan §9 (P5): a user's project containers are rootless Podman under
+# that user's uid; another user (and rootful Podman) never sees them. Only
+# when Podman is installed (the feature is optional and off by default).
+if ! command -v podman >/dev/null; then
+  pass "podman is not installed (project containers stay off)"
+else
+  for u in "$1" "$2"; do
+    rootless="$(runuser -u "$u" -- sh -c 'cd / && podman --cgroup-manager=cgroupfs info --format "{{.Host.Security.Rootless}}"' 2>&1)"
+    if [ "$rootless" = "true" ]; then pass "podman runs rootless as $u"; else fail "podman runs rootless as $u" "got: $(printf '%s' "$rootless" | head -c 200) (subordinate ids in /etc/subuid, /etc/subgid?)"; fi
+  done
+  other="$(runuser -u "$2" -- sh -c "cd / && podman --cgroup-manager=cgroupfs ps -a --format '{{.Names}}'" 2>/dev/null | grep -c "^${APP_SLUG}-" || true)"
+  mine="$(runuser -u "$1" -- sh -c "cd / && podman --cgroup-manager=cgroupfs ps -a --format '{{.Names}}'" 2>/dev/null | grep -c "^${APP_SLUG}-" || true)"
+  rootful="$(podman ps -a --format '{{.Names}}' 2>/dev/null | grep -c "^${APP_SLUG}-" || true)"
+  printf 'info  project containers: %s has %s, %s has %s, rootful Podman has %s\n' "$1" "$mine" "$2" "$other" "$rootful"
+  if [ "$rootful" = 0 ]; then pass "no project container runs under rootful Podman"; else fail "no project container runs under rootful Podman" "root's podman lists $rootful"; fi
 fi
 
 echo "── shared projects: the hub decides by uid, read access by named ACL ──"

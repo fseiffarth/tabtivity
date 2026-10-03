@@ -2775,6 +2775,8 @@ export const enSource = {
   "server.settings.adminHelp": "Applies to every user of this server. A feature switched off here is refused for everyone; its data stays.",
   "server.settings.sharing": "Calendar and to-do sharing",
   "server.settings.projectSharing": "Sharing projects",
+  "server.settings.containers": "Project containers (rootless Podman, per user)",
+  "server.settings.containersHelp": "Off until you switch it on. Each user's containers run as that user, in their own user namespace — never through Docker's root socket. Needs Podman, the uidmap package and a subordinate uid/gid range per user: run the admin helper's check first.",
   "server.sharing.header": "Shared projects",
   "server.sharing.help": "Share one of your git projects with other users of this server, as viewer (may fetch) or editor (may also push branches under their own name). Each member works in a clone of their own; only you move your branches. Revoking ends a member's access at once, but the copy they already cloned stays theirs. Remote, VM and container projects cannot be shared, and the app's own session files never are.",
   "server.sharing.pickProject": "Choose a project",

@@ -265,6 +265,8 @@ pub enum Feature {
     Mail,
     Calendar,
     Todo,
+    /// Project containers (rootless Podman per user, P5).
+    Containers,
 }
 
 impl Feature {
@@ -273,6 +275,7 @@ impl Feature {
             Feature::Mail => "mail",
             Feature::Calendar => "calendar",
             Feature::Todo => "todo",
+            Feature::Containers => "containers",
         }
     }
 }
@@ -284,7 +287,9 @@ pub fn features_of(cmd: &str) -> &'static [Feature] {
     const CALENDAR: &[Feature] = &[Feature::Calendar];
     const TODO: &[Feature] = &[Feature::Todo];
     const EITHER: &[Feature] = &[Feature::Calendar, Feature::Todo];
+    const CONTAINERS: &[Feature] = &[Feature::Containers];
     match cmd {
+        "set_project_sandbox" | "set_project_sandbox_spec" | "sandbox_preflight" => CONTAINERS,
         "calendar_load" | "calendar_save" | "calendar_alarms_claim" => EITHER,
         "create_task" | "update_task" | "delete_task" | "todo_columns_set" | "todo_move_tasks" => TODO,
         "create_calendar" | "update_calendar" | "delete_calendar" | "restore_calendar" => CALENDAR,
@@ -302,6 +307,7 @@ pub fn feature_on(feature: Feature) -> bool {
         Feature::Mail => policy.features.mail,
         Feature::Calendar => policy.features.calendar,
         Feature::Todo => policy.features.todo,
+        Feature::Containers => policy.features.containers,
     };
     admin && !user_disabled_features().iter().any(|f| f == feature.as_str())
 }
@@ -395,6 +401,7 @@ mod tests {
         assert_eq!(features_of("caldav_fetch"), [Feature::Calendar]);
         assert_eq!(features_of("update_task"), [Feature::Todo]);
         assert_eq!(features_of("calendar_load"), [Feature::Calendar, Feature::Todo]);
+        assert_eq!(features_of("set_project_sandbox"), [Feature::Containers], "P5: the administrator's containers switch");
         assert!(features_of("dev_todo_read").is_empty() && features_of("pty_write").is_empty());
         // Outside server mode every feature is on.
         assert!(feature_on(Feature::Mail) && feature_refusal("mail_sync").is_none());

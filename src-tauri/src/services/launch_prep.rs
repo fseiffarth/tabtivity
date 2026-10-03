@@ -617,7 +617,7 @@ pub async fn prepare(
     let host_agent_tab = (fence_roots.is_some()
         && !opts.sandbox
         && opts.cmd != "ssh"
-        && opts.cmd != "docker")
+        && !crate::services::sandbox::is_engine_cmd(&opts.cmd))
         .then(|| crate::services::agent_fence::HostAgentTab {
             scope_id: opts.project_id.clone().unwrap_or_else(|| "root".to_string()),
             agent_cmd: opts.cmd.clone(),
@@ -637,7 +637,7 @@ pub async fn prepare(
             crate::services::agent_fence::platform_accepted(),
             crate::services::agent_fence::bwrap_available(),
         );
-        let local_agent = opts.cmd != "ssh" && opts.cmd != "docker";
+        let local_agent = opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd);
         let scope_id = crate::services::agent_home::scope_of(opts.project_id.as_deref());
         match decision {
             crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => {
@@ -714,10 +714,10 @@ pub async fn prepare(
     // `tmux_session` name is wrapped in a tmux session on this machine, so the run
     // survives a Tabtivity crash and the tab reattaches on restart. A remote tab is
     // now `cmd == "ssh"` (its tmux is inside the remote command) and a container tab
-    // is `cmd == "docker"`, so both are skipped. No-op on Windows / without tmux.
+    // is `cmd == "docker"` (or `podman` on a server), so both are skipped. No-op on Windows / without tmux.
     crate::brand::PAIR.export_both(&mut opts.env);
     #[cfg(unix)]
-    if opts.tmux_session.is_some() && opts.cmd != "ssh" && opts.cmd != "docker" {
+    if opts.tmux_session.is_some() && opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd) {
         // On a hosted server the tmux server is its own unit's (`tmux -L
         // <slug>`, started by systemd), so a pane does not inherit this
         // daemon's PATH the way a desktop's tmux inherits the window's: carry
