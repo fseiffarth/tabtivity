@@ -380,3 +380,223 @@ error to the phone. The receipt never goes to the phone.
     gate, and pins are read at rot 0;
   - the card's own scroll box at small window heights;
   - focus behaviour of the Other… field (`autoFocus`).
+
+## P3
+
+Done, on `markup-mcp` (nothing run live):
+
+- `fcbc763f` Serve the agent's markup questions to the phone through the sidecar and the window's bridge
+- `f32ff191` Let the sealed PDF frame find a quote's boxes on its page
+- `77637730` Show the agent's markup questions on the phone, pinned to the page
+- `b30700d6` Show the agent's own Recommended word in the shared question rows
+
+### What was built
+
+**Protocol** (`services/mobile_control/protocol.rs`)
+
+- `DesktopRequest::MarkupQuestions { project_id, tmux_session, path? }`.
+  It is a read, with 3 s / 2 s deadlines like `GitStates`.
+- `DesktopRequest::MarkupAnswer { …, ask_id, answers: [MobileMarkupAnswer] }`
+  and `DesktopRequest::MarkupDismiss { …, ask_id }`. Both are mutations. The
+  dismiss is its own variant rather than a flag on the answer.
+- `MobileMarkupAnswer { options: u32[], other? }` is `deny_unknown_fields`.
+- `DesktopResponse::MarkupQuestions { asks: [MobileMarkupAsk] }`. Each ask
+  is `{ id, file_name?, questions: [{ question, header?, options:
+  [{ label, description? }], multi_select, page?, quote? }] }`. The struct
+  has no `file` field, so a path the desktop sends is dropped when the
+  sidecar re-encodes the answer.
+- A delivered answer or a dismissal is acknowledged with `Seen`.
+- New desktop error codes: `delivery_failed` (the prompt could not be queued
+  and the ask is open again) and `not_delivered` (it could not be queued, and
+  the reopen was refused). The ask codes `superseded`, `answered`, `gone` and
+  `invalid_answer` pass through unchanged.
+
+**Sidecar routes** (`services/mobile_control/host.rs`)
+
+- `GET /api/v1/tabs/{id}/markup/questions[?source=files:<token>|outbox:<leaf>]`.
+  - The tab must be an agent tab.
+  - The source is checked with `markup::validate_source`. A files token goes
+    through the file browser's gates (`files_off`, `files_unavailable`, then
+    unseal); an empty token or the root token is `invalid_source`. An outbox
+    leaf becomes `<OUTBOX_DIR>/<leaf>`.
+  - Only that project-relative path goes to the desktop. With no source,
+    every open ask of the tab is listed (the Focus banner).
+  - Answers `{ asks }`. Each ask's `file_name` is cut to its bare leaf and
+    passed through `outbox::sent_name`. An ask whose id is not `ask-<hex>` is
+    dropped.
+- `POST /api/v1/tabs/{id}/markup/answer` with body `{ ask_id, answers }`.
+  - Body cap 16 KiB; the exact origin is required.
+  - It is shaped before the desktop is asked: 1–4 answers, each with at most
+    6 indices, every index < 6, and Other… ≤ 500 characters with no control
+    characters. A bad shape is `400 invalid_answer`; a bad body or ask id is
+    `400 invalid_request`.
+  - The ask's own refusals and the two delivery codes answer `409`.
+- `POST /api/v1/tabs/{id}/markup/dismiss` with body `{ ask_id }`. Body cap
+  1 KiB.
+- With no window (headless), all three routes answer
+  `503 desktop_unavailable`, which the phone reads as "no card". There is no
+  headless fallback: the asks live in the window's process. Each route checks
+  `desktop_down` explicitly in `markup_call`. `headless.rs` has no request
+  dispatcher, so there is nothing to add there.
+- Test: `markup_questions_cross_as_leaf_names_and_answers_as_indices`. The
+  questions route was added to `AUTHENTICATED_GETS`.
+
+**Bridge** (`src/components/mobile/MobileBridgeHost.tsx`)
+
+- `markup_questions`, `markup_answer` and `markup_dismiss` go through
+  `mobileScope` and `scheduleTargetTab` (`markupTarget`). A box or the root
+  console scope lists no asks.
+- `markup_questions` calls `listMarkupQuestions(project, target, path)` and
+  maps each `AskView` to the phone's snake_case shape. It sends `fileName`
+  only, never `file`.
+- `markup_answer`:
+  1. `answerMarkupQuestions`.
+  2. `queuePromptForTab` + `holdPhonePrompt`, the same delivery as
+     `holdTabPrompt`.
+  3. If queueing fails, `reopenMarkupQuestions(…, receipt)`, which yields
+     `delivery_failed`; if that reopen is refused, `not_delivered`. The
+     receipt never leaves the window.
+- `mutationDomain`: answer and dismiss are in `"schedules"`.
+- Tests: `src/__tests__/mobile/MobileMarkupQuestions.test.tsx` (6).
+
+**Shared pick model.** `src/lib/viewers/markupQuestionPicks.ts` holds the
+types, `splitRecommended`, `NO_PICK`, `toggleOption`, `toggleOther`,
+`answersOf` and the new `answersOnTap`. It has no imports.
+`markupQuestions.ts` re-exports it. The split was needed because
+`markupQuestions.ts` imports `invoke` and `tex.ts`, which must not enter the
+phone bundle. `listMarkupQuestions`'s `path` is now optional.
+
+**Frame** (`mobile-web/src/markup/frameProtocol.ts`, `pdfFrame/main.ts`,
+`markup/findText.ts`)
+
+- The PWA sends `findText { id, page, quote }` and the frame answers
+  `found { id, page, rects }`.
+- Request bounds: the quote is 1–400 code units and not blank; `id` is an
+  integer in 0..1e9; `page` is in range.
+- Answer checks: the page must be within the announced count; at most 32
+  rects (`MAX_FOUND_RECTS`); every number finite; `w` and `h` ≥ 0.
+- The frame reads the page's text through pdf.js `getTextContent` in its own
+  viewport at scale 1, the same units as `meta`. It boxes the runs as
+  `pageText.ts` does. Only boxes leave the frame.
+- `findQuote` ignores whitespace altogether, folds case with NFKC (so
+  ligatures match), drops a hyphen that ends a line, and falls back to the
+  first six words.
+
+**Phone UI**
+
+- `components/QuestionRows.tsx` holds the row list lifted out of
+  `QuestionList`. The Focus behaviour is unchanged: same classes, the
+  current row, the pending label, the free-text field, and the agent's own
+  `Recommended` word.
+- `components/MarkupQuestionsCard.tsx` is docked at the top of
+  `.markup-palette`. The palette now also renders while reading, when there
+  is a card.
+  - The head reads "The agent asks · n" and folds the card. A new ask id
+    opens it again.
+  - Each question shows `?n`, its header, the question text, a
+    "Pick any that apply." hint, rows plus Other…, and a "Show on page N"
+    chip on PDFs.
+  - A single single-select question answers on the tap. Otherwise the rows
+    are picked (☐/☑ for multiSelect) and **Send answers** sends; the Other…
+    field's button then reads OK.
+  - **Answer in chat instead** dismisses.
+  - Refusals show in the card. `superseded`, `answered` and `gone` re-list.
+  - While an answer is in flight the card pauses the poll.
+- `markup/questions.ts` `useMarkupAsks(tabId, source, active, edge, paused)`
+  polls every 3 s and on the `agent` edge. It never polls while the page is
+  hidden. `desktop_unavailable` and refusals clear the asks; offline and
+  timeout keep them.
+- `MarkupView`:
+  - The card shows only for an agent tab's view (`tabId` and `onSend`), not
+    for a new-tab Submit.
+  - It asks the frame for every question's quote once per document, and
+    asks again after Reload.
+  - Pins: an `?n` badge at the first box, or in the top margin while the
+    frame has not answered or found nothing. Tapping a pin opens the card
+    and flashes that question. The chip scrolls the page and lights the
+    quote's boxes for 1.6 s.
+  - An answer starts a round, so the pill follows the turn. **Make these
+    changes** is hidden while an ask is open.
+  - Pictures get no pins.
+- `screens/Terminal.tsx` Focus shows a one-line `sign-in-notice` banner over
+  the session facts while an ask is open, worded one of three ways:
+  - "The agent asks about <file>" with **Open**, when the tab's outbox has a
+    file whose `sentName` equals `file_name`. Open opens that file in the
+    outbox viewer, which for a PDF is the markup view in reader mode.
+  - "… about <file> in its markup view", when the outbox does not have it.
+  - "… about your marks in the markup view", when the ask has no file.
+- The banner's poll runs only while Focus is the view and no viewer,
+  gallery or file browser covers it.
+- i18n: `mobile.markup.questions.*` (23 keys) in all five languages.
+- Untested row `mobile.markup.questions`. The pill shows on the card head
+  and on the banner.
+- CSS: `style.css`, after the note editor. Colours are the phone's own. The
+  flash is a static fill; no shadow is animated.
+- Filemap rows: the `MarkupView` row (frontend), the `MobileBridgeHost` row,
+  the `PdfMarkupQuestions` row (the pick module), and the `mobile_control/`
+  row (backend).
+- Tests: `src/__tests__/mobile/MobileMarkupQuestionsCard.test.tsx` (13):
+  - `findQuote` and the frame protocol bounds;
+  - one-tap answer: picks only, no prompt text; the round starts;
+  - multiSelect + Other… + Send answers;
+  - `delivery_failed` keeps the card, then dismiss;
+  - fold, and reopen on a new ask;
+  - no poll while hidden or in a new-tab view;
+  - PDF pin from the frame's `found`, pin → card, chip → highlight;
+  - the Focus banner, with and without the outbox file.
+
+### Deviations, and why
+
+- **`?source=files:<token>` / `outbox:<leaf>`** carries the plan's one
+  `source` parameter as a prefixed string, because a query string cannot
+  carry `MarkupSource`'s JSON shape.
+- **Dismiss is a third request and route**, not a flag on the answer. Its
+  body and its refusals differ.
+- **`file_name` is passed through `sent_name`.** The phone shows and matches
+  the name a file was sent as. An outbox copy and its project file then
+  match, as `same_file` does on the desktop.
+- **The banner opens only outbox files.** The phone gets a leaf name, never a
+  path. The project file browser is folder-by-folder with sealed tokens, so
+  a leaf alone cannot find a project file. In that case the banner names the
+  file and has no Open button.
+- **The card also shows while reading**, not only while marking. The PDF
+  reader is the same view, and the banner opens it in reader mode.
+- **`MobileTerminalInbox.test.tsx`** routes the new poll out of its counted
+  fetches, as it already did for the outbox, transcript and status polls.
+- `fcbc763f` left two literal `.tabtivity/outbox` paths in the bridge test.
+  `77637730` changed them to `NAMES.outboxDir`, so brand-check is green at
+  HEAD but not at `fcbc763f`.
+- `npm run backend:stale` was not run, because it concerns the main
+  checkout's window. Commits were made with `TABTIVITY_NO_AUTO_DEV_BUILD=1`.
+
+### Gates (at `b30700d6`)
+
+- `cargo test`: lib 3260 passed, 2 ignored; every other test binary green.
+  2 new tests: `protocol::markup_questions_cross_by_tab_pair_and_answers_stay_strict`
+  and the host route test above.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `npm run build`: OK. `npm run mobile:bundle`: OK. `mobile-dist/` is
+  untracked, so there was nothing to commit.
+- `npm test`: 697 files, 7103 tests passed (was 7084; 19 new).
+- `npm run lint`: 0 errors, 31 warnings, the same pre-existing set, none in
+  touched files.
+- `scripts/brand-check.sh`: OK.
+- `scripts/privacy-check.sh b8d34709..HEAD`: OK.
+- `git diff --check`: clean.
+
+### Open for P4 / live QA
+
+- P4 is untouched: the `DEFAULT_INSTRUCTION` sentence, `docs/context`, the
+  help doc and the QA items.
+- Live checks owed:
+  - pin placement on real PDFs: pdf.js text-run widths on the phone's legacy
+    build, rotated pages, and the badge offset at high zoom;
+  - the card's height over the palette on a small phone with the keyboard
+    up (the Other… field);
+  - the 3 s poll's cost on a phone left in Focus;
+  - the banner's Open on an outbox PDF.
+- Not covered:
+  - a multiSelect Other… cannot be unticked once typed; the reader can
+    retype it, or answer in chat;
+  - a picture opened from the banner needs a tap on Mark up before the card
+    shows, because the outbox viewer opens pictures read-only.
