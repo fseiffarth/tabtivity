@@ -292,9 +292,13 @@ WantedBy=sockets.target\n",
 }
 
 /// The key broker: calls the provider with the administrator's key for users
-/// presenting a broker token, as the key keeper's account (it reads the
-/// keeper's state and writes the month counts there). It needs the network,
-/// so unlike the keeper no `PrivateNetwork=`; otherwise hardened alike.
+/// presenting a broker token, as the key keeper's account. It needs the
+/// network, so unlike the keeper no `PrivateNetwork=`; otherwise hardened
+/// alike. Being the account's network-facing process, it holds the keeper's
+/// keys, user lists and tokens **read-only** (`ProtectSystem=strict` and no
+/// `StateDirectory=` for them) and writes only its own state dir — the month
+/// counts and its audit log (final review A3): a flaw in its TLS or JSON
+/// handling can read the keys, but not plant or change one.
 pub fn broker_service() -> String {
     format!(
         "[Unit]\n\
@@ -308,8 +312,9 @@ Type=simple\n\
 User={auth}\n\
 Group={auth}\n\
 ExecStart={bin} broker\n\
-StateDirectory={state}\n\
+StateDirectory={broker_state}\n\
 StateDirectoryMode=0700\n\
+ReadOnlyPaths={keys}\n\
 UMask=0077\n\
 Restart=on-failure\n\
 RestartSec=2\n\
@@ -331,7 +336,8 @@ CapabilityBoundingSet=\n",
         socket = names::broker_unit("socket"),
         auth = names::auth_account(),
         bin = names::gateway_binary().display(),
-        state = names::keeper_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+        broker_state = names::broker_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+        keys = names::keeper_state_dir().display(),
     )
 }
 
@@ -576,9 +582,11 @@ mod tests {
         let socket = broker_socket();
         assert!(socket.contains(&format!("ListenStream=127.0.0.1:{}\n", crate::keys_wire::BROKER_PORT)), "{socket}");
         let service = broker_service();
-        for needed in [&format!("User={SLUG}-auth\n"), &format!("StateDirectory={SLUG}-auth\n"), "UMask=0077\n", "ProtectSystem=strict\n", "-gateway broker\n", "CapabilityBoundingSet=\n", &format!("Requires={SLUG}-keybroker.socket\n")] {
+        for needed in [&format!("User={SLUG}-auth\n"), &format!("StateDirectory={SLUG}-broker\n"), &format!("ReadOnlyPaths=/var/lib/{SLUG}-auth\n"), "UMask=0077\n", "ProtectSystem=strict\n", "-gateway broker\n", "CapabilityBoundingSet=\n", "MemoryDenyWriteExecute=yes\n", &format!("Requires={SLUG}-keybroker.socket\n")] {
             assert!(service.contains(needed), "{needed} missing:\n{service}");
         }
+        // The keeper's key directory is never one the broker may write.
+        assert!(!service.contains(&format!("StateDirectory={SLUG}-auth")), "{service}");
         assert!(!service.contains("PrivateNetwork"), "the broker calls the provider");
     }
 

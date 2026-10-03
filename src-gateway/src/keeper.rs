@@ -231,6 +231,9 @@ struct Previous {
 
 pub struct Keeper {
     dir: PathBuf,
+    /// Where the broker writes the month counts ([`usage_path`]): the
+    /// broker's own state dir on a server, `dir` by default.
+    usage_dir: PathBuf,
     audit: AuditLog,
     peers: Box<dyn Peers>,
     /// Sets and removes, one at a time.
@@ -244,7 +247,13 @@ pub struct Keeper {
 impl Keeper {
     pub fn new(dir: PathBuf, peers: Box<dyn Peers>) -> Self {
         let audit = AuditLog::in_dir(&dir);
-        Keeper { dir, audit, peers, write: Mutex::default(), delivered: Mutex::default(), broker_port: keys_wire::BROKER_PORT }
+        Keeper { usage_dir: dir.clone(), dir, audit, peers, write: Mutex::default(), delivered: Mutex::default(), broker_port: keys_wire::BROKER_PORT }
+    }
+
+    /// Read the broker's month counts from `dir` (`names::broker_state_dir`).
+    pub fn with_usage_dir(mut self, dir: PathBuf) -> Self {
+        self.usage_dir = dir;
+        self
     }
 
     /// The broker listens elsewhere (tests).
@@ -478,7 +487,7 @@ impl Keeper {
     }
 
     fn month_usage(&self, meta: &Meta, cli: &str, user: &str, month: &str) -> MonthUsage {
-        let usage = usage_in(&self.dir, cli, user).months.remove(month).unwrap_or_default();
+        let usage = usage_in(&self.usage_dir, cli, user).months.remove(month).unwrap_or_default();
         MonthUsage { user: user.to_string(), month: month.to_string(), billed: keys_wire::billed(&usage), usage, budget: meta.budget_of(user) }
     }
 
@@ -657,7 +666,7 @@ impl Keeper {
 
     /// This month's brokered use of `cli`, per user who has a usage file.
     fn usage_rows(&self, meta: &Meta, cli: &str, month: &str) -> Vec<MonthUsage> {
-        let Ok(entries) = std::fs::read_dir(self.dir.join(cli).join(USAGE_DIR)) else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(self.usage_dir.join(cli).join(USAGE_DIR)) else { return Vec::new() };
         let mut users: Vec<String> = entries
             .flatten()
             .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string))

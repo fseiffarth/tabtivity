@@ -241,6 +241,7 @@ else
     code="$(runuser -u "$u" -- curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$BROKER_PORT/claude/v1/messages" -H 'Origin: https://example.invalid' -d '{}')"
     if [ "$code" = 403 ]; then pass "the broker refuses a browser page ($u)"; else fail "the broker refuses a browser page ($u)" "HTTP $code"; fi
     expect_eacces "$u cannot read the broker tokens" "$u" cat "/var/lib/${APP_SLUG}-auth/claude/tokens.json"
+    expect_eacces "$u cannot list the broker's month counts" "$u" ls "/var/lib/${APP_SLUG}-broker"
   done
 fi
 

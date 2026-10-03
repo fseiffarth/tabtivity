@@ -154,6 +154,14 @@ pub fn keeper_state_dir() -> PathBuf {
     PathBuf::from("/var/lib").join(format!("{SERVER_ACCOUNT_PREFIX}auth"))
 }
 
+/// `/var/lib/<slug>-broker`: the key broker's own writable state — the month
+/// counts (`<cli>/usage/<user>.json`) and its audit log. Same account as the
+/// keeper, but a directory of its own, so the network-facing broker holds the
+/// keeper's keys, user lists and tokens read-only (final review A3).
+pub fn broker_state_dir() -> PathBuf {
+    PathBuf::from("/var/lib").join(format!("{SERVER_ACCOUNT_PREFIX}broker"))
+}
+
 /// `/run/<slug>/auth.sock`: the key keeper's socket (systemd's, `0666`;
 /// the keeper decides by the caller's uid).
 pub fn keeper_socket() -> PathBuf {

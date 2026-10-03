@@ -457,8 +457,17 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
    <slug>-gateway broker (<slug>-auth, port held by <slug>-keybroker.socket)
       token → user (<cli>/tokens.json) · list/broker/budget (meta.json)
       the key in the provider's header ──HTTPS──► the provider
-      usage from the answer ──► <cli>/usage/<user>.json (month counts)
+      usage from the answer ──► /var/lib/<slug>-broker/<cli>/usage/<user>.json
 ```
+
+- **The broker holds the keys read-only** (final review A3). It is the
+  `<slug>-auth` account's only network-facing process, so it does not get
+  the keeper's `StateDirectory=`: under `ProtectSystem=strict` (and an
+  explicit `ReadOnlyPaths=`) it reads the keys, user lists and tokens but
+  cannot write them; its own `StateDirectory=<slug>-broker` holds the month
+  counts and its audit rows, which the keeper reads. A memory-safety flaw in
+  its TLS/HTTP/JSON handling can still read every key (one account), not
+  plant or change one.
 
 - **What changes for a user**: nothing they choose. The administrator
   switches a key's delivery to the broker (per CLI, Agent credentials

@@ -3,9 +3,10 @@
 //!
 //! * **Who runs it**: `<slug>-gateway broker`, as `<slug>-auth` — the key
 //!   keeper's account — in `<slug>-keybroker.service`. It reads the keeper's
-//!   state (the key, `meta.json`, `tokens.json`) and writes only the month
-//!   counts (`<cli>/usage/<user>.json`). Unlike the keeper it needs the
-//!   network: it calls the provider.
+//!   state (the key, `meta.json`, `tokens.json`) read-only and writes only
+//!   its own state dir (`names::broker_state_dir`: the month counts
+//!   `<cli>/usage/<user>.json` and its audit log). Unlike the keeper it needs
+//!   the network: it calls the provider.
 //! * **Where**: `127.0.0.1:<keys_wire::BROKER_PORT>`, one path prefix per CLI
 //!   (`/claude/v1/messages`). Fenced agents share the host's network
 //!   namespace and reach it; so can every local process, which is why every
@@ -30,7 +31,7 @@
 //!   the key's list, a renewed token, a withdrawn key or a switch to direct
 //!   delivery stops the next request (`401`; Claude then runs its helper
 //!   again and gets the user's current answer).
-//! * **Audit**: `audit.jsonl` beside the keeper's rows — a user's use at most
+//! * **Audit**: `audit.jsonl` in its own state dir — a user's use at most
 //!   once per [`AUDIT_EVERY`] per CLI, and a budget refusal likewise. Never a
 //!   key, a token or a prompt.
 
@@ -92,6 +93,9 @@ pub fn allowed(cli: &str, method: &Method, rest: &str) -> bool {
 
 pub struct Broker {
     dir: PathBuf,
+    /// The broker's own writable state: month counts and its audit log
+    /// (`names::broker_state_dir` on a server; `dir` by default).
+    usage_dir: PathBuf,
     /// CLI id → the provider origin it forwards to.
     upstreams: HashMap<&'static str, String>,
     client: reqwest::Client,
@@ -126,6 +130,7 @@ impl Broker {
         all.extend(upstreams);
         Ok(Broker {
             audit: AuditLog::in_dir(&dir),
+            usage_dir: dir.clone(),
             dir,
             upstreams: all,
             client,
@@ -134,6 +139,14 @@ impl Broker {
             in_flight: Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT)),
             per_user: Mutex::default(),
         })
+    }
+
+    /// Write the month counts and the audit log under `dir`, not the keeper's
+    /// key directory (which a server's broker unit holds read-only).
+    pub fn with_usage_dir(mut self, dir: PathBuf) -> Self {
+        self.audit = AuditLog::in_dir(&dir);
+        self.usage_dir = dir;
+        self
     }
 
     /// The user whose token `token` is for `cli`, compared in constant time
@@ -164,7 +177,7 @@ impl Broker {
     /// [`keeper::USAGE_MONTHS`] months are kept).
     pub fn record(&self, cli: &str, user: &str, usage: &Usage) {
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
-        let path = keeper::usage_path(&self.dir, cli, user);
+        let path = keeper::usage_path(&self.usage_dir, cli, user);
         let result = (|| -> std::io::Result<()> {
             if let Some(dir) = path.parent() {
                 if std::fs::symlink_metadata(dir).is_err() {
@@ -172,7 +185,7 @@ impl Broker {
                     std::fs::DirBuilder::new().mode(0o700).recursive(true).create(dir)?;
                 }
             }
-            let mut file: UsageFile = keeper::usage_in(&self.dir, cli, user);
+            let mut file: UsageFile = keeper::usage_in(&self.usage_dir, cli, user);
             file.months.entry(keys_wire::month_of(crate::now())).or_default().add(usage);
             while file.months.len() > keeper::USAGE_MONTHS {
                 let Some(oldest) = file.months.keys().next().cloned() else { break };
@@ -187,7 +200,7 @@ impl Broker {
     }
 
     fn billed_this_month(&self, cli: &str, user: &str) -> u64 {
-        keeper::usage_in(&self.dir, cli, user).months.get(&keys_wire::month_of(crate::now())).map(keys_wire::billed).unwrap_or(0)
+        keeper::usage_in(&self.usage_dir, cli, user).months.get(&keys_wire::month_of(crate::now())).map(keys_wire::billed).unwrap_or(0)
     }
 
     fn take_user_slot(self: &Arc<Self>, user: &str) -> Option<UserSlot> {

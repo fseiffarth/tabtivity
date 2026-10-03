@@ -263,3 +263,22 @@ fn only_the_paths_an_agent_needs_are_forwarded() {
     }
     assert!(!allowed("gemini", &Method::POST, "v1/messages"));
 }
+
+/// Final review A3: on a server the broker writes its month counts and audit
+/// rows into a directory of its own, never into the keeper's key directory
+/// (which its unit holds read-only), and the keeper reads the counts there.
+#[test]
+fn the_broker_writes_only_its_own_state_dir_and_the_keeper_reads_it() {
+    let keys = tempfile::tempdir().unwrap();
+    let own = tempfile::tempdir().unwrap();
+    brokered(keys.path());
+    let before: Vec<_> = std::fs::read_dir(keys.path().join("claude")).unwrap().flatten().map(|e| e.file_name()).collect();
+    let broker = Broker::new(keys.path().to_path_buf(), HashMap::new()).unwrap().with_usage_dir(own.path().to_path_buf());
+    broker.record("claude", "alice", &Usage { input: 5, output: 7, requests: 1, ..Default::default() });
+    assert!(keeper::usage_path(own.path(), "claude", "alice").is_file());
+    let after: Vec<_> = std::fs::read_dir(keys.path().join("claude")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(before, after, "nothing new beside the keys");
+    let keeper = Keeper::new(keys.path().to_path_buf(), Box::new(As(Peer::User("alice".into())))).with_usage_dir(own.path().to_path_buf());
+    let reply = keeper.answer(1000, &serde_json::to_vec(&Request::Usage { cli: "claude".into() }).unwrap());
+    assert_eq!(reply.usage.map(|u| (u.usage.input, u.usage.output)), Some((5, 7)), "the keeper answers from the broker's counts");
+}

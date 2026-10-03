@@ -14,7 +14,7 @@ fn main() {
             Some("hub-forget") => std::process::exit(hub_forget(&args[1..])),
             Some("calendar") => std::process::exit(calendar(&args[1..])),
             Some("--help") | Some("-h") => {
-                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n{slug}-gateway broker [--listen ADDR] [--dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nbroker: calls the provider with an administrator's key for users holding a broker token, within their budgets (as {slug}-auth, on the loopback port systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
+                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway broker [--listen ADDR] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nbroker: calls the provider with an administrator's key for users holding a broker token, within their budgets (as {slug}-auth, on the loopback port systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
                 return;
             }
             Some(other) => {
@@ -73,7 +73,8 @@ fn keeper(args: &[String]) -> i32 {
                 tokio::net::UnixListener::bind(&path).map_err(|e| format!("bind {path}: {e}"))?
             }
         };
-        let keeper = std::sync::Arc::new(Keeper::new(dir, Box::new(SystemPeers)));
+        let usage = value("--usage-dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::broker_state_dir);
+        let keeper = std::sync::Arc::new(Keeper::new(dir, Box::new(SystemPeers)).with_usage_dir(usage));
         eprintln!("{slug}-gateway keeper: {} key(s) on offer in {}", keeper.offered().len(), keeper.dir().display());
         keeper::serve(keeper, listener).await
     });
@@ -114,7 +115,8 @@ fn broker(args: &[String]) -> i32 {
                 tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?
             }
         };
-        let broker = std::sync::Arc::new(Broker::new(dir, Default::default())?);
+        let usage = value("--usage-dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::broker_state_dir);
+        let broker = std::sync::Arc::new(Broker::new(dir, Default::default())?.with_usage_dir(usage));
         eprintln!("{slug}-gateway broker: listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or_default());
         broker::serve(broker, listener).await
     });
