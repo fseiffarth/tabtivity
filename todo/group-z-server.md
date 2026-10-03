@@ -668,3 +668,32 @@ the desktop groundwork the hosted plan's P1 builds on.*
     panel greys the row, but the project pill and the projects list show
     the clone as an ordinary project. Show the state where the project is
     (a greyed chip), never removing it. (P4, 2026-10-03.)
+
+2374. **Decide: which program-naming git config keys a shared project refuses.**
+    The strict sanitizing of gate 1 fails closed on the desktop's denylist
+    (`filter.*`, `diff.*.textconv/command`, `include*.path`). git's other
+    keys that run a program are not on it: `merge.<driver>.driver` (a merged
+    `.gitattributes` names the driver; `share_merge` runs a merge),
+    `remote.<name-or-path>.uploadpack`/`receivepack` (Tabtivity fetches the
+    hub by path), `core.sshCommand`, `core.gitProxy`, `gpg.program` /
+    `gpg.*.program`, `credential.helper`, `core.askPass`, `core.editor` /
+    `sequence.editor`, `url.*.insteadOf`. No co-member can write a member's
+    `.git/config` (separate uids, the fence binds it read-only); a
+    container agent could (a member may turn the container on for a clone
+    after sharing). Stripping them breaks legitimate setups (`merge.ours.driver
+    = true`, signing); pinning exact keys with `-c` cannot reach named
+    drivers. Choose per key: strip, refuse, or pin. (P4 review, 2026-10-03.)
+
+2375. **Decide: accepting a review that was cut at 256 KB.**
+    `share::review_of` caps the text at 256 KB and binds the digest to what
+    was shown; the panel marks the cut with "…" and still offers **I have
+    reviewed these** / **Merge after review**. A padded `CLAUDE.md` can put
+    its payload past the cut. Refuse acceptance of a cut review (review in a
+    terminal instead), or page the whole text. (P4 review, 2026-10-03.)
+
+2376. **Calendar service: per-user quotas and a cheaper wait.**
+    A calendar is bounded (12 MB) but the number a user may share is not,
+    and every pending `wait` re-reads every calendar file once a second (one
+    per daemon since the review). Bound calendars per owner and keep each
+    file's owner/members/revision in memory by mtime. (P4 review,
+    2026-10-03.)

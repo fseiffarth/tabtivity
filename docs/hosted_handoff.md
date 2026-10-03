@@ -2799,3 +2799,92 @@ commit, a `CLAUDE.md` and a `.git/hooks/pre-commit` that writes a marker file.
 | `git diff --check a4c00c02 HEAD` | clean |
 | `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
 | `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+## P4 review
+
+*Written 2026-10-03 by the P4 reviewer, over `a4c00c02..8c1bb5a7`. Nothing
+run on a server, as root, or against a real state dir, port, `/srv` or
+`/run`; the isolation script and the admin helper were read, not run. Every
+fix has a test that fails without it.*
+
+### What was checked
+
+- **Hub** (`hub.rs`, `hub_wire.rs`): uid on every request (`Forget` root
+  only, before `user_of`); owner/editor/viewer rules for create, grant,
+  revoke, delete, push, presence; push checked before a byte is read
+  (`may_push`) and again under the share lock; `valid_ref` (heads/tags only,
+  strict segments, no `..`, no symrefs), `HEAD` retargeting owner-only and
+  `refs/heads/*` only; CAS on the snapshot plus old values in the one
+  `update-ref --stdin` transaction; ff check; object type check. A bundle
+  writes only a pack (no `hooks/`, `config`, `info/`, `alternates`); the
+  hub's git runs with a cleared env, no system/global config,
+  `hooksPath=/dev/null`, `fsmonitor=false`; members cannot write a hub. Per
+  uid and overall connection caps, deadlines, the upload's `O_NOFOLLOW` file.
+- **ACLs** (`acl.rs`): xattr encoding, default ACLs on every directory,
+  mask recomputation (git's 0444/0666 creates keep a member at `r--`), the
+  root `0711`, top-first revoke, the holding area (`0700`, no entries: a
+  revoked member cannot reach it), symlinks skipped, the hub only touches
+  its own files, root (`hub-forget`) only talks to the socket.
+- **Member side** (`share.rs`, `commands/share.rs`): `--no-local
+  --template=` clone, exact `safe.directory` pin, exclude + push refusal,
+  the import path, the fence's tmpfs + own-hub bind in both wraps,
+  remote/VM/container refusal.
+- **Gates** (`git.rs`, `share.rs`, fence/container wraps, `agent_shim`):
+  hookless verbs and strict sanitizing in shared dirs, `require_hook_trust`,
+  gate 2's commit rule against every way a commit can arrive, the review
+  digest, the spawn gate on fenced, container and shell-typed CLIs,
+  `exec_trust` per state dir and content-bound.
+- **Calendar service** (`calendars.rs`, `cal_wire.rs`, daemon side): uid
+  auth, roles per part, switches, CAS, `wait`, caps, link stripping on
+  share/put/columns, move-in/put-back, owner's kept links, per-viewer
+  alarms, agent refusal, whole-document saves.
+- **Isolation script** additions: what each assertion proves, run as root
+  only through `runuser`, one throwaway share/calendar taken back.
+- Desktop unchanged (`is_server()` gates every new path; `fence_args` and
+  `spawn_gate` no-ops), switches, i18n ×5 (no new strings), UntestedTags,
+  docs and TODO.
+
+### Findings
+
+| # | Sev | Finding | Status |
+|---|---|---|---|
+| 1 | High | **Gate 2 laundering.** "From the hub" was reachability from `refs/remotes/shared/*` only: after a terminal merge of a co-member's branch, she deletes or force-moves it at the hub (her own request), the next pruning app fetch (or a terminal fetch) drops the tracking ref, and the spawn gate passes on her unreviewed `AGENTS.md`. | Fixed `0cf8ab66`: the app fetch keeps moved-away tips under `refs/shared-seen/<oid>` (dropping those still reached), the check also reads the tracking refs' reflogs. Residual: a fetch/pull *by path* in a terminal plus deletion before any app fetch (documented). |
+| 2 | High | **Evil merge invisible.** `diff-tree` lists nothing for a merge commit, so an agent-facing file changed only by a merge (matching neither parent) was never reported — a fresh clone of an owner's evil merge, or a terminal merge, started agents. | Fixed `0cf8ab66` (`diff-tree -c`). |
+| 3 | Med | **Reviewed paths covered four CLIs.** Tabtivity also launches Antigravity, Kiro, Cline, Vibe, OpenCode, Droid, Copilot, and Claude/Codex read `CLAUDE.local.md`, `AGENTS.override.md`, `.agents/` skills. | Fixed `0cf8ab66` (`AGENT_PATHSPEC`, user docs, context). |
+| 4 | Med | **A failed revoke could not be retried.** The table dropped the member before the ACL walk; when the walk failed, a second revoke answered `invalid` and the member kept read access by path. | Fixed `b9347cdc`: `revoking` list, retried at every request and by a second revoke; delete cuts those uids too. |
+| 5 | Low | An unparsable `shares.json` loaded as empty and the next write replaced it (every share and every owner's revoke lost). | Fixed `b9347cdc`: refused instead. |
+| 6 | Med | **Shared calendar lost on unshare.** Records allow ~2.5 GB per calendar but answers are capped at 16 MB, and unshare deleted the file before the answer was read: a big calendar, a lost answer or a failed write-back lost it. | Fixed `325df6a8` (12 MB cap on share/apply; unshare moves to `returned/` for 30 days) and `695a058a` (a failed write-back is kept in `<state>/shared-calendars-returned/`). |
+| 7 | Med | **Calendar connection starvation.** One long poll per open page, 6 connections per uid / 64 overall: 6 pages starved the user's own edits; ~12 users with a few pages starved everyone. | Fixed `695a058a`: one wait per daemon, shared answer. |
+| 8 | Low-Med | Stop sharing dropped the owner's link (and gate 2) while a member's terminal-merged change was unreviewed; re-sharing then failed on the old `shared` remote; a gone share hid its Review, leaving its agents refused for good. | Fixed `be283985` (link kept as `deleted` until reviewed; new share refused until then; a former hub's remote replaced; Review shown on gone rows). |
+| 9 | Low | `share_add` registered the clone before writing its link; a failed write left an ungated ordinary project. | Fixed `35e6713c`. |
+| 10 | Low | `calendar_replace_events` could write a shared calendar's records into `calendar.json`. | Fixed `23902ac1`. |
+| 11 | — | Strict sanitizing's denylist is the desktop's; git's other program-naming keys (`merge.*.driver`, `remote.*.uploadpack`, `core.sshCommand`, `gpg.program`, …) are not on it. Not cross-user (no co-member can write a member's `.git/config`); a container turned on for a clone after sharing could. | Open, TODO #2374 (decision: strip/refuse/pin per key). |
+| 12 | — | A review cut at 256 KB can be accepted after seeing only its start. | Open, TODO #2375 (decision). |
+| 13 | — | Calendar service: no per-owner calendar count bound; each pending wait re-reads every calendar once a second. | Open, TODO #2376 (hub quotas are #2372). |
+| 14 | — | The hub does not itself refuse commits carrying the app's folder (the check is the daemon's); in-tree session files are write-only copies, so nothing runs from them. A container can be turned on for a shared project after sharing. The root console's Host session (unfenced) has no spawn gate. A removed account keeps its ACL entry on hubs it *owns* (`forget` takes members only). | Judgment calls, left as built. |
+
+### Gates (worktree, at `e83001a5`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **702 files, 7098 tests** (+1), all pass |
+| `cargo test --workspace -q --no-fail-fast` | src-gateway **113** (+3), src-core 99, integration 169, src-tauri lib **3289** (+5), 3 ignored — all pass. A later lib re-run (after `23902ac1`) had one failure, `brand_migration::compat::tests::the_old_send_command_runs_the_current_one_and_is_counted`, passing alone and in the next full lib run (3289/3289): load flake, untouched code. |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3194 + 1**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (unchanged) |
+| clippy `--workspace --all-targets -D warnings`, `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean (rustc 1.97.1) |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green, the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh a4c00c02..HEAD` | green |
+| `git diff --check a4c00c02 HEAD` | clean |
+
+### Needs the user
+
+- Everything in § P4 "Needs the user" stands. Add: TODO #2374 (which git
+  config keys a shared project refuses) and #2375 (accepting a cut review).
+- Live steps § P4 still apply; add to step 7: after the terminal merge,
+  Carol deletes `carol/main` (an editor may delete her own branch through
+  the hub) and Alice presses **Fetch** — the agent stays refused naming
+  `AGENTS.md`. Add to step 10: Alice's own **Stop sharing** with such a
+  merge unreviewed keeps the Review on her row; after it, **Share** works
+  again on the same project.
