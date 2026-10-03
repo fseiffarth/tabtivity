@@ -663,3 +663,84 @@ Done, on `markup-mcp` (nothing run live):
   checkout (worktree branch). The phone's default instruction is in the PWA
   bundle, the desktop's in the binary: both need the rebuild that merging
   brings. Commits used `TABTIVITY_NO_AUTO_DEV_BUILD=1`.
+
+## Review 1
+
+General review of `8dba5c4c..7adc6570` (plan, P1–P4) on `markup-mcp`,
+2026-10-03. Nothing run live; the app was not started.
+
+### Checked and sound
+
+- **Token lane.** `path_serves` names `Marker` in the `/mcp` negative list and
+  `/mcp/markup` serves only `Marker`. The registry serves the two tools to
+  `Marker` alone, and `Policy::serves` refuses `Marker` the root tools.
+  `handle_with` re-checks the class, `check()` and the project + target
+  binding. `MARKUP_TOKEN_ENV` is in every secret list: `SpawnTokenGuard`, the
+  PTY exit path (revoke + `sweep`), `tmux_local::SECRET_ENV` (appended),
+  `sandbox::is_secret_exec_env` and the push preflight's strip. The lane is
+  hidden from `sessions()`, `set_access`, `tab_active` and
+  `mark_tab_projects_readable`. The audit keeps the tool name only for
+  registered tools.
+- **`file`.** `\`, backticks and control characters are refused. Resolution
+  is lexical: no `..`, only absolute paths below the `projects.json` root,
+  hidden names refused except the outbox. `files::exists` / `outbox::exists`
+  prove a regular file with no link on the way. The path is stored
+  project-relative.
+- **Text and prompt.** Every field is cleaned (`strip_invisible`, whitespace
+  collapsed). The answer prompt has a fixed first line and stays within
+  12 KiB at every bound: the third render clips each answer to its share of
+  the budget, and the golden test covers the worst case.
+- **Phone.** The ask id and the leaf name cross; the path and raw ids do not.
+  The source is a sealed token or an outbox leaf. The body caps are 16 KiB
+  and 1 KiB, and answers are shaped before the window is asked. `findText` is
+  bounded in both directions, and only boxes leave the frame.
+- **Receipt.** It is bound to project, target, id and the answer it was
+  minted for. It is spent on reopen and never leaves the window.
+- **Races.** Supersede, answer, dismiss, withdraw, expiry and session death
+  hold under one lock. A second view gets `answered`. A newer ask makes a
+  reopen `superseded`.
+- **Polling.** Desktop polling is gated on `PaneVisibleContext` with a
+  catch-up on show. The phone polls only while the page is visible, pauses
+  while an answer is in flight, and stops on unmount. Timers and listeners
+  are cleaned up.
+- **Conventions.** i18n keys are the same set in all five dictionaries. No
+  blurred shadow is animated (the pins and card use static shadows).
+
+### Findings
+
+| # | Severity | Where | What | Status |
+|---|---|---|---|---|
+| 1 | Medium (open item 31bv) | `mobile-web/src/components/QuestionRows.tsx:72`, `MarkupQuestionsCard.tsx` `onPick` | On a multiSelect question, a typed **Other…** could not be unticked: every tap on the free-text row opened its field. | Fixed in `5cbfacc6`. A ticked free-text row's tap goes to `onPick`, and the card clears Other… there; the next tap opens the field. The Focus `QuestionList` never sets `checked`, so it is unchanged. Test: "unticks a typed Other…". TODO 31bv is `[~]` with automated ticked. |
+| 2 | Low (open item #2341) | `src/components/embed/pdf/usePdfMarkup.ts`, `PdfViewer.tsx` Mark up button | With marking off, nothing told the reader that an agent tab was waiting on an answer. | Fixed in `f7503932`. While marking is off and the pane is on screen, `usePdfMarkup` lists every agent tab of the project for the file (again on `markup-mcp-changed`) and exposes `askWaiting`. The button gets `is-armed` and the tooltip `pdfMarkup.toggleAsks` (all five languages), and Mark up opens the strip on the asking tab. Tests: "an ask waiting while marking is off" (2). The untested row `desktop.markup.questions`, the context doc, the help doc, DOCUMENTATION.md and the filemap row are updated, and TODO #2341 is ticked as automated. |
+| 3 | Low | `usePdfMarkup.ts` list effect | The open-mode listing depended on the `target` object, so it re-listed whenever the project's tab list changed. | Fixed in `f7503932`: it now depends on `scheduleTargetId`. |
+| 4 | — (open item 31bw) | Focus banner | **Open** works only for outbox files. | Not fixed. A project file would need the sidecar to mint a files token for the ask's path, but the protocol deliberately carries no path to the phone side (`MobileMarkupAsk` has no `file`). That is a protocol change, not a small fix. |
+
+### Report only
+
+- Like the push lane, the markup lane writes an audit row for every
+  JSON-RPC message, so `initialize`, `tools/list` and `ping` appear as
+  "protocol". That is about three rows per spawned tab in the 500-row ring.
+  The help lane skips auditing for exactly this reason. This copies the
+  sibling, so it was left alone.
+- Pins on a rotated page: both viewers box the text runs with pdf.js
+  `item.width`, as the desktop search highlight does. A run on a turned page
+  may be boxed as if it ran across. This is already on the live-QA list.
+- The sidecar's `markup_call` reads any transport error, including a window
+  slower than the 2 s deadline, as `desktop_unavailable`. A wedged window
+  therefore hides the phone's card rather than keeping it, which matches the
+  protocol comment's intent.
+
+### Gates (at the commit that adds this section)
+
+- `cargo test`: lib 3260 passed, 2 ignored; every other binary green.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `npm run build`: OK.
+- `npm run mobile:bundle`: OK.
+- `npm test`: 697 files, 7106 tests passed (was 7103; 3 new).
+- `npm run lint`: 0 errors, 31 warnings, the same pre-existing set.
+- `scripts/brand-check.sh`: OK.
+- `scripts/privacy-check.sh 7adc6570..HEAD`: OK.
+- `git diff --check`: clean.
+- Commits used `TABTIVITY_NO_AUTO_DEV_BUILD=1`.
+- `npm run backend:stale` is not applicable: this is a worktree branch, and
+  the review changed no backend code.
