@@ -702,7 +702,7 @@ impl WebClientState {
     /// the next loopback port otherwise; `None` when no such origin exists.
     fn content_url(&self, ticket: &str) -> Option<String> {
         match &self.server {
-            Some(link) => link.content_origin.as_ref().map(|origin| format!("{origin}/content/{ticket}")),
+            Some(link) => link.content_origin.as_ref().map(|origin| format!("{origin}{}", server::content_path(ticket))),
             None => Some(format!("http://127.0.0.1:{}/content/{ticket}", self.content_port)),
         }
     }

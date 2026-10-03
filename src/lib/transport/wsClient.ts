@@ -24,7 +24,7 @@ export interface CommandCapability {
   name: string;
   class: CommandClass;
   served: boolean;
-  refusal?: { code: string; reason?: string };
+  refusal?: { code: string; reason?: string; feature?: string };
 }
 
 export interface ServerCapabilities {

@@ -75,6 +75,14 @@ pub async fn run(state_dir: PathBuf, auth: Arc<Mutex<AuthStore>>, mut shutdown: 
     loop {
         tokio::select! {
             _ = interval.tick() => {
+                // Both switches off (hosted plan §6.7): no alarms fire; the
+                // calendar file is left as it is.
+                {
+                    use crate::services::server::{feature_on, Feature};
+                    if !feature_on(Feature::Calendar) && !feature_on(Feature::Todo) {
+                        continue;
+                    }
+                }
                 let now = chrono::Local::now().format("%Y-%m-%dT%H:%M").to_string();
                 let secs = now_secs();
                 let dir = state_dir.clone();

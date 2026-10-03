@@ -78,15 +78,21 @@ pub fn refusal(model: &str) -> Value {
 pub fn check(cmd: &str, args: &Value) -> Result<(), Value> {
     let Some(arg) = model_arg_of(cmd) else { return Ok(()) };
     let model = args.get(arg).and_then(Value::as_str).unwrap_or("");
-    let settings: crate::schema::Settings =
-        crate::storage::read_json(&crate::storage::state_dir().join("settings.json")).unwrap_or_default();
-    let installed: Option<Vec<String>> = if settings.ollama_allowed_models.is_some() {
+    // On a server the list is the admin's (the gateway's policy file, which
+    // no user can write); a user's own settings.json never widens it.
+    let allowed: Option<Vec<String>> = match crate::services::server::server_policy() {
+        Some(policy) => policy.ollama_allowed_models,
+        None => crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json"))
+            .unwrap_or_default()
+            .ollama_allowed_models,
+    };
+    let installed: Option<Vec<String>> = if allowed.is_some() {
         None
     } else {
         crate::commands::ollama::installed_model_names().ok()
     };
     let source = Source {
-        allowed: settings.ollama_allowed_models.as_deref(),
+        allowed: allowed.as_deref(),
         installed: installed.as_deref(),
     };
     if allowed_in(&source, model) {

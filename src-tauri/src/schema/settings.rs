@@ -455,6 +455,12 @@ pub struct Settings {
     /// is a model the admin allowed. Read by nothing in the desktop window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_allowed_models: Option<Vec<String>>,
+    /// Server mode only (hosted plan §6.7): the features this user switched
+    /// off for themselves — `"mail"`, `"calendar"`, `"todo"` — within what
+    /// the admin's policy allows. Off refuses the feature's commands and stops
+    /// its daemon timers; nothing is deleted. Ignored on the desktop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_features: Vec<String>,
     /// When true (the default), running a `.sh` from the side panel spawns it
     /// as a detached background process instead of opening a terminal tab.
     #[serde(skip_serializing_if = "Option::is_none")]

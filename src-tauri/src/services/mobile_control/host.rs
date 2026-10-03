@@ -4635,7 +4635,24 @@ fn router(state: HostState) -> Router {
         // catch-all by its static prefix.
         .merge(web_client::routes(state.web))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
+        .layer(middleware::from_fn(feature_gate))
         .layer(middleware::from_fn_with_state(secure, security_headers))
+}
+
+/// The phone's mail, calendar and todo routes answer `403 feature_off` while
+/// the admin or the user switched the feature off (hosted plan §6.7; always
+/// on outside server mode).
+async fn feature_gate(request: Request<Body>, next: Next) -> Response<Body> {
+    use crate::services::server::{feature_on, Feature};
+    let path = request.uri().path();
+    let gated = |prefix: &str| path == prefix || path.starts_with(&format!("{prefix}/"));
+    let off = (gated("/api/v1/mail") && !feature_on(Feature::Mail))
+        || (gated("/api/v1/calendar") && !feature_on(Feature::Calendar))
+        || (gated("/api/v1/todo") && !feature_on(Feature::Todo));
+    if off {
+        return api_error(StatusCode::FORBIDDEN, "feature_off").into_response();
+    }
+    next.run(request).await
 }
 
 /// Where the host listens.
@@ -4808,12 +4825,15 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             // The content routes ride the same socket: the gateway forwards
             // `/content/*` from the user-content origin here.
             let app = router(state).merge(web_client::content_routes(web.clone()));
-            let listener = bind_unix(&path)?;
+            let (listener, inherited) = bind_unix(&path)?;
             axum::serve(limits::PeerGatedUnixListener::new(listener, peer_uid), app)
                 .with_graceful_shutdown(shutdown)
                 .await
                 .map_err(|e| e.to_string())?;
-            let _ = std::fs::remove_file(&path);
+            // A socket systemd made (socket activation) is systemd's to keep.
+            if !inherited {
+                let _ = std::fs::remove_file(&path);
+            }
         }
         #[cfg(not(unix))]
         Listen::Unix { .. } => return Err("the per-user daemon runs on Linux only".into()),
@@ -4834,9 +4854,25 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
 /// first, the new one is `0660` — its group is the directory's (the helper
 /// makes `/run/<slug>/users` setgid to the gateway's group), so the gateway
 /// may connect and nobody else may even try.
+///
+/// Under socket activation (`<slug>-serverd@.socket`) systemd already made
+/// the socket — `root:<slug>-gw 0660` — and passes it as fd 3; it is adopted
+/// as is (`true`), never re-bound, and never removed at exit.
 #[cfg(unix)]
-fn bind_unix(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+fn bind_unix(path: &std::path::Path) -> Result<(tokio::net::UnixListener, bool), String> {
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::io::FromRawFd;
+    if let Some(fd) = crate::services::server::activation_fd(|k| std::env::var(k).ok(), std::process::id()) {
+        // SAFETY: systemd hands this process fd 3 as its listening socket
+        // (LISTEN_PID matched); nothing else in the process owns it.
+        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+        std_listener.set_nonblocking(true).map_err(|e| format!("activation socket: {e}"))?;
+        std::env::remove_var("LISTEN_PID");
+        std::env::remove_var("LISTEN_FDS");
+        std::env::remove_var("LISTEN_FDNAMES");
+        let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| format!("activation socket: {e}"))?;
+        return Ok((listener, true));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
@@ -4845,7 +4881,7 @@ fn bind_unix(path: &std::path::Path) -> Result<tokio::net::UnixListener, String>
     }
     let listener = tokio::net::UnixListener::bind(path).map_err(|e| format!("bind {}: {e}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|e| format!("chmod {}: {e}", path.display()))?;
-    Ok(listener)
+    Ok((listener, false))
 }
 
 #[cfg(test)]

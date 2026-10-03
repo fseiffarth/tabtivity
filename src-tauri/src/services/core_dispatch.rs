@@ -119,6 +119,9 @@ pub enum Refusal {
     Off { reason: &'static str },
     /// Classed `core` but its body still needs Tauri (`NOT_DISPATCHABLE`).
     Unsupported { reason: &'static str },
+    /// A server feature (mail, calendar, todo) the admin or the user switched
+    /// off (hosted plan §6.7); its data stays.
+    FeatureOff { feature: &'static str },
 }
 
 /// The class check alone: unknown, `client`, `off`, or `admin` for a user.
@@ -140,6 +143,9 @@ pub fn class_refusal(cmd: &str, role: Role) -> Option<Refusal> {
 pub fn refusal(cmd: &str, role: Role) -> Option<Refusal> {
     if let Some(refused) = class_refusal(cmd, role) {
         return Some(refused);
+    }
+    if let Some(feature) = crate::services::server::feature_refusal(cmd) {
+        return Some(Refusal::FeatureOff { feature: feature.as_str() });
     }
     if handler(cmd).is_some() {
         return None;

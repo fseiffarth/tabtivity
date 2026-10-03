@@ -19,8 +19,13 @@ use crate::storage;
 /// The install home, relative to the state dir.
 const INSTALL_DIR: &str = "agents/install";
 
+/// The install home: `<state_dir>/agents/install/` on the desktop; on a
+/// server the admin-owned, server-wide root (`<PREFIX>SERVER_CLI_ROOT`,
+/// hosted plan §5.1) — read-only to every user, written only by the admin
+/// helper's `cli-install` as the CLI account, so no user installs or updates
+/// a CLI and no per-user copy exists.
 pub fn install_root_in(state_dir: &Path) -> PathBuf {
-    state_dir.join(INSTALL_DIR)
+    crate::services::server::cli_root().unwrap_or_else(|| state_dir.join(INSTALL_DIR))
 }
 
 pub fn install_root() -> PathBuf {

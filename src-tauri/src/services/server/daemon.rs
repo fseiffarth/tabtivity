@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use super::ServerConfig;
-use crate::brand::SLUG;
+use crate::brand::{self, SLUG};
 use crate::services::mobile_control::config::{HostConfig, MobileHostSettings};
 use crate::services::mobile_control::host::{self, Listen};
 
@@ -21,6 +21,25 @@ use crate::services::mobile_control::host::{self, Listen};
 /// can heal and the journal says what cannot.
 pub fn main() -> ! {
     crate::services::brand_migration::hits::install();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--serverd") {
+        args.remove(0);
+    }
+    if let Some(verb) = args.first().cloned() {
+        let result = match verb.as_str() {
+            "--write-invite" => read_secret_line().and_then(|code| write_invite(&crate::storage::state_dir(), &code, args.get(1).map(String::as_str))),
+            "--revoke-device" => read_secret_line().and_then(|id| revoke_device(&crate::storage::state_dir(), &id)),
+            "--install-cli" => install_cli(args.get(1).map(String::as_str).unwrap_or_default()),
+            other => Err(format!("unknown argument {other:?}")),
+        };
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("{SLUG}-serverd {verb}: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     let state_dir = crate::storage::state_dir();
     let config = match ServerConfig::from_env(state_dir) {
         Ok(config) => config,
@@ -100,9 +119,88 @@ fn harden_process() {
     }
 }
 
-/// Where a user's daemon socket lives by convention: `/run/<slug>/users/<uid>.sock`.
-pub fn socket_path_for(uid: u32) -> PathBuf {
-    PathBuf::from("/run").join(SLUG).join("users").join(format!("{uid}.sock"))
+/// Where a user's daemon socket lives: `/run/<slug>/users/<user>.sock`, the
+/// path `<slug>-serverd@<user>.socket` listens on.
+pub fn socket_path_for(user: &str) -> PathBuf {
+    super::wire::socket_path(&PathBuf::from("/run").join(SLUG).join("users"), user)
+}
+
+/// One line from stdin (the admin helper passes secrets there, never in
+/// `argv`, which `/proc` shows): at most 256 bytes, trimmed.
+fn read_secret_line() -> Result<String, String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::io::stdin().take(256).read_to_end(&mut buf).map_err(|e| format!("stdin: {e}"))?;
+    let line = String::from_utf8(buf).map_err(|_| "stdin is not text".to_string())?;
+    Ok(line.trim().to_string())
+}
+
+/// `--write-invite <expires_at>` (code on stdin): the admin helper's invite,
+/// written by this account's own uid into its control dir (§4.1).
+pub fn write_invite(state_dir: &std::path::Path, code: &str, expires_at: Option<&str>) -> Result<(), String> {
+    if code.len() != 8 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("the code must be eight digits".into());
+    }
+    let expires_at: u64 = expires_at.and_then(|v| v.parse().ok()).ok_or("an expiry (epoch seconds) is needed")?;
+    crate::services::mobile_control::auth::write_invite(&state_dir.join("mobile-control"), code, expires_at)
+}
+
+/// `--revoke-device` (id on stdin): the running daemon forgets the device
+/// through its admin socket; with none running, the device file is edited.
+pub fn revoke_device(state_dir: &std::path::Path, device_id: &str) -> Result<(), String> {
+    use crate::services::mobile_control::{admin, auth::AuthStore, protocol::{AdminRequest, AdminResponse}};
+    if !super::wire::valid_device_id(device_id) {
+        return Err("not a device id".into());
+    }
+    let control_dir = state_dir.join("mobile-control");
+    let socket = control_dir.join("admin.sock");
+    let request = AdminRequest::Revoke { device_id: device_id.into() };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    match runtime.block_on(admin::admin_call(&socket, &request)) {
+        Ok(AdminResponse::Error { message }) => Err(message),
+        Ok(_) => Ok(()),
+        Err(_) => AuthStore::open(&control_dir, String::new())?.revoke(device_id),
+    }
+}
+
+/// Progress lines of an install, on stderr (the helper's terminal).
+struct StderrEvents;
+
+impl app_core::EventSink for StderrEvents {
+    fn emit_json(&self, event: &str, payload: String) {
+        if event == "agent-install-progress" {
+            let line = serde_json::from_str::<serde_json::Value>(&payload).ok().and_then(|v| v["line"].as_str().map(str::to_string)).unwrap_or(payload);
+            eprintln!("{line}");
+        }
+    }
+    fn emit_json_to(&self, _: &app_core::ClientId, event: &str, payload: String) {
+        self.emit_json(event, payload);
+    }
+}
+
+/// `--install-cli <id>`, run by the admin helper as the CLI account with
+/// `<PREFIX>SERVER_CLI_ROOT` set: the desktop's installer, into the
+/// server-wide root (`agent_install::install_root_in` follows the variable);
+/// an installed CLI is updated instead.
+pub fn install_cli(id: &str) -> Result<(), String> {
+    use crate::commands::agents;
+    if super::cli_root().is_none() {
+        return Err(format!("{} is not set: run this through the admin helper's cli-install", brand::CURRENT.env_name(super::CLI_ROOT_ENV)));
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
+    app_core::rt::install(runtime.handle().clone());
+    crate::services::mail_engine::install_crypto_provider();
+    let ctx = crate::tauri_host::Ctx(app_core::CoreCtx::system(std::sync::Arc::new(crate::standalone_core_state()), std::sync::Arc::new(StderrEvents)));
+    let id = id.to_string();
+    let message = runtime.block_on(async move {
+        if agents::agent_is_installed(id.clone()).await {
+            agents::update_agent(ctx, id).await
+        } else {
+            agents::install_agent(ctx, id).await
+        }
+    })?;
+    eprintln!("{message}");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -299,6 +397,26 @@ mod tests {
     }
 
     #[test]
+    fn the_helpers_invite_and_revoke_run_as_the_user_on_its_own_state() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(write_invite(dir.path(), "1234567", Some("99")).is_err(), "eight digits");
+        assert!(write_invite(dir.path(), "12345678", None).is_err(), "an expiry");
+        write_invite(dir.path(), "12345678", Some("4000000000")).unwrap();
+        let invite = dir.path().join("mobile-control").join(auth::INVITE_FILE);
+        let text = std::fs::read_to_string(&invite).unwrap();
+        assert!(!text.contains("12345678"), "only the hash is stored");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&invite).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert!(revoke_device(dir.path(), "../x").is_err());
+        // No daemon is running and no device is known: the file path answers.
+        assert!(revoke_device(dir.path(), "dev_unknown_01").unwrap_err().contains("unknown device"));
+        assert!(install_cli("claude").is_err() || super::super::cli_root().is_some(), "outside the helper there is no root to install into");
+    }
+
+    #[test]
     fn the_host_config_is_the_gateway_origin_with_mobile_and_the_browser_on() {
         let config = ServerConfig {
             state_dir: PathBuf::from("/home/alice/.local/share/x"),
@@ -312,6 +430,6 @@ mod tests {
         assert_eq!(host.host.browser_client, Some(true));
         assert_eq!(host.origin, "https://desk.example.ts.net");
         assert_eq!(host.control_dir, PathBuf::from("/home/alice/.local/share/x/mobile-control"));
-        assert_eq!(socket_path_for(1001), PathBuf::from("/run").join(SLUG).join("users/1001.sock"));
+        assert_eq!(socket_path_for("alice"), PathBuf::from("/run").join(SLUG).join("users/alice.sock"));
     }
 }
