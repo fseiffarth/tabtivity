@@ -1246,30 +1246,59 @@ Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
   - keystroke latency is inside the §3.5 budget.
 - *This alone answers "operations run on the server" for one person.*
 
-**P3: multi-user.**
-- Finish the crate split. Split `host.rs` into the gateway (auth, router,
+**P3: multi-user.** *Partly built 2026-10-03 on branch `hosted`
+(`cf02b197`, `3e01a6f7`, `53d70ef5`…`2ba65cd2` + the docs commit); nothing run
+on a server. Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P3;
+rationale: [`context/server_gateway.md`](context/server_gateway.md).*
+- Finish the crate split. ~~Split `host.rs` into the gateway (auth, router,
   push) and the daemon (data paths), and build `tabtivity-serverd` on
-  `CoreCtx`.
-- The admin helper and its hard rules, the per-user slices and units, the
+  `CoreCtx`.~~ `3e01a6f7` (the daemon: the sidecar's host on a peer-gated
+  unix socket, `CoreCtx` over `standalone_core_state`), `53d70ef5` (the
+  gateway crate `src-gateway/`: routing by code prefix / device owner /
+  HMAC routing cookie, revocation closes live sockets, PWA statics, audit,
+  policy; links no core service), `fa351c32` (socket activation, content
+  tickets per user). **Open:** the crate split itself — the daemon is still
+  a `[[bin]]` of `src-tauri` and links GTK (#2349); Web Push delivery is
+  still the daemon's (#2352).
+- ~~The admin helper and its hard rules, the per-user slices and units, the
   tmux unit, `0700` homes, the invite flow, per-user device keys verified by
-  the daemon, and the audit log.
-- The deployment prerequisite checks (§8), the server-wide CLI install root
+  the daemon, and the audit log.~~ `53d70ef5` (`tabtivity-admin-helper`:
+  plans + `--dry-run`, socket-activated `serverd@`, nested
+  `<slug>-users-<user>.slice`, `tmux@` with `-D` sharing the daemon's
+  `/tmp`, invites written by the user's own uid), `cf02b197`/`3e01a6f7`
+  (device keys checked by the daemon, roles from the gateway). Deviation: no
+  polkit rule — socket activation starts daemons, the admin runs the helper
+  with `sudo`. Account admin from the browser: #2356.
+- ~~The deployment prerequisite checks (§8), the server-wide CLI install root
   with its admin-only installs and the per-home self-updater switches (§5.1),
   the admin UI for the Ollama model list, and the host-channel inventory
-  (§4.4).
-- Per-user sign-in (§5.1): sign-in tabs from browser and phone, and the
-  callback relay restricted to the caller's own listeners.
-- Per-user mail, calendar and todo (§6.7), with the admin's and users'
-  opt-out switches. The device-released secrets key (§6.8): the per-device
-  ECDH key at pairing, wraps, the kernel persistent keyring,
-  `PR_SET_DUMPABLE`, the recovery code, and sealed opt-in passwords.
+  (§4.4).~~ `53d70ef5` (`admin-helper check`), `fa351c32`/`e6592754` (the
+  install root follows `SERVER_CLI_ROOT`; `cli-install` runs as
+  `<slug>-cli`; every daemon refuses installs; the per-spawn updater switch
+  already applied), `3b88c63d` (Server settings: the admin's policy editor),
+  [`context/server_gateway.md`](context/server_gateway.md) (the inventory;
+  residuals #2355). "Ask your admin" in Manage CLIs: #2354.
+- Per-user sign-in (§5.1): sign-in tabs from browser and phone, and ~~the
+  callback relay restricted to the caller's own listeners~~ `56a64754`. The
+  sign-in tabs themselves are unchanged (the phone's QA 31bk flow and the
+  desktop UI in the browser); not run live.
+- ~~Per-user mail, calendar and todo (§6.7), with the admin's and users'
+  opt-out switches.~~ `fa351c32` (policy + `disabled_features`; refused as
+  `feature-off`, phone routes 403, alarms pause), `3b88c63d` (the switches in
+  Settings). The device-released secrets key (§6.8): ~~the primitives —
+  wraps, the kernel persistent keyring, the recovery code~~ `1d9cec4e`,
+  `PR_SET_DUMPABLE` `3e01a6f7`; **open:** the per-device ECDH key at pairing,
+  the unlock exchange, `mail_crypt`'s device-released mode, sealed opt-in
+  passwords (#2350).
 - *Exit:* two users on one server. Each user's attempt at the other's paths,
   sockets, tmux, loopback listeners and `/proc` fails, and a test runs that
-  attempt, including each other's calendar, tasks and mail. Each user signs
-  in to a CLI from the phone and runs an agent on their own login. A daemon
-  restart leaves both users' agents running, and mail stays unlocked across
-  it. A fenced tab can't read the keyring entry, and a backup of the home
-  can't open the mail store.
+  attempt, including each other's calendar, tasks and mail
+  (`scripts/server-isolation-test.sh`, `2ba65cd2` — not yet run on a server,
+  #2357). Each user signs in to a CLI from the phone and runs an agent on
+  their own login. A daemon restart leaves both users' agents running, and
+  mail stays unlocked across it (needs #2350). A fenced tab can't read the
+  keyring entry (observed: `keyctl` is EPERM in a fenced tab), and a backup
+  of the home can't open the mail store (needs #2350).
 
 **P3b: admin-provided API keys (optional).**
 - The admin-only Agent credentials panel, direct API-key delivery, and the

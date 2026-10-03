@@ -334,3 +334,94 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+### Z.3 — Left by P3 (multi-user; `docs/hosted_handoff.md` § P3)
+
+2349. **Finish the crate split; the daemon still links GTK.** `tabtivity-serverd` is a second `[[bin]]` of `src-tauri`, so it links the
+    desktop library: `ldd` shows `libgtk-3`, `libgdk-3`, `libxcb*` and
+    `libdbus-1` (no WebKit). A headless server must install them until the
+    command bodies move into `app-core` and the daemon becomes its own crate
+    (plan §3.2; the 126 `services → commands` back-references of the P1
+    handoff). (P3, 2026-10-03.)
+    - [ ] 🤖 Automated test — a CI step runs `ldd` on the daemon binary and fails on any GTK/X library.
+
+2350. **Wire the device-released secrets key (§6.8).** `services::server::secrets` has the primitives (per-device wraps, the
+    recovery code, the persistent keyring). Missing: the device's ECDH key
+    made at pairing (PWA and browser, next to the signing key), the unlock
+    exchange on connect (X's public key out, the shared value back encrypted
+    to a per-connection key the device pinned at pairing), `mail_crypt`
+    taking K as its KEK in a device-released mode, the sealed opt-in password
+    store (IMAP/SMTP/CalDAV/SSH), the recovery-code dialog, and the "mail
+    locked since reboot" push. (P3, 2026-10-03.)
+    - [ ] 🤖 Automated test — the §11 secrets tests: the store opens only after a device releases K; K survives a daemon restart, not a keyring flush; a copy of the home plus the gateway database cannot open it; the recovery code does.
+    - [ ] 🖐️ Manual test — on a server: pair a phone, set up mail, restart the daemon (mail stays unlocked), reboot (mail locked until the phone connects).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2351. **Decide: stop idle daemons, or keep them for their timers.** Plan §3.1 stops a daemon with no client after an idle timeout, but the
+    same daemon runs the user's timers (scheduled prompts, alarms, Web Push)
+    with no client connected (§3.4, §6.7). Socket activation restarts a
+    stopped daemon on the next connect, not on a timer. P3 keeps daemons up
+    once started; needs the user's decision (timers vs. memory per idle
+    user) before an idle stop is built. (P3, 2026-10-03.)
+
+2352. **Move Web Push delivery into the gateway.** Daemons still deliver their own (already encrypted) pushes to the push
+    services as the user's uid. §6.7 moves delivery into the gateway, which
+    would then forward ciphertext only; until then every daemon needs
+    outbound HTTPS. (P3, 2026-10-03.)
+
+2353. **Security review of the gateway and the admin helper before any user logs in.** §11: the helper is the only root code and gets a review of its own
+    (argument validation, `runuser` environment, the `O_NOFOLLOW` walks,
+    `gpasswd`/`useradd` arguments); the gateway's rate limits are
+    server-wide windows (20 pairings and 240 challenge/session calls a
+    minute), not per device or per account; proxied request bodies are not
+    size-capped at the gateway (the daemon caps them). (P3, 2026-10-03.)
+
+2354. **Manage CLIs on a server: "ask your admin".** Install, update and uninstall are `admin` and, on a server, refused for
+    every daemon with the helper command to run (`cli-install`). The panel
+    still shows the buttons and surfaces the refusal as an error; show the
+    installed versions read-only and the sentence instead. (P3,
+    2026-10-03.)
+    - [ ] 🖐️ Manual test — as a user in the browser, Manage CLIs shows no Update button.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2355. **Loopback listeners every server user can reach.** The §4.4 inventory (`docs/context/server_gateway.md`): the VM egress
+    proxy (`vm_proxy`, no token; admin VMs only), the VM SSH forward (key
+    auth), OpenVPN's management port (password file; admin), the shared
+    Ollama (decided, no token), CLI sign-in listeners (the relay now only
+    reaches the caller's own). Move the VM proxy to a unix socket or give it
+    a token. (P3, 2026-10-03.)
+
+2356. **Account administration from the browser.** Accounts, invites, roles and device revocation are admin-helper verbs
+    run with `sudo` on the server; the gateway has no root path (there is no
+    polkit rule). An admin page would need one: a polkit rule letting the
+    gateway's account run exactly `invite`/`device-revoke` through the helper,
+    with the helper's rules unchanged. (P3, 2026-10-03.)
+
+2357. **Run P3 live on a real server with two accounts.** The steps are in `docs/hosted_handoff.md` § P3 "Live steps": install,
+    `user-add` twice, pair a browser and a phone per user, an agent on each
+    user's own login, a daemon restart under a running agent, the policy
+    switches, then `scripts/server-isolation-test.sh ALICE BOB`. (P3,
+    2026-10-03.)
+    - [ ] 🖐️ Manual test — the whole § P3 live list on one server, both users, browser and phone.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

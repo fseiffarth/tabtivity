@@ -750,3 +750,170 @@ access off.
 | `scripts/brand-check.sh` | green (48 entries) |
 | `scripts/privacy-check.sh` | green (pre-commit on each commit; range form over `c99f0b2e..HEAD`) |
 | `git diff --check b2eae3d1 HEAD` | clean |
+
+## P3 (partial)
+
+*Written 2026-10-03 by the P3 continuation agent (the first P3 agent stopped
+at its usage limit after two commits and left the gateway crate half-made;
+this agent finished it). Base `df55687c` (P2 + review). Nothing run on a real
+server and nothing run as root: every root or multi-uid step is code plus
+generated units, `--dry-run` plans and unprivileged tests. Rationale, as
+built: [`context/server_gateway.md`](context/server_gateway.md).*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `cf02b197` | (first P3 agent) P2 review items 6–8: the session's role drives hello/capabilities/calls; transport commands pass the class check; a user's `list_dir_all`/tickets/grants confined; single-use HMAC sign-in links, rotate, logout. |
+| `3e01a6f7` | (first P3 agent) `services::server` (server mode from the unit's env, gateway headers, `tmux -L <slug>`, CLI root); `host::run_with(config, Listen)`; `tabtivity-serverd` serving the whole sidecar on a `0660` peer-gated unix socket; device-key browser sessions behind the gateway; invites; `PR_SET_DUMPABLE=0`. |
+| `53d70ef5` | `src-gateway/` (package `app-gateway`): the gateway (`server.rs`, `proxy.rs`, `db.rs`, `cookie.rs`, `audit.rs`, `policy.rs`, `statics.rs`, `config.rs`), the admin helper (`helper.rs`, `units.rs`, `prereq.rs`, `names.rs`), `wire.rs`; the first agent's uncommitted brand names (`GATEWAY_COOKIE`, `SERVER_ACCOUNT_PREFIX`) and `routed_pairing_code`; CI lint + test of the crate; `brand-check`/`brand-flip`/`backend-stale` follow it. |
+| `fa351c32` | Daemon side: compiles `wire.rs`/`policy.rs` by `#[path]`; socket activation (fd 3 adopted, never removed); content tickets `/content/<user>/<ticket>`; Ollama allowlist from the gateway's policy on a server; feature switches (admin policy ∧ `Settings.disabled_features`) → `Refusal::FeatureOff`, phone routes 403, alarms pause; `serverd --write-invite/--revoke-device/--install-cli`; `agent_install` root = `SERVER_CLI_ROOT` when set. |
+| `56a64754` | Sign-in relay: on a server only a listener of the daemon's own uid (`/proc/net/tcp{,6}`) gets the code (`callback_not_yours`). |
+| `1d9cec4e` | `services::server::secrets`: §6.8 primitives (per-device ECDH wraps, recovery code, `wraps.json`, persistent keyring). |
+| `e6592754` | Every daemon refuses CLI install/update/uninstall on a server with the `cli-install` helper command. |
+| `3b88c63d` | `ServerSettings` (Settings → Mobile, browser behind a gateway only): own feature switches; admin policy editor (features, sharing, Ollama allowlist) over `/gateway/v1/policy`; i18n ×5, two `UntestedTag` rows, a vitest. |
+| `2ba65cd2` | `scripts/server-isolation-test.sh` — the two-user exit test, run as root on the server. |
+| the commit after | this section, the plan's P3 bullets, TODO #2349–#2357, `docs/context/server_gateway.md` + its AGENTS.md entry. |
+
+### Design (short; the rest is in the context file)
+
+- **Gateway = router, not trust root.** Pair → routed by `user:` prefix, the
+  daemon checks the helper's invite; challenge/session → routed by the device
+  id's owner; a `200` session gets the routing cookie
+  (`__Host-<slug>_gateway`, HMAC-SHA256, 13 h, re-checked against
+  `gateway.json` on every request). Client `x-gateway-*` headers and the
+  routing cookie are stripped before forwarding. A daemon's device id that
+  already routes elsewhere is refused (409), never remapped. WebSocket
+  splices are registered per `(user, device)`; the table is re-read every
+  2 s and a revoked device's splices are aborted.
+- **Socket activation** replaces "the helper starts daemons": no root path
+  from the gateway, no polkit rule. The gateway accepts a daemon end owned by
+  the account's uid or root (a socket-activated socket reports root).
+- **Units**: `<slug>-gateway.service` (hardened), `<slug>-users.slice`,
+  `<slug>-users-<user>.slice` (nested by name; account names have no dash),
+  `<slug>-serverd@.socket/.service`, `<slug>-tmux@.service`
+  (`tmux -L <slug> -D`, `TMUX_TMPDIR=/run/<slug>/tmux/<user>`), tmpfiles,
+  `/etc/<slug>/server.env`. The daemon `JoinsNamespaceOf=` tmux so both share
+  one `PrivateTmp`. No `ProtectSystem`/`NoNewPrivileges` on those two (the
+  fence).
+- **Helper verbs**: `install`, `user-add [--admin] [--memory --tasks
+  --cpu-weight]`, `user-remove`, `invite`, `role`, `device-revoke`,
+  `cli-install`, `check`; each a printable `Plan`. Hard rules in the module
+  doc and `helper/tests.rs`.
+- **Policy** (`/var/lib/<slug>-gateway/policy.json`, `0644`): admin feature
+  switches + Ollama allowlist; unreadable → fail closed.
+- **Secrets**: primitives only; see TODO #2350 for the wiring.
+
+### Done / deferred
+
+Done: the gateway/daemon split (as two processes; the crate split is not
+finished), the helper with its rules and the units, invites, per-user device
+keys (the daemon's), the audit log, prerequisite checks, the CLI install root
+and admin-only installs, the admin's Ollama list and feature switches (UI +
+enforcement), the host-channel inventory, the sign-in relay restriction, the
+§6.8 primitives, the isolation test script.
+
+Deferred (TODO group Z §Z.3): **#2349** finish the crate split — the daemon
+binary links `libgtk-3`, `libgdk-3`, `libxcb*`, `libdbus-1` (checked with
+`ldd`, 66 libraries; no WebKit), so a headless server must install them;
+**#2350** §6.8 wiring (ECDH key at pairing, unlock exchange, `mail_crypt`
+device-released mode, sealed passwords, recovery dialog, locked push);
+**#2351** idle stop vs. timers (decision); **#2352** Web Push delivery into
+the gateway; **#2353** security review of gateway + helper, per-device rate
+limits; **#2354** "ask your admin" in Manage CLIs; **#2355** loopback
+residuals (VM egress proxy); **#2356** account admin from the browser (needs
+a polkit path); **#2357** the live run. Not touched, as instructed: #2339
+(root MCP in the sidecar), #2347 (per-client PTY ids — multi-user does not
+strictly need it: each user has their own daemon and PTYs; it stays a
+two-pages-of-one-user issue).
+
+### Live steps for a real server (Ubuntu 24.04, two test accounts)
+
+Run from a checkout of branch `hosted` at or after the docs commit.
+
+1. Build: `npm ci && npm run build` (web-dist, mobile-dist);
+   `cargo build --release -p tabtivity --bin tabtivity-serverd`;
+   `cargo build --release -p app-gateway`. Install:
+   `sudo install -D -m 0755 target/release/tabtivity-serverd target/release/tabtivity-gateway target/release/tabtivity-admin-helper -t /usr/lib/tabtivity/`;
+   `sudo mkdir -p /usr/share/tabtivity && sudo cp -r web-dist mobile-dist /usr/share/tabtivity/`.
+   Packages: `tmux` (≥ 3.2), `bubblewrap`, `curl`, `libgtk-3-0` (#2349).
+2. Prerequisites: `/proc` with `hidepid=invisible` (fstab
+   `proc /proc proc defaults,hidepid=invisible 0 0`, then
+   `sudo mount -o remount,hidepid=invisible /proc` — on a machine with a
+   desktop session add a `gid=` exception group for polkit/logind);
+   `sudo sysctl kernel.yama.ptrace_scope=1`; on Ubuntu 24.04 either load the
+   `bwrap-userns-restrict` AppArmor profile or set
+   `kernel.apparmor_restrict_unprivileged_userns=0`.
+3. `sudo /usr/lib/tabtivity/tabtivity-admin-helper --dry-run install --origin https://HOST.TAILNET.ts.net --content-origin https://HOST.TAILNET.ts.net:8443`,
+   read the plan, then run it without `--dry-run`. Expect the `tabtivity-gw`
+   and `tabtivity-cli` accounts, the `tabtivity-users` group, the units, and
+   `systemctl status tabtivity-gateway` active.
+4. Tailscale Serve: `sudo tailscale serve --bg --https=443 http://127.0.0.1:8740`
+   and `sudo tailscale serve --bg --https=8443 http://127.0.0.1:8741`.
+5. `sudo /usr/lib/tabtivity/tabtivity-admin-helper check` → every line `ok`
+   (socket_dir may `warn` until the first boot after install).
+6. `sudo …/tabtivity-admin-helper user-add alice --admin` and
+   `… user-add bob` → each prints `name:12345678`. A refusal check:
+   `… user-add <a sudoer>` must fail naming the group.
+7. CLIs: `sudo …/tabtivity-admin-helper cli-install claude` (and `codex`);
+   `ls -l /opt/tabtivity/agents` owned by `tabtivity-cli`.
+8. Alice's phone: open `https://HOST.TAILNET.ts.net/`, pair with
+   `alice:…`; `sudo …/tabtivity-admin-helper invite alice` for a second code;
+   pair a laptop browser at `/`, then open `/desktop/` — the desktop UI.
+   Same for Bob. `systemctl status tabtivity-serverd@alice` is active only
+   after Alice's first request (socket activation).
+9. Each user: open an agent tab, sign in through a sign-in tab from the phone
+   (QA 31bk flow); the agent runs on that user's own login.
+10. `sudo systemctl restart` of Alice's daemon unit (`tabtivity-serverd@` + `alice`) while Alice's
+    agent runs: the agent keeps running (`tmux -L tabtivity` in
+    `tabtivity-tmux@alice`), the browser reconnects.
+11. Alice → Settings → Mobile → Server: switch Mail off in the policy; Bob's
+    mail view refuses (`feature-off`), Bob's phone mail tab says the feature is
+    off; set the allowed models to one model; Bob's completion with another
+    model is refused `model-not-allowed`. Bob switches his own Calendar off;
+    Alice's stays on.
+12. `sudo …/tabtivity-admin-helper device-revoke bob <device id>` (ids in
+    `/var/lib/tabtivity-gateway/gateway.json`): Bob's open browser tab loses
+    its socket within ~2 s and its next request is unauthenticated.
+13. `sudo scripts/server-isolation-test.sh alice bob` → `N passed, 0 failed`.
+14. `sudo cat /var/lib/tabtivity-gateway/audit.jsonl`: pair/login/logout/
+    admin rows, no IPs, no content.
+15. In a fenced agent tab: `keyctl show @u` / `keyctl get_persistent @u` fail
+    (EPERM).
+
+### Gotchas for P3b / P4
+
+- `src-gateway/src/wire.rs` and `policy.rs` are compiled into the daemon by
+  `#[path]` — std/serde only, no `crate::` paths; `backend-stale.sh` watches
+  them.
+- The gateway table has two writers (gateway: devices; helper: accounts),
+  each under `flock(gateway.lock)` with atomic writes; the helper hands the
+  files back to `<slug>-gw` after writing as root. One uid ↔ one account;
+  one device id ↔ one account.
+- Sockets are by **user name** (`/run/<slug>/users/<user>.sock`); the first
+  P3 agent's uid naming is gone.
+- New services (P3b's auth-keeper, P4's hub and calendar) go into
+  `units.rs`/`names.rs`, new root verbs into `helper.rs` with the same rules
+  (ids from the table, no paths, no chown of a user tree, a `Plan` per verb).
+  `policy.features.calendar_sharing` already exists for P4c.
+- The gateway answers only its public `Host` (and the content host on the
+  content listener); tests must send one.
+- Privacy-check false positives met here: `<unit>@<name>.socket` reads as an
+  e-mail address; a type name ending in the word secret followed by `::` matches the `secret[:=]` pattern (alias the import).
+- From this fenced tab, `keyctl(KEYCTL_GET_PERSISTENT)` is EPERM — the
+  keyring test records and passes; on a real server run it unfenced.
+
+### Gates (worktree, 2026-10-03, at `2ba65cd2` + the docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **694 files, 7063 tests, all pass** (was 693 / 7060; +`ServerSettings.test.tsx`) |
+| `cargo test -q --workspace --no-fail-fast` | src-tauri **3203 lib (2 ignored) + 168 integration = 3371 passed**; src-core **97**; src-gateway **48**; 0 failed |
+| `npm run lint` | 0 errors, **31 warnings** — the same pre-existing ones, none new |
+| `cargo clippy --all-targets -- -D warnings` | clean for src-tauri, src-core, src-gateway |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (the two shims) | green; the same 5 pre-existing warnings (`home_io.rs`, `agent_auth.rs`, `copilot/process.rs`, `headless.rs`) |
+| `scripts/brand-check.sh` | green (49 entries: `src-gateway/Cargo.toml` added — the server binaries are named after the app) |
+| `scripts/privacy-check.sh 3e01a6f7..HEAD` | green (and in the pre-commit hook on every commit; two false positives fixed on the way, see Gotchas) |
+| `git diff --check df55687c HEAD` | clean |
+| `ldd target/debug/tabtivity-serverd` | links GTK/xcb/dbus (#2349), no WebKit |
