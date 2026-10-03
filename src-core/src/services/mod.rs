@@ -9,6 +9,10 @@ pub mod schedule_usage;
 // that keeps a phone reopening the status sheet from spawning a CLI each
 // time.
 pub mod agent_usage;
+// Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap:
+// Linux-only code (`libc`, `CommandExt::exec`), gated here as the desktop's
+// `services/mod.rs` gates its re-export.
+#[cfg(target_os = "linux")]
 pub mod fence_scope;
 pub mod big_folders;
 // The `.git` control files a sandbox keeps its occupant from writing (#158).
