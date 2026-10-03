@@ -30,6 +30,12 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# The `core` dispatcher generator (hosted plan §3.2/§10 P2): `build.rs` parses
+# every `src/commands/*.rs` for `#[tauri::command]` signatures and emits one
+# JSON-args wrapper per Tauri-free command into `OUT_DIR/core_dispatch.rs`.
+# Both crates are already in the tree through serde_derive and tauri-macros.
+syn = { version = "2", features = ["full", "parsing", "printing", "extra-traits"] }
+quote = "1"
 
 [dependencies]
 # The Tauri-free core (docs/tabtivity_hosted_plan.md §3.2): `CoreCtx`, the

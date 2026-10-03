@@ -2883,6 +2883,12 @@ fn system_ollama_models_dir() -> Option<std::path::PathBuf> {
 /// Returns Err("not_running") when the Ollama server is not reachable.
 #[tauri::command]
 pub async fn list_ollama_models() -> Result<Vec<String>, String> {
+    installed_model_names()
+}
+
+/// The names `/api/tags` lists, synchronously — the dispatcher's model
+/// allowlist (`services::model_allowlist`) asks before a request is forwarded.
+pub(crate) fn installed_model_names() -> Result<Vec<String>, String> {
     let body = ollama_http("GET", "/api/tags", None)?;
     let v: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("ollama json: {e}"))?;

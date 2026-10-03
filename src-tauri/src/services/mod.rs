@@ -98,6 +98,13 @@ pub mod local_loss;
 // Hosted plan §3.3: every registered Tauri command's class (core / client /
 // admin / off) and the test that fails when one is added without a row.
 pub mod command_class;
+// Hosted plan §10 P2: the generated `core` dispatcher a server host answers a
+// browser's `invoke` with, the class check in front of it, and
+// `server_capabilities`.
+pub mod core_dispatch;
+// Hosted plan §3.3: the admin-allowed model list a browser client's
+// completion / local-model requests are held to before they reach Ollama.
+pub mod model_allowlist;
 // Local-model mail assistant (Group Q, #203–#208): the loopback-only /api/chat
 // helper, prompt builders and defensive JSON parsers. AI never touches the net.
 pub mod mail_ai;
