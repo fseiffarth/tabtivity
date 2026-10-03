@@ -340,10 +340,10 @@ export function usePdfMarkup({
   // Marking off (todo #2341): every agent tab of the project is asked, none
   // chosen, whether it has an open ask for this file — the Mark up button
   // then says so and opens the strip on the asking tab.
-  const idleIds = useMemo(
-    () => (!active && projectId ? targets.map((entry) => entry.scheduleTargetId) : []),
-    [active, projectId, targets],
-  );
+  // Keyed by the ids, not the `targets` object: a relabel or any other tab's
+  // change hands the hook a new list, and must not re-read every tab.
+  const idleIdList = !active && projectId ? targets.map((entry) => entry.scheduleTargetId).join("\n") : "";
+  const idleIds = useMemo(() => (idleIdList ? idleIdList.split("\n") : []), [idleIdList]);
   const idleKey = projectId && idleIds.length ? `${projectId}\n${idleIds.join("\n")}\n${path}` : null;
   const [waiting, setWaiting] = useState<{ key: string; target: string | null } | null>(null);
   const listening = asksKey !== null || idleKey !== null;

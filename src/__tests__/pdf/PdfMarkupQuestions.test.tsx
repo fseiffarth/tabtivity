@@ -324,6 +324,18 @@ describe("an ask waiting while marking is off", () => {
     await waitFor(() => expect(seen?.askWaiting).toBeNull());
   });
 
+  it("is not read again when the project's tabs change but its agent tabs stay", async () => {
+    open = [ask([single])];
+    render(<Idle />);
+    await waitFor(() => expect(seen?.askWaiting).toBe("s2"));
+    const before = calls("markup_mcp_list").length;
+    // A relabel (or any other tab's change) hands the hook a new tab list.
+    act(() => useTabsStore.setState({ tabsByScope: { p1: [agentTab("t1", "s1", "Claude ✳"), agentTab("t2", "s2", "Codex")] } }));
+    await act(async () => {});
+    expect(calls("markup_mcp_list")).toHaveLength(before);
+    expect(seen?.askWaiting).toBe("s2");
+  });
+
   it("is not listed per tab once marking is on", async () => {
     open = [ask([single])];
     render(<Idle active />);
