@@ -22,6 +22,12 @@
  *   `adaptClientCommand` or a `{code:"client"}` rejection; `off` is refused
  *   with its reason; an unknown name is sent and refused by the server.
  *
+ * In the desktop app's **Connect** window (hosted plan §7.2, P5) the same
+ * shim runs with the window's native internals beside it: the `client`
+ * commands in [`CONNECT_NATIVE`] and the window and notification plugins run
+ * on this machine, `open_file` downloads the file through the server's ticket
+ * and opens it here; everything else is routed exactly as in a browser.
+ *
  * Written against `@tauri-apps/api` 2.11 (`core.js`, `event.js`, `window.js`);
  * a Tauri upgrade re-checks the member list (`docs/third_party_update_checklist.md`).
  */
@@ -29,6 +35,20 @@ import { COMMAND_CLASSES, OFF_REASONS } from "./commandClasses";
 import { adaptClientCommand, adaptWindowCommand } from "./clientAdapters";
 import { dialogAdapter, type MessageOptions, type OpenOptions, type SaveOptions } from "./dialogAdapter";
 import type { WsClient } from "./wsClient";
+import type { NativeInternals } from "./bridgeSocket";
+
+/** `client` commands the Connect window runs natively on this machine. */
+export const CONNECT_NATIVE = new Set([
+  "copy_text_to_clipboard",
+  "clipboard_has_image",
+  "open_external_url",
+  "os_clock_format",
+  "desktop_owns_super_key",
+  "get_power_state",
+]);
+
+/** Plugins the Connect window answers natively (real window controls, OS notifications). */
+const CONNECT_NATIVE_PLUGINS = new Set(["window", "webview", "notification"]);
 
 type Callback = (payload: unknown) => void;
 
@@ -57,7 +77,11 @@ export class WsInternals {
   /** listener id → event name, for `unregisterListener(event, id)`. */
   private readonly listenerEvents = new Map<number, string>();
 
-  constructor(private readonly client: WsClient) {
+  constructor(
+    private readonly client: WsClient,
+    /** The Connect window's own Tauri internals (none in a browser). */
+    private readonly native: NativeInternals | null = null,
+  ) {
     client.onEvent((name, payload) => this.deliver(name, payload));
   }
 
@@ -140,6 +164,15 @@ export class WsInternals {
     const klass = COMMAND_CLASSES[cmd];
     switch (klass) {
       case "client": {
+        if (this.native) {
+          if (CONNECT_NATIVE.has(cmd)) return this.native.invoke(cmd, record);
+          if (cmd === "open_file") {
+            const native = this.native;
+            return this.client
+              .call("desktop_file_ticket", { path: String(record.path ?? ""), download: true })
+              .then((ticket) => native.invoke("connect_open_download", { url: (ticket as { url: string }).url }));
+          }
+        }
         const adapted = adaptClientCommand(this.client, cmd, record);
         return adapted ?? Promise.reject({ code: "client", command: cmd });
       }
@@ -154,6 +187,7 @@ export class WsInternals {
 
   private plugin(cmd: string, args: Record<string, unknown>): Promise<unknown> {
     const [plugin, command] = cmd.slice("plugin:".length).split("|", 2);
+    if (this.native && CONNECT_NATIVE_PLUGINS.has(plugin)) return this.native.invoke(cmd, args);
     switch (plugin) {
       case "event":
         return this.eventPlugin(command, args);
@@ -267,8 +301,8 @@ function notificationPlugin(command: string): Promise<unknown> {
 }
 
 /** Install the shim on `window`; the app's `@tauri-apps/api` finds it there. */
-export function installWsInternals(client: WsClient): WsInternals {
-  const internals = new WsInternals(client);
+export function installWsInternals(client: WsClient, native: NativeInternals | null = null): WsInternals {
+  const internals = new WsInternals(client, native);
   const w = window as unknown as Record<string, unknown>;
   w.__TAURI_INTERNALS__ = internals.internals();
   w.__TAURI_EVENT_PLUGIN_INTERNALS__ = internals.eventInternals();

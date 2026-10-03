@@ -81,6 +81,9 @@ pub mod ssh;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod subwindow;
+// Connect to a server (hosted plan §7.2, P5): a window and its socket bridge.
+#[cfg(feature = "desktop")]
+pub mod connect;
 pub mod sync;
 pub mod synctex;
 pub mod terminal;

@@ -1273,6 +1273,7 @@ pub fn run() {
         // Carries PDF pages between two Tabtivity windows: they are separate WebViews
         // with separate JS heaps, so the bytes must cross the process boundary.
         .manage(commands::pdf_clip::PdfClipboard::default())
+        .manage(commands::connect::ConnectBridgeState::default())
         .manage(sync_manifest)
         .manage(auto_sync)
         .manage(git_peer)
@@ -1983,6 +1984,14 @@ pub fn run() {
             commands::clipboard::save_clipboard_image,
             commands::clipboard::copy_png_bytes_to_clipboard,
             commands::clipboard::copy_text_to_clipboard,
+            commands::connect::connect_status,
+            commands::connect::connect_pair,
+            commands::connect::connect_forget,
+            commands::connect::connect_open,
+            commands::connect::connect_ws_open,
+            commands::connect::connect_ws_send,
+            commands::connect::connect_ws_close,
+            commands::connect::connect_open_download,
             commands::screenshot::capture_screenshot,
             commands::projects::project_generated_dir,
             commands::screenshot::read_pending_screenshot,

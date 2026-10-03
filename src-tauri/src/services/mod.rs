@@ -122,6 +122,9 @@ pub mod mail_contacts;
 pub mod mail_crypt;
 pub mod mail_crypto;
 pub mod mail_engine;
+// Connect to a server (hosted plan §7.2, P5): pairing, sign-in and the
+// desktop socket a Connect window is bridged to.
+pub mod connect;
 pub mod mail_filters;
 pub mod mail_pgp;
 pub mod mail_rekey;

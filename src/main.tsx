@@ -15,7 +15,10 @@
 import "./lib/brandMigrationBoot";
 import { hardenPrototype } from "./lib/hardenPrototype";
 
-if (import.meta.env.DEV) {
+// The Connect window (hosted plan §7.2): the same app as a server's client.
+if (new URLSearchParams(window.location.search).get("connect") === "1") {
+  void import("./main-connect");
+} else if (import.meta.env.DEV) {
   void import("./dev/perfMonitor")
     .then((m) => m.installDevPerf())
     .catch(() => undefined)

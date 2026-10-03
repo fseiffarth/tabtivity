@@ -37,7 +37,7 @@ use serde_json::Value;
 
 /// Labels that must keep working. If one of these ever stops matching, the UI is
 /// silently dead — every `invoke` from that window is rejected by the ACL.
-const MUST_STILL_MATCH: &[&str] = &["main", "detached-p1-g1", "detached-abc", "present-deck1"];
+const MUST_STILL_MATCH: &[&str] = &["main", "detached-p1-g1", "detached-abc", "present-deck1", "connect"];
 
 /// The label the in-app browser's live-page windows use. Nothing but
 /// `browser.json` (which grants nothing) may match it.

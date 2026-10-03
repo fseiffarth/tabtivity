@@ -462,7 +462,7 @@ describe(`${BRAND.display} Mobile auth — sign-in at an identity provider (host
     await expect(finishOidcReturn()).resolves.toBe("paired");
     expect(stores.get("keys")?.get("device")).toEqual({ deviceId: "dev_oidc_0001", privateKey });
     expect(stores.get("keys")?.get("oidc-pending")).toBeNull();
-    expect(location.search).toBe("", "a reload never repeats it");
+    expect(location.search).toBe(""); // a reload never repeats it
     await expect(finishOidcReturn()).resolves.toBeNull();
   });
 

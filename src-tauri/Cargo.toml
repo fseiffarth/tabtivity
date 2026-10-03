@@ -253,6 +253,11 @@ p256 = { version = "0.13", features = ["ecdsa", "ecdh", "pkcs8"] }
 # sign-in: `services::server::oidc`); ES256 goes through p256 above. Already
 # in the tree through rustls.
 ring = "0.17"
+# Connect to a server (hosted plan §7.2, `services::connect`): the server's
+# desktop socket, over the app's own tokio-rustls stream (no TLS feature of
+# its own). The version is axum's (its `ws` feature pulls it in); the browser
+# client's socket test uses it too.
+tokio-tungstenite = "0.29"
 # Web Push payload encryption for Tabtivity Mobile (`mobile_control::push`, RFC
 # 8291 `aes128gcm`). The RFC fixes AES-128-GCM, so the at-rest XChaCha choice
 # above does not apply; the nonce is derived per message from a fresh salt and
@@ -384,9 +389,6 @@ tempfile = "3"
 # The shared-project tests (`services::server::share`) drive the real share
 # hub on a temp socket: the daemon's client against the hub it talks to.
 app-gateway = { path = "../src-gateway" }
-# The browser desktop client's socket test drives `web_client::routes` on a
-# real listener; the version is axum's own (the `ws` feature pulls it in).
-tokio-tungstenite = "0.29"
 # The macOS GPU sampler's `ioreg` plist parser is pure and gated
 # `any(target_os = "macos", test)`, so its fixture test runs on every OS;
 # the crate is already the macOS runtime dependency above.

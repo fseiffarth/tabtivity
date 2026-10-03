@@ -341,6 +341,16 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copy_png_bytes_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
+    // commands/connect.rs — this desktop as a server's client (plan §7.2):
+    // the machine the user sits at, never exposed.
+    ("connect_forget", Client),
+    ("connect_open", Client),
+    ("connect_open_download", Client),
+    ("connect_pair", Client),
+    ("connect_status", Client),
+    ("connect_ws_close", Client),
+    ("connect_ws_open", Client),
+    ("connect_ws_send", Client),
     // commands/copilot.rs
     ("copilot_accepted", Core),
     ("copilot_account", Core),

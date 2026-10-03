@@ -14,6 +14,7 @@ import { NAMES } from "../brand";
 import { linkState, markCliInstallsByAdmin, markServerClient, setLinkState } from "./linkState";
 import { WsClient, type Hello } from "./wsClient";
 import { installWsInternals, type WsInternals } from "./wsInternals";
+import { bridgeSocketFactory, type NativeInternals } from "./bridgeSocket";
 
 /** Where `platform.ts` finds the server's OS before the app loads. */
 export const HOST_OS_GLOBAL = "__APP_HOST_OS__";
@@ -31,10 +32,28 @@ export function socketUrl(location: { protocol: string; host: string }): string 
 }
 
 export function installWebTransport(): WebTransport {
+  return installTransport(new WsClient({ url: socketUrl(window.location), protocol: NAMES.desktopProtocol }), null);
+}
+
+/**
+ * The desktop app's Connect window (hosted plan §7.2, P5): the same
+ * transport, its socket bridged through this app's backend, and `client`
+ * commands answered natively. The window's own Tauri internals are taken
+ * before the shim replaces them.
+ */
+export function installConnectTransport(): WebTransport {
+  const w = window as unknown as Record<string, unknown>;
+  const native = w.__TAURI_INTERNALS__ as NativeInternals | undefined;
+  if (!native || typeof native.invoke !== "function") throw new Error("the Connect window needs the desktop app");
+  const nativeInternals: NativeInternals = { invoke: native.invoke.bind(native), transformCallback: native.transformCallback.bind(native) };
+  const client = new WsClient({ url: "connect://server/api/v1/desktop/ws", protocol: NAMES.desktopProtocol, socket: bridgeSocketFactory(nativeInternals) });
+  return installTransport(client, nativeInternals);
+}
+
+function installTransport(client: WsClient, native: NativeInternals | null): WebTransport {
   markServerClient();
   setLinkState("connecting");
-  const client = new WsClient({ url: socketUrl(window.location), protocol: NAMES.desktopProtocol });
-  const internals = installWsInternals(client);
+  const internals = installWsInternals(client, native);
   pausePollersWhileDown();
   client.connect();
   const ready = client.whenReady().then((hello) => {

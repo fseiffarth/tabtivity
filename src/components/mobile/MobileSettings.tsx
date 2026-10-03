@@ -12,6 +12,7 @@ import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
+import { ConnectToServer } from "../server/ConnectToServer";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -700,6 +701,7 @@ export function MobileSettings() {
           <p className="settings-help">{t("mobile.browserClientSignOutHelp")}</p>
         </div>
       )}
+      <ConnectToServer />
 
       <div className="settings-subheader">{t("mobile.mailWrites")}</div>
       <ToggleRow
