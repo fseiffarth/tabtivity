@@ -527,6 +527,42 @@ mod tests {
         assert_old_opens_nothing(&f.mail, &k2, &ring2);
     }
 
+    /// Blob files whose new keyed name is already taken: the same bytes
+    /// arrived again after the switch (`put_blob` wrote them, unsynced) — that
+    /// copy is adopted; a file there that does not open under the current
+    /// key (a torn write) is replaced, never pointed at. A blob two messages
+    /// share moves for both.
+    #[test]
+    fn a_blob_already_under_its_new_name_is_adopted_only_if_it_opens() {
+        let f = fixture();
+        let shared = f.store.put_blob(b"shared attachment").unwrap();
+        let meta = |part: &str| MailAttachmentMeta { part_id: part.into(), filename: "shared.pdf".into(), mime: "application/pdf".into(), size: 17, inline: false, type_mismatch: None };
+        f.store.put_attachment(&header(1).id, &meta("3"), &shared).unwrap();
+        f.store.put_attachment(&header(2).id, &meta("3"), &shared).unwrap();
+        let k2 = rotate(&f.mail, &f.k1);
+        let ring = keys_of(&f.mail, &k2);
+        f.store.switch_keys(ring.clone()).unwrap();
+        // The same bytes again since the switch: already under the new name.
+        let again = f.store.put_blob(b"attachment 100").unwrap();
+        assert_eq!(again, mail_crypt::blob_id(&ring.addr, b"attachment 100"));
+        // A torn file where another blob's new name points.
+        let torn = mail_crypt::blob_id(&ring.addr, b"attachment 150");
+        std::fs::write(f.mail.join("blobs").join(&torn), b"not an envelope").unwrap();
+
+        run_to_done(&f.store);
+        finish(&f.mail, &k2, &f.store);
+        assert_reads(&f.store, &f.mail, &all_uids());
+        for uid in [1, 2] {
+            let (_, digest) = f.store.attachment(&header(uid).id, "3").unwrap().expect("the shared attachment");
+            assert_eq!(digest, mail_crypt::blob_id(&ring.addr, b"shared attachment"), "both rows follow the move");
+            assert_eq!(f.store.get_blob(&digest).unwrap(), b"shared attachment");
+        }
+        assert!(!f.mail.join("blobs").join(&shared).exists(), "the old file is gone");
+        assert_eq!(f.store.attachment(&header(100).id, "2").unwrap().unwrap().1, again, "adopted");
+        assert_eq!(f.store.get_blob(&torn).unwrap(), b"attachment 150", "rewritten, not adopted");
+        assert_old_opens_nothing(&f.mail, &f.k1, &f.old);
+    }
+
     /// The thread's loop ([`run`]) against a host that holds K: it moves
     /// everything, retires, and switches to the retired keys; while the key
     /// is locked it waits with everything moved and finishes on the next try.

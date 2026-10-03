@@ -3645,8 +3645,18 @@ impl MailStore {
             if let Ok((plain, false)) = keys.open_any(|k| &k.blob, &mail_crypt::blob_aad(name), &raw) {
                 let new_id = mail_crypt::blob_id(&keys.addr, &plain);
                 let new_path = dir.join(&new_id);
-                if !new_path.exists() {
-                    mail_crypt::write_bytes_durable(&new_path, &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(&new_id), &plain))?;
+                let new_aad = mail_crypt::blob_aad(&new_id);
+                // The new name may exist already: the same bytes arrived again
+                // since the switch (`put_blob`, which writes without a sync), or
+                // a batch a crash cut short wrote it. Adopted only if it opens
+                // under the current key, and synced first — the old file goes
+                // once the rows point here, so this copy must be on disk.
+                let adoptable = std::fs::read(&new_path).is_ok_and(|b| mail_crypt::open(&keys.blob, &new_aad, &b).is_ok());
+                if adoptable {
+                    // Opened for writing: `FlushFileBuffers` on Windows needs it.
+                    std::fs::OpenOptions::new().read(true).write(true).open(&new_path).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+                } else {
+                    mail_crypt::write_bytes_durable(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
                 }
                 moves.push((name.clone(), new_id));
             }
@@ -3657,11 +3667,37 @@ impl MailStore {
         if crash == Some(RekeyCrash::BlobsWritten) {
             return Err(REKEY_CRASHED.into());
         }
+        if !moves.is_empty() {
+            // The adopted files' names, too (`write_bytes_durable` synced its own).
+            if let Ok(handle) = std::fs::File::open(&dir) {
+                let _ = handle.sync_all();
+            }
+        }
         let finished = seen == names.len();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        for (old, new) in &moves {
-            tx.execute("UPDATE bodies_cache SET raw_blob = ?1 WHERE raw_blob = ?2", params![new, old]).map_err(|e| e.to_string())?;
-            tx.execute("UPDATE attachments SET blob = ?1 WHERE blob = ?2", params![new, old]).map_err(|e| e.to_string())?;
+        if !moves.is_empty() {
+            // One pass over each table for the whole batch. Neither column is
+            // indexed, and `raw_blob` sits behind the bodies, so a statement
+            // per moved file was a full read of the body cache per file — up
+            // to 400 of them while holding the store's lock.
+            tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS rekey_moves (old TEXT PRIMARY KEY, new TEXT NOT NULL); DELETE FROM rekey_moves;")
+                .map_err(|e| e.to_string())?;
+            for (old, new) in &moves {
+                tx.execute("INSERT OR REPLACE INTO rekey_moves (old, new) VALUES (?1, ?2)", params![old, new]).map_err(|e| e.to_string())?;
+            }
+            tx.execute(
+                "UPDATE bodies_cache SET raw_blob = (SELECT new FROM rekey_moves WHERE old = bodies_cache.raw_blob)
+                 WHERE raw_blob IN (SELECT old FROM rekey_moves)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE attachments SET blob = (SELECT new FROM rekey_moves WHERE old = attachments.blob)
+                 WHERE blob IN (SELECT old FROM rekey_moves)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM rekey_moves", []).map_err(|e| e.to_string())?;
         }
         if finished {
             cursor.stage += 1;
