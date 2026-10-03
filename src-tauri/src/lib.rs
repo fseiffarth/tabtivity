@@ -1682,6 +1682,7 @@ pub fn run() {
             commands::boxes::rename_box,
             commands::boxes::delete_box,
             commands::boxes::set_box_members,
+            commands::boxes::patch_box,
             commands::boxes::ensure_box_folder,
             commands::boxes::refresh_box_agent_docs,
             commands::boxes::set_box_relations,

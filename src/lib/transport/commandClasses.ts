@@ -124,6 +124,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["rename_box", "core"],
   ["save_boxes", "off"],
   ["set_box_members", "core"],
+  ["patch_box", "core"],
   ["set_box_mobile_access", "core"],
   ["set_box_relations", "core"],
   ["legacy_name_status", "core"],

@@ -65,16 +65,15 @@ describe("boxes store — load", () => {
 });
 
 describe("boxes store — addToBox (additive)", () => {
-  it("adds to member_ids and persists save_boxes; projects.json is untouched", async () => {
+  it("adds to member_ids and persists patch_box; projects.json is untouched", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", [])] });
     useProjectsStore.setState({ projects: [proj("p1")] });
 
     await useBoxesStore.getState().addToBox("p1", "boxA");
 
     expect(useBoxesStore.getState().boxes[0].member_ids).toEqual(["p1"]);
-    expect(invoke).toHaveBeenCalledWith("save_boxes", {
-      boxes: [expect.objectContaining({ id: "boxA", member_ids: ["p1"] })],
-    });
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { addMember: "p1" } });
+    expect(invoke).not.toHaveBeenCalledWith("save_boxes", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("save_projects", expect.anything());
   });
 
@@ -93,7 +92,7 @@ describe("boxes store — addToBox (additive)", () => {
     await useBoxesStore.getState().addToBox("p1", "boxA");
 
     expect(useBoxesStore.getState().boxes[0].member_ids).toEqual(["p1"]);
-    expect(invoke).not.toHaveBeenCalledWith("save_boxes", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("patch_box", expect.anything());
   });
 
   it("refreshes the agent docs of a box that already has a folder", async () => {
@@ -122,7 +121,7 @@ describe("boxes store — removeFromBox (no silent dissolve)", () => {
     const boxes = useBoxesStore.getState().boxes;
     expect(boxes).toHaveLength(1);
     expect(boxes[0].member_ids).toEqual(["p2"]);
-    expect(invoke).toHaveBeenCalledWith("save_boxes", expect.anything());
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { removeMember: "p1" } });
   });
 
   it("a box emptied of its last member still survives", async () => {
@@ -211,3 +210,35 @@ describe("boxes store — createBox / renameBox", () => {
     expect(invoke).toHaveBeenCalledWith("rename_box", { boxId: "boxA", name: "Renamed" });
   });
 });
+
+describe("boxes store — an edit that is not saved is not shown (final review B5)", () => {
+  it("a refused removal puts the member back and says why", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p2"])] });
+    useProjectsStore.setState({ switchToast: null });
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "patch_box" ? Promise.reject(new Error("refused for a reason")) : Promise.resolve(undefined),
+    );
+
+    await useBoxesStore.getState().removeFromBox("p1", "boxA");
+
+    expect(useBoxesStore.getState().boxes[0].member_ids).toEqual(["p1", "p2"]);
+    expect(useProjectsStore.getState().switchToast).toBe("refused for a reason");
+    expect(invoke).not.toHaveBeenCalledWith("refresh_box_agent_docs", expect.anything());
+  });
+
+  it("a refused colour and pill switch revert too; a saved one takes the stored box", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+    invoke.mockImplementation((cmd: string) => (cmd === "patch_box" ? Promise.reject(new Error("no")) : Promise.resolve(undefined)));
+    await useBoxesStore.getState().setBoxColor("boxA", "#112233");
+    await useBoxesStore.getState().setBoxPillHidden("boxA", true);
+    expect(useBoxesStore.getState().boxes[0]).toEqual(box("boxA", []));
+
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "patch_box" ? Promise.resolve({ ...box("boxA", []), color: "#112233", rev: 4 }) : Promise.resolve(undefined),
+    );
+    await useBoxesStore.getState().setBoxColor("boxA", "#112233");
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { color: "#112233" } });
+    expect(useBoxesStore.getState().boxes[0]).toMatchObject({ color: "#112233", rev: 4 });
+  });
+});
+

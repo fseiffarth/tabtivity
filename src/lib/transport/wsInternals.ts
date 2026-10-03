@@ -32,6 +32,7 @@
  * a Tauri upgrade re-checks the member list (`docs/third_party_update_checklist.md`).
  */
 import { COMMAND_CLASSES, OFF_REASONS } from "./commandClasses";
+import { asRefusal } from "./refusal";
 import { adaptClientCommand, adaptWindowCommand } from "./clientAdapters";
 import { dialogAdapter, type MessageOptions, type OpenOptions, type SaveOptions } from "./dialogAdapter";
 import type { WsClient } from "./wsClient";
@@ -154,6 +155,12 @@ export class WsInternals {
   }
 
   invoke(cmd: string, args?: unknown, options?: InvokeOptions): Promise<unknown> {
+    // Every refusal — the class table's here, the server's — reaches the
+    // caller as an Error reading as one sentence in the user's language.
+    return this.route(cmd, args, options).catch((error: unknown) => Promise.reject(asRefusal(error, cmd)));
+  }
+
+  private route(cmd: string, args?: unknown, options?: InvokeOptions): Promise<unknown> {
     if (cmd.startsWith("plugin:")) return this.plugin(cmd, (args ?? {}) as Record<string, unknown>);
     if (args instanceof ArrayBuffer || ArrayBuffer.isView(args)) {
       const bytes = args instanceof ArrayBuffer ? new Uint8Array(args) : new Uint8Array(args.buffer, args.byteOffset, args.byteLength);

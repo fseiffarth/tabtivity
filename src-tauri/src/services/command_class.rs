@@ -293,6 +293,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("rename_box", Core),
     ("save_boxes", Off(OffReason::WholeDocumentSave)),
     ("set_box_members", Core),
+    ("patch_box", Core),
     ("set_box_mobile_access", Core),
     ("set_box_relations", Core),
     // commands/brand_migration.rs

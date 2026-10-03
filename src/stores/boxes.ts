@@ -157,6 +157,32 @@ async function refreshDocsFor(boxes: ProjectBox[], boxIds: string[]): Promise<vo
   }
 }
 
+/** One box edit as `patch_box` takes it. */
+interface BoxPatch {
+  addMember?: string;
+  removeMember?: string;
+  color?: string;
+  hidePill?: boolean;
+}
+
+/**
+ * Save one box edit the store already shows (`patch_box`, applied to the box
+ * as the file holds it — the browser client cannot run the whole-document
+ * `save_boxes`). On a refusal or an error the box goes back to `before` and
+ * the reason is shown; `false` then.
+ */
+async function persistBoxPatch(boxId: string, before: ProjectBox, patch: BoxPatch): Promise<boolean> {
+  try {
+    const stored = await invoke<ProjectBox | undefined>("patch_box", { boxId, patch });
+    if (stored) useBoxesStore.setState((state) => ({ boxes: state.boxes.map((b) => (b.id === boxId ? stored : b)) }));
+    return true;
+  } catch (error) {
+    useBoxesStore.setState((state) => ({ boxes: state.boxes.map((b) => (b.id === boxId ? before : b)) }));
+    useProjectsStore.setState({ switchToast: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
+}
+
 export const useBoxesStore = create<BoxesStore>((set, get) => ({
   boxes: [],
   loaded: false,
@@ -195,16 +221,12 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
   addToBox: async (projectId, boxId) => {
     // ADDITIVE (N:M): the project keeps every other membership; only the target
     // box's member list changes, and only if the project isn't in it already.
-    let updated: ProjectBox | null = null;
+    const before = get().boxes.find((b) => b.id === boxId);
+    if (!before || before.member_ids.includes(projectId)) return;
     set((state) => ({
-      boxes: state.boxes.map((b) => {
-        if (b.id !== boxId || b.member_ids.includes(projectId)) return b;
-        updated = { ...b, member_ids: [...b.member_ids, projectId] };
-        return updated;
-      }),
+      boxes: state.boxes.map((b) => (b.id === boxId ? { ...b, member_ids: [...b.member_ids, projectId] } : b)),
     }));
-    if (!updated) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    if (!(await persistBoxPatch(boxId, before, { addMember: projectId }))) return;
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
@@ -212,16 +234,16 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     // NO silent dissolve: a box left with one or zero members survives (and
     // still renders, dimmed when empty). Dissolving is the box editor's
     // explicit, confirmed action (`deleteBox`).
-    let changed = false;
+    const before = get().boxes.find((b) => b.id === boxId);
+    if (!before || !before.member_ids.includes(projectId)) return;
     set((state) => ({
-      boxes: state.boxes.map((b) => {
-        if (b.id !== boxId || !b.member_ids.includes(projectId)) return b;
-        changed = true;
-        return { ...b, member_ids: b.member_ids.filter((id) => id !== projectId) };
-      }),
+      boxes: state.boxes.map((b) =>
+        b.id === boxId ? { ...b, member_ids: b.member_ids.filter((id) => id !== projectId) } : b,
+      ),
     }));
-    if (!changed) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    // A box is an agent scope: a removal that did not land must not look done
+    // (the agent would still reach the project), so a refusal reverts it.
+    if (!(await persistBoxPatch(boxId, before, { removeMember: projectId }))) return;
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
@@ -242,32 +264,30 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
 
   setBoxColor: async (boxId, color) => {
     const next = isBoxColor(color) ? color.toLowerCase() : undefined;
-    let changed = false;
+    const before = get().boxes.find((b) => b.id === boxId);
+    if (!before || before.color === next) return;
     set((state) => ({
       boxes: state.boxes.map((b) => {
-        if (b.id !== boxId || b.color === next) return b;
-        changed = true;
+        if (b.id !== boxId) return b;
         const { color: _drop, ...rest } = b;
         return next ? { ...rest, color: next } : rest;
       }),
     }));
-    if (!changed) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    await persistBoxPatch(boxId, before, { color: next ?? "" });
   },
 
   setBoxPillHidden: async (boxId, hidden) => {
-    let changed = false;
+    const before = get().boxes.find((b) => b.id === boxId);
+    if (!before || !!before.hide_pill === hidden) return;
     set((state) => ({
       boxes: state.boxes.map((b) => {
-        if (b.id !== boxId || !!b.hide_pill === hidden) return b;
-        changed = true;
+        if (b.id !== boxId) return b;
         // Absent from disk while shown, like `tabtivity_mobile_access` while off.
         const { hide_pill: _drop, ...rest } = b;
         return hidden ? { ...rest, hide_pill: true } : rest;
       }),
     }));
-    if (!changed) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    await persistBoxPatch(boxId, before, { hidePill: hidden });
   },
 
   boxProjects: async (ids, target) => {
