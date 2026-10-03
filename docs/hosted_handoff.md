@@ -917,3 +917,91 @@ Run from a checkout of branch `hosted` at or after the docs commit.
 | `scripts/privacy-check.sh 3e01a6f7..HEAD` | green (and in the pre-commit hook on every commit; two false positives fixed on the way, see Gotchas) |
 | `git diff --check df55687c HEAD` | clean |
 | `ldd target/debug/tabtivity-serverd` | links GTK/xcb/dbus (#2349), no WebKit |
+
+## P3 review
+
+*Written 2026-10-03 by the P3 reviewer, on `hosted` over `df55687c..d5b08338`
+(the ten P3 commits). Read as an attacker who is a legitimate user of the
+same server. Nothing was run as root, on a real server, or against the
+user's state: the helper and the isolation script were read and exercised
+through their unprivileged seams (fake `Accounts`/`Exec`/`Probe`, a shimmed
+`runuser`), the gateway and the daemon on temp sockets.*
+
+### What was checked
+
+- **Gateway.** Routing cookie (HMAC, expiry, names/ids charset-bound, re-checked
+  against `gateway.json` on every request); `user:code` pairing (unknown
+  account answers like a wrong code; the daemon checks the invite; a daemon's
+  device id that routes elsewhere is 409, never remapped); challenge/session
+  routed by device owner, cookie minted only on the daemon's `200`;
+  `x-gateway-*` and the routing cookie stripped on every forwarded request,
+  upgrades included (one `prepare` for all); `/content/<user>/<ticket>` (the
+  ticket is the daemon's bearer secret, cookies stripped, charset-checked,
+  only `/content/<ticket>` reaches the daemon); Host/Origin checks; statics
+  path resolution; revocation closing splices; audit rows (no IPs, no
+  content, no device names); missing socket → fast 502; smuggling (hyper on
+  both sides re-frames; any path reaches only the cookie's own account).
+- **Daemon.** Peer gate on every accept, the activation socket included
+  (same listener); headers trusted only through it; role from the header
+  (fails closed to `user`); policy and `disabled_features` only narrow;
+  `feature-off` in `core_dispatch`, the phone's mail/calendar/todo routes and
+  alarms; the sign-in relay's `/proc/net/tcp{,6}` uid filter (`SO_REUSEPORT`
+  needs the same euid, so another user cannot share the port; the remaining
+  window is a listener closing between read and connect).
+- **Helper.** Names only (ASCII `^[a-z][a-z0-9_]{0,31}$`, no leading `-`,
+  no lookalikes), re-checks at execution, `O_NOFOLLOW|O_DIRECTORY` home
+  chmod, `runuser … env -i`, secrets on stdin, `--dry-run` returns before any
+  write, CLI installs as `<slug>-cli`.
+- **Units.** The server units are *system* units: PID 1 builds their mount
+  namespace with real privileges and no user namespace, so the user-manager
+  failure of `20f53490` (AppArmor's `unprivileged_userns` confining the
+  unit) does not apply and `PrivateTmp=yes` stays; bwrap still needs the
+  profile or the sysctl (live step 2), which `check` now really tests.
+  Daemon and tmux share one `/tmp` (`JoinsNamespaceOf=`); the socket is
+  `root:<slug>-gw 0660` under `0750 root:<slug>-gw`.
+- **Secrets primitives.** Fresh ephemeral ECDH key and random 96-bit nonce
+  per seal (no reuse), HKDF with domain separation, device id as AAD,
+  128-bit recovery code, `wraps.json` `0600`, K zeroized on drop.
+- **Desktop unchanged.** Server mode only from `<PREFIX>SERVER_MODE=1`; the
+  Windows check is green; the browser Server panel shows the admin half
+  only for `role: admin`; i18n ×5, two `UntestedTag` rows, file maps.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **medium** (role escalation) | Behind the gateway the daemon still served `/desktop/login` and honoured token sessions, which are `Admin`. The token file is in the account's own state dir, so any `user` could sign a link with it (through their own routing cookie) and get an admin session in their daemon — past the gateway's role. | fixed `a075bc24`: the login route is a 404 behind the gateway and only the device session authenticates; the daemon test signs a link with the real token file |
+| 2 | **medium** (cross-user DoS) | The gateway served both listeners on a bare `TcpListener`: no cap, no header/body/idle deadline — the hole `limits.rs` closed for the P2 sidecar (whose unix listener even says "the deadlines are the gateway's"). Any tailnet peer, or any local user (loopback), could hold descriptors until every account was offline. | fixed `ca2a58ff`: the gateway compiles `limits.rs` by `#[path]` and serves through `GuardedListener` (2048 / 256); the unit gets `LimitNOFILE=8192` |
+| 3 | **medium** (gateway account → root) | The helper, as root in the gateway-owned state dir, opened `gateway.lock` `O_CREAT` without `O_NOFOLLOW` (a planted symlink makes root create any empty file, e.g. `/etc/nologin`), read the table and audit log through symlinks (a FIFO hangs it), and fchowned whatever file sat at the name, hard links included. | fixed `a9951b12`: `read_regular` (`O_NOFOLLOW\|O_NONBLOCK`, regular files only), no-follow lock and audit append, chown only a single-link plain file; tests plant the links |
+| 4 | **medium** (all users' CLIs) | `runuser` inherited the admin's cwd; the CLI account's installer starts there and `npm` reads `./.npmrc` (registry, scripts) — an admin running `cli-install` from a user-controlled directory would install that user's choice for everyone. | fixed `e417b8cf`: per-account commands start in the account's home (the install root for `<slug>-cli`), tested |
+| 5 | **medium** (false assurance) | `check` run with `sudo` (live step 5, the isolation test) probed bwrap as root, which may always open a user namespace: it said `ok` where every user's fence fails closed. | fixed `2e22621e`: as root the probe runs via `runuser -u nobody` |
+| 6 | low | A browser socket's role is fixed at its upgrade; the gateway's sweep checked only routing, so a demoted admin kept `admin` on open sockets. | fixed `e803e1c2`: a role change closes the account's live sockets (test) |
+| 7 | low | `/gateway/v1/status` connected to every account's socket: under socket activation that starts each user's daemon and tmux, and it always read "up". | fixed `e803e1c2`: reports `socket: present\|missing` from the path, no connect (no UI consumer) |
+| 8 | low | The activation fd 3 arrives without `FD_CLOEXEC` and was adopted as is: every `std::process` child of the daemon inherited the listener. | fixed `eef3e600` (+ test); the bind path's comment no longer claims a setgid dir |
+| 9 | low | `server_policy()` returned `None` in server mode when the policy env var was missing → the user's own allowlist and every feature on. | fixed `b31e2bd2`: fails closed (test) |
+| 10 | low (test validity) | `server-isolation-test.sh` passed on silence: "no such file" counted as a denial under the 0700 home, a missing socket passed both socket checks, root's probe passed on any non-`ok` answer, the tmux check aimed at the *client's* uid path, and arguments were not validated. | fixed `16f29c6e`: `expect_eacces` for paths under the home, socket existence asserted, root must see the connection dropped unanswered, `tmux -S` at B's own socket, both units' private `/tmp`, names validated |
+| 11 | **medium, open** (decision) | The "never root-capable" rule checks group names only (`sudo`, `wheel`, `admin`, `root`): a per-user `sudoers` entry passes, and so do root-equivalent groups — `docker` (the plan itself: "the Docker socket is root on the host"), `lxd`/`incus-admin`, `libvirt`, `disk`. A linked member of one can read every other user's home. | open: adding the groups and a `sudo -l -U` probe is small, but it also bars the admin-role account from Docker/VMs on the server — the user's call |
+| 12 | medium, open (deferred #2353) | Pair (20/min) and challenge/session (240/min) windows are server-wide and counted before the device lookup, so any tailnet peer without an account can keep every user from pairing or signing in. Behind Tailscale Serve every peer is `127.0.0.1`, so per-peer limits need per-device/per-account windows. | open: #2353 |
+| 13 | low, open | Account existence leaks: a pair to a known account whose daemon is down answers 502 (vs 400), timing differs, and an unauthenticated pair attempt wakes that user's daemon by socket activation. | open: judgment (tailnet-only surface; fold into #2353) |
+| 14 | low, open | `AuthStore::pair` ignores `invite.json` while an in-memory pairing code is pending in that daemon (a helper invite is refused until it expires). | open: functional, not a boundary |
+| 15 | info | CLI installs as `<slug>-cli` use the shared `/tmp`; vendor scripts use `mktemp`, but a private `TMPDIR` under the install root would settle it. `secrets.rs`: `MasterKey::from_bytes(*buf)` leaves a stack copy; the recovery-code string is not zeroized. | open: for #2350 |
+
+Nothing else needed a change: the cookie, header hygiene, device-id
+refuse-not-remap, content routing, the peer gate, the role's fail-closed
+parse, the relay's uid filter and the helper's name rules held against
+every attempt above.
+
+### Gates (worktree, 2026-10-03, at `84253931`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **694 files, 7063 tests, all pass** (unchanged: no frontend change) |
+| `cargo test -q --workspace --no-fail-fast` | src-tauri **3205 lib (2 ignored) + 168 integration = 3373**; src-core **97**; src-gateway **63** (48 + 6 new + `limits.rs`'s 9 compiled in); 0 failed. One run hit `sysstat::tests::descendant_pids_serves_cache_hit_for_unchanged_generation` (pre-existing, untouched): passed alone and on the full rerun |
+| `npm run lint` | 0 errors, **31 warnings** — the same pre-existing ones |
+| `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (the two shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (49 entries) |
+| `scripts/privacy-check.sh d5b08338..HEAD` | green |
+| `git diff --check df55687c HEAD` | clean |
+| `npm run backend:stale` | the open window predates the build — expected: branch `hosted` is not what the window runs |
