@@ -1,6 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { useT } from "../../../src/lib/i18n";
-import { splitRecommended } from "../../../src/lib/viewers/markupQuestionPicks";
+
+/** The mark Claude Code asks agents to put on the option they would pick. It
+ * is shown as a tag beside the label rather than as part of it — the agent's
+ * own word, as it wrote it. */
+const RECOMMENDED = /\s+\((Recommended)\)$/u;
 
 /** One row of a question list: what it says, and how it stands. */
 export type QuestionRow = {
@@ -50,7 +54,7 @@ export function QuestionRows({ rows, disabled, sendingLabel, onPick, onType, typ
   const [typing, setTyping] = useState<number | string | null>(null);
   const [typed, setTyped] = useState("");
   return <ul className="option-list question-list">{rows.map((row) => {
-    const split = splitRecommended(row.label);
+    const recommended = RECOMMENDED.exec(row.label);
     const send = () => {
       if (!typed.trim()) return;
       onType(row, typed);
@@ -69,7 +73,7 @@ export function QuestionRows({ rows, disabled, sendingLabel, onPick, onType, typ
         <span>
           <strong>
             {row.box && <span className="question-box" aria-hidden="true">{picked ? "☑" : "☐"} </span>}
-            {row.title ?? split.label}{split.recommended && <em className="question-recommended">Recommended</em>}
+            {row.title ?? (recommended ? row.label.slice(0, recommended.index) : row.label)}{recommended && <em className="question-recommended">{recommended[1]}</em>}
           </strong>
           {row.description && <small>{row.description}</small>}
         </span>
