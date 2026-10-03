@@ -15,8 +15,10 @@
 # a CLI's own sign-in listener: see docs/context/server_gateway.md), and runs
 # the admin helper's prerequisite check.
 #
-# It changes nothing: no account, file, unit or process is created, modified
-# or stopped. Exit status: 0 when every assertion held, 1 otherwise.
+# It changes nothing: no account, file or unit is created, modified or
+# stopped (root's connect to the first user's socket starts that user's
+# daemon by socket activation, as any gateway request would). Exit status:
+# 0 when every assertion held, 1 otherwise.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +33,18 @@ if [ $# -ne 2 ]; then
   echo "usage: sudo $0 ALICE BOB  (two accounts added with ${APP_SLUG}-admin-helper user-add)" >&2
   exit 2
 fi
+# Account names as the server accepts them (wire::valid_account_name): no
+# option-looking or path-looking argument ever reaches runuser or a path.
+for name in "$1" "$2"; do
+  if ! [[ "$name" =~ ^[a-z][a-z0-9_]{0,31}$ ]] || ! id -u "$name" >/dev/null 2>&1; then
+    echo "not a server account name: $name" >&2
+    exit 2
+  fi
+done
+if [ "$1" = "$2" ]; then
+  echo "two different accounts, please" >&2
+  exit 2
+fi
 
 SOCKETS="/run/$APP_SLUG/users"
 TMUXROOT="/run/$APP_SLUG/tmux"
@@ -43,15 +57,33 @@ fail() { failures=$((failures + 1)); printf 'FAIL  %s\n      %s\n' "$1" "$2"; }
 # expect_denied LABEL USER CMD… — CMD run as USER must fail AND say why
 # (permission denied, no such file, connection refused/reset, operation not
 # permitted). Success, or a failure without one of those reasons, is a FAIL.
+# For a path that may simply not exist use expect_eacces: "no such file" is
+# silence, not a denial.
+DENIALS="permission denied|no such file|no such process|not permitted|connection refused|connection reset|couldn't connect|cannot access|cannot open|empty reply|no server running|error connecting"
 expect_denied() {
   local label="$1" user="$2"
   shift 2
+  expect_reason "$label" "$user" "$DENIALS" "$@"
+}
+
+# expect_eacces LABEL USER CMD… — as expect_denied, but only "permission
+# denied" counts: B's home is 0700, so every path under it must be refused at
+# the directory whether or not the file exists.
+expect_eacces() {
+  local label="$1" user="$2"
+  shift 2
+  expect_reason "$label" "$user" "permission denied" "$@"
+}
+
+expect_reason() {
+  local label="$1" user="$2" reasons="$3"
+  shift 3
   local out rc
   out="$(runuser -u "$user" -- "$@" 2>&1)"
   rc=$?
   if [ $rc -eq 0 ]; then
     fail "$label" "succeeded as $user: $(printf '%s' "$out" | head -c 200)"
-  elif printf '%s' "$out" | grep -qiE "permission denied|no such file|no such process|not permitted|connection refused|connection reset|couldn't connect|cannot access|cannot open|empty reply|no server running|error connecting"; then
+  elif printf '%s' "$out" | grep -qiE "$reasons"; then
     pass "$label"
   else
     fail "$label" "failed as $user but without a denial (rc $rc): $(printf '%s' "$out" | head -c 200)"
@@ -73,15 +105,21 @@ against() {
   bstate="$(state_of "$b")"
   buid="$(uid_of "$b")"
   echo "── $a against $b ──"
-  expect_denied "$a cannot list $b's home"                     "$a" ls "$bhome"
-  expect_denied "$a cannot read $b's settings"                 "$a" cat "$bstate/settings.json"
-  expect_denied "$a cannot read $b's calendar and tasks"       "$a" cat "$bstate/calendar.json"
-  expect_denied "$a cannot list $b's mail store"               "$a" ls "$bstate/mail"
-  expect_denied "$a cannot read $b's agent logins"             "$a" ls "$bstate/agent-auth"
-  expect_denied "$a cannot read $b's secrets wraps"            "$a" cat "$bstate/secrets/wraps.json"
-  expect_denied "$a cannot reach $b's daemon socket"           "$a" curl -sS --max-time 5 --unix-socket "$SOCKETS/$b.sock" http://x/healthz
-  expect_denied "$a cannot attach to $b's tmux server"         "$a" env TMUX_TMPDIR="$TMUXROOT/$b" tmux -L "$APP_SLUG" ls
-  expect_denied "$a cannot list $b's tmux runtime dir"         "$a" ls "$TMUXROOT/$b"
+  expect_eacces "$a cannot list $b's home"                     "$a" ls "$bhome"
+  expect_eacces "$a cannot read $b's settings"                 "$a" cat "$bstate/settings.json"
+  expect_eacces "$a cannot read $b's calendar and tasks"       "$a" cat "$bstate/calendar.json"
+  expect_eacces "$a cannot list $b's mail store"               "$a" ls "$bstate/mail"
+  expect_eacces "$a cannot read $b's agent logins"             "$a" ls "$bstate/agent-auth"
+  expect_eacces "$a cannot read $b's secrets wraps"            "$a" cat "$bstate/secrets/wraps.json"
+  # A missing socket would make the next check pass for the wrong reason.
+  if [ -S "$SOCKETS/$b.sock" ]; then
+    expect_denied "$a cannot reach $b's daemon socket"         "$a" curl -sS --max-time 5 --unix-socket "$SOCKETS/$b.sock" http://x/healthz
+  else
+    fail "$b's daemon socket exists" "$SOCKETS/$b.sock is missing: systemctl enable --now ${APP_SLUG}-serverd@$b.socket"
+  fi
+  # tmux names its socket after the CLIENT's uid; aim at $b's own one.
+  expect_eacces "$a cannot attach to $b's tmux server"         "$a" tmux -S "$TMUXROOT/$b/tmux-$buid/$APP_SLUG" ls
+  expect_eacces "$a cannot list $b's tmux runtime dir"         "$a" ls "$TMUXROOT/$b"
   local pid
   pid="$(systemctl show -p MainPID --value "${APP_SLUG}-serverd@$b.service" 2>/dev/null)"
   if [ -n "$pid" ] && [ "$pid" != 0 ]; then
@@ -96,9 +134,10 @@ against() {
     expect_denied "$a cannot see $b's tmux server in /proc"    "$a" cat "/proc/$tpid/environ"
   fi
   local d
-  for d in /tmp/systemd-private-*"${APP_SLUG}-serverd@$b.service"*; do
+  # The two units share one private /tmp, named after whichever started first.
+  for d in /tmp/systemd-private-*"${APP_SLUG}-serverd@$b.service"* /tmp/systemd-private-*"${APP_SLUG}-tmux@$b.service"*; do
     [ -e "$d" ] || continue
-    expect_denied "$a cannot enter $b's private /tmp"          "$a" ls "$d/tmp"
+    expect_eacces "$a cannot enter $b's private /tmp"          "$a" ls "$d/tmp"
   done
   if runuser -u "$a" -- ps -u "$buid" -o pid= 2>/dev/null | grep -q .; then
     fail "$a sees none of $b's processes" "ps lists processes of $b: /proc is not hidepid=invisible"
@@ -129,11 +168,18 @@ against "$1" "$2"
 against "$2" "$1"
 
 echo "── the daemon socket answers the gateway only ──"
-out="$(curl -sS --max-time 5 --unix-socket "$SOCKETS/$1.sock" http://x/healthz 2>&1)"
-if printf '%s' "$out" | grep -q '"ok"'; then
-  fail "root is refused by $1's daemon (peer check)" "root got an answer: $out"
+# The daemon drops a connection from any uid but the gateway's unanswered:
+# curl must see the connection made and then closed — not refused (nothing
+# listening) and not any HTTP answer at all.
+if [ -S "$SOCKETS/$1.sock" ]; then
+  out="$(curl -sS --max-time 10 --unix-socket "$SOCKETS/$1.sock" http://x/healthz 2>&1)"
+  if printf '%s' "$out" | grep -qiE "empty reply|connection reset|recv failure"; then
+    pass "root is refused by $1's daemon (peer check)"
+  else
+    fail "root is refused by $1's daemon (peer check)" "expected the connection dropped unanswered, got: $(printf '%s' "$out" | head -c 200)"
+  fi
 else
-  pass "root is refused by $1's daemon (peer check)"
+  fail "$1's daemon socket exists" "$SOCKETS/$1.sock is missing"
 fi
 
 echo
