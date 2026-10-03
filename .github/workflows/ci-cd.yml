@@ -159,7 +159,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -205,7 +205,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -242,7 +242,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -281,7 +281,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -329,7 +329,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -391,7 +391,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -448,7 +448,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: . -> target
 
       - name: Install frontend dependencies
         run: npm ci
