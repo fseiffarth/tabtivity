@@ -2699,6 +2699,8 @@ export const dict: Dict = {
   "server.settings.modelsHelp": "Un modello per riga, per l'Ollama condiviso. Vuoto: ogni modello scaricato è consentito.",
   "server.settings.save": "Salva i criteri",
   "server.settings.saved": "Criteri salvati",
+  "agents.askAdminInstalled": "{label} su questo server lo installa l'amministratore. Chiedigli di aggiornarlo o rimuoverlo; esegue:",
+  "agents.askAdminMissing": "{label} non è installato su questo server. Chiedi all'amministratore di installarlo; esegue:",
   "server.secrets.header": "Chiave dei segreti",
   "server.secrets.help": "Su questo server l'archivio della posta e le password che hai scelto di salvare sono sigillati con una chiave che solo i tuoi dispositivi associati (o il tuo codice di recupero) possono sbloccare. Non viene mai scritta in chiaro: dopo un riavvio del server resta bloccata finché uno dei tuoi dispositivi accede.",
   "server.secrets.notSetUp": "Non ancora configurata: la posta su questo server attende finché non lo è.",

@@ -26,6 +26,21 @@ export function isServerClient(): boolean {
   return serverClient;
 }
 
+let adminInstallsClis = false;
+
+/** Set from the hello: this backend is a hosted server, where agent CLIs are
+ * installed, updated and removed by the administrator only (admin helper
+ * `cli-install`; user decision 2026-10-03). */
+export function markCliInstallsByAdmin(on: boolean): void {
+  adminInstallsClis = on;
+}
+
+/** Manage CLIs shows versions and "ask your administrator" instead of
+ * install/update/remove buttons. False in the window and the P2 sidecar. */
+export function cliInstallsByAdmin(): boolean {
+  return adminInstallsClis;
+}
+
 export function linkState(): LinkState {
   return state;
 }

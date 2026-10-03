@@ -2757,6 +2757,8 @@ export const enSource = {
   "server.settings.modelsHelp": "One model per line, for the shared Ollama. Empty: every model you pulled is allowed.",
   "server.settings.save": "Save policy",
   "server.settings.saved": "Policy saved",
+  "agents.askAdminInstalled": "{label} is installed on this server by the administrator. Ask them to update or remove it; they run:",
+  "agents.askAdminMissing": "{label} is not installed on this server. Ask the administrator to install it; they run:",
   "server.secrets.header": "Secrets key",
   "server.secrets.help": "On this server your mail store and the passwords you chose to save are sealed under one key that only your paired devices (or your recovery code) can unlock. It is never written to disk in the clear: after a server reboot it stays locked until one of your devices signs in.",
   "server.secrets.notSetUp": "Not set up yet — mail on this server waits until it is.",

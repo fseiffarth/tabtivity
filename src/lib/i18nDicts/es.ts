@@ -2699,6 +2699,8 @@ export const dict: Dict = {
   "server.settings.modelsHelp": "Un modelo por línea, para el Ollama compartido. Vacío: se permite cualquier modelo descargado.",
   "server.settings.save": "Guardar política",
   "server.settings.saved": "Política guardada",
+  "agents.askAdminInstalled": "{label} lo instala en este servidor el administrador. Pídele que lo actualice o lo quite; ejecuta:",
+  "agents.askAdminMissing": "{label} no está instalado en este servidor. Pide al administrador que lo instale; ejecuta:",
   "server.secrets.header": "Clave de secretos",
   "server.secrets.help": "En este servidor, tu almacén de correo y las contraseñas que elegiste guardar están sellados con una clave que solo tus dispositivos emparejados (o tu código de recuperación) pueden desbloquear. Nunca se guarda en claro: tras reiniciar el servidor sigue bloqueada hasta que uno de tus dispositivos inicie sesión.",
   "server.secrets.notSetUp": "Aún sin configurar: el correo en este servidor espera hasta que lo esté.",

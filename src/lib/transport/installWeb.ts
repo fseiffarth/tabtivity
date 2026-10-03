@@ -11,7 +11,7 @@
  * is pulled in — `main-web.tsx` awaits `whenReady()` for exactly that.
  */
 import { NAMES } from "../brand";
-import { linkState, markServerClient, setLinkState } from "./linkState";
+import { linkState, markCliInstallsByAdmin, markServerClient, setLinkState } from "./linkState";
 import { WsClient, type Hello } from "./wsClient";
 import { installWsInternals, type WsInternals } from "./wsInternals";
 
@@ -39,6 +39,7 @@ export function installWebTransport(): WebTransport {
   client.connect();
   const ready = client.whenReady().then((hello) => {
     (window as unknown as Record<string, unknown>)[HOST_OS_GLOBAL] = hello.capabilities.hostOs;
+    markCliInstallsByAdmin(hello.capabilities.cliInstalls === "admin-helper");
     return hello;
   });
   return { client, internals, ready };

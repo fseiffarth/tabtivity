@@ -241,6 +241,10 @@ pub struct ServerCapabilities {
     pub host_os: &'static str,
     /// `user` / `admin`.
     pub role: &'static str,
+    /// `admin-helper` on a hosted server (agent CLIs are installed by the
+    /// administrator through the admin helper, every daemon refuses), else
+    /// `self`. Manage CLIs reads it (#2354).
+    pub cli_installs: &'static str,
     pub commands: Vec<CommandCapability>,
 }
 
@@ -270,6 +274,7 @@ pub fn capabilities(role: Role, protocol: u32) -> ServerCapabilities {
         protocol,
         host_os: host_os(),
         role: role.as_str(),
+        cli_installs: if crate::services::server::is_server() { "admin-helper" } else { "self" },
         commands,
     }
 }

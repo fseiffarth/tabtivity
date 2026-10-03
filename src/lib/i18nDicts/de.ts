@@ -2702,6 +2702,8 @@ export const dict: Dict = {
   "server.settings.modelsHelp": "Ein Modell pro Zeile, für das gemeinsame Ollama. Leer: jedes geladene Modell ist erlaubt.",
   "server.settings.save": "Richtlinie speichern",
   "server.settings.saved": "Richtlinie gespeichert",
+  "agents.askAdminInstalled": "{label} wird auf diesem Server vom Administrator installiert. Bitte ihn ums Aktualisieren oder Entfernen; er führt aus:",
+  "agents.askAdminMissing": "{label} ist auf diesem Server nicht installiert. Bitte den Administrator, es zu installieren; er führt aus:",
   "server.secrets.header": "Geheimnisschlüssel",
   "server.secrets.help": "Auf diesem Server sind dein Mail-Speicher und die Passwörter, die du speichern wolltest, unter einem Schlüssel versiegelt, den nur deine gekoppelten Geräte (oder dein Wiederherstellungscode) entsperren können. Er wird nie im Klartext gespeichert: Nach einem Neustart des Servers bleibt er gesperrt, bis sich eines deiner Geräte anmeldet.",
   "server.secrets.notSetUp": "Noch nicht eingerichtet — Mail auf diesem Server wartet, bis er es ist.",

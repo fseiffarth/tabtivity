@@ -31,6 +31,8 @@ export interface ServerCapabilities {
   protocol: number;
   hostOs: "linux" | "windows" | "macos";
   role: "user" | "admin";
+  /** `admin-helper` on a hosted server: CLIs are the administrator's. */
+  cliInstalls?: "self" | "admin-helper";
   commands: CommandCapability[];
 }
 

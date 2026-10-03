@@ -12,6 +12,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
 import { HOST_OS } from "../../lib/platform";
+import { cliInstallsByAdmin } from "../../lib/transport/linkState";
 import {
   NODE_DOWNLOAD_URL,
   NODE_INSTALL,
@@ -1579,6 +1580,8 @@ export function AgentsPanel({
   installedExtras?: (a: AgentInfo) => ReactNode;
 }) {
   const t = useT();
+  // A hosted server: the administrator installs CLIs (#2354).
+  const adminInstalls = cliInstallsByAdmin();
   const { settings, updateSettings } = useSettingsStore();
   const remoteMachines = useGlobalMachinesStore((s) => s.machines);
   const remoteMachinesLoaded = useGlobalMachinesStore((s) => s.loaded);
@@ -1884,7 +1887,7 @@ export function AgentsPanel({
           {/* After a check found a newer release the chip turns into the
               update itself — `2.1.284 → 2.1.287`, the Ollama row's version
               pair — because the new number is what the user wants to act on. */}
-          {update?.updateAvailable && current && update.latest ? (
+          {update?.updateAvailable && current && update.latest && !adminInstalls ? (
             <button
               type="button"
               className="local-model-version-note has-update"
@@ -1919,7 +1922,7 @@ export function AgentsPanel({
           )}
           {/* Newest release known but the installed one unreadable: no claim
               of an update, but the installer can still be run again for it. */}
-          {update && !update.updateAvailable && update.latest && !current && (
+          {update && !update.updateAvailable && update.latest && !current && !adminInstalls && (
             <button
               type="button"
               className="ollama-action-btn"
@@ -2135,7 +2138,17 @@ export function AgentsPanel({
       {remoteErrors[a.id] && (
         <div className="project-dialog-error">{remoteErrors[a.id]}</div>
       )}
-      {a.installed && (
+      {adminInstalls && (
+        <>
+          {a.installed && versionNotice(a)}
+          <p className="settings-help">
+            {t(a.installed ? "agents.askAdminInstalled" : "agents.askAdminMissing", { label: a.label })}{" "}
+            <code>{`sudo ${NAMES.serverAdminHelper} cli-install ${a.id}`}</code>{" "}
+            <UntestedTag id="agents.askAdmin" />
+          </p>
+        </>
+      )}
+      {a.installed && !adminInstalls && (
         <>
           {versionNotice(a)}
           <div className="ollama-install-cmd-row">
@@ -2207,7 +2220,7 @@ export function AgentsPanel({
           )}
         </>
       )}
-      {!a.installed && (
+      {!a.installed && !adminInstalls && (
         <>
           {/* Auto-install runs the official installer via `sh` on
               Linux/macOS and via PowerShell/cmd on Windows. It is only

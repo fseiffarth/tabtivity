@@ -2701,6 +2701,8 @@ export const dict: Dict = {
   "server.settings.modelsHelp": "Un modèle par ligne, pour l'Ollama partagé. Vide : tout modèle téléchargé est autorisé.",
   "server.settings.save": "Enregistrer la politique",
   "server.settings.saved": "Politique enregistrée",
+  "agents.askAdminInstalled": "{label} est installé sur ce serveur par l'administrateur. Demande-lui de le mettre à jour ou de le retirer ; il lance :",
+  "agents.askAdminMissing": "{label} n'est pas installé sur ce serveur. Demande à l'administrateur de l'installer ; il lance :",
   "server.secrets.header": "Clé des secrets",
   "server.secrets.help": "Sur ce serveur, ton stockage de courrier et les mots de passe que tu as choisi d'enregistrer sont scellés sous une clé que seuls tes appareils associés (ou ton code de récupération) peuvent déverrouiller. Elle n'est jamais écrite en clair : après un redémarrage du serveur, elle reste verrouillée jusqu'à ce qu'un de tes appareils se connecte.",
   "server.secrets.notSetUp": "Pas encore configurée — le courrier sur ce serveur attend qu'elle le soit.",
