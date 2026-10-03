@@ -3194,3 +3194,109 @@ what to build for the CLIs that pass; plan Q2 records the status.
 | `git diff --check 233b7330 HEAD` | clean (two whitespace slips fixed in this commit) |
 | `npm run mobile:bundle` | green (`mobile-web/` changed) |
 | `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+## P5 review
+
+*Written 2026-10-03 by the P5 reviewer, over `233b7330..c37580dc`. Nothing
+run on a server, as root, or against a real state dir, port, `/srv` or
+`/run`; no real provider, identity provider, key or token; the isolation
+script and the admin helper were read, not run. Each fix has a test that
+fails without it, except finding 8 (server mode is process-global, so the
+switch cannot be flipped in a unit test) and the window wiring of finding 7
+(its `close_all` is tested).*
+
+### What was checked
+
+- **Broker** (`broker.rs`, keeper, units, daemon spawn): the key goes out
+  only in the upstream `x-api-key` (`set_sensitive`), never in an answer
+  (fixed answer-header list), an error (`without_url`), a log or the audit;
+  no redirect is followed, the upstream origin is fixed per CLI, TLS is
+  rustls with the platform verifier. Paths: axum decodes the route before
+  the exact-match allowlist, so `%2F`/`..` cannot widen it (one hole,
+  finding 2); the query passes through but cannot change the host; an
+  absolute-form request URI is just a path. Tokens: 32 random bytes,
+  constant-time compare, file `0600` under `<slug>-auth`; the list, the
+  delivery and the key are re-read per request. The socket unit holds
+  `127.0.0.1:8739` from boot, the activation listener refuses a
+  non-loopback fd; an `Origin` header is refused, and a DNS-rebound page
+  still holds no token. Budget: checked before forwarding, soft by the
+  requests in flight (≤ 16 per user); metering reviewed for aborted streams
+  and errors (finding 1).
+- **OIDC** (`oidc.rs`, `oidc_wire.rs`, gateway routes, daemon
+  `server::oidc`, PWA): PKCE S256; `state` one try, taken with the binder
+  cookie (`__Host-`, `HttpOnly`, `Lax`); nonce = hash of the key being
+  paired, recomputed and spent once by the daemon; `alg` pinned to
+  RS256/ES256 with the JWK's `kty`/`crv`/`alg`/`use` honoured (no `none`,
+  no HMAC, RSA ≥ 2048), `jku`/`x5u`/header keys ignored; JWKS only via the
+  configured issuer's discovery document (issuer must match, https
+  `jwks_uri`); `iss`, `aud` (array needs `azp`), `exp`/`iat` with 120 s skew
+  and 10 min age; the daemon checks its own copy of the link; redirect_uri
+  is the configured origin's fixed path; the outcome redirect is a fixed
+  word (the PWA validates the device id); provider errors are not
+  reflected; the client secret only travels stdin → `oidc.json` (`0600`)
+  → token endpoint, never a plan line, log or audit row.
+- **Connect** (`commands/connect.rs`, `services::connect`, transport): the
+  window loads only `index.html?connect=1`; the capability has no `remote`,
+  so a navigation to a remote page gets no IPC; the bridge commands answer
+  only the `connect` label, event names are validated; natively answered:
+  six `client` commands plus the window/webview/notification plugins;
+  `open_external_url` is http(s) only; the ticket download is the paired
+  host's https `/content/` only, no redirects, a leaf file name, never
+  overwriting.
+- **Podman** (`sandbox.rs`, policy, prereq, isolation script):
+  `--userns=keep-id` + `--user uid:gid`, no `--privileged`, `--cap-drop ALL`,
+  `no-new-privileges`, no engine socket mounted, the project at its own
+  path, fence/agent-home wraps unchanged (`is_engine_cmd`); the policy
+  default and `fail_closed` are off; each user's rootless store is theirs.
+- **Worktree gate** (`share.rs`): `git worktree list --porcelain` covers
+  in-tree, outside-the-tree and prunable worktrees; one `rev-list` over all
+  heads (cost: two git calls whatever the number of worktrees).
+- Desktop unchanged (`Engine::current` is Docker off a server; Connect is
+  additive), i18n ×5 (parity tests), UntestedTags, TODO #2377–#2383.
+
+### Findings
+
+| # | Sev | Finding | Status |
+|---|---|---|---|
+| 1 | Med | **Broker metering bypass.** A stream's output count comes only in its closing `message_delta`, so a client that stopped reading just before it (or a user pressing Esc) was billed one output token for the whole answer; a JSON answer names `usage` last, so a client could read the content and drop the connection before the count. Budgets could be outrun at will. | Fixed `ff12e743`: an unfinished stream bills its streamed text at 3 bytes a token; a JSON answer is read and metered whole before it is handed over. |
+| 2 | Low | `GET v1/models/..` passed the allowlist (`.` is an id character); the URL parser resolved it to `GET /v1/` on the provider with the key. | Fixed `ff12e743`. |
+| 3 | Low | The invite pair path forwarded its body as sent, so an `oidc_token` field reached the daemon's provider sign-in without the callback's state, binder cookie and code exchange (the daemon's signature/nonce checks still held). | Fixed `5edb9c12`: dropped at the gateway. |
+| 4 | Low | The discovery document's endpoints accepted plain `http://127.0.0.1:` in every build (meant for tests only, like the issuer check). | Fixed `5edb9c12`. |
+| 5 | Low | A callback with no binder cookie (another browser) answered "refused" and left the sign-in pending, unlike a wrong cookie; the live steps expect "started in another browser". | Fixed `75e3957e`: spent, "expired". |
+| 6 | Med | **Connect opened any downloaded server file with the default app**: a file a server or a co-member named `setup.exe`/`run.bat` ran as a program on Windows (`.desktop`/`.sh` are the Linux cases); names could also carry `:` (an NTFS stream), a device name or a trailing dot. | Fixed `badfde57`: program-named files are saved, not opened (`opens_as_program`); names sanitized. |
+| 7 | Med | **Connect sockets outlived their window.** An event to a closed window is no error, so a closed or reloaded Connect window left its sockets open, streaming frames to nobody, and the server serving (per-client PTYs, #2347) a client that was gone; every reopen added one. | Fixed `8db3cf9e`: closed on `Destroyed` and at a page load's start; the window is also hooked to the renderer crash reporter like the other late windows. |
+| 8 | Low-Med | The project-activation warm-up (`up_for_project`) ignored the administrator's containers switch: a project switched on before still got its Podman container created on activation. | Fixed `bbaf138f` (`containers_allowed` on both paths). |
+| 9 | Low | Review of worktrees: equal commits not adjacent were shown and marked twice; inserting `checked_out` had moved `unreviewed`'s doc comment onto it. | Fixed `fe57c087`. |
+| 10 | — | **The Connect window holds the full desktop IPC** (the default capability; app commands have no manifest, so every command is allowed). Any script injection from server-rendered data — or a co-member's file in a shared project — becomes local native execution. Same posture as the main window rendering untrusted project files, but the server is a new source of that data. Narrowing it needs a Tauri app-command manifest. | Judgment call, open. |
+| 11 | — | On macOS the Connect window shares the main profile, so the server workspace's `localStorage`/IndexedDB mixes with the standalone one's (settings can be overwritten). Candidate: `data_store_identifier` (macOS 14+). | Open (macOS cannot be compiled here). |
+| 12 | Low | **Forget this server** removes the key and the record only; `<state>/connect/webview` (the server workspace's browser storage) stays — § P5 Connect live step 6 says `connect/` goes. Downloads land in `~/Downloads`, not the XDG/localized download folder. | Open. |
+| 13 | — | Broker behaviour to know: switching a key to **direct** leaves running brokered Claude tabs pointed at the broker; their helper now answers the key, which they send to the broker (the keeper's own account) and get 401 until restarted. Switching to the broker sends a running direct tab's token to the provider (useless there). Budget soft by ≤ 16 requests in flight per user; `count_tokens`/`models` unmetered. | Judgment calls, as built. |
+| 14 | — | OIDC email links (`email_verified` must be boolean `true`, case-insensitive): safe only with a provider that never marks a user-chosen address verified; multi-tenant providers where `email` is a mutable profile field are a takeover path. Prefer `--sub`. `oidc-set` with another issuer or client id leaves every daemon's binding on the old one, so provider sign-in fails closed until each `user-oidc` is run again. | Judgment (already in § P5 Needs the user); the re-link is worth a line in the user docs. |
+| 15 | — | Rootless Podman with `--cgroup-manager=cgroupfs` and no delegation may refuse or ignore `--memory`/`--cpus`/`--pids-limit`; only the live run (#2380 step 5) tells. `check` matches `/etc/subuid` by user name only (a uid-numbered line warns falsely). | Open, live. |
+
+### Gates (worktree, at `75e3957e`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **704 files, 7111 tests**, all pass (unchanged: no frontend change) |
+| `cargo test --workspace -q --no-fail-fast` | src-tauri lib **3302** (+1), 3 ignored; src-gateway **130** (+2); src-core 99; integration 169 — all pass; none of the known flakies hit |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3205 + 1**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (unchanged) |
+| clippy `--workspace --all-targets -D warnings`, `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean (rustc 1.97.1) |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green, the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 233b7330..HEAD` | green |
+| `git diff --check c37580dc HEAD` | clean |
+| `npm run mobile:bundle` | not needed (`mobile-web/` unchanged by the review) |
+
+### Needs the user
+
+- Everything in § P5 "Needs the user" stands. Add: finding 10 (keep the
+  Connect window on the full capability, or invest in a command manifest);
+  finding 14 (email links at all).
+- Live steps § P5 still apply; add to the Connect steps: close the Connect
+  window → `ss -tnp | grep <server port>` on the desktop shows no
+  connection of the app's left; **Open** on a server file named `x.sh` → saved in Downloads,
+  not run. Broker step 6: also press Esc mid-answer → the month still grows
+  by the streamed part.
