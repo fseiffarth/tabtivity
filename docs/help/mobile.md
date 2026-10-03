@@ -106,11 +106,14 @@ chat. The questions show in the markup view of that tab's PDF:
 
 - On the desktop, as a card under the **Mark up** bar while marking is on.
   With marking off, the **Mark up** button is underlined while a tab asks
-  about the PDF, and opens the bar on that tab.
+  about the PDF, and opens the bar on that tab. While you mark for one tab
+  and another asks about the same PDF, the bar names it: **Show its
+  questions** switches to that tab.
 - On the phone, as a card at the top of the markup view ("The agent asks ·
   2"), which also shows while you only read the PDF. While a question is
   open, the tab's Chat shows a line "The agent asks about …" naming the
-  file; **Open** opens it when the agent sent that file to the phone.
+  file; **Open** opens it when the agent sent that file to the phone, or —
+  with **Project files on the phone** on — when it is a file of the project.
 - Each question gets a numbered pin (`?1`, `?2`…) on the page, at the words
   it is about. Tap the pin to find the question, or **Show on page N** to
   find the place.

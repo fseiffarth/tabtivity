@@ -35,7 +35,9 @@ phone or desktop with its own instruction keeps it unchanged.
   two views cannot both deliver. If queueing then fails, the caller hands back
   the receipt the answer minted (`markup_mcp_reopen`) and the ask opens again
   — only for that answer, and not when another view answered, a newer ask came
-  in, or it was withdrawn, dismissed or expired. A refused reopen shows the
+  in, or it was withdrawn, dismissed or expired — a `markup_withdraw` that
+  finds the ask already answered spends its receipt, so a delivery that then
+  fails does not bring back a question the agent took back. A refused reopen shows the
   prompt text to paste (desktop) or `not_delivered` (phone). The receipt never
   leaves the window.
 - **One open ask per tab.** A new ask supersedes the open one (`replaced` in
@@ -87,7 +89,11 @@ phone or desktop with its own instruction keeps it unchanged.
   gets none, as help writes none (`audited`), so new tabs don't fill the ring.
 - **What the phone sees.** The ask's random id, the questions and the file's
   *leaf* (`fileName`, through `outbox::sent_name`) — never a path or a raw
-  project id. Its markup view sends its own source (`?source=files:<token>`
+  project id. For the Focus banner (no source) the window also hands the
+  sidecar the ask's project-relative `path`; the sidecar always takes it out
+  and, while the file browser is switched on, gives the phone the file as
+  the drawer would row it instead (`file_row`: sealed token, its folder's
+  token, the folder trail of names — `files::entry`, no link on the way). Its markup view sends its own source (`?source=files:<token>`
   or `outbox:<leaf>`), which the sidecar resolves through
   `markup::validate_source` (the file browser's gates, then unseal) before
   asking the window. Answers are shaped in the sidecar before the window is
@@ -105,11 +111,14 @@ phone or desktop with its own instruction keeps it unchanged.
 - **Every question must be answered** (single-select: exactly one). Partial
   answers go through **Answer in chat instead**.
 - The desktop card shows only while markup mode is on (the target tab is
-  chosen when it comes on). With the mode off, `usePdfMarkup` lists every
-  agent tab of the project for the file (`askWaiting`, on screen only): the
-  Mark up button is underlined and opens the strip on the asking tab.
-- The phone's Focus banner opens only files in the tab's outbox: the phone
-  has a leaf name, and the project file browser needs sealed folder tokens.
+  chosen when it comes on). `usePdfMarkup` also lists the project's other
+  agent tabs for the file (on screen only, keyed by their ids): with the mode
+  off every one (`askWaiting` — the Mark up button is underlined and opens
+  the strip on the asking tab), while marking every one but the chosen
+  (`askElsewhere` — the strip names it with **Show its questions**, which
+  switches the target).
+- The phone's Focus banner opens an outbox file, or a project file only while
+  the file browser is switched on (`file_row`); otherwise it names the file.
 - Pictures get no pins. A picture opened from the banner needs a tap on Mark
   up before the card shows.
 - Out of v1: on-screen CLI question dialogs inside the markup view, mark ids,
@@ -136,7 +145,10 @@ the app. QA group-h 31bt.
    top of the palette ("The agent asks · n"), pins from the sealed frame,
    one tap answers, folding and reopening on a new ask. In reader mode too.
 6. Phone Focus: the banner "The agent asks about <file>" with **Open** for an
-   outbox file (opens the markup view), without Open otherwise.
+   outbox file, and for a project file while the file browser is on (opens
+   it in the files viewer, Mark up shows the card); without Open otherwise.
+   Desktop: mark up for one agent tab while another asks about the same PDF —
+   the strip names it, **Show its questions** switches to it.
 7. Delivery failure: make queueing fail (e.g. the tab's schedule cap) — the
    card stays with "still open, try again" (desktop) / `delivery_failed`
    (phone), and a retry delivers.

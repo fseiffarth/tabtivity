@@ -3722,8 +3722,11 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
-- [ ] **31bw — The Focus banner can open a markup question's project file**
-  (open, 2026-10-03; from the markup questions MCP,
+- [~] **31bw — The Focus banner can open a markup question's project file**
+  (built 2026-10-03, never live: with the file browser switched on the
+  sidecar hands the banner a sealed files row — `files::entry`, its folder
+  token and trail — and **Open** shows it in the files viewer with Mark up;
+  the picture part below stays open. From the markup questions MCP,
   `docs/context/markup_mcp.md`). The banner "The agent asks about <file>"
   has **Open** only when the tab's outbox holds the file: the phone gets the
   ask's leaf name, never a path, and the project file browser walks sealed
@@ -3732,7 +3735,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   it asks the window) behind the file browser's own gates, so Open works for
   a project PDF too. Also: a picture opened from the banner opens read-only
   and needs a tap on **Mark up** before the card shows.
-  - [ ] 🤖 Automated test
+  - [x] 🤖 Automated test
   - [ ] 🖐️ Manual test
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
