@@ -465,10 +465,20 @@ Settings → Mobile → Server → **Secrets key**:
   working. If the key is locked at that moment, the device's access is
   removed at once and the key changes at the next unlock. A revoked device,
   even with an old copy of the server's files, opens nothing sealed after
-  that — except mail rows: the mail store's own key stays (re-sealing a whole
-  mailbox is not done), so if a revoked device and an old copy of the
-  server's files may both be in someone's hands, use mail's encryption
-  dialog → **Delete and download again** for a fresh mail key.
+  that.
+- **Your mail is re-encrypted after a revoke.** The mail store gets a new key
+  of its own too: new mail is sealed under it at once, and the server
+  re-encrypts the mail already there in the background — the Secrets key
+  panel shows how far it is. Mail keeps working meanwhile, and a restart in
+  the middle just carries on. The old mail key is deleted only when
+  everything is moved, and only while the secrets key is unlocked (after a
+  reboot, once a device has signed in).
+- **Make a new recovery code after a revoke.** Your recovery code stays
+  valid through a revoke, but someone holding the revoked device and an old
+  copy of the server's files could use what it knows to fake the "identity
+  key changed" prompt below. So after a revoke the Secrets key panel — and
+  the phone, after signing in — recommends a new recovery code until you
+  make one (**Make a new recovery code**; the old code stops working).
 - **"This server's identity key changed."** Your devices remember the
   server's identity key and release the secrets key only to it. If the server
   lost that key (a partial restore), the phone shows this prompt after

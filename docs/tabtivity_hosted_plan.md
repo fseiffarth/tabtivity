@@ -1030,15 +1030,30 @@ availability**.
   todo hold no secrets and keep working.
 - **Revoking a device deletes its wrap and rotates K** (decided
   2026-10-03). A new K is minted; everything sealed under the old one (the
-  credential store, a device-mode mail `key.json`'s wrap, the recovery
+  credential store, a device-mode mail `key.json`, the recovery
   wrap) is re-sealed beside the original and a wrap made for every
   remaining device; one atomic rename of `wraps.json` commits, and a
   journal lets the next start finish or undo a rotation a crash
   interrupted, so no crash leaves data that no remaining key opens. While
   locked, the wrap goes at once and the rotation runs at the next release.
-  A revoked device with an old copy of `wraps.json` then opens nothing new
-  (except mail rows: the mail store's own master key is not re-sealed —
-  "Delete and download again" gives a fresh one).
+  A revoked device with an old copy of `wraps.json` then opens nothing new.
+- **Revoking a device also re-keys the mailbox** (decided 2026-10-03). The
+  rotation's mail `key.json` holds a fresh mail master key; the old ones
+  stay in it, wrapped under the new K, for reading only. New mail is sealed
+  under the fresh key from the switch on, and the daemon re-seals the whole
+  store in the background — batch by batch, each batch one transaction
+  with its progress marker, so mail stays usable and a crash at any point
+  leaves everything readable by the keys on disk and resumes. The old key
+  leaves `key.json` only once a full pass found nothing left under it (and
+  only while K is unlocked). The Server settings show the progress. The
+  desktop's mail encryption is unchanged.
+- **After a revoke, a new recovery code is recommended** (decided
+  2026-10-03). The code's auth key `A` outlives rotations, so a revoked
+  device with an old `wraps.json` and the gateway's position could fake a
+  re-pin prompt the old code confirms. Every revoke sets a flag in
+  `wraps.json`; the Server settings (browser) and the phone (a sheet after
+  sign-in) ask for a new code until one is made (signed, as below), which
+  clears it.
 - **Recovery.** At setup the user gets a one-time **recovery code**. It is
   shown once and never stored by Tabtivity. From it come a P-256 key `R`
   that K is wrapped to (so a rotation re-wraps the new K for the same code

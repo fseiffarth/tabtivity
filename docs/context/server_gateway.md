@@ -186,8 +186,8 @@ keyring. `services::server::vault` wires them:
   rewritten as v2 by the next `recover`; one met by a rotation is dropped
   and the status says `recoveryCode: false` (panel: make a new code).
 - **Revoking rotates K** (`vault/rotation.rs`, decision 2026-10-03). New
-  K; the credential store and a device-mode mail `key.json` (its wrap
-  only — the mail master key stays) are re-sealed beside the originals
+  K; the credential store and a device-mode mail `key.json` (with a fresh
+  mail master — see the next point) are re-sealed beside the originals
   (`<file>.next`), the recovery wrap re-wrapped, a wrap per remaining
   device; `rotation.json` names the new key id and the files; **commit =
   renaming `wraps.json.next` over `wraps.json`**; then the `.next` files
@@ -209,7 +209,51 @@ keyring. `services::server::vault` wires them:
   `mail_crypt`'s device mode opens, enables and rewraps under
   `Vault::with_key` (the vault's lock), so nothing reads one K's file
   with another K. A re-enrolment's new ECDH key drops the old wrap
-  without rotating (`drop_wrap`).
+  without rotating (`drop_wrap`). A committed rotation runs the
+  `Vault::on_rotate` listeners after the lock is released.
+- **Revoking re-keys the mailbox** (decision 2026-10-03). The rotation's
+  `key.json` (`mail_crypt::rotate_device_key_file`) has a **fresh mail
+  master** and moves every master it held into `previous`, all wrapped
+  under the new K — so mail sealed from the switch on opens with no old
+  K. The `on_rotate` listener (`commands::mail`) switches the open store
+  and the session to it (`refresh_keys`: side-file lock, then
+  `MailStore::switch_keys` under the connection lock — every write reads
+  its keys under that lock, so nothing is sealed under replaced keys) and
+  starts the re-key thread (`services::mail_rekey::run`): batches of
+  `MailStore::rekey_step` (keyed digests; each table of `SEALED_TABLES`
+  by rowid; blob files — re-sealed under their new keyed name, rows
+  re-pointed, old file deleted after the commit; the outbox), each one
+  transaction with its `meta` marker (`rekey_cursor`: target fingerprint,
+  stage, rowid / last blob name, blob names to unlink), 20 ms apart; then
+  the files beside the database (`reseal_side_files`, all synced); then
+  `mail_crypt::retire_previous` under `Vault::with_key` drops `previous`
+  (synced) — only if `key.json`'s current master is still the target (a
+  second revoke mid-way: `Ok(false)`, refresh, the pass restarts towards
+  the newest). Reads use `MailKeys::open_any` (current, then each
+  previous), so a crash anywhere leaves every value readable by the key
+  set on disk; the next open of the store (`store_of`) resumes. Locked
+  when everything is moved: status `waiting`, an `on_unlock` listener
+  finishes it. Side-file writers (accounts, filters, contacts, the PGP
+  keyring) take `mail_crypt::side_files` (holding a switch count): a
+  `PgpKeyring` opened before a switch refuses to write after it. **Lock
+  order:** `REFRESH` → vault lock (released inside `mail_crypt::unlock`)
+  → `MailState` (released) → `side_files` → the store's connection; the
+  vault's lock is a leaf towards mail (only `key.json` under it), which is
+  why `mail_crypt::rewrap`'s non-device branches stay outside it.
+  `GET /api/v1/secrets` carries `mailRekey` (`mail_rekey::status`: the
+  thread's word, else `waiting` while `previous` is non-empty). Not
+  vacuumed: freed pages may keep old-master ciphertext of mail from before
+  the revoke, which the revoked device could read anyway. `reply_key`
+  digests (not recomputable: the `In-Reply-To` is not stored) keep the old
+  key until their message is re-synced — the replies strip of older Sent
+  mail may miss them; they reveal equality only, of mail from before.
+- **New recovery code after a revoke** (decision 2026-10-03).
+  `wraps.json`'s `new_code_recommended` is set by every revoke that drops
+  a wrap (`revoke_where`, `revoke_offline`; not by `drop_wrap`), carried
+  by rotations, cleared only by `new_recovery_code` (the signed route).
+  `GET /api/v1/secrets` → `newCodeRecommended`; the browser panel shows a
+  card (button while unlocked), the phone a sheet after sign-in
+  (`SecretsNewCodeSheet`, signed with its pairing key).
 - **Identity re-pin** (decision 2026-10-03). The device's pin is
   first-use only: a different identity at enrolment or in `GET
   /api/v1/secrets` (`identity`) is never adopted — `releaseSecrets`
@@ -233,12 +277,10 @@ keyring. `services::server::vault` wires them:
   the user's own shell tabs, SSH logins and project code run on the host
   (build scripts, allowed hooks) can `keyctl` it while unlocked; fenced
   agents can't (seccomp; EPERM observed from a fenced tab, 2026-10-03); a
-  copy of the home or a backup can't open it. The mail store's master key
-  is not rotated on revoke (only its wrap): a revoked device plus an old
-  copy of `key.json` and `wraps.json` still opens mail rows sealed later —
-  the user docs point at mail's "Delete and download again". `A` sealed
+  copy of the home or a backup can't open it. `A` sealed
   under an old K lets a revoked device with old wraps forge re-pin
-  bindings until a new recovery code is made (it also needs the gateway's
+  bindings until a new recovery code is made — which the Server settings
+  now ask for after every revoke (it also needs the gateway's
   position and the user typing the code; the K it then reaches still
   needs the *current* `wraps.json`, which with the gateway's position is
   enough on its own). The recovery code crosses

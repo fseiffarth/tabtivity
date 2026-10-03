@@ -1778,3 +1778,147 @@ keyring is exercised through `KeyHold`.*
   daemon (it may then refuse to serve — the auth store cannot open): the
   log says the rotation waits, and `wraps.json` still lists every device.
   Restore the file and restart.
+
+## Mail re-key on revoke
+
+*Written 2026-10-03 by the revoke-follow-ups agent. Base `743dc8bc`. The
+two user decisions of 2026-10-03 on device revocation (plan §6.8): a revoke
+re-keys the mailbox, and the Server settings ask for a new recovery code
+afterwards. Nothing run on a server, nothing as root, no daemon/gateway
+against a real state dir or port: the daemon ran only in tests on temp
+sockets; `keyctl` is EPERM in this fence (expected), so the keyring is
+exercised through `KeyHold`. Rationale, as built:
+[`context/server_gateway.md`](context/server_gateway.md) § Secrets (the two
+new points), [`context/mail_encryption.md`](context/mail_encryption.md).*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `3fdfd335` | Recovery-code advice, daemon half: `WrapFile::new_code_recommended` set by every revoke that drops a wrap (`revoke_where`, `revoke_offline`, a stale wrap at release), carried by rotations, cleared only by `new_recovery_code`; `VaultStatus` + `GET /api/v1/secrets` `newCodeRecommended`. Tests: `vault::tests::a_revoke_recommends_a_new_recovery_code_until_one_is_made`, `tests/server_secrets.rs` (tablet sees the advice after the revoke; its signed new code clears it). |
+| `95dc5320` | Mail re-key: `mail_crypt` (`MailKeyFile::previous`, `MailKeys::{previous, open_any, rekeying, same_master, fingerprint}`, `rotate_device_key_file` replaces `rewrap_device_key_file`, `retire_previous{,_with}`, `write_bytes_durable`, `side_files`); `MailStore` (keys swappable under `conn`, every write reads them under `conn`, ring-aware reads, `SEALED_TABLES`, `rekey_step{,_inner}`, `rekey_progress`, `rekey_clear`); `mail_pgp` (`PgpKeyring` reads with old wraps, refuses writes after a key switch, `reseal_keyring`); new `services::mail_rekey` (`run` behind a `Host` trait, `reseal_side_files`, status); `Vault::on_rotate` + `mail_dir`; `commands::mail` (`refresh_keys`, `after_rotation`, `start_rekey`, `RekeyHost`, side-file writes under `side_files`); `GET /api/v1/secrets` `mailRekey`. Tests: `mail_rekey::tests` (+6), `vault::tests` (+1, `assert_opens` now checks the fresh master), `tests/server_secrets.rs` (fresh master after the revoke, the old K opens no mail key, `mailRekey: waiting`, a full pass + `retire_previous` through the installed vault). |
+| `3d95b930` | UI: `ServerSecrets.tsx` (advice card with **Make a new recovery code** while unlocked, "unlock first" while locked; re-key status line, polled every 3 s while running), phone `screens/SecretsNewCodeSheet.tsx` after sign-in (`secrets.ts` `newCodeAdvised`/`makeNewRecoveryCode`, signed); i18n 8 keys × 5; UntestedTags `server.secrets.newCodeAdvice`, `server.secrets.mailRekey`. Tests: `ServerSecrets.test.tsx` (+3), `MobileSecretsNewCode.test.tsx` (new, 2). |
+| the commit after | this section; plan §6.8; both context files; `DOCUMENTATION.md` § "Hosted server: the secrets key"; file maps; TODO #2350. |
+
+### Design
+
+**Key ring, not a second store.** The rotation's mail `key.json` holds a
+fresh master (`wrapped`) and every master it held before in `previous`
+(newest first), all wrapped under the new K's KEK. `unwrap_master` opens
+them all (one that does not open fails the unlock: never half-open).
+Reads try the current master, then each previous one (`open_any`); writes
+use the current one only. So mail written from the switch on is under a
+master no old K ever wrapped, and a crash at any point leaves every value
+readable by the key set on disk. The rotation's journal already makes the
+`key.json` switch atomic with the K switch.
+
+**No stale writer.** `MailStore::keys` is a leaf mutex; every write reads
+its keys while holding the connection lock (`put_blob`, `stage_attachment`,
+`set_reply_key`, `agent_mark` moved under it), and `switch_keys` takes the
+connection lock, so nothing is sealed under replaced keys after a switch
+returns. The files beside the database (accounts, filters, contacts, PGP
+keyring) are written under `mail_crypt::side_files`, which holds a switch
+count: `refresh_keys` bumps it and publishes the session keys under it
+before switching the store; a `PgpKeyring` opened before a switch refuses
+to write after it ("try again").
+
+**The pass** (`MailStore::rekey_step`, one batch per call, ≤ 200 rows or
+4 MB of plaintext, under `conn`): stage 0 the keyed digests
+(`rekey_digest_columns`: folders, the remote-content list, agent marks);
+1..7 each table of `SEALED_TABLES` by rowid; 8 blob files (re-sealed under
+their new keyed name, rows re-pointed in the batch's transaction, old
+files deleted after the commit — the marker's `unlink` list repeats the
+deletion after a crash); 9 the outbox. Every value is re-checked under the
+current key, so the marker (`meta.rekey_cursor`: target fingerprint, stage,
+rowid / last blob name) is only a shortcut and a stale one costs time. A
+new target (second revoke) restarts the pass. Then `reseal_side_files`
+(re-seal + fsync each), then `retire_previous` under `Vault::with_key`:
+only if `key.json`'s current master is still the target (`Ok(false)` →
+refresh, pass towards the newer one), written with fsync. Locked at that
+point → status `waiting`, an `on_unlock` listener finishes it. The thread
+sleeps 20 ms between batches.
+
+**Lock order** (the review's deadlock warning): `REFRESH` → the vault's
+lock (taken and released inside `mail_crypt::unlock`) → `MailState`
+(taken and released) → `side_files` → the store's connection → the keys'
+leaf mutex. The vault's lock is a leaf towards mail: under it only
+`key.json` is read or written (`rotate_device_key_file`,
+`retire_previous_with`, `forget`), never the database or the side files,
+and its unlock/rotation listeners run after it is released (rotation
+listeners spawn a thread). `side_files` → vault happens (a side-file write
+whose `file_keys` does the silent unlock); vault → `side_files` never.
+`mail_crypt::rewrap`'s non-device branches are still outside the vault's
+lock, as the review asked; nothing calls `rewrap` (it now carries
+`previous` along).
+
+**Durability.** SQLite commits are durable (WAL, `synchronous` FULL by
+default); new blob files, re-sealed staged/side files and the retired
+`key.json` go through `write_bytes_durable` (fsync file, rename, fsync
+dir); side files a normal writer wrote non-durably since the switch are
+fsynced by the side-file pass before the retire.
+
+**Not done, stated:** no `VACUUM` after the pass (freed pages may keep
+old-master ciphertext of mail from before the revoke, which the revoked
+device could read anyway); `reply_key` digests are not recomputable (the
+`In-Reply-To` is not stored) and keep the old key until their message is
+re-synced — the replies strip of older Sent mail may miss entries; they
+reveal equality only, of mail from before.
+
+**New recovery code.** `new_code_recommended` in `wraps.json` (set by a
+revoke that drops a wrap, not by `drop_wrap`; carried through rotations;
+cleared by the signed new-code route only). Browser: a card in the
+secrets panel. Phone: `SecretsNewCodeSheet` once per sign-in after the
+release, **Make a new recovery code** signs with the pairing key and shows
+the code once; **Later** keeps the advice.
+
+### Live steps (a real server, after § Vault decisions' list)
+
+1. Phone + browser enrolled, mail set up with a few hundred messages and
+   attachments, a filter rule, a saved password. While unlocked,
+   disconnect a third device (or the phone) in the device list. Browser
+   Settings → Mobile → Server → Secrets key: the "New recovery code
+   recommended" card and "Re-encrypting your mail … %" climbing, then
+   gone. Daemon log: "rotated the key", later "re-keyed the mailbox; the
+   previous key is retired". Mail lists, opens bodies and attachments,
+   syncs and sends throughout. `mail/key.json` has no `previous` entry
+   afterwards; no `*.rekey` files in `mail/`.
+2. The phone (if still paired) after signing in: the "New recovery code
+   recommended" sheet; **Make a new recovery code** shows a code; the
+   browser card is gone after a refresh. The old code no longer unlocks.
+3. Revoke again, and `systemctl restart` the daemon while the percentage
+   is still climbing: after the restart, opening mail resumes it (the
+   panel shows the percentage again or "waiting"), and nothing reads as
+   damaged.
+4. Revoke while locked (after a reboot, before any device signs in, via
+   the admin helper): nothing changes in `mail/` yet (the rotation waits);
+   once a remaining device signs in, the rotation runs, mail reopens and
+   the re-key runs and finishes (panel: the percentage, then nothing).
+5. Two revokes in quick succession while unlocked: one pass ends with
+   `previous` empty; mail opens.
+
+### Needs the user
+
+- Live verification of all of the above (UntestedTags
+  `server.secrets.mailRekey`, `server.secrets.newCodeAdvice`).
+- The re-key starts when the daemon's mail store is open (any mail
+  command); a rotation with mail never opened re-keys at the first open.
+- The replies strip / `VACUUM` residuals above — say if either should be
+  closed (a `VACUUM INTO` at the end would block mail for its duration).
+
+### Gates (worktree, 2026-10-03, final tree = `3d95b930` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **699 files, 7085 tests**, all pass (was 698 / 7080) |
+| `cargo test --workspace -q --no-fail-fast` | **3591 passed**, 0 failed, 3 ignored (src-tauri lib 3245, +8); the `sysstat` race did not fire |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3150 + 1 passed**, 3 ignored, on a re-run; the first run had 1 failure in `codex_bind::tests::a_watched_tree_is_walked_only_after_a_change` (untouched file, timing; passes alone ×3) |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 743dc8bc..HEAD` | green |
+| `git diff --check` | clean |
+| `npm run mobile:bundle` | built (`mobile-dist/` is git-ignored) |
+| `3fdfd335` alone (scratch export) | `cargo test -p tabtivity --no-default-features --lib --test server_secrets`: 3143 + 1 passed |
