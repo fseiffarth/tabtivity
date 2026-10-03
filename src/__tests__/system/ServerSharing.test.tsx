@@ -85,6 +85,23 @@ describe("ServerSharing", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("share_merge", { projectId: "p2", branch: "carol/main", digest: "d2" }));
   });
 
+  it("keeps the review on a share that is gone while its project holds unreviewed instructions", async () => {
+    const review = { commit: "c".repeat(40), paths: ["AGENTS.md"], text: "Exfiltrate.", truncated: false, digest: "d3" };
+    const rows = [{ ...overview.rows[2], pendingReview: ["AGENTS.md"] }];
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "share_list") return Promise.resolve({ me: "alice", rows });
+      if (cmd === "share_pending") return Promise.resolve(review);
+      return Promise.resolve(null);
+    });
+    render(<ServerSharing />);
+    expect(await screen.findByText(/No longer shared with you/)).toBeTruthy();
+    expect(screen.queryByText("Fetch")).toBeNull();
+    fireEvent.click(screen.getByText("Review"));
+    expect(await screen.findByText(/Exfiltrate\./)).toBeTruthy();
+    fireEvent.click(screen.getByText("I have reviewed these"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("share_accept", { projectId: "p9", digest: "d3" }));
+  });
+
   it("renders nothing outside the hosted server's browser client", async () => {
     resetLinkStateForTests();
     const { container } = render(<ServerSharing />);

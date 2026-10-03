@@ -316,6 +316,9 @@ fn set_remote(dir: &Path, hub: &Path) -> Result<(), String> {
     let key = format!("remote.{REMOTE}.url");
     match git_in(dir, None, &["config", "--get", &key]) {
         Ok(url) if url == hub_s => return Ok(()),
+        // A hub this project was shared through before (stopped since): the
+        // remote is the app's own, pointed at the new one.
+        Ok(url) if Path::new(&url).parent().is_some_and(|p| Some(p) == hub.parent()) => {}
         Ok(url) if !url.is_empty() => return Err(format!("This repository already has a remote named '{REMOTE}' ({url})")),
         _ => {}
     }
@@ -488,8 +491,16 @@ pub fn fetch_report(link: &Link) -> Result<Vec<BranchState>, String> {
 /// Make a share of a local git project: a hub, the `<REMOTE>` remote, the
 /// app's folder excluded, the checked-out branch pushed.
 pub fn create_in(state_dir: &Path, socket: &Path, project_id: &str, dir: &Path, name: &str, user: &str) -> Result<ShareInfo, String> {
-    if link_of(state_dir, project_id).is_some_and(|l| l.state == "active") {
-        return Err("This project is already shared".into());
+    if let Some(old) = link_of(state_dir, project_id) {
+        if old.state == "active" {
+            return Err("This project is already shared".into());
+        }
+        // Sharing marks the owner's HEAD reviewed: never over changes from
+        // the members of an earlier share that were not reviewed.
+        let pending = unreviewed(&old)?;
+        if !pending.is_empty() {
+            return Err(format!("Review the agent instructions merged from other members first ({})", pending.join(", ")));
+        }
     }
     if !dir.join(".git").exists() {
         return Err("Only a project with its own git repository can be shared".into());
@@ -615,6 +626,24 @@ pub fn adopt_in(state_dir: &Path, project_id: &str, info: &ShareInfo, dir: &Path
 /// The owner deleted the share (or stopped sharing): forget the link.
 pub fn forget_in(state_dir: &Path, project_id: &str) -> Result<(), String> {
     drop_link(state_dir, project_id)
+}
+
+/// Stop sharing `share` (the owner): the hub goes to its holding area, and
+/// the owner's project forgets the link — unless changes from members are
+/// in it unreviewed (or that cannot be checked): then the link stays, as
+/// `deleted`, so gate 2 still holds until they are reviewed ([`accept_in`]
+/// lets it go then).
+pub fn stop_in(state_dir: &Path, socket: &Path, share: &str) -> Result<(), String> {
+    expect_ok(ask_at(socket, &Request::Delete { share: share.to_string() }, None)?)?;
+    for project in projects_of(state_dir, share) {
+        let Some(link) = link_of(state_dir, &project) else { continue };
+        if unreviewed(&link).map(|p| p.is_empty()).unwrap_or(false) {
+            forget_in(state_dir, &project)?;
+        } else {
+            set_link(state_dir, &project, Link { state: "deleted".into(), ..link })?;
+        }
+    }
+    Ok(())
 }
 
 /// The project ids whose links name `share`.
@@ -808,11 +837,20 @@ pub fn pending_review(link: &Link) -> Result<Option<Review>, String> {
 
 /// The user reviewed [`pending_review`]: mark the checked-out commit.
 pub fn accept_in(state_dir: &Path, link: &Link, digest: &str) -> Result<(), String> {
-    let Some(review) = pending_review(link)? else { return Ok(()) };
-    if review.digest != digest {
-        return Err("The files changed after they were shown; review them again".into());
+    if let Some(review) = pending_review(link)? {
+        if review.digest != digest {
+            return Err("The files changed after they were shown; review them again".into());
+        }
+        mark_reviewed(state_dir, &link.dir, &review.commit)?;
     }
-    mark_reviewed(state_dir, &link.dir, &review.commit)
+    // An owner's link kept past a stopped share only for this review.
+    if link.role == "owner" && link.state != "active" {
+        let map = load_map(state_dir);
+        if let Some((project, _)) = map.links.iter().find(|(_, l)| l.share == link.share && l.dir == link.dir) {
+            return forget_in(state_dir, project);
+        }
+    }
+    Ok(())
 }
 
 /// Refuse an agent spawn in a shared project whose agent-facing files hold

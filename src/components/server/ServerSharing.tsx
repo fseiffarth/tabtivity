@@ -104,6 +104,7 @@ export function ServerSharing() {
     row.projectId ? (
       <ShareTools
         projectId={row.projectId}
+        gone={row.state !== "active"}
         pending={row.pendingReview ?? []}
         branches={branches[row.id] ?? []}
         disabled={busy !== null}
@@ -248,7 +249,9 @@ export function ServerSharing() {
             {!gone && row.presence.length > 0 && (
               <p className="settings-help">{t("server.sharing.here", { users: row.presence.map((p) => p.user).join(", ") })}</p>
             )}
-            {!gone && tools(row)}
+            {/* A share that is gone still holds its project's agents until
+                what came from others is reviewed: the review stays. */}
+            {(!gone || (row.pendingReview?.length ?? 0) > 0) && tools(row)}
             {!gone && (
               <div className="settings-link-row">
                 {!row.projectId && (
@@ -296,6 +299,7 @@ export function ServerSharing() {
  */
 function ShareTools({
   projectId,
+  gone = false,
   pending,
   branches,
   disabled,
@@ -303,6 +307,8 @@ function ShareTools({
   onBranches,
 }: {
   projectId: string;
+  /** No longer shared: only the review of what is already there. */
+  gone?: boolean;
   pending: string[];
   branches: BranchState[];
   disabled: boolean;
@@ -327,7 +333,7 @@ function ShareTools({
           <UntestedTag id="server.sharing.review" /> {t("server.sharing.pending", { paths: pending.join(", ") })}
         </p>
       )}
-      {branches.map((b) => (
+      {!gone && branches.map((b) => (
         <div key={b.name} className="settings-link-row">
           <span className="settings-help">{t("server.sharing.branch", { name: b.name, ahead: b.ahead, behind: b.behind })}</span>
           {b.ahead > 0 && (
@@ -385,19 +391,21 @@ function ShareTools({
         </SettingsCard>
       )}
       <div className="settings-link-row">
-        <button
-          type="button"
-          className="settings-btn sm"
-          disabled={disabled}
-          onClick={() =>
-            void run(async () => {
-              onBranches(await invoke<BranchState[]>("share_fetch", { projectId }));
-              return null;
-            })
-          }
-        >
-          {t("server.sharing.fetch")}
-        </button>
+        {!gone && (
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={disabled}
+            onClick={() =>
+              void run(async () => {
+                onBranches(await invoke<BranchState[]>("share_fetch", { projectId }));
+                return null;
+              })
+            }
+          >
+            {t("server.sharing.fetch")}
+          </button>
+        )}
         {pending.length > 0 && (
           <button
             type="button"

@@ -122,19 +122,12 @@ pub async fn share_revoke(share: String, user: String) -> Result<(), String> {
 }
 
 /// Stop sharing (the owner): the hub goes to the holding area, members see
-/// "deleted by owner", this user's own project is untouched.
+/// "deleted by owner", this user's own project is untouched (its gate 2
+/// stays until changes from members in it are reviewed).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn share_delete(share: String) -> Result<(), String> {
     me()?;
-    off_thread(move || {
-        hub(Request::Delete { share: share.clone() })?;
-        let state = state_dir();
-        for project in share::projects_of(&state, &share) {
-            share::forget_in(&state, &project)?;
-        }
-        Ok(())
-    })
-    .await
+    off_thread(move || share::stop_in(&state_dir(), &share::hub_socket(), &share)).await
 }
 
 /// Clone a share shared with this user into the projects root and register
