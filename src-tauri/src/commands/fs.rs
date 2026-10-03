@@ -2049,6 +2049,14 @@ pub(crate) fn confine_project_path(p: &Path, scope_id: Option<&str>) -> Result<(
     confine_abs(p, scope_id)
 }
 
+/// Confine a path a server **user** (not the box's admin) names to a command
+/// that has no confinement of its own because it stands in for an OS file
+/// dialog on the desktop — `list_dir_all`, the browser's file tickets and
+/// grants (`services::core_dispatch::user_path`). The same roots as a read.
+pub(crate) fn confine_user_path(p: &Path) -> Result<(), String> {
+    confine_abs_read(p, None)
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn canonical(path: &str) -> Result<PathBuf, String> {

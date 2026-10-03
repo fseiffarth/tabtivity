@@ -44,7 +44,7 @@ interface InvokeOptions {
 }
 
 /** The names the transport answers itself (`web_client.rs`), not in the table. */
-const TRANSPORT_COMMANDS = new Set(["server_capabilities", "desktop_file_ticket", "desktop_file_grant"]);
+const TRANSPORT_COMMANDS = new Set(["server_capabilities", "desktop_file_ticket", "desktop_file_grant", "desktop_logout"]);
 
 /** The raw-body commands (`fs.rs`). */
 const RAW_ANSWER = new Set(["read_file_bytes"]);

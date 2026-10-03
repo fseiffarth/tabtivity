@@ -4655,15 +4655,15 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         web_client::bundle_dir(&config.control_dir),
     );
     if web.enabled {
-        match (&web.bundle, &web.token) {
-            (Some(bundle), Some(_)) => eprintln!(
+        match (&web.bundle, web.has_token()) {
+            (Some(bundle), true) => eprintln!(
                 "desktop client: serving {} at http://127.0.0.1:{}/desktop/ (sign in with the link in Settings → Mobile → Browser access, or the token in {})",
                 bundle.display(),
                 config.host.port,
                 config.control_dir.join(web_client::TOKEN_FILE).display()
             ),
             (None, _) => eprintln!("desktop client: on, but no web bundle was found (npm run web:bundle)"),
-            (_, None) => eprintln!("desktop client: on, but no login token could be written"),
+            (_, false) => eprintln!("desktop client: on, but no login token could be written"),
         }
     }
     let state = HostState {

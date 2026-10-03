@@ -395,6 +395,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["mobile_desktop_respond", "off"],
   ["mobile_host_apply", "admin"],
   ["mobile_browser_client_link", "admin"],
+  ["mobile_browser_client_rotate", "admin"],
   ["mobile_host_status", "admin"],
   ["mobile_opaque_id", "core"],
   ["mobile_prepare_phone_install_script", "core"],

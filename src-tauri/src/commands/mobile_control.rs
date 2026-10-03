@@ -1045,6 +1045,16 @@ pub fn mobile_browser_client_link() -> Result<String, String> {
     Ok(crate::services::mobile_control::web_client::login_url(config.host.port, &token))
 }
 
+/// Retire every outstanding sign-in link: a fresh token is written, and the
+/// link for it answered. Browsers already signed in stay signed in until
+/// they log out (`desktop_logout`) or their session ends.
+#[tauri::command]
+pub fn mobile_browser_client_rotate() -> Result<String, String> {
+    let config = HostConfig::load(&storage::state_dir())?;
+    let token = crate::services::mobile_control::web_client::rotate_login_token(&config.control_dir)?;
+    Ok(crate::services::mobile_control::web_client::login_url(config.host.port, &token))
+}
+
 #[tauri::command]
 pub async fn mobile_host_apply(enabled: bool) -> Result<(), String> {
     if !enabled {

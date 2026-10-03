@@ -9,11 +9,15 @@
 //! * `GET /desktop/`, `/desktop/{*path}` — the web bundle (`web-dist/`, read
 //!   from disk: `<ENV_PREFIX>WEB_DIST`, else the dev checkout's `web-dist/`,
 //!   else `<control_dir>/web-dist`); the SPA fallback never covers `assets/`.
-//! * `GET /desktop/login?token=…` — the one way in: the token lives in
-//!   `<control_dir>/web-client.token` (`0600`, the same trust as the admin
-//!   socket next to it — the state dir is masked inside every agent fence), and
-//!   a right answer sets the session cookie (`brand::DESKTOP_SESSION_COOKIE`,
+//! * `GET /desktop/login?exp=…&sig=…` — the one way in: a sign-in link
+//!   signed by the token in `<control_dir>/web-client.token` (`0600`, the same
+//!   trust as the admin socket next to it — the state dir is masked inside
+//!   every agent fence). The token itself never travels: the link carries
+//!   `HMAC(token, exp)`, is good for one login within [`LOGIN_LINK_TTL`], and
+//!   a right one sets the session cookie (`brand::DESKTOP_SESSION_COOKIE`,
 //!   `HttpOnly; SameSite=Strict`) and redirects to the app.
+//!   `GET /desktop/logout` and the `desktop_logout` call end a session;
+//!   `rotate_login_token` retires every outstanding link.
 //! * `GET /api/v1/desktop/ws` — the socket. Frames (text, JSON):
 //!   `→ {t:"call", id, cmd, args}` / `← {t:"ret", id, ok | err}`,
 //!   `→ {t:"sub"|"unsub", name}` / `← {t:"event", name, payload}`,
@@ -42,8 +46,12 @@
 //! page that lost its link keeps its PTYs and views. A client gone for longer
 //! has its views dropped and the PTYs it spawned killed (they are tmux attach
 //! clients; the sessions live on); a PTY id another page re-spawned meanwhile
-//! has moved to that page and is left alone. The role is [`Role::Admin`]:
-//! P2's one user owns the box; P3 assigns roles.
+//! has moved to that page and is left alone. The role is the **session's**
+//! (`core_dispatch::Role`), fixed at login and never read from a frame: the
+//! token login is the box owner's `Admin`; a gateway-verified account's is
+//! what the gateway's handshake names. A user's calls are confined where an
+//! admin's are not (`core_dispatch::user_path`: `list_dir_all`, file tickets
+//! and grants), and every transport-level command passes the class check too.
 //!
 //! **Backpressure.** Each client has a bounded event queue. A full queue drops
 //! the event — terminal output is shed oldest-first the way `pty_bridge` sheds
@@ -108,6 +116,8 @@ const SESSION_IDLE: Duration = Duration::from_secs(super::auth::SESSION_IDLE);
 const SESSION_MAX: Duration = Duration::from_secs(super::auth::SESSION_MAX);
 /// WebSocket ping cadence; a client that answers none in two rounds is gone.
 const PING_INTERVAL: Duration = Duration::from_secs(20);
+/// How long a sign-in link (`login_url`) can be redeemed; one login each.
+pub const LOGIN_LINK_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Binary frame kinds, byte 0.
 pub const KIND_CALL: u8 = 1;
@@ -121,6 +131,22 @@ pub const FILE_TICKET_CMD: &str = "desktop_file_ticket";
 /// A picked server file as a single-use grant for the mail file commands
 /// (`services::pick_grants`): `{path} → {grant}`.
 pub const FILE_GRANT_CMD: &str = "desktop_file_grant";
+/// Ends this browser's session; the socket closes after the answer.
+pub const LOGOUT_CMD: &str = "desktop_logout";
+/// The names the transport answers itself. Not in the class table (they are
+/// not Tauri commands) and `core` by definition: every role gets them, and
+/// what they hand out is confined for a user (`core_dispatch::user_path`).
+pub const TRANSPORT_COMMANDS: &[&str] = &[CAPABILITIES_CMD, FILE_TICKET_CMD, FILE_GRANT_CMD, LOGOUT_CMD];
+
+/// The class check for a name the transport handles before the dispatcher:
+/// its own names pass; anything else (`read_file_bytes`) is held to the class
+/// table for `role` exactly as a dispatched call is.
+fn transport_refusal(cmd: &str, role: Role) -> Option<core_dispatch::Refusal> {
+    if TRANSPORT_COMMANDS.contains(&cmd) {
+        return None;
+    }
+    core_dispatch::class_refusal(cmd, role)
+}
 
 // ── Clients and events ───────────────────────────────────────────────────
 
@@ -221,6 +247,9 @@ impl EventSink for WebEvents {
 struct Session {
     created: Instant,
     expires: Instant,
+    /// What the session may do (`core_dispatch::Role`): the token login is
+    /// the box's admin; a gateway-verified account carries its own.
+    role: Role,
 }
 
 /// The browser sessions. Separate from the phone's `AuthStore`: a different
@@ -230,26 +259,48 @@ struct Session {
 pub struct WebSessions {
     sessions: HashMap<String, Session>,
     failures: VecDeque<Instant>,
+    /// Sign-in links already redeemed (`sig` → `exp`), so a link is one
+    /// login, not a standing credential in a browser's history.
+    used_links: HashMap<String, u64>,
 }
 
 impl WebSessions {
-    /// A new session token (base64url of 32 random bytes).
-    pub fn login(&mut self) -> Result<String, String> {
+    /// A new session token (base64url of 32 random bytes) with `role`.
+    pub fn login(&mut self, role: Role) -> Result<String, String> {
         let token = random_token()?;
         let now = Instant::now();
-        self.sessions.insert(token.clone(), Session { created: now, expires: now + SESSION_IDLE });
+        self.sessions.insert(token.clone(), Session { created: now, expires: now + SESSION_IDLE, role });
         Ok(token)
     }
 
-    /// Is `token` a live session? Slides the idle deadline.
-    pub fn touch(&mut self, token: &str) -> bool {
+    /// Is `token` a live session? Slides the idle deadline; answers its role.
+    pub fn touch(&mut self, token: &str) -> Option<Role> {
         let now = Instant::now();
-        let Some(session) = self.sessions.get_mut(token) else { return false };
+        let session = self.sessions.get_mut(token)?;
         if session.expires <= now {
             self.sessions.remove(token);
-            return false;
+            return None;
         }
         session.expires = (now + SESSION_IDLE).min(session.created + SESSION_MAX);
+        Some(session.role)
+    }
+
+    /// Redeem a sign-in link (`exp`, `sig`) against `token` at `now`: the
+    /// signature must be the token's over `exp`, `exp` still ahead, and the
+    /// link not redeemed before. Constant-time on the signature.
+    pub fn redeem_link(&mut self, token: &str, exp: u64, nonce: &str, sig: &str, now: u64) -> bool {
+        self.used_links.retain(|_, e| *e > now);
+        if exp <= now || exp > now + LOGIN_LINK_TTL.as_secs() {
+            return false;
+        }
+        let expected = login_signature(token, exp, nonce);
+        if sig.len() != expected.len() || !bool::from(sig.as_bytes().ct_eq(expected.as_bytes())) {
+            return false;
+        }
+        if self.used_links.contains_key(sig) {
+            return false;
+        }
+        self.used_links.insert(sig.to_string(), exp);
         true
     }
 
@@ -317,9 +368,48 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
 }
 
-/// The sign-in URL for this machine's browser.
+/// Replace the login token: every sign-in link minted from the old one stops
+/// working at once (the sidecar reads the file at each login). Sessions
+/// already signed in are not ended — `desktop_logout` does that per browser.
+pub fn rotate_login_token(control_dir: &Path) -> Result<String, String> {
+    std::fs::create_dir_all(control_dir).map_err(|e| format!("create {}: {e}", control_dir.display()))?;
+    let token = random_token()?;
+    write_private(&control_dir.join(TOKEN_FILE), token.as_bytes())?;
+    Ok(token)
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// `HMAC-SHA256(token, "desktop-login\n" ‖ exp ‖ "\n" ‖ nonce)`, base64url.
+/// What a sign-in link carries instead of the token itself; the nonce makes
+/// two links minted in the same second two logins.
+fn login_signature(token: &str, exp: u64, nonce: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<Sha256>::new_from_slice(token.as_bytes()).expect("HMAC takes any key length");
+    mac.update(b"desktop-login\n");
+    mac.update(exp.to_string().as_bytes());
+    mac.update(b"\n");
+    mac.update(nonce.as_bytes());
+    Base64UrlUnpadded::encode_string(&mac.finalize().into_bytes())
+}
+
+/// The sign-in URL for this machine's browser: good for one login within
+/// [`LOGIN_LINK_TTL`]. The token never leaves the control dir — the link
+/// carries its signature over an expiry, so a URL left in a browser's
+/// history is dead within minutes and was single-use anyway.
 pub fn login_url(port: u16, token: &str) -> String {
-    format!("http://127.0.0.1:{port}/desktop/login?token={token}")
+    let nonce = random_token().unwrap_or_default();
+    login_url_at(port, token, unix_now(), &nonce)
+}
+
+fn login_url_at(port: u16, token: &str, now: u64, nonce: &str) -> String {
+    let exp = now + LOGIN_LINK_TTL.as_secs();
+    format!("http://127.0.0.1:{port}/desktop/login?exp={exp}&n={nonce}&sig={}", login_signature(token, exp, nonce))
 }
 
 // ── Content tickets ──────────────────────────────────────────────────────
@@ -383,9 +473,9 @@ pub struct WebClientState {
     pub events: Arc<WebEvents>,
     pub sessions: Arc<Mutex<WebSessions>>,
     pub tickets: Arc<Mutex<Tickets>>,
-    /// The login token; `None` when the file could not be read or written
-    /// (the login route then refuses everything).
-    pub token: Option<Arc<str>>,
+    /// Where the login token lives (`<control_dir>/web-client.token`); read
+    /// at every login, so a rotation takes effect without a restart.
+    pub control_dir: PathBuf,
     /// Where the web bundle is read from, if a bundle was found.
     pub bundle: Option<PathBuf>,
     /// The app's port and the user-content origin's.
@@ -400,20 +490,18 @@ pub struct WebClientState {
 impl WebClientState {
     /// `ctx` is the host's system context built over `events`.
     pub fn new(enabled: bool, ctx: CoreCtx, events: Arc<WebEvents>, control_dir: &Path, port: u16, bundle: Option<PathBuf>) -> Self {
-        let token = match login_token(control_dir) {
-            Ok(token) => Some(Arc::from(token.as_str())),
-            Err(error) => {
+        if enabled {
+            if let Err(error) = login_token(control_dir) {
                 eprintln!("desktop client: no login token: {error}");
-                None
             }
-        };
+        }
         Self {
             enabled,
             ctx,
             events,
             sessions: Arc::default(),
             tickets: Arc::default(),
-            token,
+            control_dir: control_dir.to_path_buf(),
             bundle,
             port,
             content_port: content_port_for(port),
@@ -517,10 +605,16 @@ impl WebClientState {
         out
     }
 
-    /// The session cookie's token, if the request carries a live one.
-    fn authenticate(&self, headers: &HeaderMap) -> Option<String> {
+    /// The session cookie's token and role, if the request carries a live one.
+    fn authenticate(&self, headers: &HeaderMap) -> Option<(String, Role)> {
         let token = session_cookie(headers)?;
-        self.lock_sessions().touch(&token).then_some(token)
+        let role = self.lock_sessions().touch(&token)?;
+        Some((token, role))
+    }
+
+    /// Whether a login token exists (the login route works).
+    pub fn has_token(&self) -> bool {
+        login_token(&self.control_dir).is_ok()
     }
 }
 
@@ -609,7 +703,7 @@ fn sign_in_page() -> Response<Body> {
             "<p>This browser is not signed in. Open the sign-in link from <b>Settings → Mobile → Browser access</b> in the ",
             crate::app_name!(),
             " window, or run <code>cat &lt;state dir&gt;/mobile-control/",
-            "web-client.token</code> and open <code>http://127.0.0.1:&lt;port&gt;/desktop/login?token=…</code>.</p></main>"
+            "web-client.token</code> there is the token the link is signed with — a link is good for one sign-in within ten minutes.</p></main>"
         )
         .to_string(),
     )
@@ -635,7 +729,11 @@ fn no_bundle_page() -> Response<Body> {
 #[derive(Deserialize)]
 struct LoginQuery {
     #[serde(default)]
-    token: String,
+    exp: Option<u64>,
+    #[serde(default)]
+    n: String,
+    #[serde(default)]
+    sig: String,
 }
 
 #[derive(Deserialize)]
@@ -650,6 +748,7 @@ pub fn routes(state: WebClientState) -> Router {
         .route("/desktop", get(redirect_to_app))
         .route("/desktop/", get(index))
         .route("/desktop/login", get(login))
+        .route("/desktop/logout", get(logout))
         .route("/desktop/{*path}", get(asset))
         .route("/api/v1/desktop/ws", get(socket))
         .with_state(state)
@@ -676,28 +775,52 @@ async fn login(State(state): State<WebClientState>, headers: HeaderMap, Query(qu
     if let Some(refused) = guard(&state, &headers) {
         return refused;
     }
-    let Some(expected) = state.token.as_deref() else {
+    // Read at every login: a rotated token file takes effect at once.
+    let Ok(expected) = login_token(&state.control_dir) else {
         return page(StatusCode::SERVICE_UNAVAILABLE, "<!doctype html><p>No login token is available.</p>".into());
     };
     if state.lock_sessions().locked_out() {
         return page(StatusCode::TOO_MANY_REQUESTS, "<!doctype html><p>Too many sign-in attempts. Wait a minute.</p>".into());
     }
-    let ok = query.token.len() == expected.len() && bool::from(query.token.as_bytes().ct_eq(expected.as_bytes()));
+    let ok = match query.exp {
+        Some(exp) => state.lock_sessions().redeem_link(&expected, exp, &query.n, &query.sig, unix_now()),
+        None => false,
+    };
     if !ok {
         state.lock_sessions().note_failure();
-        return page(StatusCode::FORBIDDEN, "<!doctype html><p>That sign-in link is not valid.</p>".into());
+        return page(
+            StatusCode::FORBIDDEN,
+            "<!doctype html><p>That sign-in link is not valid any more. Each link signs in once and expires after ten minutes; open a fresh one from Settings → Mobile → Browser access.</p>".into(),
+        );
     }
-    let token = match state.lock_sessions().login() {
+    // The token login is the box owner's: the sidecar serves one account.
+    let token = match state.lock_sessions().login(Role::Admin) {
         Ok(token) => token,
         Err(error) => return page(StatusCode::INTERNAL_SERVER_ERROR, format!("<!doctype html><p>{error}</p>")),
     };
-    let cookie = format!(
-        "{}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-        crate::brand::DESKTOP_SESSION_COOKIE,
-        super::auth::SESSION_MAX
-    );
     let mut response = Redirect::to("/desktop/").into_response();
-    if let Ok(value) = HeaderValue::from_str(&cookie) {
+    if let Ok(value) = HeaderValue::from_str(&session_cookie_header(&token, super::auth::SESSION_MAX)) {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+
+/// `Set-Cookie` for the session: `max_age` 0 clears it.
+fn session_cookie_header(token: &str, max_age: u64) -> String {
+    format!("{}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}", crate::brand::DESKTOP_SESSION_COOKIE)
+}
+
+/// End this browser's session and clear its cookie. A plain GET on purpose:
+/// the one thing a cross-site link could do with it is sign the user out.
+async fn logout(State(state): State<WebClientState>, headers: HeaderMap) -> Response<Body> {
+    if let Some(refused) = guard(&state, &headers) {
+        return refused;
+    }
+    if let Some(token) = session_cookie(&headers) {
+        state.lock_sessions().logout(&token);
+    }
+    let mut response = Redirect::to("/desktop/").into_response();
+    if let Ok(value) = HeaderValue::from_str(&session_cookie_header("", 0)) {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
@@ -810,7 +933,7 @@ async fn socket(
     if !loopback_origin(&headers, state.port) || headers.get(header::ORIGIN).is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(session) = state.authenticate(&headers) else {
+    let Some((session, role)) = state.authenticate(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let offered = headers
@@ -824,7 +947,7 @@ async fn socket(
     ws.protocols([wanted])
         .max_message_size(MAX_INBOUND_FRAME)
         .max_frame_size(MAX_INBOUND_FRAME)
-        .on_upgrade(move |socket| serve_socket(socket, state, session, query.resume))
+        .on_upgrade(move |socket| serve_socket(socket, state, session, role, query.resume))
 }
 
 // ── The socket ───────────────────────────────────────────────────────────
@@ -909,7 +1032,9 @@ fn killed_pty_id(cmd: &str, args: &Value) -> Option<String> {
 }
 
 /// One client's connection, from `hello` to the grace timer after it closes.
-async fn serve_socket(socket: WebSocket, state: WebClientState, session: String, resume: Option<String>) {
+/// `role` is the session's, decided at login — never by anything the client
+/// sends on the socket.
+async fn serve_socket(socket: WebSocket, state: WebClientState, session: String, role: Role, resume: Option<String>) {
     // Resume keeps the id (and with it the terminal router's view keys and the
     // PTYs) when the page that lost its link is back inside the grace window
     // — or before the server even noticed the old link die.
@@ -924,7 +1049,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
         "t": "hello",
         "client": client.as_str(),
         "protocol": PROTOCOL,
-        "capabilities": core_dispatch::capabilities(Role::Admin, PROTOCOL),
+        "capabilities": core_dispatch::capabilities(role, PROTOCOL),
     })
     .to_string();
     if ws_tx.send(Message::Text(hello.into())).await.is_err() {
@@ -946,6 +1071,13 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
                             Err(_) => continue,
                         };
                         match frame {
+                            Inbound::Call { id, cmd, args: _ } if cmd == LOGOUT_CMD => {
+                                // Answered in line, then the connection ends:
+                                // the session is gone, nothing more is served.
+                                state.lock_sessions().logout(&session);
+                                let _ = ws_tx.send(Message::Text(ret_frame(id, &Ok(Value::Null)).into())).await;
+                                break;
+                            }
                             Inbound::Call { id, cmd, args } => {
                                 let Ok(permit) = calls.clone().acquire_owned().await else { break };
                                 let ctx = call_ctx.clone();
@@ -953,7 +1085,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
                                 let client = client.clone();
                                 let tx = answer_tx.clone();
                                 tokio::spawn(async move {
-                                    let answer = handle_call(&state, &ctx, &client, id, &cmd, args).await;
+                                    let answer = handle_call(&state, &ctx, &client, role, id, &cmd, args).await;
                                     let _ = tx.send(answer);
                                     drop(permit);
                                 });
@@ -977,7 +1109,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
                         let tx = answer_tx.clone();
                         let body = body.to_vec();
                         tokio::spawn(async move {
-                            let answer = handle_raw_call(&ctx, id, header, &body).await;
+                            let answer = handle_raw_call(&ctx, role, id, header, &body).await;
                             let _ = tx.send(answer);
                             drop(permit);
                         });
@@ -1005,7 +1137,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
             }
             _ = ping.tick() => {
                 // The session must still be live, and the peer must answer.
-                if !state.lock_sessions().touch(&session) { break; }
+                if state.lock_sessions().touch(&session).is_none() { break; }
                 if unanswered_pings >= 2 { break; }
                 unanswered_pings += 1;
                 if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
@@ -1060,29 +1192,47 @@ fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
     }
 }
 
+/// A path a transport command hands out (a ticket, a grant): an admin's as
+/// given, a user's confined to their roots.
+fn handed_out_path(role: Role, cmd: &str, args: &Value) -> Result<String, Value> {
+    let path = args.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if path.is_empty() {
+        return Err(Value::String(format!("{cmd}: missing path")));
+    }
+    match role {
+        Role::Admin => Ok(path),
+        Role::User => core_dispatch::user_path(&path).map_err(Value::String),
+    }
+}
+
 /// One text call: the transport's own commands first, then the dispatcher.
-async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, id: u64, cmd: &str, args: Value) -> Answer {
+/// Every name is held to the class table for `role` before its arguments
+/// are read, the transport's own included (`transport_refusal`).
+async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, role: Role, id: u64, cmd: &str, args: Value) -> Answer {
+    if let Some(refused) = transport_refusal(cmd, role) {
+        return Answer::Text(ret_frame(id, &Err(serde_json::to_value(refused).unwrap_or(Value::Null))));
+    }
     match cmd {
         CAPABILITIES_CMD => {
-            let caps = serde_json::to_value(core_dispatch::capabilities(Role::Admin, PROTOCOL)).map_err(|e| Value::String(e.to_string()));
+            let caps = serde_json::to_value(core_dispatch::capabilities(role, PROTOCOL)).map_err(|e| Value::String(e.to_string()));
             return Answer::Text(ret_frame(id, &caps));
         }
         FILE_TICKET_CMD => {
-            let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+            let path = match handed_out_path(role, cmd, &args) {
+                Ok(path) => path,
+                Err(e) => return Answer::Text(ret_frame(id, &Err(e))),
+            };
             let project_id = args.get("projectId").and_then(Value::as_str).map(str::to_string);
             let download = args.get("download").and_then(Value::as_bool).unwrap_or(false);
-            if path.is_empty() {
-                return Answer::Text(ret_frame(id, &Err(Value::String("desktop_file_ticket: missing path".into()))));
-            }
             let ticket = state.tickets.lock().unwrap_or_else(PoisonError::into_inner).mint(path, project_id, download);
             let out = ticket.map(|t| json!({ "url": format!("http://127.0.0.1:{}/content/{t}", state.content_port) })).map_err(Value::String);
             return Answer::Text(ret_frame(id, &out));
         }
         FILE_GRANT_CMD => {
-            let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_string();
-            if path.is_empty() {
-                return Answer::Text(ret_frame(id, &Err(Value::String("desktop_file_grant: missing path".into()))));
-            }
+            let path = match handed_out_path(role, cmd, &args) {
+                Ok(path) => path,
+                Err(e) => return Answer::Text(ret_frame(id, &Err(e))),
+            };
             let out = match (ctx.state.try_get::<crate::services::pick_grants::PickGrantsState>(), random_token()) {
                 (Some(grants), Ok(grant)) => {
                     let grant = grants.lock().unwrap_or_else(PoisonError::into_inner).grant(std::path::PathBuf::from(path), grant);
@@ -1105,7 +1255,7 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, i
     }
     let spawned = spawned_pty_id(cmd, &args);
     let killed = killed_pty_id(cmd, &args);
-    let out = core_dispatch::dispatch(ctx, Role::Admin, cmd, args).await;
+    let out = core_dispatch::dispatch(ctx, role, cmd, args).await;
     if out.is_ok() {
         if let Some(pty) = spawned {
             state.note_spawned(client, pty);
@@ -1118,9 +1268,12 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, i
 }
 
 /// A raw-body call (`KIND_CALL`): only `write_file_bytes` takes one.
-async fn handle_raw_call(ctx: &CoreCtx, id: u64, header: RawCallHeader, body: &[u8]) -> Answer {
+async fn handle_raw_call(ctx: &CoreCtx, role: Role, id: u64, header: RawCallHeader, body: &[u8]) -> Answer {
     if header.cmd != "write_file_bytes" {
         return Answer::Text(ret_frame(id, &Err(Value::String(format!("`{}` takes no raw body", header.cmd)))));
+    }
+    if let Some(refused) = core_dispatch::class_refusal(&header.cmd, role) {
+        return Answer::Text(ret_frame(id, &Err(serde_json::to_value(refused).unwrap_or(Value::Null))));
     }
     let decode = |name: &str| -> Option<String> {
         let raw = header.headers.get(name)?;
@@ -1333,16 +1486,45 @@ mod tests {
     #[test]
     fn sessions_slide_lock_out_and_log_out() {
         let mut sessions = WebSessions::default();
-        let token = sessions.login().unwrap();
-        assert!(sessions.touch(&token));
-        assert!(!sessions.touch("nope"));
+        let token = sessions.login(Role::Admin).unwrap();
+        assert_eq!(sessions.touch(&token), Some(Role::Admin));
+        assert_eq!(sessions.touch("nope"), None);
+        let user = sessions.login(Role::User).unwrap();
+        assert_eq!(sessions.touch(&user), Some(Role::User));
         for _ in 0..MAX_LOGIN_FAILURES {
             assert!(!sessions.note_failure());
         }
         assert!(sessions.note_failure());
         assert!(sessions.locked_out());
         sessions.logout(&token);
-        assert!(!sessions.touch(&token));
+        assert_eq!(sessions.touch(&token), None);
+    }
+
+    #[test]
+    fn a_sign_in_link_is_one_login_inside_its_window() {
+        let mut sessions = WebSessions::default();
+        let token = "the-token";
+        let now = 1_700_000_000;
+        let url = login_url_at(8742, token, now, "n1");
+        let (exp, rest) = url.split_once("?exp=").unwrap().1.split_once("&n=").unwrap();
+        let (nonce, sig) = rest.split_once("&sig=").unwrap();
+        let exp: u64 = exp.parse().unwrap();
+        assert_eq!(exp, now + LOGIN_LINK_TTL.as_secs());
+        assert_eq!(nonce, "n1");
+        assert!(!url.contains(token), "the token never travels");
+        assert!(!sessions.redeem_link(token, exp, nonce, sig, exp), "expired at exp");
+        assert!(!sessions.redeem_link(token, exp + 1, nonce, sig, now), "a changed expiry breaks the signature");
+        assert!(!sessions.redeem_link(token, exp, "n2", sig, now), "a changed nonce breaks the signature");
+        assert!(!sessions.redeem_link("other-token", exp, nonce, sig, now), "another token's link");
+        assert!(!sessions.redeem_link(token, exp, nonce, "", now));
+        let far = now + 24 * 3600;
+        assert!(!sessions.redeem_link(token, far, "n", &login_signature(token, far, "n"), now), "a link cannot be minted longer than the TTL");
+        assert!(sessions.redeem_link(token, exp, nonce, sig, now + 5));
+        assert!(!sessions.redeem_link(token, exp, nonce, sig, now + 6), "a second redemption is refused");
+        // A second link minted the same second is its own login.
+        let url2 = login_url_at(8742, token, now, "n2");
+        let sig2 = url2.rsplit_once("&sig=").unwrap().1;
+        assert!(sessions.redeem_link(token, exp, "n2", sig2, now + 6));
     }
 
     #[test]
@@ -1359,7 +1541,10 @@ mod tests {
             let mode = std::fs::metadata(control.join(TOKEN_FILE)).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
-        assert_eq!(login_url(8742, "T"), "http://127.0.0.1:8742/desktop/login?token=T");
+        assert!(login_url(8742, "T").starts_with("http://127.0.0.1:8742/desktop/login?exp="));
+        let rotated = rotate_login_token(&control).unwrap();
+        assert_ne!(rotated, first);
+        assert_eq!(login_token(&control).unwrap(), rotated, "the rotated token is what the file holds now");
     }
 
     #[test]
@@ -1404,7 +1589,8 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let state = WebClientState::new(true, ctx, events.clone(), &control, port, None);
-        let token = state.token.clone().unwrap();
+        let token = login_token(&control).unwrap();
+        let link = login_url(port, &token);
         let app = routes(state.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
@@ -1413,14 +1599,20 @@ mod tests {
         // Not signed in: the shell asks for the link; a wrong token is refused.
         let r = http.get(format!("{base}/desktop/")).send().await.unwrap();
         assert_eq!(r.status(), 401);
-        let r = http.get(format!("{base}/desktop/login?token=wrong")).send().await.unwrap();
+        let r = http.get(format!("{base}/desktop/login?exp=9999999999&sig=wrong")).send().await.unwrap();
+        assert_eq!(r.status(), 403);
+        // The token itself is not a credential on the wire.
+        let r = http.get(format!("{base}/desktop/login?token={token}")).send().await.unwrap();
         assert_eq!(r.status(), 403);
         // Through a non-loopback host nothing exists.
-        let r = http.get(format!("{base}/desktop/login?token={token}")).header("host", "desk.example.ts.net").send().await.unwrap();
+        let r = http.get(&link).header("host", "desk.example.ts.net").send().await.unwrap();
         assert_eq!(r.status(), 404);
-        let r = http.get(format!("{base}/desktop/login?token={token}")).send().await.unwrap();
+        let r = http.get(&link).send().await.unwrap();
         assert_eq!(r.status(), 303);
         let cookie = r.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+        // The same link a second time is spent.
+        let r = http.get(&link).send().await.unwrap();
+        assert_eq!(r.status(), 403);
         assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
         let cookie_pair = cookie.split(';').next().unwrap().to_string();
         // Signed in, no bundle: the "not built" page, not a 404.
@@ -1525,7 +1717,85 @@ mod tests {
             assert_eq!(v["id"], 7);
         }
         assert!(state.lock_parked().is_empty());
-        ws2.close(None).await.unwrap();
+        // `desktop_logout` answers, then the server closes the socket; the
+        // cookie is dead for the shell and for a new socket.
+        ws2.send(WsMessage::Text(json!({ "t": "call", "id": 8, "cmd": LOGOUT_CMD }).to_string().into())).await.unwrap();
+        if let WsMessage::Text(t) = ws2.next().await.unwrap().unwrap() {
+            let v: Value = serde_json::from_str(&t).unwrap();
+            assert_eq!(v["id"], 8);
+            assert!(v["ok"].is_null());
+        }
+        let closed = tokio::time::timeout(Duration::from_secs(5), ws2.next()).await.expect("the socket ends after logout");
+        assert!(matches!(closed, None | Some(Ok(WsMessage::Close(_))) | Some(Err(_))), "{closed:?}");
+        let r = http.get(format!("{base}/desktop/")).header("cookie", &cookie_pair).send().await.unwrap();
+        assert_eq!(r.status(), 401);
+        // A fresh link signs in again; `/desktop/logout` clears that cookie too.
+        let r = http.get(login_url(port, &token)).send().await.unwrap();
+        assert_eq!(r.status(), 303);
+        let cookie2 = r.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().split(';').next().unwrap().to_string();
+        let r = http.get(format!("{base}/desktop/logout")).header("cookie", &cookie2).send().await.unwrap();
+        assert_eq!(r.status(), 303);
+        assert!(r.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().contains("Max-Age=0"));
+        let r = http.get(format!("{base}/desktop/")).header("cookie", &cookie2).send().await.unwrap();
+        assert_eq!(r.status(), 401);
+    }
+
+    /// A user's socket: admin commands refused, a ticket or grant for a path
+    /// outside the user's roots refused, `list_dir_all` confined — the P2
+    /// review's items 6 and 8.
+    #[tokio::test]
+    async fn a_user_session_is_confined_and_denied_admin_commands() {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as WsMessage};
+        crate::services::mail_engine::install_crypto_provider();
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let events = Arc::new(WebEvents::default());
+        let state_core = CoreState::new().manage(crate::services::remote::new_pool()).manage(crate::services::pick_grants::new_state());
+        let ctx = CoreCtx::system(Arc::new(state_core), events.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state = WebClientState::new(true, ctx, events.clone(), &control, port, None);
+        // A user session, as the gateway's handshake would create it.
+        let session = state.lock_sessions().login(Role::User).unwrap();
+        let app = routes(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut request = format!("ws://127.0.0.1:{port}/api/v1/desktop/ws").into_client_request().unwrap();
+        request.headers_mut().insert("cookie", format!("{}={session}", crate::brand::DESKTOP_SESSION_COOKIE).parse().unwrap());
+        request.headers_mut().insert("origin", format!("http://127.0.0.1:{port}").parse().unwrap());
+        request.headers_mut().insert("sec-websocket-protocol", crate::brand::DESKTOP_PROTOCOL.parse().unwrap());
+        let (mut ws, _) = tokio_tungstenite::connect_async(request).await.expect("upgrade");
+        let hello: Value = match ws.next().await.unwrap().unwrap() {
+            WsMessage::Text(t) => serde_json::from_str(&t).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(hello["capabilities"]["role"], "user");
+        let pull = hello["capabilities"]["commands"].as_array().unwrap().iter().find(|c| c["name"] == "pull_ollama_model").unwrap();
+        assert_eq!(pull["served"], false);
+        let outside = dir.path().join("secret.txt");
+        std::fs::write(&outside, b"x").unwrap();
+        let calls = [
+            json!({ "t": "call", "id": 1, "cmd": "pull_ollama_model", "args": { "name": "llama3" } }),
+            json!({ "t": "call", "id": 2, "cmd": FILE_TICKET_CMD, "args": { "path": outside.to_string_lossy() } }),
+            json!({ "t": "call", "id": 3, "cmd": FILE_GRANT_CMD, "args": { "path": outside.to_string_lossy() } }),
+            json!({ "t": "call", "id": 4, "cmd": "list_dir_all", "args": { "path": dir.path().to_string_lossy() } }),
+            json!({ "t": "call", "id": 5, "cmd": "read_file_bytes", "args": { "path": outside.to_string_lossy() } }),
+        ];
+        for call in &calls {
+            ws.send(WsMessage::Text(call.to_string().into())).await.unwrap();
+        }
+        let mut rets = Vec::new();
+        for _ in 0..calls.len() {
+            if let WsMessage::Text(t) = ws.next().await.unwrap().unwrap() {
+                rets.push(serde_json::from_str::<Value>(&t).unwrap());
+            }
+        }
+        rets.sort_by_key(|r| r["id"].as_u64());
+        assert_eq!(rets[0]["err"]["code"], "admin", "{}", rets[0]);
+        for r in &rets[1..] {
+            let err = r["err"].as_str().unwrap_or_else(|| panic!("{r}"));
+            assert!(err.contains("not in the current project"), "{r}");
+        }
+        ws.close(None).await.unwrap();
     }
 
     #[test]

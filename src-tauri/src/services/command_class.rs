@@ -590,6 +590,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_desktop_respond", Off(OffReason::HeadlessOwner)),
     ("mobile_host_apply", Admin),
     ("mobile_browser_client_link", Admin),
+    ("mobile_browser_client_rotate", Admin),
     ("mobile_host_status", Admin),
     ("mobile_opaque_id", Core),
     ("mobile_prepare_phone_install_script", Core),

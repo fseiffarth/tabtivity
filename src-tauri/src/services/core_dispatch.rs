@@ -75,12 +75,33 @@ async fn blocking<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) 
         .map_err(|e| Value::String(format!("command failed: {e}")))
 }
 
-/// Who the caller is to the server as a whole (plan §3.3 `admin`). P2's one
-/// user is the box's admin; P3's gateway assigns the role per account.
+/// Who the caller is to the server as a whole (plan §3.3 `admin`). The
+/// single-user sidecar's token login is the box's admin; on a multi-user
+/// server the gateway names the account's role in the connection's handshake
+/// (`services::server`), and the daemon passes it in here per call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     User,
     Admin,
+}
+
+impl Role {
+    /// The wire token (`server_capabilities.role`, the gateway's handshake).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::User => "user",
+            Role::Admin => "admin",
+        }
+    }
+
+    /// `as_str` undone; anything else is a user — the role fails closed.
+    pub fn parse(token: &str) -> Role {
+        if token == "admin" {
+            Role::Admin
+        } else {
+            Role::User
+        }
+    }
 }
 
 /// Why a command is not served, as the frontend sees it (`server_capabilities`
@@ -100,15 +121,25 @@ pub enum Refusal {
     Unsupported { reason: &'static str },
 }
 
+/// The class check alone: unknown, `client`, `off`, or `admin` for a user.
+/// What a transport answering a command itself (`read_file_bytes` as a
+/// binary frame) must run before touching the frame — the wrapper table does
+/// not apply to it, the class table always does.
+pub fn class_refusal(cmd: &str, role: Role) -> Option<Refusal> {
+    match command_class::class_of(cmd) {
+        None => Some(Refusal::Unknown),
+        Some(CommandClass::Client) => Some(Refusal::Client),
+        Some(CommandClass::Off(reason)) => Some(Refusal::Off { reason: reason.as_str() }),
+        Some(CommandClass::Admin) if role != Role::Admin => Some(Refusal::Admin),
+        Some(CommandClass::Admin) | Some(CommandClass::Core) => None,
+    }
+}
+
 /// Whether `cmd` is served for `role`, or why not. The class decides first;
 /// the generated table second; arguments never (they are the call's business).
 pub fn refusal(cmd: &str, role: Role) -> Option<Refusal> {
-    match command_class::class_of(cmd) {
-        None => return Some(Refusal::Unknown),
-        Some(CommandClass::Client) => return Some(Refusal::Client),
-        Some(CommandClass::Off(reason)) => return Some(Refusal::Off { reason: reason.as_str() }),
-        Some(CommandClass::Admin) if role != Role::Admin => return Some(Refusal::Admin),
-        Some(CommandClass::Admin) | Some(CommandClass::Core) => {}
+    if let Some(refused) = class_refusal(cmd, role) {
+        return Some(refused);
     }
     if handler(cmd).is_some() {
         return None;
@@ -130,13 +161,52 @@ pub fn served(cmd: &str, role: Role) -> bool {
 /// the client `ctx.caller` names. A refusal is an `Err` carrying the
 /// [`Refusal`]'s JSON, so the frontend can tell "not served here" from a
 /// command's own error.
-pub async fn dispatch(ctx: &CoreCtx, role: Role, cmd: &str, args: Value) -> Result<Value, Value> {
+pub async fn dispatch(ctx: &CoreCtx, role: Role, cmd: &str, mut args: Value) -> Result<Value, Value> {
     if let Some(refusal) = refusal(cmd, role) {
         return Err(serde_json::to_value(refusal).unwrap_or(Value::Null));
     }
     crate::services::model_allowlist::check(cmd, &args)?;
+    confine_for_user(role, cmd, &mut args)?;
     let run = handler(cmd).expect("refusal() checked the wrapper exists");
     run(ctx.clone(), args).await
+}
+
+/// The `core` commands that take a path with no confinement of their own,
+/// because on the desktop they stand in for an OS file dialog (`list_dir_all`
+/// is the server-side picker's directory listing). An admin keeps that parity
+/// — the box is theirs — a user is held to the roots every file command is
+/// bound by (`fs::confine_user_path`): an empty start path becomes the
+/// user's projects root instead of their home.
+const USER_CONFINED_PATH: &[(&str, &str)] = &[("list_dir_all", "path")];
+
+/// Confine the path argument of a [`USER_CONFINED_PATH`] command for a user.
+/// Nothing for an admin, nothing for any other command.
+fn confine_for_user(role: Role, cmd: &str, args: &mut Value) -> Result<(), Value> {
+    if role == Role::Admin {
+        return Ok(());
+    }
+    let Some((_, key)) = USER_CONFINED_PATH.iter().find(|(name, _)| *name == cmd) else {
+        return Ok(());
+    };
+    let path = args.get(*key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let path = user_path(&path).map_err(Value::String)?;
+    if let Some(map) = args.as_object_mut() {
+        map.insert((*key).to_string(), Value::String(path));
+    } else {
+        *args = serde_json::json!({ *key: path });
+    }
+    Ok(())
+}
+
+/// A path a user may list or hand out: empty → the projects root; anything
+/// else must lie under one of the user's allowed roots.
+pub fn user_path(path: &str) -> Result<String, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(crate::storage::root_work_dir().to_string_lossy().into_owned());
+    }
+    crate::commands::fs::confine_user_path(std::path::Path::new(path))?;
+    Ok(path.to_string())
 }
 
 /// One `server_capabilities` row.
@@ -193,10 +263,7 @@ pub fn capabilities(role: Role, protocol: u32) -> ServerCapabilities {
     ServerCapabilities {
         protocol,
         host_os: host_os(),
-        role: match role {
-            Role::User => "user",
-            Role::Admin => "admin",
-        },
+        role: role.as_str(),
         commands,
     }
 }
@@ -258,6 +325,33 @@ mod tests {
             .collect();
         assert!(orphans.is_empty(), "wrappers for unregistered commands: {orphans:?}");
         assert!(dispatchable_names().len() > 500, "the generator read too little");
+    }
+
+    #[test]
+    fn a_user_is_confined_where_an_admin_is_not() {
+        assert_eq!(Role::parse("admin"), Role::Admin);
+        assert_eq!(Role::parse("user"), Role::User);
+        assert_eq!(Role::parse("root"), Role::User, "an unknown role fails closed");
+        assert_eq!(Role::Admin.as_str(), "admin");
+        // The class check alone serves `read_file_bytes` (core, no wrapper) and
+        // refuses a client command and an admin command for a user.
+        assert_eq!(class_refusal("read_file_bytes", Role::User), None);
+        assert_eq!(class_refusal("clipboard_has_image", Role::User), Some(Refusal::Client));
+        assert_eq!(class_refusal("install_ollama", Role::User), Some(Refusal::Admin));
+        assert_eq!(class_refusal("desktop_logout", Role::User), Some(Refusal::Unknown), "transport-only names are the transport's");
+        // An admin's `list_dir_all` is untouched; a user's empty path becomes
+        // the projects root and an outside path is refused.
+        let mut args = serde_json::json!({ "path": "" });
+        confine_for_user(Role::Admin, "list_dir_all", &mut args).unwrap();
+        assert_eq!(args["path"], "");
+        confine_for_user(Role::User, "list_dir_all", &mut args).unwrap();
+        assert_eq!(args["path"], crate::storage::root_work_dir().to_string_lossy().as_ref());
+        let outside = tempfile::tempdir().unwrap();
+        let mut args = serde_json::json!({ "path": outside.path().to_string_lossy() });
+        let err = confine_for_user(Role::User, "list_dir_all", &mut args).unwrap_err();
+        assert!(err.as_str().unwrap().contains("not in the current project"), "{err}");
+        let mut other = serde_json::json!({ "path": outside.path().to_string_lossy() });
+        confine_for_user(Role::User, "read_dir", &mut other).unwrap();
     }
 
     #[test]

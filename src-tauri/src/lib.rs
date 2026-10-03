@@ -1533,6 +1533,7 @@ pub fn run() {
             commands::mobile_control::mobile_host_status,
             commands::mobile_control::mobile_host_apply,
             commands::mobile_control::mobile_browser_client_link,
+            commands::mobile_control::mobile_browser_client_rotate,
             commands::mobile_control::mobile_verify_tailscale_serve,
             commands::mobile_control::mobile_tailscale_serve_status,
             commands::mobile_control::mobile_desktop_images,

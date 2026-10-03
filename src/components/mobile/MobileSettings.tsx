@@ -11,6 +11,7 @@ import { runInstallInTab } from "../../lib/installCommand";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { isServerClient } from "../../lib/transport/linkState";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -649,6 +650,20 @@ export function MobileSettings() {
           >
             {t("mobile.browserClientLink")} <UntestedTag id="mobile.browserClientLink" />
           </button>
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBrowserLinkError(null);
+              setBrowserLinkCopied(false);
+              invoke<string>("mobile_browser_client_rotate")
+                .then((link) => setBrowserLink(link))
+                .catch((reason) => setBrowserLinkError(String(reason)));
+            }}
+          >
+            {t("mobile.browserClientRotate")} <UntestedTag id="mobile.browserClientRotate" />
+          </button>
           {browserLink && (
             <>
               <code className="settings-help" style={{ userSelect: "all" }}>{browserLink}</code>
@@ -668,7 +683,23 @@ export function MobileSettings() {
         </div>
       )}
       {browserLinkError && <ErrorNote className="project-dialog-error" error={browserLinkError} />}
-      {stored?.browser_client && <p className="settings-help">{t("mobile.browserClientLinkHelp")}</p>}
+      {stored?.browser_client && <p className="settings-help">{t("mobile.browserClientLinkHelp")} {t("mobile.browserClientRotateHelp")}</p>}
+      {isServerClient() && (
+        <div className="settings-link-row">
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => {
+              invoke("desktop_logout")
+                .catch(() => undefined)
+                .then(() => window.location.replace("/desktop/"));
+            }}
+          >
+            {t("mobile.browserClientSignOut")} <UntestedTag id="mobile.browserClientSignOut" />
+          </button>
+          <p className="settings-help">{t("mobile.browserClientSignOutHelp")}</p>
+        </div>
+      )}
 
       <div className="settings-subheader">{t("mobile.mailWrites")}</div>
       <ToggleRow
