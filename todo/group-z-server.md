@@ -364,7 +364,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2351. **Decide: stop idle daemons, or keep them for their timers.** Plan §3.1 stops a daemon with no client after an idle timeout, but the
+2351. **Decide: stop idle daemons, or keep them for their timers.** ✅ **Decided** (2026-10-03, the user): idle daemons keep running — no idle stop is built; plan §3.1 and `docs/context/server_gateway.md` say so. Plan §3.1 stops a daemon with no client after an idle timeout, but the
     same daemon runs the user's timers (scheduled prompts, alarms, Web Push)
     with no client connected (§3.4, §6.7). Socket activation restarts a
     stopped daemon on the next connect, not on a timer. P3 keeps daemons up

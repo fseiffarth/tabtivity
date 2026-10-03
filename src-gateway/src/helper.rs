@@ -14,9 +14,13 @@
 //!   user's own uid (`runuser`), with the code on stdin, not in `argv`.
 //! * **Only real people.** It links an existing account only when its uid is
 //!   ≥ 1000 (not `nobody`), it is already in `<slug>-users` (the admin's
-//!   deliberate step), it is in no admin group (`sudo`, `wheel`, `admin`,
-//!   `root`) and it is not one of the server's own service accounts —
-//!   re-checked at execution, after `useradd`, not only at planning.
+//!   deliberate step), it is in no root-equivalent group ([`ADMIN_GROUPS`]:
+//!   `sudo`, `wheel`, `admin`, `root`, and `docker`, `lxd`, `incus-admin`,
+//!   `libvirt`, `disk`), sudoers names it in no rule ([`crate::sudoers`],
+//!   read-only, fail closed), and it is not one of the server's own service
+//!   accounts — re-checked at execution, after `useradd`, not only at
+//!   planning. This holds for admin-role accounts too: an admin who needs
+//!   Docker or VMs uses a separate, unlinked account for them.
 //! * **No root verbs for the gateway.** Daemons start by socket activation,
 //!   so the gateway never calls this; there is no polkit rule.
 //! * CLI installs run as `<slug>-cli` into the server-wide root, never as root
@@ -30,8 +34,10 @@ use crate::db::{self, Db, Role};
 use crate::units::{self, Deployment, Limits};
 use crate::{audit, names, prereq, wire};
 
-/// Groups whose members are never linked: they can become root anyway.
-pub const ADMIN_GROUPS: &[&str] = &["sudo", "wheel", "admin", "root"];
+/// Groups whose members are never linked: they can become root anyway — by
+/// `sudo`, or through a daemon socket or device that is root on the host
+/// (Docker, LXD/Incus, libvirt, raw disks). User decision 2026-10-03.
+pub const ADMIN_GROUPS: &[&str] = &["sudo", "wheel", "admin", "root", "docker", "lxd", "incus-admin", "libvirt", "disk"];
 /// How long an invite may be redeemed (`auth::INVITE_TTL`).
 pub const INVITE_TTL: u64 = 24 * 60 * 60;
 
@@ -48,10 +54,24 @@ pub struct UnixAccount {
 pub trait Accounts {
     fn lookup(&self, name: &str) -> Option<UnixAccount>;
     fn group_exists(&self, name: &str) -> bool;
+    /// The first sudoers rule naming `account`; an error when sudoers cannot
+    /// be read completely (the caller refuses then).
+    fn sudo_rule(&self, account: &UnixAccount) -> Result<Option<String>, String>;
 }
 
-/// Why an account may not be a server user, or `Ok`.
-pub fn check_linkable(account: &UnixAccount) -> Result<(), String> {
+/// Why an account may not be a server user, or `Ok`: [`check_account`],
+/// then sudoers.
+pub fn check_linkable(accounts: &dyn Accounts, account: &UnixAccount) -> Result<(), String> {
+    check_account(account)?;
+    match accounts.sudo_rule(account) {
+        Ok(None) => Ok(()),
+        Ok(Some(rule)) => Err(format!("{} is named by a sudoers rule ({rule}): an account sudo grants anything is never a server user", account.name)),
+        Err(error) => Err(format!("{}: sudoers could not be checked, so the account is refused: {error}", account.name)),
+    }
+}
+
+/// The checks on the account record alone (name, uid, groups).
+pub fn check_account(account: &UnixAccount) -> Result<(), String> {
     if !wire::valid_account_name(&account.name) {
         return Err(format!("{:?} is not a name the server accepts (a-z, 0-9, _; no dashes)", account.name));
     }
@@ -193,7 +213,7 @@ pub fn plan_user_add(accounts: &dyn Accounts, db: &Db, user: &str, role: Role, l
     }
     let mut steps = Vec::new();
     match accounts.lookup(user) {
-        Some(account) => check_linkable(&account)?,
+        Some(account) => check_linkable(accounts, &account)?,
         None => steps.push(run(&["useradd", "--create-home", "--shell", "/bin/bash", "--groups", &names::users_group(), user])),
     }
     steps.push(Step::CheckLinkable { user: user.into() });
@@ -296,7 +316,7 @@ pub fn execute(plan: &Plan, ctx: &Ctx, exec: &mut dyn Exec) -> Result<(), String
             Step::Remove(path) => exec.remove(path)?,
             Step::HomePrivate { user } => {
                 let account = lookup(user)?;
-                check_linkable(&account)?;
+                check_linkable(ctx.accounts, &account)?;
                 exec.chmod_home(&account.home, 0o700)?;
             }
             Step::OwnedDir { path, mode, owner } => exec.owned_dir(path, *mode, &lookup(owner)?)?,
@@ -306,10 +326,10 @@ pub fn execute(plan: &Plan, ctx: &Ctx, exec: &mut dyn Exec) -> Result<(), String
                 std::fs::create_dir_all(names::etc_dir()).ok();
                 exec.write(&names::server_env_file(), &units::server_env(&d), 0o644)?;
             }
-            Step::CheckLinkable { user } => check_linkable(&lookup(user)?)?,
+            Step::CheckLinkable { user } => check_linkable(ctx.accounts, &lookup(user)?)?,
             Step::DbAdd { user, role } => {
                 let account = lookup(user)?;
-                check_linkable(&account)?;
+                check_linkable(ctx.accounts, &account)?;
                 db::update(&ctx.gateway_dir, |db| db.add_account(user, account.uid, *role, ctx.now)).map_err(|e| e.to_string())?;
                 table_touched = true;
             }
@@ -332,7 +352,7 @@ pub fn execute(plan: &Plan, ctx: &Ctx, exec: &mut dyn Exec) -> Result<(), String
             }
             Step::Invite { user } => {
                 let account = lookup(user)?;
-                check_linkable(&account)?;
+                check_linkable(ctx.accounts, &account)?;
                 let code = eight_digits();
                 let expires = ctx.now + INVITE_TTL;
                 let argv = vec![names::serverd_binary().to_string_lossy().into_owned(), "--write-invite".into(), expires.to_string()];
@@ -399,6 +419,10 @@ impl Accounts for SystemAccounts {
         }
         let groups = gids.into_iter().filter_map(group_name).collect();
         Some(UnixAccount { name: name.into(), uid: pwd.pw_uid, gid: pwd.pw_gid, home, groups })
+    }
+
+    fn sudo_rule(&self, account: &UnixAccount) -> Result<Option<String>, String> {
+        crate::sudoers::rule_for(Path::new("/"), &crate::sudoers::Subject { name: &account.name, uid: account.uid, gid: account.gid, groups: &account.groups })
     }
 
     fn group_exists(&self, name: &str) -> bool {

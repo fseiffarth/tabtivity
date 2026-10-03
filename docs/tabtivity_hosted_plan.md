@@ -243,10 +243,18 @@ These are **system** template units, so no `enable-linger` is needed.
     and any copy runs as the owning uid.
   - Every walk uses `openat` and `O_NOFOLLOW`.
   - It links only accounts with uid ≥ 1000 in the `tabtivity-users` group, and
-    refuses root, system accounts and sudoers.
-- **Per-user daemons** are started through the helper on the user's first
-  login. A daemon with no client is stopped after an idle timeout. The agents
-  are unaffected, because they live in `tabtivity-tmux@`, not in the daemon.
+    refuses root, system accounts and every **root-equivalent** account:
+    members of `sudo`, `wheel`, `admin`, `root`, `docker`, `lxd`,
+    `incus-admin`, `libvirt` or `disk`, and any account a sudoers rule names
+    (per user, group, uid, alias or `ALL`, whatever it grants; sudoers and
+    its includes are parsed read-only, and an unreadable sudoers or a
+    non-`files` sudoers source refuses). Admin-role accounts too: an admin
+    uses a separate, unlinked account for Docker and VMs. *(User decision
+    2026-10-03, P3 review finding 11; built in P3 part 2.)*
+- **Per-user daemons** start by socket activation on the user's first
+  request. *Decided 2026-10-03 (#2351): a daemon with no client keeps
+  running* — it also runs the user's timers (scheduled prompts, alarms,
+  push). The agents live in `tabtivity-tmux@`, not in the daemon.
 - **tmux runs on a dedicated socket, `tmux -L tabtivity`, in its own unit.**
   With the default socket, a user who also SSHes in and runs tmux could end up
   hosting Tabtivity's sessions in their SSH-started server, outside every limit.
@@ -521,7 +529,7 @@ prerequisite (#172, H0 of [`headless_owner_plan.md`](headless_owner_plan.md)).
 
 - **A gateway user is one Unix account.** `tabtivity-gateway user add <name>`
   (admin CLI) goes through the helper. It creates or links the Unix user
-  (uid ≥ 1000, in `tabtivity-users`, not a sudoer), makes the home `0700`,
+  (uid ≥ 1000, in `tabtivity-users`, not root-equivalent — §3.1), makes the home `0700`,
   installs the user's slice and units, and prints a **single-use invite
   code**.
 - **Login method v1: device keys, reusing mobile pairing.** The invite code

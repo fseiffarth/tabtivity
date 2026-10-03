@@ -42,6 +42,7 @@ pub mod limits;
 
 #[cfg(unix)]
 pub mod helper;
+pub mod sudoers;
 #[cfg(unix)]
 pub mod proxy;
 pub mod rate;

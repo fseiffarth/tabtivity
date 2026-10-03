@@ -9,6 +9,8 @@ use std::collections::HashMap;
 struct FakeAccounts {
     accounts: RefCell<HashMap<String, UnixAccount>>,
     groups: Vec<String>,
+    /// A fixture filesystem root holding `etc/sudoers` (none: no rules).
+    sudoers_root: RefCell<Option<PathBuf>>,
 }
 
 impl FakeAccounts {
@@ -28,6 +30,20 @@ impl Accounts for FakeAccounts {
     fn group_exists(&self, name: &str) -> bool {
         self.groups.iter().any(|g| g == name)
     }
+    fn sudo_rule(&self, account: &UnixAccount) -> Result<Option<String>, String> {
+        match self.sudoers_root.borrow().as_deref() {
+            Some(root) => crate::sudoers::rule_for(root, &crate::sudoers::Subject { name: &account.name, uid: account.uid, gid: account.gid, groups: &account.groups }),
+            None => Ok(None),
+        }
+    }
+}
+
+/// A fixture root whose `etc/sudoers` is `text`.
+fn sudoers_root(text: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("etc")).unwrap();
+    std::fs::write(dir.path().join("etc/sudoers"), text).unwrap();
+    dir
 }
 
 #[derive(Default)]
@@ -86,21 +102,62 @@ fn users() -> String {
 #[test]
 fn only_regular_non_admin_members_of_the_users_group_are_linked() {
     let ok = UnixAccount { name: "alice".into(), uid: 1001, gid: 1001, home: "/home/alice".into(), groups: vec!["alice".into(), users()] };
-    assert!(check_linkable(&ok).is_ok());
+    let accounts = FakeAccounts::default();
+    assert!(check_linkable(&accounts, &ok).is_ok());
     let refused = [
         UnixAccount { uid: 0, ..ok.clone() },
         UnixAccount { uid: 999, ..ok.clone() },
         UnixAccount { uid: 65534, ..ok.clone() },
         UnixAccount { groups: vec![users(), "sudo".into()], ..ok.clone() },
         UnixAccount { groups: vec![users(), "wheel".into()], ..ok.clone() },
+        UnixAccount { groups: vec![users(), "docker".into()], ..ok.clone() },
+        UnixAccount { groups: vec![users(), "lxd".into()], ..ok.clone() },
+        UnixAccount { groups: vec![users(), "incus-admin".into()], ..ok.clone() },
+        UnixAccount { groups: vec![users(), "libvirt".into()], ..ok.clone() },
+        UnixAccount { groups: vec![users(), "disk".into()], ..ok.clone() },
         UnixAccount { groups: vec!["alice".into()], ..ok.clone() },
         UnixAccount { name: names::gateway_account(), ..ok.clone() },
         UnixAccount { name: "al-ice".into(), ..ok.clone() },
     ];
     for account in refused {
-        assert!(check_linkable(&account).is_err(), "{account:?}");
+        assert!(check_linkable(&accounts, &account).is_err(), "{account:?}");
     }
-    assert!(check_linkable(&UnixAccount { groups: vec!["alice".into()], ..ok }).unwrap_err().contains("usermod -aG"));
+    assert!(check_linkable(&accounts, &UnixAccount { groups: vec!["alice".into()], ..ok }).unwrap_err().contains("usermod -aG"));
+}
+
+/// P3 review finding 11 (user decision 2026-10-03): any sudoers rule naming
+/// the account refuses it — the admin role included — and so does a sudoers
+/// the helper cannot read completely.
+#[test]
+fn an_account_sudo_grants_anything_is_never_linked() {
+    let ok = UnixAccount { name: "alice".into(), uid: 1001, gid: 1001, home: "/home/alice".into(), groups: vec!["alice".into(), users()] };
+    let accounts = FakeAccounts::default();
+    let plain = sudoers_root("root ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n");
+    *accounts.sudoers_root.borrow_mut() = Some(plain.path().into());
+    check_linkable(&accounts, &ok).unwrap();
+    let narrow = sudoers_root("root ALL=(ALL:ALL) ALL\nalice ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx\n");
+    *accounts.sudoers_root.borrow_mut() = Some(narrow.path().into());
+    assert!(check_linkable(&accounts, &ok).unwrap_err().contains("sudoers rule"));
+    let missing = tempfile::tempdir().unwrap();
+    *accounts.sudoers_root.borrow_mut() = Some(missing.path().into());
+    assert!(check_linkable(&accounts, &ok).unwrap_err().contains("could not be checked"), "fail closed");
+}
+
+#[test]
+fn a_sudoers_rule_added_after_planning_is_refused_at_execution() {
+    let accounts = FakeAccounts::default().with("alice", 1001, &["alice", &users()]);
+    let mut db = Db::default();
+    db.add_account("alice", 1001, Role::Admin, 1).unwrap();
+    let plan = plan_invite(&db, "alice").unwrap();
+    let granted = sudoers_root("@includedir /etc/sudoers.d\n");
+    std::fs::create_dir_all(granted.path().join("etc/sudoers.d")).unwrap();
+    std::fs::write(granted.path().join("etc/sudoers.d/alice"), "alice ALL=(ALL) ALL\n").unwrap();
+    *accounts.sudoers_root.borrow_mut() = Some(granted.path().into());
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Ctx { accounts: &accounts, gateway_dir: dir.path().into(), now: 1 };
+    let mut rec = Recorder::default();
+    assert!(execute(&plan, &ctx, &mut rec).unwrap_err().contains("sudoers"), "an admin-role account too");
+    assert!(rec.stdin_seen.is_empty(), "no invite was written");
 }
 
 #[test]

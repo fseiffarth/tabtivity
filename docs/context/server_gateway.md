@@ -55,8 +55,9 @@ socket-activated socket reports. The daemon adopts fd 3 (`LISTEN_PID`/
 `LISTEN_FDS`) and never deletes a socket it did not bind.
 
 Consequence: there is **no polkit rule**; the helper is only ever run by the
-admin with `sudo`. Idle stop is not built (TODO #2351): the daemon also runs
-the user's timers.
+admin with `sudo` (account admin stays sudo-only for now, #2356). **Idle
+daemons keep running** (user decision 2026-10-03, #2351): the daemon also
+runs the user's timers, and socket activation only restarts on a connect.
 
 ## Slices and units
 
@@ -73,9 +74,19 @@ gateway unit, which runs no fence, is hardened (`ProtectSystem=strict`, …).
 
 - Names, never paths; every path is built from fixed roots.
 - Links an existing account only if uid ≥ 1000 (not 65534), already in
-  `<slug>-users` (the admin's deliberate step), in no admin group (`sudo`,
-  `wheel`, `admin`, `root`), not a service account — re-checked at
-  execution, after `useradd`.
+  `<slug>-users` (the admin's deliberate step), not a service account, and
+  **not root-equivalent** — re-checked at execution, after `useradd`:
+  no `sudo`/`wheel`/`admin`/`root` and no `docker`/`lxd`/`incus-admin`/
+  `libvirt`/`disk` membership (each is root on the host by a socket or a
+  device), and no sudoers rule naming it in any way (`src-gateway/src/
+  sudoers.rs`: `/etc/sudoers` and its includes parsed read-only, any user
+  list mentioning the account, its groups, its uid, an alias of them,
+  `ALL` or a netgroup counts, whatever the rule grants). Fail closed: an
+  unreadable file or an nsswitch `sudoers:` source other than `files`
+  refuses. Parsing rather than `sudo -l -U`: no logging, no plugins, no
+  side effects. Admin-role accounts are held to the same rule (user
+  decision 2026-10-03) — an admin keeps a separate unlinked account for
+  Docker and VMs.
 - Never copies or chowns a user's tree: one `fchmod 0700` of the home
   through `O_NOFOLLOW | O_DIRECTORY`. The invite and a device revocation are
   done by the user's own uid (`runuser … env -i … <serverd> --write-invite`),
