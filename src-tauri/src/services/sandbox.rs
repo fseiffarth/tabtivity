@@ -1391,15 +1391,17 @@ pub fn preflight_report(project_id: &str) -> PreflightReport {
 /// embedded copy of the reference Dockerfile materialized under the state dir
 /// (an installed app has no repo checkout). Anything else is a registry pull.
 fn build_command(project_id: &str, image: &str) -> Option<String> {
+    // On a server the image goes into the user's own rootless store.
+    let engine = Engine::current().program();
     if image != DEFAULT_IMAGE && !image.starts_with(crate::brand::CONTAINER_PREFIX) {
-        return Some(format!("docker pull {image}"));
+        return Some(format!("{engine} pull {image}"));
     }
     let windows = cfg!(target_os = "windows");
     if let Some(dir) = project_dir_for(project_id) {
         let in_repo = Path::new(&dir).join("docker").join("agent-sandbox");
         if in_repo.join("Dockerfile").is_file() {
             return Some(format!(
-                "docker build -t {image} {}",
+                "{engine} build -t {image} {}",
                 install_shell_quote(&in_repo.to_string_lossy(), windows)
             ));
         }
@@ -1408,7 +1410,7 @@ fn build_command(project_id: &str, image: &str) -> Option<String> {
     std::fs::create_dir_all(&stage).ok()?;
     std::fs::write(stage.join("Dockerfile"), REFERENCE_DOCKERFILE).ok()?;
     Some(format!(
-        "docker build -t {image} {}",
+        "{engine} build -t {image} {}",
         install_shell_quote(&stage.to_string_lossy(), windows)
     ))
 }
