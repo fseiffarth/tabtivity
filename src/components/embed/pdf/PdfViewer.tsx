@@ -2445,6 +2445,9 @@ function PdfCanvas({
     }
   }, []);
   const enterMarkup = useCallback(() => {
+    // An agent tab asks about this file: the strip opens on that tab.
+    const asking = markupRef.current.askWaiting;
+    if (asking) markupRef.current.chooseTarget(asking);
     setRedacting(false);
     setCopySelecting(false);
     setRailOpen(false);
@@ -4338,7 +4341,7 @@ function PdfCanvas({
           <>
             <button
               className={`file-viewer-zoom-btn file-viewer-zoom-text${marking ? " active" : ""}${
-                !marking && markup.hasUnsent ? " is-armed" : ""
+                !marking && (markup.hasUnsent || markup.askWaiting) ? " is-armed" : ""
               }`}
               onClick={() => (marking ? leaveMarkup() : enterMarkup())}
               disabled={!doc || (!marking && gate.blocked !== null)}
@@ -4347,7 +4350,9 @@ function PdfCanvas({
                   ? "pdfMarkup.toggleArranged"
                   : gate.blocked === "claimed"
                     ? "pdfMarkup.toggleClaimed"
-                    : "pdfMarkup.toggleTitle",
+                    : !marking && markup.askWaiting
+                      ? "pdfMarkup.toggleAsks"
+                      : "pdfMarkup.toggleTitle",
               )}
               aria-pressed={marking}
             >

@@ -105,6 +105,8 @@ figure?"), a local Claude or Codex tab (or a Local Model tab with the
 chat. The questions show in the markup view of that tab's PDF:
 
 - On the desktop, as a card under the **Mark up** bar while marking is on.
+  With marking off, the **Mark up** button is underlined while a tab asks
+  about the PDF, and opens the bar on that tab.
 - On the phone, as a card at the top of the markup view ("The agent asks ·
   2"), which also shows while you only read the PDF. While a question is
   open, the tab's Chat shows a line "The agent asks about …" naming the

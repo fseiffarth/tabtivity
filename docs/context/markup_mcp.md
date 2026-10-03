@@ -103,7 +103,9 @@ phone or desktop with its own instruction keeps it unchanged.
 - **Every question must be answered** (single-select: exactly one). Partial
   answers go through **Answer in chat instead**.
 - The desktop card shows only while markup mode is on (the target tab is
-  chosen when it comes on); the Mark up button does not hint at a waiting ask.
+  chosen when it comes on). With the mode off, `usePdfMarkup` lists every
+  agent tab of the project for the file (`askWaiting`, on screen only): the
+  Mark up button is underlined and opens the strip on the asking tab.
 - The phone's Focus banner opens only files in the tab's outbox: the phone
   has a leaf name, and the project file browser needs sealed folder tokens.
 - Pictures get no pins. A picture opened from the banner needs a tap on Mark

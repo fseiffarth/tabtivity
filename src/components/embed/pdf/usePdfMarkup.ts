@@ -334,9 +334,19 @@ export function usePdfMarkup({
   const tabAgent = useActivityStore((s) => (target ? agentTabStateOf(s, target.ptyId) : "idle"));
 
   // ── The agent's questions (`markup_ask`) ─────────────────────────────────
-  const asksKey = active && projectId && target ? `${projectId}\n${target.scheduleTargetId}\n${path}` : null;
+  const targetId = target?.scheduleTargetId ?? null;
+  const asksKey = active && projectId && targetId ? `${projectId}\n${targetId}\n${path}` : null;
   const asks = useMemo(() => (listed && listed.key === asksKey ? listed.asks : []), [listed, asksKey]);
-  const listening = asksKey !== null;
+  // Marking off (todo #2341): every agent tab of the project is asked, none
+  // chosen, whether it has an open ask for this file — the Mark up button
+  // then says so and opens the strip on the asking tab.
+  const idleIds = useMemo(
+    () => (!active && projectId ? targets.map((entry) => entry.scheduleTargetId) : []),
+    [active, projectId, targets],
+  );
+  const idleKey = projectId && idleIds.length ? `${projectId}\n${idleIds.join("\n")}\n${path}` : null;
+  const [waiting, setWaiting] = useState<{ key: string; target: string | null } | null>(null);
+  const listening = asksKey !== null || idleKey !== null;
   useEffect(() => {
     if (!listening) return;
     let live = true;
@@ -357,10 +367,10 @@ export function usePdfMarkup({
   // up on show — and never while an answer is on its way: the card it is
   // about stays put until the answer is queued or the ask reopened.
   useEffect(() => {
-    if (!asksKey || !projectId || !target || !visible || answering) return;
+    if (!asksKey || !projectId || !targetId || !visible || answering) return;
     let live = true;
     const key = asksKey;
-    void listMarkupQuestions(projectId, target.scheduleTargetId, path).then(
+    void listMarkupQuestions(projectId, targetId, path).then(
       (rows) => {
         if (live) setListed({ key, asks: rows });
       },
@@ -369,7 +379,23 @@ export function usePdfMarkup({
     return () => {
       live = false;
     };
-  }, [asksKey, projectId, target, path, visible, answering, asksChanged]);
+  }, [asksKey, projectId, targetId, path, visible, answering, asksChanged]);
+  // The same reads while marking is off, one per agent tab, on screen only.
+  useEffect(() => {
+    if (!idleKey || !projectId || !visible) return;
+    let live = true;
+    const key = idleKey;
+    void Promise.all(
+      idleIds.map((id) => listMarkupQuestions(projectId, id, path).then((rows) => (rows.length ? id : null), () => null)),
+    ).then((found) => {
+      if (live) setWaiting({ key, target: found.find((id) => id !== null) ?? null });
+    });
+    return () => {
+      live = false;
+    };
+  }, [idleKey, idleIds, projectId, path, visible, asksChanged]);
+  /** The agent tab with an open ask for this file while marking is off. */
+  const askWaiting = waiting && waiting.key === idleKey ? waiting.target : null;
   // An open ask is the agent asking: the round's pill says so.
   const agent = asks.length > 0 && tabAgent === "idle" ? "question" : tabAgent;
 
@@ -648,6 +674,7 @@ export function usePdfMarkup({
     chooseTarget: setChosen,
     agent,
     questions,
+    askWaiting,
     round,
     reloaded,
     stale: pdfStale,

@@ -2914,7 +2914,10 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ❌ Doesn't work on macOS
 
 2341. **The desktop PDF viewer hints at an open markup question while marking
-    is off.** The agent's markup questions (`docs/context/markup_mcp.md`,
+    is off.** (✅ done 2026-10-03 in review 1: `usePdfMarkup` lists each agent
+    tab of the project while marking is off and on screen — `askWaiting`; the
+    button gets `is-armed` and a tooltip, and Mark up opens on the asking tab;
+    ⚠️ never run live.) The agent's markup questions (`docs/context/markup_mcp.md`,
     `PdfMarkupQuestions.tsx`) show only while **✎ Mark up** is on, because the
     target tab is chosen when the mode comes on. With the mode off nothing on
     the toolbar says an ask is waiting, so a reader who closed the strip after
@@ -2922,7 +2925,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     carries one for unsent marks) when the PDF's project has an open ask for
     this file, listed per agent tab of the project without choosing one, and
     open the strip on the asking tab when clicked.
-    - [ ] 🤖 Automated test
+    - [x] 🤖 Automated test (`PdfMarkupQuestions.test.tsx` "an ask waiting while marking is off")
     - [ ] 🖐️ Manual test
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)

@@ -6438,6 +6438,7 @@ export const dict: Dict = {
   "pdfLinks.refused": "Este enlace no se puede abrir ({reason}).",
   "pdfMarkup.toggle": "Marcar",
   "pdfMarkup.toggleTitle": "Marca este PDF y envía las marcas a una pestaña de agente de este proyecto",
+  "pdfMarkup.toggleAsks": "Una pestaña de agente pregunta por este PDF — Marcar muestra sus preguntas",
   "pdfMarkup.toggleArranged": "Marcar funciona sobre el PDF guardado — guarda o deshaz antes los cambios de páginas",
   "pdfMarkup.toggleClaimed": "Este PDF se está marcando en otro panel",
   "pdfMarkup.hint": "Dibuja sobre las páginas — se queda en este ordenador hasta que lo envíes.",

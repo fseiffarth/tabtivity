@@ -452,7 +452,8 @@ tab's markup view, phone and desktop alike, each with a `?n` pin at the words
 it quotes; a tap (or **Other…** with typed words) sends the answer into the tab
 as the next prompt and closes the card everywhere, and **Answer in chat
 instead** closes it unanswered. The phone's chat shows a one-line banner while
-a question is open.
+a question is open; on the desktop, with marking off, the **Mark up** button is
+underlined and opens on the asking tab.
 
 ### Workspace Apps
 

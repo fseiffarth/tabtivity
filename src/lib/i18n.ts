@@ -6734,6 +6734,7 @@ export const enSource = {
   "pdfLinks.refused": "This link cannot be opened ({reason}).",
   "pdfMarkup.toggle": "Mark up",
   "pdfMarkup.toggleTitle": "Mark up this PDF and send the marks to an agent tab of this project",
+  "pdfMarkup.toggleAsks": "An agent tab asks about this PDF — Mark up to see its questions",
   "pdfMarkup.toggleArranged": "Mark up works on the PDF as saved — save or undo the page edits first",
   "pdfMarkup.toggleClaimed": "This PDF is being marked up in another pane",
   "pdfMarkup.hint": "Draw on the pages — kept on this computer until you submit.",

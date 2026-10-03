@@ -289,6 +289,50 @@ describe("desktop markup questions card", () => {
   });
 });
 
+describe("an ask waiting while marking is off", () => {
+  let seen: ReturnType<typeof usePdfMarkup> | null = null;
+  function Idle({ active = false, visible = true }: { active?: boolean; visible?: boolean }) {
+    seen = usePdfMarkup({ projectId: "p1", scope: "p1", path: PATH, active, visible, pageCount: 3, docSize: 9_000, docVersion: 0 });
+    return null;
+  }
+  beforeEach(() => {
+    seen = null;
+    useTabsStore.setState({ tabsByScope: { p1: [agentTab("t1", "s1", "Claude"), agentTab("t2", "s2", "Codex")] } });
+    mocks.invoke.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "markup_mcp_list") return args.scheduleTargetId === "s2" ? open : [];
+      return null;
+    });
+  });
+
+  it("names the asking tab of the project, whichever is chosen, and only while the pane shows", async () => {
+    open = [ask([single])];
+    const { rerender } = render(<Idle visible={false} />);
+    await waitFor(() => expect(mocks.listeners.has("markup-mcp-changed")).toBe(true));
+    await act(async () => {});
+    expect(calls("markup_mcp_list")).toHaveLength(0);
+    rerender(<Idle />);
+    await waitFor(() => expect(seen?.askWaiting).toBe("s2"));
+    expect(calls("markup_mcp_list").map(([, args]) => args)).toEqual(
+      expect.arrayContaining([
+        { projectId: "p1", scheduleTargetId: "s1", path: PATH },
+        { projectId: "p1", scheduleTargetId: "s2", path: PATH },
+      ]),
+    );
+    // Answered elsewhere: the event takes the hint away.
+    open = [];
+    ring();
+    await waitFor(() => expect(seen?.askWaiting).toBeNull());
+  });
+
+  it("is not listed per tab once marking is on", async () => {
+    open = [ask([single])];
+    render(<Idle active />);
+    await act(async () => {});
+    expect(calls("markup_mcp_list").every(([, args]) => (args as { scheduleTargetId: string }).scheduleTargetId === "s1")).toBe(true);
+    expect(seen?.askWaiting).toBeNull();
+  });
+});
+
 describe("question pins", () => {
   const run = (str: string, x: number, y: number, eol = false): TextItemBox => ({ str, x, y, w: str.length * 5, h: 10, ...(eol ? { eol: true } : {}) });
   const items = [run("The results, as shown in", 72, 100, true), run("Figure 2, hold.", 72, 112)];
