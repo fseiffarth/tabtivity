@@ -112,27 +112,80 @@ pub fn keeper_socket() -> PathBuf {
         .unwrap_or_else(|| Path::new("/run").join(brand::SLUG).join(super::keys_wire::SOCKET_NAME))
 }
 
-/// One request to the keeper at `socket`: a JSON line each way.
+/// Tries of one request when the keeper closes the connection unanswered.
+#[cfg(unix)]
+const ATTEMPTS: u32 = 4;
+#[cfg(unix)]
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Why one exchange with the keeper failed.
+#[cfg(unix)]
+enum Failure {
+    /// Closed before answering: the keeper's per-uid or overall cap was
+    /// full at that moment (`keeper::MAX_PER_UID`). Worth a retry — a burst
+    /// of this user's own spawns and Claude helper calls can fill it.
+    Unanswered(String),
+    Other(String),
+}
+
+/// One request to the keeper at `socket`: a JSON line each way. Every
+/// request the daemon sends only reads, so one the keeper turned away at a
+/// full cap is sent again a few times before it fails.
 #[cfg(unix)]
 pub fn ask_at(socket: &Path, request: &Request) -> Result<Reply, String> {
-    use std::io::Write;
-    let mut stream = std::os::unix::net::UnixStream::connect(socket).map_err(|e| format!("the key keeper ({}): {e}", socket.display()))?;
-    stream.set_read_timeout(Some(DEADLINE)).map_err(|e| e.to_string())?;
-    stream.set_write_timeout(Some(DEADLINE)).map_err(|e| e.to_string())?;
-    let mut line = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    let mut attempt = 0;
+    loop {
+        match ask_once(socket, request) {
+            Ok(reply) => return Ok(reply),
+            Err(Failure::Unanswered(_)) if attempt + 1 < ATTEMPTS => {
+                attempt += 1;
+                std::thread::sleep(RETRY_PAUSE * attempt);
+            }
+            Err(Failure::Unanswered(error) | Failure::Other(error)) => return Err(format!("the key keeper: {error}")),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn ask_once(socket: &Path, request: &Request) -> Result<Reply, Failure> {
+    use std::io::{ErrorKind, Write};
+    let unanswered = |e: &std::io::Error| matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted);
+    let mut stream = std::os::unix::net::UnixStream::connect(socket).map_err(|e| Failure::Other(format!("{}: {e}", socket.display())))?;
+    stream.set_read_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
+    stream.set_write_timeout(Some(DEADLINE)).map_err(|e| Failure::Other(e.to_string()))?;
+    let mut line = serde_json::to_vec(request).map_err(|e| Failure::Other(e.to_string()))?;
     line.push(b'\n');
-    stream.write_all(&line).map_err(|e| format!("the key keeper: {e}"))?;
-    read_reply(stream).map_err(|e| format!("the key keeper: {e}"))
+    if let Err(e) = stream.write_all(&line) {
+        return Err(if unanswered(&e) { Failure::Unanswered(e.to_string()) } else { Failure::Other(e.to_string()) });
+    }
+    match read_answer(stream) {
+        Ok(answer) if answer.is_empty() => Err(Failure::Unanswered("closed without an answer".into())),
+        Ok(answer) => parse_reply(&answer).map_err(Failure::Other),
+        Err(e) if unanswered(&e) => Err(Failure::Unanswered(e.to_string())),
+        Err(e) => Err(Failure::Other(e.to_string())),
+    }
+}
+
+/// Everything `stream` sends (one line, bounded), into a buffer that is wiped.
+#[cfg(unix)]
+fn read_answer(stream: std::os::unix::net::UnixStream) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read;
+    let mut answer = Zeroizing::new(Vec::new());
+    stream.take(super::keys_wire::MAX_LINE as u64 + 1).read_to_end(&mut answer)?;
+    Ok(answer)
+}
+
+#[cfg(unix)]
+fn parse_reply(answer: &[u8]) -> Result<Reply, String> {
+    let end = answer.iter().position(|&b| b == b'\n').unwrap_or(answer.len());
+    serde_json::from_slice::<Reply>(&answer[..end]).map_err(|e| format!("answer: {e}"))
 }
 
 /// One JSON reply line from `stream`, read into a buffer that is wiped.
 #[cfg(unix)]
 fn read_reply(stream: std::os::unix::net::UnixStream) -> Result<Reply, String> {
-    use std::io::Read;
-    let mut answer = Zeroizing::new(Vec::new());
-    stream.take(super::keys_wire::MAX_LINE as u64 + 1).read_to_end(&mut answer).map_err(|e| e.to_string())?;
-    let end = answer.iter().position(|&b| b == b'\n').unwrap_or(answer.len());
-    serde_json::from_slice::<Reply>(&answer[..end]).map_err(|e| format!("answer: {e}"))
+    let answer = read_answer(stream).map_err(|e| e.to_string())?;
+    parse_reply(&answer)
 }
 
 #[cfg(not(unix))]
@@ -311,13 +364,31 @@ fn is_ours(value: &serde_json::Value) -> bool {
 /// Tabtivity's own agent homes only (`agent_auth`'s place step calls it for
 /// every home, at each spawn and when the choice changes).
 pub fn sync_helper_settings(state_dir: &Path, home: &Path, chosen: &BTreeSet<String>) {
-    let exe = std::env::current_exe().ok();
+    let exe = std::env::current_exe().ok().and_then(|exe| helper_exe(&exe));
     sync_helper_settings_with(state_dir, home, chosen, exe.as_deref());
+}
+
+/// The path the helper setting names for this binary. Once an update has
+/// replaced the running binary, Linux reports it as `<path> (deleted)` —
+/// a setting naming that would fail every helper call until the daemon
+/// restarts — so the path the update put there (the new binary, which
+/// answers the same verb) is named instead. `None` when neither exists.
+fn helper_exe(exe: &Path) -> Option<PathBuf> {
+    if exe.is_file() {
+        return Some(exe.to_path_buf());
+    }
+    let replaced = PathBuf::from(exe.to_str()?.strip_suffix(" (deleted)")?);
+    replaced.is_file().then_some(replaced)
 }
 
 pub fn sync_helper_settings_with(state_dir: &Path, home: &Path, chosen: &BTreeSet<String>, exe: Option<&Path>) {
     use crate::services::home_io::HomeFile;
     let on = chosen.contains("claude");
+    // On, but this binary's path is unknown: leave the setting as it is
+    // rather than write a helper that cannot run or drop the one there.
+    if on && exe.is_none() {
+        return;
+    }
     let file = if on { HomeFile::open(home, ".claude/settings.json") } else { HomeFile::open_existing(home, ".claude/settings.json") };
     let Some(file) = file else { return };
     let bytes = file.read();
@@ -325,7 +396,19 @@ pub fn sync_helper_settings_with(state_dir: &Path, home: &Path, chosen: &BTreeSe
     if !on && !bytes.as_deref().is_some_and(|b| b.windows(HELPER_ARG.len()).any(|w| w == HELPER_ARG.as_bytes())) {
         return;
     }
-    let mut root: serde_json::Value = bytes.as_deref().and_then(|b| serde_json::from_slice(b).ok()).unwrap_or_else(|| serde_json::json!({}));
+    // A file that is there but does not parse (hand-edited, or caught half
+    // written) is left alone, as `agent_global` leaves it: rewriting it from
+    // `{}` would throw away every other setting in it.
+    let mut root: serde_json::Value = match bytes.as_deref() {
+        Some(b) if !b.iter().all(u8::is_ascii_whitespace) => match serde_json::from_slice(b) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("agent_keys: helper setting in {}: unreadable, left alone: {e}", home.display());
+                return;
+            }
+        },
+        _ => serde_json::json!({}),
+    };
     let Some(obj) = root.as_object_mut() else { return };
     let want = match (on, exe) {
         (true, Some(exe)) => Some(serde_json::Value::String(helper_command(exe, &state_dir.join(HELPER_DIR).join("claude.sock")))),
@@ -380,16 +463,48 @@ pub fn serve_helper_in(state_dir: PathBuf, keeper: PathBuf, cli: &'static str) -
     }
     let listener = std::os::unix::net::UnixListener::bind(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("{}: {e}", path.display()))?;
+    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     std::thread::Builder::new()
         .name(format!("key-helper-{cli}"))
         .spawn(move || {
             for stream in listener.incoming().flatten() {
+                // Anything in a chosen Claude's fence can connect: a flood
+                // gets closed connections, never a thread each.
+                let Some(slot) = HelperSlot::take(&in_flight) else { continue };
                 let (state_dir, keeper) = (state_dir.clone(), keeper.clone());
-                let _ = std::thread::Builder::new().name("key-helper".into()).spawn(move || answer_helper(&state_dir, &keeper, cli, stream));
+                let _ = std::thread::Builder::new().name("key-helper".into()).spawn(move || {
+                    let _slot = slot;
+                    answer_helper(&state_dir, &keeper, cli, stream);
+                });
             }
         })
         .map_err(|e| e.to_string())?;
     Ok(path)
+}
+
+/// Helper calls answered at once per socket; more are closed unanswered (the
+/// helper then reports the key could not be fetched, and Claude asks again).
+#[cfg(target_os = "linux")]
+const MAX_HELPER_CALLS: usize = 8;
+
+/// One helper call in flight; gives its count back when dropped.
+#[cfg(target_os = "linux")]
+struct HelperSlot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(target_os = "linux")]
+impl HelperSlot {
+    fn take(count: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_HELPER_CALLS).then_some(n + 1)).ok()?;
+        Some(HelperSlot(count.clone()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HelperSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -698,6 +813,49 @@ pub(crate) mod tests {
         assert!(!bare.join(".claude").exists());
     }
 
+    /// P3b decisions review: a settings file that does not parse is never
+    /// rewritten from scratch, and an unknown binary path never writes or
+    /// drops the helper.
+    #[test]
+    fn an_unreadable_settings_file_or_an_unknown_binary_leaves_the_setting_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, home) = (dir.path().join("state"), dir.path().join("home"));
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let settings = home.join(".claude/settings.json");
+        let chosen: BTreeSet<String> = ["claude".to_string()].into();
+        let exe = Path::new("/opt/serverd");
+        let torn = r#"{"model":"opus","permissions":{"allow":["Bash(ls)"#;
+        std::fs::write(&settings, torn).unwrap();
+        sync_helper_settings_with(&state, &home, &chosen, Some(exe));
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), torn, "every other setting survives");
+        // An empty file is a fresh one.
+        std::fs::write(&settings, "\n").unwrap();
+        sync_helper_settings_with(&state, &home, &chosen, Some(exe));
+        let written = std::fs::read_to_string(&settings).unwrap();
+        assert!(written.contains(HELPER_ARG), "{written}");
+        // On, but the binary's path unknown: ours stays, nothing new is written.
+        sync_helper_settings_with(&state, &home, &chosen, None);
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), written);
+        let bare = dir.path().join("bare");
+        std::fs::create_dir(&bare).unwrap();
+        sync_helper_settings_with(&state, &bare, &chosen, None);
+        assert!(!bare.join(".claude").exists());
+    }
+
+    /// An update that replaced the running binary: the helper names the path
+    /// the new one sits at, never `… (deleted)`.
+    #[test]
+    fn a_replaced_binary_is_named_by_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("serverd");
+        std::fs::write(&bin, b"").unwrap();
+        assert_eq!(helper_exe(&bin), Some(bin.clone()));
+        let deleted = PathBuf::from(format!("{} (deleted)", bin.display()));
+        assert_eq!(helper_exe(&deleted), Some(bin.clone()));
+        std::fs::remove_file(&bin).unwrap();
+        assert_eq!(helper_exe(&deleted), None, "nothing at the path: no helper to name");
+    }
+
     /// The helper socket answers this uid with the key while the user runs
     /// Claude on it, and stops the moment they switch back or the key goes.
     #[cfg(target_os = "linux")]
@@ -734,6 +892,62 @@ pub(crate) mod tests {
         std::fs::create_dir_all(odd.join(HELPER_DIR)).unwrap();
         std::fs::write(odd.join(HELPER_DIR).join("claude.sock"), b"x").unwrap();
         assert!(serve_helper_in(odd, live, "claude").is_err());
+    }
+
+    /// P3b decisions review: the keeper closes a connection over its per-uid
+    /// cap unanswered; a burst of this user's own spawns and helper calls
+    /// must not fail on that, so the read-only request is sent again.
+    #[test]
+    fn a_request_the_keeper_turned_away_at_its_cap_is_sent_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("auth.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = served.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                // The first two: closed unanswered, as over the cap.
+                if count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    drop(stream);
+                    continue;
+                }
+                let mut line = String::new();
+                let _ = BufReader::new(&stream).read_line(&mut line);
+                let mut out = serde_json::to_vec(&Reply { offered: vec![Offer { cli: "claude".into(), updated: 1 }], ..Reply::ok() }).unwrap();
+                out.push(b'\n');
+                let _ = (&stream).write_all(&out);
+            }
+        });
+        let offers = offered_at(&socket).unwrap();
+        assert_eq!(offers.iter().map(|o| o.cli.as_str()).collect::<Vec<_>>(), ["claude"]);
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 3);
+        // A keeper that never answers anyone: a bounded number of tries.
+        let mute = dir.path().join("mute.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&mute).unwrap();
+        let tries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = tries.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        assert!(offered_at(&mute).is_err());
+        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), ATTEMPTS as usize);
+        // No keeper at all: no retries, an error at once.
+        let error = offered_at(&dir.path().join("missing.sock")).unwrap_err();
+        assert!(error.contains("the key keeper"), "{error}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn helper_calls_in_flight_are_capped_and_given_back() {
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let held: Vec<HelperSlot> = (0..MAX_HELPER_CALLS).map(|_| HelperSlot::take(&count).unwrap()).collect();
+        assert!(HelperSlot::take(&count).is_none());
+        drop(held);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(HelperSlot::take(&count).is_some());
     }
 
     #[test]
