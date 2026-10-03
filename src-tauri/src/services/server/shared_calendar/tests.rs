@@ -218,3 +218,51 @@ fn a_wait_returns_when_another_member_changes_a_calendar() {
     assert!(waiter.join().unwrap().unwrap(), "alice's page is woken by carol's edit");
     assert_eq!(alice.task("t1").unwrap().percent, 50, "and the daemon's copy caught up");
 }
+
+/// Many open pages share one wait at the service: the service takes only a
+/// few connections per account, and a wait per page would hold them all and
+/// leave the user's own edits (and other users') without a connection.
+#[test]
+fn many_pages_share_one_wait_at_the_service() {
+    let server = Server::new();
+    let (alice_sock, carol_sock) = (server.socket_for("alice"), server.socket_for("carol"));
+    let (alice_state, carol_state) = (server.state("alice"), server.state("carol"));
+    let path = alices_calendar(&alice_state);
+    let info = share_in(&path, &alice_state, &alice_sock, "lab").unwrap();
+    grant(&alice_sock, &info.id, "carol", None, Some(Role::Editor));
+    let alice = std::sync::Arc::new(Shared::new(alice_sock.clone(), alice_state));
+    view(&alice);
+    let carol = Shared::new(carol_sock, carol_state);
+    let task = view(&carol).tasks[0].clone();
+    let pages: Vec<_> = (0..2 * app_gateway::calendars::MAX_PER_UID)
+        .map(|_| {
+            let alice = alice.clone();
+            std::thread::spawn(move || alice.wait())
+        })
+        .collect();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    // Alice's own edit still gets a connection while every page waits.
+    assert!(ask_at(&alice_sock, &Request::List).unwrap().ok);
+    let mut edited = task.clone();
+    edited.percent = 30;
+    carol.put_task(&edited, false).unwrap().unwrap();
+    for page in pages {
+        assert!(page.join().unwrap().unwrap(), "every page is woken by the one wait");
+    }
+}
+
+/// An unshare whose write-back fails keeps the calendar aside: the service
+/// has let go of it, so the answer must not be dropped.
+#[test]
+fn an_unshare_that_cannot_be_stored_is_kept_aside() {
+    let server = Server::new();
+    let alice_sock = server.socket_for("alice");
+    let alice_state = server.state("alice");
+    let path = alices_calendar(&alice_state);
+    let info = share_in(&path, &alice_state, &alice_sock, "lab").unwrap();
+    std::fs::write(&path, b"{ not a calendar").unwrap();
+    let error = unshare_in(&path, &alice_state, &alice_sock, &info.id).unwrap_err();
+    assert!(error.contains("kept in"), "{error}");
+    let kept = std::fs::read_to_string(alice_state.join(RETURNED_DIR).join(format!("{}.json", info.id))).unwrap();
+    assert!(kept.contains("Group meeting") && kept.contains("Order reagents"), "{kept}");
+}

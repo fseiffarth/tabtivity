@@ -154,6 +154,13 @@ pub struct Shared {
     socket: PathBuf,
     state_dir: PathBuf,
     cache: Mutex<BTreeMap<String, CalContent>>,
+    /// One `wait` at the service at a time, whatever number of pages watch:
+    /// each held connection is one of the service's few per account (and
+    /// overall), so a user with many pages open would otherwise starve their
+    /// own edits — and other users'.
+    waiting: Mutex<()>,
+    /// When the last `wait` at the service ended, and what it said.
+    last_wait: Mutex<Option<(std::time::Instant, bool)>>,
 }
 
 fn editable(role: Option<Role>) -> bool {
@@ -166,7 +173,7 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, String> {
 
 impl Shared {
     pub fn new(socket: PathBuf, state_dir: PathBuf) -> Self {
-        Shared { socket, state_dir, cache: Mutex::default() }
+        Shared { socket, state_dir, cache: Mutex::default(), waiting: Mutex::default(), last_wait: Mutex::default() }
     }
 
     /// Ask the service what this user may see; fetch every calendar whose
@@ -198,13 +205,22 @@ impl Shared {
 
     /// Block until the service has something newer than this daemon's copy
     /// (at most [`cal_wire::MAX_WAIT_MS`]); `true` when it does.
+    /// Callers that arrive while one wait is out share its answer.
     pub fn wait(&self) -> Result<bool, String> {
+        let asked = std::time::Instant::now();
+        let _turn = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((ended, changed)) = *self.last_wait.lock().unwrap_or_else(PoisonError::into_inner) {
+            if ended >= asked {
+                return Ok(changed);
+            }
+        }
         let changed = expect_ok(ask_at(&self.socket, &Request::Wait { revs: self.revs(), timeout_ms: cal_wire::MAX_WAIT_MS })?)?.changed;
         if changed {
             // Catch the copy up, so the next wait blocks even when no page
             // reloads the calendar (a page that never opened it).
             self.refresh()?;
         }
+        *self.last_wait.lock().unwrap_or_else(PoisonError::into_inner) = Some((std::time::Instant::now(), changed));
         Ok(changed)
     }
 
@@ -472,10 +488,27 @@ pub fn share_in(path: &Path, state_dir: &Path, socket: &Path, calendar_id: &str)
 
 /// Stop sharing `id` (the owner): everything comes back into `calendar.json`
 /// under the calendar's own id (a fresh one if that is taken meanwhile).
+/// If the write-back fails, the content is kept in
+/// `<state>/`[`RETURNED_DIR`]`/<id>.json` (the service no longer has it).
 pub fn unshare_in(path: &Path, state_dir: &Path, socket: &Path, id: &str) -> Result<(), String> {
-    use crate::commands::calendar::transact;
     let content = expect_ok(ask_at(socket, &Request::Unshare { id: id.to_string() })?)?.content.ok_or("the service sent nothing back")?;
-    let mut prefs = load_prefs(state_dir);
+    if let Err(error) = put_back(path, state_dir, &content) {
+        let kept = state_dir.join(RETURNED_DIR).join(format!("{id}.json"));
+        let saved = std::fs::create_dir_all(state_dir.join(RETURNED_DIR)).map_err(|e| e.to_string()).and_then(|_| crate::services::mobile_control::store::write_json_atomic(&kept, &content, 0o600));
+        return Err(match saved {
+            Ok(()) => format!("The calendar came back but could not be stored in your calendar ({error}); it is kept in {}", kept.display()),
+            Err(e) => format!("The calendar came back but could not be stored in your calendar ({error}), nor kept aside ({e})"),
+        });
+    }
+    forget_prefs(state_dir, id, &content)
+}
+
+/// Where [`unshare_in`] keeps a calendar it could not put back.
+pub const RETURNED_DIR: &str = "shared-calendars-returned";
+
+fn put_back(path: &Path, state_dir: &Path, content: &CalContent) -> Result<(), String> {
+    use crate::commands::calendar::transact;
+    let prefs = load_prefs(state_dir);
     transact(path, |data| {
         let mut cal_id = content.origin.clone().filter(|o| !o.is_empty()).unwrap_or_else(crate::commands::projects::uuid_v4);
         if data.calendars.iter().any(|c| c.id == cal_id) {
@@ -509,7 +542,13 @@ pub fn unshare_in(path: &Path, state_dir: &Path, socket: &Path, id: &str) -> Res
         }
         data.normalize();
         Ok(())
-    })?;
+    })
+    .map(|_| ())
+}
+
+/// The owner's kept links and checkbox of an unshared calendar, forgotten.
+fn forget_prefs(state_dir: &Path, id: &str, content: &CalContent) -> Result<(), String> {
+    let mut prefs = load_prefs(state_dir);
     for record in &content.tasks {
         if let Some(id) = record.get("id").and_then(Value::as_str) {
             prefs.kept.remove(id);
