@@ -3049,3 +3049,50 @@ the Connect window. On macOS the window shares the main profile (no
 `data_directory` there). The pairing key is a file, not the OS keychain —
 the same choice as the daemon's identity key; flag if the keychain is
 wanted.
+
+### 5. Rootless Podman per user (§9)
+
+| Commit | Content |
+|---|---|
+| `d063d126` | `sandbox::Engine` (Docker on a desktop, Podman on a server; `program`, `global_args` = `--cgroup-manager=cgroupfs --events-backend=file`, `create_args` adds `--userns=keep-id`), every engine call through it (`docker()`/`engine_output`, the exec wrap, preflight, sweep), `is_engine_cmd` in `launch_prep` (the tmux/fence skips); `policy.features.containers` (default **off**, fail-closed off) and `server::Feature::Containers` for `set_project_sandbox[_spec]`/`sandbox_preflight`, which move from `Admin` to `Core` (`commandClasses.ts` regenerated); a container spawn on a server with the switch off fails; the admin's Server settings toggle; prereq `podman` row (Podman, `newuidmap`/`newgidmap`, subordinate ranges per user — a warning); the isolation script's Podman section; i18n ×5 (2 keys); UntestedTag `server.containers`. |
+| `362b6e7c` | The missing-image build/pull tab uses the current engine. |
+| `dac408da` | Docs (`docker_containers.md` section, plan §9 row, user docs, file map, TODO #2380). |
+
+**Design** (rationale in `context/docker_containers.md`): rootless Podman is
+the user's own process tree — the same uid boundary as every other process
+of theirs — so the container commands become the user's (`Core`), behind an
+admin switch that starts off because the machine needs Podman and
+subordinate id ranges first. No Docker socket ever reaches a user (the helper
+still refuses `docker` group members).
+
+**Live steps** (TODO #2380):
+1. `sudo apt install podman uidmap`; `grep -E '^(alice|bob):' /etc/subuid
+   /etc/subgid` lists both (else `sudo usermod --add-subuids
+   200000-265535 --add-subgids 200000-265535 bob`); `sudo
+   …/tabtivity-admin-helper check` → `podman ok`.
+2. Alice (admin): Server settings → **Project containers** on.
+3. Bob: a project → pill → Run this project in a container → the image
+   is missing → the one-click build tab runs `podman build …` and succeeds.
+4. A shell tab in the project: `id -u` = Bob's uid; `touch x` → on the host
+   `ls -ln x` shows Bob's uid. As Bob outside: `podman --cgroup-manager=
+   cgroupfs ps` lists `tabtivity-<id>`; as Alice: nothing; `sudo podman ps`
+   (rootful): nothing.
+5. `systemd-cgls` shows the container's processes under Bob's
+   `tabtivity-users-bob.slice` (the cgroupfs choice). If Podman refuses
+   cgroupfs without delegation, try `Delegate=yes` in the daemon unit and
+   note it here.
+6. An agent tab in it starts (P4's spawn gate and the P3b direct key still
+   apply); a brokered Claude is refused naming the broker.
+7. Alice switches containers off → Bob's next tab in that project fails
+   naming the switch; existing containers stay until the session ends.
+8. `sudo scripts/server-isolation-test.sh alice bob`: the Podman section
+   passes.
+
+**Gotchas for the reviewer**: Podman's runtime dir is not set explicitly:
+without lingering there is no `/run/user/<uid>`, and Podman falls back to
+`/tmp/podman-run-<uid>` — the daemon and tmux units share one private
+`/tmp` (`JoinsNamespaceOf=`), so tabs and the daemon see one runtime dir.
+A tab's `podman exec` runs on the host side like `docker exec` did (not
+fenced). The fingerprint of a container spec is computed on the Docker argv
+(the engine's additions come after), so a desktop project moved to a server
+recreates nothing it should not.
