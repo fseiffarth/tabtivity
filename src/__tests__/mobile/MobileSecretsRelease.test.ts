@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { answerUnlock, b64url, context, transportKey, unb64url } from "../../../mobile-web/src/secrets";
+import { answerUnlock, b64url, checkRepin, context, transportKey, unb64url } from "../../../mobile-web/src/secrets";
+import { actionPayload } from "../../../mobile-web/src/secretsCore";
 import { BRAND } from "../../lib/brand";
 
 const ORIGIN = "https://desk.example.ts.net";
@@ -73,5 +74,39 @@ describe(`${BRAND.display} server secrets release`, () => {
     expect(await answerUnlock({ ...record, deviceId: "dev_other_000001" }, server.start, ORIGIN)).toBeNull();
     // A field swapped after signing.
     expect(await answerUnlock(record, { ...server.start, transport: impostor.start.transport }, ORIGIN)).toBeNull();
+  });
+
+  // `vault::tests::the_repin_vector_checks`: made by the daemon, checked here
+  // exactly as a phone re-pins a changed identity key with its recovery code.
+  const offer = {
+    identity: "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKkDURY8Syd9-UTEdLF0YhWAyoWJ34Iaf8hcJyIZne5Z8ERpICQjhw9039TemZ1DEY_mNAye8h1svmWfleHLNOw",
+    salt: "Y1NhEUVqetU8Ee2LPjHvHw",
+    public: "BDsolR8Xuro9UbcrPIUBXI7HdcXBNfuhYVMoObI6i6Ajmus9zbe4BD1gvLTSKvsjlA82fZZ44O-maPN8GcHGZbc",
+    ephemeral: "BKqQH8LgudJ_fBD56lEsYJdgMFzV0w_C0HtCFcHEHIA6KpWv59lA2SdS6U_GBtuwEgC_9YlyggmP1gtbMjktm50",
+    nonce: "LWrwX_Jrtxdv4NkD",
+    sealed: "gVCmwcvNbmSD-rvI_VQqyOZIC6BbL_WhTVLZJp4qviRmVYkOuyV8rMF-fZtnfj05",
+    authNonce: "FjrRrJmXuzIBw9ud",
+    binding: "hZ_YVpo4uqHK94P-YZpujj64pDLzzPw5jfLubTaCt_U",
+  };
+  const code = "8ef8-e89b-c049-e1a0-373c-4944-2858-41c0";
+
+  it("re-pins only an identity the recovery code confirms", async () => {
+    expect(await checkRepin(code, offer, ORIGIN)).toBe(true);
+    expect(await checkRepin(code.toUpperCase().replace(/-/g, " "), offer, ORIGIN)).toBe(true);
+    expect(await checkRepin("0000-0000-0000-0000-0000-0000-0000-0000", offer, ORIGIN)).toBe(false);
+    expect(await checkRepin(code, offer, "https://other.example")).toBe(false);
+    // A key of someone in the middle under the genuine binding, or a binding
+    // the middle made itself: neither checks.
+    const middle = await crypto.subtle.generateKey(ecdsa, true, ["sign", "verify"]);
+    const spki = b64url(await crypto.subtle.exportKey("spki", middle.publicKey));
+    expect(await checkRepin(code, { ...offer, identity: spki }, ORIGIN)).toBe(false);
+    expect(await checkRepin(code, { ...offer, binding: b64url(new Uint8Array(32)) }, ORIGIN)).toBe(false);
+    expect(await checkRepin("not a code", offer, ORIGIN)).toBe(false);
+  });
+
+  it("signs set-up and new codes over its own text, not the server's", () => {
+    expect(actionPayload(ORIGIN, "dev_phone_000001", "secrets-setup", "abc_DEF-1", 1700000000).split("\n")).toEqual([
+      context("action"), ORIGIN, "dev_phone_000001", "secrets-setup", "abc_DEF-1", "1700000000",
+    ]);
   });
 });

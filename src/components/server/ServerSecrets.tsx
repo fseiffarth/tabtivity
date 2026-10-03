@@ -5,6 +5,12 @@
  * a reboot is the paired phone's or browser's own job at sign-in
  * (`mobile-web/src/secrets.ts`); this panel only says whether it happened.
  *
+ * Set-up and a new recovery code are signed by this browser's pairing key
+ * (the same origin's IndexedDB as the phone app at `/`), not only its
+ * session cookie. When the daemon's identity key is not the one this
+ * browser pinned, the panel asks for the recovery code and re-pins only if
+ * the code confirms the new key (`mobile-web/src/secretsCore.ts`).
+ *
  * Talks to the daemon's device-session routes (`/api/v1/secrets/*`) through
  * the gateway; shown by `ServerSettings`, i.e. only behind a gateway.
  */
@@ -12,8 +18,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { SettingsCard } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
+import { loadSecrets, repinIdentity, signedAction, unlockWith, type Post } from "../../../mobile-web/src/secretsCore";
 
-interface SecretsState { available: boolean; setUp?: boolean; unlocked?: boolean }
+interface SecretsState { available: boolean; setUp?: boolean; unlocked?: boolean; recoveryCode?: boolean; identity?: string | null }
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
@@ -28,16 +35,32 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
   return answer;
 }
 
+const post: Post = (path, body) => call(path, body);
+
+/** The identity this browser pinned, if it holds one (no IndexedDB, or a
+ * browser that never paired at `/`: none). */
+async function pinnedIdentity(): Promise<string | null> {
+  try {
+    return (await loadSecrets())?.identity ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function ServerSecrets() {
   const t = useT();
   const [state, setState] = useState<SecretsState | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [recovery, setRecovery] = useState("");
+  const [repin, setRepin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     call<SecretsState>("/api/v1/secrets").then(setState).catch(() => setState(null));
+    void pinnedIdentity().then(setPinned);
   }, []);
   useEffect(refresh, [refresh]);
 
@@ -46,15 +69,24 @@ export function ServerSecrets() {
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
     setError(null);
+    setNote(null);
     try {
       await work();
     } catch (e) {
-      setError(t("server.secrets.error", { error: e instanceof Error ? e.message : String(e) }));
+      const reason = e instanceof Error ? e.message : String(e);
+      setError(
+        reason === "unpaired" ? t("server.secrets.unpaired")
+          : reason === "recovery_outdated" ? t("server.secrets.repin.outdated")
+            : t("server.secrets.error", { error: reason }),
+      );
     } finally {
       setBusy(false);
       refresh();
     }
   };
+
+  const signed = async (path: string, action: string) => (await call<{ code: string }>(path, await signedAction(action, post))).code;
+  const untrusted = !!state.identity && !!pinned && state.identity !== pinned;
 
   return (
     <>
@@ -62,6 +94,43 @@ export function ServerSecrets() {
         {t("server.secrets.header")} <UntestedTag id="server.secrets" />
       </div>
       <p className="settings-help">{t("server.secrets.help")}</p>
+      {untrusted && !code && (
+        <SettingsCard>
+          <p className="settings-help">
+            {t("server.secrets.repin.header")} <UntestedTag id="server.secrets.repin" />
+          </p>
+          <p className="settings-help">{t("server.secrets.repin.help")}</p>
+          <label className="settings-card-label" htmlFor="server-repin-input">{t("server.secrets.recoveryLabel")}</label>
+          <input
+            id="server-repin-input"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            value={repin}
+            disabled={busy}
+            onChange={(event) => setRepin(event.target.value)}
+          />
+          <div className="settings-link-row">
+            <button
+              type="button"
+              className="settings-btn sm"
+              disabled={busy || !repin.trim()}
+              onClick={() => void run(async () => {
+                const outcome = await repinIdentity(repin.trim(), post);
+                if (outcome === "mismatch") {
+                  setError(t("server.secrets.repin.mismatch"));
+                  return;
+                }
+                setRepin("");
+                if (!state.unlocked) await unlockWith(post);
+                setNote(t("server.secrets.repin.done"));
+              })}
+            >
+              {t("server.secrets.repin.submit")}
+            </button>
+          </div>
+        </SettingsCard>
+      )}
       {code ? (
         <SettingsCard>
           <p className="settings-help">{t("server.secrets.codeIntro")}</p>
@@ -80,19 +149,21 @@ export function ServerSecrets() {
             type="button"
             className="settings-btn sm"
             disabled={busy}
-            onClick={() => void run(async () => setCode((await call<{ code: string }>("/api/v1/secrets/setup", {})).code))}
+            onClick={() => void run(async () => setCode(await signed("/api/v1/secrets/setup", "secrets-setup")))}
           >
             {t("server.secrets.setUp")}
           </button>
         </div>
       ) : state.unlocked ? (
         <div className="settings-link-row">
-          <p className="settings-help">{t("server.secrets.unlocked")}</p>
+          <p className="settings-help">
+            {state.recoveryCode === false ? t("server.secrets.noRecoveryCode") : t("server.secrets.unlocked")}
+          </p>
           <button
             type="button"
             className="settings-btn sm"
             disabled={busy}
-            onClick={() => void run(async () => setCode((await call<{ code: string }>("/api/v1/secrets/recovery-code", {})).code))}
+            onClick={() => void run(async () => setCode(await signed("/api/v1/secrets/recovery-code", "secrets-recovery-code")))}
           >
             {t("server.secrets.newCode")}
           </button>
@@ -125,6 +196,7 @@ export function ServerSecrets() {
           </div>
         </SettingsCard>
       )}
+      {note && <p className="settings-help" role="status">{note}</p>}
       {error && <p className="settings-help">{error}</p>}
     </>
   );
