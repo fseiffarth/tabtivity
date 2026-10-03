@@ -162,17 +162,57 @@ fn strip_comment(line: &str) -> String {
 }
 
 /// The comma-list before the host list: `"alice, %staff  ALL = …"` →
-/// `["alice", "%staff"]`.
+/// `["alice", "%staff"]`. sudoers lets a name be double-quoted or carry
+/// backslash escapes (`"alice"`, `%domain\ users`), so both are undone here
+/// — a quoted name must not slip past the match.
 fn user_list(spec: &str) -> Vec<String> {
-    let head = spec.split('=').next().unwrap_or("");
-    let mut normalized = String::new();
-    for part in head.split(',') {
-        if !normalized.is_empty() {
-            normalized.push(',');
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    // Unquoted whitespace after an item: the list ends unless a comma follows.
+    let mut after_space = false;
+    let mut chars = spec.chars();
+    while let Some(c) = chars.next() {
+        if quoted {
+            match c {
+                '"' => quoted = false,
+                '\\' => current.extend(chars.next()),
+                c => current.push(c),
+            }
+            continue;
         }
-        normalized.push_str(part.trim());
+        match c {
+            ',' => {
+                items.push(std::mem::take(&mut current));
+                after_space = false;
+            }
+            // `! alice`: a negation may stand apart from its name.
+            c if c.is_whitespace() => after_space |= !current.trim_start_matches('!').is_empty(),
+            '=' => break,
+            _ if after_space => break,
+            '"' => quoted = true,
+            '\\' => current.extend(chars.next()),
+            c => current.push(c),
+        }
     }
-    normalized.split_whitespace().next().unwrap_or("").split(',').map(|t| t.trim().trim_start_matches('!').to_string()).filter(|t| !t.is_empty()).collect()
+    items.push(current);
+    items.into_iter().map(|t| clean(&t)).filter(|t| !t.is_empty()).collect()
+}
+
+/// One list member as sudoers means it: negations dropped (the parse
+/// counts `!alice` as naming alice), quotes and escapes undone.
+fn clean(token: &str) -> String {
+    let token = token.trim().trim_start_matches(|c: char| c == '!' || c.is_whitespace());
+    let mut out = String::new();
+    let mut chars = token.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {}
+            '\\' => out.extend(chars.next()),
+            c => out.push(c),
+        }
+    }
+    out.trim().to_string()
 }
 
 fn first_match(lines: &[String], who: &Subject<'_>) -> Option<String> {
@@ -182,7 +222,7 @@ fn first_match(lines: &[String], who: &Subject<'_>) -> Option<String> {
         if let Some(rest) = line.strip_prefix("User_Alias") {
             for def in rest.split(':') {
                 if let Some((name, members)) = def.split_once('=') {
-                    aliases.insert(name.trim().to_string(), members.split(',').map(|m| m.trim().trim_start_matches('!').to_string()).filter(|m| !m.is_empty()).collect());
+                    aliases.insert(name.trim().to_string(), members.split(',').map(clean).filter(|m| !m.is_empty()).collect());
                 }
             }
         }
@@ -274,6 +314,12 @@ mod tests {
             "+admins ALL=ALL",
             "!alice ALL=ALL",
             "bob, \\\n  alice ALL = ALL",
+            "\"alice\" ALL=ALL",
+            "bob,\"alice\" ALL=ALL",
+            "ali\\ce ALL=ALL",
+            "! alice ALL=ALL",
+            "%\"staff\" ALL=ALL",
+            "User_Alias OPS = bob, \"alice\"\nOPS ALL = ALL",
         ] {
             let root = fixture(&[("/etc/sudoers", "root ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n"), ("/etc/sudoers.d/ops", rule)]);
             assert!(rule_for(root.path(), &alice(&groups)).unwrap().is_some(), "{rule}");
