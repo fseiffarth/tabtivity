@@ -707,11 +707,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Agent-facing paths the checked-out branch holds from commits that came
-/// from the hub (a co-member's, or the owner's for a member) and were never
-/// reviewed — however they got into HEAD (a Tabtivity merge, a `git merge`
-/// in a terminal, the first clone), and wherever the hub's branch that
-/// brought them is now ([`hub_revs`]). Errors fail closed at the caller.
 /// Every checked-out commit of the project's repository: the main working
 /// tree's and each linked worktree's (the in-tree `.tabtivity/worktrees/`
 /// ones, P5), as `(worktree dir, commit)`. A worktree on an unborn branch or
@@ -739,6 +734,11 @@ pub fn checked_out(dir: &Path) -> Result<Vec<(PathBuf, String)>, String> {
     Ok(heads)
 }
 
+/// Agent-facing paths any checkout ([`checked_out`]) holds from commits
+/// that came from the hub (a co-member's, or the owner's for a member) and
+/// were never reviewed — however they got into HEAD (a Tabtivity merge, a
+/// `git merge` in a terminal, the first clone), and wherever the hub's branch
+/// that brought them is now ([`hub_revs`]). Errors fail closed at the caller.
 pub fn unreviewed(link: &Link) -> Result<Vec<String>, String> {
     let dir = &link.dir;
     let not: Vec<String> = link.reviewed.iter().filter(|c| hub_wire::valid_oid(c)).map(|c| format!("^{c}")).collect();
@@ -862,7 +862,8 @@ pub fn pending_review(link: &Link) -> Result<Option<Review>, String> {
     // by its folder. The review's `commit` lists them all, so accepting it
     // marks every one of them.
     let mut heads = checked_out(&link.dir)?;
-    heads.dedup_by(|a, b| a.1 == b.1);
+    let mut seen = std::collections::BTreeSet::new();
+    heads.retain(|(_, oid)| seen.insert(oid.clone()));
     let mut text = String::new();
     for (tree, head) in &heads {
         let label = if *tree == link.dir { String::new() } else { format!(" (worktree {})", tree.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()) };
