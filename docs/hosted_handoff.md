@@ -623,7 +623,7 @@ Prerequisites: Mobile enabled with a verified Tailscale Serve origin (the sideca
 2. **Show sign-in link** → Copy → paste into a browser on this machine. Expect a redirect to `/desktop/` and the desktop app rendering; the `tabtivity_desktop_session` cookie is set. Opening `http://127.0.0.1:<port>/desktop/` in a private window shows the plain "Sign in" page instead.
 3. From another device on the tailnet, `https://<tailnet-host>/desktop/` must be a 404 (and the phone PWA unaffected).
 4. In the browser: open a project, open a shell tab, type — output appears; `tmux ls` on the box shows a `tabtivity-<project>--shell-…` session with two clients when the desktop window has the same tab open. Start a Claude tab; the agent runs (no `tabtivity-*` MCP tools yet, #2339).
-5. Open the same project in a second browser tab: both show the same tab set; rename a tab in one, the other follows within a patch; each has its own terminal size. Close one tab page: within 90 s `tmux list-clients` drops one client; the session stays.
+5. Open the same project in a second browser tab: both show the same tab set; rename a tab in one, the other follows within a patch; each has its own terminal size (*since #2347 — see § #2347 per-client PTYs for the full steps; before it this failed by construction*). Close one tab page: within 90 s `tmux list-clients` drops one client; the session stays.
 6. Kill the link (toggle Wi-Fi, or `kill -STOP` the sidecar for 10 s): the banner "Connection to Tabtivity lost — reconnecting…" shows, the pills stop polling (no error toasts), and on return the terminal catches up from where it stopped (type `seq 1 2000` before the pause).
 7. Phone: with the laptop lid closed (window gone, sidecar up with "Keep running when closed"), continue the agent from the phone; reopen the browser: both views identical (the H3 check, now with the browser as the second view).
 8. Files: in a viewer, the browser's "open outside" opens `http://127.0.0.1:<port+1>/content/…` in a new tab; an HTML file downloads instead of rendering. Mail → attach a file: the server-side picker appears, the attachment stages. Mail → contacts export: the picker's save mode writes where chosen.
@@ -1288,3 +1288,133 @@ isolation script were not run. `keyctl` is EPERM in this fence (expected).*
   `ls -ld /tmp/*-ssh-$(id -u)`) shows the 0700 control dir.
 - A passphrase-mode mailbox on a server with the key unlocked: the
   daemon's thread count stays flat (`ls /proc/$(pgrep -u alice -f serverd)/task | wc -l`).
+
+## #2347 per-client PTYs
+
+*Written 2026-10-03, scheduled between P3 and P4. Base `cf642779`. Nothing
+run live (AGENTS.md: never start the app or a sidecar against the user's
+state dir); one test drives a real tmux server of its own (`-L t2347-<pid>`,
+no config, killed and unlinked at the end). TODO #2347 and #2345 (folded
+in). Rationale: [`context/web_client.md`](context/web_client.md) (§ "One PTY
+per client on a shared tab", "The window follows the client in use",
+"A server client's events are addressed").*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `a4061281` | `tmux_local::window_size_policy` — the wrap sets `window-size latest` from tmux 3.2 (else `largest`, as before); `tmux_local::attach_argv` (`-u attach-session -t =<session>`, never creates); comments in `pty_bridge`/`headless`. |
+| `804bc196` | `terminal/mod.rs`: `PtyMeta` (`client`, `local_tmux`, `attach_of`) on every registry entry; `join_tab` (a server client's own attach PTY `<tab>@<client>`), `PtyRegistry::{resolve, attachable, release_client}`, `route_move_window_views`; the spawn split into `spawn_pty` (the tab's, bookkeeping as before) and `launch` (shared; an attach PTY carries no tab bookkeeping and streams under the tab id); per-client event routing for `Caller::Client` (#2345). `commands/terminal.rs`: `pty_spawn` joins first and answers `attached`; `pty_write/resize/set_visible/scrollback/remove_view/watch/unwatch/kill` resolve the caller's id (three gained a `Ctx` argument; payloads unchanged). `web_client.rs`: the transport's PTY sets are gone — ownership is the registry's, keyed by the client id a resume keeps; the reap calls `release_client`. File-map rows. |
+| `a4501d22` | `TerminalView`: an `attached` spawn types no rename line and re-runs no command; two cases in `AgentHeldInput.test.tsx`. |
+| the commit after | TODO #2347/#2345, plan §3.5 and the P2 bullet, `context/web_client.md`, `context/tmux_sessions.md`, P2 live check 5, this section. |
+
+### Design
+
+- **Who gets what.** A server client (`Caller::Client(web-n)`) calling
+  `pty_spawn` for tab `X`: if the registry's `X` is alive, a client of a
+  local tmux session (`PtyMeta::local_tmux`, recorded when the wrap left
+  `cmd = tmux`) and spawned by *another* client, the caller gets an attach
+  PTY `X@web-n` — one more tmux client, at the caller's `cols×rows`.
+  Otherwise the ordinary spawn, exactly as before (the caller respawning its
+  own PTY, no live `X`, or a tab no local tmux holds). A previous attach PTY
+  of the caller's is taken first; its view registrations move to whichever
+  PTY now serves it. Desktop windows are `Caller::Local` and never reach any
+  of this.
+- **Ids.** The frontend keeps naming the tab id. `PtyRegistry::resolve`
+  maps a server client's id to its attach PTY when it has one — or would get
+  one (`attachable`), so the view a pane registers just before its spawn
+  lands on its own stream. The attach route carries the tab id
+  (`OutputRoute::tab`) for every event and replay. `pty_kill` of an attach
+  ends only that tmux client and its route; `pty_kill_scope` still ends
+  every PTY of the scope, attach PTYs included (`<tab>@…` keeps the scope
+  prefix).
+- **Bookkeeping stays with the tab.** Only the tab's own PTY runs the launch
+  assembly (`launch_prep::prepare`: fence, MCP grants, Codex binding,
+  `agent_turn::bind_tab`, resume) and the end-of-spawn cleanups; an attach
+  PTY skips them in `launch`, `teardown_taken` and `kill_all`. Tab id, tmux
+  session name, agent session records, Reader, headless owner and scheduler
+  are untouched. Offsets for resume are per stream: a page's
+  `pty_scrollback` resolves to its own PTY, whose offsets are the ones its
+  chunks carried.
+- **Leaving.** A page gone past `RESUME_GRACE` → `route_drop_window_views` +
+  `release_client`: its attach PTYs end; its tab PTYs end too — unless
+  another client still has an attach PTY onto that tab, in which case the
+  tab PTY is handed to that client (`PtyMeta::client`) and resized to its
+  attach's size (a resize is tmux activity, so under `latest` the window
+  follows the heir, not the ghost). The handed-over PTY streams to nobody
+  (no views) and ends with its new client. A reloaded page is a new client:
+  it attaches to the tabs the old page still holds, and 90 s later gets them
+  handed over.
+- **tmux `window-size`.** `latest`, from tmux 3.2 — see the context doc.
+  Verified on tmux 3.6 with a scratch server: attach, resize and typing each
+  make a client the latest; when the latest leaves, the window takes a
+  remaining client's size. `largest`/`smallest` measured for the record
+  (largest pans the smaller client; smallest pads the larger).
+- **Routing (#2345).** `emit_output`/`emit_pty_event`: for a
+  `Caller::Client` context, the payload is serialized once and sent with
+  `emit_json_to` to each client with a view of the route; no broadcast, no
+  `:<label>` copy. `Local`/`System` contexts: unchanged (plain broadcast,
+  popout copies).
+- **Not covered, by design.** A remote tab (the ssh wrap is
+  `new-session -A -D`, which detaches other clients), a container tab and
+  every Windows tab keep one shared PTY: a second page re-spawns it as
+  before, and since #2345 its output reaches the pages with a view of it.
+
+### Live steps (localhost, Browser access on, the frozen dev build at or after the docs commit, `npm run web:bundle` run)
+
+1. Open a local project in browser page A, open a shell tab, run `seq 1 50`.
+   Open the same project in page B (a second browser tab) and the same shell
+   tab: B shows the shell (tmux's redraw), A's view is untouched.
+   `tmux list-clients -t <the tab's tabtivity-… session> -F '#{client_width}x#{client_height}'`
+   (server mode: `tmux -L tabtivity …`) lists **two** sidecar clients (plus
+   the desktop window's, if it has the tab open) with different sizes.
+2. Make page B's window narrower and type in B: the shell's prompt and a
+   long `ls` fit B; page A now shows the narrower window padded. Type in A:
+   the window snaps back to A's width. Neither page reflows in a loop.
+3. Close page B: within 90 s `tmux list-clients` drops B's client; A keeps
+   working, the session stays.
+4. With A and B on the tab, close page **A** (the one that opened it first)
+   and wait 90 s: B keeps working, `tmux list-clients` still lists two
+   clients (A's tab PTY is now B's), and an agent tab's MCP tools (e.g. the
+   help server) still answer in B.
+5. Reload page B: the tab reappears at once on tmux's redraw of the current
+   screen, and nothing is typed into it (no second `/rename`, no re-run
+   command).
+6. A remote (ssh) tab in two pages: as before (one shared PTY; the second
+   page's open restarts the client), output in both — the documented limit.
+7. Desktop window alone: open a tab, resize, pop it out, close: unchanged.
+
+### Gates (worktree, 2026-10-03, at `a4501d22` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **697 files, 7073 tests**, all pass (+2: the `attached` cases) |
+| `cargo test --workspace -q --no-fail-fast` | **3570 passed**, 0 failed, 2 ignored, 22 binaries (src-tauri lib 3224: +6 `terminal::client_tests`, +1 `tmux_local`, the transport ownership test rewritten) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3129 + 1 passed**, 2 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones; `TerminalView.tsx`'s three are older) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh cf642779..HEAD` | green |
+| `git diff --check cf642779 HEAD` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
+
+### Gotchas / follow-ups
+
+- **Two pages each deliver the frontend's own scheduled prompts and initial
+  input** for a tab both have mounted (pre-existing since P2, not changed
+  here except that an `attached` join no longer types a launch line): the
+  frontend scheduler gate is "the PTY-owning main-window view", and every
+  page is a `main`. Worth a TODO when P4 touches scheduling.
+- **A tab PTY's spawn bookkeeping still ends when its last client leaves**
+  while the tmux session lives on (as in P2): the agent's MCP tokens are
+  revoked and a later page's respawn mints new ones the running agent never
+  sees. #2347 only stretches that to "the last client". The headless owner
+  (detached sessions) is the long-term answer.
+- No UntestedTag: nothing here is a UI element; the browser client's rows
+  (`server.banner.down`, `filePicker.title`) already mark the surface.
+- `PtyRegistry::resolve` takes `&mut self` (it probes the tab PTY's child
+  with `try_wait`); `pty_write` from a server client takes the registry lock
+  once more than before. Desktop calls skip it.

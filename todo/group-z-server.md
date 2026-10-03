@@ -257,14 +257,20 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2345. **Route terminal output by client in the server's sink.** `emit_output`
+2345. **Route terminal output by client in the server's sink.** ✅ **Done**
+    (2026-10-03, `804bc196`, with #2347; never live): a PTY event raised for a
+    server client (`Caller::Client`) goes, serialized once, under the plain
+    name to each client with a view of that PTY and to nobody else — no
+    `:<label>` copies; `terminal-ready`/`-exit`/`-activity` the same way. The
+    desktop keeps its broadcast plus popout copies. Was: `emit_output`
     still emits every chunk once under the plain name and once per non-main
     viewer window (`terminal-output:<label>`); a browser client is such a
     "window", so each chunk is serialized twice for it and the suffixed copy
-    is dropped unsubscribed. The P1 gotcha: a server sink can target the
-    `ClientId` and drop the suffixing — once the browser also learns to
-    subscribe to its own name (popouts, #2342, need the same).
-    - [ ] 🤖 Automated test — one browser client, one chunk, one frame.
+    is dropped unsubscribed. (Browser popouts, #2342, will register their
+    views under their own client id and get the same routing.)
+    - [x] 🤖 Automated test — one browser client, one chunk, one frame
+      (`terminal::client_tests::a_server_clients_chunk_is_one_frame_to_its_viewer_only`;
+      the desktop's broadcast: `…a_desktop_windows_chunk_is_still_broadcast_with_popout_copies`).
     - [ ] 🖐️ Manual test — n/a (perf monitor shows one emit per chunk).
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -293,7 +299,17 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2347. **One PTY per browser client, not per tab.** In the sidecar a PTY id is
+2347. **One PTY per browser client, not per tab.** ✅ **Done** (2026-10-03,
+    `a4061281`, `804bc196`, `a4501d22`; never live — see
+    `docs/hosted_handoff.md` § #2347). A second client opening a tab another
+    client runs in local tmux gets an attach PTY of its own,
+    `<tab>@<client>` (`terminal::join_tab`; `pty_spawn` answers `attached`
+    and the pane types nothing); the `pty_*` id commands resolve a client's
+    ids to its own PTY; ownership is the registry's (`PtyMeta::client`), and
+    a gone owner's tab PTY passes to a client still attached
+    (`release_client`). tmux windows now follow the client in use
+    (`window-size latest` from tmux 3.2). A remote, container or Windows tab
+    keeps the one shared PTY. Was: In the sidecar a PTY id is
     the tab id, the same in every page of the workspace: a second page that
     opens a tab the first page has open calls `pty_spawn` with the same id,
     and `PtyRegistry::insert` kills the first page's attach client and puts
@@ -303,8 +319,13 @@ the desktop groundwork the hosted plan's P1 builds on.*
     the router and the registry, or a per-viewer size in the router. Until
     then the handoff's live check 5 ("each has its own terminal size") fails
     by construction. (P2 review, 2026-10-03.)
-    - [ ] 🤖 Automated test — two clients spawn the same tab id; both PTYs
-      live; each `pty_resize` reaches its own.
+    - [x] 🤖 Automated test — two clients spawn the same tab id; both PTYs
+      live; each `pty_resize` reaches its own
+      (`terminal::client_tests::two_clients_on_one_tmux_tab_each_get_their_own_size_and_stream`,
+      a real tmux server of the test's own; also one client leaving, the
+      hand-over and per-client output; registry and resume:
+      `…a_client_resolves_to_its_own_attach_and_a_gone_owner_hands_the_tab_over`,
+      `web_client::tests::pty_ownership_lives_in_the_registry_and_a_resume_keeps_it`).
     - [ ] 🖐️ Manual test — two browser pages on one shell tab, different
       window sizes: no reflow fight.
       - [ ] ✅ Works on Linux (X11)

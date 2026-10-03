@@ -424,7 +424,11 @@ HTTPS session. Frame kinds:
 - **Terminal size is per client.** Today `pty_resize(id, cols, rows)`
   (`terminal.rs:980`) sets one size per terminal, so two clients of
   different sizes would fight. Each web client gets its own tmux attach,
-  because tmux already sizes per client. The phone's `pty_bridge` keeps its
+  because tmux already sizes per client. *(Built, #2347: a second client of a
+  local tmux tab gets an attach PTY `<tab>@<client>` (`terminal::join_tab`),
+  the `pty_*` commands resolve to it, and its events reach that client only;
+  the window follows the client in use, `window-size latest`. A remote,
+  container or Windows tab keeps one shared PTY.)* The phone's `pty_bridge` keeps its
   one-viewer rule, so "continue from the phone in the same tab" means the
   phone takes that tab over, and the other client sees that it was taken.
 - **Reconnect resumes by byte offset.** The daemon's terminals never drop,
@@ -1249,9 +1253,11 @@ Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
   `lib/transport/*`, `ServerFilePicker`, `vite.web.config.ts`), `bbddfbba`
   (the audit: 31 files use the flags; the host-side uses moved to
   `IS_HOST_*`/`HOST_OS`), `ddfdea27` (offset catch-up after a reconnect).
-  Per-client size is NOT done (P2 review): a PTY id is the tab id, so a
-  second page's `pty_spawn` of an open tab replaces the first page's attach
-  client and both pages share one PTY (#2347). Popout windows (`?popout=`) are NOT done: the
+  Per-client size was NOT done in P2 (P2 review: a PTY id was the tab id,
+  so a second page's `pty_spawn` of an open tab replaced the first page's
+  attach client); done by #2347 (`a4061281`, `804bc196`, `a4501d22`): one
+  attach PTY per client on a local tmux tab, events routed per client
+  (#2345). Popout windows (`?popout=`) are NOT done: the
   browser is one window; `plugin:window|*` is answered for that one page.
 - ~~The user-content origin for ticketed files.~~ `a084b436`: a second
   loopback listener on the next port, `desktop_file_ticket` → `/content/{t}`,

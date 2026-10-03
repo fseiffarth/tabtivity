@@ -1,7 +1,8 @@
 # The browser desktop client — why it is the way it is
 
 *Hosted plan P2 (`docs/tabtivity_hosted_plan.md` §3.5, §7.1, §10), built
-2026-10-03 on branch `hosted`; nothing run live. Handoff:
+2026-10-03 on branch `hosted`; per-client PTYs (#2347) the same day;
+nothing run live. Handoff:
 `docs/hosted_handoff.md` § P2. Files: `src-tauri/src/services/mobile_control/web_client.rs`,
 `src-tauri/src/services/core_dispatch.rs` (+ `build.rs`),
 `src-tauri/src/services/model_allowlist.rs`, `src-tauri/src/services/pick_grants.rs`,
@@ -59,13 +60,55 @@ the sidecar runs. It is additive — the Tauri window behaves exactly as before.
   are two origins too, but a user can open the app on either). Active types
   (HTML, SVG, XML, JS) go as attachments. Tickets live five minutes.
 - **Reconnect resumes the client id.** `web-<n>` is also the "window label"
-  the terminal router keys viewer registrations by, so a page that lost its
-  link and comes back with `?resume=<id>` inside `RESUME_GRACE` (90 s) keeps
-  its views and the PTYs it spawned (`pty_spawn` ids are recorded per
-  client); a client gone for longer has its views dropped and those PTYs
-  killed — they are tmux attach clients, the sessions live on. The page side
+  the terminal router keys viewer registrations by, and the owner the PTY
+  registry records for every PTY the client spawned (`PtyMeta::client`), so a
+  page that lost its link and comes back with `?resume=<id>` inside
+  `RESUME_GRACE` (90 s) keeps its views and its PTYs; a client gone for
+  longer has its views dropped and its PTYs released
+  (`PtyRegistry::release_client`) — they are tmux clients, the sessions live
+  on. A PTY id another page re-spawned meanwhile is recorded as that page's
+  and is left alone (P2 review finding 1, now by construction). The page side
   (`terminalBus`) remembers each pane's last end offset and replays only what
-  lies past it from `pty_scrollback`.
+  lies past it from `pty_scrollback` — the client's own stream's tail.
+- **One PTY per client on a shared tab (#2347).** The tab set is shared and
+  the terminal size is per client (plan §3.4–3.5), but a PTY has one size: a
+  second page that re-spawned an open tab used to replace the first page's
+  PTY and the two then fought over `pty_resize`. Now, when a server client
+  (`Caller::Client`) spawns a tab whose PTY is alive, a client of a *local
+  tmux* session and another client's, it gets an attach PTY of its own,
+  `<tab>@<client>`: `tmux -u attach-session -t =<session>`, never a new
+  session, none of the tab's spawn bookkeeping (fence, MCP grants, Codex
+  binding, `agent_turn`), `pty_spawn` answering `attached` so the pane types
+  no launch line into the running program. The frontend still names the tab
+  id everywhere: the `pty_*` id commands resolve a client's id to its own
+  PTY (`PtyRegistry::resolve`, including a view registered just before the
+  spawn), and the attach PTY's events carry the tab id. The tab's own PTY
+  keeps the tab's identity (tab id, session name, agent records, Reader,
+  scheduler); when its client leaves for good while another client is still
+  attached, it is handed to that client and sized like its attach, so the
+  bookkeeping (an agent's MCP grants above all) lives as long as somebody
+  looks. A remote tab (ssh, whose wrap is `new-session -A -D`), a container
+  tab and every tab on Windows keep the single shared PTY: nothing there to
+  attach a second client to.
+- **The window follows the client in use: `window-size latest`.** The
+  program in the pane sees one size per window, so the choice is whose.
+  `largest` (what the wrap set before) panned every smaller client across a
+  window sized for the widest — a narrow page saw a cut-off slice;
+  `smallest` padded the larger ones and, with the phone adopting the window's
+  geometry, could never grow again; `aggressive-resize` only weighs clients
+  looking at a window, which all of these are. `latest` — tmux's own default
+  since 3.1 — gives whichever client last typed, resized or attached an
+  exact fit, and the others pan or pad until they are used. With the phone
+  it changes nothing (it resizes only to the window's size), and one client
+  alone gets its own size under any policy, so the single desktop window is
+  unchanged. Set from tmux 3.2 (the version the wrap already probes), else
+  `largest` (`tmux_local::window_size_policy`).
+- **A server client's events are addressed (#2345).** A PTY event raised
+  for a `Caller::Client` (`terminal-output`/`-replay`/`-ready`/`-exit`/
+  `-activity`) is serialized once and delivered under its plain name to each
+  client with a view of that PTY, and to nobody else. The desktop keeps
+  broadcasting with `:<label>` copies for popouts (`emit_output`), which a
+  browser page never subscribed to.
 - **Backpressure sheds events, never answers.** Each client has a bounded
   event queue (`EVENT_QUEUE` frames); a full queue drops the event and counts
   it — terminal output is shed oldest-first as `pty_bridge` sheds it, TUIs
@@ -107,7 +150,6 @@ the sidecar runs. It is additive — the Tauri window behaves exactly as before.
 ## Not done (TODO group Z, #2341–#2346, and #2339)
 
 Popout windows (`?popout=`), browser shortcut alternatives for Ctrl+T/W/N,
-the per-client routing of terminal output in the server's sink,
 `pdf_clip_*`/`run_script_detached`, a stale-bundle notice, the CSP and
 security review — and the root MCP listener in the sidecar (#2339: starting a
 second listener would sweep a running window's review sandboxes).
