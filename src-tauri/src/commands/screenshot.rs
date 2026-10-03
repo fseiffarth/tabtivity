@@ -38,7 +38,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::fs::enforce_confinement;
-use crate::services::remote::RemotePoolState;
 
 /// Emitted once a capture's PNG is on disk in the staging area. The frontend
 /// answers with `save_pending_screenshot` or `discard_pending_screenshot`.
@@ -118,7 +117,7 @@ pub async fn save_pending_screenshot(
     path: String,
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: crate::tauri_host::Ctx,
 ) -> Result<String, String> {
     let shot = pending_shot(&path)?;
     let bytes = std::fs::read(&shot).map_err(|e| e.to_string())?;
@@ -138,7 +137,7 @@ pub async fn save_pending_screenshot(
         project_dir.clone(),
         rel_path.clone(),
         bytes,
-        pool,
+        ctx,
     )
     .await?;
     // The staged copy has served its purpose. A failed cleanup must not fail a

@@ -14,6 +14,8 @@ use serde_json::Value;
 use crate::schema::boxes::BoxesList;
 use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::storage;
+use crate::tauri_host::Ctx;
+use app_core::CoreCtx;
 
 // ── File tree ─────────────────────────────────────────────────────────────
 
@@ -84,16 +86,17 @@ fn file_entry_from(path: &Path, meta: &fs::Metadata, name: String) -> FileEntry 
 /// - **Local project** → `fs::read_dir`, validating the path stays inside the
 ///   project root. Byte-identical to the pre-Phase-2 behavior.
 ///
-/// `pool` is Tauri-injected managed state; the frontend does not pass it.
+/// The SFTP pool comes from the host context; the frontend does not pass it.
 #[tauri::command]
 pub async fn list_dir(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<Vec<FileEntry>, String> {
+    let pool = ctx.get::<RemotePoolState>();
     // Detect remote BEFORE any local-fs access (`canonical` would touch the fs).
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
-        return list_dir_remote(&target, &rel_path, pool.inner()).await;
+        return list_dir_remote(&target, &rel_path, pool).await;
     }
     list_dir_local(&project_dir, &rel_path)
 }
@@ -239,8 +242,9 @@ pub async fn dir_size(
     project_dir: String,
     rel_path: String,
     excluded: Option<Vec<String>>,
-    pool: tauri::State<'_, crate::services::remote::RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<u64, String> {
+    let pool = ctx.get::<RemotePoolState>();
     let _ = &pool; // remote path uses SSH exec, not the SFTP pool; keep the arg for symmetry
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let remote_dir = join_remote_dir(&target.spec.remote_path, &rel_path);
@@ -763,8 +767,9 @@ pub async fn rename_path(
     project_dir: String,
     old_rel: String,
     new_name: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     let name = validate_bare_name(&new_name)?;
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let from = remote_join_confined(&target.spec.remote_path, &old_rel)?;
@@ -773,7 +778,7 @@ pub async fn rename_path(
             Some(i) => format!("{}/{}", &from[..i], name),
             None => name.clone(),
         };
-        return remote_rename(pool.inner(), &target, &from, &to).await;
+        return remote_rename(pool, &target, &from, &to).await;
     }
     rename_path_local(&project_dir, &old_rel, &new_name)
 }
@@ -800,11 +805,12 @@ pub fn rename_path_local(project_dir: &str, old_rel: &str, new_name: &str) -> Re
 pub async fn delete_file(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_remove_file(pool.inner(), &target, &full).await;
+        return remote_remove_file(pool, &target, &full).await;
     }
     delete_file_local(&project_dir, &rel_path)
 }
@@ -826,15 +832,16 @@ pub fn delete_file_local(project_dir: &str, rel_path: &str) -> Result<(), String
 pub async fn delete_dir(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let clean = normalize_project_rel_path(&rel_path)?;
         if clean.is_empty() {
             return Err("refusing to delete project root".to_string());
         }
         let full = join_remote_dir(&target.spec.remote_path, &clean);
-        return remote_remove_dir(pool.inner(), &target, &full).await;
+        return remote_remove_dir(pool, &target, &full).await;
     }
     delete_dir_local(&project_dir, &rel_path)
 }
@@ -859,11 +866,12 @@ pub fn delete_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 pub async fn create_file(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_create_file(pool.inner(), &target, &full).await;
+        return remote_create_file(pool, &target, &full).await;
     }
     create_file_local(&project_dir, &rel_path)
 }
@@ -883,11 +891,12 @@ pub async fn write_project_file(
     project_dir: String,
     rel_path: String,
     content: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_write(pool.inner(), &target, &full, content.as_bytes()).await;
+        return remote_write(pool, &target, &full, content.as_bytes()).await;
     }
     write_project_file_local(&project_dir, &rel_path, &content)
 }
@@ -911,11 +920,12 @@ pub async fn write_project_file_bytes(
     project_dir: String,
     rel_path: String,
     content: Vec<u8>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_write(pool.inner(), &target, &full, &content).await;
+        return remote_write(pool, &target, &full, &content).await;
     }
     write_project_file_bytes_local(&project_dir, &rel_path, &content)
 }
@@ -980,11 +990,12 @@ pub fn update_gitignore_rule(
 pub async fn create_dir(
     project_dir: String,
     rel_path: String,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
         let full = remote_join_confined(&target.spec.remote_path, &rel_path)?;
-        return remote_mkdir(pool.inner(), &target, &full).await;
+        return remote_mkdir(pool, &target, &full).await;
     }
     create_dir_local(&project_dir, &rel_path)
 }
@@ -1340,8 +1351,9 @@ fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
 pub async fn detect_mime(
     path: String,
     project_id: Option<String>,
-    _pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<String, String> {
+    let _ = &ctx;
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path is classified on the LOCAL fs
@@ -1445,8 +1457,9 @@ const MAX_BINARY_VIEW_BYTES: u64 = 256 * 1024 * 1024;
 pub async fn read_file_text(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<String, String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a path under the local mirror is read on the LOCAL fs
@@ -1454,13 +1467,13 @@ pub async fn read_file_text(
             // tabs see mirrored bytes instead of round-tripping SFTP.
             if !crate::services::remote_sync::is_under_mirror(pid, &path) {
                 confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (size, _) = remote_metadata(pool.inner(), &target, &path).await?;
+                let (size, _) = remote_metadata(pool, &target, &path).await?;
                 if size > MAX_TEXT_VIEW_BYTES {
                     return Err(format!(
                         "file too large to view ({size} bytes; limit {MAX_TEXT_VIEW_BYTES})"
                     ));
                 }
-                let bytes = remote_read(pool.inner(), &target, &path).await?;
+                let bytes = remote_read(pool, &target, &path).await?;
                 return String::from_utf8(bytes)
                     .map_err(|_| "file is not valid UTF-8 text".to_string());
             }
@@ -1500,8 +1513,9 @@ pub async fn write_file_text(
     path: String,
     content: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path saves to the LOCAL mirror (Phase 2
@@ -1515,7 +1529,7 @@ pub async fn write_file_text(
                         MAX_TEXT_VIEW_BYTES
                     ));
                 }
-                return remote_write(pool.inner(), &target, &path, content.as_bytes()).await;
+                return remote_write(pool, &target, &path, content.as_bytes()).await;
             }
         }
     }
@@ -1564,8 +1578,9 @@ pub fn write_file_text_local(
 #[tauri::command]
 pub async fn write_file_bytes(
     request: tauri::ipc::Request<'_>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<(), String> {
+    let pool = ctx.get::<RemotePoolState>();
     let path = request_header(&request, crate::brand::FILE_PATH_HEADER)
         .ok_or_else(|| "write_file_bytes: missing path".to_string())?;
     let project_id = request_header(&request, crate::brand::FILE_PROJECT_HEADER).filter(|s| !s.is_empty());
@@ -1628,7 +1643,7 @@ async fn write_file_bytes_routed(
     path: String,
     content: &[u8],
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    pool: &RemotePoolState,
 ) -> Result<(), String> {
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
@@ -1642,7 +1657,7 @@ async fn write_file_bytes_routed(
                         MAX_BINARY_VIEW_BYTES
                     ));
                 }
-                return remote_write(pool.inner(), &target, &path, content).await;
+                return remote_write(pool, &target, &path, content).await;
             }
         }
     }
@@ -1684,11 +1699,34 @@ pub fn write_file_bytes_local(
 pub async fn read_file_bytes(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<tauri::ipc::Response, String> {
+    let pool = ctx.get::<RemotePoolState>();
     read_file_bytes_any(path, project_id, pool)
         .await
         .map(tauri::ipc::Response::new)
+}
+
+/// The bytes of `path`, for a host that is not Tauri: a browser's
+/// `read_file_bytes` arrives as a binary frame (hosted plan §3.5) and is
+/// answered by `mobile_control::web_client` through this, with the same
+/// confinement and remote routing as the IPC shape above.
+pub async fn read_file_bytes_for(
+    ctx: &CoreCtx,
+    path: String,
+    project_id: Option<String>,
+) -> Result<Vec<u8>, String> {
+    read_file_bytes_any(path, project_id, ctx.get::<RemotePoolState>()).await
+}
+
+/// `write_file_bytes` for a host that is not Tauri (see [`read_file_bytes_for`]).
+pub async fn write_file_bytes_for(
+    ctx: &CoreCtx,
+    path: String,
+    content: &[u8],
+    project_id: Option<String>,
+) -> Result<(), String> {
+    write_file_bytes_routed(path, content, project_id, ctx.get::<RemotePoolState>()).await
 }
 
 /// The read itself, kept separate from the IPC shape so the routing stays testable
@@ -1696,20 +1734,20 @@ pub async fn read_file_bytes(
 async fn read_file_bytes_any(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    pool: &RemotePoolState,
 ) -> Result<Vec<u8>, String> {
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path reads from the LOCAL mirror.
             if !crate::services::remote_sync::is_under_mirror(pid, &path) {
                 confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (size, _) = remote_metadata(pool.inner(), &target, &path).await?;
+                let (size, _) = remote_metadata(pool, &target, &path).await?;
                 if size > MAX_BINARY_VIEW_BYTES {
                     return Err(format!(
                         "file too large to view ({size} bytes; limit {MAX_BINARY_VIEW_BYTES})"
                     ));
                 }
-                return remote_read(pool.inner(), &target, &path).await;
+                return remote_read(pool, &target, &path).await;
             }
         }
     }
@@ -1743,14 +1781,15 @@ pub fn read_file_bytes_local(path: &str, scope_id: Option<&str>) -> Result<Vec<u
 pub async fn file_mtime(
     path: String,
     project_id: Option<String>,
-    pool: tauri::State<'_, RemotePoolState>,
+    ctx: Ctx,
 ) -> Result<u64, String> {
+    let pool = ctx.get::<RemotePoolState>();
     if let Some(pid) = project_id.as_deref() {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
             // SSH-sync G2: a mirror-local path is stat'd on the LOCAL fs.
             if !crate::services::remote_sync::is_under_mirror(pid, &path) {
                 confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (_, modified) = remote_metadata(pool.inner(), &target, &path).await?;
+                let (_, modified) = remote_metadata(pool, &target, &path).await?;
                 return Ok(modified.unwrap_or(0));
             }
         }

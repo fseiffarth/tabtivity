@@ -215,20 +215,6 @@ mod tests {
     const KNOWN_GAPS: &[&str] = &[
         "read_file_bytes",
         "write_file_bytes",
-        // `commands/fs.rs` still takes `State<RemotePoolState>` (P1 handoff).
-        "create_dir",
-        "create_file",
-        "delete_dir",
-        "delete_file",
-        "detect_mime",
-        "dir_size",
-        "file_mtime",
-        "list_dir",
-        "read_file_text",
-        "rename_path",
-        "write_file_text",
-        "write_project_file",
-        "write_project_file_bytes",
         // `commands/pdf_clip.rs`: `State<PdfClipboard>`, a singleton the core
         // state does not manage yet.
         "pdf_clip_get",
