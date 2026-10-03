@@ -279,6 +279,58 @@ const CONFIG_DENYLIST: &[DenylistedConfigKey] = &[
     },
 ];
 
+/// Keys beyond [`CONFIG_DENYLIST`] from which git runs a program, **refused**
+/// (never stripped) in a project shared through a hosted server's hub (TODO
+/// #2374, user decision: fail closed). Stripping them would silently break
+/// legitimate setups (`merge.ours.driver`, signing, a credential helper);
+/// pinning exact keys with `-c` cannot reach a named driver. So git is not
+/// run in that clone until the key is removed, and the refusal names it.
+/// `(prefix, suffix)` like [`CONFIG_DENYLIST`]; an empty suffix with a
+/// prefix ending in `.` takes any key below it. `core.hooksPath` and
+/// `core.fsmonitor` are absent on purpose: a shared clone's git runs
+/// hookless and with `core.fsmonitor=false` pinned per call.
+const SHARED_PROGRAM_KEYS: &[(&str, &str)] = &[
+    ("merge.", ".driver"),
+    ("remote.", ".uploadpack"),
+    ("remote.", ".receivepack"),
+    ("remote.", ".vcs"),
+    ("gpg.", ".program"),
+    ("credential.", ".helper"),
+    ("url.", ".insteadof"),
+    ("url.", ".pushinsteadof"),
+    ("pager.", ""),
+    ("difftool.", ".cmd"),
+    ("mergetool.", ".cmd"),
+    ("browser.", ".cmd"),
+    ("browser.", ".path"),
+    ("man.", ".cmd"),
+    ("man.", ".path"),
+    ("submodule.", ".update"),
+    ("core.sshcommand", ""),
+    ("core.gitproxy", ""),
+    ("core.askpass", ""),
+    ("core.editor", ""),
+    ("core.pager", ""),
+    ("core.alternaterefscommand", ""),
+    ("sequence.editor", ""),
+    ("diff.external", ""),
+    ("web.browser", ""),
+    ("interactive.difffilter", ""),
+    ("sendemail.smtpserver", ""),
+];
+
+/// Pure match against [`SHARED_PROGRAM_KEYS`], case-insensitive.
+fn is_shared_program_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    SHARED_PROGRAM_KEYS.iter().any(|(prefix, suffix)| {
+        if suffix.is_empty() && !prefix.ends_with('.') {
+            key == *prefix
+        } else {
+            key.starts_with(prefix) && key.ends_with(suffix) && key.len() > prefix.len()
+        }
+    })
+}
+
 /// Pure match against [`CONFIG_DENYLIST`], case-insensitive (git lowercases
 /// section and key names itself; only the attacker-controlled subsection may
 /// carry mixed case, and it never touches the fixed prefix/suffix ends this
@@ -414,7 +466,8 @@ fn sanitize_repo_git_config_strict(project_dir: &Path) -> Result<(), String> {
         sanitize_git_config_file(&config);
         if let Some(key) = surviving_denylisted_key(&config)? {
             return Err(format!(
-                "{} still sets {key} after sanitizing; git is not run in this shared project until it is removed",
+                "{} sets {key}, which can make git run a program; git is not run in this shared project until it is removed (git config --file {} --unset-all {key})",
+                config.display(),
                 config.display()
             ));
         }
@@ -422,8 +475,8 @@ fn sanitize_repo_git_config_strict(project_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The first [`CONFIG_DENYLIST`] key `config_path` still sets; `Err` when the
-/// file is there but cannot be listed.
+/// The first [`CONFIG_DENYLIST`] or [`SHARED_PROGRAM_KEYS`] key `config_path`
+/// still sets; `Err` when the file is there but cannot be listed.
 fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String> {
     if !config_path.exists() {
         return Ok(None);
@@ -436,7 +489,11 @@ fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String
     if !listed.status.success() {
         return Err(format!("{} cannot be read as git config, so git is not run in this shared project", config_path.display()));
     }
-    Ok(String::from_utf8_lossy(&listed.stdout).lines().map(str::trim).find(|k| is_denylisted_config_key(k)).map(str::to_string))
+    Ok(String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|k| is_denylisted_config_key(k) || is_shared_program_key(k))
+        .map(str::to_string))
 }
 
 /// A command that runs nothing and fails with `message` on stderr — what a
@@ -5352,6 +5409,43 @@ mod shared_gate_tests {
         assert!(error.contains("cannot be read"), "{error}");
         // The lenient path the desktop keeps does not refuse.
         sanitize_repo_git_config(dir.path());
+    }
+
+    /// TODO #2374 (user decision): every other key git runs a program from
+    /// refuses the shared clone's git — not stripped — and says which.
+    #[test]
+    fn strict_sanitizing_refuses_every_program_running_key() {
+        for (section, line) in [
+            ("[merge \"ours\"]", "driver = true"),
+            ("[remote \"origin\"]", "uploadpack = touch /tmp/x"),
+            ("[core]", "sshCommand = ssh -oProxyCommand=x"),
+            ("[core]", "askPass = /tmp/x"),
+            ("[gpg]", "program = /tmp/x"),
+            ("[gpg \"ssh\"]", "program = /tmp/x"),
+            ("[credential]", "helper = !x"),
+            ("[credential \"https://example.invalid\"]", "helper = x"),
+            ("[url \"/tmp/evil\"]", "insteadOf = https://example.invalid/"),
+            ("[sequence]", "editor = x"),
+            ("[pager]", "log = x"),
+            ("[diff]", "external = x"),
+        ] {
+            let dir = repo();
+            let config = dir.path().join(".git/config");
+            let mut text = std::fs::read_to_string(&config).unwrap();
+            text.push_str(&format!("{section}\n\t{line}\n"));
+            std::fs::write(&config, &text).unwrap();
+            let error = sanitize_repo_git_config_strict(dir.path()).unwrap_err();
+            assert!(error.contains("can make git run a program"), "{section} {line}: {error}");
+            assert!(std::fs::read_to_string(&config).unwrap().contains(line.split(' ').next().unwrap()), "refused, not stripped: {section}");
+        }
+        // What a clone of a shared project legitimately holds still runs.
+        let dir = repo();
+        let config = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[remote \"origin\"]\n\turl = /srv/hub/p.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[core]\n\thooksPath = .husky\n[user]\n\tname = A\n");
+        std::fs::write(&config, &text).unwrap();
+        sanitize_repo_git_config_strict(dir.path()).unwrap();
+        assert!(is_shared_program_key("core.sshCommand") && !is_shared_program_key("core.sshcommandx") && !is_shared_program_key("remote.origin.url"));
     }
 
     #[test]

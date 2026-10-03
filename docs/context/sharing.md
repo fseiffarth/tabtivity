@@ -90,8 +90,15 @@ never paths.
    own or a clone), `commands::git::git_command_in` downgrades a hooked verb to
    hookless and `require_hook_trust` asks nothing (hooks can arrive by merge),
    and config sanitizing **fails closed**: after the strip every config file is
-   listed again; a surviving denylisted key, or a file git cannot parse,
-   replaces the git call by one that runs nothing and says why.
+   listed again; a surviving denylisted key, any other key git runs a program
+   from (`commands::git::SHARED_PROGRAM_KEYS`: `merge.*.driver`,
+   `remote.*.uploadpack/receivepack/vcs`, `core.sshCommand/gitProxy/askPass/
+   editor/pager/alternateRefsCommand`, `gpg.*program`, `credential.*helper`,
+   `url.*.insteadOf`, `sequence.editor`, `diff.external`, pagers, tool and
+   browser commands, `submodule.*.update` — refused, never stripped: TODO
+   #2374, user decision), or a file git cannot parse, replaces the git call
+   by one that runs nothing and names the key. `core.hooksPath` and
+   `core.fsmonitor` pass: hooks are off and fsmonitor pinned per call.
 2. **The agent-facing surface is reviewed before an agent reads it.**
    `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.mcp.json`, `.envrc` at any depth and
    everything under `.claude/`, `.codex/`, `.gemini/`, `.cursor/` (the plan's

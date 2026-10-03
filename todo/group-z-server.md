@@ -695,20 +695,21 @@ the desktop groundwork the hosted plan's P1 builds on.*
     the clone as an ordinary project. Show the state where the project is
     (a greyed chip), never removing it. (P4, 2026-10-03.)
 
-2374. **Decide: which program-naming git config keys a shared project refuses.**
-    The strict sanitizing of gate 1 fails closed on the desktop's denylist
-    (`filter.*`, `diff.*.textconv/command`, `include*.path`). git's other
-    keys that run a program are not on it: `merge.<driver>.driver` (a merged
-    `.gitattributes` names the driver; `share_merge` runs a merge),
-    `remote.<name-or-path>.uploadpack`/`receivepack` (Tabtivity fetches the
-    hub by path), `core.sshCommand`, `core.gitProxy`, `gpg.program` /
-    `gpg.*.program`, `credential.helper`, `core.askPass`, `core.editor` /
-    `sequence.editor`, `url.*.insteadOf`. No co-member can write a member's
-    `.git/config` (separate uids, the fence binds it read-only); a
-    container agent could (a member may turn the container on for a clone
-    after sharing). Stripping them breaks legitimate setups (`merge.ours.driver
-    = true`, signing); pinning exact keys with `-c` cannot reach named
-    drivers. Choose per key: strip, refuse, or pin. (P4 review, 2026-10-03.)
+2374. **Program-naming git config keys in a shared project.** ✅ **Done**
+    (final fix round, 2026-10-04; user decision: a full denylist, fail
+    closed). Gate 1's strict sanitizing now also **refuses** — never strips —
+    every other key git runs a program from (`commands::git::
+    SHARED_PROGRAM_KEYS`: `merge.<driver>.driver`, `remote.*.uploadpack` /
+    `receivepack` / `vcs`, `core.sshCommand` / `gitProxy` / `askPass` /
+    `editor` / `pager` / `alternateRefsCommand`, `gpg.program` /
+    `gpg.*.program`, `credential.helper` / `credential.*.helper`,
+    `url.*.insteadOf` / `pushInsteadOf`, `sequence.editor`, `diff.external`,
+    `pager.*`, `difftool`/`mergetool`/`browser`/`man` commands,
+    `submodule.*.update`); the refusal names the key and how to unset it.
+    `core.hooksPath`/`core.fsmonitor` pass (hooks off, fsmonitor pinned).
+    Was (P4 review): the denylist covered only `filter.*`, `diff.*.textconv/
+    command`, `include*.path`.
+    - [x] 🤖 Automated test — `commands::git::tests::strict_sanitizing_refuses_every_program_running_key`.
 
 2375. **Decide: accepting a review that was cut at 256 KB.**
     `share::review_of` caps the text at 256 KB and binds the digest to what
