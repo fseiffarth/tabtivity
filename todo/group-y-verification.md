@@ -335,3 +335,14 @@ missing capability — is the project's dominant risk.
        (paths unknown); a retake of `screenshots/eldrun-current.png`.
 
 ---
+
+2385. **Clear the 31 lint warnings, then make warnings fail `npm run lint`.**
+    `package.json`'s `"lint": "eslint ."` has no `--max-warnings 0`, so
+    warnings never fail CI while AGENTS.md says every gate sits at zero
+    warnings. 31 are there on `develop` too (18 files, mostly
+    `react-hooks/exhaustive-deps`, three `no-explicit-any` in
+    `lib/viewers/notebook.ts`); each hook one needs reading before a
+    dependency is added (a new dependency changes when the effect runs), so
+    they were not touched on the hosted branch, whose merge would otherwise
+    conflict in 18 files it never changed. Fix them on `develop`, then add
+    `--max-warnings 0`. (Final review B10, 2026-10-04.)

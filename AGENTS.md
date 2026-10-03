@@ -27,13 +27,22 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 Run before calling work done; all are CI gates and all sit at zero warnings:
 
 ```
-npm run build        # the ONLY type-check (tsc + both bundles); vitest/eslint don't type-check
+npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
 npm test
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --workspace
+cargo test -p tabtivity --no-default-features --lib --test server_secrets   # the daemon's build
 npm run lint
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
+cargo clippy -p app-serverd --all-targets -- -D warnings
 scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
+
+Touched Rust that is not Linux-only? Also `cargo check --workspace
+--all-targets --target x86_64-pc-windows-msvc` (needs the RC/AR shims) and
+the same for `aarch64-apple-darwin` (needs CC/AR shims): CI's Windows and
+macOS jobs build the tests, which a lib-only check misses. Touched the
+daemon? `cargo build -p app-serverd` and `ldd` it: no GTK/WebKit/X11/dbus.
 
 CI clippy is latest stable; a stale local toolchain can pass what CI fails.
 `cargo fmt` is not enforced. Without the RTK hook, keep output short:
@@ -76,6 +85,18 @@ tool is unavailable, say so — never skip silently.
   spot with `rg -n`, then read or edit only that range. Never read one whole.
 
 ## Conventions
+
+- New Tauri commands (the server daemon builds the library without Tauri):
+  `#[cfg_attr(feature = "desktop", tauri::command)]`, never a bare
+  `#[tauri::command]`; take `tauri_host::Ctx` (or nothing), never
+  `AppHandle`/`State`/`Window`, and no `use tauri::…` outside
+  `#[cfg(feature = "desktop")]` code. Give every new command a row in
+  `services::command_class` (`core`/`client`/`admin`/`off`) and regenerate
+  `src/lib/transport/commandClasses.ts` (`UPDATE_COMMAND_CLASSES=1 cargo
+  test -p tabtivity --lib -- the_generated_command_classes_ts_is_current`).
+  A command that names an Ollama model gets a `model_allowlist::MODEL_ARG`
+  row. A browser client cannot run a whole-document save: give a new store a
+  patch or compare-and-swap command.
 
 - Match surrounding style; small focused changes; `rg` for search.
 - Never spell the app's name in code. Rust: `crate::brand` constants and
