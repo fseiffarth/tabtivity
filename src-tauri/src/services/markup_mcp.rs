@@ -13,7 +13,8 @@
 //! (`services::help_mcp`), refusals like git push (`services::git_push_mcp`):
 //! every refusal is a normal tool result with a fixed `category` (`invalid`,
 //! `file_not_found`, `budget`, `off`) and one `message`. The audit ring keeps
-//! session, tool and category, never the text.
+//! session, tool and category of every tool call and refusal, never the text
+//! ([`audited`]).
 //!
 //! State is in memory only and keyed by `(project, schedule target)` — the
 //! stable target both viewers resolve to. One open ask per key: a new ask
@@ -574,6 +575,16 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
     })
 }
 
+/// Whether a message of this lane goes into the audit ring (`reason`: its
+/// [`refusal_reason`]): every tool call and everything refused. The handshake
+/// every new tab sends — `initialize`, `tools/list`, `ping`, notifications —
+/// is not written down, as the help lane writes none of its own: three rows
+/// per spawned tab would push the root tools' records out of the ring.
+/// Admission failures are recorded before the lane is reached.
+pub fn audited(message: &Value, reason: Option<&str>) -> bool {
+    reason.is_some() || message["method"] == "tools/call"
+}
+
 pub fn tools() -> Value {
     let object = |properties: Value, required: Value| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     let question = object(json!({
@@ -1052,6 +1063,27 @@ mod tests {
         assert!(handle_with(&s, &json!({"jsonrpc":"2.0","method":"notifications/initialized"}), &ctx_on()).is_none());
         root_mcp::revoke_tab(&s.identity.tab);
         assert_eq!(handle_with(&s, &msg, &ctx_on()).unwrap()["error"]["message"], "access refused", "a closed tab");
+    }
+
+    #[test]
+    fn the_audit_keeps_tool_calls_and_refusals_but_not_the_handshake() {
+        let (s, ..) = tab("audit");
+        let ctx = ctx_on();
+        let audit = |message: Value| {
+            let reply = handle_with(&s, &message, &ctx);
+            audited(&message, reply.as_ref().and_then(refusal_reason))
+        };
+        for method in ["initialize", "tools/list", "ping"] {
+            assert!(!audit(json!({"jsonrpc":"2.0","id":1,"method":method})), "{method}");
+        }
+        assert!(!audit(json!({"jsonrpc":"2.0","method":"notifications/initialized"})));
+        assert!(audit(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":[q("a?", &["x","y"])]}}})));
+        assert!(audit(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":TOOL_WITHDRAW,"arguments":{"id":"ask-0"}}})));
+        assert!(audit(json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":[]}}})), "a refused call");
+        assert!(audit(json!({"jsonrpc":"2.0","id":5,"method":"resources/list"})), "an unknown method");
+        assert!(audit(json!({"jsonrpc":"1.0","id":6,"method":"ping"})), "a malformed request");
+        root_mcp::revoke_tab(&s.identity.tab);
+        assert!(audit(json!({"jsonrpc":"2.0","id":7,"method":"initialize"})), "a closed tab's handshake is a refusal");
     }
 
     #[test]

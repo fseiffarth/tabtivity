@@ -211,19 +211,23 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
     if session.identity.caller == root_mcp::Caller::Marker {
         // The markup lane (`services::markup_mcp`): the switch is read per
         // call and answered as a normal `off` result, so the agent can tell
-        // the user where to turn it on. Audited like push: session, tool and
-        // a fixed category, never the text.
+        // the user where to turn it on. Tool calls and refusals are audited
+        // like push — session, tool and a fixed category, never the text —
+        // but not the handshake every new tab sends (`markup_mcp::audited`).
         if session.check().is_err() {
             security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("revoked"));
             return StatusCode::UNAUTHORIZED.into_response();
         }
         let outcome = tokio::task::spawn_blocking(move || {
             let (_global, _own) = (global, own);
-            crate::services::markup_mcp::handle_message(&session, &message)
+            let reply = crate::services::markup_mcp::handle_message(&session, &message);
+            let reason = reply.as_ref().and_then(crate::services::markup_mcp::refusal_reason);
+            (reply, reason, crate::services::markup_mcp::audited(&message, reason))
         }).await;
-        let Ok(reply) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
-        let reason = reply.as_ref().and_then(crate::services::markup_mcp::refusal_reason);
-        security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+        let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+        if audited {
+            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+        }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
     if session.identity.caller == root_mcp::Caller::Scheduler {

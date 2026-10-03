@@ -82,7 +82,9 @@ phone or desktop with its own instruction keeps it unchanged.
   `budget` (+ `retryAfterSecs`), `off`. Switched off, running tabs still
   answer `initialize` and `tools/list` and `markup_ask` says `off`, so the
   agent can name the setting. Text is cleaned (`strip_invisible`, whitespace
-  collapsed). The audit row keeps session, tool and category — never text.
+  collapsed). Tool calls and refusals get an audit row — session, tool and
+  category, never text; the handshake (`initialize`, `tools/list`, `ping`)
+  gets none, as help writes none (`audited`), so new tabs don't fill the ring.
 - **What the phone sees.** The ask's random id, the questions and the file's
   *leaf* (`fileName`, through `outbox::sent_name`) — never a path or a raw
   project id. Its markup view sends its own source (`?source=files:<token>`
