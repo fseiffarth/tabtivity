@@ -63,7 +63,7 @@ fn emit(ctx: &CoreCtx, scan_id: &str, phase: &str, path: &str, t: &Tally) {
 /// **host** (and `root` is a path over there), anything else scans locally. As in
 /// `fs::dir_size`, remoteness is resolved *before* any local-fs access — a remote
 /// project's stored directory is a local state dir, not the tree being measured.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn disk_usage_scan(
     ctx: Ctx,
     scan_id: String,
@@ -148,7 +148,7 @@ pub async fn disk_usage_scan(
 /// built, with `cancelled` set. A no-op for an unknown or already-finished
 /// `scan_id` — and for a remote scan, which is a single `du` round-trip on the host
 /// with no walk of ours to interrupt.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn disk_usage_cancel(ctx: Ctx, scan_id: String) {
     let state = ctx.get::<DuScanState>();
     if let Ok(map) = state.lock() {
@@ -160,7 +160,7 @@ pub fn disk_usage_cancel(ctx: Ctx, scan_id: String) {
 
 /// Scan targets offered on the pane's home screen (home dir + its filesystem),
 /// each with its capacity where the platform can tell us.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn disk_usage_devices() -> Result<Vec<DuDevice>, String> {
     Ok(duscan::devices())
 }

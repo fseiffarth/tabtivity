@@ -176,6 +176,15 @@ jobs:
       - name: Lint gateway crate
         run: cargo clippy --manifest-path src-gateway/Cargo.toml --all-targets -- -D warnings
 
+      # The server daemon's build of the library: no `desktop` feature, so no
+      # Tauri/GTK/X11/libdbus (hosted plan §3.2, TODO #2349). Built alone, or
+      # Cargo would unify the desktop's features into it.
+      - name: Lint the daemon's build of the library
+        run: cargo clippy -p tabtivity --no-default-features --lib -- -D warnings
+
+      - name: Lint daemon crate
+        run: cargo clippy -p app-serverd -- -D warnings
+
   test:
     name: test
     runs-on: ubuntu-24.04
@@ -227,6 +236,18 @@ jobs:
 
       - name: Run gateway crate tests
         run: cargo test --manifest-path src-gateway/Cargo.toml
+
+      # The daemon links no window toolkit: built on its own, `ldd` must name
+      # no GTK, GDK, WebKit, X11/xcb or libdbus library (TODO #2349).
+      - name: Daemon links no desktop libraries
+        run: |
+          cargo build -p app-serverd
+          daemon=$(ls target/debug/*-serverd)
+          ldd "$daemon"
+          if ldd "$daemon" | grep -Ei 'gtk|gdk|webkit|javascriptcore|libx11|xcb|dbus|soup|ayatana'; then
+            echo "the server daemon links a desktop library" >&2
+            exit 1
+          fi
 
   test-windows:
     name: test-windows

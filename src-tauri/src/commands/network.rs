@@ -732,7 +732,7 @@ fn local_snapshot(_include_connections: bool) -> NetworkHostSnapshot {
     )
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_host_snapshot(
     ctx: Ctx,
     project_id: String,
@@ -1108,7 +1108,7 @@ fn parse_ssh_link_ss(text: &str, master_pid: u32) -> Option<SshLinkSnapshot> {
     None
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_ssh_link_snapshot(
     ctx: Ctx,
     project_id: String,

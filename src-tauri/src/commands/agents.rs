@@ -532,7 +532,7 @@ fn remote_install_script(spec: &AgentSpec) -> String {
 /// Authentication follows the same saved-password/key/ControlMaster path as
 /// the global machine monitor. The command itself is registry-owned and runs in
 /// the remote account's login shell, where npm/nvm and user install paths live.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent_remote(agent_id: String, machine_id: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let spec = find_spec(&agent_id).ok_or_else(|| format!("unknown agent: {agent_id}"))?;
@@ -584,7 +584,7 @@ pub async fn install_agent_remote(agent_id: String, machine_id: String) -> Resul
 /// so a "type my saved password" paste aimed at it could land in whatever prompt
 /// the installer happens to be showing. The interactive login is still typed by
 /// hand, or ridden for free off the shared ControlMaster.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn install_agent_remote_command(
     agent_id: String,
     machine_id: String,
@@ -644,7 +644,7 @@ fn spec_is_installed(spec: &AgentSpec) -> bool {
 }
 
 /// True when the given agent (by id) is installed. Unknown ids return false.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_is_installed(id: String) -> bool {
     find_spec(&id).map(spec_is_installed).unwrap_or(false)
 }
@@ -672,7 +672,7 @@ pub struct NodeRuntimeStatus {
 /// Probe the host's Node.js for the Manage Agents panel. Most agent CLIs
 /// install via `npm install -g …`, so a missing npm or a Node below
 /// [`NODE_MIN_MAJOR`] surfaces the "install Node first" helper.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn node_runtime_status() -> NodeRuntimeStatus {
     app_core::rt::spawn_blocking(|| {
         let version = crate::paths::command_no_window("node")
@@ -712,7 +712,7 @@ fn node_runtime_status_from(npm: bool, version: Option<String>) -> NodeRuntimeSt
 /// built-in `AGENTS` registry) for install status, returning the subset present.
 /// A bare name is looked up on `PATH`; a value containing a path separator is
 /// checked as a file path so a custom agent pointed at a full path resolves too.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn probe_binaries(bins: Vec<String>) -> Vec<String> {
     bins.into_iter()
         .filter(|b| {
@@ -742,7 +742,7 @@ pub fn binary_is_installed(bin: &str) -> bool {
 /// behind a one-time trust approval (`/hooks`), and an untrusted one never fires,
 /// silently; Tabtivity then falls back to guessing the session from Codex's rollout
 /// logs (`services::codex_bind`). The UI reads this to offer the one-click fix.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn codex_hook_status() -> crate::services::agent_session::CodexHookState {
     crate::services::agent_session::codex_hook_state()
 }
@@ -765,7 +765,7 @@ fn sudo_variant(cmd: &str) -> String {
 }
 
 /// List every known agent CLI with its current installed status.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_agents() -> Vec<AgentInfo> {
     AGENTS
         .iter()
@@ -873,7 +873,7 @@ fn manual_install_cmd(spec: &AgentSpec) -> &'static str {
 /// via `agent-install-progress` events (`{ id, line }`) so the UI can show live
 /// progress. Returns the install log on success, or the tail of the output on
 /// failure. The post-install probe is the real source of truth.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
 
@@ -887,7 +887,7 @@ pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
 /// fetches the newest release — into Tabtivity's install home, whose launcher
 /// dirs come ahead of any host copy on PATH (`services::agent_install`). Same
 /// `agent-install-progress` stream as [`install_agent`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
     if !spec_is_installed(spec) {
@@ -1099,7 +1099,7 @@ fn npm_uninstall_command(pkg: &str) -> std::process::Command {
 /// `spec_is_installed` back to false and let the official installer run again
 /// from scratch; any support files the installer left behind (an updater, a
 /// packages cache) are none of Tabtivity's business to guess at and clean up.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn uninstall_agent(id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
     server_installs_are_the_helpers(spec.id)?;
@@ -1262,7 +1262,7 @@ pub struct AgentWarmupLaunch {
 /// process is reaped by a thread of its own: `std::process::Child` left
 /// unwaited is a zombie on Unix, and the same thread enforces
 /// `WARMUP_TIMEOUT`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupLaunch, String> {
     let message = message.trim().to_string();
     if message.is_empty() || message.len() > WARMUP_MESSAGE_MAX || message.contains(['\n', '\r']) {
@@ -1376,7 +1376,7 @@ impl AgentUsageReport {
 /// (`services::agent_session::agent_session_model`). `None` when the agent
 /// keeps no transcript Tabtivity reads, or it holds no answer yet — the Agents
 /// view then shows no tag rather than a guessed one.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_model(
     agent: String,
     project_id: Option<String>,
@@ -1398,7 +1398,7 @@ pub async fn agent_tab_model(
 /// pursuing a `/goal`, read from the session's own record
 /// (`services::agent_session::agent_session_goal`). `None` when the agent
 /// keeps none Tabtivity reads; the GOAL mark then goes by the tab's footer.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_goal(
     agent: String,
     project_id: Option<String>,
@@ -1417,7 +1417,7 @@ pub async fn agent_tab_goal(
 /// read from the CLI's own transcript
 /// (`services::agent_session::agent_session_last_prompt`). `None` when the
 /// agent keeps no transcript Tabtivity reads, or it holds no prompt yet.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_last_prompt(
     agent: String,
     project_id: Option<String>,
@@ -1440,7 +1440,7 @@ pub async fn agent_tab_last_prompt(
 /// sent while the agent was working included
 /// (`services::agent_session::agent_session_recent_prompts`). What the prompt
 /// chart adopts typed prompts from; empty when there is no transcript to read.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_recent_prompts(
     agent: String,
     project_id: Option<String>,
@@ -1466,7 +1466,7 @@ pub async fn agent_tab_recent_prompts(
 /// the fingerprint the caller last saw; a matching one is answered
 /// `unchanged` without a parse. Always answers: an agent with no readable
 /// transcript comes back `available: false` with the reason, never an error.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_transcript(
     agent: String,
     project_id: Option<String>,
@@ -1498,7 +1498,7 @@ pub async fn agent_tab_transcript(
 /// diffs its CLI recorded (`services::agent_changes`): the desktop Reader's
 /// Changes panel. Takes `agent_tab_transcript`'s arguments; never reaches
 /// the phone.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_changes(
     agent: String,
     project_id: Option<String>,
@@ -1531,7 +1531,7 @@ pub async fn agent_tab_changes(
 /// record pointed back at that conversation and is relaunched onto it. `None`
 /// once there is nothing to undo, or for an agent this does not know — the
 /// window relaunches the other resumable agents on their own resume flag.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_tab_undo_clear(
     agent: String,
     project_id: Option<String>,
@@ -1552,7 +1552,7 @@ pub async fn agent_tab_undo_clear(
 /// no project, and a successful read is cached for `CACHE_TTL` so reopening the
 /// sheet does not spawn anything. `refresh` skips the cache — that is what the
 /// sheet's own refresh means.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageReport {
     use crate::services::agent_usage as usage;
 
@@ -1729,7 +1729,7 @@ async fn probe_agent_version(
 /// Only installed agents are probed, at most once a day per unchanged
 /// executable (`PROBE_TTL`), all of them concurrently. `refresh` skips the
 /// cache; that is what the panel's own re-check means.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_versions(
     refresh: Option<bool>,
 ) -> Vec<crate::services::agent_versions::VersionReport> {
@@ -1818,7 +1818,7 @@ pub struct AgentUpdateReport {
 /// once, each settled on its own so one registry being down costs only its row.
 /// The installed versions are re-read first, so a CLI that updated itself
 /// since the last probe is not offered the update it already has.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn check_agent_updates() -> Vec<AgentUpdateReport> {
     use crate::services::{agent_latest, agent_versions};
 
@@ -1929,7 +1929,7 @@ fn host_agent_version_says(
 ///
 /// Keyed by the version, not by a flag: the notice comes back on the *next*
 /// release, which is the only time it has something new to say.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(), String> {
     let spec = find_spec_by_id_or_bin(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
     if version.trim().is_empty() {
@@ -1952,7 +1952,7 @@ pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(),
 /// parsing it inline would jank the window at launch. `sandbox` and
 /// `local_only` are accepted for older callers; the answer is the scope
 /// home's either way (`services::agent_home`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn claude_folder_trusted(
     cwd: String,
     project_id: Option<String>,
@@ -1969,7 +1969,7 @@ pub async fn claude_folder_trusted(
 
 /// Every CLI's shared login as the Manage CLIs panel shows it
 /// (`services::agent_auth`). Never a token.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
     app_core::rt::spawn_blocking(crate::services::agent_auth::status)
         .await
@@ -1979,7 +1979,7 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
 /// Copy this computer's login files for `id` into Tabtivity's store — the one
 /// safe direction — and link them into every agent home. Returns how many
 /// files were taken.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_import(id: String) -> Result<usize, String> {
     app_core::rt::spawn_blocking(move || crate::services::agent_auth::import_from_user_home(&id))
         .await
@@ -1987,7 +1987,7 @@ pub async fn agent_login_import(id: String) -> Result<usize, String> {
 }
 
 /// Forget the shared login of `id` everywhere.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
     app_core::rt::spawn_blocking(move || crate::services::agent_auth::sign_out(&id))
         .await
@@ -1996,7 +1996,7 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
 
 /// The Tabtivity-wide agent config layer (`services::agent_global`): where it is
 /// and how many files it holds.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_status() -> Result<crate::services::agent_global::LayerStatus, String> {
     app_core::rt::spawn_blocking(crate::services::agent_global::status)
         .await
@@ -2005,7 +2005,7 @@ pub async fn agent_global_status() -> Result<crate::services::agent_global::Laye
 
 /// Fill the Tabtivity-wide layer from the user's own `~/.claude`, `~/.codex` and
 /// `~/.gemini`; every agent home picks it up at its next tab start.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_import() -> Result<crate::services::agent_global::ImportReport, String> {
     app_core::rt::spawn_blocking(crate::services::agent_global::import_from_user_home)
         .await
@@ -2015,7 +2015,7 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
 
 /// The Manage CLIs switch for Codex auto-review in the Tabtivity-wide layer;
 /// every Codex tab picks it up at its next start.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), String> {
     app_core::rt::spawn_blocking(move || crate::services::agent_global::set_codex_auto_review(enabled))
         .await
@@ -2024,7 +2024,7 @@ pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), Str
 }
 
 /// Open the Tabtivity-wide layer's folder in the file manager, creating it first.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_open() -> Result<(), String> {
     app_core::rt::spawn_blocking(|| {
         let dir = crate::services::agent_global::ensure_dir().map_err(|e| e.to_string())?;

@@ -296,9 +296,14 @@ fn camel_key(ident: &str) -> String {
     out
 }
 
+/// `#[tauri::command]`, or the form every command file uses so the library
+/// also builds without Tauri: `#[cfg_attr(feature = "desktop", tauri::command)]`.
 fn is_tauri_command(attr: &syn::Attribute) -> bool {
     let segments: Vec<String> = attr.path().segments.iter().map(|s| s.ident.to_string()).collect();
-    segments == ["tauri", "command"]
+    if segments == ["tauri", "command"] {
+        return true;
+    }
+    attr.path().is_ident("cfg_attr") && quote::ToTokens::to_token_stream(attr).to_string().replace(' ', "").contains(",tauri::command")
 }
 
 fn type_text(ty: &syn::Type) -> String {
@@ -453,6 +458,22 @@ fn generate_core_dispatch() {
         .filter(|p| p.extension().is_some_and(|x| x == "rs") && p.file_stem().is_some_and(|s| s != "mod"))
         .collect();
     files.sort();
+    // Modules `mod.rs` declares under a cfg (the desktop-only ones): their
+    // wrappers carry the same cfg, so the daemon's build leaves them out.
+    let mod_rs = fs::read_to_string(dir.join("mod.rs")).expect("read commands/mod.rs");
+    let mut gated: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut pending: Option<String> = None;
+    for line in mod_rs.lines().map(str::trim) {
+        if line.starts_with("#[cfg(") {
+            pending = Some(line.to_string());
+        } else if let Some(name) = line.strip_prefix("pub mod ").and_then(|l| l.strip_suffix(';')) {
+            if let Some(cfg) = pending.take() {
+                gated.insert(name.to_string(), cfg);
+            }
+        } else if !line.starts_with("//") && !line.is_empty() {
+            pending = None;
+        }
+    }
     let mut sigs = Vec::new();
     let mut gaps: Vec<(String, String)> = Vec::new();
     for path in &files {
@@ -462,7 +483,12 @@ fn generate_core_dispatch() {
         let file = syn::parse_file(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for sig in command_sigs(&module, &file) {
             match sig {
-                Ok(sig) => sigs.push(sig),
+                Ok(mut sig) => {
+                    if let Some(cfg) = gated.get(&module) {
+                        sig.cfg.insert(0, cfg.clone());
+                    }
+                    sigs.push(sig)
+                }
                 Err(gap) => gaps.push(gap),
             }
         }
@@ -508,5 +534,8 @@ fn main() {
     generate_mobile_assets();
     generate_help_corpus();
     generate_core_dispatch();
-    tauri_build::build()
+    // Only the desktop build is a Tauri app; the server daemon builds this
+    // library with `default-features = false` (hosted plan §3.2).
+    #[cfg(feature = "desktop")]
+    tauri_build::build();
 }

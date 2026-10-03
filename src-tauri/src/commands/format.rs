@@ -215,7 +215,7 @@ fn toolchain_file_is_plain_channel(text: &str) -> bool {
 
 /// Whether a formatter for `lang` is available (drives the button's enabled
 /// state). `path` lets a project-local prettier count.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn formatter_available(lang: String, path: Option<String>) -> bool {
     resolve_tool(&lang, path.as_deref()).is_some()
 }
@@ -230,7 +230,7 @@ pub fn formatter_available(lang: String, path: Option<String>) -> bool {
 // resolution), which as a plain `#[tauri::command]` froze the whole window for
 // the run. Tauri's blocking pool runs it instead; the body, its error strings
 // and the unit tests calling it directly are unchanged.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn format_source(text: String, lang: String, path: Option<String>) -> Result<String, String> {
     let tool = resolve_tool(&lang, path.as_deref())
         .ok_or_else(|| format!("formatter-unavailable:{lang}"))?;
@@ -307,7 +307,7 @@ pub struct SyntaxIssue {
 // to the 8 MiB viewer limit) on every check, and a plain `#[tauri::command]`
 // would freeze the whole window for the length of that parse. Kept a plain fn
 // so the return type (and the unit tests) stay `Option<SyntaxIssue>`.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn check_syntax(text: String, lang: String) -> Option<SyntaxIssue> {
     if text.trim().is_empty() {
         return None;

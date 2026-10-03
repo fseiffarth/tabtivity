@@ -49,20 +49,20 @@ fn describe(staged: &app_update::Staged) -> StagedInfo {
 }
 
 /// Ask GitHub whether a newer release exists.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn check_app_update() -> Result<UpdateCheck, String> {
     app_update::check().await
 }
 
 /// The release page, for the "open on GitHub" link. A constant rather than
 /// something the frontend hardcodes, so the repository is named in one place.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn app_update_releases_url() -> String {
     app_update::RELEASES_PAGE.to_string()
 }
 
 /// An update already downloaded in this session, if any.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn app_update_staged() -> Option<StagedInfo> {
     app_update::staged()
         .filter(|staged| staged.path.is_file())
@@ -73,7 +73,7 @@ pub fn app_update_staged() -> Option<StagedInfo> {
 ///
 /// Re-checks first: the asset URL is never taken from the renderer, and a check
 /// that has been sitting open in the panel for an hour may be stale.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn download_app_update(ctx: Ctx) -> Result<StagedInfo, String> {
     let check = app_update::check().await?;
     if !check.update_available {
@@ -99,7 +99,7 @@ pub async fn download_app_update(ctx: Ctx) -> Result<StagedInfo, String> {
 
 /// Apply the staged update. See [`app_update::install`] for what that means per
 /// platform — none of the branches restart Tabtivity themselves.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_app_update() -> Result<InstallOutcome, String> {
     app_core::rt::spawn_blocking(app_update::install)
         .await

@@ -157,6 +157,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-serverd"
+version = "0.1.0"
+dependencies = [
+ "tabtivity",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

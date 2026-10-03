@@ -177,7 +177,7 @@ async fn resolve(
 /// mirror, marking each pulled file selected and recording its base. `rel_path`
 /// is project-relative (`""` = the whole project root). Returns the number of
 /// files transferred. Streams `sync-progress` as it goes.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_pull(
     ctx: Ctx,
     project_id: String,
@@ -199,7 +199,7 @@ pub async fn sync_pull(
 
 /// Pull the entire project tree into the mirror (the one-click "sync whole
 /// project"). Equivalent to `sync_pull` with an empty `rel_path`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_whole_project(
     ctx: Ctx,
     project_id: String,
@@ -214,7 +214,7 @@ pub async fn sync_whole_project(
 /// transferring anything (e.g. deselecting to stop tracking). Selecting a path
 /// the user then wants mirrored is followed by `sync_pull`; selecting alone just
 /// records intent. Mirror bytes are left in place on deselect.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_mark_selected(
     ctx: Ctx,
     project_id: String,
@@ -244,7 +244,7 @@ pub async fn sync_mark_selected(
 /// project-wide — auto-sync; `selected` is left as-is (manual tracking continues),
 /// matching the deselect-leaves-bytes convention. No bytes transfer here — the
 /// background reconcile engine (`services::sync_auto`) acts on its next pass.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_set_auto(
     ctx: Ctx,
     project_id: String,
@@ -301,7 +301,7 @@ pub struct AutoSyncPreview {
 /// Walks the **host** because that is the side that holds the bytes in the case
 /// worth warning about; a `rel` that is a file (not a directory) fails the walk
 /// and reports a single entry, which is never large enough to warn on anyway.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_auto_preview(
     ctx: Ctx,
     project_id: String,
@@ -382,7 +382,7 @@ pub struct BigFolderScan {
 /// the shape `disk_usage_scan` already uses — which `lib/remote/hpc/hpcGuard`'s
 /// `withHpcConfirm` turns into a dialog naming the machine and one retry with
 /// `confirmed: true`. Per run, never remembered, exactly as the other gate.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_big_folders(
     ctx: Ctx,
     project_id: String,
@@ -507,7 +507,7 @@ pub async fn sync_big_folders(
 /// pull and push (`pull_subtree` / `sync_push`), which is the transfer the prompt
 /// exists to keep off a multi-GB tree. Nothing is deleted either way — mirror bytes
 /// already present stay exactly where they are.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_set_excluded(
     ctx: Ctx,
     project_id: String,
@@ -536,7 +536,7 @@ pub async fn sync_set_excluded(
 /// on the host so the green/amber state is fresh (amber = host moved since the
 /// last fetch). Directories report their stored selection (no re-stat). This is
 /// the explicit "refresh" the plan calls out — there is no live watcher.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_status(
     ctx: Ctx,
     project_id: String,
@@ -912,7 +912,7 @@ pub struct SyncFileMeta {
 /// popup can show the concrete divergence (size + mtime, per side) alongside the
 /// recorded base. Requires a live pooled connection to stat the host; a cold
 /// pool errors via `resolve` (the popup only opens for a connected project).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_file_meta(
     ctx: Ctx,
     project_id: String,
@@ -981,7 +981,7 @@ pub async fn sync_file_meta(
 /// that path's size cutoff: the user explicitly opened the viewer for this one
 /// file, so reading it once — however large — is a decision, not the per-refresh
 /// cost the heuristic exists to avoid.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_resolve_if_identical(
     ctx: Ctx,
     project_id: String,
@@ -1041,7 +1041,7 @@ pub async fn sync_resolve_if_identical(
 /// write and an explicit one is still one. The manifest entry is removed under the
 /// same snapshot guard the status prune uses, so a concurrent pull that revived
 /// the file keeps its fresh base.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_apply_delete(
     ctx: Ctx,
     project_id: String,
@@ -1232,7 +1232,7 @@ fn drop_tracked_files<T>(
 /// `force` mirrors `sync_push`'s flag: it turns what would have been a blocked
 /// conflict into a destroyed host file, which is the difference the dialog exists
 /// to state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_transfer_preview(
     ctx: Ctx,
     project_id: String,
@@ -1467,7 +1467,7 @@ pub struct SyncPushResult {
 /// have yet) is written atomically (temp + rename). A file whose host moved since
 /// the last sync is BLOCKED and returned in `conflicts` — unless `force` is set
 /// (the user chose "keep local"), which overwrites it. Never silently clobbers.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_push(
     ctx: Ctx,
     project_id: String,
@@ -1615,7 +1615,7 @@ pub async fn sync_push(
 /// button: the host moved past our mirrored base, so this shows exactly what
 /// changed on the host before the user re-syncs. Requires a live pooled
 /// connection (reads the host over SFTP); a cold pool errors via `resolve`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_diff(
     ctx: Ctx,
     project_id: String,

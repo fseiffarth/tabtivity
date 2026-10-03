@@ -219,7 +219,7 @@ async fn run_off_thread<T: Send + 'static>(
 }
 
 /// Is SLURM available on the project's host? Lets the UI hide itself off-HPC.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn slurm_available(
     project_dir: String,
     host_id: Option<String>,
@@ -242,7 +242,7 @@ pub async fn slurm_available(
 /// Submit `script_rel` (project-relative) with `sbatch`, then resolve its real
 /// output paths via `scontrol` — in one round trip: the numeric job id comes from
 /// `sbatch`'s own output, so chaining `scontrol` on it injects nothing.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn slurm_submit(
     project_dir: String,
     script_rel: String,
@@ -295,7 +295,7 @@ pub async fn slurm_submit(
 
 /// The current user's jobs on the host. `--me` (newer SLURM) with a `-u "$USER"`
 /// fallback for sites where it isn't supported. Constant script.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn slurm_queue(
     project_dir: String,
     host_id: Option<String>,
@@ -325,7 +325,7 @@ pub async fn slurm_queue(
 /// existed. Given one, it wins over `WorkDir` — but only for the *fallback*;
 /// whatever `scontrol` states still beats both, since that is what SLURM
 /// actually used.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn slurm_job_out(
     project_dir: String,
     job_id: String,
@@ -353,7 +353,7 @@ pub async fn slurm_job_out(
 }
 
 /// Cancel a job. The id is validated numeric before it touches the command.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn slurm_cancel(
     project_dir: String,
     job_id: String,

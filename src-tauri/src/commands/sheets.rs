@@ -61,7 +61,7 @@ fn cell_to_string(cell: &Data) -> String {
 /// `.xlsx` (or one on a network mount) run synchronously froze the window (the
 /// main-thread freeze class `commands::git`'s `run_off_thread` doc describes).
 /// The sync body stays directly unit-testable.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_spreadsheet(path: String, sheet: Option<String>) -> Result<SheetData, String> {
     tokio::task::spawn_blocking(move || read_spreadsheet_blocking(path, sheet))
         .await

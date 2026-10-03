@@ -15,19 +15,19 @@ fn changed(ctx: &CoreCtx) {
 /// Take or renew the single-client timer lease for this window
 /// (`services::timer_lease`, headless owner plan H2): the timer hosts run
 /// only while it answers `held`. Called on a heartbeat.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn timer_lease_acquire(client_id: String) -> Result<crate::services::timer_lease::LeaseState, String> {
     crate::services::timer_lease::acquire(&client_id)
 }
 
 /// Give the timer lease up on the way out, so another window takes over at
 /// once rather than after the TTL.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn timer_lease_release(client_id: String) -> Result<(), String> {
     crate::services::timer_lease::release(&client_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedules_list(
     project_id: String,
     schedule_target_id: String,
@@ -35,7 +35,7 @@ pub fn agent_schedules_list(
     agent_tasks::list(&project_id, &schedule_target_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedule_upsert(
     ctx: Ctx,
     project_id: String,
@@ -56,7 +56,7 @@ pub fn agent_schedule_upsert(
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedule_delete(
     ctx: Ctx,
     project_id: String,
@@ -74,7 +74,7 @@ pub fn agent_schedule_delete(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedules_delete_target(
     ctx: Ctx,
     project_id: String,
@@ -85,7 +85,7 @@ pub fn agent_schedules_delete_target(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedule_claim(
     project_id: String,
     schedule_target_id: String,
@@ -95,7 +95,7 @@ pub fn agent_schedule_claim(
     agent_tasks::claim(&project_id, &schedule_target_id, &schedule_id, &occurrence)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedule_complete(
     ctx: Ctx,
     project_id: String,
@@ -115,7 +115,7 @@ pub fn agent_schedule_complete(
     Ok(schedules)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_schedules_cleanup_orphans(
     ctx: Ctx,
     live: Vec<AgentScheduleTargetBinding>,

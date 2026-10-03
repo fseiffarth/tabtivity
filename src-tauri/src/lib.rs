@@ -8,6 +8,12 @@
 // them into a struct would move the same fields behind one more indirection and
 // change nothing about the call site the lint is worried about.
 #![allow(clippy::too_many_arguments)]
+// The server daemon builds this library without the `desktop` feature
+// (hosted plan §3.2, `src-serverd/`): the window, its toolkit and the OS
+// credential store are compiled out, and with them every caller of some
+// shared helpers. The desktop build — the one CI lints with `-D warnings` —
+// still sees every dead item; this only quiets the daemon's build.
+#![cfg_attr(not(feature = "desktop"), allow(dead_code, unused_imports, unused_variables))]
 
 // The brand module lives in the core crate; re-exported with its macros so
 // `crate::brand::…` and `crate::app_slug!()` resolve here unchanged.
@@ -562,6 +568,7 @@ pub fn format_crash_line(code: u32, addr: usize, buf: &mut [u8]) -> usize {
 /// showing its last frame — an apparent freeze. Hook WebKit's
 /// web-process-terminated signal to log the reason to crash.log and reload
 /// the page, which respawns the renderer.
+#[cfg(feature = "desktop")]
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn install_webview_crash_reporter(app: &tauri::App) {
     use tauri::Manager;
@@ -603,6 +610,7 @@ fn bump_renderer_reloads(counts: &mut std::collections::BTreeMap<String, u32>, l
 
 /// Hook one window's renderer-crash signal. Safe to call on any window, at any
 /// point after it is built.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
     use webkit2gtk::{WebProcessTerminationReason, WebViewExt};
@@ -645,6 +653,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
 /// talk to (the user's remedy is a relaunch, which the log line now explains).
 /// An unresponsive renderer is logged and left alone — it may recover, and a
 /// reload would destroy whatever it was doing.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "windows")]
 pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -710,6 +719,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
 /// per-window call is a no-op here and [`with_webview_crash_reporter`] installs
 /// the hook once for every window, present and future. (Any other platform
 /// reports through its signal handlers.)
+#[cfg(feature = "desktop")]
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
     let _ = window;
@@ -722,6 +732,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
 /// reload cap. Applies to every window the app ever builds (popouts, the
 /// presenter, live browser pages), which is why it lives on the builder rather
 /// than beside the per-window Linux/Windows hooks.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     // Per-window budgets behind one app-wide hook: keyed by webview label.
@@ -747,6 +758,7 @@ fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Bu
 
 /// Linux and Windows hook each window as it is built (see
 /// [`hook_webview_crash_reporter`]); nothing to add to the builder.
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "macos"))]
 fn with_webview_crash_reporter(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
@@ -807,6 +819,7 @@ fn macos_menu_plan() -> Vec<(&'static str, Vec<MacMenuItem>)> {
     ]
 }
 
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn build_macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -852,6 +865,7 @@ fn build_macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<t
 
 /// macOS: install the explicit menu bar (see [`macos_menu_plan`]) and route its
 /// custom Quit through the main window's close, so the frontend teardown runs.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "macos")]
 fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
@@ -874,6 +888,7 @@ fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri:
 
 /// Linux and Windows get no menu bar: Tauri installs none there, and one would
 /// draw into Windows' undecorated overlay header.
+#[cfg(feature = "desktop")]
 #[cfg(not(target_os = "macos"))]
 fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
@@ -891,6 +906,7 @@ fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri:
 /// solid accent-blue slider — so it reads as "Tabtivity blue" without having to
 /// follow the live in-app theme. Best-effort and behind an env opt-out: any
 /// failure simply leaves the native scrollbar untouched.
+#[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn install_scrollbar_theme() {
     use gtk::prelude::*;
@@ -948,6 +964,7 @@ fn install_scrollbar_theme() {
 ///
 /// Geometry rules (which monitor, what if it was unplugged) live in
 /// `services::window_state::resolve_startup_geometry`, which is pure and tested.
+#[cfg(feature = "desktop")]
 fn restore_main_window(app: &tauri::App) {
     use tauri::Manager;
 
@@ -1158,6 +1175,7 @@ pub fn standalone_core_state() -> app_core::CoreState {
     Singletons::new().core_state()
 }
 
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKit's DMA-BUF renderer SIGBUSes inside Mesa on some driver stacks

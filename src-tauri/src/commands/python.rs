@@ -448,7 +448,7 @@ fn python_interpreters_blocking(project_dir: &str) -> Result<Vec<PyInterpreter>,
     Ok(discover_local(Path::new(project_dir)))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn python_interpreters(project_dir: String) -> Result<Vec<PyInterpreter>, String> {
     run_off_thread(move || python_interpreters_blocking(&project_dir)).await
 }
@@ -456,7 +456,7 @@ pub async fn python_interpreters(project_dir: String) -> Result<Vec<PyInterprete
 /// The interpreter Run/Debug should use *right now*: the project's explicit choice
 /// if it has one (no probing), else the best auto-detected candidate, else the
 /// system default. This is the only thing `lib/terminal/pythonRun.ts` needs to ask.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn python_interpreter_for(
     project_id: Option<String>,
     project_dir: String,
@@ -497,7 +497,7 @@ fn python_from_entry(entry: &crate::schema::ProjectEntry) -> Option<String> {
 /// Pin (or clear, with `None`/blank) the project's interpreter. Written to both
 /// stores, like the sandbox spec: the `projects.json` mirror is what the run path
 /// reads, `project.json` keeps it with the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_python(
     project_id: String,
     interpreter: Option<String>,

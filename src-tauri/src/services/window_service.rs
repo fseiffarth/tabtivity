@@ -10,6 +10,7 @@ use crate::storage;
 /// Physical monitor rects as reported by a live window (#42), for validating a
 /// detached popout's restore geometry on switch-back. Mirrors the mapping
 /// `lib.rs` uses at startup for the main window.
+#[cfg(feature = "desktop")]
 pub fn monitor_rects(
     win: &tauri::WebviewWindow,
 ) -> Vec<crate::services::window_state::MonitorRect> {

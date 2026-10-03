@@ -134,7 +134,7 @@ fn paste_allowed(pty: &str, account: &str) -> bool {
 }
 
 /// Whether the OS credential store is readable right now (see [`KeyringState`]).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keyring_state() -> KeyringState {
     tokio::task::spawn_blocking(creds::keyring_state)
         .await
@@ -148,7 +148,7 @@ pub async fn keyring_state() -> KeyringState {
 ///
 /// Only ever called from an explicit user action (the header's VPN menu, a Connect
 /// dialog) — never from a launch path, which promises not to prompt.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keyring_unlock() -> Result<(), String> {
     tokio::task::spawn_blocking(creds::unlock_keyring)
         .await
@@ -212,7 +212,7 @@ impl PasteCredential {
 /// Returns `false` when nothing is stored for the target (including a locked keyring,
 /// which reads as empty — [`keyring_state`] is what distinguishes the two), so the
 /// caller can say "nothing saved" instead of appearing to paste an empty secret.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn credential_paste_to_pty(
     ctx: Ctx,
     pty: String,

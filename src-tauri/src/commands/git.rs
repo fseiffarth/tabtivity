@@ -615,7 +615,7 @@ pub(crate) async fn run_off_thread<T: Send + 'static>(
 /// this before offering a git-backed project, so a missing `git` surfaces as an
 /// install prompt instead of `scaffold_project` silently no-oping `git init`
 /// (see its `let _ =` discard) and registering a git-typed project with no repo.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_available() -> bool {
     crate::paths::command_no_window("git")
         .arg("--version")
@@ -640,7 +640,7 @@ pub struct GitStatus {
     pub head_tagged: bool,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_status(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -785,7 +785,7 @@ pub struct GitDirtyProbe {
 /// `git_status` + the unpushed-commit count as ONE command, for the switcher's
 /// 12 s per-project dot poll: one git spawn and one IPC round trip in the
 /// common (dirty, non-repo, or no-upstream-relevant) case instead of two each.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, String> {
     run_off_thread(move || {
         // `has_remote` is not read by the dot (see `git_status_probe`); skip it.
@@ -818,7 +818,7 @@ pub async fn git_dirty_probe(project_dir: String) -> Result<GitDirtyProbe, Strin
 /// host toplevel can't be reverse-mapped back to the project's `RemoteSpec` by
 /// `remote_target_for_dir`, so remote projects short-circuit to `None` and keep
 /// their existing project-scoped behavior.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_repo_root(
     project_dir: String,
     rel_path: String,
@@ -852,7 +852,7 @@ fn git_repo_root_blocking(project_dir: String, rel_path: String) -> Result<Optio
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_add_all(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -880,7 +880,7 @@ fn git_add_all_blocking_selected(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_generate_commit_message(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -984,7 +984,7 @@ fn format_commit_message(kind: &str, files: &[String]) -> String {
     format!("{kind}: {subject}")
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_commit(
     project_dir: String,
     message: String,
@@ -1023,7 +1023,7 @@ fn git_commit_blocking_selected(
 ///   "unpushed"  – committed locally but not pushed to upstream (green ↑)
 ///   "ignored"   – ignored by git (gray ✕)
 /// For directories the highest-priority child status bubbles up.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_file_statuses(
     project_dir: String,
     rel_path: String,
@@ -1230,7 +1230,7 @@ fn git_file_statuses_blocking(
 }
 
 /// Stages a specific path (file or directory) via `git add`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_add_path(project_dir: String, rel_path: String) -> Result<(), String> {
     run_off_thread(move || git_add_path_blocking(project_dir, rel_path)).await
 }
@@ -1259,7 +1259,7 @@ pub struct FileChange {
 ///   "staged"   – index vs HEAD (the Commit list)
 ///   "unpushed" – local commits ahead of upstream (the Push list)
 /// The frontend folds these flat paths into a navigable folder tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_change_stats(
     ctx: Ctx,
     project_dir: String,
@@ -1454,7 +1454,7 @@ fn pick_remote_namesake(refs: &str, branch: &str) -> Option<String> {
 
 /// Returns one-line summaries of commits ahead of the upstream (not yet pushed),
 /// measured against [`unpushed_base`]. Empty when there is none or no repo.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_unpushed_commits(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -1533,7 +1533,7 @@ pub(crate) fn require_hook_trust(target: Option<&RemoteTarget>, project_dir: &st
     )
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push(
     project_dir: String,
     project_id: Option<String>,
@@ -1557,7 +1557,7 @@ pub async fn git_push(
 /// The git bar's Release dialog: the suggested tag for the checked-out
 /// branch's tip and whether a release could go out now
 /// (`services::git_release`). Local projects only; asks the remote.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_release_preview(
     project_dir: String,
     project_id: Option<String>,
@@ -1584,7 +1584,7 @@ pub async fn git_release_preview(
 /// tip is exactly what the remote branch holds and the tag is new there. Gated
 /// like Push: with no stored token the user's own credential helpers answer,
 /// and those are part of the approved hook fingerprint.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_release_tag(
     project_dir: String,
     project_id: Option<String>,
@@ -1890,7 +1890,7 @@ fn clone_error(stderr: &str, had_token: bool, https: bool) -> String {
 /// SSH URL uses the user's own keys. Every interactive prompt git could raise is
 /// disabled (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode=yes`) — Tabtivity has no console
 /// attached, so a prompt would be an invisible hang rather than a question.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_clone(url: String, dest: String) -> Result<String, String> {
     run_off_thread(move || git_clone_blocking(url, dest)).await
 }
@@ -2000,7 +2000,7 @@ pub(crate) fn https_probe_url(raw: &str) -> Option<String> {
 /// from a mistyped URL — both read as `"private"`, which is also the safe default
 /// for the field this fills, and the clone itself is the thing that reports a bad
 /// URL.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_remote_visibility(url: String) -> Result<String, String> {
     run_off_thread(move || git_remote_visibility_blocking(url)).await
 }
@@ -2072,7 +2072,7 @@ fn git_head_hash(target: Option<&RemoteTarget>, project_dir: &str) -> Option<Str
 /// 100) starting `skip` commits back from HEAD, so the panel can page a long
 /// history in instead of stopping at the first page. Returns an empty vec for a
 /// non-git directory, a repo with no commits yet, or a `skip` past the root.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_log(
     project_dir: String,
     limit: Option<u32>,
@@ -2130,7 +2130,7 @@ const GIT_LOG_SEARCH_SCAN: u32 = 20_000;
 /// Search the history (newest first) for commits whose hash, subject, author or
 /// ref names contain `query` (case-insensitive). Reads `GIT_LOG_SEARCH_SCAN`
 /// commits at most and returns up to `limit` matches.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_log_search(
     project_dir: String,
     query: String,
@@ -2230,7 +2230,7 @@ fn parse_git_log(text: &str, head: Option<&str>) -> Vec<GitCommit> {
 /// recent first. `--follow` keeps history across renames. Returns an empty vec for
 /// a non-git dir, an untracked path, or a repo with no commits. Local and remote
 /// (SSH) projects both work via the shared `run_git` dispatch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_file_log(
     project_dir: String,
     rel_path: String,
@@ -2270,7 +2270,7 @@ fn git_file_log_blocking(
 /// Used by the in-app compare/merge view for the "old version" pane. Errors (bad
 /// rev, path absent at that rev) surface as `Err(stderr)`. Local and remote (SSH)
 /// projects both work via the shared `run_git` dispatch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_file_at_rev(
     project_dir: String,
     rel_path: String,
@@ -2313,7 +2313,7 @@ pub struct GitBranch {
 }
 
 /// Lists local and remote-tracking branches.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_branches(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
@@ -2367,7 +2367,7 @@ fn git_branches_blocking_selected(
 
 /// Checks out a branch name or commit hash. Surfaces git's stderr on failure
 /// (e.g. when the working tree has conflicting uncommitted changes).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_checkout(
     project_dir: String,
     target: String,
@@ -2407,7 +2407,7 @@ fn git_checkout_blocking_selected(
 }
 
 /// Returns the full commit message (subject + body) for a single commit.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_commit_message(
     project_dir: String,
     hash: String,
@@ -2444,7 +2444,7 @@ fn git_commit_message_blocking_selected(
 
 /// Rewords the most recent commit (HEAD) via `git commit --amend`. Only valid
 /// for the latest commit; rewording older commits would require a rebase.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_reword_head(
     project_dir: String,
     message: String,
@@ -2490,7 +2490,7 @@ fn git_reword_head_blocking_selected(
 /// <rel_path>`, which renders the whole file as added. `--no-index` exits
 /// non-zero whenever there are differences, so for the fallback we treat any
 /// non-empty stdout as success regardless of exit status.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_diff_file(project_dir: String, rel_path: String) -> Result<String, String> {
     run_off_thread(move || git_diff_file_blocking(project_dir, rel_path)).await
 }
@@ -2616,7 +2616,7 @@ fn parse_blame_porcelain(text: &str) -> Vec<GitBlameLine> {
 /// for a non-git dir or a path with no blame (e.g. never committed and no
 /// working-tree content). Local and remote (SSH) projects both work via the
 /// shared `run_git` dispatch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_blame(project_dir: String, rel_path: String) -> Result<Vec<GitBlameLine>, String> {
     run_off_thread(move || git_blame_blocking(project_dir, rel_path)).await
 }
@@ -2800,7 +2800,7 @@ impl WorktreeSite {
 
 /// Frontend capability check: older running binaries ignore unknown command
 /// arguments, so selection must stay disabled until this API is available.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_worktree_selection_supported() -> bool {
     true
 }
@@ -3034,7 +3034,7 @@ fn git_err(out: &std::process::Output) -> String {
 }
 
 /// Lists worktrees attached to the repository on the chosen side.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_list(
     project_dir: String,
     site: Option<String>,
@@ -3072,7 +3072,7 @@ fn git_worktree_list_blocking(
 ///
 /// `path` is resolved into the project's sanctioned worktrees root — see
 /// [`resolve_worktree_path`]; a bare name is the normal input.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn git_worktree_add(
     project_dir: String,
@@ -3207,7 +3207,7 @@ fn exclude_app_dir(ctx: &WorktreeCtx) {
 /// (`remove -f -f`) is the only thing that removes a *locked* one — git says so
 /// itself and exits 128 for a single `--force` (verified). Passing a bool here
 /// is what made a locked worktree permanently unremovable from Tabtivity (B4).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_remove(
     project_dir: String,
     path: String,
@@ -3254,7 +3254,7 @@ fn git_worktree_remove_blocking(
 
 /// Locks a worktree so neither `prune` nor a plain `remove` can drop it —
 /// `reason` is git's own free text, shown back in the list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_lock(
     project_dir: String,
     path: String,
@@ -3290,7 +3290,7 @@ pub async fn git_worktree_lock(
 /// Unlocks a worktree. Without this, and without `remove -f -f`, a locked
 /// worktree could only be freed from a terminal — for a feature whose point is
 /// not needing one (B4).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_unlock(
     project_dir: String,
     path: String,
@@ -3313,7 +3313,7 @@ pub async fn git_worktree_unlock(
 
 /// Prunes administrative entries for worktrees whose directories were removed
 /// out-of-band (`git worktree prune`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_worktree_prune(
     project_dir: String,
     site: Option<String>,
@@ -3368,7 +3368,7 @@ pub struct DetectedOrigin {
 /// Offloaded via [`run_off_thread`]: the body forks one `git remote get-url`
 /// per local project, and as a sync command that whole loop ran on the main
 /// thread, stalling the window for N process spawns on every call.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_git_providers() -> Result<HashMap<String, DetectedOrigin>, String> {
     run_off_thread(detect_git_providers_blocking).await
 }

@@ -201,7 +201,7 @@ fn blank_save_error(already_saved: bool, store_readable: bool) -> Option<String>
 
 // ── Commands: accounts ──────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_accounts_list() -> Result<Vec<CalDavAccount>, String> {
     tokio::task::spawn_blocking(|| Ok(read_accounts(&accounts_path())?.accounts))
         .await
@@ -216,7 +216,7 @@ pub async fn caldav_accounts_list() -> Result<Vec<CalDavAccount>, String> {
 /// live copy of the secret is the session map. Passing the blank field straight
 /// to `remember_secret` would mean `Save` with no secret, which is a *clear* —
 /// exactly what "saving the password does not work" looks like from outside.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_account_upsert(
     ctx: Ctx,
     account: CalDavAccount,
@@ -287,7 +287,7 @@ pub async fn caldav_account_upsert(
 /// `calendar.json` at this point, and silently deleting a month of appointments
 /// because an account was removed is a surprise, not a cleanup. Deleting the
 /// calendar is `delete_calendar`, which the sidebar already offers.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_account_delete(
     ctx: Ctx,
     account_id: String,
@@ -304,7 +304,7 @@ pub async fn caldav_account_delete(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_password_state(account_id: String) -> Result<CalDavPasswordState, String> {
     tokio::task::spawn_blocking(move || {
         let account = account_by_id(&accounts_path(), &account_id)?;
@@ -322,7 +322,7 @@ pub async fn caldav_password_state(account_id: String) -> Result<CalDavPasswordS
 }
 
 /// The **only** path that deletes a saved CalDAV password.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_forget_password(
     ctx: Ctx,
     account_id: String,
@@ -357,7 +357,7 @@ pub async fn caldav_forget_password(
 /// The "Test connection" analogue of `mail_account_test`: **the password passed
 /// here is never persisted by this call**, and a saved one is used when the
 /// field was left blank (the usual second-visit case).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_discover(
     ctx: Ctx,
     base_url: String,
@@ -401,7 +401,7 @@ pub async fn caldav_discover(
 /// timer cost one small request rather than a whole calendar. `force` skips it,
 /// for the "Sync now" button — a user clicking Sync after fixing something on
 /// the server should not be told "nothing changed" by a token.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_fetch(
     ctx: Ctx,
     account_id: String,
@@ -461,7 +461,7 @@ pub async fn caldav_fetch(
 /// saved over a write that failed would make the next sync skip the very change
 /// it just dropped, and the calendar would sit quietly wrong until something
 /// else happened to move the ctag.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_apply(
     account_id: String,
     href: String,
@@ -565,7 +565,7 @@ fn writable(account: &CalDavAccount, href: &str) -> Result<(), String> {
 /// in that order, after the server accepted, never before. A row stamped
 /// optimistically and then refused would claim to be synced while the server had
 /// never heard of it, and the next sync would create a *second* copy.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_push(
     ctx: Ctx,
     account_id: String,
@@ -638,7 +638,7 @@ pub async fn caldav_push(
 /// ordinary `delete_event`/`delete_task` after this returns, so the order is
 /// server-then-local. The other order loses the row whenever the server refuses,
 /// and there is nothing left to retry from.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_delete(
     ctx: Ctx,
     account_id: String,
@@ -670,7 +670,7 @@ pub async fn caldav_delete(
 /// the user what they are about to replace, and the write that follows is still
 /// conditional on *that* — so an edit that lands in the seconds between the
 /// question and the answer conflicts again rather than being lost.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_resource_etag(
     ctx: Ctx,
     account_id: String,
@@ -693,7 +693,7 @@ pub async fn caldav_resource_etag(
 /// after it was subscribed to — and without this the only way to pick that up
 /// would be deleting the subscription and making it again, which costs the local
 /// calendar's board state. Returns the collection's new `read_only`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn caldav_refresh_access(
     ctx: Ctx,
     account_id: String,

@@ -77,13 +77,13 @@ fn request_owner(project_id: &str, editor: &str) -> String {
     json!([project_id, editor]).to_string()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn copilot_prepare(ctx: Ctx, project_id: String, editor: String) -> Result<String, String> {
     authorize(&project_id)?;
     requests::reserve(request_owner(&project_id, &editor_key(&ctx, &editor)?))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn copilot_setup() -> Value {
     let installed = process::server_path(&process::install_directory()).is_ok();
     json!({
@@ -93,7 +93,7 @@ pub fn copilot_setup() -> Value {
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn copilot_project_policy(project_id: String) -> Value {
     let settings: Settings = storage::read_json(&settings_path()).unwrap_or_default();
     let policy = settings.completion_project_policies.as_ref().and_then(|p| p.get(&project_id));
@@ -108,7 +108,7 @@ pub fn copilot_project_policy(project_id: String) -> Value {
 /// Consent binds the project id to the directory the backend resolves now.
 /// Returns the settings that won, like `patch_settings`, for the sender to
 /// broadcast.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local_only: bool) -> Result<Settings, String> {
     let directory = remote::project_directory(&project_id).ok_or("copilot_invalid_path")?;
     if copilot && remote::remote_target_for(&project_id).is_some() {
@@ -130,7 +130,7 @@ pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_complete(
     ctx: Ctx,
     project_id: String,
@@ -172,14 +172,14 @@ pub async fn copilot_complete(
     }, lease.signal.clone()).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_cancel(ctx: Ctx, project_id: String, editor: String, request_id: String) -> Result<(), String> {
     let editor = editor_key(&ctx, &editor)?;
     requests::cancel(&request_owner(&project_id, &editor), &request_id);
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_close_editor(ctx: Ctx, project_id: String, editor: String) -> Result<(), String> {
     let editor = editor_key(&ctx, &editor)?;
     requests::cancel_owner(&request_owner(&project_id, &editor));
@@ -189,7 +189,7 @@ pub async fn copilot_close_editor(ctx: Ctx, project_id: String, editor: String) 
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_shown(ctx: Ctx, project_id: String, editor: String, candidate: String) -> Result<(), String> {
     let editor = editor_key(&ctx, &editor)?;
     match sessions().existing(&project_id).await {
@@ -199,7 +199,7 @@ pub async fn copilot_shown(ctx: Ctx, project_id: String, editor: String, candida
 }
 
 /// `accepted_length` omitted is the full acceptance.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_accepted(
     ctx: Ctx,
     project_id: String,
@@ -216,7 +216,7 @@ pub async fn copilot_accepted(
 
 /// Never starts a server: a status read must not be what sends a project's
 /// workspace to a subprocess.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_account(project_id: String) -> Result<Value, String> {
     let Some(session) = sessions().existing(&project_id).await.filter(|session| session.alive()) else {
         return Ok(json!({"running": false}));
@@ -225,7 +225,7 @@ pub async fn copilot_account(project_id: String) -> Result<Value, String> {
     Ok(json!({"running": true, "status": session.status(), "account": account, "messages": session.account_messages()}))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_message_action(project_id: String, message_id: u64, action: Option<usize>) -> Result<(), String> {
     match sessions().existing(&project_id).await {
         Some(session) => session.answer_message(message_id, action).await,
@@ -233,17 +233,17 @@ pub async fn copilot_message_action(project_id: String, message_id: u64, action:
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_sign_in(project_id: String) -> Result<Option<DeviceCode>, String> {
     session(&project_id).await?.0.sign_in().await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_finish_sign_in(project_id: String) -> Result<(), String> {
     session(&project_id).await?.0.finish_sign_in().await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_sign_out(project_id: String) -> Result<(), String> {
     let result = match sessions().existing(&project_id).await {
         Some(session) => session.sign_out().await,
@@ -254,7 +254,7 @@ pub async fn copilot_sign_out(project_id: String) -> Result<(), String> {
     result
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_stop(project_id: String) {
     sessions().stop(&project_id).await;
 }

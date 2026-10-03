@@ -14,7 +14,7 @@ use crate::services::sync_auto::AutoSyncState;
 use crate::tauri_host::Ctx;
 
 /// Read a project's persisted lockstep state (disabled/synchronized default).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_status(project_id: String) -> Result<GitPeerState, String> {
     Ok(git_peer::load_state(&project_id))
 }
@@ -22,7 +22,7 @@ pub async fn git_peer_status(project_id: String) -> Result<GitPeerState, String>
 /// Toggle the per-project opt-in. Enabling persists the flag, launches the detection
 /// task (`.git` watcher + host poll), and reconciles once; disabling stops the task.
 /// Returns the resulting state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_set_enabled(
     ctx: Ctx,
     project_id: String,
@@ -61,7 +61,7 @@ pub async fn git_peer_set_enabled(
 
 /// Manually reconcile now (the Retry / "Sync git" action). Runs a detection pass and
 /// emits the new status.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_sync_now(
     ctx: Ctx,
     project_id: String,
@@ -95,7 +95,7 @@ pub async fn git_peer_sync_now(
 /// (#28p D3). Only reachable from the state's `pairingConflict`, whose paths the UI has
 /// already named — this is the explicit consent that the refusal demands, and the only
 /// caller that may set `allow_pair_overwrite`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_pair_confirm(
     ctx: Ctx,
     project_id: String,
@@ -124,7 +124,7 @@ pub async fn git_peer_pair_confirm(
 }
 
 /// List both peers' `refs/tabtivity/backup/*` safety refs, newest first (#28p D6).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, String> {
     let rt = remote_target_for(&project_id)
         .ok_or("Git lockstep is only available for SSH remote projects")?;
@@ -133,7 +133,7 @@ pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, Stri
 
 /// Move a branch back onto a backup ref, on the peer that holds it (#28p D6). The
 /// branch's current tip is backed up first, so a restore is itself undoable.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_restore_backup(
     ctx: Ctx,
     project_id: String,
@@ -162,7 +162,7 @@ pub async fn git_peer_restore_backup(
 
 /// The local mirror's absolute path — where "Resolve in terminal" (#28p D8) opens its
 /// shell, since that is the working copy the user merges/rebases in.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_mirror_dir(project_id: String) -> Result<String, String> {
     if remote_target_for(&project_id).is_none() {
         return Err("Git lockstep is only available for SSH remote projects".to_string());
@@ -175,7 +175,7 @@ pub async fn git_peer_mirror_dir(project_id: String) -> Result<String, String> {
 /// Coordinated checkout: check `target` out on the initiating side, bring the peer in
 /// step, and check the same target out there (guarded — never `-f`). `initiating_side`
 /// is `"local"` or `"remote"` (default `"local"`; the frontend passes `initiatingSide`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_checkout(
     ctx: Ctx,
     project_id: String,
@@ -209,7 +209,7 @@ pub async fn git_peer_checkout(
 /// tips backed up to `refs/tabtivity/backup/*` first), file-sync bases are re-stamped,
 /// and the recomputed status is emitted. The Use-local / Use-remote action (#28n
 /// Phase 2), only offered when the state is `Desynchronized`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_resolve(
     ctx: Ctx,
     project_id: String,

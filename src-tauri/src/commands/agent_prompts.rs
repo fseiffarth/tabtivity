@@ -17,17 +17,17 @@ fn changed(ctx: &CoreCtx) {
     ctx.emit(CHANGED_EVENT, ());
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompts_list(project_id: String) -> Result<Vec<ProjectAgentPrompt>, String> {
     agent_prompts::list(&project_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_links_list(project_id: String) -> Result<Vec<PromptLink>, String> {
     agent_prompts::links(&project_id)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_link_upsert(
     ctx: Ctx,
     project_id: String,
@@ -38,7 +38,7 @@ pub fn agent_prompt_link_upsert(
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_link_delete(
     ctx: Ctx,
     project_id: String,
@@ -49,7 +49,7 @@ pub fn agent_prompt_link_delete(
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_upsert(
     ctx: Ctx,
     project_id: String,
@@ -60,7 +60,7 @@ pub fn agent_prompt_upsert(
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_delete(
     ctx: Ctx,
     project_id: String,
@@ -74,7 +74,7 @@ pub fn agent_prompt_delete(
 /// Reorder a project's collected prompts — the order a drag left them in. The
 /// caller sends the ids in their new order; anything it did not name keeps its
 /// relative place after them.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_reorder(
     ctx: Ctx,
     project_id: String,
@@ -85,7 +85,7 @@ pub fn agent_prompt_reorder(
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_history_list(project_id: String) -> Result<Vec<SentAgentPrompt>, String> {
     agent_prompts::history(&project_id)
 }
@@ -95,7 +95,7 @@ pub fn agent_prompt_history_list(project_id: String) -> Result<Vec<SentAgentProm
 ///
 /// Off-thread, like the git commands: the row is stamped with the project's
 /// HEAD (`services::prompt_blame`), which spawns git for a local project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_prompt_archive(
     ctx: Ctx,
     project_id: String,
@@ -112,7 +112,7 @@ pub async fn agent_prompt_archive(
 /// returns the history rather than the active list; an entry already written
 /// under this id (a send-now prompt archived when it was queued) is updated in
 /// place with the outcome.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_prompt_record(
     ctx: Ctx,
     project_id: String,
@@ -127,7 +127,7 @@ pub async fn agent_prompt_record(
 /// its delivery (or `since`, the moment the scheduler submitted the text) and
 /// now. The scheduler calls it once, when it sees the tab idle again after a
 /// delivery. Returns the project's history.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_prompt_blame(
     ctx: Ctx,
     project_id: String,
@@ -141,7 +141,7 @@ pub async fn agent_prompt_blame(
     Ok(result)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_prompt_history_clear(
     ctx: Ctx,
     project_id: String,

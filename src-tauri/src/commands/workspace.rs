@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::apps::{opened_windows_for_project, TrackedWindow, WindowRegistryState};
@@ -27,7 +28,8 @@ impl WorkspaceState {
     }
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_info(state: State<'_, WorkspaceStateArc>) -> WorkspaceInfo {
     state.lock().unwrap().backend.info()
 }
@@ -50,12 +52,14 @@ pub(crate) fn capabilities_of(backend: &dyn WorkspaceBackend) -> WorkspaceCapabi
     }
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_capabilities(state: State<'_, WorkspaceStateArc>) -> WorkspaceCapabilities {
     capabilities_of(&*state.lock().unwrap().backend)
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_switch(
     state: State<'_, WorkspaceStateArc>,
     windows: State<'_, WindowRegistryState>,
@@ -89,22 +93,25 @@ pub fn workspace_switch(
 /// launcher) — see `platform::desktop_claims_super`. Read once at startup and
 /// cached in `src/lib/shortcuts/superKey.ts`; the environment cannot change under a
 /// running session.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn desktop_owns_super_key() -> bool {
     crate::platform::desktop_owns_super_key()
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn show_window(state: State<'_, WorkspaceStateArc>, window_id: u64) -> Result<(), String> {
     state.lock().unwrap().backend.show_window(window_id)
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn hide_window(state: State<'_, WorkspaceStateArc>, window_id: u64) -> Result<(), String> {
     state.lock().unwrap().backend.hide_window(window_id)
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_opened_windows(
     windows: State<'_, WindowRegistryState>,
     project_id: Option<String>,
@@ -116,7 +123,8 @@ pub fn get_opened_windows(
     opened_windows_for_project(windows.windows.values(), project_id.as_deref())
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn switch_project_windows(
     state: State<'_, WorkspaceStateArc>,
     windows: State<'_, WindowRegistryState>,
@@ -154,7 +162,8 @@ pub fn switch_project_windows(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_name(state: State<'_, WorkspaceStateArc>) -> String {
     state.lock().unwrap().backend.name().to_string()
 }
@@ -167,7 +176,7 @@ pub fn workspace_name(state: State<'_, WorkspaceStateArc>) -> String {
 /// synchronously that work landed on the main thread every tick. The spawns
 /// are additionally time-capped ([`probe_output_capped`]) so a hung tool
 /// yields "disconnected" instead of a stuck poll.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_conn_type() -> String {
     tokio::task::spawn_blocking(network_conn_type_blocking)
         .await
@@ -237,7 +246,7 @@ fn probe_output_capped(bin: &str, args: &[&str]) -> Option<String> {
 /// one — the header asks for it only after the type probe says `wlan`, so an
 /// Ethernet machine never pays for it. Same `spawn_blocking` + time cap as the
 /// type probe, for the same reason.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_wifi_ssid() -> String {
     tokio::task::spawn_blocking(wifi_ssid_blocking)
         .await
@@ -490,7 +499,7 @@ pub struct NetworkIdentity {
 /// Async + `spawn_blocking` for [`network_conn_type`]'s reason. Called only by
 /// the per-network default-printer host, and only while at least one such
 /// default is saved, so a machine that never set one never pays the SSID spawn.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn network_identity() -> NetworkIdentity {
     tokio::task::spawn_blocking(network_identity_blocking)
         .await

@@ -41,7 +41,7 @@ pub struct SshTooling {
 
 /// Report which remote-project tools are present on `PATH`. Called when the
 /// remote checkbox is toggled on so missing tools can be flagged up front.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ssh_tooling_status() -> SshTooling {
     SshTooling {
         password_auth: crate::services::ssh_common::password_auth_available(),
@@ -71,7 +71,7 @@ pub struct HostKeyPreview {
 /// fingerprint before a password is sent to it (see
 /// `ssh_common::guard_first_contact`). Async + `spawn_blocking`: `ssh-keyscan`
 /// talks to the network and would otherwise freeze the window.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_host_key_preview(
     host: String,
     port: Option<u16>,
@@ -96,7 +96,7 @@ pub async fn ssh_host_key_preview(
 /// appending them to `~/.ssh/known_hosts`. This is the *only* thing that clears
 /// the first-contact gate, and it exists solely to be reachable from a click — no
 /// launch or background path may call it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ssh_trust_host_key(scan: String) -> Result<(), String> {
     crate::services::ssh_common::trust_host_key(&scan)
 }
@@ -127,7 +127,7 @@ fn merge_recent_address(existing: Vec<String>, addr: &str) -> Vec<String> {
 /// Previously-used SSH addresses (most-recent first) so the project dialog can
 /// offer them for reuse instead of retyping. Best-effort: a missing or corrupt
 /// store yields an empty list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ssh_list_addresses() -> Vec<String> {
     crate::storage::read_json(&ssh_addresses_path()).unwrap_or_default()
 }
@@ -136,7 +136,7 @@ pub fn ssh_list_addresses() -> Vec<String> {
 /// it (rejecting blanks, option-looking values, and control chars) so we never
 /// persist something the connect path couldn't use, then moves it to the front
 /// of the recents list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ssh_remember_address(address: String) -> Result<(), String> {
     let trimmed = address.trim();
     if trimmed.is_empty() {
@@ -178,7 +178,7 @@ fn merge_recent_path(existing: Vec<String>, path: &str) -> Vec<String> {
 /// Previously-used remote paths for `host` (most-recent first), so the project
 /// dialog can offer them for reuse instead of re-browsing. Best-effort: a
 /// missing or corrupt store, or a host with no history, yields an empty list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_list_paths(host: String) -> Vec<String> {
     let store: std::collections::HashMap<String, Vec<String>> =
         crate::storage::read_json(&remote_paths_path()).unwrap_or_default();
@@ -189,7 +189,7 @@ pub fn remote_list_paths(host: String) -> Vec<String> {
 /// validates it (rejecting blanks, option-looking values, and control chars) so
 /// we never persist something the browse/connect path couldn't use, then moves
 /// it to the front of that host's recents list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_remember_path(host: String, path: String) -> Result<(), String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -215,7 +215,7 @@ fn remote_host_defaults_path() -> std::path::PathBuf {
 
 /// All per-host standard paths configured from Settings, for the "Remote
 /// Connections" panel to list and edit.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_list_default_paths() -> std::collections::HashMap<String, String> {
     crate::storage::read_json(&remote_host_defaults_path()).unwrap_or_default()
 }
@@ -224,7 +224,7 @@ pub fn remote_list_default_paths() -> std::collections::HashMap<String, String> 
 /// connect/browse flow would otherwise fall back to `ssh_default_dir`'s SSH
 /// home-directory guess, so a host with a preferred working directory starts
 /// there instead every time.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_get_default_path(host: String) -> Option<String> {
     let store: std::collections::HashMap<String, String> =
         crate::storage::read_json(&remote_host_defaults_path()).unwrap_or_default();
@@ -235,7 +235,7 @@ pub fn remote_get_default_path(host: String) -> Option<String> {
 /// Trims and validates a non-empty path the same way `remote_remember_path`
 /// does, so it can't smuggle in an `ssh`/`sftp`-option-looking value or
 /// control characters.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_set_default_path(host: String, path: String) -> Result<(), String> {
     let key = host.trim().to_lowercase();
     if key.is_empty() {
@@ -256,7 +256,7 @@ pub fn remote_set_default_path(host: String, path: String) -> Result<(), String>
 /// Open a web URL in the user's default browser. Refuses anything that is not an
 /// `http(s)` URL so it cannot be turned into a launcher for arbitrary local files
 /// or schemes.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn open_external_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("refusing to open a non-web URL".to_string());
@@ -470,7 +470,7 @@ fn run_one_secret_attempt(
 /// reuse. Returned for the frontend to type into a root-scope shell tab when
 /// headless connections are off, so the password is entered in the visible
 /// terminal and never handled by Tabtivity (see `ssh_exec::interactive_login_command`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_login_command(
     user: Option<String>,
     host: String,
@@ -517,7 +517,7 @@ pub fn remote_login_command(
 /// fail on its own: a locked keyring refuses the write, and reporting only "the
 /// connect worked" left the user with a ticked Save box, no saved password, and a
 /// blank prompt at the next launch as the sole evidence.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_connect(
     user: Option<String>,
     host: String,
@@ -589,7 +589,7 @@ pub struct SavedPasswordState {
 /// facts come from **one** `spawn_blocking` hop because they are one question —
 /// asking them separately costs two unbounded keychain trips per host, on a path
 /// auto-connect already takes once per host per launch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_saved_password_state(
     user: Option<String>,
     host: String,
@@ -633,7 +633,7 @@ pub async fn remote_saved_password_state(
 /// question *and* says whether the store was readable. Kept because callers still
 /// ask it this way; a `false` here remains the safe direction (the caller prompts,
 /// never a silent connect on a credential we cannot read).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_has_saved_password(
     user: Option<String>,
     host: String,
@@ -689,7 +689,7 @@ fn ssh_unreachable(err: &str) -> bool {
 /// auto-connect and the machines-menu reachability sweep are its background
 /// callers, a Connect dialog's pre-flight its gesture one — and only an explicit
 /// `Some(false)` counts as a person waiting.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_probe(
     user: Option<String>,
     host: String,
@@ -723,7 +723,7 @@ pub async fn ssh_probe(
 
 /// Forget any saved SSH password for this host target (explicit "clear" action).
 /// Off the main thread for the same reason as `remote_has_saved_password`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_forget_password(
     user: Option<String>,
     host: String,
@@ -748,7 +748,7 @@ pub async fn remote_forget_password(
 /// deliberate path that ends them, and it must never fire on deactivation or
 /// restart. `tmux kill-server` reporting "no server running" is success (there
 /// was nothing to kill), so the whole command is best-effort past reachability.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_kill_all_jobs(
     user: Option<String>,
     host: String,
@@ -780,7 +780,7 @@ pub async fn remote_kill_all_jobs(
 /// no-op. A **project** host tears its pool down through `remote_disconnect`
 /// instead (which also stops its lockstep/auto-sync); this is for the project-
 /// free **global machines**, which pool nothing of their own.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_close_master(
     user: Option<String>,
     host: String,
@@ -824,7 +824,7 @@ fn close_control_master(_user: &Option<String>, _host: &str, _port: Option<u16>)
 /// Leaving it background made a tagged machine impossible to *add*, which turns
 /// the tag from a protection into a trap: the point is that Tabtivity never reaches
 /// a cluster on its own, not that the user cannot.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_default_dir(
     user: Option<String>,
     host: String,
@@ -841,7 +841,7 @@ pub async fn ssh_default_dir(
 /// remote shell (the injection surface the old `ssh ls` path had to guard).
 /// User-initiated for the same reason as [`ssh_default_dir`] — one browser, one
 /// rule.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_list_dir(
     user: Option<String>,
     host: String,
@@ -866,7 +866,7 @@ pub async fn ssh_list_dir(
 /// new/import dialog's remote browser to add a target folder while browsing.
 /// User-initiated for the same reason as [`ssh_default_dir`]; creating a folder
 /// is a gesture by construction — nothing polls a mkdir.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ssh_mkdir(
     user: Option<String>,
     host: String,

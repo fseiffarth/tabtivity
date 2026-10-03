@@ -171,7 +171,8 @@ done < <(
   # Both backend crates (src-tauri is the host, src-core the Tauri-free core
   # it links) plus the workspace manifest and lock file at the root, and the
   # two gateway files the daemon compiles in by path (the gateway crate itself
-  # is not part of the desktop app).
+  # is not part of the desktop app, and neither is `src-serverd/`, the
+  # daemon's binary crate: a one-line `main` over this same library).
   find "$ROOT/src-tauri" "$ROOT/src-core" "$ROOT/Cargo.toml" "$ROOT/Cargo.lock" \
     "$ROOT/src-gateway/src/wire.rs" "$ROOT/src-gateway/src/policy.rs" \
     -path "$ROOT/src-tauri/target" -prune -o \

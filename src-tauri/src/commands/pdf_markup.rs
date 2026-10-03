@@ -84,7 +84,7 @@ fn submit_in_with(root: &Path, path: &str, pages: Vec<PdfMarkupPage>, instructio
 
 /// `pdf_markup_submit({ projectId, path, pages, instruction? })` →
 /// `{ prompt, marked }`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pdf_markup_submit(
     project_id: String,
     path: String,

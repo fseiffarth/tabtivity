@@ -25,7 +25,7 @@ pub struct OsClockFormat {
 
 /// Read once per window at startup; never fails — an OS with no opinion is
 /// `{ use24h: null, locale: null }` and the frontend falls back to the language.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn os_clock_format() -> OsClockFormat {
     app_core::rt::spawn_blocking(detect)
         .await

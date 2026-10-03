@@ -461,7 +461,7 @@ pub struct HelpMcpStatus {
 
 /// What the overlay's rights badge shows. Deliberately carries neither the port
 /// nor the token — the renderer has no use for either.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn root_mcp_status() -> RootMcpStatus {
     let settings = storage::state_dir().join("settings.json");
     let reader = root_mcp::serves(&settings, root_mcp::Caller::Reader);
@@ -495,19 +495,19 @@ pub fn root_mcp_status() -> RootMcpStatus {
 /// The window's own view of the help corpus (an intro / Settings "Ask" box):
 /// the same index and bounds the `tabtivity-help` MCP server answers from.
 /// Off the main thread: the first call builds the index.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_search(query: String, limit: Option<usize>) -> Result<Vec<crate::services::help_mcp::Hit>, String> {
     tokio::task::spawn_blocking(move || {
         let query: String = query.chars().take(crate::services::help_mcp::MAX_QUERY_BYTES).collect();
         crate::services::help_mcp::index().search(&query, limit.unwrap_or(crate::services::help_mcp::DEFAULT_RESULTS))
     }).await.map_err(|e| e.to_string())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_read(topic_id: String, section: Option<String>) -> Result<crate::services::help_mcp::Read, String> {
     tokio::task::spawn_blocking(move || crate::services::help_mcp::index().read(&topic_id, section.as_deref()))
         .await.map_err(|e| e.to_string())?
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn help_topics() -> Result<Vec<crate::services::help_mcp::TopicRef>, String> {
     tokio::task::spawn_blocking(|| crate::services::help_mcp::index().list()).await.map_err(|e| e.to_string())
 }
@@ -537,7 +537,7 @@ fn emit_review(ctx: &CoreCtx, changes: Vec<root_mcp::Change>) {
         crate::services::root_mcp_review::pending_count(&storage::state_dir()),
     );
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_list(
     ctx: Ctx,
 ) -> Result<Vec<crate::services::root_mcp_review::ReviewEntry>, String> {
@@ -556,7 +556,7 @@ pub async fn root_mcp_review_list(
     }
     Ok(entries)
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_apply(
     ctx: Ctx,
     id: String,
@@ -570,7 +570,7 @@ pub async fn root_mcp_review_apply(
     emit_review(&ctx, result?);
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_reject(
     ctx: Ctx,
     id: String,
@@ -584,7 +584,7 @@ pub async fn root_mcp_review_reject(
     emit_review(&ctx, result?);
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_undo(
     ctx: Ctx,
     id: String,
@@ -598,7 +598,7 @@ pub async fn root_mcp_review_undo(
     emit_review(&ctx, result?);
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_review_apply_all(
     ctx: Ctx,
     approvals: Vec<crate::services::root_mcp_review::Approval>,
@@ -614,14 +614,14 @@ pub async fn root_mcp_review_apply_all(
 
 /// The `.ics` files root agents staged (`services::root_mcp_import`), text and
 /// all: the window's parser reads them, and its importer runs on the user's ✓.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_import_list() -> Result<Vec<crate::services::root_mcp_import::StagedImport>, String> {
     tokio::task::spawn_blocking(|| crate::services::root_mcp_import::list(&storage::state_dir()))
         .await
         .map_err(|e| e.to_string())
 }
 /// Imported or discarded: the staged copy goes either way.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_import_remove(ctx: Ctx, id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || crate::services::root_mcp_import::remove(&storage::state_dir(), &id))
         .await
@@ -635,17 +635,17 @@ pub struct SecurityStatus {
     sessions: Vec<root_mcp::SessionInfo>,
     audit: Vec<security::Audit>,
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn root_mcp_security_status() -> SecurityStatus {
     SecurityStatus { sessions: root_mcp::sessions(), audit: security::audit_rows() }
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_session_access(ctx: Ctx, id: String, access: Access) -> Result<(), String> {
     tokio::task::spawn_blocking(move || root_mcp::set_access(&id, access)).await.map_err(|e| e.to_string())??;
     ctx.emit(SESSIONS_EVENT, ());
     Ok(())
 }
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Option<bool>) -> Result<(), String> {
     // Invalidate first, before waiting on the review lock to clean the sandbox.
     let tab = root_mcp::revoke_session(&id)?;
@@ -663,21 +663,21 @@ pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Opt
 
 /// The push proposals of one project (the git bar's and the Agents view's
 /// card), pruned of expired and orphaned ones.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_push_mcp_proposals(project_id: String) -> Vec<crate::services::git_push_mcp::Proposal> {
     crate::services::git_push_mcp::proposals_for(Some(&project_id), None)
 }
 /// Push (approve) or dismiss a pending proposal. Approval re-checks the
 /// bound SHA and the remote, confirms a first URL, then pushes; the reply is
 /// the proposal in its final state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push_mcp_decide(ctx: Ctx, id: String, approve: bool) -> Result<crate::services::git_push_mcp::Proposal, String> {
     let result = tokio::task::spawn_blocking(move || crate::services::git_push_mcp::decide(&id, approve)).await.map_err(|e| e.to_string())?;
     ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     result
 }
 /// Close a finished (pushed, failed, dismissed, expired) proposal's card.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn git_push_mcp_clear(ctx: Ctx, id: String) -> Result<crate::services::git_push_mcp::Proposal, String> {
     let result = crate::services::git_push_mcp::clear(&id);
     ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());

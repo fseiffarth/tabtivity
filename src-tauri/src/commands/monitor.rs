@@ -39,7 +39,7 @@ use serde::Serialize;
 /// probes of the same target found ([`crate::services::hpc_mode`]). That memory
 /// deliberately does **not** override an explicit `false` — it exists to stop a
 /// flaky *probe* from talking a cluster down, not to overrule the user.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn system_monitor_snapshot(
     project_id: Option<String>,
     host_id: Option<String>,
@@ -109,7 +109,7 @@ pub struct MachineLoadSample {
     pub mem_temp_c: Option<f64>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn machine_load_snapshot() -> Result<MachineLoadSample, String> {
     let first = sysstat::machine_load();
     if !first.supported {
@@ -160,7 +160,7 @@ pub async fn machine_load_snapshot() -> Result<MachineLoadSample, String> {
 /// for a whole process table (the local-model menu, which asks "what headroom is
 /// left before I load this?"). Reads the same [`gpustat`] cache the snapshot
 /// does. An empty list means no GPU could be read, not that there is no GPU.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn gpu_memory_snapshot() -> Result<Vec<GpuSample>, String> {
     Ok(gpustat::snapshot())
 }
@@ -170,7 +170,7 @@ pub async fn gpu_memory_snapshot() -> Result<Vec<GpuSample>, String> {
 /// compute clients) than the whole-device snapshot, so only the pane calls it —
 /// the always-visible header readout never pays for it. Local-only and best-effort:
 /// an empty list means "no per-process data available", not "no GPU processes".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn gpu_process_snapshot() -> Result<Vec<GpuProc>, String> {
     Ok(gpustat::process_snapshot())
 }

@@ -7,19 +7,30 @@
 //! is the one place that knows a client is a Tauri window and an event is a
 //! Tauri event.
 
-use std::ops::Deref;
-use std::sync::Arc;
+//!
+//! Without the `desktop` feature (the server daemon's build) only [`Ctx`] and
+//! the converted-file list remain: the command bodies take `Ctx` either way.
 
-use app_core::{Caller, ClientId, CoreCtx, CoreState, EventSink};
+use std::ops::Deref;
+
+use app_core::CoreCtx;
+#[cfg(feature = "desktop")]
+use app_core::{Caller, ClientId, CoreState, EventSink};
+#[cfg(feature = "desktop")]
+use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::ipc::{CommandArg, CommandItem, InvokeError};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Tauri as an event sink. `emit` reaches every webview (Tauri's own
 /// semantics: each listener, whatever its target); `emit_to` reaches the
 /// window whose label is the client id. The payload is already JSON, so
 /// `emit_str` forwards it without a second serialization.
+#[cfg(feature = "desktop")]
 pub struct TauriEvents(AppHandle);
 
+#[cfg(feature = "desktop")]
 impl EventSink for TauriEvents {
     fn emit_json(&self, event: &str, payload: String) {
         let _ = self.0.emit_str(event, payload);
@@ -35,6 +46,7 @@ impl EventSink for TauriEvents {
 /// that still has an `AppHandle` reaches it through [`system_ctx`]. Also
 /// points the core's runtime seam at Tauri's runtime, so `rt::spawn` from any
 /// thread lands where `tauri::async_runtime::spawn` would.
+#[cfg(feature = "desktop")]
 pub fn install(app: &AppHandle, state: CoreState) -> CoreCtx {
     app_core::rt::install(tauri::async_runtime::handle().inner().clone());
     let events: Arc<dyn EventSink> = Arc::new(TauriEvents(app.clone()));
@@ -46,6 +58,7 @@ pub fn install(app: &AppHandle, state: CoreState) -> CoreCtx {
 /// The system context (caller `System`) for code that holds an `AppHandle`:
 /// `lib.rs` hooks, and commands not yet converted that call into converted
 /// services. Panics before [`install`] ran, like any `State` read would.
+#[cfg(feature = "desktop")]
 pub fn system_ctx(app: &AppHandle) -> CoreCtx {
     app.state::<CoreCtx>().inner().clone()
 }
@@ -68,6 +81,7 @@ impl Deref for Ctx {
     }
 }
 
+#[cfg(feature = "desktop")]
 impl<'de, R: Runtime> CommandArg<'de, R> for Ctx {
     fn from_command(command: CommandItem<'de, R>) -> Result<Self, InvokeError> {
         let webview = command.message.webview();
@@ -162,7 +176,7 @@ mod tests {
                     _ => line,
                 };
                 let trimmed = code.trim();
-                if trimmed.starts_with("#[tauri::command") {
+                if trimmed.starts_with("#[tauri::command") || trimmed.starts_with("#[cfg_attr(feature = \"desktop\", tauri::command") {
                     continue;
                 }
                 // A string literal is data (`mail.rs`'s own source scan spells

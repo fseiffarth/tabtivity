@@ -548,7 +548,7 @@ pub fn suggested_bundle_name(name: &str) -> String {
 // work that froze the window when run on the main thread (see
 // `commands::git::run_off_thread`). No `State`/`AppHandle`, so nothing binds it
 // to that thread.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn preview_project_export(project_id: String) -> Result<ExportPreview, String> {
     validate_project_id(&project_id)?;
     let list = read_projects_list()?;
@@ -932,7 +932,7 @@ fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_project(
     ctx: Ctx,
     req: ExportProjectRequest,
@@ -995,7 +995,7 @@ fn open_bundle(path: &str) -> Result<(Bundle, ExportManifest), String> {
 }
 
 /// Read a bundle's manifest without unpacking anything, for the import dialog.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn inspect_project_export(bundle_path: String) -> Result<BundleInfo, String> {
     let (_zip, manifest) = open_bundle(&bundle_path)?;
     let list = read_projects_list()?;
@@ -1459,7 +1459,7 @@ pub fn import_project_export_blocking(
     })
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_project_export(
     req: ImportBundleRequest,
 ) -> Result<ImportBundleResult, String> {

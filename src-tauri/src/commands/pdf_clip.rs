@@ -79,7 +79,7 @@ impl PdfClipboard {
 }
 
 /// Park a one-off PDF (the dragged/copied pages) and return the token naming it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn pdf_clip_set(
     clipboard: tauri::State<'_, PdfClipboard>,
     bytes: Vec<u8>,
@@ -89,7 +89,7 @@ pub fn pdf_clip_set(
 
 /// Fetch a parked PDF by token. The entry is left in place, so the same transfer can
 /// be dropped or pasted more than once (a copy is not consumed by its first use).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn pdf_clip_get(
     clipboard: tauri::State<'_, PdfClipboard>,
     token: String,

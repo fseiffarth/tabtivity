@@ -77,7 +77,7 @@ struct CapturedShot {
 /// soon as the tool is launched — region selection blocks the *tool*, not
 /// Tabtivity — and the shot itself arrives later as an [`EV_CAPTURED`] event. A
 /// cancelled capture writes no file and so reports nothing, which is normal.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn capture_screenshot(app: AppHandle, exec: Option<String>) -> Result<(), String> {
     let dir = ensure_pending_dir()?;
     prune_stale_pending(&dir);
@@ -99,7 +99,7 @@ pub fn capture_screenshot(app: AppHandle, exec: Option<String>) -> Result<(), St
 /// The bytes of a staged shot, for the overlay's preview. Confined to the
 /// staging area: this is the one command that reads a path outside every
 /// project tree, so it must never be talked into reading anything else.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn read_pending_screenshot(path: String) -> Result<tauri::ipc::Response, String> {
     let shot = pending_shot(&path)?;
     std::fs::read(&shot)
@@ -112,7 +112,7 @@ pub fn read_pending_screenshot(path: String) -> Result<tauri::ipc::Response, Str
 /// The write goes through `fs::write_project_file_bytes`, so it is confined to
 /// the project root exactly like every other project write — and reaches a
 /// remote project's host over SFTP rather than writing a local orphan.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_pending_screenshot(
     path: String,
     project_dir: String,
@@ -151,7 +151,7 @@ pub async fn save_pending_screenshot(
 }
 
 /// Drop a staged shot the user chose not to file. The clipboard copy stands.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn discard_pending_screenshot(path: String) -> Result<(), String> {
     let shot = pending_shot(&path)?;
     std::fs::remove_file(&shot).map_err(|e| e.to_string())

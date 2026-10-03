@@ -20,7 +20,7 @@ use crate::tauri_host::Ctx;
 /// never stalled. The resulting layout reaches the frontend through the
 /// `project-runtime-switched` event (emitted by `switch`), not this call's
 /// return value, which resolves immediately.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn switch_project_runtime(
     ctx: Ctx,
     project_id: Option<String>,
@@ -67,7 +67,7 @@ pub fn switch_project_runtime(
 /// server has none of. The browser client's shim answers the `client`-class
 /// `switch_project_runtime` with this, so a project opened in a browser still
 /// gets its per-project migration and its restored layout.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn switch_project_session(
     ctx: Ctx,
     project_id: Option<String>,
@@ -105,13 +105,13 @@ fn local_files(previous_project_id: Option<&str>, project_id: Option<&str>) -> (
 }
 
 /// Load the saved side-panel subfolder for a project (restored at startup).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn load_side_panel_folder(local_file: String) -> Option<String> {
     crate::services::project_runtime::load_side_panel_folder(&local_file)
 }
 
 /// Persist the side-panel subfolder for a project as the user navigates it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_side_panel_folder(local_file: String, folder: Option<String>) -> Result<(), String> {
     crate::services::project_runtime::save_side_panel_folder(&local_file, folder)
 }

@@ -32,7 +32,7 @@ pub struct GitHostingInfo {
 }
 
 /// Read effective hosting config for the project-settings editor.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_project_git_hosting(project_id: String) -> Result<GitHostingInfo, String> {
     let profile_url = project_profile_url(&project_id)?;
     let settings = read_settings();
@@ -56,7 +56,7 @@ pub fn get_project_git_hosting(project_id: String) -> Result<GitHostingInfo, Str
 /// keyring when `token` is `Some`; when `clear_token` is true the stored token is
 /// removed. A `token` of `None` with `clear_token` false leaves the token as-is
 /// (so saving just the URL doesn't wipe an existing secret).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_git_hosting(
     project_id: String,
     profile_url: Option<String>,

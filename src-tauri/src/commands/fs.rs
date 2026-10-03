@@ -87,7 +87,7 @@ fn file_entry_from(path: &Path, meta: &fs::Metadata, name: String) -> FileEntry 
 ///   project root. Byte-identical to the pre-Phase-2 behavior.
 ///
 /// The SFTP pool comes from the host context; the frontend does not pass it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_dir(
     project_dir: String,
     rel_path: String,
@@ -148,7 +148,7 @@ pub fn list_dir_local(project_dir: &str, rel_path: &str) -> Result<Vec<FileEntry
 /// `since_secs` (Unix seconds) keeps only entries modified at or after it; `None`
 /// returns everything. Results are sorted by `modified_secs` descending, then by
 /// name, so the most recent download is first.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_recent_downloads(
     paths: Vec<String>,
     since_secs: Option<u64>,
@@ -237,7 +237,7 @@ async fn list_dir_remote(
 ///
 /// A folder that can't be fully read yields the partial total rather than an
 /// error, since this is a best-effort display aid.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dir_size(
     project_dir: String,
     rel_path: String,
@@ -357,7 +357,7 @@ pub struct DirSizeBreakdown {
 /// index without a dedicated round trip per lazily-shown folder — a remote
 /// folder (or one with no `.git`) just gets `ignored: 0`, same best-effort
 /// fallback as [`dir_size`] on failure.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dir_size_breakdown(
     project_dir: String,
     rel_path: String,
@@ -717,7 +717,7 @@ async fn run_off_thread<T: Send + 'static>(
         .map_err(|e| format!("fs task failed: {e}"))?
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_endings(project_dir: String) -> Result<Vec<String>, String> {
     run_off_thread(move || list_project_endings_blocking(project_dir)).await
 }
@@ -729,7 +729,7 @@ pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>,
     Ok(endings.into_iter().collect())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_project_paths(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
     run_off_thread(move || list_project_paths_blocking(project_dir)).await
 }
@@ -762,7 +762,7 @@ fn validate_bare_name(new_name: &str) -> Result<String, String> {
 /// `new_name` must be a bare file name; renames never move entries between
 /// directories. Remote projects (mount-free, Phase 3) rename over SFTP; local
 /// projects keep the byte-identical local behavior.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn rename_path(
     project_dir: String,
     old_rel: String,
@@ -801,7 +801,7 @@ pub fn rename_path_local(project_dir: &str, old_rel: &str, new_name: &str) -> Re
 }
 
 /// Delete a file — never a directory (safety: use trash or explicit confirm for dirs).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_file(
     project_dir: String,
     rel_path: String,
@@ -828,7 +828,7 @@ pub fn delete_file_local(project_dir: &str, rel_path: &str) -> Result<(), String
 }
 
 /// Delete a directory tree inside the project root.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_dir(
     project_dir: String,
     rel_path: String,
@@ -862,7 +862,7 @@ pub fn delete_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 }
 
 /// Create a new empty file inside the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_file(
     project_dir: String,
     rel_path: String,
@@ -886,7 +886,7 @@ pub fn create_file_local(project_dir: &str, rel_path: &str) -> Result<(), String
 }
 
 /// Write a text file inside the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_project_file(
     project_dir: String,
     rel_path: String,
@@ -915,7 +915,7 @@ pub fn write_project_file_local(
 }
 
 /// Write raw bytes to a file inside the project (used for drag-and-drop uploads).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_project_file_bytes(
     project_dir: String,
     rel_path: String,
@@ -943,7 +943,7 @@ pub fn write_project_file_bytes_local(
     write_confined(&target_c, content)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn update_gitignore_rule(
     project_dir: String,
     rel_path: String,
@@ -986,7 +986,7 @@ pub fn update_gitignore_rule(
 }
 
 /// Create a new directory inside the project.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_dir(
     project_dir: String,
     rel_path: String,
@@ -1013,7 +1013,7 @@ pub fn create_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String>
 /// to their respective project roots (which may be the same project, enabling an
 /// in-project copy/paste, or two box-co-accessible projects). The destination
 /// must not already exist, and a directory may not be copied into itself.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_path(
     src_project_dir: String,
     src_rel: String,
@@ -1041,7 +1041,7 @@ pub fn copy_path_blocking(
 /// confinement and pre-conditions as [`copy_path`]. Falls back to copy+remove
 /// only when the rename failed because source and destination are on different
 /// filesystems/volumes; any other rename error is returned as it is.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_path(
     src_project_dir: String,
     src_rel: String,
@@ -1098,7 +1098,7 @@ pub fn move_path_blocking(
 /// it can redirect the copy within the dropped-on folder and nowhere else; and
 /// it still goes through `unique_dest` unless `replace`, so a chosen name that
 /// also collides is suffixed rather than overwriting something.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_external_file(
     project_dir: String,
     source_path: String,
@@ -1170,7 +1170,7 @@ pub fn import_external_file_blocking(
 
 /// Whether a project-relative path currently exists. The drag-drop importer
 /// calls this before copying so it can prompt rename-vs-replace on a collision.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
     let root = canonical(&project_dir)?;
     let rel = normalize_project_rel_path(&rel_path)?;
@@ -1193,7 +1193,7 @@ pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool
 /// Security: guards against Zip-Slip. Every entry's path goes through
 /// `enclosed_name` (which rejects `..`/absolute components), and the resolved
 /// output is additionally confined to the destination folder before any write.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extract_archive(project_dir: String, rel_path: String) -> Result<String, String> {
     run_off_thread(move || extract_archive_blocking(project_dir, rel_path)).await
 }
@@ -1347,7 +1347,7 @@ fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
 /// the extension); remote projects (mount-free, Phase 3) use the **extension**
 /// only — avoiding a network fetch just to classify — after confining the path to
 /// the remote project root.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_mime(
     path: String,
     project_id: Option<String>,
@@ -1399,15 +1399,16 @@ pub fn detect_mime_local(path: &str, scope_id: Option<&str>) -> Result<String, S
 /// Classify where an in-app viewer's bytes come from, for the viewer's source
 /// notice. Returns exactly one of:
 ///   - `"remote"` — a remote (SSH) project path served straight from the host
-///                  over SFTP (remote-native, no local copy).
+///     over SFTP (remote-native, no local copy).
 ///   - `"local"`  — a remote project path under the local **mirror**, read on the
-///                  LOCAL fs (the paired working copy synced from the host).
+///     LOCAL fs (the paired working copy synced from the host).
 ///   - `"none"`   — a local project (or root scope): there is no remote/local
-///                  distinction, so the frontend shows no badge.
+///     distinction, so the frontend shows no badge.
+///
 /// This mirrors the *exact* routing `read_file_text`/`read_file_bytes` apply
 /// (`remote_target_for` gates remoteness, `is_under_mirror` picks the side), so
 /// the badge can never disagree with where the bytes were actually read from.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn file_source(path: String, project_id: Option<String>) -> String {
     match project_id.as_deref() {
         Some(pid) if crate::services::remote::remote_target_for(pid).is_some() => {
@@ -1453,7 +1454,7 @@ const MAX_BINARY_VIEW_BYTES: u64 = 256 * 1024 * 1024;
 /// a renderer cannot turn this into an arbitrary file read of e.g.
 /// `~/.ssh/id_rsa`. Refuses files over `MAX_TEXT_VIEW_BYTES` and non-UTF-8
 /// (binary) files.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_file_text(
     path: String,
     project_id: Option<String>,
@@ -1508,7 +1509,7 @@ pub fn read_file_text_local(path: &str, scope_id: Option<&str>) -> Result<String
 /// overwrite arbitrary user files), refuses to grow a file past
 /// `MAX_TEXT_VIEW_BYTES`, and only writes to an existing regular file (the
 /// editor edits files opened from the tree; it never creates new paths).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_file_text(
     path: String,
     content: String,
@@ -1575,7 +1576,8 @@ pub fn write_file_text_local(
 /// a path is not: `~/tabtivity/projects/Übung/…` would otherwise be unsendable. Nothing
 /// about that is a trust boundary — the decoded path goes through exactly the same
 /// `confine_abs_write` as before.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_file_bytes(
     request: tauri::ipc::Request<'_>,
     ctx: Ctx,
@@ -1611,6 +1613,7 @@ fn json_byte_array(value: &Value) -> Option<Vec<u8>> {
 }
 
 /// A percent-decoded request header, or `None` when it is absent or not valid UTF-8.
+#[cfg(feature = "desktop")]
 fn request_header(request: &tauri::ipc::Request<'_>, name: &str) -> Option<String> {
     let raw = request.headers().get(name)?.to_str().ok()?;
     percent_decode(raw)
@@ -1695,7 +1698,8 @@ pub fn write_file_bytes_local(
 /// pdf.js was even handed anything. A raw body arrives as an `ArrayBuffer` — the
 /// bytes, once — which is also why the frontend wrapper hands one straight to pdf.js
 /// instead of re-wrapping it.
-#[tauri::command]
+#[cfg(feature = "desktop")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_file_bytes(
     path: String,
     project_id: Option<String>,
@@ -1777,7 +1781,7 @@ pub fn read_file_bytes_local(path: &str, scope_id: Option<&str>) -> Result<Vec<u
 /// Used by the in-app text/markdown/TeX viewer to poll for external changes
 /// (#43 diff-aware auto-reload). Confined to Tabtivity's known roots (Security #1).
 /// Mirrors the `FileEntry.modified_secs` machinery in `list_dir`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn file_mtime(
     path: String,
     project_id: Option<String>,
@@ -2318,7 +2322,7 @@ pub struct DirListing {
 /// picker browses the whole local filesystem to choose a destination folder.
 /// Empty `path` starts at the user's home directory. Files are omitted (only
 /// folders); unreadable entries are skipped rather than failing the whole call.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_dirs(path: String) -> Result<DirListing, String> {
     let trimmed = path.trim();
     let base = if trimmed.is_empty() {
@@ -2374,7 +2378,7 @@ pub struct FileListing {
 
 /// Folders and files of a local directory (see [`FileListing`]). Empty `path`
 /// starts at the user's home; unreadable entries are skipped.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_dir_all(path: String) -> Result<FileListing, String> {
     let trimmed = path.trim();
     let base = if trimmed.is_empty() {

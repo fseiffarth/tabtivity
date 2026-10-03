@@ -62,7 +62,7 @@ fn read_batteries() -> Option<Vec<(State, f32)>> {
     )
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_power_state() -> PowerState {
     match read_batteries() {
         Some(readings) => {

@@ -13,12 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "tabtivity"
 path = "src/main.rs"
-
-# The per-user server daemon (docs/tabtivity_hosted_plan.md §3.1): the same
-# library, started by `tabtivity-serverd@<user>.service`. Linux only.
-[[bin]]
-name = "tabtivity-serverd"
-path = "src/bin/serverd.rs"
+required-features = ["desktop"]
 
 # Switches the app from `devUrl` to the frontend embedded at compile time:
 # tauri's build script sets `dev = !custom_protocol`, and a `dev` build embeds
@@ -31,11 +26,31 @@ path = "src/bin/serverd.rs"
 #
 # Off by default on purpose: `cargo test`/`cargo clippy` then keep compiling in
 # dev mode, needing no built `dist/` and no brotli pass over the bundle.
+#
+# `desktop` (default) is everything that needs a window toolkit: Tauri and its
+# plugins, WebKitGTK/GTK, X11 (xcb), the clipboard and the OS credential store
+# (Secret Service over libdbus). The per-user server daemon (`src-serverd/`)
+# builds this library with `default-features = false`, so it links none of
+# them (hosted plan §3.2, TODO #2349) — check with `ldd`.
 [features]
-custom-protocol = ["tauri/custom-protocol"]
+default = ["desktop"]
+desktop = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-notification",
+    "dep:tauri-plugin-drag",
+    "dep:arboard",
+    "dep:keyring",
+    "dep:dbus-secret-service",
+    "dep:xcb",
+    "dep:webkit2gtk",
+    "dep:gtk",
+]
+custom-protocol = ["desktop", "tauri/custom-protocol"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 # The `core` dispatcher generator (hosted plan §3.2/§10 P2): `build.rs` parses
 # every `src/commands/*.rs` for `#[tauri::command]` signatures and emits one
 # JSON-args wrapper per Tauri-free command into `OUT_DIR/core_dispatch.rs`.
@@ -48,17 +63,17 @@ quote = "1"
 # event sink and runtime seams, and the services that have moved out of this
 # crate. This crate is its desktop host; `tauri_host.rs` is the adapter.
 app-core = { path = "../src-core" }
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 # Desktop notifications for calendar reminders. The in-app alarm popup
 # (components/calendar/AlarmPopup.tsx) covers the case where Tabtivity is focused;
 # this covers the case where it is not — a reminder is worthless if the window
 # has to be open to see it.
-tauri-plugin-notification = "2"
+tauri-plugin-notification = { version = "2", optional = true }
 # Native OS drag-OUT of files (Windows OLE / macOS NSDraggingSession / Linux GTK).
 # WebKitGTK's HTML5 drag-out won't render a drag image or reliably export files
 # to other apps, so the Ctrl-drag file export goes through this plugin instead.
-tauri-plugin-drag = "2"
+tauri-plugin-drag = { version = "2", optional = true }
 # Encode the drag-preview PNG as a base64 data URL for tauri-plugin-drag's icon
 # field (it only accepts `data:image/png;base64,…`, not a file path).
 base64 = "0.22"
@@ -81,7 +96,7 @@ notify = "8"
 # wayland-data-control: without it arboard speaks only X11, so image copy/paste
 # silently no-ops on a Wayland session with no XWayland. It falls back to X11 at
 # runtime when the compositor lacks the protocol, so this is additive.
-arboard = { version = "3", features = ["wayland-data-control"] }
+arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 # Encode the clipboard's raw RGBA image as PNG before writing it to disk.
 png = "0.17"
 calamine = "0.36"
@@ -113,7 +128,7 @@ flate2 = "1"
 # this store hands back a plain secret-service credential (upstream bug), so
 # `remote_credentials` constructs `KeyutilsPersistentCredential` itself rather than
 # going through `keyring::Entry` — enabling the feature alone would be a silent no-op.
-keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "linux-native-sync-persistent", "crypto-rust"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "linux-native-sync-persistent", "crypto-rust"], optional = true }
 # Native SFTP client for the remote folder browser (TODO #80): drives the SFTP
 # subsystem over a child `ssh -s sftp` process, so browsing parses no `ls` text
 # and never feeds a remote `$SHELL -c` (replaces the injection-prone `ssh ls`
@@ -284,16 +299,16 @@ zbus = "4"
 # answers `None`. That silently un-saves every credential the user asked us to
 # remember, so `services::remote_credentials` needs the lock state — and the
 # `Unlock` call that fixes it — directly. See `keyring_state` / `unlock_keyring`.
-dbus-secret-service = { version = "4", features = ["crypto-rust"] }
-xcb = { version = "1", features = ["randr"] }
+dbus-secret-service = { version = "4", features = ["crypto-rust"], optional = true }
+xcb = { version = "1", features = ["randr"], optional = true }
 # Same crate/version wry uses; needed to hook web-process-terminated on the
 # raw WebKitWebView for the webview crash reporter.
-webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
+webkit2gtk = { version = "=2.0.2", features = ["v2_40"], optional = true }
 # GTK3 (the toolkit WebKitGTK 4.1 renders with). Used to inject an app-level CSS
 # provider that recolors the native scrollbars WebKit draws inside the web
 # content — the page's `scrollbar-color` is ignored on this WebKitGTK build.
 # Same major version wry/webkit2gtk already pull in, so it adds nothing new.
-gtk = "0.18"
+gtk = { version = "0.18", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Same crate/version wry uses; needed to hook `ProcessFailed` on the raw

@@ -17,7 +17,7 @@ pub struct PtySpawned {
     pub interrupted: bool,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_spawn(
     ctx: Ctx,
     opts: PtyOptions,
@@ -62,20 +62,20 @@ pub async fn pty_spawn(
 /// Honest per-scope fence status for the project-pill menu.  This performs no
 /// spawn and uses the same cached bubblewrap probe and backend authority inputs
 /// as `pty_spawn`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn agent_fence_status(project_id: String) -> crate::services::agent_fence::AgentFenceStatus {
     crate::services::agent_fence::status_for_scope(&project_id)
 }
 
 /// Whether fenced Copilot tabs have a sign-in Tabtivity holds for them, and as
 /// whom. Never returns the token (see `services::copilot_auth`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_fence_auth_status() -> crate::services::copilot_auth::CopilotFenceAuth {
     crate::services::copilot_auth::status().await
 }
 
 /// Forget the Copilot sign-in Tabtivity holds for fenced tabs.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_fence_sign_out() -> Result<(), String> {
     app_core::rt::spawn_blocking(crate::services::copilot_auth::sign_out)
         .await
@@ -86,7 +86,7 @@ pub async fn copilot_fence_sign_out() -> Result<(), String> {
 /// agent tabs start unfenced by choice, and how many live ones run outside the
 /// fence right now — measured from the agent processes, not from what their
 /// spawn decided (see `agent_fence::HostAgentTab`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_fence_marks(
     ctx: Ctx,
     project_ids: Vec<String>,
@@ -104,7 +104,7 @@ pub async fn agent_fence_marks(
 
 /// List the tmux sessions running on the **local** machine (TODO #85), for a local
 /// project's Sessions view. Empty on Windows / without tmux / no server.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSession>, String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(Vec::new());
@@ -124,7 +124,7 @@ pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSess
 
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
 /// kill of a local persistent tab. No-op on Windows / without tmux.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill(session: String) -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
@@ -165,7 +165,7 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
 /// `tabtivity-` session, no foreign one) and is also run by `RunEvent::Exit` as
 /// the net for exits that never reach frontend code. A renderer or process
 /// crash reaches neither, leaving the sessions alive for restore.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
@@ -179,7 +179,7 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
 /// model tag beside an agent tab reads the session's status line from
 /// (`stores/agents/agentModels`). `None` when the session is not here (a remote
 /// tab, one that exited, no tmux), which the caller reads as "no screen".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String> {
     if !crate::services::ssh_exec::valid_tmux_session_name(&session)
         || !crate::services::tmux_local::tmux_available()
@@ -201,7 +201,7 @@ pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String
 }
 
 /// Rename a **local** tmux session (TODO #85). `new_name` must be a safe tmux name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), String> {
     if !crate::services::ssh_exec::valid_tmux_session_name(&new_name) {
         return Err("a session name may only contain letters, digits, '-' and '_'".to_string());
@@ -220,7 +220,7 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_write(
     ctx: Ctx,
     id: String,
@@ -241,7 +241,7 @@ pub async fn pty_write(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_resize(
     ctx: Ctx,
     id: String,
@@ -257,7 +257,7 @@ pub async fn pty_resize(
 /// and condenses throttled `terminal-activity` digests for the pill
 /// indicators — and re-showing drains the buffer as one `terminal-replay`.
 /// See the routing block in `terminal/mod.rs`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_set_visible(
     ctx: Ctx,
     id: String,
@@ -286,14 +286,14 @@ pub async fn pty_set_visible(
 /// the router keeps a bounded tail of everything it routed (visible or not) and
 /// hands it back here, to be written into the new terminal before its first live
 /// byte. A read, not a drain: a third window attaching later gets it too.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_scrollback(
     id: String,
 ) -> Result<crate::terminal::TerminalScrollback, String> {
     Ok(crate::terminal::route_scrollback(&id))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> Result<(), String> {
     crate::terminal::route_remove_view(&id, &viewer_id, update_seq);
     Ok(())
@@ -302,19 +302,19 @@ pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> 
 /// Hold a marker-watch on a PTY: stream its output as if its pane were
 /// visible, for the login flows that scan a possibly-hidden terminal's raw
 /// stream (`useRemoteSession`/`useRemoteReconnect`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_watch(ctx: Ctx, id: String) -> Result<(), String> {
     crate::terminal::route_watch(&ctx, &id);
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_unwatch(id: String) -> Result<(), String> {
     crate::terminal::route_unwatch(&id);
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();
     // The terminal is gone, so its login marking must not outlive it and bless a
@@ -337,7 +337,7 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
 /// Kill every live PTY belonging to one project scope. PTY ids are
 /// `<scope>:<tab-key>`; the delimiter is part of the match so similarly named
 /// projects cannot affect each other.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_kill_scope(
     ctx: Ctx,
     scope: String,
@@ -373,7 +373,7 @@ pub async fn pty_kill_scope(
 /// Samples busy CPU ticks twice over a short interval via `sysstat` (Linux
 /// `/proc`, Windows `GetProcessTimes`). On backends that don't sample (other
 /// OSes) the ticks are always 0, so this returns 0.0 and the UI hides the figure.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_cpu_percent(
     ctx: Ctx,
     pty_ids: Vec<String>,
@@ -411,7 +411,7 @@ pub async fn project_cpu_percent(
 /// (`services::sandbox::register_host_bound_tab`), which is what makes it survive
 /// a relaunch — the tab's key and PTY id do not — without the decision riding on
 /// anything a project's own files can state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), String> {
     crate::services::sandbox::register_host_bound_tab(&project_id, &uid)
 }

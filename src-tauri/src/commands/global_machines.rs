@@ -63,7 +63,7 @@ fn save_all(list: &[GlobalMachine]) -> Result<(), String> {
 }
 
 /// Every globally connected machine, for the header's Machines indicator.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machines_list() -> Vec<GlobalMachine> {
     load_all()
 }
@@ -72,7 +72,7 @@ pub fn global_machines_list() -> Vec<GlobalMachine> {
 /// it via `ssh_connect` — this command does no auth of its own, it only
 /// persists the identity (mirrors how `RemoteMachinesWindow` already separates
 /// "log in" from "add" for a project worker).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_add(
     user: Option<String>,
     host: String,
@@ -128,7 +128,7 @@ pub fn global_machine_add(
 /// Note the keychain consequence of changing the target: the saved password (if
 /// any) was stored under the *old* `ssh_account` key and does not follow the
 /// machine to a new user/host/port. The caller re-authenticates the new target.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_update(
     id: String,
     user: Option<String>,
@@ -178,7 +178,7 @@ pub fn global_machine_update(
 /// disarmed machine looks exactly like one from before the field existed. The
 /// promise is kept on the *frontend* auto path (it probes before it connects, so
 /// it never prompts); this only persists the opt-in.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_set_auto_connect(
     id: String,
     enabled: bool,
@@ -199,7 +199,7 @@ pub fn global_machine_set_auto_connect(
 /// the same target, not by this registry. Never touches any project's
 /// `compute_hosts` either: a `ComputeHost` is a value copy of the connection
 /// info made at drop time, not a reference back here.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_remove(id: String) -> Result<Vec<GlobalMachine>, String> {
     let mut list = load_all();
     list.retain(|m| m.id != id);
@@ -215,7 +215,7 @@ pub fn global_machine_remove(id: String) -> Result<Vec<GlobalMachine>, String> {
 /// `ids` (a stale snapshot racing a concurrent add/remove) keeps its original
 /// relative place, appended after the given ones, so a reorder can never
 /// silently drop a machine.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machine_reorder(ids: Vec<String>) -> Result<Vec<GlobalMachine>, String> {
     let list = load_all();
     let mut reordered: Vec<GlobalMachine> = ids
@@ -237,7 +237,7 @@ pub fn global_machine_reorder(ids: Vec<String>) -> Result<Vec<GlobalMachine>, St
 /// imports it) and never a password (secrets live in the OS keychain, keyed by
 /// host, and are never serialized). The path comes from a native save dialog on
 /// the frontend, so it can be anywhere the user chose.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machines_export(ids: Vec<String>, path: String) -> Result<(), String> {
     let list = load_all();
     let by_id: std::collections::HashMap<&str, &GlobalMachine> =
@@ -273,7 +273,7 @@ pub fn global_machines_export(ids: Vec<String>, path: String) -> Result<(), Stri
 /// Entries are trimmed; those with an empty or shell-unsafe host/user are dropped
 /// (the same `validate_arg` gate `global_machine_add` applies), so a malformed
 /// file yields fewer rows rather than an unsafe add later.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn global_machines_import_read(path: String) -> Result<Vec<MachineIo>, String> {
     let content =
         std::fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))?;
@@ -337,7 +337,7 @@ pub fn global_machines_import_read(path: String) -> Result<Vec<MachineIo>, Strin
 /// surfaces read identically field-for-field. One SSH round trip, heavier than
 /// a pooled poll, so the frontend should only sample this while the dialog is
 /// open.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn global_machine_monitor_snapshot(
     user: Option<String>,
     host: String,
@@ -399,7 +399,7 @@ pub async fn global_machine_monitor_snapshot(
 ///
 /// One SSH round trip per call, so the frontend fires it only while the menu or
 /// hub that shows the lamp is open — never on a background poll.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn global_machine_tmux_list(
     user: Option<String>,
     host: String,
@@ -443,7 +443,7 @@ pub async fn global_machine_tmux_list(
 ///
 /// One SSH round trip per call, so the frontend only fires it when the dialog is
 /// opened or its "Recheck" is pressed — never on a poll.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn global_machine_usage_check(
     user: Option<String>,
     host: String,

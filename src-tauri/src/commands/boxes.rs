@@ -537,7 +537,7 @@ fn write_box_agent_docs(
 
 // ── Box CRUD (Phase 1) ──────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_boxes() -> Result<BoxesList, String> {
     // Reconcile against the current project ids in-memory so a deleted project
     // never leaves a dangling member id in what the frontend sees. No surprise
@@ -546,12 +546,12 @@ pub fn get_boxes() -> Result<BoxesList, String> {
     Ok(reconcile_member_ids(boxes, &known_project_ids()))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_boxes(boxes: BoxesList) -> Result<(), String> {
     save_boxes_at(&boxes_path(), &boxes)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn create_box(name: String) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     // Guard against time-based `uuid_v4` collisions for back-to-back creation.
@@ -577,7 +577,7 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
     Ok(new_box)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
@@ -593,7 +593,7 @@ pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
     Ok(updated)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_box(box_id: String) -> Result<(), String> {
     let mut boxes = read_boxes()?;
     let before = boxes.len();
@@ -656,7 +656,7 @@ pub(crate) fn box_names_for(project_id: &str) -> Vec<String> {
         .collect()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
@@ -677,7 +677,7 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
 /// locally, and the sidecar takes only those whose cwd is the box folder or a
 /// local member root. Enabling also resolves the box folder: the sidecar lists
 /// a box by that folder, and a box never opened on the desktop has none yet.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_box_mobile_access(box_id: String, enabled: bool) -> Result<ProjectBox, String> {
     if enabled {
         let settings: crate::schema::Settings =
@@ -743,7 +743,7 @@ fn resolve_box_folder(boxes: &BoxesList, box_id: &str, name: &str) -> std::path:
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn ensure_box_folder(box_id: String) -> Result<String, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
@@ -781,7 +781,7 @@ pub fn ensure_box_folder(box_id: String) -> Result<String, String> {
 /// Regenerate the box agent docs (CLAUDE/GEMINI/AGENTS link blocks) for a box
 /// that already has a folder. No-op when the box has never been opened (no
 /// `folder` yet) — we never create a folder here, only refresh existing docs.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     let boxes = read_boxes()?;
     let Some(b) = boxes.iter().find(|b| b.id == box_id) else {
@@ -801,7 +801,7 @@ pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
     write_box_agent_docs(folder, &b.name, &members).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_box_relations(
     box_id: String,
     relations: Vec<BoxRelation>,

@@ -82,7 +82,7 @@ fn record_key_auth(
 /// indistinguishable from key/agent auth from here — so it must NOT be allowed to
 /// record `key_auth: true` (see [`record_key_auth`]). It is a *caller* fact, not
 /// something this command can observe.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_connect(
     ctx: Ctx,
     project_id: String,
@@ -295,7 +295,7 @@ pub async fn remote_connect(
 /// type is `String` rather than `()` because every other command here uses
 /// `String` (and `clippy::result_unit_err` asks for a nameable error either way);
 /// nothing ever constructs one.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_connected_ids(ctx: Ctx) -> Result<Vec<String>, String> {
     let pool = ctx.get::<RemotePoolState>();
     Ok(remote::connected_ids(pool).await)
@@ -310,7 +310,7 @@ pub async fn remote_connected_ids(ctx: Ctx) -> Result<Vec<String>, String> {
 /// Deliberately leaves the host's tmux sessions running: closing a connection is
 /// not ending the work it was carrying (TODO #85). See the note at the top of
 /// this module.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_disconnect(
     ctx: Ctx,
     project_id: String,
@@ -332,7 +332,7 @@ pub async fn remote_disconnect(
 /// — on project deactivation. Stops the primary's lockstep/auto-sync, then tears
 /// down all pooled entries for the project. Like [`remote_disconnect`], it leaves
 /// the hosts' tmux sessions alone: this fires on an ordinary project switch.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_disconnect_all_hosts(
     ctx: Ctx,
     project_id: String,
@@ -349,7 +349,7 @@ pub async fn remote_disconnect_all_hosts(
 /// The `(project_id, host_id)` pairs whose pooled SSH connection is currently live
 /// — the per-host granular form of [`remote_connected_ids`], for the frontend to
 /// reconcile each host lamp against reality (see that command's rationale).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_connected_targets(ctx: Ctx) -> Result<Vec<(String, String)>, String> {
     let pool = ctx.get::<RemotePoolState>();
     Ok(remote::connected_targets(pool).await)
@@ -358,7 +358,7 @@ pub async fn remote_connected_targets(ctx: Ctx) -> Result<Vec<(String, String)>,
 /// Manually push the mirror's current HEAD to a remote project's worker host (the
 /// pill's "Sync code now"). `force` re-pushes even when the worker is recorded as
 /// already at HEAD. Emits a `worker-sync-report` and returns the same report.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worker_sync_now(
     ctx: Ctx,
     project_id: String,
@@ -398,7 +398,7 @@ fn user_dial_for_host(
 
 /// Preview the size of a worker's pullable experiment outputs (its untracked
 /// files) so the frontend can confirm before a large transfer (plan §4.4).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worker_outputs_preview(
     project_id: String,
     host_id: String,
@@ -408,7 +408,7 @@ pub async fn worker_outputs_preview(
 
 /// Pull a worker's untracked outputs into a local `outputs/<label>/` folder — the
 /// one, user-initiated worker→local byte path (plan §4.4/§8).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worker_pull_outputs(
     ctx: Ctx,
     project_id: String,
@@ -428,7 +428,7 @@ pub async fn worker_pull_outputs(
 ///
 /// `dest_rel` is sanitized to stay inside the project root: a leading `/` is
 /// dropped and a `..` component is refused, so an upload can never escape the tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_upload_file(
     ctx: Ctx,
     project_id: String,
@@ -474,7 +474,7 @@ pub async fn remote_upload_file(
 /// host listing unfiltered, which is how an orphaned or unattributable session
 /// stays reachable to kill. The **path** used is this host's own
 /// `remote_path`, so a synced worker with its own copy scopes to its own tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_tmux_list(
     project_id: String,
     host_id: Option<String>,
@@ -531,7 +531,7 @@ pub async fn remote_tmux_list(
 /// intent behind an **explicit** tab close of a persistent remote tab, and the
 /// Sessions view's per-row Kill. `host_id`
 /// defaults to the primary; `session` is `shell_quote`d inside the script.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_tmux_kill(
     project_id: String,
     host_id: Option<String>,
@@ -564,7 +564,7 @@ pub async fn remote_tmux_kill(
 /// view's per-row Rename. `new_name` must be a safe tmux name
 /// (`ssh_exec::valid_tmux_session_name`); the (possibly foreign) `session` source
 /// name is only quoted. `host_id` defaults to the primary.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_tmux_rename(
     project_id: String,
     host_id: Option<String>,
@@ -597,7 +597,7 @@ pub async fn remote_tmux_rename(
 /// Takes `background` (`ssh_common`'s second shape): a per-row "Read now" is a
 /// gesture, while the dialog's open-the-menu sweep across every host is not, and
 /// the two reach this same command. Only `Some(false)` counts as the former.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_usage_check(
     project_id: String,
     host_id: Option<String>,

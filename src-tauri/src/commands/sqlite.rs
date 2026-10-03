@@ -72,7 +72,7 @@ async fn run_off_thread<T: Send + 'static>(
 }
 
 /// List the user tables (and views) in a SQLite database file, sorted by name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sqlite_tables(path: String) -> Result<Vec<String>, String> {
     run_off_thread(move || sqlite_tables_blocking(path)).await
 }
@@ -83,7 +83,7 @@ pub fn sqlite_tables_blocking(path: String) -> Result<Vec<String>, String> {
 }
 
 /// Read up to `limit` rows from `table`, starting at `offset`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sqlite_page(
     path: String,
     table: String,

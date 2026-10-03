@@ -1165,7 +1165,7 @@ async fn run_off_thread<T: Send + 'static>(
 }
 
 /// Read an `.ics` file the user picked, for the frontend parser.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_read_ics(path: String) -> Result<String, String> {
     run_off_thread(move || calendar_read_ics_blocking(path)).await
 }
@@ -1188,7 +1188,7 @@ fn calendar_read_ics_blocking(path: String) -> Result<String, String> {
 }
 
 /// Write an `.ics` file to the path the user picked.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_write_ics(path: String, content: String) -> Result<(), String> {
     run_off_thread(move || calendar_write_ics_blocking(path, content)).await
 }
@@ -1207,7 +1207,7 @@ fn calendar_write_ics_blocking(path: String, content: String) -> Result<(), Stri
 /// network, and it does so only on an explicit "Refresh from URL" click —
 /// never on a timer — through the same SSRF-guarded fetch the in-app browser's
 /// reader mode uses (`services::browser_engine::fetch_ics`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_fetch_ics(url: String) -> Result<String, String> {
     crate::services::browser_engine::fetch_ics(&url).await
 }
@@ -1216,14 +1216,14 @@ pub async fn calendar_fetch_ics(url: String) -> Result<String, String> {
 /// answers the keys nobody had claimed yet — another window, or the Mobile
 /// sidecar with no window open, may have shown one already — and records
 /// them all (`services::calendar_alarms`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn calendar_alarms_claim(keys: Vec<String>) -> Result<Vec<String>, String> {
     crate::services::calendar_alarms::claim(&keys)
 }
 
 /// Replace `calendar_id`'s events/tasks with a freshly parsed set, in one
 /// atomic write.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_replace_events(
     calendar_id: String,
     events: Vec<CalendarEvent>,
@@ -1235,13 +1235,13 @@ pub async fn calendar_replace_events(
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_load() -> Result<CalendarData, String> {
     run_off_thread(move || read_data(&calendar_path())).await
 }
 
 /// Replace the whole store. Used by ICS import, which rewrites in bulk.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn calendar_save(data: CalendarData) -> Result<(), String> {
     run_off_thread(move || save_document_at(&calendar_path(), data)).await
 }
@@ -1265,44 +1265,44 @@ pub(crate) fn save_document_at(path: &Path, data: CalendarData) -> Result<(), St
     .map(|_| ())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
     run_off_thread(move || create_event_at(&calendar_path(), event)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_event(event: CalendarEvent) -> Result<CalendarEvent, String> {
     run_off_thread(move || update_event_at(&calendar_path(), event)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_event(id: String) -> Result<(), String> {
     run_off_thread(move || delete_event_at(&calendar_path(), &id)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_task(task: CalendarTask) -> Result<CalendarTask, String> {
     run_off_thread(move || create_task_at(&calendar_path(), task)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_task(task: CalendarTask) -> Result<CalendarTask, String> {
     run_off_thread(move || update_task_at(&calendar_path(), task)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_task(id: String) -> Result<(), String> {
     run_off_thread(move || delete_task_at(&calendar_path(), &id)).await
 }
 
 /// Apply a board drag. See [`move_tasks_at`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn todo_move_tasks(moves: Vec<TaskPlacement>) -> Result<Vec<CalendarTask>, String> {
     run_off_thread(move || move_tasks_at(&calendar_path(), moves)).await
 }
 
 /// Replace the board's columns. See [`columns_set_at`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn todo_columns_set(
     columns: Vec<TaskColumn>,
     fallback_column: Option<String>,
@@ -1310,23 +1310,23 @@ pub async fn todo_columns_set(
     run_off_thread(move || columns_set_at(&calendar_path(), columns, fallback_column)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_calendar(calendar: Calendar) -> Result<Calendar, String> {
     run_off_thread(move || create_calendar_at(&calendar_path(), calendar)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_calendar(calendar: Calendar) -> Result<Calendar, String> {
     run_off_thread(move || update_calendar_at(&calendar_path(), calendar)).await
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_calendar(id: String) -> Result<(), String> {
     run_off_thread(move || delete_calendar_at(&calendar_path(), &id)).await
 }
 
 /// Undo of [`delete_calendar`]. See [`restore_calendar_at`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restore_calendar(
     calendar: Calendar,
     events: Vec<CalendarEvent>,

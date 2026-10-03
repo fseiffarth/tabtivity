@@ -132,7 +132,7 @@ fn is_git_state_event(path: &Path, git_roots: &[PathBuf]) -> bool {
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn watch_dir(
     ctx: Ctx,
     path: String,
@@ -244,7 +244,7 @@ pub fn watch_dir(
     Ok(())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn unwatch_dir(ctx: Ctx) -> Result<(), String> {
     let state = ctx.get::<FsWatchState>();
     *state.lock().unwrap() = None;

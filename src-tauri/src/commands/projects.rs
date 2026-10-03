@@ -416,7 +416,7 @@ fn project_id_for_local_file(local_file: &str) -> Result<String, String> {
 }
 
 /// The panel settings, from the trusted entry (see [`PANEL_PREF_KEYS`]).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_project_panel_prefs(local_file: String) -> Result<serde_json::Map<String, Value>, String> {
     let list = read_projects_list()?;
     let entry = list
@@ -431,7 +431,7 @@ pub fn get_project_panel_prefs(local_file: String) -> Result<serde_json::Map<Str
 
 /// Set (or, with `null`, clear) panel settings on the trusted entry and its
 /// mirror. Keys outside [`PANEL_PREF_KEYS`] are ignored.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_panel_prefs(
     local_file: String,
     prefs: serde_json::Map<String, Value>,
@@ -550,7 +550,7 @@ pub struct CheckProjectSiteRequest {
 ///
 /// Advisory only: the commands that write re-run the same check against the list
 /// on disk, since this answer can be stale by the time Create is clicked.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn check_project_site(req: CheckProjectSiteRequest) -> Result<Option<ProjectConflict>, String> {
     let list = read_projects_list()?;
     let site = match req.remote.as_ref() {
@@ -567,7 +567,7 @@ pub fn check_project_site(req: CheckProjectSiteRequest) -> Result<Option<Project
 /// sits at `directory`. The New-project dialog asks before Create so it can say
 /// the project can't be made there; advisory, like `check_project_site` —
 /// `create_project`'s own `claim_new_project_dir` is the gate.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_folder_exists(directory: String) -> bool {
     !directory.trim().is_empty() && fs::symlink_metadata(&directory).is_ok()
 }
@@ -600,7 +600,7 @@ fn claim_new_project_dir(dir: &Path) -> Result<(), String> {
 
 // ── Project list ──────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_projects() -> Result<ProjectsList, String> {
     patch_projects_list(|list| {
         for entry in list.iter_mut() {
@@ -686,7 +686,7 @@ pub(crate) fn normalize_git_type(value: &str) -> String {
     .to_string()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_projects(projects: ProjectsList) -> Result<(), String> {
     patch_projects_list(|current| {
         // The frontend uses this command for pill status/order only. Treating
@@ -930,7 +930,7 @@ async fn run_off_thread<T: Send + 'static>(
 /// Move a project into the archive and drop it from `projects.json`. `archived_at`
 /// is a caller-supplied ISO timestamp (the frontend stamps it). The remote host
 /// tree is never touched — only local folders move.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn archive_project(project_id: String, archived_at: String) -> Result<(), String> {
     run_off_thread(move || archive_project_blocking(project_id, archived_at)).await
 }
@@ -1019,7 +1019,7 @@ pub fn archive_project_blocking(project_id: String, archived_at: String) -> Resu
 /// A VM project is refused: its overlay disk lives in Tabtivity's state dir and
 /// *is* the working tree, so "keep the files" has nothing to keep — that one
 /// goes through the archive, which moves the disk with it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn forget_project(project_id: String) -> Result<(), String> {
     run_off_thread(move || forget_project_blocking(project_id)).await
 }
@@ -1086,7 +1086,7 @@ fn remove_dirs_if_present(dirs: &[PathBuf]) -> Result<(), String> {
 }
 
 /// List archived projects (newest first) for the Settings panel.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_archived_projects() -> Result<Vec<ArchivedProject>, String> {
     let root = paths::archive_root();
     if !root.exists() {
@@ -1114,7 +1114,7 @@ pub fn list_archived_projects() -> Result<Vec<ArchivedProject>, String> {
 
 /// Restore an archived project: move its folders back (collision-safe) and
 /// re-register it in `projects.json` as `inactive`. Returns the restored entry.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn restore_archived_project(project_id: String) -> Result<ProjectEntry, String> {
     run_off_thread(move || restore_archived_project_blocking(project_id)).await
 }
@@ -1225,7 +1225,7 @@ fn git_in(dir: &Path, args: &[&str]) -> String {
 // mirror, which as a plain command stalled the window while the archive list's
 // delete warning loaded. Read-only and self-contained (no State/AppHandle), so
 // nothing depends on it running on the main thread; the body is unchanged.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn archived_mirror_unsynced(project_id: String) -> Result<UnsyncedReport, String> {
     validate_project_id(&project_id)?;
     let none = UnsyncedReport {
@@ -1336,7 +1336,7 @@ fn remote_head_sha(state: &crate::services::git_peer::GitPeerState) -> Option<St
 
 /// Permanently delete an archived project: remove its archive folder and purge
 /// its time-tracking history. Irreversible.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_archived_project(project_id: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
     let dest = paths::archive_root().join(&project_id);
@@ -1349,7 +1349,7 @@ pub fn delete_archived_project(project_id: String) -> Result<(), String> {
 }
 
 /// Permanently delete every archived project (Settings "Clear archive").
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn clear_archive() -> Result<(), String> {
     for archived in list_archived_projects()? {
         delete_archived_project(archived.id)?;
@@ -1360,7 +1360,7 @@ pub fn clear_archive() -> Result<(), String> {
 /// Update a project's description in both `projects.json` (the pill list) and
 /// the project's own `project.json`, keeping the two in sync. An empty/blank
 /// description clears the field. Returns the cleaned description (or null).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_description(
     project_id: String,
     description: Option<String>,
@@ -1392,7 +1392,7 @@ pub fn set_project_description(
 /// pill list) and the project's own `project.json`, keeping the two in sync.
 /// The on-disk `directory` is left untouched — only the human-facing name
 /// changes. A blank name is rejected. Returns the cleaned (trimmed) name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_name(project_id: String, name: String) -> Result<String, String> {
     let cleaned = name.trim().to_string();
     if cleaned.is_empty() {
@@ -1542,7 +1542,7 @@ fn plan_dir_rename(
 
 /// Check what renaming a local project's folder to `leaf` would do (see
 /// [`ProjectDirRenamePlan`]). Read-only; backs the rename dialog's live line.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn plan_project_dir_rename(
     project_id: String,
     leaf: String,
@@ -1594,7 +1594,7 @@ fn rename_dir_no_replace(old: &Path, new: &Path) -> Result<(), String> {
 /// call `ok`, and refuses an open project — its shells and agents hold the old
 /// path and would write back into a folder that no longer exists. Linked git
 /// worktrees are re-pointed with `git worktree repair`. Returns the new entry.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn rename_project_dir(project_id: String, leaf: String) -> Result<ProjectEntry, String> {
     run_off_thread(move || rename_project_dir_blocking(&project_id, &leaf)).await
 }
@@ -1744,7 +1744,7 @@ fn source_needs_decision(spec: &SandboxSpec, detected: &DetectedSpecSource) -> b
 /// that no longer matches the live detection (the file changed between the
 /// two calls, or the caller is answering a stale dialog) is refused the same
 /// way — `NeedsConfirmation` again, with the current source.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_sandbox(
     project_id: String,
     enabled: bool,
@@ -1850,7 +1850,7 @@ pub fn set_project_sandbox(
 /// taken from the incoming spec verbatim; blank strings are normalized away so
 /// "cleared field" and "never set" serialize identically. Returns the stored
 /// spec.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_sandbox_spec(
     project_id: String,
     mut spec: SandboxSpec,
@@ -1885,7 +1885,7 @@ pub fn set_project_sandbox_spec(
 /// shape: written into both the `projects.json` entry's flattened
 /// `extra["remote_control"]` (the copy `commands::terminal::pty_spawn` trusts)
 /// and the project's own `project.json` (display/export only).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_remote_control(
     project_id: String,
     remote_control: Option<bool>,
@@ -1911,7 +1911,7 @@ pub fn set_project_remote_control(
 }
 
 /// Authority stays in projects.json; never copy this grant into the project tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_schedule_mcp(project_id: String, level: String) -> Result<(), String> {
     if !matches!(level.as_str(), "off" | "propose" | "apply") { return Err("invalid schedule MCP level".into()); }
     patch_project_entry(&project_id, |entry| {
@@ -1922,7 +1922,7 @@ pub fn set_project_schedule_mcp(project_id: String, level: String) -> Result<(),
 
 /// The agent-push policy (`services::git_push_mcp`): level and protected
 /// branches. Authority stays in projects.json; never copied into the tree.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_git_push_mcp(project_id: String, level: Option<String>, protected: Option<Vec<String>>) -> Result<crate::services::git_push_mcp::ProjectPolicy, String> {
     let level = match level.as_deref() {
         None => None,
@@ -1958,7 +1958,7 @@ fn write_project_sandbox_spec(project_id: &str, spec: &SandboxSpec) -> Result<()
 // the main thread — `docker info` against a wedged daemon hangs rather than
 // failing, and froze the whole window with it. The probes themselves stay
 // unbounded, exactly as before; only the thread they block moved.
-#[tauri::command(async)]
+#[cfg_attr(feature = "desktop", tauri::command(async))]
 pub fn sandbox_preflight(project_id: String) -> crate::services::sandbox::PreflightReport {
     crate::services::sandbox::preflight_report(&project_id)
 }
@@ -1974,7 +1974,7 @@ pub fn sandbox_preflight(project_id: String) -> crate::services::sandbox::Prefli
 /// is stored alongside for `auth-user-pass` configs (it is not a secret); blank
 /// clears it. Errors if the project isn't remote. Returns the stored config path
 /// ("" when cleared).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_openvpn(
     project_id: String,
     config: Option<String>,
@@ -2031,7 +2031,7 @@ fn patch_remote_spec(project_id: &str, patch: impl Fn(&mut RemoteSpec)) -> Resul
 /// silently (saved SSH password, or a host recorded as `key_auth`); the connect
 /// path re-checks that itself, so a stale opt-in can never produce a prompt.
 /// Returns the resulting state.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_auto_connect(project_id: String, enabled: bool) -> Result<bool, String> {
     patch_remote_spec(&project_id, |remote| {
         remote.auto_connect = enabled.then_some(true);
@@ -2045,7 +2045,7 @@ pub fn set_project_auto_connect(project_id: String, enabled: bool) -> Result<boo
 /// (`None`) to restore the default. Returns the resulting enabled state. Applies
 /// to shell/script tabs spawned after the change (each spawn reads it via the
 /// frontend's per-tab `tmux_session` name).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_persist_sessions(project_id: String, enabled: bool) -> Result<bool, String> {
     patch_remote_spec(&project_id, |remote| {
         remote.persist_sessions = if enabled { None } else { Some(false) };
@@ -2055,7 +2055,7 @@ pub fn set_project_persist_sessions(project_id: String, enabled: bool) -> Result
 
 /// Authoritative per-project opt-in for Tabtivity Mobile. This flag lives in the
 /// state-dir `projects.json`, never only in project-writable `project.json`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bool, String> {
     let projects = get_projects()?;
     let project = projects
@@ -2119,7 +2119,7 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
 /// wherever a project's hosts are listed side by side (System Monitor's source
 /// picker, the pill's connection lamps). A blank/whitespace-only string clears it,
 /// falling back to the bare host. Returns the resulting label (`None` when cleared).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_remote_label(
     project_id: String,
     label: Option<String>,
@@ -2160,7 +2160,7 @@ pub fn set_project_remote_label(
 /// and certainly not licence to delete). If nothing came across, the target now
 /// has neither a saved password nor a proven key login, so `auto_connect` is
 /// cleared too — an armed auto-connect it cannot deliver is worse than none.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_remote_user(
     project_id: String,
     user: Option<String>,
@@ -2303,7 +2303,7 @@ fn patch_compute_hosts(
 /// it with the project). `location` is a `TabLocation` string (`"local"` /
 /// `"remote"` / `"host:<id>"`); `None` or empty clears it (back to the primary
 /// default). Returns the stored value.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_run_host(
     project_id: String,
     location: Option<String>,
@@ -2335,7 +2335,7 @@ pub fn set_project_run_host(
 /// Add an extra "worker" host to a remote project (the pill's "Add machine").
 /// Mints a stable `id` when the incoming spec has none, then appends it. Returns
 /// the full updated host list. The primary (`Project.remote`) is untouched.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_compute_host(
     project_id: String,
     mut host: ComputeHost,
@@ -2356,7 +2356,7 @@ pub fn add_compute_host(
 /// Remove a worker host from a remote project. The caller disconnects it and stops
 /// its fan-out first (frontend); this only drops the persisted entry. Returns the
 /// remaining host list.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remove_compute_host(
     project_id: String,
     host_id: String,
@@ -2372,7 +2372,7 @@ pub fn remove_compute_host(
 /// `user` is the worker twin of [`set_project_remote_user`] — the SSH login name,
 /// editable from the same Connect dialog — and clears `key_auth` for the same
 /// reason: it was recorded for the account being replaced.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn patch_compute_host(
     project_id: String,
     host_id: String,
@@ -2443,7 +2443,7 @@ fn clean_categories(raw: Vec<String>) -> Vec<String> {
 /// project's own `project.json`, keeping the two in sync. Categories color/group
 /// the project in the cloud and the pill bar. An empty list clears the field
 /// entirely. Returns the cleaned, de-duplicated list that was stored.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_categories(
     project_id: String,
     categories: Vec<String>,
@@ -2494,7 +2494,7 @@ pub fn set_project_categories(
 ///
 /// Returns the resulting `git_type`. Mirrors the change into both
 /// `projects.json` and `project.json`, like `set_project_sandbox`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<String, String> {
     // projects.json — locate the entry and resolve its on-disk directory.
     let list = read_projects_list()?;
@@ -2557,7 +2557,7 @@ pub fn set_project_git_disabled(project_id: String, disabled: bool) -> Result<St
 
 // ── Per-project project.json ───────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn load_project(local_file: String) -> Result<Project, String> {
     let path = PathBuf::from(&local_file);
     let mut project: Project = storage::read_json(&path).map_err(|e| e.to_string())?;
@@ -2582,7 +2582,7 @@ pub fn load_project(local_file: String) -> Result<Project, String> {
 /// Split out of `load_project` when the layout moved to the state dir: the two
 /// answer different questions now (what this project *is* vs. what it should
 /// reopen), and only one of them is keyed by a trustworthy id.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn load_tab_session(project_id: String) -> crate::schema::session::TerminalSession {
     crate::services::terminal_service::load_terminal_session(&project_id)
 }
@@ -2595,7 +2595,7 @@ pub const WORKSPACE_PATCH_EVENT: &str = "workspace:patch";
 /// A scope's tab set with its version — what a client hydrates from
 /// (`services::workspace::snapshot`). Replaces [`load_tab_session`] for
 /// clients that then write through [`workspace_sync`].
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_snapshot(project_id: String) -> Result<crate::services::workspace::Snapshot, String> {
     crate::services::workspace::snapshot(&project_id)
 }
@@ -2607,7 +2607,7 @@ pub fn workspace_snapshot(project_id: String) -> Result<crate::services::workspa
 /// persisted shape (`toSavedTabEntry`) stays the one shape. Answers the new
 /// version and the stored tabs with their ids, and tells every window what
 /// changed.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub fn workspace_sync(
     ctx: Ctx,
@@ -2641,7 +2641,7 @@ pub fn workspace_sync(
 /// Adopt the layout saved in the project **folder** (`.tabtivity/sessions/`) as this
 /// project's session state. Explicit user action only — see
 /// `terminal_service::adopt_project_tree_session`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn adopt_folder_tab_layout(
     project_id: String,
     local_file: String,
@@ -2649,7 +2649,7 @@ pub fn adopt_folder_tab_layout(
     crate::services::terminal_service::adopt_project_tree_session(&project_id, &local_file)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_project(local_file: String, project: Project) -> Result<(), String> {
     let path = PathBuf::from(&local_file);
     storage::write_json(&path, &project).map_err(|e| e.to_string())
@@ -2663,7 +2663,7 @@ pub fn save_project(local_file: String, project: Project) -> Result<(), String> 
 /// `allow_clear` licenses an EMPTY `tabs` to erase the saved layout. The frontend
 /// sets it only for a scope it has actually hydrated and that genuinely holds no
 /// tabs; every other empty save is a no-op. See `terminal_service`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn save_tab_layout(
     project_id: Option<String>,
     local_file: String,
@@ -2694,14 +2694,14 @@ pub fn save_tab_layout(
 /// that would create it. A create that fails is not reported: the answer is the
 /// path either way, and every command that then touches it fails with its own,
 /// more specific error.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn root_work_dir() -> String {
     let dir = storage::root_work_dir();
     let _ = std::fs::create_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn projects_root_dir() -> String {
     projects_root().to_string_lossy().to_string()
 }
@@ -2709,13 +2709,13 @@ pub fn projects_root_dir() -> String {
 /// The default parent directory for a remote (SSH) project's local mirror — the
 /// top-level `tabtivity/projects-ssh/` root. The New/Import dialog seeds its "Local
 /// location" picker from this so its default matches `default_remote_mirror`.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_mirror_root_dir() -> String {
     paths::projects_ssh_root().to_string_lossy().to_string()
 }
 
 /// Open a directory in the OS file manager (Files/Finder/Explorer).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn open_in_file_manager(path: String) -> Result<(), String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
@@ -2737,7 +2737,7 @@ pub struct MirrorStatus {
     pub suggested: String,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorStatus, String> {
     if crate::services::remote::remote_target_for(&project_id).is_none() {
         return Err("not a remote project".to_string());
@@ -2756,7 +2756,7 @@ pub fn remote_mirror_status(project_id: String, name: String) -> Result<MirrorSt
 /// of truth `remote_sync::mirror_dir` reads) and the project's `project.json`.
 /// Used when the user relocates a mirror whose folder was deleted. Returns the
 /// resolved absolute path.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
     if crate::services::remote::remote_target_for(&project_id).is_none() {
         return Err("not a remote project".to_string());
@@ -2795,7 +2795,7 @@ fn persist_mirror_dir(project_id: &str, resolved: &str) -> Result<(), String> {
 /// copy-then-remove fallback across filesystems); a never-synced mirror simply
 /// has the new folder created. Persists the new pointer and returns its absolute
 /// path. Errors for a local project. Backs the pill's "Move project…" option.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_remote_mirror(
     project_id: String,
     name: String,
@@ -3014,7 +3014,7 @@ pub fn generated_dir_name(root: &Path, name: crate::brand::Name) -> String {
 /// The folder a save into the project at `project_dir` defaults to, for the
 /// dialogs that show it: `kind` is `"screenshots"` or `"emails"`. A directory
 /// that is not on this machine (a remote project's) answers the current name.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_generated_dir(project_dir: String, kind: String) -> Result<String, String> {
     let name = match kind.as_str() {
         "screenshots" => crate::brand::Name::SCREENSHOTS_DIR,
@@ -3458,7 +3458,7 @@ pub struct ProjectScaffoldRepair {
 /// Repair one project's scaffold: fill in any scaffold doc, `.gitignore`
 /// pattern, or `.claude/settings.json` that is missing relative to current
 /// defaults. Safe to run repeatedly — every step is additive/idempotent.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
     let list_path = storage::state_dir().join("projects.json");
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
@@ -3482,7 +3482,7 @@ pub fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepa
 /// directory doesn't exist yet (e.g. a remote project whose mirror hasn't
 /// materialized) are silently skipped rather than erroring the whole batch.
 /// Returns only the projects that actually needed a repair.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, String> {
     let list_path = storage::state_dir().join("projects.json");
     if !list_path.exists() {
@@ -3607,7 +3607,7 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
     items
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPreviewItem>, String> {
     let source = PathBuf::from(source_dir);
     if !source.is_dir() {
@@ -3625,7 +3625,7 @@ pub fn preview_project_scaffold(source_dir: String) -> Result<Vec<ScaffoldPrevie
 /// project with no materialized local scaffold target yet (e.g. a remote project
 /// whose mirror hasn't been created) reports `false` rather than a spurious
 /// "missing".
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_scaffold_missing(project_id: String) -> Result<bool, String> {
     let list_path = storage::state_dir().join("projects.json");
     if !list_path.exists() {
@@ -3817,7 +3817,7 @@ fn apply_migration_steps_at(
 /// Dry-run for the "Migrate project" dialog: everything an old project is
 /// missing relative to the current Tabtivity state, one step per piece. Changes
 /// nothing.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
     let list_path = storage::state_dir().join("projects.json");
     let list: ProjectsList = storage::read_json(&list_path).map_err(|e| e.to_string())?;
@@ -3852,7 +3852,7 @@ pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, Strin
 
 /// Apply the steps the user accepted (by id, from `project_migration_plan`).
 /// Declined steps are simply absent from `accepted` and nothing runs for them.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn project_migration_apply(
     project_id: String,
     accepted: Vec<String>,
@@ -3925,7 +3925,7 @@ pub struct CreateProjectRequest {
     pub vm: Option<crate::schema::project::VmSpec>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_project(req: CreateProjectRequest) -> Result<ProjectEntry, String> {
     run_off_thread(move || create_project_blocking(req)).await
 }
@@ -4232,7 +4232,7 @@ pub struct ImportProjectRequest {
     pub mirror_parent: Option<String>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_project(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
     run_off_thread(move || import_project_blocking(req)).await
 }
@@ -4533,7 +4533,7 @@ pub struct ExtendProjectRemoteRequest {
 /// local `mirror` (working copy) in place — files never move — and its `directory`
 /// becomes a local state dir holding `project.json`. The user pushes files to the
 /// (empty) host later via the existing manual sync UI.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn extend_project_to_remote(
     ctx: Ctx,
     req: ExtendProjectRemoteRequest,
@@ -4702,7 +4702,7 @@ pub async fn extend_project_to_remote(
 /// its id, tabs, time, categories, git metadata, etc.
 ///
 /// Errors if the project isn't remote, or has no local mirror to fall back to.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_project_from_remote(
     ctx: Ctx,
     project_id: String,
@@ -4824,7 +4824,7 @@ pub async fn detach_project_from_remote(
 
 // ── Time tracking ─────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_time_today(project_id: String) -> Result<f64, String> {
     // Efficiency #2: O(1) lookup in the rolling daily-summary file instead of
     // fully deserializing the growing append-only log on every pill hover.
