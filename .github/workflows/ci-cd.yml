@@ -237,6 +237,13 @@ jobs:
       - name: Run gateway crate tests
         run: cargo test --manifest-path src-gateway/Cargo.toml
 
+      # The library as the server daemon builds it (no `desktop` feature):
+      # code compiled only there (the vault-only credential paths, the
+      # headless platform stubs) is tested where it runs, plus the secrets
+      # end-to-end test against that build.
+      - name: Run the daemon build's library tests
+        run: cargo test -p tabtivity --no-default-features --lib --test server_secrets
+
       # The daemon links no window toolkit: built on its own, `ldd` must name
       # no GTK, GDK, WebKit, X11/xcb or libdbus library (TODO #2349).
       - name: Daemon links no desktop libraries

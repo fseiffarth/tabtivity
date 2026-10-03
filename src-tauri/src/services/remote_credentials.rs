@@ -1016,8 +1016,8 @@ mod tests {
 
     /// A locked collection must make the write fail *fast*, not wait on an unlock prompt
     /// nobody may answer. Proven by the error alone: reaching the keychain at all would
-    /// mean the gate let the call through.
-    #[cfg(target_os = "linux")]
+    /// mean the gate let the call through. The daemon's build has no keychain to gate.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
     #[test]
     fn a_locked_keyring_refuses_the_write_instead_of_blocking_on_it() {
         remember_keyring_state(KeyringState::Locked);
