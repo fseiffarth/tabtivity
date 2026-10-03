@@ -66,7 +66,7 @@ tool is unavailable, say so — never skip silently.
   brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
   multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
-  tmux_sessions, usage_stats, vm_projects.
+  tmux_sessions, usage_stats, vm_projects, web_client.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
 - Updating a wrapped third-party tool: `docs/third_party_update_checklist.md`.
 - New TODOs go in the matching `todo/<group>.md`. A 🖐️ manual box gets a

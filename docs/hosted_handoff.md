@@ -573,3 +573,88 @@ pass; the P0 section's counts carry the new numbers.
 - When a non-`WebviewWindow` webview ever invokes a command, `Ctx` should take
   `webview.window().label()` to keep the `Window` semantics; today the two
   labels coincide everywhere.
+
+## P2 (single-user server, "my box, thin clients")
+
+*Written 2026-10-03 by the P2 agent. Base `b2eae3d1` (P0, P1 part 1 and their
+reviews). Nothing run live — AGENTS.md forbids starting the app or the
+sidecar against the user's state dir; the live checks are listed below for
+the user. Rationale, as built: [`context/web_client.md`](context/web_client.md).*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `5cd3dfe3` | The generated `core` dispatcher: `build.rs` (`syn`) emits one JSON-args wrapper per Tauri-free `#[tauri::command]` into `OUT_DIR/core_dispatch.rs`; `services::core_dispatch` (class check → model allowlist → wrapper; `capabilities`), `services::model_allowlist`, `Settings.ollama_allowed_models`. |
+| `1f7d32fb` | `commands/fs.rs` → `Ctx` (15 commands, 2 helpers); `read_file_bytes_for` / `write_file_bytes_for` for other hosts; `save_pending_screenshot` passes `Ctx` on. |
+| `a084b436` | `mobile_control::web_client`: `/desktop/*` bundle serving, token login, the socket, `WebEvents` as the sink, resume/grace, binary frames, the user-content origin; `lib.rs::Singletons` + `standalone_core_state`; `MobileHostSettings.browser_client`; `mobile_browser_client_link`; brand names `DESKTOP_SESSION_COOKIE`, `DESKTOP_PROTOCOL`; dev-dep `tokio-tungstenite`. |
+| `8b6f9d1e` | `src/main-web.tsx`, `lib/transport/{wsClient,wsInternals,clientAdapters,dialogAdapter,installWeb,linkState,commandClasses}.ts`, `web/WebShell.tsx`, `components/common/ServerFilePicker.tsx`, `commands::fs::list_dir_all`, `vite.web.config.ts`, `npm run web:bundle` (in `npm run build`), `command_class::command_classes_ts` + its currency test, `WebTransport.test.ts`. |
+| `bbddfbba` | `lib/platform.ts`: `HOST_OS`/`IS_HOST_*` beside the client flags; the 31-file audit (host-side uses moved). |
+| `80a3702f` | Settings → Mobile → Browser access (toggle + sign-in link + copy); Recent Downloads hidden in the browser. |
+| `fd348bd0` | `services::pick_grants`; the five mail `*_grant` siblings; `desktop_file_grant`; `lib/mail.ts` takes the grant path in the browser. |
+| `b1d126d9` | `switch_project_runtime` split: `services::project_runtime::switch_session` + core command `switch_project_session`; the shim answers the client command with it. |
+| `ddfdea27` | `terminalBus` offset catch-up after a reconnect; third-party checklist row for the shim; map rows. |
+| the commit after | this section, the plan's P2 bullets, TODO #2341–#2346 (+ a note on #2339), `docs/context/web_client.md`, its AGENTS.md entry. |
+
+### Design (as built; the rationale per decision is in `context/web_client.md`)
+
+- **Dispatcher.** `build.rs` → `OUT_DIR/core_dispatch.rs`: `handler(cmd) -> Option<Handler>`, `NOT_DISPATCHABLE: [(name, reason)]`, `dispatchable_names()`. Wrappers read arguments with `arg(&args, "camelKey", cmd)` and let the call infer the type; sync bodies run on the blocking pool; `Result<T, E>` errors are serialized like Tauri's `InvokeError`. `core_dispatch::refusal(cmd, role)` → `Unknown | Client | Admin | Off{reason} | Unsupported{reason}`, checked **before** arguments; `dispatch` then runs `model_allowlist::check` and the wrapper. `capabilities(role, protocol)` is one row per `command_class` row (`name, class, served, refusal?`) plus `hostOs` and `role`. `KNOWN_GAPS` (in the module's tests) names every `core` row with no wrapper: the two raw-body commands, the five mail dialogs, `pdf_clip_get/set`, `run_script_detached`.
+- **Allowlist.** `MODEL_ARG` lists `(command, model argument)`; `check` reads `Settings.ollama_allowed_models`, or asks `/api/tags` when unset ("what the admin pulled is allowed"); `llama3` matches `llama3:latest`. Refusal `{code:"model-not-allowed", model}`. Desktop never calls it.
+- **Sidecar as a host.** `host::run` installs `app_core::rt`, the crypto provider, builds `standalone_core_state()` (fresh `Singletons`, the same list `lib.rs` manages for Tauri — `pick_grants` is new in both) under a `CoreCtx::system` whose sink is `WebEvents`; `kill_all` on its PTYs at a clean stop. `HostState.web` carries it; the host router merges `web_client::routes` after `with_state`, so the middleware covers both; `security_headers` gives `/desktop*` the desktop's CSP plus `ws://<host>` and the shell's inline-script hashes (`INLINE_SCRIPT_HASHES`, an internal header `serve_bundle` sets and the middleware strips).
+- **Socket.** `web-<n>` per connection, `Caller::Client(id)`, `Role::Admin`. Text frames `call`/`ret`/`sub`/`unsub`/`event`/`emit`/`hello`; binary `[kind][u32 id][payload]` (`KIND_CALL`=1 in, `KIND_RET`=2 out). Per-client bounded event queue (512) — full drops the event (counted, logged at detach); answers on an unbounded channel bounded by `MAX_CALLS_IN_FLIGHT`=256 permits. WS ping every 20 s, two unanswered → close; the session is `touch`ed on each tick. On close the client's PTY set is parked; `?resume=<id>` within 90 s adopts it, else `route_drop_window_views` + the PTYs are taken and torn down. Transport-level commands: `server_capabilities`, `desktop_file_ticket {path, projectId?, download?} → {url}`, `desktop_file_grant {path} → {grant}`, and `read_file_bytes` (binary answer). `write_file_bytes` arrives as a raw call with Tauri's two headers (percent-decoded).
+- **Content origin.** `content_routes` on `port+1` (`content_port_for`), `/content/{ticket}`, `CSP: sandbox; default-src 'none'`, nosniff, `attachment` for active types or `download`, `inline` otherwise; bytes through `fs::read_file_bytes_for` (same confinement as the viewer's read). Bind failure is logged, not fatal.
+- **Login.** `web_client::login_token(control_dir)` mints/reads `<control_dir>/web-client.token` (0600); `GET /desktop/login?token=` → `WebSessions::login` → cookie `<slug>_desktop_session; HttpOnly; SameSite=Strict; Path=/` → 303 `/desktop/`. Unauthenticated `/desktop/` → a plain server page telling the user where the link is; hashed `assets/*` are served without a session. Sidecar start prints the bundle dir and the token file path (never the token).
+- **Bundle.** `bundle_dir`: `<ENV_PREFIX>WEB_DIST` → `dev_build::SOURCE_ROOT/web-dist` → `<control_dir>/web-dist`; none → a "not built" page. `vite.web.config.ts`: the same `index.html`, `transformIndexHtml` (`order: "pre"`) swaps the entry to `/src/main-web.tsx`, `base: /desktop/`, `outDir: web-dist` (16 MB, gitignored, built by `npm run build`).
+- **Frontend.** `installWebTransport()` (before any app module): `markServerClient`, `WsClient` on `ws(s)://<host>/api/v1/desktop/ws`, `installWsInternals`, `pausePollersWhileDown` (wraps `window.setInterval`: callbacks skipped while the link is down). `main-web.tsx` awaits `whenReady()`, stores `hostOs` on `window.__APP_HOST_OS__`, mounts `WebShell` (banner + dialog host) into its own root, then `hardenPrototype()` and `import("./bootstrap")`. The shim routes `plugin:event|*` through a local callback table with refcounted `sub`/`unsub`; `plugin:dialog|open/save` → `dialogAdapter` (the `ServerFilePicker`), `|message` → the pressed button's label as plugin-dialog 2.7 expects; `plugin:notification|*` → the Web Notifications API; `plugin:drag|start_drag` → downloads via tickets; `plugin:window|*` / `plugin:webview|*` → `adaptWindowCommand` (one page: `get_all_windows` = `["main"]`, viewport geometry, `set_zoom` → root `zoom`); everything else by `COMMAND_CLASSES` (generated rows; a credential-looking key with a colon would trip the privacy check, hence rows). `clientAdapters.ts` answers a short list of `client` commands in the browser (`copy_text_to_clipboard`, `open_external_url`, `open_file` → ticket tab, `switch_project_runtime` → `switch_project_session`, `list_recent_downloads` → `[]`, the detached/window no-ops); the rest reject `{code:"client", command}`.
+- **`HOST_OS`.** `lib/platform.ts`: `CLIENT_OS` = `PLATFORM` (unchanged semantics for every existing import); `HOST_OS` from the window global, else the client's. Moved to the host flags: `paths.ts` (`sepFor`), `installCommand.ts`, `ProjectDialog`/`ProjectPill`/`FileViewerPane`/`SettingsPanel` install shells and commands, `CenterPanel`/`projects.ts`/`agentClearUndo`/`closeRemoteTab` (tmux), `useRemoteSession`/`useRemoteReconnect` (manual login mode), `TerminalSignInToggle`, `MobileSettings` (its own install tab and the Windows note), `LocalModelsPage`, `AgentsPage`/`SettingsSubPanels` (`NODE_INSTALL`), `FileTree` (`shellRunnerFor`). Left with the client: keys/modifiers, window controls, drag platform, window move, fullscreen, the header's `is-mac`, wheel binding, shortcut labels, the Super-key probe, `terminalSelection`'s EOL (a copy to the client's clipboard), the presenter.
+- **Mail file commands.** `commands::mail`'s rule 2 (no path parameter; `no_command_takes_a_path`) stands: the browser's picker returns a path, `desktop_file_grant` mints a five-minute single-use grant (`services::pick_grants`, managed by both hosts, minted only by the transport), and `mail_pgp_import_grant`, `mail_contacts_import_grant`, `mail_contacts_export_grant`, `mail_attach_grants`, `mail_attachment_save_grant` redeem it. The five dialog commands are unchanged and stay `core` + undispatchable (hidden via capabilities).
+
+### Done / deferred
+
+Done: every P2 bullet of §10 (struck in the plan with shas). The user's three decisions: Ollama model management is admin-only *and* user requests are allowlisted server-side; Recent Downloads are the client's (hidden in the browser, `list_recent_downloads` answers `[]` locally); CLI installs are admin-only (served to P2's one admin user; refused for `Role::User`, which nothing creates yet). `switch_project_runtime` is split.
+
+Deferred (TODO group Z): **#2341** CSP + §11 security review before anything beyond localhost; **#2342** popout windows in the browser (`?popout=`); **#2343** browser alternatives for Ctrl+T/W/N; **#2344** `pdf_clip_*`, `run_script_detached`, `browser.rs`'s core half; **#2345** per-client terminal routing in the sink (today each chunk is also serialized under `terminal-output:web-n` and dropped unsubscribed); **#2346** a stale-bundle notice. **#2339** (root MCP in the sidecar) was looked at and *not* done: `commands::root_mcp::start` sweeps the review sandboxes first, so a second listener beside a running window would sweep the window's live ones — agents a browser starts get no `tabtivity-*` MCP tools until the listener moves.
+
+### Live checks for the user (localhost only)
+
+Prerequisites: Mobile enabled with a verified Tailscale Serve origin (the sidecar still requires it), the frozen dev build at or after the docs commit, `npm run web:bundle` run in the checkout the dev build was packaged from (or set `TABTIVITY_WEB_DIST` to a built `web-dist/`).
+
+1. Settings → Mobile → **Browser access** on; restart the Mobile host (Apply / Start host). `journalctl --user -u tabtivity-mobile-host -n 20` shows `desktop client: serving <dir> at http://127.0.0.1:<port>/desktop/`.
+2. **Show sign-in link** → Copy → paste into a browser on this machine. Expect a redirect to `/desktop/` and the desktop app rendering; the `tabtivity_desktop_session` cookie is set. Opening `http://127.0.0.1:<port>/desktop/` in a private window shows the plain "Sign in" page instead.
+3. From another device on the tailnet, `https://<tailnet-host>/desktop/` must be a 404 (and the phone PWA unaffected).
+4. In the browser: open a project, open a shell tab, type — output appears; `tmux ls` on the box shows a `tabtivity-<project>--shell-…` session with two clients when the desktop window has the same tab open. Start a Claude tab; the agent runs (no `tabtivity-*` MCP tools yet, #2339).
+5. Open the same project in a second browser tab: both show the same tab set; rename a tab in one, the other follows within a patch; each has its own terminal size. Close one tab page: within 90 s `tmux list-clients` drops one client; the session stays.
+6. Kill the link (toggle Wi-Fi, or `kill -STOP` the sidecar for 10 s): the banner "Connection to Tabtivity lost — reconnecting…" shows, the pills stop polling (no error toasts), and on return the terminal catches up from where it stopped (type `seq 1 2000` before the pause).
+7. Phone: with the laptop lid closed (window gone, sidecar up with "Keep running when closed"), continue the agent from the phone; reopen the browser: both views identical (the H3 check, now with the browser as the second view).
+8. Files: in a viewer, the browser's "open outside" opens `http://127.0.0.1:<port+1>/content/…` in a new tab; an HTML file downloads instead of rendering. Mail → attach a file: the server-side picker appears, the attachment stages. Mail → contacts export: the picker's save mode writes where chosen.
+9. Latency: Ctrl+Alt+P (dev perf monitor) in the browser; `pty_write` invokes should sit under 50 ms on loopback.
+10. Local model: with `ollama_allowed_models` unset, a completion with an installed model works; add `"ollama_allowed_models": ["nope"]` to `settings.json` and the same completion is refused with `model-not-allowed`.
+
+### Gotchas for P3
+
+- `core_dispatch` wrappers call `crate::commands::<module>::<fn>(Ctx(ctx.clone()), …)`; when P3 moves command bodies into the core crate the generator's `crate::commands::` prefix and `Ctx` newtype must follow (`build.rs::wrapper_source`). The generator parses only top-level fns with `#[tauri::command]`; a command behind `#[cfg]` keeps the attribute on its arm.
+- `KNOWN_GAPS` in `core_dispatch::tests` must shrink as files convert — the test fails the other way too ("no longer gaps").
+- `commandClasses.ts` is regenerated by `UPDATE_COMMAND_CLASSES=1 cargo test … the_generated_command_classes_ts_is_current`; a class table edit without it fails the test. Rows, not object keys (privacy check).
+- `WebEvents` keys subscriptions by exact event name; the terminal router's `<event>:<window>` copies for `web-n` are wasted serialization (#2345).
+- `web_client::tests::the_socket_signs_in_calls_and_subscribes` needs the rustls provider installed (it does so itself); `reqwest` is `rustls-no-provider`.
+- `Role::Admin` is hard-wired in `serve_socket`; the gateway (P3) decides it per account and passes it in.
+- The content origin is `port+1`; nothing checks that port is free before the sidecar binds — a collision is a journal line and "open outside" 404s.
+- `vite.web.config.ts` duplicates the pdfjs alias of `vite.config.ts` (two lines); a change there goes here too.
+- The privacy check flags `password[[:space:]]*[:=]` and tailnet-looking hostnames in staged text — use `desk.example.ts.net` in tests and rows/tuples for generated maps.
+- `tests/project_tree_intent.rs` and `no_command_takes_a_path` are the two source-scanning tests this phase bumped into; both are deliberate.
+
+### Gates (worktree, 2026-10-03, at `ddfdea27`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles; web bundle 17 s) |
+| `npm test -- --reporter=dot` | **693 files, 7060 tests, all pass** (was 691 / 7045) |
+| `cargo test -q --no-fail-fast` (src-tauri) | 3182 lib (2 ignored) + 168 integration = **3350 passed**, 0 failed |
+| `cargo test -q` (src-core) | 97 passed |
+| `npm run lint` | 0 errors, **31 warnings — the same pre-existing 18 files**, none of this phase's |
+| `cargo clippy --all-targets -- -D warnings` | clean, both crates |
+| `cargo check --target x86_64-pc-windows-msvc` (with the two shims of `project_windows_build`) | green; the same 5 pre-existing warnings P1 listed |
+| `scripts/brand-check.sh` | green (48 entries) |
+| `scripts/privacy-check.sh` | green on every commit (pre-commit hook; three false positives fixed on the way: a tailnet-looking test host, generated object keys ending in a credential word followed by a colon, and a comment naming the pattern) |
+| `git diff --check b2eae3d1 HEAD` | clean |
+| `npm run mobile:bundle` | not needed — `mobile-web/` untouched (`npm run build` rebuilt it anyway) |

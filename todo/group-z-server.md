@@ -130,6 +130,13 @@ the desktop groundwork the hosted plan's P1 builds on.*
     [`docs/tabtivity_hosted_plan.md`](../docs/tabtivity_hosted_plan.md) P1),
     keeping the window as the place approval cards appear; until then, a tab
     started headless needs a restart from a window to get its tools.
+    *P2 (2026-10-03) looked and did not do it:* `commands::root_mcp::start`
+    begins with `root_mcp_review::sweep_sandboxes(state_dir)` ("no tab is
+    live yet, so every one of them goes"), so a sidecar starting its own
+    listener beside a running window would sweep the window's live review
+    sandboxes. The move has to be a move — one listener, in the sidecar, the
+    window a client of it — not a second copy. Agents a browser starts
+    through the sidecar today get no `tabtivity-*` MCP tools.
     - [ ] 🤖 Automated test — a headless `Create` of a Claude tab records
       `PtyOptions` carrying the schedule/help MCP config and a token the
       sidecar's listener accepts; a token minted by one process is refused by
@@ -172,3 +179,117 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+### Z.2 — Left by P2 (the browser desktop client; `docs/hosted_handoff.md` § P2)
+
+2341. **CSP and §11 security review of the browser client before anything
+    leaves localhost.** `web_client.rs` refuses every non-loopback `Host`
+    and inexact `Origin` today; `page_csp` is the desktop CSP plus the socket
+    and inline-script hashes. Before Tailscale Serve may forward `/desktop/*`:
+    the cookie flags on https (`Secure`, maybe back to `__Host-`), the WS
+    Origin check against the served origin, the ticket routes' path
+    confinement (today `fs::read_file_bytes_for`'s), rate limits on
+    `/desktop/login`, and the CSP's `connect-src`/`frame-src` lines.
+    - [ ] 🤖 Automated test — a request with the Tailscale origin is refused
+      on every `/desktop/*` route and on `/content/*`; a cookie set over
+      https carries `Secure`.
+    - [ ] 🖐️ Manual test — review notes filed in `docs/context/web_client.md`.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2342. **Popout windows in the browser client.** Plan §3.5: `window.open` of
+    the same bundle with `?popout=<kind>`, each popout its own connection to
+    the same workspace, which removes `detachedContext` write forwarding.
+    Today the shim answers `plugin:window|*` for one page and the `detached_*`
+    client commands with nothing, so the popout controls do nothing in a
+    browser. `web_client.rs` already keys views by client id, so a second
+    page is a second client.
+    - [ ] 🤖 Automated test — a `?popout=` page subscribes to
+      `terminal-output:<its id>` and sees only its PTYs.
+    - [ ] 🖐️ Manual test — pop a tab out in the browser; type in both windows.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2343. **Browser shortcut alternatives for the chords a browser reserves**
+    (plan §7.1): Ctrl+T, Ctrl+W, Ctrl+N (and Ctrl+Shift variants) are the
+    browser's; `lib/shortcuts` keeps the desktop chords keyed by `CLIENT_OS`
+    and has no web alternatives yet. Install-as-PWA helps only partly.
+    - [ ] 🤖 Automated test — with `isServerClient()`, the defaults for new
+      tab / close tab / new window differ from the reserved chords.
+    - [ ] 🖐️ Manual test — in the browser, the new-tab chord opens a tab in the
+      app, not a browser tab.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2344. **The remaining `core` commands the dispatcher cannot serve.**
+    `pdf_clip_get`/`pdf_clip_set` take `State<PdfClipboard>` (a singleton the
+    core state does not manage; it carries pages between two windows),
+    `run_script_detached` sits in `apps.rs` with the window commands, and
+    `browser_check_url`/`browser_reader_fetch` in `browser.rs` — P3's split
+    of the mixed files (`core_dispatch::tests::KNOWN_GAPS` names them).
+    - [ ] 🤖 Automated test — `KNOWN_GAPS` shrinks to the five mail dialogs
+      and the two raw-body commands.
+    - [ ] 🖐️ Manual test — n/a.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2345. **Route terminal output by client in the server's sink.** `emit_output`
+    still emits every chunk once under the plain name and once per non-main
+    viewer window (`terminal-output:<label>`); a browser client is such a
+    "window", so each chunk is serialized twice for it and the suffixed copy
+    is dropped unsubscribed. The P1 gotcha: a server sink can target the
+    `ClientId` and drop the suffixing — once the browser also learns to
+    subscribe to its own name (popouts, #2342, need the same).
+    - [ ] 🤖 Automated test — one browser client, one chunk, one frame.
+    - [ ] 🖐️ Manual test — n/a (perf monitor shows one emit per chunk).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2346. **Tell the user the web bundle is stale.** The sidecar serves
+    `web-dist/` from disk (the dev checkout's, or `<control_dir>/web-dist`);
+    a `src/` edit reaches the browser only after `npm run web:bundle`, and
+    `scripts/backend-stale.sh` does not say so. Either add the bundle to the
+    stale report, or let `package-dev.sh` build and install it beside the
+    frozen binary.
+    - [ ] 🤖 Automated test — `backend-stale.sh` reports a `src/` edit newer
+      than `web-dist/index.html` when Browser access is on.
+    - [ ] 🖐️ Manual test — edit a label, run the script, see the line.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+

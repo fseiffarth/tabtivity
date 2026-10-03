@@ -1196,21 +1196,49 @@ comes.
   [`hosted_handoff.md`](hosted_handoff.md) § P1. P3 finishes the physical
   move.*
 
-**P2: single-user server, "my box, thin clients".**
-- The sidecar grows a `core` dispatcher and serves the web bundle. There is
+**P2: single-user server, "my box, thin clients".** *Built 2026-10-03 on
+branch `hosted` (`5cd3dfe3`…`ddfdea27` + the docs commit); nothing run live.
+Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
+- ~~The sidecar grows a `core` dispatcher and serves the web bundle. There is
   no gateway/daemon split, no admin helper and no unix RPC yet. Commands not
-  yet dispatchable are hidden through `server_capabilities`.
-- The web entry and the `__TAURI_INTERNALS__` shim, the `HOST_OS`/
+  yet dispatchable are hidden through `server_capabilities`.~~ `5cd3dfe3`
+  (`build.rs` generates one wrapper per Tauri-free `#[tauri::command]`;
+  `services::core_dispatch` checks the class first, then the model allowlist,
+  then calls; `capabilities` is the answer), `1f7d32fb` (`fs.rs` → `Ctx`),
+  `a084b436` (`mobile_control::web_client`: the bundle from disk at
+  `/desktop/`, the token login, the socket). Still hidden: the five
+  Rust-dialog mail commands (their `*_grant` siblings serve the browser,
+  `fd348bd0`), `read_file_bytes`/`write_file_bytes` (binary frames instead),
+  `pdf_clip_*`, `run_script_detached` (`apps.rs`, P3's split).
+- ~~The web entry and the `__TAURI_INTERNALS__` shim, the `HOST_OS`/
   `CLIENT_OS` split and the 25-file audit, the server-side file picker, and
   the transport of §3.5: binary frames, per-client size, offset resume,
-  bounded queues and the poller pause.
-- The user-content origin for ticketed files.
-- The admin-allowed Ollama model list and its server-side check in the
+  bounded queues and the poller pause.~~ `8b6f9d1e` (`src/main-web.tsx`,
+  `lib/transport/*`, `ServerFilePicker`, `vite.web.config.ts`), `bbddfbba`
+  (the audit: 31 files use the flags; the host-side uses moved to
+  `IS_HOST_*`/`HOST_OS`), `ddfdea27` (offset catch-up after a reconnect).
+  Per-client size falls out of one PTY per client (each browser's `pty_spawn`
+  is its own tmux attach). Popout windows (`?popout=`) are NOT done: the
+  browser is one window; `plugin:window|*` is answered for that one page.
+- ~~The user-content origin for ticketed files.~~ `a084b436`: a second
+  loopback listener on the next port, `desktop_file_ticket` → `/content/{t}`,
+  `CSP: sandbox`, active types as attachments.
+- ~~The admin-allowed Ollama model list and its server-side check in the
   dispatcher (§3.3): a `core` request naming another model is refused before
-  it reaches the shared Ollama.
-- **Localhost first.** Nothing is reachable beyond localhost until the CSP
-  review and the §11 security review are done.
-- *Exit, live:*
+  it reaches the shared Ollama.~~ `5cd3dfe3`: `services::model_allowlist`,
+  `Settings.ollama_allowed_models` (unset = what the admin pulled), checked in
+  `core_dispatch::dispatch` for `complete_text`, `prepare_local_agent`,
+  `prepare_local_launch`, `ensure_vibe_ollama_model`. No admin UI (P3).
+- **Localhost first.** Done as built: every `/desktop/*` route and the content
+  origin refuse a non-loopback `Host`, the socket an inexact `Origin`; a
+  request through Tailscale Serve is a 404. **Open:** the CSP review (the web
+  pages get the desktop's CSP plus the socket and the shell's inline-script
+  hashes, `web_client::page_csp`) and the §11 security review, both before
+  anything is reachable beyond localhost.
+- *Exit, live — not run; the automated equivalents are `web_client::tests`
+  (sign-in, socket, calls, subscriptions, binary frames, tickets) and
+  `WebTransport.test.ts` (the shim against a fake server). The click-through
+  is in the handoff:*
   - open a project in a browser, start an agent, close the laptop, continue
     from the phone, reopen the laptop and find both views identical;
   - two browsers open at once lose no tab;
