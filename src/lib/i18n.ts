@@ -4753,6 +4753,8 @@ export const enSource = {
   "mcpSecurity.marker": "Markup questions",
   "gitPushMcp.title": "Let project agents ask {app} to push, tag releases and read CI (MCP)",
   "gitPushMcp.help": "On by default. New local Claude, Codex and MCP-enabled Vibe tabs get git_push and git_release tools: {app} pushes the checked-out branch, or tags a release on its pushed tip, from outside the agent's sandbox with your stored token — fast-forward only, never a force-push or the default branch. The repo's pre-push hook runs inside the sandbox first, without the token. Each project chooses Off, Propose (a card in the git bar asks you; the default) or Apply; a release always asks. The first push to a URL always asks. Agents can also read GitHub Actions runs, failed-job logs and open code-scanning alerts (read-only). Remote, VM and container tabs are not supported.",
+  "markupMcp.title": "Let project agents ask about your PDF marks (MCP)",
+  "markupMcp.help": "On by default. New local Claude, Codex and MCP-enabled Vibe tabs get a markup_ask tool: when a mark leaves the agent a choice, its questions appear beside the PDF in the markup view, pinned to the words they are about, and your answer is typed into the tab as your next prompt. The tool can only show a card — nothing reaches the tab until you answer. Remote, VM and container tabs are not supported.",
   "gitPushMcp.level": "Agent pushes",
   "gitPushMcp.menuItem": "Agent pushes: {level}",
   "gitPushMcp.menuTitle": "Click to cycle: off → propose for approval → push immediately (fast-forward only, never the default branch).",

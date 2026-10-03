@@ -11,6 +11,7 @@ import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
+import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
 import { PLATFORM } from "../../lib/platform";
 import {
   NODE_DOWNLOAD_URL,
@@ -2417,6 +2418,7 @@ export function AgentsPanel({
         <AgentCronSection agents={agents} />
         <AgentScheduleMcpSettings />
         <GitPushMcpSettings />
+        <MarkupMcpSettings />
         <AgentComposerCard agents={agents} />
       </SettingsAdvanced>
       </div>
