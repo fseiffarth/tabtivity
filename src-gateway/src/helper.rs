@@ -363,13 +363,13 @@ pub fn plan_oidc_clear() -> Plan {
     Plan { verb: "oidc-clear".into(), steps: vec![Step::OidcClear, Step::Audit { user: "-".into(), verb: "oidc-clear".into() }] }
 }
 
-/// `user-oidc NAME --sub ID | --email ADDRESS | --clear`: who may pair this
-/// account's devices by signing in at the provider.
+/// `user-oidc NAME --sub ID | --clear`: who may pair this account's devices
+/// by signing in at the provider — by the provider's stable `sub` only.
 pub fn plan_user_oidc(db: &Db, user: &str, link: Option<crate::oidc_wire::Link>) -> Result<Plan, String> {
     known(db, user)?;
     if let Some(link) = &link {
         if !link.valid() {
-            return Err("an identity is --sub ID or --email ADDRESS (at most 256 characters)".into());
+            return Err("an identity is --sub ID (at most 256 characters)".into());
         }
         if db.accounts.iter().any(|a| a.name != user && a.oidc.as_ref().is_some_and(|l| l.claim == link.claim && l.value.eq_ignore_ascii_case(&link.value))) {
             return Err("another account is already linked to that person".into());

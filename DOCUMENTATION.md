@@ -476,8 +476,8 @@ https://… --client-id … --name "…"` (the client secret is read from the
 input, never typed as an argument; register
 `https://<server>/gateway/v1/oidc/callback` as the redirect address at the
 provider), then per person `sudo tabtivity-admin-helper user-oidc NAME --sub
-<their id>` (or `--email <address>` for providers that confirm email
-addresses). `user-oidc NAME --clear` and `oidc-clear` take it back. Invite
+<their id>` — the provider's stable subject id, never an email address.
+`user-oidc NAME --clear` and `oidc-clear` take it back. Invite
 codes keep working either way.
 
 ### Hosted server: project containers

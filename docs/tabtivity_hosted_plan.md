@@ -549,7 +549,7 @@ prerequisite (#172, H0 of [`headless_owner_plan.md`](headless_owner_plan.md)).
   identity *is* the right trust root. OIDC still only **binds a device key**;
   the session model does not change.
   *As built (P5, `docs/context/server_gateway.md` § OIDC sign-in):* the
-  admin helper's `oidc-set` (secret on stdin) and `user-oidc NAME --sub|--email`
+  admin helper's `oidc-set` (secret on stdin) and `user-oidc NAME --sub` (by `sub` only, user decision at the final review)
   link an account to a provider person; the pairing page's **Sign in with …**
   runs the code flow at the gateway (PKCE, a browser-bound binder cookie, a
   nonce bound to the key being paired); the account's own daemon verifies

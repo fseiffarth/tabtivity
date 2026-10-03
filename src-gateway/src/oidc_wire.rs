@@ -35,15 +35,17 @@ pub const SKEW: u64 = 120;
 /// Which claim of the ID token names the account's person, and its value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
-    /// `sub` (the provider's stable id) or `email` (only with
-    /// `email_verified: true`).
+    /// Always `sub`, the provider's stable id (user decision, final review:
+    /// an `email` link trusted a provider's `email_verified`, a takeover
+    /// path where the address is a mutable profile field). A stored link
+    /// naming another claim is invalid and pairs nobody.
     pub claim: String,
     pub value: String,
 }
 
 impl Link {
     pub fn valid(&self) -> bool {
-        matches!(self.claim.as_str(), "sub" | "email") && !self.value.is_empty() && self.value.len() <= 256 && !self.value.chars().any(char::is_control)
+        self.claim == "sub" && !self.value.is_empty() && self.value.len() <= 256 && !self.value.chars().any(char::is_control)
     }
 }
 
@@ -92,17 +94,9 @@ pub fn claims_unverified(token: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&bytes).ok().filter(serde_json::Value::is_object)
 }
 
-/// Does `claims` name `link`'s person? `sub` exactly; `email` without regard
-/// to case and only when the provider says it verified it.
+/// Does `claims` name `link`'s person? `sub`, exactly; nothing else links.
 pub fn names(claims: &serde_json::Value, link: &Link) -> bool {
-    match link.claim.as_str() {
-        "sub" => claims.get("sub").and_then(|v| v.as_str()) == Some(link.value.as_str()),
-        "email" => {
-            claims.get("email_verified").and_then(|v| v.as_bool()) == Some(true)
-                && claims.get("email").and_then(|v| v.as_str()).is_some_and(|e| e.eq_ignore_ascii_case(&link.value))
-        }
-        _ => false,
-    }
+    link.claim == "sub" && claims.get("sub").and_then(|v| v.as_str()) == Some(link.value.as_str())
 }
 
 /// Every check of an ID token's claims but the signature: issuer, audience
@@ -159,7 +153,8 @@ mod tests {
         assert_ne!(nonce, nonce_for("KEY-B"));
         let ok = claims(now, &nonce);
         assert_eq!(check_claims(&ok, &binding("sub", "u-1"), &nonce, now), Ok(()));
-        assert_eq!(check_claims(&ok, &binding("email", "alice@example.invalid"), &nonce, now), Ok(()));
+        assert_eq!(check_claims(&ok, &binding("email", "alice@example.invalid"), &nonce, now), Err("identity"), "links are by sub only, a verified email included");
+        assert!(!Link { claim: "email".into(), value: "alice@example.invalid".into() }.valid());
         assert_eq!(check_claims(&ok, &binding("sub", "u-2"), &nonce, now), Err("identity"));
         assert_eq!(check_claims(&ok, &binding("sub", "u-1"), &nonce_for("KEY-B"), now), Err("nonce"), "a token for one key pairs no other");
         let tweak = |key: &str, value: serde_json::Value| {
@@ -173,9 +168,6 @@ mod tests {
         assert_eq!(tweak("exp", json!(now - 600)), Err("expired"));
         assert_eq!(tweak("iat", json!(now - MAX_TOKEN_AGE - 1)), Err("issued"));
         assert_eq!(tweak("iat", json!(now + 600)), Err("issued"));
-        let mut unverified = ok.clone();
-        unverified["email_verified"] = json!(false);
-        assert_eq!(check_claims(&unverified, &binding("email", "alice@example.invalid"), &nonce, now), Err("identity"));
         let mut several = ok.clone();
         several["aud"] = json!(["desk", "other"]);
         several["azp"] = json!("desk");

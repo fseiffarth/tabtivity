@@ -24,7 +24,7 @@ mod cli {
                             (sign-in through an identity provider; the client\n\
                              secret is read from stdin)\n\
   oidc-clear                (invites only again)\n\
-  user-oidc NAME --sub ID | --email ADDRESS | --clear\n\
+  user-oidc NAME --sub ID | --clear\n\
                             (who may pair NAME's devices by signing in there)\n\
   check                     (the deployment prerequisites; no root needed)\n",
             cli = names::cli_account()
@@ -118,10 +118,8 @@ mod cli {
                     None
                 } else if let Some(sub) = value(&mut args, "--sub")? {
                     Some(app_gateway::oidc_wire::Link { claim: "sub".into(), value: sub })
-                } else if let Some(email) = value(&mut args, "--email")? {
-                    Some(app_gateway::oidc_wire::Link { claim: "email".into(), value: email })
                 } else {
-                    return Err("user-oidc needs --sub ID, --email ADDRESS or --clear".into());
+                    return Err("user-oidc needs --sub ID (the provider's stable id) or --clear".into());
                 };
                 helper::plan_user_oidc(&db()?, positional(&args, 1)?, link)?
             }

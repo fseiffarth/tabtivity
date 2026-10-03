@@ -5,7 +5,7 @@
 //! * **The binding** (`<control dir>/oidc.json`, `0600`) is the admin
 //!   helper's, written by this account's own uid (`--write-oidc-binding`,
 //!   JSON on stdin; empty stdin removes it): the provider's issuer, the
-//!   client id, and which person (`sub`, or a verified `email`) is this
+//!   client id, and which person (`sub`, the provider's stable id) is this
 //!   account. No binding, no OIDC pairing — invites keep working.
 //! * **The token** is checked here in full: a compact JWS signed by one of
 //!   the issuer's published keys (RS256 or ES256 only — never `none`, never

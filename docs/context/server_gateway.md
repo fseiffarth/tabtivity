@@ -581,7 +581,7 @@ browser ◄─ 303 /?oidc=paired&device=<id>: the pending key becomes the pairin
   pairs a device key; sessions remain device-key challenge/response and
   the gateway's routing cookie. Invites keep working beside it.
 - **Two copies of the link, as with invites.** The admin helper's
-  `user-oidc NAME --sub ID | --email ADDRESS` writes the link into the
+  `user-oidc NAME --sub ID` writes the link into the
   gateway's table (routing: which account's daemon gets the token) and, by
   the user's own uid (`<slug>-serverd --write-oidc-binding`, JSON on stdin),
   the daemon's `mobile-control/oidc.json` with the issuer and client id —
@@ -620,8 +620,10 @@ browser ◄─ 303 /?oidc=paired&device=<id>: the pending key becomes the pairin
   terminates the callback) can pair a key of its own to an account whose
   person signs in *through it* — no worse than its position on live
   sessions (§ Shape). The daemon fetches the provider's keys itself (it has
-  network; the gateway is not trusted for them). Email links trust the
-  provider's `email_verified`. Not run against a real provider (#2378).
+  network; the gateway is not trusted for them). Links are by `sub` only
+  (user decision, final review): an email link would trust the provider's
+  `email_verified`, and where the address is a mutable profile field that
+  is a takeover path. Not run against a real provider (#2378).
 
 ## Host-channel inventory (§4.4)
 
