@@ -2217,3 +2217,100 @@ login.
 | `git diff --check b9a0b16a HEAD` | clean |
 | `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
 | `npm run backend:stale` | the open window predates the build — expected: branch `hosted` is not what the window runs |
+
+## P3b review
+
+*Written 2026-10-03 by the P3b reviewer. Range `b9a0b16a..b501d779`, read
+in full (keeper, wire, gateway endpoints, units, helper, daemon side,
+`agent_auth`, fence and Host-session injection, `tmux_local`, `launch_prep`,
+the shim path, the browser panel, docs/TODO). Nothing run live, nothing as
+root, no keeper/daemon/gateway against real state, ports or `/run`, no real
+key.*
+
+### What was checked
+
+- **Keeper access control.** `SO_PEERCRED` is read per connection and a
+  connection carries exactly one request, so it is per request; a passed
+  fd keeps its connector's uid, which equals that user handing the key over
+  (accepted). Classification runs at every request: `getpwuid_r` → the
+  gateway's account by name, else `helper::check_account` over a fresh
+  `getgrouplist` — `user-remove` (out of `<slug>-users`) ends access at the
+  next request, no cache. root, uid < 1000, `nobody`, root-equivalent and
+  `/proc`-group members are refused. The gateway can set/remove/list/status,
+  never `get`; a user can `offered`/`get`, never `status`. `<cli>` is
+  `[a-z0-9-]{1,32}` not starting with `-` (no traversal, no dots); unknown
+  CLIs simply have no key. Key files `0600` via `write_atomic` in a `0700`
+  dir with `UMask=0077`; a planted symlink dir is refused. No key in any
+  reply to the gateway, any log line, any audit row (fixed error tokens).
+  First fetch per (user, CLI) per keeper run is always audited (slot starts
+  at 0); later ones at most every 10 min.
+- **Socket/units.** `/run/<slug>` is `0755 root` (tmpfiles and the socket
+  unit's `DirectoryMode`), the socket `0666 root` — nobody can squat it;
+  the keeper service is `PrivateNetwork`, `AF_UNIX`, no capabilities.
+- **Gateway endpoints.** `PUT`/`DELETE` need exact origin, then a routed
+  admin; body ≤ 64 KiB, `deny_unknown_fields`, key validated and trimmed;
+  `GET` returns `KeyStatus` only (never a key), `no-store`.
+- **Delivery.** The key is fetched per spawn into `opts.env` only (both
+  fence wraps → agent tabs and the shell shim; the Host session); never
+  argv (tmux ≥ 3.2 copies it from the client's `0400` environment into the
+  tab's own session environment; < 3.2 is the known #864 limit, behind
+  `hidepid` on a server), never a launcher script or file, never sent to
+  the frontend (spawn errors carry no key). Scope: the tab's tmux session
+  environment and that pane's trailing shell hold it — the same user, who
+  can fetch it from the keeper anyway; fenced agents see neither (`/run` is
+  a fresh tmpfs, so no tmux socket and no keeper; own pid namespace).
+- **Never both.** Removal, `oauthAccount` strip, restore on switch back and
+  Bob/Alice separation as tested; desktop never has the choice file.
+  Concurrent spawn during a switch: the per-spawn reconcile and
+  `inject_env` read the choice separately (not under `keeper_lock`), so a
+  spawn racing a switch can start once with a stale view — tolerated, the
+  next reconcile corrects the home.
+- **`a368b3bc`.** Server-only (`is_server()`), `or_insert` (a caller's PATH
+  wins), value is `effective_path()` — the shims, the CLI installs (both
+  read-only in the fence), the user's own home bin dirs, then the daemon's
+  PATH: the desktop window's own order, no `.`, no project path. The PATH
+  is applied after the fence wrap, so the fence's command resolution is
+  unchanged.
+- **Shims on a server.** `<state>/bin`, user-owned, mounted read-only into
+  every fence (and the whole state dir is masked), so no fenced agent can
+  rewrite one; `--agent-shim` marks server mode before anything asks
+  `is_server`.
+- Desktop unchanged apart from finding 1 (fixed); i18n 18 keys × 5;
+  UntestedTag rows `server.agentKeys`, `agents.adminKey`; TODO #2359–#2363
+  accurate (#2362's "no keeper loop in the daemon" verified).
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **medium** (desktop regression) | `tmux_local::SECRET_ENV` gained `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`/`MISTRAL_API_KEY`, and every tab sets each secret's slot in the tmux server's **global** `update-environment`. On a desktop that is the user's own default tmux server: every attach — of the user's own sessions and of every Tabtivity tab — then copies the key from the attaching client or marks it removed, so a key the user's tmux had from its founding shell vanished from new windows and from Claude/Gemini/Vibe agent tabs of a window launched without it. | fixed `9ea132d2`: a vendor key's slot is claimed only on the app's own tmux server (`-L`, a server's) or by a tab carrying that variable; test `a_vendor_key_slot_is_claimed_on_the_users_own_tmux_only_by_a_tab_carrying_it` |
+| 2 | **medium** (login data loss) | `beside_admin_key` removed a login file a tab wrote even when the keeper could not say whether it held the admin's key (keeper down, key withdrawn) — a pre-switch tab's rotated refresh token was deleted unadopted, so switching back restored a dead login. | fixed `c589fa71`: such a file stays in the home until it can be told (no new spawn runs beside it: the same keeper answer fails `inject_env`); test extended (Both and Adopt/Place passes) |
+| 3 | **high** (server, pre-existing since P3, found checking the shim path) | Where Landlock scopes abstract sockets the fence execs `<running binary> --fence-scope <bwrap> …`; on a server that binary is `<slug>-serverd`, whose `main` answered "unknown argument" — every fenced agent tab and typed CLI failed on such a kernel (≥ 6.12-class Landlock ABI). | fixed `a1cb2c88`: `daemon::main` handles the verb first, `args_os`, environment untouched; test pins the launcher's verb to the daemon's |
+| 4 | low | Debian's `/etc/profile` resets `PATH` in the login shell tmux starts for a shell tab, so the shims (and `a368b3bc`'s PATH) are lost there: a typed CLI is not found or runs the user's own copy unfenced, keyless — no new exposure (same as an absolute path), but the shim's promise breaks; desktop too. | open → **#2364** |
+| 5 | low | A switch-back leaves `ANTHROPIC_API_KEY` in the environment of panes started while on the admin's key (their tmux session env, the trailing shell); a CLI typed there goes through the shim, which keeps the inherited variable — Claude then sees both the key and the restored login. | open (judgment: same user, rare; stripping a non-chosen CLI's variable would also strip a user's own key) |
+| 6 | low | The keeper serves 32 connections at once, each held up to 5 s; a local user can keep it busy and fail other users' spawns (no per-uid cap). | open (judgment: local DoS only, journal shows it; a per-uid cap is a small follow-up if wanted) |
+| 7 | low | `holds_admin_key` compares against the *current* key: after the admin rotates it, a Vibe `.vibe/.env` that saved the *old* admin key reads as "not the key" and is adopted as the user's own login. | open (only Vibe saves a key into its login file; the old key is revoked at rotation per §5.4) |
+| 8 | info | A `holds_admin_key` comparison is a keeper `get` and so audits as "delivered" (the panel's "used lately by" can name a user whose reconcile only compared). | open (accepted: only users on the key ever compare) |
+| 9 | info | `tabtivity --serverd` (the desktop binary as daemon, a dev route) writes shims naming the desktop binary, whose `--agent-shim` is not server mode — no key there. Production runs `<slug>-serverd`. | open (dev route only) |
+
+### Judgment calls left to the user
+
+- The "Needs the user" list of § P3b stands (offer to every user, failing
+  spawn on withdraw, Claude's first-use prompt, remote/container, Codex).
+- Findings 5–7: accepted as above unless you want them closed.
+
+### Gates (worktree, 2026-10-03, at `a1cb2c88` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **700 files, 7089 tests**, all pass |
+| `cargo test --workspace -q --no-fail-fast` | **3610 passed, 0 failed, 3 ignored** (src-tauri lib 3256, src-gateway 86, src-core 99; +2 new tests; the known flakies passed this run) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3161 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1), `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (RC/AR shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh b501d779..HEAD` | green (4 commits, 6 paths, 0 binaries) |
+| `git diff --check b501d779 HEAD` | clean |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |

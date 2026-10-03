@@ -552,3 +552,26 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2364. **A login shell that resets `PATH` loses the agent shims (Debian's `/etc/profile`).**
+    Found in the P3b review. Shell tabs reach the `agent_bin` shims only
+    through the `PATH` the tab inherits (on a server since `a368b3bc`,
+    `new-session -e PATH=…`), but tmux starts a shell tab's shell as a
+    login shell, and Debian's `/etc/profile` sets `PATH` unconditionally
+    (Ubuntu's does not). There a typed `claude` misses the shim: the CLI
+    is not found, or a copy in the user's own `~/.local/bin` runs unfenced
+    on the user's real home without the administrator's key — the same as
+    running it by absolute path, so no new exposure, but the shim's promise
+    breaks. Same on a Debian desktop. Re-prepend the shims after the
+    profile (e.g. an `ENV`/rc snippet in the tab's environment, or tmux's
+    `default-command`), keeping the user's own `~/.tmux.conf` in the loop.
+    (P3b review, 2026-10-03.)
+    - [ ] 🖐️ Manual test — on a Debian server and a Debian desktop, `command -v claude` in a new shell tab names the shim.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

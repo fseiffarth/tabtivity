@@ -333,7 +333,9 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   refreshing its token is not lost — but a file holding the admin's
   current key (asked of the keeper) is never adopted, and nothing is
   adopted when that cannot be told: the admin's key never becomes the
-  user's own login.
+  user's own login. Such an undecidable file also stays in the home until
+  it can be told (it may be the only copy of a rotated refresh token); the
+  same keeper answer fails every new spawn meanwhile (P3b review).
 - **Delivery at spawn, never stored.** `agent_keys::inject_env` runs where
   `copilot_auth` injects its token — the Linux and macOS fence wraps (so an
   agent tab *and* the shell tabs' shim, which builds the same fence), and
@@ -341,7 +343,11 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   a withdraw or rotation applies to the next spawn) into the registry's
   `api_key_env`. The three variables are in `tmux_local::SECRET_ENV`, so
   tmux ≥ 3.2 copies them from the client's environment (`0400`), never an
-  argv or a launcher script. Withdrawn or keeper down → the spawn fails
+  argv or a launcher script. Their global `update-environment` slots are
+  claimed only on the app's own tmux server (`-L <slug>`, a server's) or by
+  a tab carrying one: a desktop's tmux server is the user's own, where
+  listing `ANTHROPIC_API_KEY` would copy or drop the user's own key at every
+  attach (P3b review). Withdrawn or keeper down → the spawn fails
   naming the way back; never a silent fall-back to a login the home no
   longer has. Remote and container agents get nothing (#2361).
 - **Shims on a server.** The daemon now writes the shell tabs' agent shims
