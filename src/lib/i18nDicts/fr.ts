@@ -42,6 +42,7 @@ export const dict: Dict = {
   "scheduleMcp.confirmApplyBody": "Dans « {project} », un prompt ponctuel qu'un agent planifie pour lui-même se déclenchera sans votre approbation. Les prompts récurrents attendent toujours une approbation.",
   "mcpSecurity.scheduler": "Agent de planification",
   "mcpSecurity.pusher": "Agent de push",
+  "mcpSecurity.marker": "Questions d'annotation",
   "gitPushMcp.title": "Laisser les agents de projet demander à {app} un push, un tag de version et l'état de la CI (MCP)",
   "gitPushMcp.help": "Activé par défaut. Les nouveaux onglets locaux Claude, Codex et Vibe avec MCP reçoivent les outils git_push et git_release : {app} pousse la branche extraite, ou pose un tag de version sur sa pointe déjà poussée, depuis l'extérieur du bac à sable de l'agent avec votre jeton enregistré — avance rapide uniquement, jamais de force-push ni la branche par défaut. Le hook pre-push du dépôt s'exécute d'abord dans le bac à sable, sans le jeton. Chaque projet choisit Désactivé, Proposer (une carte dans la barre git vous demande ; par défaut) ou Appliquer ; une version demande toujours. Le premier push vers une URL demande toujours. Les agents peuvent aussi lire les exécutions GitHub Actions, les journaux des jobs en échec et les alertes code scanning ouvertes (lecture seule). Les onglets distants, VM et conteneur ne sont pas pris en charge.",
   "gitPushMcp.level": "Push par les agents",

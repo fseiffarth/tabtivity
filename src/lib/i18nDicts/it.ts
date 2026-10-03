@@ -42,6 +42,7 @@ export const dict: Dict = {
   "scheduleMcp.confirmApplyBody": "In «{project}», un prompt singolo che un agente programma per sé stesso verrà eseguito senza la tua approvazione. I prompt ricorrenti attendono ancora l'approvazione.",
   "mcpSecurity.scheduler": "Agente di programmazione",
   "mcpSecurity.pusher": "Agente di push",
+  "mcpSecurity.marker": "Domande sulle annotazioni",
   "gitPushMcp.title": "Consenti agli agenti di progetto di chiedere a {app} push, tag di release e stato della CI (MCP)",
   "gitPushMcp.help": "Attivo per impostazione predefinita. Le nuove schede locali di Claude, Codex e Vibe con MCP ricevono gli strumenti git_push e git_release: {app} fa il push del branch attivo, o mette un tag di release sulla sua punta già pubblicata, da fuori dalla sandbox dell'agente con il tuo token salvato — solo fast-forward, mai force-push né il branch predefinito. L'hook pre-push del repository gira prima nella sandbox, senza token. Ogni progetto sceglie Disattivato, Proponi (una scheda nella barra git ti chiede; predefinito) o Applica; una release chiede sempre. Il primo push verso un URL chiede sempre. Gli agenti possono anche leggere le esecuzioni di GitHub Actions, i log dei job falliti e gli avvisi di code scanning aperti (sola lettura). Le schede remote, VM e container non sono supportate.",
   "gitPushMcp.level": "Push degli agenti",

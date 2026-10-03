@@ -271,6 +271,9 @@ export interface Settings {
   /** The read-only "Ask Tabtivity" help MCP (`tabtivity-help`) in local agent tabs.
    *  **Default true** — absent means on. Switched in the intro wizard. */
   help_mcp?: boolean;
+  /** The markup questions MCP (`services::markup_mcp`, `markup_ask`) in local
+   *  project-agent tabs. **Default true** — absent means on. */
+  markup_mcp?: boolean;
   root_mcp_review?: "all" | "destructive" | "off";
   /** Root console: serve the MCP tools to local-model tabs only. Absent means
    *  off. On, cloud agent CLIs get no endpoint and running ones are refused. */

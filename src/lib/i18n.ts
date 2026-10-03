@@ -4750,6 +4750,7 @@ export const enSource = {
   "scheduleMcp.confirmApplyBody": "In \"{project}\", a one-time prompt an agent schedules for itself will fire without your approval. Recurring prompts still wait for approval.",
   "mcpSecurity.scheduler": "Schedule agent",
   "mcpSecurity.pusher": "Push agent",
+  "mcpSecurity.marker": "Markup questions",
   "gitPushMcp.title": "Let project agents ask {app} to push, tag releases and read CI (MCP)",
   "gitPushMcp.help": "On by default. New local Claude, Codex and MCP-enabled Vibe tabs get git_push and git_release tools: {app} pushes the checked-out branch, or tags a release on its pushed tip, from outside the agent's sandbox with your stored token — fast-forward only, never a force-push or the default branch. The repo's pre-push hook runs inside the sandbox first, without the token. Each project chooses Off, Propose (a card in the git bar asks you; the default) or Apply; a release always asks. The first push to a URL always asks. Agents can also read GitHub Actions runs, failed-job logs and open code-scanning alerts (read-only). Remote, VM and container tabs are not supported.",
   "gitPushMcp.level": "Agent pushes",

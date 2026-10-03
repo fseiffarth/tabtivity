@@ -42,6 +42,7 @@ export const dict: Dict = {
   "scheduleMcp.confirmApplyBody": "In „{project}“ wird ein einmaliger Prompt, den ein Agent für sich selbst plant, ohne deine Freigabe ausgelöst. Wiederkehrende Prompts warten weiterhin auf Freigabe.",
   "mcpSecurity.scheduler": "Zeitplan-Agent",
   "mcpSecurity.pusher": "Push-Agent",
+  "mcpSecurity.marker": "Markup-Fragen",
   "gitPushMcp.title": "Projekt-Agenten dürfen {app} um Push, Release-Tags und CI-Auskunft bitten (MCP)",
   "gitPushMcp.help": "Standardmäßig an. Neue lokale Claude-, Codex- und MCP-fähige Vibe-Tabs bekommen die Werkzeuge git_push und git_release: {app} pusht den ausgecheckten Branch oder setzt einen Release-Tag auf seinen gepushten Stand – von außerhalb der Sandbox des Agenten, mit deinem gespeicherten Token, nur Fast-Forward, nie Force-Push oder Standard-Branch. Der pre-push-Hook des Repos läuft vorher in der Sandbox, ohne Token. Jedes Projekt wählt Aus, Vorschlagen (eine Karte in der Git-Leiste fragt dich; Standard) oder Anwenden; ein Release fragt immer. Der erste Push an eine URL fragt immer. Agenten können außerdem GitHub-Actions-Läufe, Logs fehlgeschlagener Jobs und offene Code-Scanning-Warnungen lesen (nur lesend). Remote-, VM- und Container-Tabs werden nicht unterstützt.",
   "gitPushMcp.level": "Pushes durch Agenten",

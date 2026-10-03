@@ -399,6 +399,7 @@ pub fn start(app: AppHandle) {
     crate::services::git_push_mcp::set_change_hook(Box::new(move || {
         let _ = push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     }));
+    crate::commands::markup_mcp::install_change_hook(&app);
     let handle = tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
             Ok(listener) => listener,

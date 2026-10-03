@@ -31,6 +31,7 @@ pub mod ide;
 pub mod local_loss;
 pub mod mail;
 pub mod markdown;
+pub mod markup_mcp;
 pub mod mobile_control;
 pub mod monitor;
 pub mod net_usage;

@@ -17,7 +17,7 @@ interface Access {
   calendars: Scope; projects: Scope; accounts: Scope;
   families: string[]; write: boolean;
 }
-type Caller = "agent" | "local_model" | "reader" | "scheduler" | "pusher";
+type Caller = "agent" | "local_model" | "reader" | "scheduler" | "pusher" | "marker";
 interface Session { id: string; tab: string; caller: Caller; access: Access; project?: string }
 /** One audit row (`services::root_mcp_security::Audit`). `caller` is null and
  *  `session` empty for a request refused before it authenticated; `reason` is

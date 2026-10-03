@@ -42,6 +42,7 @@ export const dict: Dict = {
   "scheduleMcp.confirmApplyBody": "En «{project}», un prompt único que un agente programe para sí mismo se ejecutará sin tu aprobación. Los prompts recurrentes siguen esperando aprobación.",
   "mcpSecurity.scheduler": "Agente de programación",
   "mcpSecurity.pusher": "Agente de push",
+  "mcpSecurity.marker": "Preguntas de marcado",
   "gitPushMcp.title": "Permitir que los agentes de proyecto pidan a {app} hacer push, etiquetar versiones y leer la CI (MCP)",
   "gitPushMcp.help": "Activado por defecto. Las nuevas pestañas locales de Claude, Codex y Vibe con MCP reciben las herramientas git_push y git_release: {app} hace push de la rama activa, o etiqueta una versión en su punta ya publicada, desde fuera del sandbox del agente con tu token guardado — solo fast-forward, nunca force-push ni la rama por defecto. El hook pre-push del repositorio se ejecuta antes dentro del sandbox, sin el token. Cada proyecto elige Desactivado, Proponer (una tarjeta en la barra de git te pregunta; por defecto) o Aplicar; una versión siempre pregunta. El primer push a una URL siempre pregunta. Los agentes también pueden leer ejecuciones de GitHub Actions, registros de trabajos fallidos y alertas abiertas de code scanning (solo lectura). No se admiten pestañas remotas, de VM ni de contenedor.",
   "gitPushMcp.level": "Push por agentes",
