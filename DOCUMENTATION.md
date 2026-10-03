@@ -492,7 +492,8 @@ does not start new tabs — turn its container off to run them without one.
 
 For the administrator: install `podman` and `uidmap`, make sure every server
 user has a subordinate id range in `/etc/subuid` and `/etc/subgid`
-(`sudo tabtivity-admin-helper check` names who lacks one), then switch
+(`sudo tabtivity-admin-helper check` names who lacks one — and fails while
+Tailscale Funnel publishes the gateway), then switch
 **Project containers** on.
 
 ### Hosted server: the desktop app as a client

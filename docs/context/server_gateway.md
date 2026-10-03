@@ -86,6 +86,12 @@ gateway unit, which runs no fence, is hardened (`ProtectSystem=strict`, …).
 ## The admin helper's rules (the only root code)
 
 - Names, never paths; every path is built from fixed roots.
+- **`check` fails while Tailscale Funnel publishes the gateway** (user
+  decision, final review): any Funnel-enabled name whose Serve handler
+  proxies, or whose TCP forward points, at the gateway's loopback listeners
+  (`server.env`, else 8740/8741). Serve alone keeps the sign-in, pairing
+  and content routes on the tailnet; another service's Funnel is left
+  alone; no `tailscale` answer is a warning.
 - **The machine may be someone's desktop** (user decision 2026-10-03).
   `install` creates `<slug>-proc`, gives `polkit.service` that group by a
   `SupplementaryGroups=` drop-in and prints — never applies — the fstab

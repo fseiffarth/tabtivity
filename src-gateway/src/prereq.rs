@@ -235,10 +235,73 @@ pub fn podman(p: &dyn Probe, users: &[String]) -> Check {
     }
 }
 
+/// Tailscale Funnel must not publish the gateway (user decision, final
+/// review): Serve keeps the sign-in, pairing and content routes on the
+/// tailnet; Funnel would put them on the public internet. Fails when any
+/// Funnel-enabled HTTPS name proxies (or TCP-forwards) to one of the
+/// gateway's loopback listeners — `<PREFIX>GATEWAY_LISTEN` /
+/// `GATEWAY_CONTENT_LISTEN` from `server.env`, else 8740/8741.
+pub fn funnel(p: &dyn Probe) -> Check {
+    let targets = gateway_listeners(p);
+    let Ok(out) = p.run(&["tailscale", "serve", "status", "--json"]) else {
+        return check("funnel", Verdict::Warn, "`tailscale serve status` did not answer: cannot tell whether Funnel exposes the gateway");
+    };
+    let Ok(status) = serde_json::from_str::<serde_json::Value>(&out) else {
+        return check("funnel", Verdict::Warn, "`tailscale serve status --json` printed no JSON: cannot tell whether Funnel exposes the gateway");
+    };
+    let exposed = funneled_gateway(&status, &targets);
+    if exposed.is_empty() {
+        check("funnel", Verdict::Ok, "Tailscale Funnel does not expose the gateway")
+    } else {
+        check("funnel", Verdict::Fail, format!("Tailscale Funnel exposes the gateway at {} — turn Funnel off for it (`tailscale funnel --https=<port> off`); Serve alone keeps it on the tailnet", exposed.join(", ")))
+    }
+}
+
+/// The gateway's loopback listeners, `host:port`.
+fn gateway_listeners(p: &dyn Probe) -> Vec<String> {
+    let env = p.read(&names::server_env_file()).unwrap_or_default();
+    let value = |key: &str| {
+        env.lines()
+            .filter_map(|l| l.trim().split_once('='))
+            .find(|(k, _)| k.trim().ends_with(key) && !k.trim().ends_with(&format!("CONTENT_{key}")))
+            .map(|(_, v)| v.trim().trim_matches('"').to_string())
+            .filter(|v| !v.is_empty())
+    };
+    vec![
+        value(crate::config::LISTEN_ENV).unwrap_or_else(|| crate::config::DEFAULT_LISTEN.to_string()),
+        value(crate::config::CONTENT_LISTEN_ENV).unwrap_or_else(|| crate::config::DEFAULT_CONTENT_LISTEN.to_string()),
+    ]
+}
+
+/// The Funnel-enabled names of `status` that reach one of `targets`.
+fn funneled_gateway(status: &serde_json::Value, targets: &[String]) -> Vec<String> {
+    let reaches = |target: &str| {
+        let bare = target.trim_start_matches("http://").trim_start_matches("https+insecure://").trim_start_matches("https://");
+        let bare = bare.split('/').next().unwrap_or(bare);
+        let bare = bare.strip_prefix("localhost:").map(|port| format!("127.0.0.1:{port}")).unwrap_or_else(|| bare.to_string());
+        targets.iter().any(|t| *t == bare)
+    };
+    let Some(allow) = status.get("AllowFunnel").and_then(serde_json::Value::as_object) else { return Vec::new() };
+    let mut exposed: Vec<String> = allow
+        .iter()
+        .filter(|(_, on)| on.as_bool() == Some(true))
+        .filter(|(authority, _)| {
+            let web = status.get("Web").and_then(|w| w.get(authority.as_str())).and_then(|s| s.get("Handlers")).and_then(serde_json::Value::as_object);
+            let by_web = web.is_some_and(|handlers| handlers.values().filter_map(|h| h.get("Proxy").and_then(serde_json::Value::as_str)).any(reaches));
+            let port = authority.rsplit_once(':').map(|(_, port)| port).unwrap_or("443");
+            let by_tcp = status.get("TCP").and_then(|t| t.get(port)).and_then(|f| f.get("TCPForward")).and_then(serde_json::Value::as_str).is_some_and(reaches);
+            by_web || by_tcp
+        })
+        .map(|(authority, _)| authority.clone())
+        .collect();
+    exposed.sort();
+    exposed
+}
+
 /// Every check, in order.
 pub fn all(p: &dyn Probe, user_homes: &[(String, PathBuf)]) -> Vec<Check> {
     let users: Vec<String> = user_homes.iter().map(|(u, _)| u.clone()).collect();
-    vec![userns(p), hidepid(p), proc_group_members(p, &users), ptrace_scope(p), persistent_keyring(p), private_tmp(p), homes(p, user_homes), tmux(p), socket_dir(p), podman(p, &users)]
+    vec![userns(p), hidepid(p), proc_group_members(p, &users), ptrace_scope(p), persistent_keyring(p), private_tmp(p), homes(p, user_homes), tmux(p), socket_dir(p), funnel(p), podman(p, &users)]
 }
 
 /// The real machine.
@@ -341,7 +404,47 @@ mod tests {
         f.modes.insert("/usr/bin/newgidmap".into(), (0o100755, 0));
         f.files.insert("/etc/subuid".into(), "alice:100000:65536\n".into());
         f.files.insert("/etc/subgid".into(), "alice:100000:65536\n".into());
+        f.commands.insert("tailscale".into(), Ok(serve_status(false).to_string()));
         f
+    }
+
+    /// `tailscale serve status --json` of a gateway behind Serve, with Funnel
+    /// on or off for it.
+    fn serve_status(funnel: bool) -> serde_json::Value {
+        serde_json::json!({
+            "TCP": { "443": { "HTTPS": true }, "8443": { "HTTPS": true } },
+            "Web": {
+                "desk.example.ts.net:443": { "Handlers": { "/": { "Proxy": "http://127.0.0.1:8740" } } },
+                "desk.example.ts.net:8443": { "Handlers": { "/": { "Proxy": "http://127.0.0.1:8741" } } }
+            },
+            "AllowFunnel": { "desk.example.ts.net:8443": funnel }
+        })
+    }
+
+    /// User decision (final review): `check` fails while Funnel publishes
+    /// any of the gateway's listeners; another service's Funnel is fine.
+    #[test]
+    fn funnel_on_the_gateway_fails_the_check() {
+        let mut f = good();
+        assert_eq!(funnel(&f).verdict, Verdict::Ok);
+        f.commands.insert("tailscale".into(), Ok(serve_status(true).to_string()));
+        let c = funnel(&f);
+        assert!(c.verdict == Verdict::Fail && c.detail.contains("desk.example.ts.net:8443"), "{c:?}");
+        let mut other = serve_status(false);
+        other["Web"]["blog.example.ts.net:443"] = serde_json::json!({ "Handlers": { "/": { "Proxy": "http://127.0.0.1:3000" } } });
+        other["AllowFunnel"]["blog.example.ts.net:443"] = serde_json::json!(true);
+        f.commands.insert("tailscale".into(), Ok(other.to_string()));
+        assert_eq!(funnel(&f).verdict, Verdict::Ok, "another service may use Funnel");
+        // A gateway moved to other ports in server.env is still found.
+        let mut moved = serve_status(false);
+        moved["Web"]["desk.example.ts.net:443"]["Handlers"]["/"]["Proxy"] = serde_json::json!("http://127.0.0.1:9740");
+        moved["AllowFunnel"]["desk.example.ts.net:443"] = serde_json::json!(true);
+        f.commands.insert("tailscale".into(), Ok(moved.to_string()));
+        assert_eq!(funnel(&f).verdict, Verdict::Ok, "9740 is not the gateway by default");
+        f.files.insert(names::server_env_file(), format!("{}={}\n", crate::brand::CURRENT.env_name(crate::config::LISTEN_ENV), "127.0.0.1:9740"));
+        assert_eq!(funnel(&f).verdict, Verdict::Fail);
+        f.commands.insert("tailscale".into(), Err("not running".into()));
+        assert_eq!(funnel(&f).verdict, Verdict::Warn);
     }
 
     /// P5: rootless Podman is optional — each gap is a warning naming it.
