@@ -592,11 +592,14 @@ async fn a_provider_sign_in_pairs_the_starting_browsers_key_for_the_linked_accou
     assert_eq!(nonce, crate::oidc_wire::nonce_for(KEY), "the nonce binds the key being paired");
     *idp.nonce.lock().unwrap() = nonce;
     *idp.challenge.lock().unwrap() = challenge;
-    // Another browser (no binder) cannot complete it, and the try is spent.
+    // Another browser (no binder, or another's) cannot complete it, and the
+    // try is spent: it says where the sign-in was started.
     let callback = format!("/gateway/v1/oidc/callback?code=good-code&state={state}");
-    let (status, headers, _) = raw(f.addr, "GET", &callback, &[("Cookie", "__Host-oidc_binder=not-it")], None).await;
     let location = |headers: &[(String, String)]| headers.iter().find(|(k, _)| k == "location").map(|(_, v)| v.clone()).unwrap_or_default();
-    assert_eq!((status, location(&headers)), (303, "/?oidc=expired".to_string()));
+    let (status, headers, _) = raw(f.addr, "GET", &callback, &[], None).await;
+    assert_eq!((status, location(&headers)), (303, "/?oidc=expired".to_string()), "no binder cookie at all");
+    let (status, headers, _) = raw(f.addr, "GET", &callback, &[("Cookie", &binder)], None).await;
+    assert_eq!((status, location(&headers)), (303, "/?oidc=expired".to_string()), "spent by the cookieless try (another's cookie: `oidc::tests`)");
     let (binder, _, state, nonce, challenge) = begin().await;
     *idp.nonce.lock().unwrap() = nonce;
     *idp.challenge.lock().unwrap() = challenge;

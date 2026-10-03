@@ -505,8 +505,10 @@ async fn oidc_callback(State(gw): State<Shared>, Extension(source): Extension<So
     if !gw.limits().pair_stranger(&source.0, Instant::now()) {
         return oidc_back("busy", None);
     }
-    let binder = cookie_values(&headers).iter().find_map(|c| crate::oidc::binder_from(c).map(str::to_string));
-    let (Some(state), Some(binder)) = (query.state, binder) else { return oidc_back("refused", None) };
+    let Some(state) = query.state else { return oidc_back("refused", None) };
+    // No binder cookie is another browser (or one that dropped it): like a
+    // wrong one, it spends the sign-in and says where it was started.
+    let binder = cookie_values(&headers).iter().find_map(|c| crate::oidc::binder_from(c).map(str::to_string)).unwrap_or_default();
     let Some(pending) = gw.oidc.take(&state, &binder, crate::now()) else { return oidc_back("expired", None) };
     // The provider's own error (cancelled, denied) carries no code.
     let Some(code) = query.code.filter(|c| !c.is_empty() && c.len() <= 4096) else { return oidc_back("refused", None) };
