@@ -658,3 +658,95 @@ Prerequisites: Mobile enabled with a verified Tailscale Serve origin (the sideca
 | `scripts/privacy-check.sh` | green on every commit (pre-commit hook; three false positives fixed on the way: a tailnet-looking test host, generated object keys ending in a credential word followed by a colon, and a comment naming the pattern) |
 | `git diff --check b2eae3d1 HEAD` | clean |
 | `npm run mobile:bundle` | not needed — `mobile-web/` untouched (`npm run build` rebuilt it anyway) |
+
+## P2 review
+
+*Reviewer, 2026-10-03, on branch `hosted` over `b2eae3d1..c99f0b2e` (the 11
+P2 commits). Nothing run live; no sidecar started against a real state dir or
+port (the socket test binds an ephemeral loopback port with a temp control
+dir). Security first — this is a new network surface.*
+
+### What was checked
+
+- **Authn/authz of the browser surface** (`web_client.rs`, `host.rs`): every
+  `/desktop*` route and the content origin 404 unless `Host` is a loopback
+  literal on the exact expected port (`127.0.0.1`/`localhost`/`[::1]`; the
+  listeners are IPv4-only, so `[::1]` is dead letter, not a hole); the
+  socket additionally requires `Origin` present and byte-equal to
+  `http://` + `Host` (so `null`, a missing Origin, another loopback port and
+  a different loopback spelling are all refused — this is what stops CSWSH,
+  since `SameSite=Strict` does not help between `127.0.0.1:9999` and
+  `127.0.0.1:8742`, which are the same site). Tailscale Serve preserves the
+  inbound `Host` (tailnet FQDN), so through it the routes do not exist; the
+  socket test covers the `desk.example.ts.net` 404. Token compare is
+  `subtle::ct_eq` after a length check; ten failures a minute lock the
+  login route. Cookie: `HttpOnly; SameSite=Strict; Path=/; Max-Age`, no
+  `Secure` (plain http on loopback, by design, #2341 for https). The phone's
+  `__Host-…_session` and this cookie are read by disjoint routes.
+- **Dispatcher**: `core_dispatch::refusal` runs before `arg()` touches the
+  frame (`a_refused_call_never_reaches_a_body`); `Client`/`Off` refused for
+  everyone, `Admin` for `Role::User`; the generated wrappers read camelCase
+  keys with Tauri's wording, missing keys deserialize as `null` (so
+  `Option` = `None`), extra keys are ignored like Tauri. The model allowlist
+  covers every `core` command that forwards a caller-named model to Ollama
+  (`complete_text`, `prepare_local_agent`, `prepare_local_launch`,
+  `ensure_vibe_ollama_model`; `load/pull/stop/delete_ollama_model` are
+  `admin`; `mail_ai_*` and the root MCP take the model from settings, which
+  the browser cannot write — `save_settings` is `off`).
+- **`mobile_control` invariant**: the phone routes and their store are
+  untouched; the browser surface is a different prefix, cookie and auth, as
+  plan §4.3 allows (raw ids of the user's own projects, this user only).
+- **File access**: `read_file_bytes`/`write_file_bytes`/`/content/{ticket}`
+  all go through `fs::read_file_bytes_for`/`write_file_bytes_for` (the IPC
+  shapes' confinement; the socket test shows an outside-root write refused).
+  Tickets are 32 random bytes, 5 min, 256 at most; content answers carry
+  `CSP: sandbox; default-src 'none'`, `nosniff`, `no-store`, and HTML/SVG/
+  XML/JS go as `attachment`. Bundle paths reject `..`, empty parts and
+  backslashes. `list_dir_all` and `desktop_file_grant` are deliberately
+  unconfined (OS-dialog parity for the admin; see P3 notes below).
+- **Resource limits**: per-client event queue of 512 (shed + counted),
+  answers bounded by 256 in-flight permits, frames capped at 256 MB + 64 KB,
+  two unanswered pings close, the session is re-checked every 20 s;
+  `host::run` runs `kill_all` on the sidecar's registry at a clean stop.
+- **Desktop unchanged when off**: `browser_client` unset → every
+  `/desktop*` route is a 404 inside the existing router, and the content
+  listener is never bound; `build.rs` codegen adds ~0.1 s (`syn` over
+  `src/commands/*.rs`) and the Windows `cargo check` is green.
+- Code quality, i18n keys in all five dictionaries, the two UntestedTag
+  rows, file-map rows, TODO #2341–#2346.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **High** (data loss: a live terminal killed) | A parked client's PTY set is keyed by PTY id = tab id, shared by every page. A reloaded page (new client) or a sibling page re-spawns the same ids; 90 s later `reap_if_still_parked` of the old client took them from the registry and tore down the live page's PTYs. | **Fixed** `d3a6ee23`: a successful `pty_spawn` moves the id to the spawning client, out of every parked and other live set (`WebClientState::note_spawned`); state-level test. |
+| 2 | **Medium** (promise broken: "a page that lost its link keeps its PTYs") | A page whose link died without a close frame reconnects with `?resume=` before the server noticed; the id was still "connected", so the page got a fresh id and its PTYs stayed with the stale one, reaped later. | **Fixed** `d3a6ee23`: a resume of a live id takes it over (per-connection generation; the stale loop ends when its link is replaced and neither detaches the new link nor parks anything). Socket test: a second connection resuming `web-1` while the first is open gets `web-1`, the first is closed by the server. |
+| 3 | Low (docs) | A comment block in `terminalBus.ts` sat after a `return` inside `sliceBeyond`. | **Fixed** `d3a6ee23`. |
+| 4 | **Medium** (design gap, plan §3.5 "terminal size is per client") | A PTY id is the tab id: a second page's `pty_spawn` of an open tab goes through `PtyRegistry::insert`, which kills the first page's attach client and replaces it; both pages then share one PTY and `pty_resize` fights. The P2 handoff's live check 5 ("each has its own terminal size") and the plan bullet claiming per-client size were wrong. | **Open — #2347**; plan bullet corrected. Needs per-client PTY ids in router and registry, not a review-size change. |
+| 5 | Low (UX) | A session that idled out (or hit `SESSION_MAX`) makes the socket upgrade 401; `WsClient` cannot see the status and retries forever under "reconnecting…". | **Open — #2348**. |
+| 6 | Design (P3) | `Role::Admin` is hard-wired for any cookie holder: everything the box owner can do (CLI installs, `mobile_host_apply`, `mobile_browser_client_link` = the token itself, model pulls/deletes, containers, VPN). Acceptable for P2 by the trust argument (loopback + `0600` token = the admin socket's trust), not beyond. | Open by design; P3's gateway must pass the role in. |
+| 7 | Design (P3) | The login token is long-lived, never rotated, and travels in a URL (browser history); there is no logout route. | Open by design (same trust as the control dir). For P3: single-use or short-lived login tokens, a logout/rotate command. |
+| 8 | Design (P3) | `read_file_bytes`, `desktop_file_ticket` and `desktop_file_grant` are answered by the transport before `core_dispatch::refusal`, and `list_dir_all` is `core` and unconfined. Fine for one admin; a `Role::User` must not get the whole filesystem. | Open: before P3 serves users, route the transport commands through the class check and confine (or reclass) `list_dir_all`/grants. |
+| 9 | Low (risk, live) | `CSP: sandbox` on an inline PDF: Chromium disables plugins in sandboxed documents, so "open outside" of a PDF may download or show blank instead of rendering. | Watch in live check 8; if so, serve PDFs without `sandbox` (they are not active content) or always as `attachment`. |
+| 10 | Info | Browser pages subscribe to the plain `terminal-output` name, so every page receives every PTY's chunks in the sidecar (filtered by id client-side); the `:web-n` copies are wasted. | Already #2345. |
+| 11 | Info | `MAX_INBOUND_FRAME` (256 MB) × 256 permits bounds memory only in theory; one user, loopback. | Note for P3 limits. |
+
+Not found: path traversal in the bundle or content routes; a way to reach
+the dispatcher without the cookie; a missing Origin case; a phone-route
+change; a non-constant-time compare; a new listener or port with Browser
+access off.
+
+### Gates (worktree, 2026-10-03, at `d3a6ee23` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **693 files, 7060 tests, all pass** |
+| `cargo test -q --no-fail-fast` (src-tauri) | 3183 lib (2 ignored) + 168 integration = **3351 passed**, 0 failed (+1: the ownership test) |
+| `cargo test -q` (src-core) | 97 passed |
+| `npm run lint` | 0 errors, 31 warnings — the same pre-existing ones, none new |
+| `cargo clippy --all-targets -- -D warnings` | clean, both crates |
+| `cargo check --target x86_64-pc-windows-msvc` | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (48 entries) |
+| `scripts/privacy-check.sh` | green (pre-commit on each commit; range form over `c99f0b2e..HEAD`) |
+| `git diff --check b2eae3d1 HEAD` | clean |

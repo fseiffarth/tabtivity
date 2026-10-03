@@ -1217,8 +1217,9 @@ Handoff: [`hosted_handoff.md`](hosted_handoff.md) § P2.*
   `lib/transport/*`, `ServerFilePicker`, `vite.web.config.ts`), `bbddfbba`
   (the audit: 31 files use the flags; the host-side uses moved to
   `IS_HOST_*`/`HOST_OS`), `ddfdea27` (offset catch-up after a reconnect).
-  Per-client size falls out of one PTY per client (each browser's `pty_spawn`
-  is its own tmux attach). Popout windows (`?popout=`) are NOT done: the
+  Per-client size is NOT done (P2 review): a PTY id is the tab id, so a
+  second page's `pty_spawn` of an open tab replaces the first page's attach
+  client and both pages share one PTY (#2347). Popout windows (`?popout=`) are NOT done: the
   browser is one window; `plugin:window|*` is answered for that one page.
 - ~~The user-content origin for ticketed files.~~ `a084b436`: a second
   loopback listener on the next port, `desktop_file_ticket` → `/content/{t}`,

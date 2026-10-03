@@ -292,3 +292,45 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2347. **One PTY per browser client, not per tab.** In the sidecar a PTY id is
+    the tab id, the same in every page of the workspace: a second page that
+    opens a tab the first page has open calls `pty_spawn` with the same id,
+    and `PtyRegistry::insert` kills the first page's attach client and puts
+    the second's in its place. Both pages then read and write one PTY, so
+    `pty_resize` fights — plan §3.5 asks for a size per client through one
+    tmux attach per client. Needs a per-client PTY id (`<tab>@<client>`) in
+    the router and the registry, or a per-viewer size in the router. Until
+    then the handoff's live check 5 ("each has its own terminal size") fails
+    by construction. (P2 review, 2026-10-03.)
+    - [ ] 🤖 Automated test — two clients spawn the same tab id; both PTYs
+      live; each `pty_resize` reaches its own.
+    - [ ] 🖐️ Manual test — two browser pages on one shell tab, different
+      window sizes: no reflow fight.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2348. **A browser whose session ended reconnects forever.** When the socket
+    upgrade answers 401 (the session idled out or hit `SESSION_MAX`),
+    `WsClient` cannot see the status: it retries at the capped 10 s backoff
+    under the "reconnecting…" banner and never tells the user to sign in
+    again. After a few failed opens, probe `/desktop/` with the cookie; a 401
+    stops the retries and shows a "session ended, open the sign-in link"
+    state instead. (P2 review, 2026-10-03.)
+    - [ ] 🤖 Automated test — the fake socket fails three opens, the probe
+      answers 401, no fourth open is scheduled, the banner changes.
+    - [ ] 🖐️ Manual test — wait out the idle timeout; the page says so.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
