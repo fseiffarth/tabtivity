@@ -1773,6 +1773,8 @@ keyring is exercised through `KeyHold`.*
 - After step 4: with the server locked, revoke a device and at once sign
   in on a remaining one: `wraps.json` lists no wrap for the revoked device
   and has a new `kid`; mail and the saved password open.
-- `systemctl stop` the daemon, put `{` into
-  `mobile-control/devices.json` (keep a copy), start it: the log says the
-  rotation waits; `wraps.json` still lists every device. Restore the file.
+- While unlocked: `systemctl stop` the daemon, copy
+  `mobile-control/devices.json` aside and put `{` into it, start the
+  daemon (it may then refuse to serve — the auth store cannot open): the
+  log says the rotation waits, and `wraps.json` still lists every device.
+  Restore the file and restart.
