@@ -123,9 +123,11 @@ describe("Mobile bridge — the agent's markup questions", () => {
     expect(JSON.stringify(answer)).not.toContain("docs/paper");
     expect(called("markup_mcp_list")[0]).toEqual({ projectId: project.id, scheduleTargetId: "target-1", path: `${NAMES.outboxDir}/20261003-101500-draft.pdf` });
 
-    // No path: every open ask of the tab (the Focus banner).
-    await ask({ type: "markup_questions", request_id: "q2", project_id: project.id, tmux_session: TMUX });
+    // No path: every open ask of the tab (the Focus banner). Its path goes to
+    // the sidecar, which seals it into a files row and never passes it on.
+    const banner = await ask({ type: "markup_questions", request_id: "q2", project_id: project.id, tmux_session: TMUX });
     expect(called("markup_mcp_list")[0]).toEqual({ projectId: project.id, scheduleTargetId: "target-1", path: undefined });
+    expect(banner).toMatchObject({ asks: [{ id: ASK, path: "docs/paper/draft.pdf" }] });
 
     expect(await ask({ type: "markup_questions", request_id: "q3", project_id: project.id, tmux_session: `${BRAND.slug}-nope` }))
       .toMatchObject({ status: "error", code: "tab_not_found" });

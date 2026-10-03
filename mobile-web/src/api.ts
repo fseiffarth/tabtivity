@@ -1086,7 +1086,11 @@ export interface PhoneMarkupQuestion {
 }
 /** An agent's open markup ask: its random id, its questions, and the leaf
  * name of the file it is about (absent: any file). Never a path. */
-export interface PhoneMarkupAsk { id: string; file_name?: string; questions: PhoneMarkupQuestion[] }
+/** The project file an ask is about, as the files drawer rows it — sealed by
+ * the sidecar for the Focus banner (`protocol::MobileMarkupFile`). `place` is
+ * its folder trail, `folder` its folder's token (none at the root). */
+export interface PhoneMarkupFile { token: string; name: string; kind: string; size: number; modified: number; folder?: string; place: string }
+export interface PhoneMarkupAsk { id: string; file_name?: string; file_row?: PhoneMarkupFile; questions: PhoneMarkupQuestion[] }
 /** One question's answer: option indices and/or a typed **Other…**. */
 export interface PhoneMarkupAnswer { options: number[]; other?: string }
 

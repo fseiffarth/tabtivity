@@ -376,6 +376,23 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
     Ok(Listing { entries, truncated })
 }
 
+/// One file of the project as its folder's listing would row it, or `None`
+/// when it is not a regular file reached with no link on the way (or names
+/// something the browser hides). What the phone needs to open a file it was
+/// not browsing to — the Focus banner of an agent's markup question.
+pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
+    if rel.is_empty() || !valid_rel(rel) {
+        return None;
+    }
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let dir = ProjectDir::open(root, parent).ok()?;
+    let (file, meta) = dir.open_file(name)?;
+    let (_file, meta, kind) = outbox::sniff_opened(file, meta)?;
+    let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
+    let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
+    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind, size: meta.len(), modified, created })
+}
+
 /// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
 /// answered with its head — a long log is still worth its first pages; any
 /// other kind that large is `TooLarge`.

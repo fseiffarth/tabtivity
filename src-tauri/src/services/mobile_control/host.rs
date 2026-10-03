@@ -36,7 +36,7 @@ use super::{
     limits,
     protocol::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
-        MailMarkAction, MobileCollectedPrompt, MobilePromptInput, MobileSchedule,
+        MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation,
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
@@ -4482,23 +4482,76 @@ async fn markup_questions(
         Ok(target) => target,
         Err(error) => return error,
     };
+    let banner = path.is_none();
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    let request = DesktopRequest::MarkupQuestions { request_id, project_id, tmux_session: tab.tmux_name.clone(), path };
+    let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
     match markup_call(&state, request).await {
         Ok(DesktopResponse::MarkupQuestions { asks }) => {
-            let asks: Vec<_> = asks
-                .into_iter()
-                .filter(|ask| valid_ask_id(&ask.id))
-                .map(|mut ask| {
+            let mut asks: Vec<_> = asks.into_iter().filter(|ask| valid_ask_id(&ask.id)).collect();
+            // The path never crosses; for the Focus banner (no source) a
+            // project file the drawer could open is handed over as its row.
+            let paths: Vec<Option<String>> = asks
+                .iter_mut()
+                .map(|ask| {
+                    ask.file_row = None;
                     ask.file_name = ask.file_name.as_deref().and_then(markup_file_name);
-                    ask
+                    ask.path.take()
                 })
                 .collect();
+            if banner {
+                let rows = markup_banner_files(&state, &tab_id, &project_id, paths).await;
+                for (ask, row) in asks.iter_mut().zip(rows) {
+                    ask.file_row = row;
+                }
+            }
             (StatusCode::OK, Json(json!({ "asks": asks })))
         }
         Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         Err(error) => error,
     }
+}
+
+/// The Focus banner's file rows: each ask's project-relative path sealed as
+/// the files drawer would row it (`files::entry`), with its folder's token
+/// and folder trail. Only while the drawer is open for the project
+/// (`files_scope`), never for an outbox copy (the phone finds those in its
+/// own gallery), and `None` for a file the drawer would not list.
+async fn markup_banner_files(state: &HostState, tab_id: &str, raw_id: &str, paths: Vec<Option<String>>) -> Vec<Option<MobileMarkupFile>> {
+    let none = || vec![None; paths.len()];
+    if paths.iter().all(Option::is_none) || !files::files_open(&state.config.state_dir) {
+        return none();
+    }
+    let Ok(catalog) = catalog(state) else { return none() };
+    let Some((project, _)) = catalog.tab(tab_id) else { return none() };
+    if project.public.kind != ScopeKind::Project || project.raw_id != raw_id {
+        return none();
+    }
+    let root = project.root.clone();
+    let raw_id = raw_id.to_string();
+    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    let outbox_dir = format!("{}/", outbox::OUTBOX_DIR);
+    tokio::task::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|path| {
+                let rel = path.filter(|rel| !rel.starts_with(&outbox_dir))?;
+                let entry = files::entry(&root, &rel, &key, &raw_id)?;
+                let place = rel.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default();
+                let folder = (!place.is_empty()).then(|| files::seal(&key, &raw_id, &place));
+                Some(MobileMarkupFile {
+                    token: entry.token,
+                    name: entry.name,
+                    kind: entry.kind.to_string(),
+                    size: entry.size,
+                    modified: entry.modified,
+                    folder,
+                    place,
+                })
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// `POST /api/v1/tabs/{tab_id}/markup/answer` — `{ ask_id, answers: [{
@@ -8055,7 +8108,7 @@ mod tests {
         let log = seen.clone();
         let desktop = tokio::spawn(async move {
             let mut answered = 0;
-            while answered < 5 {
+            while answered < 6 {
                 let (mut stream, _) = listener.accept().await.expect("accept");
                 // A reachability probe connects and sends nothing.
                 let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
@@ -8065,7 +8118,7 @@ mod tests {
                     DesktopRequest::MarkupQuestions { .. } => serde_json::from_value(json!({
                         "status": "markup_questions",
                         "asks": [
-                            { "id": ask, "file": "docs/paper/draft.pdf", "file_name": "docs/paper/20261003-101500-draft.pdf",
+                            { "id": ask, "path": "docs/paper/draft.pdf", "file_name": "docs/paper/20261003-101500-draft.pdf",
                               "questions": [{ "question": "Figure or paragraph?", "options": [{ "label": "Figure" }, { "label": "Paragraph" }], "page": 2, "quote": "Figure 2" }] },
                             { "id": "not-an-ask-id", "questions": [] },
                         ],
@@ -8088,8 +8141,11 @@ mod tests {
         assert_eq!(asks[0]["file_name"], "draft.pdf");
         assert_eq!(asks[0]["questions"][0]["page"], 2);
         assert!(!body.contains("docs/") && !body.contains("\"file\"") && !body.contains(RAW_PROJECT), "{body}");
+        // The Focus banner, drawer off: no row, and still no path.
         let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
         assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert!(json(&body)["asks"][0].get("file_row").is_none(), "{body}");
+        assert!(!body.contains("docs/") && !body.contains("\"path\""), "{body}");
 
         let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good.clone()))).await;
         assert_eq!(status, StatusCode::OK, "answered: {body}");
@@ -8100,6 +8156,26 @@ mod tests {
         let (status, _, body) = host.send(request_as("POST", &dismiss_uri, &cookie, Some(json!({ "ask_id": ask })))).await;
         assert_eq!(status, StatusCode::OK, "answered: {body}");
         assert_eq!(json(&body)["dismissed"], true);
+
+        // Drawer on, the file there: the banner gets its sealed row — the
+        // folder trail and tokens, never the path or the root.
+        std::fs::create_dir_all(host.root.join("docs/paper")).unwrap();
+        std::fs::write(host.root.join("docs/paper/draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let file = json(&body)["asks"][0]["file_row"].clone();
+        assert_eq!(file["name"], "draft.pdf", "{body}");
+        assert_eq!(file["place"], "docs/paper");
+        assert_eq!(file["kind"], "application/pdf");
+        let key = host.state.auth.lock().unwrap().host_key().to_vec();
+        assert_eq!(files::unseal(&key, RAW_PROJECT, file["token"].as_str().unwrap()).as_deref(), Some("docs/paper/draft.pdf"));
+        assert_eq!(files::unseal(&key, RAW_PROJECT, file["folder"].as_str().unwrap()).as_deref(), Some("docs/paper"));
+        assert!(!body.contains("\"path\"") && !body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
         desktop.await.expect("fake desktop");
 
         let seen = seen.lock().unwrap();

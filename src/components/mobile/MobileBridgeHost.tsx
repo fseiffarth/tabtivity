@@ -317,11 +317,14 @@ interface DesktopImage { id: string; name: string; source: string; size?: number
  * upload gets back, so the two ways of filling the inbox read alike. */
 interface InboxAttachment { name: string; reference: string; size: number }
 
-/** An agent's open markup question as the phone gets it
- * (`protocol::MobileMarkupAsk`): the file's leaf name, never its path. */
+/** An agent's open markup question as the sidecar gets it
+ * (`protocol::MobileMarkupAsk`): the file's leaf name, and — for the Focus
+ * banner — its project-relative `path`, which the sidecar seals into a files
+ * row and never passes on to the phone. */
 interface MobileMarkupAsk {
   id: string;
   file_name?: string;
+  path?: string;
   questions: { question: string; header?: string; options: { label: string; description?: string }[]; multi_select: boolean; page?: number; quote?: string }[];
 }
 /** One question's answer from the phone: indices and/or a typed Other…. */
@@ -2119,7 +2122,9 @@ function markupTarget(projectId: string, tmuxSession: string): { projectId: stri
 
 /** The agent tab's open markup question for the phone's markup card (`path`:
  * the project-relative file its view shows, resolved by the sidecar) or, with
- * no path, for its Focus banner. The file goes as its leaf name only. */
+ * no path, for its Focus banner. The file goes as its leaf name; for the
+ * banner also as its path, which only the sidecar reads (it hands the phone a
+ * sealed files row instead). */
 async function markupQuestionsFor(projectId: string, tmuxSession: string, path: string | undefined): Promise<DesktopResponse> {
   const key = markupTarget(projectId, tmuxSession);
   if ("status" in key) return key;
@@ -2130,6 +2135,7 @@ async function markupQuestionsFor(projectId: string, tmuxSession: string, path: 
     asks: asks.map((ask) => ({
       id: ask.id,
       ...(ask.fileName ? { file_name: ask.fileName } : {}),
+      ...(path === undefined && ask.file ? { path: ask.file } : {}),
       questions: ask.questions.map((question) => ({
         question: question.question,
         ...(question.header ? { header: question.header } : {}),

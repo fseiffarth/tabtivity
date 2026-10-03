@@ -783,16 +783,40 @@ pub struct MobileMarkupQuestion {
     pub quote: Option<String>,
 }
 
-/// An open ask of the markup questions MCP (`services::markup_mcp`). There
-/// is no field for the file's path: the phone is told its leaf name only, and
-/// the sidecar strips that to a bare leaf once more before it crosses.
+/// An open ask of the markup questions MCP (`services::markup_mcp`). The
+/// phone is told the file's leaf name, which the sidecar strips to a bare
+/// leaf once more before it crosses, and — for the Focus banner — a sealed
+/// listing row of a project file (`file_row`). `path` goes from the window to the
+/// sidecar only: the sidecar always takes it out before the ask crosses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MobileMarkupAsk {
     /// The ask's random id (`ask-<hex>`), what an answer names.
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_name: Option<String>,
+    /// Window → sidecar only: the project-relative path the ask is bound to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Sidecar → phone: the asked-about project file as the files drawer
+    /// would row it, so the Focus banner can open it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_row: Option<MobileMarkupFile>,
     pub questions: Vec<MobileMarkupQuestion>,
+}
+
+/// A project file an ask is about, sealed as the files drawer seals its rows
+/// (`files::entry`): its token, its folder's token (none at the root) and
+/// the folder trail of names the phone keys its markup layer by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupFile {
+    pub token: String,
+    pub name: String,
+    pub kind: String,
+    pub size: u64,
+    pub modified: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub place: String,
 }
 
 /// One question's answer from the phone: option indices (0-based) and/or a
@@ -2137,8 +2161,8 @@ mod tests {
         assert!(dismiss.is_mutation());
         assert_eq!(serde_json::to_value(&dismiss).expect("dismiss")["type"], "markup_dismiss");
 
-        // The answer: no path field to carry, and a desktop that sent one
-        // (or the camelCase view) loses it on the way through the sidecar.
+        // The answer: a desktop that sent the view's `file` loses it here;
+        // `path` reaches the sidecar only, which takes it out (host.rs).
         let response: DesktopResponse = serde_json::from_value(serde_json::json!({
             "status": "markup_questions",
             "asks": [{

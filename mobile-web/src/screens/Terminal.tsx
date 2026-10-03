@@ -31,6 +31,7 @@ import {
   inboxFileUrl,
   listDesktopImages,
   listOutbox,
+  listProjectFiles,
   MAX_INBOX_FILE,
   openSignInTab,
   pickPhoneFiles,
@@ -43,6 +44,8 @@ import {
   uploadToInbox,
   type DesktopImage,
   type OutboxFile,
+  type PhoneMarkupFile,
+  type ViewerScope,
   type ProjectDetail,
   type SessionTranscript,
   type AskedQuestion,
@@ -1080,6 +1083,10 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const [outboxOpen, setOutboxOpen] = useState<OutboxFile | null>(null);
   /** A file the reader sent, opened from its prompt's bubble. */
   const [inboxOpen, setInboxOpen] = useState<OutboxFile | null>(null);
+  /** A project file the agent's markup question is about, opened from the
+   * Focus banner: its row, its folder trail (the layer's key) and its
+   * folder's token (Reload lists it again). */
+  const [askedFile, setAskedFile] = useState<{ file: OutboxFile; place: string; folder?: string } | null>(null);
   /** The stored session behind an agent tab (`getTranscript`): `null` until
    * the first read answers. Focus reads from it whenever it is available and
    * the reader has not switched the view to the screen. */
@@ -3530,10 +3537,26 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
    * composer: read on the markup views' own poll, only while the Focus chat
    * is on screen (no viewer over it) and on each agent edge. */
   const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" ? tab.id : undefined, undefined,
-    view === "focus" && !outboxOpen && !filesOpen && !gallery, markupAgent);
+    view === "focus" && !outboxOpen && !filesOpen && !gallery && !askedFile, markupAgent);
   const markupAsk = markupAsks.find((ask) => ask.questions.length > 0);
   /** The file it is about, if this tab's outbox has it — the newest copy. */
   const markupAskFile = markupAsk?.file_name ? outbox.find((file) => sentName(file) === markupAsk.file_name) : undefined;
+  /** Else the project file it is about, as the files drawer rows it (the
+   * sidecar seals it; only while the drawer is switched on). */
+  const markupAskRow = !markupAskFile && project ? markupAsk?.file_row : undefined;
+  const askedScope = useMemo<ViewerScope | undefined>(() => (project ? { files: project } : undefined), [project]);
+  /** Mark up's Reload for that file: its folder listed again, for a fresh row. */
+  const refreshAskedFile = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
+    if (!project || !askedFile) return null;
+    const fresh = await listProjectFiles(project, askedFile.folder);
+    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
+  }, [project, askedFile]);
+  const openAskedRow = (row: PhoneMarkupFile) => setAskedFile({
+    file: { name: row.name, kind: row.kind, size: row.size, modified: row.modified, ref: row.token },
+    place: row.place,
+    folder: row.folder,
+  });
   /** A shell tab has no chat to send marks to: Mark up's Submit opens a new
    * tab of the desktop's default agent and shows it in place of this one. */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
@@ -4085,11 +4108,12 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       {view === "focus" && markupAsk && <div className="sign-in-notice markup-ask-notice" role="status">
         <span>
           {!markupAsk.file_name ? t("mobile.markup.questions.bannerAny")
-            : markupAskFile ? t("mobile.markup.questions.banner", { file: markupAsk.file_name })
+            : markupAskFile || markupAskRow ? t("mobile.markup.questions.banner", { file: markupAsk.file_name })
               : t("mobile.markup.questions.bannerElsewhere", { file: markupAsk.file_name })}
           {isUntested("mobile.markup.questions") && <> · <em>{t("mobile.focus.untested")}</em></>}
         </span>
         {markupAskFile && <button className="primary" onClick={() => setOutboxOpen(markupAskFile)}>{t("mobile.markup.questions.bannerOpen")}</button>}
+        {markupAskRow && <button className="primary" onClick={() => openAskedRow(markupAskRow)}>{t("mobile.markup.questions.bannerOpen")}</button>}
       </div>}
       {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}>✕</button></div>}
       {(tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
@@ -4275,6 +4299,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       newTab={markupNewTab} />}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}
     {inboxOpen && !outboxOpen && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
+    {askedFile && askedScope && <OutboxViewer key={`asked/${askedFile.file.ref}`} scope={askedScope} file={askedFile.file} onClose={() => setAskedFile(null)}
+      markup={markupTarget && { ...markupTarget, place: askedFile.place, refresh: refreshAskedFile }} />}
     {filesOpen && project && filesLabel !== null && <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
       markup={markupTarget && { tabId: markupTarget.tabId, onSend: markupTarget.onSend, agent: markupTarget.agent }} showTab={markupNewTab?.show} />}
 

@@ -342,13 +342,13 @@ describe("Terminal · the Focus banner", () => {
     close() { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
   }
 
-  function chat(asks: () => unknown[], outbox: () => unknown[]) {
+  function chat(asks: () => unknown[], outbox: () => unknown[], project?: string) {
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("WebSocket", FakeWebSocket);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
     const calls = desktop(asks, undefined, outbox);
     const tab = { id: "tab-7", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
-    render(<Terminal tab={tab} back={() => {}} />);
+    render(<Terminal tab={tab} project={project} back={() => {}} />);
     return calls;
   }
 
@@ -358,6 +358,17 @@ describe("Terminal · the Focus banner", () => {
     expect(calls.find((call) => call.url.includes("/markup/questions"))!.url).toBe("/api/v1/tabs/tab-7/markup/questions");
     fireEvent.click(await screen.findByRole("button", { name: "Open" }));
     expect(await screen.findByRole("dialog", { name: "paper.pdf" })).toBeTruthy();
+  });
+
+  it("opens a project file the sidecar sealed for it, in the files viewer", async () => {
+    const row = { token: "tok-file", name: "draft.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000, folder: "tok-dir", place: "docs/paper" };
+    const calls = chat(() => [{ ...ONE, file_name: "draft.pdf", file_row: row }], () => [], "proj-1");
+    expect(await screen.findByText(/The agent asks about draft\.pdf/)).toBeTruthy();
+    expect(screen.queryByText(/in its markup view/)).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("dialog", { name: "draft.pdf" })).toBeTruthy();
+    // Read through the project's files route by its sealed token, never a path.
+    await waitFor(() => expect(calls.some((call) => call.url.includes("/api/v1/projects/proj-1/files/raw") && call.url.includes("tok-file"))).toBe(true));
   });
 
   it("names a file it cannot open without offering to", async () => {
