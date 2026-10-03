@@ -531,8 +531,10 @@ the desktop groundwork the hosted plan's P1 builds on.*
     still reconcile at every spawn (and at a key switch, P3b), so nothing is
     lost, but a refresh reaches other running tabs only at their next spawn,
     and session tracking across `/clear` may not follow. P3b added only the
-    shell tabs' agent shims (`agent_bin::install`). Check each and start
-    what a server needs from `daemon::main`. (P3b, 2026-10-03.)
+    shell tabs' agent shims (`agent_bin::install`, `acceb24a`) and carried
+    the daemon's PATH into server tmux sessions so panes reach them
+    (`a368b3bc`). Check each and start what a server needs from
+    `daemon::main`. (P3b, 2026-10-03.)
 
 2363. **Run P3b live on a real server.** The steps are in
     `docs/hosted_handoff.md` § P3b "Live steps": install (the keeper's

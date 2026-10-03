@@ -2044,3 +2044,176 @@ a real state dir or port, the user's mail store untouched.*
 | `scripts/privacy-check.sh 743dc8bc..HEAD` | green |
 | `git diff --check` | clean |
 | `npm run mobile:bundle` | not needed (no `mobile-web/` change in the fixes) |
+
+## P3b
+
+*Written 2026-10-03 by the P3b agent. Base `b9a0b16a` (P0–P3, #2347, the
+vault decisions, the mail re-key and their reviews). Plan §10 P3b: the
+admin-only Agent credentials panel, direct API-key delivery, and the
+per-user, per-CLI choice between one's own login and the admin's key
+(§5.2, §5.4). Nothing run on a server, nothing as root, no daemon, gateway
+or keeper against a real state dir or port, no real API key anywhere: the
+keeper ran only in tests on temp sockets with an injected uid classifier,
+the daemon side against a fake keeper. Rationale, as built:
+[`context/server_gateway.md`](context/server_gateway.md) § Admin-provided
+API keys.*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `ccadf849` | Gateway crate: `keys_wire.rs` (the keeper's JSON-line protocol, shared by `#[path]`), `keeper.rs` (the key keeper: `/var/lib/<slug>-auth/<cli>/api-key` 0600; `Peers` by `SO_PEERCRED` — the gateway's account sets/removes/lists, never reads; a server user per `helper::check_account` lists and fetches; others refused; audit rows without the key, fetches debounced per user/CLI/10 min; `ask` client; `activation_listener`); `<slug>-gateway keeper` subcommand; units `<slug>-auth-keeper.socket` (`/run/<slug>/auth.sock`, root, `0666`) and `.service` (`<slug>-auth`, `StateDirectory=` 0700, `PrivateNetwork=`, AF_UNIX only); `install` adds the account and enables the socket; gateway `/gateway/v1/agent-keys` (GET, admin) and `/agent-keys/{cli}` (PUT/DELETE, admin, exact origin, own audit rows); `GatewayConfig.keeper_socket`. |
+| `acceb24a` | Daemon: registry column `api_key_env` (Claude `ANTHROPIC_API_KEY`, Gemini `GEMINI_API_KEY`, Vibe `MISTRAL_API_KEY`); `services::server::agent_keys` (choice file, keeper client, `inject_env` in both fence wraps and the Host session, `holds_admin_key`, `choose`); `agent_auth` "never both" (`beside_admin_key`); `LoginStatus` + `api_key_env`/`admin_key_offered`/`uses_admin_key`; command `agent_login_use_admin_key` (Core, `commandClasses.ts` regenerated); `tmux_local::SECRET_ENV` + the three variables; daemon writes the agent shims and answers `--agent-shim` (`mark_server_process`); `backend-stale.sh` watches `keys_wire.rs`. |
+| `b7c5f4b0` | Browser: `ServerAgentKeys.tsx` (admin's Agent credentials cards inside Server settings), the Use the administrator's key / Use my own login switch in Manage CLIs → Agent logins; i18n ×5 (18 keys); UntestedTag `server.agentKeys`, `agents.adminKey`; `ServerAgentKeys.test.tsx` (4 tests). |
+| `787b7c61` | `scripts/server-isolation-test.sh`: the keeper's key dir unreadable to both users, the keeper refuses them `status`/`remove`, lists the offer, refuses `nobody` (needs `nc -U`). |
+| `a34c1974` | Docs: plan P3b/§5.4/Q2, context file, file maps, `DOCUMENTATION.md` § Hosted server: the administrator's agent API keys, TODO #2359–#2363. |
+| `a368b3bc` | Server tmux tabs carry the daemon's PATH (shims first): the tmux server is its own unit's, so panes never reached the shims a typed CLI needs. |
+| the commit after | this section; context/TODO notes on `a368b3bc`. |
+
+### Design (short; the rest is in the context file)
+
+- **Where the key lives.** Exactly §5.4: `<slug>-auth`'s
+  `/var/lib/<slug>-auth/<cli>/api-key`, `0600` in a `0700` state dir;
+  never `settings.json`, the gateway's state or a home. The keeper is
+  `<slug>-gateway keeper` (one binary, no new name for the brand tools),
+  socket-activated, hardened past the gateway.
+- **Who gets it: by uid only.** The gateway (its role check is the admin
+  authority, as for the policy) may set/remove/list but never read a key
+  back; a server user's own uid may fetch. The socket is `0666` in the
+  root-owned `/run/<slug>` (no squatting); fences mount a tmpfs over
+  `/run`, so no fenced agent reaches it. `user-remove` drops the account
+  from `<slug>-users`, which ends its access at once.
+- **The choice is the user's** (`agent-auth/admin-keys.json`), per CLI,
+  written only on a server and (switching on) only with a key on offer.
+  **Never both:** for a chosen CLI the user's own login copies and
+  Claude's `oauthAccount` leave every agent home (the store keeps them);
+  a refreshed own login a tab writes is still adopted, a file holding the
+  admin's key never, nothing when unknowable.
+- **Delivery** is per spawn, uncached, into the CLI's variable, in the
+  same place `copilot_auth` injects its token (both fence wraps → agent
+  tabs and the shell shim; the Host session). tmux ≥ 3.2 carries it from
+  the client's environment, never argv. Withdrawn/unreachable → the spawn
+  fails naming the way back (no silent fall-back to a login the home no
+  longer has). Remote and container agents: nothing (#2361).
+- **Audit:** the keeper's `audit.jsonl` (set/remove/delivered) and the
+  gateway's rows for the admin's requests; never the key. The panel's
+  "used lately by" reads the keeper's delivered rows (30 days).
+
+### Done / deferred
+
+Done: the panel, direct delivery (agent tabs, Host session, typed CLI via
+the shim — on a server now actually reachable, `a368b3bc`), the per-user
+choice, "never both", revocation for new spawns, audit, isolation checks.
+Deferred: **#2359** Codex (key only in its login file); **#2360** verify
+the three Q2 rows live and the CLIs' first-use prompts (Claude asks once
+per home whether to use an environment key — "No" is its recommended
+answer); **#2361** remote/container agents; **#2362** the daemon starts
+none of the window's agent start-up (agent_auth keeper loop, imports,
+SessionStart hook, `agent_turn`) — found here, not P3b's; **#2363** the
+live run. P5 (not touched): the broker with budgets, the shared consumer
+login.
+
+### Live steps on a real server (the exit; after § P3's and § P3 part 2's)
+
+1. Build and install as in § P3 step 1 / § P3 part 2 step 1 (the keeper is
+   in `tabtivity-gateway`). `sudo …/tabtivity-admin-helper --dry-run install
+   …` lists `useradd --system … tabtivity-auth` and `systemctl enable --now
+   tabtivity-auth-keeper.socket`; run it. `systemctl status
+   tabtivity-auth-keeper.socket` active; `ls -l /run/tabtivity/auth.sock`
+   `srw-rw-rw- root root`.
+2. Alice is admin (`user-add alice --admin`), Bob a user; both signed in to
+   Claude on their own logins (§ P3 step 9).
+3. Alice, browser: Settings → Mobile → Server → **Agent credentials**: cards
+   for Claude, Google Gemini, Mistral Vibe (no Codex). Paste a real
+   Anthropic key into Claude → **Save key** → "offered since … by alice";
+   the field empties and never shows the key again. `sudo ls -la
+   /var/lib/tabtivity-auth /var/lib/tabtivity-auth/claude` → `drwx------
+   tabtivity-auth`, `api-key` `-rw-------`. Bob's Server settings show no
+   such panel; `curl` with Bob's cookies to `/gateway/v1/agent-keys` →
+   `403`.
+4. Bob: Settings → Manage CLIs → Agent logins → Claude → **Use the
+   administrator's key** → "runs on the administrator's API key". As Bob:
+   no `.claude/.credentials.json` in any
+   `~/.local/share/tabtivity-server/agent-homes/*/`, and no `oauthAccount`
+   in their `.claude.json`; `agent-auth/claude/` still holds his login.
+5. **The exit:** Bob opens a Claude agent tab (Claude asks once whether to
+   use the key: Yes; `/status` names the API key) while Alice opens one in
+   her account (`/status`: her own subscription). Both answer a prompt.
+   Alice's Agent logins row is unchanged.
+6. No trace on disk or argv: as Bob, `grep -rl "<the key's last 16
+   characters>" ~/.local/share/tabtivity-server ~/tabtivity-server` → none;
+   `sudo grep -l "<same>" /proc/*/cmdline` → none. In Bob's agent, a Bash
+   tool call `printenv ANTHROPIC_API_KEY` shows it (the accepted exposure);
+   in Alice's, nothing. In Bob's fenced tab `ls /run/tabtivity` → nothing.
+7. Bob types `claude` in a shell tab: it runs fenced (`echo
+   $TABTIVITY_AGENT_FENCE` inside → `1`) on the admin's key.
+8. Alice's card now says "used lately by bob". `sudo tail
+   /var/lib/tabtivity-auth/audit.jsonl` → `agent-key-set` (alice),
+   `agent-key-delivered` (bob, claude); `sudo tail
+   /var/lib/tabtivity-gateway/audit.jsonl` → `agent-key-set`; no key in
+   either.
+9. Alice → **Withdraw**: Bob's running tab carries on; Bob's next Claude tab
+   fails with "the administrator no longer offers an API key; switch back
+   …"; his row says "no longer offered". Bob → **Use my own login**: his
+   login is back in the homes, a new tab runs on it.
+10. `sudo scripts/server-isolation-test.sh alice bob` (needs `nc`, package
+    `netcat-openbsd`): the keeper section passes.
+11. Q2 rows (#2360): repeat 3–5 with a Gemini key (`/auth` may need "Gemini
+    API key" once) and a Mistral key for Vibe.
+
+### Gotchas for the reviewer and P4
+
+- `src-gateway/src/keys_wire.rs` joins `wire.rs`/`policy.rs` as a file the
+  daemon compiles by `#[path]` (std + serde only; `backend-stale.sh`
+  watches it).
+- **Fake keys in tests** must not look like a vendor's: the privacy check
+  blocks Anthropic-shaped key literals and a vendor key variable followed
+  by `=` and a value. Use `fake-key-…`.
+- `tmux_local::SECRET_ENV` must list every registry `api_key_env` (a test
+  enforces it); adding a CLI row means adding its variable there.
+- The keeper resolves peers through NSS under `PrivateNetwork=yes`:
+  `files`/`systemd`/sssd's unix socket work, an NSS module that needs the
+  network (LDAP/NIS direct) does not — users would be refused.
+- `agent_auth` reads `admin-keys.json` on every reconcile (pure over the
+  state dir); only `choose` writes it and only on a server.
+- `a368b3bc` changes every server tmux tab: `PATH` now rides `new-session
+  -e` (the same value `build_command` already gave the tmux client). Worth
+  a look that fenced agents still resolve their CLI on a server.
+- The daemon's `--agent-shim` path marks server mode in-process
+  (`mark_server_process`) rather than through the environment, so nothing
+  the shim starts inherits a marker.
+- For P4/P5: new services go into `units.rs`/`names.rs` as the keeper did
+  (`auth_account`, `keeper_unit`, `keeper_state_dir`, `keeper_socket`).
+  P5's broker and auth-keeper are meant to run as the same `<slug>-auth`;
+  `keeper::Peers` is the uid classifier to reuse.
+
+### Needs the user
+
+- **An offered key goes to every server user.** §5.4 has no per-user
+  allowlist, and the user's choice is no access control: any server
+  user's own unfenced process can fetch an offered key from the keeper.
+  Add an admin allowlist per key?
+- **A withdrawn key fails the opted-in user's next spawn** (with a note)
+  instead of falling back to their own login silently. Keep?
+- **Claude's one-time "use this API key?"** (#2360): pre-answer it per home
+  (writes the key's last 20 characters into the home's `.claude.json`), or
+  an `apiKeyHelper`, or leave the prompt?
+- Remote/container agents (#2361) and Codex's key file (#2359).
+
+### Gates (worktree, 2026-10-03, at `a368b3bc` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **700 files, 7089 tests**, all pass |
+| `cargo test --workspace -q --no-fail-fast` | **3607 passed, 1 failed, 3 ignored**: the failure is the known flaky `codex_bind::tests::a_watched_tree_is_walked_only_after_a_change`; the src-tauri lib re-run alone: **3254 passed**, 0 failed, 3 ignored. src-gateway **86** (+8), src-core **99**, integration 169 |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3159 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1) | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (the two shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh b9a0b16a..HEAD` | green (6 commits, 2148 added lines); the pre-commit hook on every commit (two fake-key false positives fixed before committing) |
+| `git diff --check b9a0b16a HEAD` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
+| `npm run backend:stale` | the open window predates the build — expected: branch `hosted` is not what the window runs |

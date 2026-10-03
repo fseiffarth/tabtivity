@@ -348,7 +348,11 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   (`agent_bin::install`, in `main`), and `<slug>-serverd --agent-shim`
   marks server mode for that process only (`mark_server_process`): a tab
   in tmux has tmux's environment, not the unit's, and a marker in the
-  environment would leak into a desktop app started from that tab.
+  environment would leak into a desktop app started from that tab. A
+  server's tmux is its own unit's, so panes inherited systemd's PATH and
+  never saw the shims; in server mode a tmux-wrapped local tab now carries
+  the daemon's effective PATH (shims first) in its session env
+  (`launch_prep`, `a368b3bc`).
 - **Audit.** The keeper's `audit.jsonl` (set, remove, and fetches at most
   once per user and CLI per 10 minutes, so a user cannot flood the log)
   and the gateway's own rows for the admin's requests; no key, no
