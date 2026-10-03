@@ -216,6 +216,14 @@ impl Engine {
     }
 }
 
+/// May a container start here? Always on a desktop; on a hosted server only
+/// while the administrator's `containers` switch (and the user's own) is on
+/// (P5) — checked by every path that creates one, the activation warm-up
+/// as much as a tab's spawn.
+pub fn containers_allowed() -> bool {
+    !crate::services::server::is_server() || crate::services::server::feature_on(crate::services::server::Feature::Containers)
+}
+
 /// Is `cmd` a tab already wrapped into the project container (an engine
 /// client), which no tmux or fence wrap may wrap again?
 pub fn is_engine_cmd(cmd: &str) -> bool {
@@ -757,7 +765,7 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     // A hosted server runs containers only while the administrator allows
     // them (P5); a project switched on before keeps its spec, but no tab
     // starts in it — never silently on the host instead.
-    if crate::services::server::is_server() && !crate::services::server::feature_on(crate::services::server::Feature::Containers) {
+    if !containers_allowed() {
         return Err("Project container: containers are switched off on this server (the administrator's Server settings), or by you. Turn the container toggle off to run this project's tabs without one.".into());
     }
     // A shared project's unreviewed agent instructions stop a container agent
@@ -1055,10 +1063,12 @@ pub fn up(
 }
 
 /// Activation warm-up: `up()` for a project *iff* it is a container-toggled,
-/// local project. `Ok(None)` when the toggle is off / the project is remote —
-/// callers treat that as "nothing to do".
+/// local project. `Ok(None)` when the toggle is off / the project is remote /
+/// a server's containers switch is off — callers treat that as "nothing to
+/// do".
 pub fn up_for_project(project_id: &str) -> Result<Option<String>, String> {
-    if crate::services::remote::remote_target_for(project_id).is_some() {
+    // Switched off on a server: no warm-up either (a tab's spawn says why).
+    if !containers_allowed() || crate::services::remote::remote_target_for(project_id).is_some() {
         return Ok(None);
     }
     let Some(spec) = sandbox_spec_for(project_id) else {
@@ -1880,6 +1890,7 @@ mod tests {
         assert_eq!((Engine::Docker.program(), Engine::Podman.program()), ("docker", "podman"));
         assert!(is_engine_cmd("docker") && is_engine_cmd("podman") && !is_engine_cmd("ssh") && !is_engine_cmd(""));
         assert_eq!(Engine::current(), Engine::Docker, "a desktop (this test process) keeps Docker");
+        assert!(containers_allowed(), "a desktop has no containers switch");
     }
 
     #[test]
