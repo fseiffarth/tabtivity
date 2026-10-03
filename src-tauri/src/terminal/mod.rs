@@ -1726,9 +1726,12 @@ async fn batch_output<F: FnMut(&[u8])>(mut rx: tokio::sync::mpsc::Receiver<Vec<u
     // Start stale by one full window so the very first chunk takes the
     // leading-edge flush too (checked_sub: an Instant can't go below the
     // platform's epoch; the fallback merely delays the first flush one window).
-    let mut last_emit = Instant::now()
+    // tokio's clock throughout, not std's: the deadline below is tokio's, and
+    // mixing the two let a paused-clock test's window end in real time under
+    // load (final review B9). At run time both read the same clock.
+    let mut last_emit = tokio::time::Instant::now()
         .checked_sub(BATCH_INTERVAL)
-        .unwrap_or_else(Instant::now);
+        .unwrap_or_else(tokio::time::Instant::now);
 
     loop {
         if batch.is_empty() {
@@ -1737,7 +1740,7 @@ async fn batch_output<F: FnMut(&[u8])>(mut rx: tokio::sync::mpsc::Receiver<Vec<u
                 None => break, // Channel closed = reader thread exited.
             }
         } else {
-            let deadline = tokio::time::Instant::from_std(last_emit + BATCH_INTERVAL);
+            let deadline = last_emit + BATCH_INTERVAL;
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Some(data)) => batch.extend_from_slice(&data),
                 Ok(None) => break,
@@ -1745,7 +1748,7 @@ async fn batch_output<F: FnMut(&[u8])>(mut rx: tokio::sync::mpsc::Receiver<Vec<u
             }
         }
 
-        let now = Instant::now();
+        let now = tokio::time::Instant::now();
         let should_flush = !batch.is_empty()
             && (batch.len() >= BATCH_MAX_BYTES || now.duration_since(last_emit) >= BATCH_INTERVAL);
 

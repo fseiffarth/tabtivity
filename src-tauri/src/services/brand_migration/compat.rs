@@ -274,6 +274,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_old_send_command_runs_the_current_one_and_is_counted() {
+        /// Run a script this test just wrote. A parallel test that forks
+        /// while the script's write fd is open holds it until its exec, and
+        /// then the exec fails with ETXTBSY (directly, or as `sh`'s exit 126
+        /// for the script's own `exec`): the classic Rust test flake (final
+        /// review B9), so a busy executable is tried again.
+        fn output_retrying(command: impl Fn() -> std::process::Command) -> std::process::Output {
+            for _ in 0..100 {
+                match command().output() {
+                    Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {}
+                    Ok(out) if out.status.code() == Some(126) => {}
+                    other => return other.expect("the alias runs"),
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("the script stayed busy");
+        }
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let bin = dir.path().join("bin");
@@ -292,13 +308,11 @@ mod tests {
             &LEGACY.name(Name::SEND_CLI),
             &send_alias_script(&RENAMED).expect("an alias once renamed"),
         );
-        let out = std::process::Command::new(&alias)
-            .args(["a.pdf", "b c.png"])
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("NEWNAME_PROJECT_DIR", &project)
-            .output()
-            .expect("the alias runs");
+        let out = output_retrying(|| {
+            let mut cmd = std::process::Command::new(&alias);
+            cmd.args(["a.pdf", "b c.png"]).env_clear().env("PATH", "/usr/bin:/bin").env("NEWNAME_PROJECT_DIR", &project);
+            cmd
+        });
         assert_eq!(String::from_utf8_lossy(&out.stdout), "sent:a.pdf b c.png");
         assert!(outbox.join(SEND_ALIAS_MARKER).is_file());
 
@@ -312,13 +326,14 @@ mod tests {
         // A session an older build started has the project dir under the old
         // variable only; outside a project nothing is noted and it still runs.
         let run = |env: &[(&str, &std::path::Path)]| {
-            let out = std::process::Command::new(&alias)
-                .arg("x")
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .envs(env.iter().map(|(k, v)| (k.to_string(), v.to_path_buf())))
-                .output()
-                .expect("the alias runs");
+            let out = output_retrying(|| {
+                let mut cmd = std::process::Command::new(&alias);
+                cmd.arg("x")
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin")
+                    .envs(env.iter().map(|(k, v)| (k.to_string(), v.to_path_buf())));
+                cmd
+            });
             String::from_utf8_lossy(&out.stdout).into_owned()
         };
         assert_eq!(run(&[(&LEGACY.env_name("PROJECT_DIR"), &project)]), "sent:x");
