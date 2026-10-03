@@ -17,6 +17,8 @@
 //! * **Share hub** ([`hub`]): `<slug>-hub`, the owner of every bare hub a
 //!   project is shared through (plan §6.2–§6.6, P4); named-user ACLs
 //!   ([`acl`]) for read access, ref rules for pushes.
+//! * **Shared calendars** ([`calendars`]): `<slug>-calendar`, the calendars
+//!   and to-do lists users opened to each other (plan §6.7, P4c).
 //! * [`units`] renders the systemd units and slices; [`prereq`] checks the
 //!   deployment prerequisites of §8.
 //!
@@ -30,6 +32,8 @@ pub mod wire;
 pub mod keys_wire;
 /// The share hub's protocol, shared with the daemon by `#[path]`.
 pub mod hub_wire;
+/// The shared-calendar service's protocol, shared with the daemon by `#[path]`.
+pub mod cal_wire;
 
 pub mod audit;
 pub mod config;
@@ -57,6 +61,8 @@ pub mod keeper;
 #[cfg(unix)]
 pub mod hub;
 pub mod acl;
+#[cfg(unix)]
+pub mod calendars;
 pub mod sudoers;
 #[cfg(unix)]
 pub mod proxy;

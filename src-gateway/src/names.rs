@@ -182,7 +182,7 @@ pub fn shared_root() -> PathBuf {
 
 /// `/run/<slug>/calendar.sock`: the shared-calendar service (plan §6.7).
 pub fn calendar_socket() -> PathBuf {
-    PathBuf::from("/run").join(SLUG).join("calendar.sock")
+    PathBuf::from("/run").join(SLUG).join(crate::cal_wire::SOCKET_NAME)
 }
 
 /// `/var/lib/<slug>-calendar`: shared calendars and their members (`0700`).

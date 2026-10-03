@@ -11,8 +11,9 @@ fn main() {
             Some("keeper") => std::process::exit(keeper(&args[1..])),
             Some("hub") => std::process::exit(hub(&args[1..])),
             Some("hub-forget") => std::process::exit(hub_forget(&args[1..])),
+            Some("calendar") => std::process::exit(calendar(&args[1..])),
             Some("--help") | Some("-h") => {
-                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).");
+                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
                 return;
             }
             Some(other) => {
@@ -149,6 +150,44 @@ fn hub_forget(args: &[String]) -> i32 {
         }
         Err(error) => {
             eprintln!("{slug}-gateway hub-forget: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway calendar`: the shared-calendar service (hosted plan
+/// §6.7), started by `<slug>-calendar.service` as `<slug>-cal`.
+#[cfg(unix)]
+fn calendar(args: &[String]) -> i32 {
+    use app_gateway::calendars;
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let mut service = calendars::default_service();
+    if let Some(dir) = value("--dir") {
+        service = calendars::Calendars::new(dir.into(), Box::new(app_gateway::hub::SystemHubPeers));
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway calendar: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match app_gateway::keeper::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let path = value("--socket").ok_or("no socket from systemd and no --socket PATH")?;
+                tokio::net::UnixListener::bind(&path).map_err(|e| format!("bind {path}: {e}"))?
+            }
+        };
+        eprintln!("{slug}-gateway calendar: serving {}", service.dir().display());
+        calendars::serve(std::sync::Arc::new(service), listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway calendar: {error}");
             1
         }
     }

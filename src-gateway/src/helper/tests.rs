@@ -272,6 +272,10 @@ fn install_creates_only_what_is_missing_and_never_runs_installers_as_root() {
     assert!(text.contains(&format!("directory /srv/{SLUG}/shared (711, {})", names::hub_account())), "{text}");
     assert!(text.contains(&format!("directory /srv/{SLUG} (755, root)")), "{text}");
     assert!(text.contains(&format!("enable --now {SLUG}-hub.socket")));
+    // The shared-calendar service (plan §6.7): its own account and socket.
+    assert!(text.contains(&format!("--shell /usr/sbin/nologin {}\n", names::calendar_account())), "{text}");
+    assert!(text.contains(&format!("enable --now {SLUG}-calendar.socket")));
+    assert!(!text.contains(&names::calendar_state_dir().display().to_string()), "the helper never makes the calendar store");
     let with_auth = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }.with(&names::auth_account(), 992, &[]);
     assert!(!plan_install(&with_auth, "https://desk.example.ts.net", None).unwrap().to_string().contains(&format!("nologin {}\n", names::auth_account())));
     assert!(plan_install(&accounts, "http://plain.example", None).is_err());

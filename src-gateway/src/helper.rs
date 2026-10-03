@@ -215,6 +215,12 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     if accounts.lookup(&hub).is_none() {
         steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", nologin, &hub]));
     }
+    // The shared-calendar service's account (plan §6.7); its state
+    // directory is systemd's (`StateDirectory=`, 0700).
+    let cal = names::calendar_account();
+    if accounts.lookup(&cal).is_none() {
+        steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", nologin, &cal]));
+    }
     steps.push(Step::OwnedDir { path: names::srv_dir(), mode: 0o755, owner: "root".into() });
     steps.push(Step::OwnedDir { path: names::shared_root(), mode: 0o711, owner: hub });
     // `/proc` hidepid=invisible with an exception group for the system
@@ -235,6 +241,7 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     steps.push(run(&["systemctl", "enable", "--now", &names::gateway_unit()]));
     steps.push(run(&["systemctl", "enable", "--now", &names::keeper_unit("socket")]));
     steps.push(run(&["systemctl", "enable", "--now", &names::hub_unit("socket")]));
+    steps.push(run(&["systemctl", "enable", "--now", &names::calendar_unit("socket")]));
     for unit in names::PROC_EXCEPTION_UNITS {
         steps.push(run(&["systemctl", "try-restart", unit]));
     }
