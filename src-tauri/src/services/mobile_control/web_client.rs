@@ -37,10 +37,13 @@
 //! **Who the caller is.** Every call runs with `Caller::Client(<id>)`, the
 //! connection's id (`web-<n>`), which is also the "window label" the terminal
 //! router keys viewer registrations by; a reconnect within [`RESUME_GRACE`]
-//! (`?resume=<id>`) keeps the id, so a page that lost its link keeps its PTYs
-//! and views. A client gone for longer has its views dropped and the PTYs it
-//! spawned killed (they are tmux attach clients; the sessions live on). The
-//! role is [`Role::Admin`]: P2's one user owns the box; P3 assigns roles.
+//! (`?resume=<id>`) keeps the id — also when the server has not yet noticed
+//! the old link die, in which case the stale connection is superseded — so a
+//! page that lost its link keeps its PTYs and views. A client gone for longer
+//! has its views dropped and the PTYs it spawned killed (they are tmux attach
+//! clients; the sessions live on); a PTY id another page re-spawned meanwhile
+//! has moved to that page and is left alone. The role is [`Role::Admin`]:
+//! P2's one user owns the box; P3 assigns roles.
 //!
 //! **Backpressure.** Each client has a bounded event queue. A full queue drops
 //! the event — terminal output is shed oldest-first the way `pty_bridge` sheds
@@ -361,6 +364,15 @@ struct Parked {
     since: Instant,
 }
 
+/// A connected client: the connection holding its id (a page that comes back
+/// with `?resume=` before the server noticed the old link die takes the id
+/// over, and the stale connection must then neither detach nor park it) and
+/// the PTYs it spawned.
+struct Live {
+    generation: u64,
+    ptys: Arc<Mutex<HashSet<String>>>,
+}
+
 #[derive(Clone)]
 pub struct WebClientState {
     /// `MobileHostSettings.browser_client`: off → every route here is a 404.
@@ -380,7 +392,9 @@ pub struct WebClientState {
     pub port: u16,
     pub content_port: u16,
     parked: Arc<Mutex<HashMap<ClientId, Parked>>>,
+    live: Arc<Mutex<HashMap<ClientId, Live>>>,
     next_client: Arc<AtomicU64>,
+    next_generation: Arc<AtomicU64>,
 }
 
 impl WebClientState {
@@ -404,12 +418,103 @@ impl WebClientState {
             port,
             content_port: content_port_for(port),
             parked: Arc::default(),
+            live: Arc::default(),
             next_client: Arc::new(AtomicU64::new(1)),
+            next_generation: Arc::new(AtomicU64::new(1)),
         }
     }
 
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, WebSessions> {
         self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_parked(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, Parked>> {
+        self.parked.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_live(&self) -> std::sync::MutexGuard<'_, HashMap<ClientId, Live>> {
+        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A new connection's client id and generation. `resume` names the id a
+    /// page held before its link dropped: a parked id is adopted with the
+    /// PTYs it owned; an id the server still counts as connected (its close
+    /// never arrived — the usual case for a link that died, not closed) is
+    /// taken over, and the stale connection, superseded, ends on its own
+    /// (its link is replaced in [`WebEvents`]) without parking anything.
+    fn register(&self, resume: Option<String>) -> (ClientId, u64) {
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        // Lock order everywhere: parked before live.
+        let mut parked = self.lock_parked();
+        let mut live = self.lock_live();
+        let resumed = resume.and_then(|id| {
+            let id = ClientId::new(id);
+            if let Some(p) = parked.remove(&id) {
+                return Some((id, Arc::new(Mutex::new(p.ptys))));
+            }
+            live.get(&id).map(|l| (id.clone(), l.ptys.clone()))
+        });
+        let (client, ptys) = resumed.unwrap_or_else(|| {
+            (ClientId::new(format!("web-{}", self.next_client.fetch_add(1, Ordering::Relaxed))), Arc::default())
+        });
+        live.insert(client.clone(), Live { generation, ptys });
+        (client, generation)
+    }
+
+    /// The connection `generation` of `client` ended. `true` when it still
+    /// held the id: the id is parked with its PTYs for [`RESUME_GRACE`]. `false`
+    /// when a resumed connection took the id over meanwhile — then nothing
+    /// is parked and the caller must not detach the (new) link either.
+    fn release(&self, client: &ClientId, generation: u64) -> bool {
+        let mut parked = self.lock_parked();
+        let mut live = self.lock_live();
+        match live.get(client) {
+            Some(l) if l.generation == generation => {}
+            _ => return false,
+        }
+        let owned = live
+            .remove(client)
+            .map(|l| std::mem::take(&mut *l.ptys.lock().unwrap_or_else(PoisonError::into_inner)))
+            .unwrap_or_default();
+        parked.insert(client.clone(), Parked { ptys: owned, since: Instant::now() });
+        true
+    }
+
+    /// `client` spawned PTY `id`: it owns it now, alone. PTY ids are tab ids,
+    /// the same in every page of the workspace — a reloaded page (a new
+    /// client) or a sibling page re-spawns the ids a parked client still
+    /// lists, and the parked set's reap must not take the live page's PTY.
+    fn note_spawned(&self, client: &ClientId, id: String) {
+        let mut parked = self.lock_parked();
+        let live = self.lock_live();
+        for p in parked.values_mut() {
+            p.ptys.remove(&id);
+        }
+        for (other, l) in live.iter() {
+            if other != client {
+                l.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
+            }
+        }
+        if let Some(l) = live.get(client) {
+            l.ptys.lock().unwrap_or_else(PoisonError::into_inner).insert(id);
+        }
+    }
+
+    fn note_killed(&self, client: &ClientId, id: &str) {
+        if let Some(l) = self.lock_live().get(client) {
+            l.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
+        }
+    }
+
+    /// The PTY ids `client` owns right now (connected or parked).
+    #[cfg(test)]
+    fn owned_ptys(&self, client: &ClientId) -> Vec<String> {
+        let mut out: Vec<String> = match self.lock_live().get(client) {
+            Some(l) => l.ptys.lock().unwrap_or_else(PoisonError::into_inner).iter().cloned().collect(),
+            None => self.lock_parked().get(client).map(|p| p.ptys.iter().cloned().collect()).unwrap_or_default(),
+        };
+        out.sort();
+        out
     }
 
     /// The session cookie's token, if the request carries a live one.
@@ -805,18 +910,14 @@ fn killed_pty_id(cmd: &str, args: &Value) -> Option<String> {
 
 /// One client's connection, from `hello` to the grace timer after it closes.
 async fn serve_socket(socket: WebSocket, state: WebClientState, session: String, resume: Option<String>) {
-    // Resume keeps the id (and with it the terminal router's view keys) when
-    // the page that lost its link is back inside the grace window.
-    let (client, ptys): (ClientId, HashSet<String>) = {
-        let mut parked = state.parked.lock().unwrap_or_else(PoisonError::into_inner);
-        match resume.and_then(|id| parked.remove(&ClientId::new(id.clone())).map(|p| (id, p))) {
-            Some((id, parked)) => (ClientId::new(id), parked.ptys),
-            None => (ClientId::new(format!("web-{}", state.next_client.fetch_add(1, Ordering::Relaxed))), HashSet::new()),
-        }
-    };
-    let ptys = Arc::new(Mutex::new(ptys));
+    // Resume keeps the id (and with it the terminal router's view keys and the
+    // PTYs) when the page that lost its link is back inside the grace window
+    // — or before the server even noticed the old link die.
+    let (client, generation) = state.register(resume);
     let (event_tx, mut event_rx) = mpsc::channel::<Outbound>(EVENT_QUEUE);
     let (answer_tx, mut answer_rx) = mpsc::unbounded_channel::<Answer>();
+    // Replaces a superseded connection's link: its event channel closes and
+    // its loop below ends.
     state.events.attach(&client, event_tx);
     let (mut ws_tx, mut ws_rx) = socket.split();
     let hello = json!({
@@ -827,7 +928,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
     })
     .to_string();
     if ws_tx.send(Message::Text(hello.into())).await.is_err() {
-        state.events.detach(&client);
+        end_connection(&state, &client, generation);
         return;
     }
     let calls = Arc::new(Semaphore::new(MAX_CALLS_IN_FLIGHT));
@@ -849,10 +950,10 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
                                 let Ok(permit) = calls.clone().acquire_owned().await else { break };
                                 let ctx = call_ctx.clone();
                                 let state = state.clone();
-                                let ptys = ptys.clone();
+                                let client = client.clone();
                                 let tx = answer_tx.clone();
                                 tokio::spawn(async move {
-                                    let answer = handle_call(&state, &ctx, &ptys, id, &cmd, args).await;
+                                    let answer = handle_call(&state, &ctx, &client, id, &cmd, args).await;
                                     let _ = tx.send(answer);
                                     drop(permit);
                                 });
@@ -911,18 +1012,22 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
             }
         }
     }
-    let dropped = state.events.detach(&client);
+    end_connection(&state, &client, generation);
+}
+
+/// A connection ended: park what the client owned and reap it unless it is
+/// back in time — or, when a resumed connection already took the id over,
+/// nothing at all (the id, its link, views and PTYs are the new connection's).
+fn end_connection(state: &WebClientState, client: &ClientId, generation: u64) {
+    if !state.release(client, generation) {
+        return;
+    }
+    let dropped = state.events.detach(client);
     if dropped > 0 {
         eprintln!("desktop client {client}: {dropped} events shed on a full queue");
     }
-    // Park what the client owned; reap it unless it is back in time.
-    let owned = std::mem::take(&mut *ptys.lock().unwrap_or_else(PoisonError::into_inner));
-    state
-        .parked
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(client.clone(), Parked { ptys: owned, since: Instant::now() });
     let state = state.clone();
+    let client = client.clone();
     tokio::spawn(async move {
         tokio::time::sleep(RESUME_GRACE).await;
         reap_if_still_parked(&state, &client);
@@ -933,7 +1038,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
 /// it spawned (tmux attach clients; the sessions stay), unless it came back.
 fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
     let parked = {
-        let mut parked = state.parked.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut parked = state.lock_parked();
         match parked.get(client) {
             Some(p) if p.since.elapsed() >= RESUME_GRACE => parked.remove(client),
             _ => None,
@@ -956,7 +1061,7 @@ fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
 }
 
 /// One text call: the transport's own commands first, then the dispatcher.
-async fn handle_call(state: &WebClientState, ctx: &CoreCtx, ptys: &Arc<Mutex<HashSet<String>>>, id: u64, cmd: &str, args: Value) -> Answer {
+async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, id: u64, cmd: &str, args: Value) -> Answer {
     match cmd {
         CAPABILITIES_CMD => {
             let caps = serde_json::to_value(core_dispatch::capabilities(Role::Admin, PROTOCOL)).map_err(|e| Value::String(e.to_string()));
@@ -1002,12 +1107,11 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, ptys: &Arc<Mutex<Has
     let killed = killed_pty_id(cmd, &args);
     let out = core_dispatch::dispatch(ctx, Role::Admin, cmd, args).await;
     if out.is_ok() {
-        let mut owned = ptys.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(pty) = spawned {
-            owned.insert(pty);
+            state.note_spawned(client, pty);
         }
         if let Some(pty) = killed {
-            owned.remove(&pty);
+            state.note_killed(client, &pty);
         }
     }
     Answer::Text(ret_frame(id, &out))
@@ -1397,6 +1501,74 @@ mod tests {
             let url = v["ok"]["url"].as_str().unwrap();
             assert!(url.starts_with(&format!("http://127.0.0.1:{}/content/", content_port_for(port))), "{url}");
         }
-        ws.close(None).await.unwrap();
+
+        // The page's link died without the server noticing (no close frame
+        // arrived); the page is back with `?resume=`: it takes its id over
+        // and the stale connection is ended by the server.
+        let mut request = format!("ws://127.0.0.1:{port}/api/v1/desktop/ws?resume=web-1").into_client_request().unwrap();
+        request.headers_mut().insert("cookie", cookie_pair.parse().unwrap());
+        request.headers_mut().insert("origin", format!("http://127.0.0.1:{port}").parse().unwrap());
+        request.headers_mut().insert("sec-websocket-protocol", crate::brand::DESKTOP_PROTOCOL.parse().unwrap());
+        let (mut ws2, _) = tokio_tungstenite::connect_async(request).await.expect("upgrade");
+        let hello2: Value = match ws2.next().await.unwrap().unwrap() {
+            WsMessage::Text(t) => serde_json::from_str(&t).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(hello2["client"], "web-1", "the resumed page keeps its id");
+        let stale = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("the stale socket ends");
+        assert!(matches!(stale, None | Some(Ok(WsMessage::Close(_))) | Some(Err(_))), "{stale:?}");
+        assert_eq!(state.events.connected(), vec![ClientId::new("web-1")], "one link, the new one");
+        // The new connection is served; the id was not parked by the stale one.
+        ws2.send(WsMessage::Text(json!({ "t": "call", "id": 7, "cmd": CAPABILITIES_CMD }).to_string().into())).await.unwrap();
+        if let WsMessage::Text(t) = ws2.next().await.unwrap().unwrap() {
+            let v: Value = serde_json::from_str(&t).unwrap();
+            assert_eq!(v["id"], 7);
+        }
+        assert!(state.lock_parked().is_empty());
+        ws2.close(None).await.unwrap();
+    }
+
+    #[test]
+    fn pty_ownership_follows_the_spawn_and_a_resume_takes_a_live_id_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let events = Arc::new(WebEvents::default());
+        let ctx = CoreCtx::system(Arc::new(CoreState::new()), events.clone());
+        let state = WebClientState::new(true, ctx, events, &dir.path().join("mobile-control"), 8742, None);
+        let (a, gen_a) = state.register(None);
+        assert_eq!(a.as_str(), "web-1");
+        state.note_spawned(&a, "tab-1".into());
+        state.note_spawned(&a, "tab-2".into());
+        state.note_killed(&a, "tab-2");
+        assert_eq!(state.owned_ptys(&a), ["tab-1"]);
+        // The link ends: parked with its PTY.
+        assert!(state.release(&a, gen_a));
+        assert_eq!(state.owned_ptys(&a), ["tab-1"]);
+        // A reloaded page is a new client that re-spawns the same tab id: the
+        // PTY is its now, and the parked set's reap must not take it.
+        let (b, gen_b) = state.register(None);
+        assert_eq!(b.as_str(), "web-2");
+        state.note_spawned(&b, "tab-1".into());
+        assert!(state.owned_ptys(&a).is_empty());
+        assert_eq!(state.owned_ptys(&b), ["tab-1"]);
+        // The parked page comes back inside the grace window: its id again.
+        let (a2, _) = state.register(Some("web-1".into()));
+        assert_eq!(a2, a);
+        assert!(state.lock_parked().is_empty());
+        // b's link died unnoticed; the page is back with `?resume=` while the
+        // server still counts the old connection live: it takes the id over.
+        let (b2, gen_b2) = state.register(Some("web-2".into()));
+        assert_eq!(b2, b);
+        assert_ne!(gen_b2, gen_b);
+        assert_eq!(state.owned_ptys(&b), ["tab-1"]);
+        // The stale connection ends: superseded, it parks nothing.
+        assert!(!state.release(&b, gen_b));
+        assert!(state.lock_live().contains_key(&b));
+        assert!(state.lock_parked().is_empty());
+        // The connection that holds the id ends: parked, PTY and all.
+        assert!(state.release(&b, gen_b2));
+        assert_eq!(state.owned_ptys(&b), ["tab-1"]);
+        // An id nobody holds is not resumable: a fresh client.
+        let (c, _) = state.register(Some("web-99".into()));
+        assert_eq!(c.as_str(), "web-3");
     }
 }

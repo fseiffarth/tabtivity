@@ -77,6 +77,10 @@ function ensureStarted() {
     for (const h of set) h(ev.payload.data, range);
   }).catch(() => {});
 
+  // The backend's replay of output it buffered while the pane was hidden
+  // (visible-only streaming). A separate event from `terminal-output` on
+  // purpose: replayed output is STALE output written late, and the pane must
+  // route it through its strip-terminal-queries path, never a bare write.
   listen<TerminalOutput>(streamEventName("terminal-replay"), (ev) => {
     const set = replayHandlers.get(ev.payload.id);
     if (!set) return;
@@ -160,11 +164,6 @@ export function sliceBeyond(snapshot: PtyScrollback, seen: number | undefined): 
   // the right cut (`outputAfterScrollback` in TerminalView makes the same one).
   const cut = seen - snapshot.startOffset;
   return { data: snapshot.data.slice(cut), range: { startOffset: seen, endOffset: snapshot.endOffset } };
-
-  // The backend's replay of output it buffered while the pane was hidden
-  // (visible-only streaming). A separate event from `terminal-output` on
-  // purpose: replayed output is STALE output written late, and the pane must
-  // route it through its strip-terminal-queries path, never a bare write.
 }
 
 function subscribe<H>(registry: Map<string, Set<H>>, id: string, handler: H): () => void {
