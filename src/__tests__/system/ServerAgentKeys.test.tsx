@@ -107,6 +107,64 @@ describe("ServerAgentKeys (administrator)", () => {
     );
   });
 
+  it("switches a Claude key to the broker, budgets it and renews a user's token (P5)", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "agent_logins" ? [login("claude", "ANTHROPIC_API_KEY"), login("gemini", "GEMINI_API_KEY")] : null),
+    );
+    const fetch = vi.fn((_url: string, init?: RequestInit) => {
+      if (!init?.method)
+        return answer({
+          keys: [
+            {
+              cli: "claude",
+              updated: 1,
+              by: "alice",
+              users: [],
+              allowed: ["bob", "carol"],
+              broker: true,
+              default_budget: 1000,
+              budgets: { carol: 50 },
+              usage: [{ user: "bob", month: "2026-10", billed: 400, requests: 2 }],
+            },
+            { cli: "gemini", updated: 1, by: "alice", users: [], allowed: [] },
+          ],
+          accounts: ["alice", "bob", "carol"],
+        });
+      return answer({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ServerAgentKeys />);
+    expect(await screen.findByText(/bob: 400 of 1,000 tokens this month/)).toBeTruthy();
+    expect(screen.getByText(/carol: 0 of 50 tokens this month/)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Deliver directly" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Deliver through the key broker" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Monthly budget per user, in tokens (empty: no cap)"), { target: { value: "2_000" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save budget" })[0]);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/gateway/v1/agent-keys/claude/budget", expect.objectContaining({ method: "PUT", body: JSON.stringify({ tokens: 2000 }) })),
+    );
+    fireEvent.change(screen.getByLabelText("carol's monthly budget (empty: the default)"), { target: { value: "lots" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save budget" })[2]);
+    expect(await screen.findByText(/whole number of tokens/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("carol's monthly budget (empty: the default)"), { target: { value: "" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save budget" })[2]);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/gateway/v1/agent-keys/claude/budget",
+        expect.objectContaining({ body: JSON.stringify({ user: "carol", tokens: null }) }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Renew bob's token" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/gateway/v1/agent-keys/claude/renew-token", expect.objectContaining({ method: "POST", body: JSON.stringify({ user: "bob" }) })),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Deliver directly" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/gateway/v1/agent-keys/claude/delivery", expect.objectContaining({ method: "PUT", body: JSON.stringify({ broker: false }) })),
+    );
+  });
+
   it("renders nothing for a non-admin and says so when the keeper is down", async () => {
     vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY")]));
     vi.stubGlobal("fetch", vi.fn(() => answer({ error: "admin" }, 403)));
@@ -150,6 +208,16 @@ describe("Agent logins: the administrator's key per CLI (a user)", () => {
     expect(await screen.findByText(/runs on the administrator's API key/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Use my own login" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_login_use_admin_key", { id: "claude", on: false }));
+  });
+
+  it("shows this month's brokered use beside a key the user runs on (P5)", async () => {
+    vi.mocked(invoke).mockImplementation(() =>
+      Promise.resolve([
+        login("claude", "ANTHROPIC_API_KEY", { admin_key_offered: true, uses_admin_key: true, admin_key_broker: { month: "2026-10", billed: 1234, budget: 5000 } }),
+      ]),
+    );
+    render(<AgentLoginsRows />);
+    expect(await screen.findByText(/key broker: 1,234 of 5,000 tokens this month/)).toBeTruthy();
   });
 
   it("names a withdrawn key and offers nothing on the desktop", async () => {

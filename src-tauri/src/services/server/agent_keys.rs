@@ -42,9 +42,17 @@
 //!   with a message naming the way back. Gemini and Vibe agents already
 //!   running keep the key they started with (§5.4: rotate it at the provider
 //!   to take it from them); a running Claude loses it at its next helper call.
+//! * **Through the broker** (P5, §5.4): when the administrator switched a
+//!   key to broker delivery, the keeper's offer names the broker's loopback
+//!   URL and its `get` answers this user's broker token, never the key. The
+//!   spawn then sets the CLI's base-URL variable (Claude's
+//!   `ANTHROPIC_BASE_URL`, not a secret) and the helper hands out the token
+//!   exactly as it would the key; the broker swaps it for the key, meters it
+//!   and enforces the user's monthly budget. A project container cannot reach
+//!   the host's loopback, so a brokered CLI's container spawn fails.
 //! * **Exposure, as §5.4 accepts it:** every agent of a user who opted in
-//!   can read the key (its environment, or its helper), and direct mode has
-//!   no per-user budget (the broker is P5).
+//!   can read the key (its environment, or its helper) — or, brokered, only
+//!   that user's token, bounded by their budget and revocable on its own.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -52,7 +60,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use super::keys_wire::{Fingerprint, Offer, Reply, Request};
+use super::keys_wire::{Fingerprint, MonthUsage, Offer, Reply, Request};
 use crate::brand;
 
 /// The user's choice, in the login store's root.
@@ -288,15 +296,24 @@ pub fn prepare_spawn_in(state_dir: &Path, socket: &Path, cmd: &str, env: &mut Ha
     if takes_helper(cli) {
         // The helper asks the keeper itself; the spawn only checks the key is
         // still this user's, so a withdrawn key fails here, at the start.
-        return match offered_at(socket) {
-            Ok(offers) if offers.iter().any(|o| o.cli == cli) => {
-                let dir = state_dir.join(HELPER_DIR);
-                crate::services::agent_home::create_private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-                Ok(Some(dir))
-            }
-            Ok(_) => Err(withdrawn_message(cli)),
-            Err(error) => Err(unfetchable_message(cli, &error)),
+        let offer = match offered_at(socket) {
+            Ok(offers) => offers.into_iter().find(|o| o.cli == cli).ok_or_else(|| withdrawn_message(cli))?,
+            Err(error) => return Err(unfetchable_message(cli, &error)),
         };
+        // Brokered: the CLI calls the broker (the helper then answers this
+        // user's token); direct: the provider, as the CLI would on its own.
+        if let Some(var) = super::keys_wire::broker_cli(cli).map(|b| b.base_url_env) {
+            match offer.base_url {
+                Some(url) if is_broker_url(&url, cli) => {
+                    env.insert(var.to_string(), url);
+                }
+                Some(_) => return Err(unfetchable_message(cli, "the broker's address is not a loopback URL")),
+                None => {}
+            }
+        }
+        let dir = state_dir.join(HELPER_DIR);
+        crate::services::agent_home::create_private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        return Ok(Some(dir));
     }
     let Some(var) = crate::commands::agents::api_key_env(cli) else {
         return Err(format!("{}: this CLI takes no API key by environment; switch back to your own login in Settings → Manage CLIs", label(cli)));
@@ -319,6 +336,14 @@ pub fn container_env(cmd: &str, env: &mut HashMap<String, String>) -> Result<(),
 
 pub fn container_env_in(state_dir: &Path, socket: &Path, cmd: &str, env: &mut HashMap<String, String>) -> Result<(), String> {
     let Some(cli) = chosen_cli(state_dir, cmd) else { return Ok(()) };
+    // The broker listens on the host's loopback, which a container's own
+    // network namespace does not reach; its token would be of no use there.
+    if offered_at(socket).is_ok_and(|offers| offers.iter().any(|o| o.cli == cli && o.base_url.is_some())) {
+        return Err(format!(
+            "{}: the administrator's key reaches agents through the server's key broker, which a project container cannot reach; turn the container off for this project, or switch to your own login in Settings → Manage CLIs",
+            label(cli)
+        ));
+    }
     let var = if takes_helper(cli) {
         CONTAINER_KEY_ENV
     } else {
@@ -327,6 +352,38 @@ pub fn container_env_in(state_dir: &Path, socket: &Path, cmd: &str, env: &mut Ha
     let key = fetch_for_spawn(socket, cli)?;
     env.insert(var.to_string(), key.as_str().to_string());
     Ok(())
+}
+
+/// Is `url` the broker's own address for `cli` — loopback, plain HTTP (the
+/// broker never leaves the host), the CLI's path? The keeper's word is
+/// trusted for everything else; this only keeps a wrong value from pointing
+/// a CLI, with a token, anywhere off the machine.
+fn is_broker_url(url: &str, cli: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://127.0.0.1:") else { return false };
+    let Some((port, path)) = rest.split_once('/') else { return false };
+    port.parse::<u16>().is_ok() && path == cli
+}
+
+/// This month's brokered use per CLI this user is offered through the broker
+/// (and runs on it): for Manage CLIs. Empty off a server or when the keeper
+/// cannot be asked.
+pub fn broker_usage(chosen: &BTreeSet<String>) -> HashMap<String, MonthUsage> {
+    if !super::is_server() || chosen.is_empty() {
+        return HashMap::new();
+    }
+    broker_usage_at(&keeper_socket(), chosen)
+}
+
+pub fn broker_usage_at(socket: &Path, chosen: &BTreeSet<String>) -> HashMap<String, MonthUsage> {
+    let Ok(offers) = offered_at(socket) else { return HashMap::new() };
+    offers
+        .into_iter()
+        .filter(|o| o.base_url.is_some() && chosen.contains(&o.cli))
+        .filter_map(|o| {
+            let reply = ask_at(socket, &Request::Usage { cli: o.cli.clone() }).ok()?;
+            reply.usage.filter(|_| reply.ok).map(|usage| (o.cli, usage))
+        })
+        .collect()
 }
 
 /// Every variable that may carry an administrator's key into a spawn: the
@@ -892,6 +949,70 @@ pub(crate) mod tests {
         std::fs::create_dir_all(odd.join(HELPER_DIR)).unwrap();
         std::fs::write(odd.join(HELPER_DIR).join("claude.sock"), b"x").unwrap();
         assert!(serve_helper_in(odd, live, "claude").is_err());
+    }
+
+    /// P5 broker, against the real keeper: a brokered Claude spawn is pointed
+    /// at the broker, its helper hands out this user's token (never the key),
+    /// a container spawn is refused, and the user sees their month.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_brokered_claude_is_pointed_at_the_broker_and_its_helper_hands_out_the_token() {
+        use app_gateway::keeper::{Keeper, Peer, Peers};
+        struct As(Peer);
+        impl Peers for As {
+            fn classify(&self, _: u32) -> Peer {
+                self.0.clone()
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let keys = dir.path().join("keys");
+        std::fs::create_dir(&keys).unwrap();
+        let admin = |request: Request| {
+            let reply = Keeper::new(keys.clone(), Box::new(As(Peer::Gateway))).answer(0, &serde_json::to_vec(&request).unwrap());
+            assert!(reply.ok, "{reply:?}");
+        };
+        admin(Request::Set { cli: "claude".into(), key: KEY.into(), by: "root1".into() });
+        admin(Request::Users { cli: "claude".into(), users: vec!["alice".into()], by: "root1".into() });
+        admin(Request::Delivery { cli: "claude".into(), broker: true, by: "root1".into() });
+        let socket = dir.path().join("auth.sock");
+        let (ready, wait) = std::sync::mpsc::channel();
+        let (path, served) = (socket.clone(), keys.clone());
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async move {
+                let listener = tokio::net::UnixListener::bind(&path).unwrap();
+                ready.send(()).unwrap();
+                let keeper = Keeper::new(served, Box::new(As(Peer::User("alice".into())))).with_broker_port(18739);
+                let _ = app_gateway::keeper::serve(std::sync::Arc::new(keeper), listener).await;
+            });
+        });
+        wait.recv().unwrap();
+        let state = dir.path().join("alice");
+        set_choice_in(&state, "claude", true).unwrap();
+        let mut env = HashMap::new();
+        let bound = prepare_spawn_in(&state, &socket, "claude", &mut env).unwrap();
+        assert_eq!(bound, Some(state.join(HELPER_DIR)));
+        assert_eq!(env.get("ANTHROPIC_BASE_URL").map(String::as_str), Some("http://127.0.0.1:18739/claude"));
+        assert!(env.values().all(|v| v != KEY), "nothing of the key in the spawn");
+        let helper = serve_helper_in(state.clone(), socket.clone(), "claude").unwrap();
+        let token = read_reply(std::os::unix::net::UnixStream::connect(&helper).unwrap()).unwrap().key.unwrap();
+        assert!(token.starts_with("broker-") && token != KEY, "the helper hands out the token");
+        let mut container = HashMap::new();
+        let refused = container_env_in(&state, &socket, "claude", &mut container).unwrap_err();
+        assert!(refused.contains("broker") && container.is_empty(), "{refused}");
+        let usage = broker_usage_at(&socket, &BTreeSet::from(["claude".to_string()]));
+        assert_eq!(usage.get("claude").map(|u| (u.billed, u.month.len())), Some((0, 7)));
+        assert!(broker_usage_at(&socket, &BTreeSet::new()).is_empty(), "only CLIs the user runs on it");
+        // Back to direct delivery: no base URL, the helper hands out the key.
+        admin(Request::Delivery { cli: "claude".into(), broker: false, by: "root1".into() });
+        let mut env = HashMap::new();
+        prepare_spawn_in(&state, &socket, "claude", &mut env).unwrap();
+        assert!(!env.contains_key("ANTHROPIC_BASE_URL"));
+        assert_eq!(read_reply(std::os::unix::net::UnixStream::connect(&helper).unwrap()).unwrap().key.as_deref(), Some(KEY));
+        assert!(is_broker_url("http://127.0.0.1:8739/claude", "claude"));
+        for bad in ["https://127.0.0.1:8739/claude", "http://evil.example:8739/claude", "http://127.0.0.1:8739/gemini", "http://127.0.0.1:x/claude"] {
+            assert!(!is_broker_url(bad, "claude"), "{bad}");
+        }
     }
 
     /// P3b decisions review: the keeper closes a connection over its per-uid

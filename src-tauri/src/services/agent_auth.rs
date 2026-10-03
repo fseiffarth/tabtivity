@@ -572,6 +572,8 @@ pub struct LoginStatus {
     /// This user's agents run on the administrator's key for this CLI, not
     /// on their own login (hosted plan §5.2).
     pub uses_admin_key: bool,
+    /// Through the server's key broker (P5): this month's use and budget.
+    pub admin_key_broker: Option<crate::services::server::keys_wire::MonthUsage>,
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
@@ -608,13 +610,21 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 api_key_env: crate::commands::agents::api_key_env(cli).map(str::to_string),
                 admin_key_offered: offered.contains(cli),
                 uses_admin_key: on_admin_key.contains(cli),
+                admin_key_broker: None,
             }
         })
         .collect()
 }
 
 pub fn status() -> Vec<LoginStatus> {
-    status_with(&storage::state_dir(), &crate::paths::home_dir(), &crate::services::server::agent_keys::offered())
+    use crate::services::server::agent_keys;
+    let state_dir = storage::state_dir();
+    let mut rows = status_with(&state_dir, &crate::paths::home_dir(), &agent_keys::offered());
+    let mut brokered = agent_keys::broker_usage(&agent_keys::chosen_in(&state_dir));
+    for row in &mut rows {
+        row.admin_key_broker = brokered.remove(&row.id);
+    }
+    rows
 }
 
 /// Remove a home's copies of `cli`'s login paths.

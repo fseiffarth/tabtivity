@@ -10,6 +10,11 @@
  * Which CLIs can take one comes from the daemon's own registry
  * (`agent_logins`' `api_key_env`). Rendered inside the administrator's
  * Server settings only; nothing without a gateway.
+ *
+ * P5: a CLI the key broker serves can be switched to broker delivery —
+ * users then get a token of their own, never the key — with a monthly budget
+ * per user (or a default) and this month's use per user; a user's token can
+ * be renewed, which cuts off their running agents without rotating the key.
  */
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -22,6 +27,17 @@ import { Dropdown } from "../common/Dropdown";
 import { SettingsCard } from "../layout/settingsUi";
 
 const KEYS_URL = "/gateway/v1/agent-keys";
+/** The CLIs the key broker serves (`keys_wire::BROKER_CLIS`): only those
+ * whose base-URL override is documented. */
+const BROKER_CLIS = new Set(["claude"]);
+
+interface MonthUsage {
+  user: string;
+  month: string;
+  billed: number;
+  requests: number;
+  budget?: number | null;
+}
 
 interface KeyStatus {
   cli: string;
@@ -30,6 +46,18 @@ interface KeyStatus {
   users: string[];
   /** The accounts allowed to use it; nobody else's agents can. */
   allowed?: string[];
+  /** Delivered through the key broker (P5). */
+  broker?: boolean;
+  default_budget?: number | null;
+  budgets?: Record<string, number>;
+  usage?: MonthUsage[];
+}
+
+/** A budget field's text as a token count; empty → no budget. */
+function parseBudget(text: string): number | null | undefined {
+  const trimmed = text.trim().replace(/[\s_,.']/g, "");
+  if (!trimmed) return null;
+  return /^\d{1,15}$/.test(trimmed) ? Number(trimmed) : undefined;
 }
 
 interface LoginRow {
@@ -47,6 +75,7 @@ export function ServerAgentKeys() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [budgetDrafts, setBudgetDrafts] = useState<Record<string, string>>({});
   const labels = useMemo(() => new Map(AGENT_ITEMS.map((a) => [loginIdForCmd(a.cmd), a.label])), []);
 
   const refresh = () => {
@@ -124,6 +153,43 @@ export function ServerAgentKeys() {
     }
   };
 
+  /** One administrator's change to a key (delivery, budget, token): PUT or
+   * POST `body` to `<cli>/<path>`, then the list again. */
+  const send = async (cli: string, path: string, method: "PUT" | "POST", body: unknown, done: string) => {
+    setBusy(cli);
+    setStatus(null);
+    try {
+      const response = await fetch(`${KEYS_URL}/${encodeURIComponent(cli)}/${path}`, {
+        method,
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const answer = (await response.json().catch(() => ({}))) as { error?: string; detail?: string };
+      if (!response.ok) {
+        setStatus(t("server.settings.error", { error: answer.detail ?? answer.error ?? String(response.status) }));
+        return;
+      }
+      setStatus(done);
+      refresh();
+    } catch (e) {
+      setStatus(t("server.settings.error", { error: String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveBudget = (cli: string, user: string | null, text: string) => {
+    const tokens = parseBudget(text);
+    if (tokens === undefined) {
+      setStatus(t("server.agentKeys.budgetInvalid"));
+      return;
+    }
+    void send(cli, "budget", "PUT", user ? { user, tokens } : { tokens }, t("server.agentKeys.budgetSaved")).then(() =>
+      setBudgetDrafts((d) => ({ ...d, [`${cli}/${user ?? ""}`]: "" })),
+    );
+  };
+
   const byCli = new Map((keys ?? []).map((k) => [k.cli, k]));
   return (
     <>
@@ -192,6 +258,21 @@ export function ServerAgentKeys() {
                       </>
                     )}
                   </div>
+                  {BROKER_CLIS.has(id) && (
+                    <BrokerControls
+                      cli={id}
+                      label={label}
+                      offered={offered}
+                      busy={busy === id}
+                      drafts={budgetDrafts}
+                      setDraft={(slot, value) => setBudgetDrafts((d) => ({ ...d, [slot]: value }))}
+                      onDelivery={(broker) =>
+                        void send(id, "delivery", "PUT", { broker }, t("server.agentKeys.deliverySaved", { label }))
+                      }
+                      onBudget={(user, text) => saveBudget(id, user, text)}
+                      onRenew={(user) => void send(id, "renew-token", "POST", { user }, t("server.agentKeys.tokenRenewed", { user }))}
+                    />
+                  )}
                 </>
               )}
               <PasswordInput
@@ -217,6 +298,86 @@ export function ServerAgentKeys() {
           );
         })}
       {status && <p className="settings-help">{status}</p>}
+    </>
+  );
+}
+
+/** The broker part of one offered key's card (P5): delivery switch,
+ * the default budget, and per allowed user their month and own budget. */
+function BrokerControls(props: {
+  cli: string;
+  label: string;
+  offered: KeyStatus;
+  busy: boolean;
+  drafts: Record<string, string>;
+  setDraft: (slot: string, value: string) => void;
+  onDelivery: (broker: boolean) => void;
+  onBudget: (user: string | null, text: string) => void;
+  onRenew: (user: string) => void;
+}) {
+  const t = useT();
+  const { cli, offered, busy, drafts, setDraft } = props;
+  const usage = new Map((offered.usage ?? []).map((u) => [u.user, u]));
+  const budgetOf = (user: string) => offered.budgets?.[user] ?? offered.default_budget ?? null;
+  const budgetField = (user: string | null, placeholder: string) => {
+    const slot = `${cli}/${user ?? ""}`;
+    return (
+      <div className="settings-link-row">
+        <input
+          className="ollama-pull-input"
+          inputMode="numeric"
+          aria-label={placeholder}
+          placeholder={placeholder}
+          value={drafts[slot] ?? ""}
+          disabled={busy}
+          onChange={(event) => setDraft(slot, event.target.value)}
+        />
+        <button type="button" className="settings-btn sm" disabled={busy} onClick={() => props.onBudget(user, drafts[slot] ?? "")}>
+          {t("server.agentKeys.saveBudget")}
+        </button>
+      </div>
+    );
+  };
+  return (
+    <>
+      <p className="settings-help">
+        <UntestedTag id="server.agentKeys.broker" />{" "}
+        {t(offered.broker ? "server.agentKeys.brokerOn" : "server.agentKeys.brokerOff")}
+      </p>
+      <div className="settings-link-row">
+        <button type="button" className="settings-btn sm" disabled={busy} onClick={() => props.onDelivery(!offered.broker)}>
+          {t(offered.broker ? "server.agentKeys.direct" : "server.agentKeys.broker")}
+        </button>
+      </div>
+      {offered.broker && (
+        <>
+          <p className="settings-help">
+            {offered.default_budget != null
+              ? t("server.agentKeys.defaultBudgetIs", { tokens: offered.default_budget.toLocaleString() })
+              : t("server.agentKeys.defaultBudgetNone")}
+          </p>
+          {budgetField(null, t("server.agentKeys.defaultBudget"))}
+          {(offered.allowed ?? []).map((user) => {
+            const used = usage.get(user);
+            const budget = budgetOf(user);
+            return (
+              <div key={user}>
+                <p className="settings-help">
+                  {budget != null
+                    ? t("server.agentKeys.usage", { user, billed: (used?.billed ?? 0).toLocaleString(), budget: budget.toLocaleString() })
+                    : t("server.agentKeys.usageNoCap", { user, billed: (used?.billed ?? 0).toLocaleString() })}
+                </p>
+                {budgetField(user, t("server.agentKeys.userBudget", { user }))}
+                <div className="settings-link-row">
+                  <button type="button" className="settings-btn sm" disabled={busy} onClick={() => props.onRenew(user)}>
+                    {t("server.agentKeys.renewToken", { user })}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
     </>
   );
 }

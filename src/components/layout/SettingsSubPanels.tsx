@@ -724,6 +724,8 @@ interface AgentLogin {
   admin_key_offered?: boolean;
   /** This user's agents run on that key instead of their own login. */
   uses_admin_key?: boolean;
+  /** Through the server's key broker (P5): this month's use and budget. */
+  admin_key_broker?: { month: string; billed: number; budget?: number | null } | null;
 }
 
 /** The shared agent logins: one row per CLI whose login Tabtivity can share,
@@ -782,6 +784,18 @@ export function AgentLoginsRows() {
             <span>
               {label}
               <span className="settings-help"> · {state}</span>
+              {l.uses_admin_key && l.admin_key_broker && (
+                <span className="settings-help">
+                  {" · "}
+                  <UntestedTag id="server.agentKeys.broker" />{" "}
+                  {l.admin_key_broker.budget != null
+                    ? t("settings.agentLoginBrokerUsage", {
+                        billed: l.admin_key_broker.billed.toLocaleString(),
+                        budget: l.admin_key_broker.budget.toLocaleString(),
+                      })
+                    : t("settings.agentLoginBrokerUsageNoCap", { billed: l.admin_key_broker.billed.toLocaleString() })}
+                </span>
+              )}
               {l.blocked && (
                 <span className="settings-help pill-fence-live-note">
                   {" "}
