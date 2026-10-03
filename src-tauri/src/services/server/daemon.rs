@@ -104,6 +104,7 @@ pub fn main() -> ! {
     // Claude's `apiKeyHelper` asks here for the administrator's key (plan
     // §5.4); a no-op until this user chooses it, answered per call.
     super::agent_keys::serve_helpers();
+    start_agent_work();
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -121,6 +122,40 @@ pub fn main() -> ! {
             std::process::exit(1);
         }
     }
+}
+
+/// The window's agent start-up work, which a server has no window to run
+/// (TODO #2362): in `main`, not [`run`], for the same reason as the shims.
+///
+/// * The hook script every registered agent hook names
+///   (`agent_session::install_session_start_hook`, with the agent hint
+///   script): spawns register the hooks in every agent home, so without it
+///   each SessionStart/Stop/prompt hook ran a missing file and no turn
+///   record or live session id was ever written.
+/// * The login keeper (`agent_auth::start`): homes hold copies, so a token a
+///   CLI refreshed in one scope reaches the other scopes' running tabs only
+///   through it — and it is what strips a login beside the administrator's
+///   key ("never both", plan §5.2) while tabs run.
+/// * The sweeps of ssh ControlMaster sockets and askpass shims a previous
+///   daemon left in the private `/tmp` it shares with the tmux unit (which
+///   outlives it): a stale master turns every later channel into its own
+///   login (a 2FA prompt each on an HPC host), and a shim's tally says a
+///   password path was used. Both keep what a live process still holds.
+/// * The turn relay and the usage samplers start with the listener
+///   (`host::enable_background_relays`).
+///
+/// Not run here, on purpose: the stage wipe and the container/VM orphan
+/// sweeps. The window runs them because its tabs end with it; a server's
+/// tabs live in the tmux unit across daemon restarts, so what a previous
+/// daemon started is not an orphan.
+fn start_agent_work() {
+    if let Err(error) = crate::services::agent_session::install_session_start_hook() {
+        eprintln!("{SLUG}-serverd: agent session hooks: {error}");
+    }
+    crate::services::agent_auth::start();
+    std::thread::spawn(crate::services::ssh_exec::sweep_stale_control_sockets);
+    std::thread::spawn(crate::services::ssh_common::sweep_stale_askpass);
+    host::enable_background_relays();
 }
 
 /// Serve `config` until the admin socket asks for a shutdown.

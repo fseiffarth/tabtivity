@@ -519,19 +519,37 @@ the desktop groundwork the hosted plan's P1 builds on.*
       a_container_agent_gets_the_key_in_its_exec_environment`,
       `sandbox::tests::exec_argv_carries_no_admin_key_value`.
 
-2362. **The daemon runs no `agent_auth` keeper loop, no first-start import, no SessionStart hook.**
-    Found during P3b: the per-user daemon (`server::daemon::main` →
-    `host::run_with`) starts none of what the window's setup starts for
-    agents — `agent_auth::start` (the 5 s reconcile that carries a token
-    refresh to every running tab), `agent_auth`/`agent_global::import_once`,
-    `agent_session::install_session_start_hook`, `agent_turn::start`. Logins
-    still reconcile at every spawn (and at a key switch, P3b), so nothing is
-    lost, but a refresh reaches other running tabs only at their next spawn,
-    and session tracking across `/clear` may not follow. P3b added only the
-    shell tabs' agent shims (`agent_bin::install`, `acceb24a`) and carried
-    the daemon's PATH into server tmux sessions so panes reach them
-    (`a368b3bc`). Check each and start what a server needs from
-    `daemon::main`. (P3b, 2026-10-03.)
+2362. **The daemon runs the window's agent start-up work.** ✅ **Done** (final
+    fix round, 2026-10-04, never live). Found during P3b and widened by the
+    final review (B3): the per-user daemon started none of what the window's
+    setup starts for agents, so every registered hook ran a missing script
+    (no turn records, no live session ids, `--resume` after `/clear` followed
+    the wrong session, the H2 scheduler fell back to its quiet heuristic), no
+    `agent-turn` reached a browser client, a token refresh reached other
+    scopes' running tabs only at their next spawn (and "never both" beside
+    the administrator's key held only at spawns), and stale ssh ControlMaster
+    sockets and askpass shims piled up in the private `/tmp` the daemon shares
+    with the tmux unit. `daemon::start_agent_work` now writes the hook and
+    hint scripts, starts `agent_auth::start` and both ssh sweeps;
+    `host::enable_background_relays` starts `agent_turn::start` for the
+    browser clients (the desktop sidecar too, when Browser access is on) and,
+    on a server only, `usage_stats`/`net_usage`. Deliberately **not** on a
+    server: the stage wipe and the container/VM orphan sweeps (a server's
+    tabs live in the tmux unit across daemon restarts, so nothing a previous
+    daemon started is an orphan), and `agent_auth`/`agent_global::import_once`
+    (they adopt a desktop's own `~/.claude` etc., which a server account does
+    not have). Left: phone push notices for "question"/"done" come from turn
+    edges the desktop window's `MobileBridgeHost` detects; a server has no
+    window, so none are sent — #2384.
+    - [ ] 🖐️ Manual test — on a server, an agent tab's turn state shows in the browser client and survives `/clear`; restart the daemon, `ls /tmp/<slug>-ssh-<uid>` (as the user, in the unit's namespace) holds no dead masters.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
 
 2363. **Run P3b live on a real server.** The steps are in
     `docs/hosted_handoff.md` § P3b "Live steps": install (the keeper's
@@ -821,3 +839,12 @@ the desktop groundwork the hosted plan's P1 builds on.*
     throwaway subscription, record each row in plan Q2, then build the
     §5.4 keeper-refreshed, access-token-only replica for the CLIs that pass,
     with the terms quoted in the panel (Q11). (P5, 2026-10-03.)
+
+2384. **Phone push notices for turn edges on a windowless host.** A
+    "question"/"done" notice to the phone comes from turn edges the desktop
+    window's `MobileBridgeHost` (`mobileAgentTurns.ts`) detects. A server
+    daemon — and a desktop whose window is closed — has the turn relay
+    (`agent_turn`, #2362) but no window, so no notice is sent. Move the edge
+    detection beside the relay in the host process (`mobile_control`), with
+    the window's copy standing down while a window runs. (Final review B3,
+    2026-10-04.)

@@ -4978,7 +4978,42 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     let config = HostConfig::load(&state_dir)?;
     verify_tailscale_serve(&config.origin, config.host.port)?;
     let port = config.host.port;
+    enable_background_relays();
     run_with(config, Listen::Loopback { port }).await
+}
+
+/// Whether [`run_with`] starts this process's background relays (below).
+static BACKGROUND_RELAYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Let [`run_with`] start the process-wide background work a host owns
+/// beside its listener: the agent turn relay (`services::agent_turn`, for
+/// the browser clients — the window's own relay feeds only the window) and,
+/// in the server daemon, the usage samplers the window would run. Called by
+/// the real entry points only (the sidecar's [`run`], the daemon's `main`):
+/// a test serving a host must not watch or write the real state dir.
+pub fn enable_background_relays() {
+    BACKGROUND_RELAYS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Start the relays [`enable_background_relays`] allowed. The turn relay
+/// only reads the hooks' records and emits to this process's own clients, so
+/// the window and the sidecar may each run one; the usage samplers write
+/// `usage_stats`/net-usage files, so only a server (no window) runs them.
+fn start_background_relays(core_ctx: &app_core::CoreCtx, browser_clients: bool, server: bool) {
+    if !BACKGROUND_RELAYS.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if browser_clients || server {
+        crate::services::agent_turn::start(core_ctx.clone());
+    }
+    if server {
+        if let Some(pool) = core_ctx.state.try_get::<crate::services::remote::RemotePoolState>() {
+            crate::services::net_usage::start(pool.clone());
+        }
+        if let Some(watch) = core_ctx.state.try_get::<crate::services::usage_stats::UsageWatchState>() {
+            crate::services::usage_stats::start(watch.clone());
+        }
+    }
 }
 
 /// The host's whole life on `listen`: the sidecar's and the daemon's one body.
@@ -5012,6 +5047,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             auth: auth.clone(),
         });
     }
+    start_background_relays(&core_ctx, web.enabled, matches!(listen, Listen::Unix { .. }));
     if web.enabled {
         match (&web.bundle, web.has_token(), &listen) {
             (Some(bundle), _, Listen::Unix { .. }) => eprintln!("desktop client: serving {} at {}/desktop/ behind the gateway", bundle.display(), config.origin),
