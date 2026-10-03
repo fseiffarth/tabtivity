@@ -11,6 +11,10 @@
  * browser pinned, the panel asks for the recovery code and re-pins only if
  * the code confirms the new key (`mobile-web/src/secretsCore.ts`).
  *
+ * After a device is revoked (user decision 2026-10-03) the panel recommends
+ * a new recovery code until one is made, and shows the mailbox's re-key
+ * under the rotated key while it runs (polled every few seconds).
+ *
  * Talks to the daemon's device-session routes (`/api/v1/secrets/*`) through
  * the gateway; shown by `ServerSettings`, i.e. only behind a gateway.
  */
@@ -20,7 +24,22 @@ import { SettingsCard } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { loadSecrets, repinIdentity, signedAction, unlockWith, type Post } from "../../../mobile-web/src/secretsCore";
 
-interface SecretsState { available: boolean; setUp?: boolean; unlocked?: boolean; recoveryCode?: boolean; identity?: string | null }
+/** The mailbox's re-key after a revoke (`services::mail_rekey`). */
+interface MailRekey { state: "running" | "waiting" | "failed"; done: number; total: number; error?: string }
+
+interface SecretsState {
+  available: boolean;
+  setUp?: boolean;
+  unlocked?: boolean;
+  recoveryCode?: boolean;
+  /** A device was revoked since the recovery code was made. */
+  newCodeRecommended?: boolean;
+  mailRekey?: MailRekey | null;
+  identity?: string | null;
+}
+
+/** How often the panel looks again while the mailbox re-keys. */
+const REKEY_POLL_MS = 3000;
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
@@ -63,6 +82,12 @@ export function ServerSecrets() {
     void pinnedIdentity().then(setPinned);
   }, []);
   useEffect(refresh, [refresh]);
+  const rekeying = state?.mailRekey?.state === "running";
+  useEffect(() => {
+    if (!rekeying) return undefined;
+    const timer = window.setInterval(refresh, REKEY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [rekeying, refresh]);
 
   if (!state?.available) return null;
 
@@ -86,7 +111,9 @@ export function ServerSecrets() {
   };
 
   const signed = async (path: string, action: string) => (await call<{ code: string }>(path, await signedAction(action, post))).code;
+  const newCode = () => void run(async () => setCode(await signed("/api/v1/secrets/recovery-code", "secrets-recovery-code")));
   const untrusted = !!state.identity && !!pinned && state.identity !== pinned;
+  const rekey = state.mailRekey;
 
   return (
     <>
@@ -131,6 +158,31 @@ export function ServerSecrets() {
           </div>
         </SettingsCard>
       )}
+      {state.setUp && state.newCodeRecommended && !code && (
+        <SettingsCard>
+          <p className="settings-help">
+            {t("server.secrets.newCodeHeader")} <UntestedTag id="server.secrets.newCodeAdvice" />
+          </p>
+          <p className="settings-help">{t(state.unlocked ? "server.secrets.newCodeAdvice" : "server.secrets.newCodeAdviceLocked")}</p>
+          {state.unlocked && (
+            <div className="settings-link-row">
+              <button type="button" className="settings-btn sm" disabled={busy} onClick={newCode}>
+                {t("server.secrets.newCodeNow")}
+              </button>
+            </div>
+          )}
+        </SettingsCard>
+      )}
+      {rekey && (
+        <p className="settings-help" role="status" data-testid="server-mail-rekey">
+          {rekey.state === "running"
+            ? t("server.secrets.mailRekey.running", { percent: String(rekey.total > 0 ? Math.floor((rekey.done * 100) / rekey.total) : 0) })
+            : rekey.state === "waiting"
+              ? t("server.secrets.mailRekey.waiting")
+              : t("server.secrets.mailRekey.failed", { error: rekey.error ?? "" })}{" "}
+          <UntestedTag id="server.secrets.mailRekey" />
+        </p>
+      )}
       {code ? (
         <SettingsCard>
           <p className="settings-help">{t("server.secrets.codeIntro")}</p>
@@ -159,12 +211,7 @@ export function ServerSecrets() {
           <p className="settings-help">
             {state.recoveryCode === false ? t("server.secrets.noRecoveryCode") : t("server.secrets.unlocked")}
           </p>
-          <button
-            type="button"
-            className="settings-btn sm"
-            disabled={busy}
-            onClick={() => void run(async () => setCode(await signed("/api/v1/secrets/recovery-code", "secrets-recovery-code")))}
-          >
+          <button type="button" className="settings-btn sm" disabled={busy} onClick={newCode}>
             {t("server.secrets.newCode")}
           </button>
         </div>

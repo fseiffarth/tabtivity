@@ -86,6 +86,48 @@ describe("ServerSecrets", () => {
     expect(await screen.findByText(/no recovery code opens the current key/)).toBeTruthy();
   });
 
+  it("recommends a new recovery code after a revoke until one is made", async () => {
+    let recommended = true;
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/v1/secrets/recovery-code" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({ nonce: "nonce-secrets-recovery-code", signature: "sig" });
+        recommended = false;
+        return answer({ code: "fresh-code" });
+      }
+      return answer({ available: true, setUp: true, unlocked: true, recoveryCode: true, newCodeRecommended: recommended });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ServerSecrets />);
+    expect(await screen.findByText(/A device was disconnected after your recovery code was made/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Make a new recovery code" }));
+    expect((await screen.findByTestId("server-recovery-code")).textContent).toBe("fresh-code");
+    fireEvent.click(screen.getByRole("button", { name: "I have written it down" }));
+    await waitFor(() => expect(screen.queryByText(/A device was disconnected/)).toBeNull());
+  });
+
+  it("says to unlock first when a new code is recommended while locked", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => answer({ available: true, setUp: true, unlocked: false, recoveryCode: true, newCodeRecommended: true })));
+    render(<ServerSecrets />);
+    expect(await screen.findByText(/Once the key is unlocked/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Make a new recovery code" })).toBeNull();
+  });
+
+  it("shows the mailbox re-key after a revoke while it runs", async () => {
+    let rekey: unknown = { state: "running", done: 25, total: 100 };
+    vi.stubGlobal("fetch", vi.fn(() => answer({ available: true, setUp: true, unlocked: true, recoveryCode: true, mailRekey: rekey })));
+    const { unmount } = render(<ServerSecrets />);
+    expect((await screen.findByTestId("server-mail-rekey")).textContent).toMatch(/25 %/);
+    unmount();
+    rekey = { state: "waiting", done: 0, total: 0 };
+    render(<ServerSecrets />);
+    expect((await screen.findByTestId("server-mail-rekey")).textContent).toMatch(/waiting until a paired device unlocks/);
+    cleanup();
+    rekey = null;
+    render(<ServerSecrets />);
+    await screen.findByText(/Unlocked: mail and saved passwords are open/);
+    expect(screen.queryByTestId("server-mail-rekey")).toBeNull();
+  });
+
   it("re-pins a changed identity key only when the recovery code confirms it", async () => {
     vi.mocked(loadSecrets).mockResolvedValue({ deviceId: "dev_1", ecdhPrivateKey: {} as CryptoKey, identity: "OLD" });
     vi.mocked(repinIdentity).mockImplementation(async (code: string) => (code === "right" ? "repinned" : "mismatch"));

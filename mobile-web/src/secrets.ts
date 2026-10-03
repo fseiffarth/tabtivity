@@ -22,11 +22,11 @@
  */
 import { api } from "./api";
 import { loadDevice } from "./authStore";
-import { b64url, context, loadSecrets, repinIdentity, saveSecrets, unlockWith, type Post, type RepinOutcome, type SecretsRecord } from "./secretsCore";
+import { b64url, context, loadSecrets, repinIdentity, saveSecrets, signedAction, unlockWith, type Post, type RepinOutcome, type SecretsRecord } from "./secretsCore";
 
 export { answerUnlock, b64url, checkRepin, context, transportKey, unb64url } from "./secretsCore";
 
-interface SecretsState { available: boolean; setUp?: boolean; unlocked?: boolean; enrolled?: boolean; identity?: string | null }
+interface SecretsState { available: boolean; setUp?: boolean; unlocked?: boolean; enrolled?: boolean; newCodeRecommended?: boolean; identity?: string | null }
 
 /** The phone's POST through its request layer. */
 const post: Post = <T,>(path: string, body: unknown) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
@@ -71,4 +71,23 @@ export async function repinWithCode(code: string): Promise<RepinOutcome> {
   const outcome = await repinIdentity(code, post);
   if (outcome === "repinned") await releaseSecrets();
   return outcome;
+}
+
+/** A device was revoked since the recovery code was made and the key is
+ * open, so a new code can be made now (user decision 2026-10-03): the cue
+ * for the phone's `SecretsNewCodeSheet`. Never throws. */
+export async function newCodeAdvised(): Promise<boolean> {
+  try {
+    const state = await api<SecretsState>("/api/v1/secrets");
+    return !!(state.available && state.setUp && state.unlocked && state.newCodeRecommended);
+  } catch {
+    return false;
+  }
+}
+
+/** Make a new recovery code, signed by this phone's pairing key; the old
+ * code stops working and the advice goes away. Returned once. */
+export async function makeNewRecoveryCode(): Promise<string> {
+  const signed = await signedAction("secrets-recovery-code", post);
+  return (await post<{ code: string }>("/api/v1/secrets/recovery-code", signed)).code;
 }

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AppMark } from "./AppMark";
 import { hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
-import { releaseSecrets } from "./secrets";
+import { newCodeAdvised, releaseSecrets } from "./secrets";
+import { SecretsNewCodeSheet } from "./screens/SecretsNewCodeSheet";
 import { SecretsRepinSheet } from "./screens/SecretsRepinSheet";
 import { connectTrace, getMobileStatus, primeConnection, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
@@ -219,6 +220,9 @@ export function App() {
   /** The server's identity key is not the pinned one: ask for the recovery
    * code (`SecretsRepinSheet`). Once per sign-in; Later closes it. */
   const [secretsUntrusted, setSecretsUntrusted] = useState(false);
+  /** A device was revoked since the recovery code was made: offer a new
+   * code (`SecretsNewCodeSheet`). Once per sign-in; Later closes it. */
+  const [secretsNewCode, setSecretsNewCode] = useState(false);
   /** Why the last attempt failed, shown on the `unavailable` splash. */
   const [unavailable, setUnavailable] = useState<{ reason: UnavailableReason; detail?: string }>({ reason: "unreachable" });
   const authRef = useRef(auth);
@@ -284,9 +288,11 @@ export function App() {
         void refreshPush().catch(() => undefined);
         // A server's secrets key: enrol this device, and release the key
         // if the server rebooted (`secrets.ts`). Off a server, one GET.
-        void releaseSecrets().then((outcome) => {
+        void releaseSecrets().then(async (outcome) => {
           traceConnect(`secrets ${outcome}`);
           setSecretsUntrusted(outcome === "untrusted");
+          // After a release the key is open: a new code can be made now.
+          if (outcome !== "untrusted") setSecretsNewCode(await newCodeAdvised());
         });
       } else if (result.kind === "unpaired") {
         forgetLastPlace();
@@ -567,5 +573,6 @@ export function App() {
             />}
     <TabBar active={tab} open={openSection} />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
+    {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;
 }
