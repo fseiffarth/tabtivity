@@ -434,6 +434,48 @@ mod tests {
         assert_reads(&reopened, &f.mail, &uids);
     }
 
+    /// The mail re-key review's three open gaps, closed (user decision, final
+    /// review): a blob written under the old keys just before the switch and
+    /// named by a row only after the blob stage still opens under its old
+    /// name — under the new key; replies keep finding their message under
+    /// the new key's digest (and no old-key digest is left); the WAL holds
+    /// nothing from before the pass when the old master is retired.
+    #[test]
+    fn late_blobs_reply_links_and_the_wal_follow_the_re_key() {
+        let f = fixture();
+        let late = f.store.put_blob(b"late attachment bytes").unwrap();
+        let sent = MailFolder { id: "acct|Sent".into(), account_id: ACCOUNT.into(), path: "Sent".into(), name: "Sent".into(), kind: MailFolderKind::Sent, unread: 0, total: 0 };
+        f.store.upsert_folder(&sent).unwrap();
+        let mut reply = header(9_001);
+        reply.id = "acct|Sent#9001".into();
+        reply.folder_id = sent.id.clone();
+        reply.rfc_message_id = Some("<reply-9001@example.org>".into());
+        f.store.upsert_header(&reply).unwrap();
+        f.store.set_reply_key(&reply.id, Some("<3@example.com>")).unwrap();
+        assert_eq!(f.store.replies_to(&header(3).id).unwrap().len(), 1);
+        let old_digest = mail_crypt::name_digest(&f.old.name, "reply", "3@example.com");
+
+        let k2 = rotate(&f.mail, &f.k1);
+        f.store.switch_keys(keys_of(&f.mail, &k2)).unwrap();
+        run_to_done(&f.store);
+        let wal = f.mail.join("mail.db-wal");
+        assert!(std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) == 0, "the WAL was truncated before the retire");
+        finish(&f.mail, &k2, &f.store);
+
+        // The late row names the blob by the name `put_blob` gave it.
+        let meta = MailAttachmentMeta { part_id: "9".into(), filename: "late.pdf".into(), mime: "application/pdf".into(), size: 21, inline: false, type_mismatch: None };
+        f.store.put_attachment(&header(3).id, &meta, &late).unwrap();
+        assert_eq!(f.store.get_blob(&late).unwrap(), b"late attachment bytes");
+        let on_disk = std::fs::read(f.mail.join("blobs").join(&late)).unwrap();
+        assert!(mail_crypt::open(&f.old.blob, &mail_crypt::blob_aad(&late), &on_disk).is_err(), "the old master opens it no more");
+
+        assert_eq!(f.store.replies_to(&header(3).id).unwrap().iter().map(|h| h.id.clone()).collect::<Vec<_>>(), [reply.id.clone()]);
+        let conn = rusqlite::Connection::open(f.mail.join("mail.db")).unwrap();
+        let stale: i64 = conn.query_row("SELECT COUNT(*) FROM messages WHERE reply_key = ?1", [old_digest], |r| r.get(0)).unwrap();
+        assert_eq!(stale, 0, "no digest under the retired key is left");
+        assert_old_opens_nothing(&f.mail, &f.k1, &f.old);
+    }
+
     /// The process dies after a number of batches (or inside the blob pass,
     /// or after the last batch before the retire); every time, the store
     /// reopened with the keys on disk reads everything, and the pass resumes

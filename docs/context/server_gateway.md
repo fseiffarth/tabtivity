@@ -265,13 +265,19 @@ keyring. `services::server::vault` wires them:
   why `mail_crypt::rewrap`'s non-device branches stay outside it.
   `GET /api/v1/secrets` carries `mailRekey` (`mail_rekey::status`: the
   thread's word, else `waiting` while `previous` is non-empty). Not
-  vacuumed: freed pages and old WAL frames may keep old-master ciphertext
-  of mail from before the revoke (and of what was written in the moment
-  between the rotation and the switch), which the revoked device could
-  read anyway; a re-sealed row's same-size record is overwritten in place. `reply_key`
-  digests (not recomputable: the `In-Reply-To` is not stored) keep the old
-  key until their message is re-synced — the replies strip of older Sent
-  mail may miss them; they reveal equality only, of mail from before.
+  vacuumed, but (user decision, final review) `secure_delete` is on while
+  re-keying, so pages freed meanwhile are zeroed, and the pass ends with
+  `wal_checkpoint(TRUNCATE)` before the retire, so no WAL frame from before
+  it is left; a re-sealed row's same-size record is overwritten in place.
+  Pages freed *before* the revoke may still hold old-master ciphertext of
+  mail the revoked device could read anyway. `reply_key` digests follow
+  the messages batch: for each message's `Message-ID` the replies' digest
+  under every previous key is replaced by the current key's (through
+  `messages_by_reply_key`); a reply whose original is not in the store
+  keeps its old digest until re-synced (equality only). A blob no row
+  names at its batch (written under the old keys just before the switch,
+  its row still to come) is re-sealed in place under its old name, so the
+  late row finds it and the old master opens it no more.
 - **New recovery code after a revoke** (decision 2026-10-03).
   `wraps.json`'s `new_code_recommended` is set by every revoke that drops
   a wrap (`revoke_where`, `revoke_offline`; not by `drop_wrap`), carried

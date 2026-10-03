@@ -3487,6 +3487,10 @@ impl MailStore {
         if !keys.rekeying() || self.is_ephemeral() {
             return Ok(RekeyStep::Done);
         }
+        // While re-keying, pages SQLite frees (a re-sealed value of another
+        // size, a row deleted since the revoke) are zeroed, not left holding
+        // the old master's ciphertext; `rekey_clear` turns it off again.
+        conn.pragma_update(None, "secure_delete", "ON").map_err(|e| e.to_string())?;
         let target = keys.fingerprint();
         let mut cursor = Self::rekey_cursor(&conn)?.filter(|c| c.target == target).unwrap_or(RekeyCursor { target, ..Default::default() });
         // Old blob files a committed batch no longer names: gone at once
@@ -3497,6 +3501,11 @@ impl MailStore {
             }
         }
         if cursor.stage >= stages {
+            // Before the old master is retired: the WAL's frames from before
+            // the pass are the last copies of its ciphertext in the database
+            // files. A checkpoint that truncates the log drops them (this
+            // connection is the store's only one, so nothing holds it back).
+            Self::truncate_wal(&conn);
             return Ok(RekeyStep::Done);
         }
 
@@ -3549,14 +3558,26 @@ impl MailStore {
                 rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
             };
             let mut updates: Vec<(i64, &'static str, Vec<u8>)> = Vec::new();
+            // `Message-ID`s of the batch's messages: the replies naming one
+            // carry its digest under a previous key in `reply_key`.
+            let mut reply_ids: Vec<String> = Vec::new();
             let (mut seen, mut bytes, mut last) = (0usize, 0usize, cursor.after);
             for (rowid, row_key, account, sealed) in &rows {
                 for (column, value) in sealed {
                     let aad = mail_crypt::field_aad(account, table, column, row_key);
+                    let opened = keys.open_any(|k| &k.field, &aad, value);
+                    if table == "messages" && *column == "rfc_message_id" {
+                        if let Ok((plain, _)) = &opened {
+                            let id = normalize_rfc_id(&String::from_utf8_lossy(plain)).to_string();
+                            if !id.is_empty() {
+                                reply_ids.push(id);
+                            }
+                        }
+                    }
                     // Already under the current master: nothing to do. Under
                     // none (damaged on disk): left alone, it reads as damaged
                     // either way.
-                    if let Ok((plain, false)) = keys.open_any(|k| &k.field, &aad, value) {
+                    if let Ok((plain, false)) = opened {
                         bytes += plain.len();
                         updates.push((*rowid, column, mail_crypt::seal(&keys.field, &aad, &plain)));
                     }
@@ -3571,6 +3592,21 @@ impl MailStore {
             for (rowid, column, value) in &updates {
                 tx.execute(&format!("UPDATE {table} SET {column} = ?1 WHERE rowid = ?2"), params![value, rowid])
                     .map_err(|e| e.to_string())?;
+            }
+            // The replies to these messages: their `reply_key` is a digest
+            // under the key it was written with, so after the switch the
+            // replies strip found none of the earlier ones, and the old-key
+            // digests stayed for the old master to match. Moved to the
+            // current key through the `messages_by_reply_key` index.
+            for id in &reply_ids {
+                let new = mail_crypt::name_digest(&keys.name, "reply", id);
+                for old in keys.previous() {
+                    tx.execute(
+                        "UPDATE messages SET reply_key = ?1 WHERE reply_key = ?2",
+                        params![new, mail_crypt::name_digest(&old.name, "reply", id)],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
             }
             if rows.len() < REKEY_ROWS && seen == rows.len() {
                 cursor.stage += 1;
@@ -3637,6 +3673,8 @@ impl MailStore {
         names.sort();
         let (mut seen, mut bytes) = (0usize, 0usize);
         let mut moves: Vec<(String, String)> = Vec::new();
+        // Each moved file's bytes, for the one that turns out unreferenced.
+        let mut plains: Vec<zeroize::Zeroizing<Vec<u8>>> = Vec::new();
         for name in &names {
             seen += 1;
             cursor.blob_after = name.clone();
@@ -3659,6 +3697,7 @@ impl MailStore {
                     mail_crypt::write_bytes_durable(&new_path, &mail_crypt::seal(&keys.blob, &new_aad, &plain))?;
                 }
                 moves.push((name.clone(), new_id));
+                plains.push(plain);
             }
             if seen >= REKEY_ROWS || bytes >= REKEY_BYTES {
                 break;
@@ -3685,6 +3724,29 @@ impl MailStore {
             for (old, new) in &moves {
                 tx.execute("INSERT OR REPLACE INTO rekey_moves (old, new) VALUES (?1, ?2)", params![old, new]).map_err(|e| e.to_string())?;
             }
+            // A file no row names yet may still be named under its old name:
+            // `put_blob` wrote it under the old keys just before the switch,
+            // and the row naming it lands after this batch. Re-sealed in place
+            // under the current key instead of moved, so that late row finds
+            // a file — one the old master no longer opens. (Its new-name copy
+            // stays for the prune; a `put_blob` of the same bytes may name it.)
+            let referenced: std::collections::HashSet<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT old FROM rekey_moves
+                         WHERE old IN (SELECT raw_blob FROM bodies_cache WHERE raw_blob IS NOT NULL)
+                            OR old IN (SELECT blob FROM attachments)",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+                rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+            };
+            for ((old, _), plain) in moves.iter().zip(&plains) {
+                if !referenced.contains(old) {
+                    mail_crypt::write_bytes_durable(&dir.join(old), &mail_crypt::seal(&keys.blob, &mail_crypt::blob_aad(old), plain))?;
+                }
+            }
+            moves.retain(|(old, _)| referenced.contains(old));
             tx.execute(
                 "UPDATE bodies_cache SET raw_blob = (SELECT new FROM rekey_moves WHERE old = bodies_cache.raw_blob)
                  WHERE raw_blob IN (SELECT old FROM rekey_moves)",
@@ -3735,7 +3797,18 @@ impl MailStore {
     pub fn rekey_clear(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
         conn.execute("DELETE FROM meta WHERE key = ?1", params![META_REKEY]).map_err(|e| e.to_string())?;
+        let _ = conn.pragma_update(None, "secure_delete", "OFF");
         Ok(())
+    }
+
+    /// `PRAGMA wal_checkpoint(TRUNCATE)`, best effort: a busy answer is
+    /// logged (the frames are then dropped by a later checkpoint).
+    fn truncate_wal(conn: &Connection) {
+        match conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get::<_, i64>(0)) {
+            Ok(0) => {}
+            Ok(_) => eprintln!("mail: the re-key's WAL checkpoint was busy; old frames go at a later checkpoint"),
+            Err(e) => eprintln!("mail: the re-key's WAL checkpoint failed: {e}"),
+        }
     }
 
     /// How far the re-key towards the current master is: `(done, total)`,
