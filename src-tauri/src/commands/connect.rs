@@ -36,6 +36,18 @@ pub struct ConnectBridge {
 
 pub type ConnectBridgeState = Arc<ConnectBridge>;
 
+impl ConnectBridge {
+    /// Close every bridged socket: the window that owned them is gone or
+    /// loading afresh. Its frames would otherwise go on arriving for nobody
+    /// (an event to a missing window is no error), and the server would keep
+    /// serving a client that no longer exists.
+    pub fn close_all(&self) {
+        for (_, sender) in self.sockets.lock().unwrap_or_else(PoisonError::into_inner).drain() {
+            let _ = sender.send(Message::Close(None));
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct Frame {
     kind: &'static str,
@@ -86,18 +98,34 @@ pub fn connect_open(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let host = paired.origin.split_once("://").map(|(_, h)| h.to_string()).unwrap_or_default();
+    let bridge = app.state::<ConnectBridgeState>().inner().clone();
+    let reloaded = bridge.clone();
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(&app, WINDOW, WebviewUrl::App("index.html?connect=1".into()))
         .title(format!("{} — {host}", crate::app_name!()))
         .inner_size(1280.0, 820.0)
-        .decorations(true);
+        .decorations(true)
+        // A reload starts the frontend afresh: the sockets the old page
+        // opened are nobody's now.
+        .on_page_load(move |_, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                reloaded.close_all();
+            }
+        });
     // A profile of its own: the server's frontend state (local storage,
     // IndexedDB) never mixes with the standalone workspace's.
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         builder = builder.data_directory(connect::dir_in(&state_dir).join("webview"));
     }
-    builder.build().map_err(|e| format!("open the Connect window: {e}"))?;
+    let window = builder.build().map_err(|e| format!("open the Connect window: {e}"))?;
+    // The crash reporter hooks the windows that exist at setup only.
+    crate::hook_webview_crash_reporter(&window);
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            bridge.close_all();
+        }
+    });
     Ok(())
 }
 
@@ -185,6 +213,20 @@ pub async fn connect_open_download(window: tauri::Window, url: String) -> Result
 
 #[cfg(test)]
 mod tests {
+    /// P5 review: a closed or reloaded Connect window takes its sockets
+    /// with it.
+    #[test]
+    fn closing_the_bridge_closes_every_socket_it_holds() {
+        use tokio_tungstenite::tungstenite::Message;
+        let bridge = super::ConnectBridge::default();
+        let (a, mut a_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (b, mut b_rx) = tokio::sync::mpsc::unbounded_channel();
+        bridge.sockets.lock().unwrap().extend([(1, a), (2, b)]);
+        bridge.close_all();
+        assert!(bridge.sockets.lock().unwrap().is_empty());
+        assert!(matches!(a_rx.try_recv(), Ok(Message::Close(None))) && matches!(b_rx.try_recv(), Ok(Message::Close(None))));
+    }
+
     #[test]
     fn frame_event_names_are_the_windows_own_and_bounded() {
         assert!(super::valid_event("connect-frame-a1B2"));
