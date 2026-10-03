@@ -268,6 +268,11 @@ impl Keeper {
 
     /// Answer one request line from `uid`.
     pub fn answer(&self, uid: u32, line: &[u8]) -> Reply {
+        // Root's one request, before the account rules (root is no server
+        // user and not the gateway): the admin helper's `user-remove`.
+        if let Ok(Request::Forget { user }) = serde_json::from_slice::<Request>(line) {
+            return if uid == 0 { self.forget(&user) } else { Reply::error("refused") };
+        }
         let peer = self.peers.classify(uid);
         if peer == Peer::Refused {
             eprintln!("keeper: refused uid {uid}");
@@ -614,6 +619,41 @@ impl Keeper {
 
     /// Replace the list of users who may fetch `cli`'s key; one audit row
     /// per user added or removed (resource `<cli>/<user>`).
+    /// `user-remove`: `user` leaves every key's list — with their broker
+    /// token, through [`Self::set_users`], so it is audited like the
+    /// administrator's own removal — and their own budget goes too. A removed
+    /// account must not come back to a list it was on (user decision, final
+    /// review).
+    fn forget(&self, user: &str) -> Reply {
+        if !wire::valid_account_name(user) {
+            return Reply::error("invalid");
+        }
+        let Ok(entries) = std::fs::read_dir(&self.dir) else { return Reply::ok() };
+        let mut clis: Vec<String> = entries.flatten().filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|c| keys_wire::valid_cli_id(c)).collect();
+        clis.sort();
+        let mut failed = false;
+        for cli in clis {
+            let Some(meta) = self.meta_of(&cli) else { continue };
+            if meta.users.contains(user) {
+                let rest: Vec<String> = meta.users.iter().filter(|u| u.as_str() != user).cloned().collect();
+                failed |= !self.set_users(&cli, &rest, "root").ok;
+            }
+            let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(mut meta) = self.meta_of(&cli) {
+                if meta.budgets.remove(user).is_some() {
+                    let written = self.write_meta(&cli, &meta);
+                    self.audit.record(Row::new("root", None, VERB_BUDGET, if written.is_ok() { "ok" } else { "failed" }).resource(&format!("{cli}/{user}")));
+                    failed |= written.is_err();
+                }
+            }
+        }
+        if failed {
+            Reply::error("failed")
+        } else {
+            Reply::ok()
+        }
+    }
+
     fn set_users(&self, cli: &str, users: &[String], by: &str) -> Reply {
         let valid = users.len() <= keys_wire::MAX_USERS && users.iter().all(|u| wire::valid_account_name(u));
         let (Some(_), true, true) = (self.cli_dir(cli), valid, wire::valid_account_name(by)) else {
@@ -923,6 +963,30 @@ mod tests {
         let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
         assert!(audit.contains(VERB_DELIVERY) && audit.contains(VERB_BUDGET) && audit.contains(VERB_TOKEN));
         assert!(!audit.contains(&token) && !audit.contains(KEY), "no token or key in the audit");
+    }
+
+    /// `user-remove` takes the account off every key's list, with its broker
+    /// token and budget; only root may ask.
+    #[test]
+    fn a_removed_account_leaves_every_keys_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let gw = keeper(dir.path(), Peer::Gateway);
+        for cli in ["claude", "vibe"] {
+            assert!(ask_line(&gw, Request::Set { cli: cli.into(), key: KEY.into(), by: "admin".into() }).ok);
+            allow(&gw, cli, &["alice", "bob"]);
+        }
+        assert!(ask_line(&gw, Request::Budget { cli: "claude".into(), user: Some("alice".into()), tokens: Some(5), by: "admin".into() }).ok);
+        let forget = serde_json::to_vec(&Request::Forget { user: "alice".into() }).unwrap();
+        assert_eq!(gw.answer(1000, &forget).error.as_deref(), Some("refused"), "only root");
+        assert!(gw.answer(0, &forget).ok);
+        for cli in ["claude", "vibe"] {
+            let meta = meta_in(dir.path(), cli).unwrap();
+            assert_eq!(meta.users.iter().collect::<Vec<_>>(), ["bob"], "{cli}");
+            assert!(meta.budgets.is_empty(), "{cli}");
+        }
+        let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
+        assert!(audit.contains(VERB_USER_REMOVE) && audit.contains("claude/alice") && audit.contains("vibe/alice"));
+        assert!(gw.answer(0, &forget).ok, "again: nothing left to do");
     }
 
     #[test]

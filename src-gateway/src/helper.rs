@@ -307,6 +307,9 @@ pub fn plan_user_remove(db: &Db, user: &str) -> Result<Plan, String> {
             // Their named ACL entries on every shared hub go too: a removed
             // account must not keep reading by path (plan §6.6).
             run(&[&names::gateway_binary().to_string_lossy(), "hub-forget", user]),
+            // …and every administrator's key list they were on, with their
+            // broker tokens and budgets (user decision, final review).
+            run(&[&names::gateway_binary().to_string_lossy(), "keys-forget", user]),
             Step::Audit { user: user.into(), verb: "user-remove".into() },
         ],
     })

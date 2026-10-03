@@ -116,7 +116,12 @@ gateway unit, which runs no fence, is hardened (`ProtectSystem=strict`, …).
 - CLI installs run as `<slug>-cli` into `/opt/<slug>/agents` with
   `<PREFIX>SERVER_CLI_ROOT` set; every daemon refuses install/update/remove
   with the helper command (even the admin's daemon: the root is not theirs).
-- `user-remove` never deletes the account or its home.
+- `user-remove` never deletes the account or its home. It does take the
+  account off every shared project (`hub-forget`) and off every
+  administrator's key list, with its broker tokens and budgets
+  (`<slug>-gateway keys-forget`, the keeper's root-only `forget`; user
+  decision, final review): a removed account re-added later starts with no
+  key access.
 - Every verb is a `Plan` that `--dry-run` prints and the tests snapshot.
 
 ## Policy and feature switches

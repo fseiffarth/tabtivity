@@ -237,6 +237,7 @@ fn verbs_on_existing_users_take_names_from_the_table_only() {
     assert!(!remove.contains("userdel") && !remove.contains("rm "), "the account and its home are never deleted:\n{remove}");
     assert!(remove.contains(&format!("gpasswd --delete alice {}", users())));
     assert!(remove.contains(&format!("{SLUG}-gateway hub-forget alice")), "a removed account's hub ACL entries go too:\n{remove}");
+    assert!(remove.contains(&format!("{SLUG}-gateway keys-forget alice")), "and every admin-key list it was on:\n{remove}");
 }
 
 #[test]

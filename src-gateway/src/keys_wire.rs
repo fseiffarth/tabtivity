@@ -69,6 +69,9 @@ pub enum Request {
     /// This month's brokered use of `cli` and the budget (a server user, of
     /// their own use).
     Usage { cli: String },
+    /// Take `user` off every key's list, with their broker tokens and
+    /// budgets (root only: the admin helper's `user-remove`).
+    Forget { user: String },
 }
 
 /// The port of the key broker (plan §5.4, P5) on loopback: next to the

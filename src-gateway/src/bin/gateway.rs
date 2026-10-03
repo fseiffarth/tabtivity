@@ -12,9 +12,10 @@ fn main() {
             Some("broker") => std::process::exit(broker(&args[1..])),
             Some("hub") => std::process::exit(hub(&args[1..])),
             Some("hub-forget") => std::process::exit(hub_forget(&args[1..])),
+            Some("keys-forget") => std::process::exit(keys_forget(&args[1..])),
             Some("calendar") => std::process::exit(calendar(&args[1..])),
             Some("--help") | Some("-h") => {
-                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway broker [--listen ADDR] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nbroker: calls the provider with an administrator's key for users holding a broker token, within their budgets (as {slug}-auth, on the loopback port systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
+                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway broker [--listen ADDR] [--dir PATH] [--usage-dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway keys-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nbroker: calls the provider with an administrator's key for users holding a broker token, within their budgets (as {slug}-auth, on the loopback port systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\nkeys-forget: as root, takes a removed account off every administrator's key list (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
                 return;
             }
             Some(other) => {
@@ -194,6 +195,36 @@ fn hub_forget(args: &[String]) -> i32 {
         }
         Err(error) => {
             eprintln!("{slug}-gateway hub-forget: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway keys-forget USER`: as root, ask the key keeper to take
+/// USER off every key's list (with their broker tokens and budgets).
+#[cfg(target_os = "linux")]
+fn keys_forget(args: &[String]) -> i32 {
+    use app_gateway::keys_wire::Request;
+    let slug = app_gateway::brand::SLUG;
+    let Some(user) = args.first().filter(|u| app_gateway::wire::valid_account_name(u)) else {
+        eprintln!("{slug}-gateway keys-forget: an account name is needed");
+        return 2;
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway keys-forget: runtime: {error}");
+            return 1;
+        }
+    };
+    match runtime.block_on(app_gateway::keeper::ask(&app_gateway::names::keeper_socket(), &Request::Forget { user: user.clone() })) {
+        Ok(reply) if reply.ok => 0,
+        Ok(reply) => {
+            eprintln!("{slug}-gateway keys-forget: {}", reply.error.unwrap_or_default());
+            1
+        }
+        Err(error) => {
+            eprintln!("{slug}-gateway keys-forget: {error}");
             1
         }
     }
