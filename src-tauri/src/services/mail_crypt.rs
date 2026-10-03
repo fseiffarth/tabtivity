@@ -975,10 +975,17 @@ fn rewrap_with(
 /// over" path, which removes the store in the same breath.
 pub fn forget(dir: &Path) -> Result<(), String> {
     let _ = remote_credentials::set(&remote_credentials::mail_store_key_account(), None);
-    match std::fs::remove_file(key_file_path(dir)) {
+    let remove = || match std::fs::remove_file(key_file_path(dir)) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
+    };
+    // On a server, under the vault's lock: a rotation re-wraps a
+    // device-mode key file beside it and moves it back in, which would
+    // undo a removal made in between.
+    match crate::services::server::vault::vault() {
+        Some(vault) => vault.with_key(|_| remove()),
+        None => remove(),
     }
 }
 
