@@ -28,7 +28,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; working_at?: number; done_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
  * Mark up starts where no agent tab is open; an older desktop flags none. */
 export interface AgentRow { id: string; label: string; modes: ("plan" | "auto")[]; default?: boolean }
@@ -703,6 +703,10 @@ export interface SessionTranscript {
   /** Those earlier turns hold a subagent the answer does not list — what
    * the Subagents index's "+" stands for. */
   agentsEarlier?: boolean;
+  /** How many of the session's subagents are at work right now, the ones
+   * the answer leaves out included; absent at zero and on a CLI whose record
+   * does not say (only Claude's does). */
+  runningAgents?: number;
   /** The session's own usage figures, where its transcript records them
    *  (Codex's rollout does; Claude's does not). */
   usage?: SessionUsage;

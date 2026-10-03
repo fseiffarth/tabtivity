@@ -16,6 +16,18 @@ export function AgentModeMarks({ tab }: { tab: Pick<TabRow, "agent_plan" | "agen
   </>;
 }
 
+/** How many subagents the tab's session has at work right now, as the
+ *  desktop counts them off its transcript. Nothing while none are. */
+export function SubagentCount({ tab }: { tab: Pick<TabRow, "agent_subagents"> }) {
+  const t = useT();
+  const count = tab.agent_subagents ?? 0;
+  if (count <= 0) return null;
+  return <>
+    <small className="agent-subagent-count" title={t("mobile.project.subagentsTitle")}>{count === 1 ? t("mobile.project.subagentsOne") : t("mobile.project.subagents", { count })}</small>
+    {isUntested("mobile.project.subagentCount") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </>;
+}
+
 /** The card class that tints a tab's border for the mode it is in — plan
  *  first, as the rarer and the one that changes nothing. */
 export function agentModeClass(tab: Pick<TabRow, "agent_plan" | "agent_goal">): string {

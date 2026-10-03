@@ -873,6 +873,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
             tab.agent_model = status.model.clone();
             tab.agent_plan = status.plan;
             tab.agent_goal = status.goal;
+            tab.agent_subagents = status.subagents;
             tab.working_at = status.working_at;
             tab.done_at = status.done_at;
             tab.viewer_busy = state.terminal_registry.is_busy(&resolved.tmux_name);
@@ -1008,6 +1009,7 @@ async fn project(
                 tab.agent_model = status.model.clone();
                 tab.agent_plan = status.plan;
                 tab.agent_goal = status.goal;
+                tab.agent_subagents = status.subagents;
                 tab.working_at = status.working_at;
                 tab.done_at = status.done_at;
             } else if let Some(timing) = timings.remove(&resolved.tmux_name) {
@@ -1016,6 +1018,7 @@ async fn project(
                 tab.agent_model = timing.model;
                 tab.agent_plan = timing.plan;
                 tab.agent_goal = timing.goal;
+                tab.agent_subagents = timing.subagents;
                 tab.working_at = timing.working_at;
                 tab.done_at = timing.done_at;
             }

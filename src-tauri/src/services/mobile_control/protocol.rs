@@ -1236,6 +1236,15 @@ pub struct AgentTabStatus {
     pub working_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    /// How many subagents the tab's session has at work right now, as its
+    /// transcript says (`AgentTranscript::running_agents`); zero when none
+    /// or when its CLI does not record it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subagents: u32,
+}
+
+pub(crate) fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// The same two readings for an agent tab with no status to report — one whose
@@ -1259,6 +1268,10 @@ pub struct AgentTabTiming {
     pub working_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    /// The quiet tab's subagents still at work, as `AgentTabStatus::subagents`:
+    /// a background one runs on after the turn is over.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subagents: u32,
 }
 
 /// An agent tab closed in the project, as the desktop remembers it for a
@@ -1713,6 +1726,7 @@ mod tests {
                 goal: false,
                 working_at: Some(1_700_000_000_000),
                 done_at: None,
+                subagents: 2,
             }],
             schedules: vec![AgentTabSchedules {
                 tmux_session: concat!(crate::app_slug!(), "-project-0--agent-123456789").into(),
@@ -1738,6 +1752,7 @@ mod tests {
                 goal: true,
                 working_at: None,
                 done_at: Some(1_700_000_100_000),
+                subagents: 0,
             }],
             closed: vec![ClosedAgentTab {
                 id: "0b8f6c1e-closed".into(),
@@ -1776,6 +1791,9 @@ mod tests {
         assert!(response_json["statuses"][0].get("goal").is_none());
         assert_eq!(response_json["timings"][0]["goal"], true);
         assert!(response_json["timings"][0].get("plan").is_none());
+        // So does the count of subagents at work.
+        assert_eq!(response_json["statuses"][0]["subagents"], 2);
+        assert!(response_json["timings"][0].get("subagents").is_none());
     }
 
     /// A desktop one build ahead of this sidecar must cost the phone the field

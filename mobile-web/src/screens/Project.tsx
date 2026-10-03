@@ -13,7 +13,7 @@ import { PromptsSheet } from "./PromptsSheet";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { AgentStatusMark } from "../components/AgentStatusPill";
-import { AgentModeMarks, agentModeClass } from "../components/AgentModeMarks";
+import { AgentModeMarks, SubagentCount, agentModeClass } from "../components/AgentModeMarks";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles } from "../components/ProjectFiles";
@@ -508,6 +508,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {tab.agent_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={`Change the model of ${tab.label}`} title="Change the model">{tab.agent_model}</button>}
             {tab.agent_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             <AgentModeMarks tab={tab} />
+            <SubagentCount tab={tab} />
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}

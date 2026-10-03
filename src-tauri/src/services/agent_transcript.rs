@@ -177,6 +177,11 @@ pub struct AgentTranscript {
     /// never spawned one is `truncated` without it.
     #[serde(default, rename = "agentsEarlier", skip_serializing_if = "std::ops::Not::not")]
     pub agents_earlier: bool,
+    /// How many of the session's subagents are at work right now (`running`
+    /// entries, the cut-off ones included) — the count the phone's tab cards
+    /// show. Zero on a CLI whose record does not say.
+    #[serde(default, rename = "runningAgents", skip_serializing_if = "is_zero")]
+    pub running_agents: u32,
     /// The session's own usage figures, where its transcript records them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<TranscriptUsage>,
@@ -314,6 +319,41 @@ pub fn agent_session_transcript(
             })
         })
 }
+
+/// How many subagents the Claude tab launched with `launch_id` has at work
+/// right now ([`AgentTranscript::running_agents`]), for the phone's tab cards
+/// when no window answers for them. Only Claude's record says whether a
+/// subagent is still at work, so any other CLI is zero without a read. A
+/// transcript unchanged since the tab's last count is answered from it.
+pub fn running_subagents(cmd: &str, project_id: Option<&str>, launch_id: &str) -> u32 {
+    if cmd != "claude" {
+        return 0;
+    }
+    let counted = || RUNNING_COUNTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let known = counted().get(launch_id).cloned();
+    let read = agent_session_transcript(cmd, project_id, None, None, launch_id, None, known.as_ref().map(|(version, _)| version.as_str()), 1);
+    if read.unchanged {
+        return known.map_or(0, |(_, count)| count);
+    }
+    let mut counted = counted();
+    if counted.len() >= BACKGROUND_SEEN_MAX {
+        counted.clear();
+    }
+    match read.version {
+        Some(version) if read.available => {
+            counted.insert(launch_id.to_string(), (version, read.running_agents));
+        }
+        _ => {
+            counted.remove(launch_id);
+        }
+    }
+    read.running_agents
+}
+
+/// Each tab's last [`running_subagents`] answer: the transcript version it
+/// was counted at, and the count.
+static RUNNING_COUNTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (String, u32)>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// The handle a subagent's entry carries: a digest of the id its CLI gave it,
 /// so no id of the CLI's — a resume handle — crosses to the phone, and a
@@ -653,6 +693,7 @@ fn read_transcript_in(
             insert_by_time(&mut entries, placed, truncated);
         }
     }
+    let running_agents = running_agents(&entries);
     if entries.len() > limit {
         let drop = entries.len() - limit;
         entries.drain(..drop);
@@ -667,11 +708,23 @@ fn read_transcript_in(
         entries,
         truncated,
         agents_earlier,
+        running_agents,
         usage,
         model,
         tokens,
         shells,
     })
+}
+
+/// How many of `entries`' subagents are still at work — counted over every
+/// entry read, before the limit cuts the front off: a background one spawned
+/// many turns ago can still be running.
+pub(crate) fn running_agents(entries: &[TranscriptEntry]) -> u32 {
+    entries.iter().filter(|entry| entry.kind == "agent" && entry.running).count() as u32
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Each transcript's background shells as last answered: the version, their
@@ -928,6 +981,10 @@ fn parse_entries<'a>(
     // (`async_launched`); what it does after is replayed in `agents`.
     let mut returned = std::collections::HashSet::new();
     let mut agents = BackgroundAgents::default();
+    // Where the newest typed prompt's turn starts: a foreground spawn before
+    // it that never got its result (the CLI was killed mid-call) is not at
+    // work, as a shell from an earlier turn is not.
+    let mut turn_start = 0;
     // Questions asked, by call id, until their result comes: the exchange is
     // one entry, placed where the result lands — the agent waits on it, so
     // nothing of its own comes in between.
@@ -970,6 +1027,7 @@ fn parse_entries<'a>(
                 Record::Turn(role, raw) => {
                     if typed && role == "prompt" {
                         shells.clear();
+                        turn_start = entries.len();
                     }
                     entries.extend(transcript_entry(role, &raw, at.clone()));
                 }
@@ -994,7 +1052,7 @@ fn parse_entries<'a>(
     for (index, call) in &calls {
         let background = agents.at_work.get(call).copied();
         let finished = background.map_or_else(|| returned.contains(call), |at_work| !at_work);
-        entries[*index].running = !finished;
+        entries[*index].running = !finished && (background.is_some() || *index >= turn_start);
         entries[*index].finished = finished;
         entries[*index].background = background.is_some();
     }
@@ -1899,6 +1957,34 @@ mod tests {
         assert_eq!(state(&[spawn, launched, &done, message]), (true, false));
         let again = note("<usage>2</usage>\\n");
         assert_eq!(state(&[spawn, launched, &done, message, &again]), (false, true));
+    }
+
+    #[test]
+    fn subagents_at_work_are_counted_past_the_limit_and_a_dead_turns_spawn_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("s.jsonl");
+        let prompt = |text: &str| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}\n");
+        let spawn = |id: &str, background: bool| format!("{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"{id}\",\"name\":\"Agent\",\"input\":{{\"description\":\"scout {id}\",\"run_in_background\":{background}}}}}]}}}}\n");
+        let launched = |id: &str| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"{id}\",\"content\":\"launched\"}}]}},\"toolUseResult\":{{\"isAsync\":true,\"status\":\"async_launched\",\"agentId\":\"a1\"}}}}\n");
+        let answer = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n".to_string();
+        let read = |parts: &[String], limit: usize| {
+            std::fs::write(&main, parts.concat()).unwrap();
+            read_transcript_in(&main, TranscriptKind::Claude, &Spawns::None, false, None, limit).unwrap()
+        };
+        // Two foreground spawns of this turn and a background one: three at work.
+        let busy = read(&[prompt("go"), spawn("toolu_B", true), launched("toolu_B"), spawn("toolu_F", false), spawn("toolu_G", false)], DEFAULT_LIMIT);
+        assert_eq!(busy.running_agents, 3);
+        assert_eq!(serde_json::to_value(&busy).unwrap()["runningAgents"], 3);
+        // The background one still counts once the limit cuts it off.
+        let cut = read(&[prompt("go"), spawn("toolu_B", true), launched("toolu_B"), prompt("next"), answer.clone()], 1);
+        assert!(cut.entries.iter().all(|e| e.kind != "agent"));
+        assert_eq!(cut.running_agents, 1);
+        // A foreground spawn whose CLI died before its result is not at work
+        // once a new prompt has started a turn — nor said to have finished.
+        let dead = read(&[prompt("go"), spawn("toolu_F", false), prompt("again"), answer.clone()], DEFAULT_LIMIT);
+        assert_eq!(dead.running_agents, 0);
+        assert!(!dead.entries[1].running && !dead.entries[1].finished);
+        assert!(serde_json::to_value(&dead).unwrap().get("runningAgents").is_none());
     }
 
     #[test]

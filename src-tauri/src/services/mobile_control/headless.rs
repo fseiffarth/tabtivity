@@ -429,7 +429,8 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
 /// `Catalog`'s per-tab agent readings for `tabs` with no window: a turn in
 /// flight is `working` (a decision pending, `question`), a finished one
 /// `done`; an idle or unrecorded tab gets a timing row when its transcript
-/// names a model; every agent tab with a transcript gets its newest prompts.
+/// names a model or has subagents at work; every agent tab with a transcript
+/// gets its newest prompts.
 pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -> TurnReadings {
     let mut readings = TurnReadings::default();
     for tab in tabs.iter().filter(|t| t.public.kind == "agent") {
@@ -437,6 +438,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
             continue;
         };
         let model = agent_session::agent_session_model(&tab.cmd, Some(project_id), uid);
+        let subagents = agent_transcript::running_subagents(&tab.cmd, Some(project_id), uid);
         let record = turn_record(state_dir, project_id, uid);
         let ms = |at: Option<u64>| at.map(|secs| secs.saturating_mul(1000));
         match record {
@@ -450,6 +452,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                     goal: false,
                     working_at: ms(at),
                     done_at: None,
+                    subagents,
                 });
             }
             // A finished turn the phone already watched (`mark_seen`, H3) is a
@@ -462,6 +465,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                     goal: false,
                     working_at: None,
                     done_at: ms(at),
+                    subagents,
                 });
             }
             Some((TurnState::Done, at)) => readings.statuses.push(AgentTabStatus {
@@ -472,9 +476,10 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                 goal: false,
                 working_at: None,
                 done_at: ms(at),
+                subagents,
             }),
             _ => {
-                if model.is_some() {
+                if model.is_some() || subagents > 0 {
                     readings.timings.push(AgentTabTiming {
                         tmux_session: tab.tmux_name.clone(),
                         model: model.clone(),
@@ -482,6 +487,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                         goal: false,
                         working_at: None,
                         done_at: None,
+                        subagents,
                     });
                 }
             }
@@ -1575,6 +1581,7 @@ mod tests {
                 agent_model: None,
                 agent_plan: false,
                 agent_goal: false,
+                agent_subagents: 0,
                 working_at: None,
                 done_at: None,
                 schedules: None,

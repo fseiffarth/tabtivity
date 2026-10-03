@@ -69,6 +69,7 @@ import { finishAlert } from "../../lib/alertDone";
 import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
 import { agentTurnEdges, type AgentTurnEdge, type MobileAgentState } from "../../lib/mobileAgentTurns";
 import { freshGitDot, gitDotRows, type MobileGitDot, type MobileGitStateRow } from "../../lib/mobileGitDots";
+import { mobileSubagentCount } from "../../lib/mobileSubagents";
 import {
   desktopTimeZone,
   localOccurrenceKey,
@@ -86,10 +87,11 @@ interface AgentInfo { id: string; bin: string; installed: boolean }
 /** `default`: the agent `default_agent_cmd` names, what the phone's Mark up
  * starts from a screen with no agent tab; sent only on that one row. */
 interface CatalogAgent { id: string; label: string; modes: string[]; default?: boolean }
-interface AgentTabStatus { tmux_session: string; status: "working" | "question" | "interrupted" | "done"; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number }
+/** `subagents`: how many the session has at work, sent only when some are. */
+interface AgentTabStatus { tmux_session: string; status: "working" | "question" | "interrupted" | "done"; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number; subagents?: number }
 /** The same readings for an agent tab with no status: a finished turn stays
  * sorted among the finished ones on the phone after it has been read. */
-interface AgentTabTiming { tmux_session: string; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number }
+interface AgentTabTiming { tmux_session: string; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number; subagents?: number }
 interface AgentTabPrompt { text: string; at?: string }
 /** `upcoming` carries the soonest scheduled messages, `at` desktop-local
  * `YYYY-MM-DDTHH:MM` like `next`. */
@@ -564,6 +566,8 @@ function projectAgentStatuses(projectId: string): AgentTabStatus[] {
     const model = mobileModelTag(projectId, tab);
     if (model) row.model = model;
     withModeMarks(row, ptyId);
+    const subagents = mobileSubagentCount(projectId, tab);
+    if (subagents) row.subagents = subagents;
     const workingAt = status === "working" ? Date.now() : activity.lastWorkingByTab[ptyId];
     if (workingAt !== undefined) row.working_at = workingAt;
     const doneAt = activity.lastDoneByTab[ptyId];
@@ -586,11 +590,14 @@ function projectAgentTimings(projectId: string): AgentTabTiming[] {
     const model = mobileModelTag(projectId, tab);
     if (model) row.model = model;
     withModeMarks(row, ptyId);
+    // A background subagent works on after the turn is over.
+    const subagents = mobileSubagentCount(projectId, tab);
+    if (subagents) row.subagents = subagents;
     const workingAt = activity.lastWorkingByTab[ptyId];
     if (workingAt !== undefined) row.working_at = workingAt;
     const doneAt = activity.lastDoneByTab[ptyId];
     if (doneAt !== undefined) row.done_at = doneAt;
-    return row.model === undefined && !row.plan && !row.goal && row.working_at === undefined && row.done_at === undefined ? [] : [row];
+    return row.model === undefined && !row.plan && !row.goal && !row.subagents && row.working_at === undefined && row.done_at === undefined ? [] : [row];
   });
 }
 

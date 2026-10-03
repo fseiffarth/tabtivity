@@ -210,6 +210,11 @@ pub struct PublicTab {
     pub agent_plan: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub agent_goal: bool,
+    /// How many subagents the agent tab's session has at work right now, as
+    /// the desktop (or, with no window, the transcript) reads it — the count
+    /// the phone's tab cards wear. Omitted at zero.
+    #[serde(skip_serializing_if = "super::protocol::is_zero")]
+    pub agent_subagents: u32,
     /// Desktop wall clock (ms) of the tab's last working output and of its last
     /// finished turn — the two keys the phone's Agents list can sort by. The
     /// desktop's numbers travel untouched: they are compared with each other,
@@ -944,6 +949,7 @@ fn resolve_scope(
             agent_model: None,
             agent_plan: false,
             agent_goal: false,
+            agent_subagents: 0,
             working_at: None,
             done_at: None,
             schedules: None,

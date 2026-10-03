@@ -208,6 +208,9 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .agent-mode-mark { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 16%, transparent); font-size:.66rem; font-weight:800; letter-spacing:.05em; line-height:1; }
 .agent-mode-mark.plan { color:#b3a8ff; }
 .agent-mode-mark.goal { color:#6fd6e0; }
+/* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
+   lower-case words rather than a tag — it is a count, not a mode. */
+.agent-subagent-count { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 7px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 14%, transparent); color:#a99cff; font-size:.7rem; font-weight:700; line-height:1; white-space:nowrap; }
 .card.in-plan,.project-screen .tab-card.in-plan { border-color:#7b6ee0; }
 .card.in-goal,.project-screen .tab-card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.tab-card.in-plan.has-tab-color,.card.in-goal.has-tab-color,.tab-card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
