@@ -169,6 +169,11 @@ async fn pairing_routes_by_the_code_prefix_and_records_the_device() {
     let (status, _, body) = raw(f.addr, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&bad)).await;
     assert_eq!(status, 400);
     assert!(body.contains("\"got\":\"00000000\""), "the prefix is stripped: {body}");
+    // P5 review: an identity provider's token never rides along with an
+    // invite code — only the OIDC callback hands one to a daemon.
+    let smuggled = json!({ "code": "alice:00000000", "device_name": "L", "public_key": "k", "oidc_token": "a.b.c" }).to_string();
+    let (status, _, body) = raw(f.addr, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&smuggled)).await;
+    assert_eq!(status, 400, "the token was dropped before the daemon: {body}");
     // Unknown account and a code with no prefix answer like a wrong code.
     for code in ["zed:12345678", "12345678"] {
         let body = json!({ "code": code, "device_name": "L", "public_key": "k" }).to_string();

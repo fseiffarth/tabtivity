@@ -91,10 +91,10 @@ pub struct Provider {
     pub token_endpoint: String,
 }
 
-/// An endpoint the gateway sends a browser to or calls: https, or (tests)
-/// plain http on loopback.
+/// An endpoint the gateway sends a browser to or calls: https, or (tests
+/// only, like [`oidc_wire::valid_issuer`]) plain http on loopback.
 fn acceptable_endpoint(url: &str) -> bool {
-    url.starts_with("https://") || url.starts_with("http://127.0.0.1:")
+    url.starts_with("https://") || (cfg!(test) && url.starts_with("http://127.0.0.1:"))
 }
 
 #[derive(Debug, Clone)]

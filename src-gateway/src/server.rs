@@ -338,6 +338,10 @@ async fn pair(State(gw): State<Shared>, Extension(source): Extension<Source>, he
     }
     let device_name = fields.get("device_name").and_then(Value::as_str).unwrap_or_default().to_string();
     fields.insert("code".into(), Value::String(code));
+    // An identity provider's token reaches a daemon only from the OIDC
+    // callback, after its state, binder cookie and code exchange — never
+    // riding along with an invite code.
+    fields.remove("oidc_token");
     let request = json_request(&gw, "/api/v1/pair", serde_json::to_vec(&fields).unwrap_or_default(), &headers);
     let (status, response_headers, response_body) = buffered(forward(&gw, &account, None, request).await).await;
     if status != StatusCode::CREATED {
