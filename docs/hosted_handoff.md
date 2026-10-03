@@ -2477,3 +2477,108 @@ classifier). Rationale, as built: [`context/server_gateway.md`](context/server_g
 - Open from § P3b review and unchanged: #2362 (daemon start-up), #2364
   (Debian `/etc/profile` PATH), finding 5 (env of panes after switch-back,
   now only Gemini/Vibe), finding 9 (dev route).
+
+## P3b decisions review
+
+*Written 2026-10-03 by the P3b-decisions reviewer. Range
+`00f1f3fc..9129792b` read in full (keeper, wire, gateway endpoint, daemon
+`agent_keys`, fence bind, `agent_auth` hook-in, `sandbox` container path,
+both binaries' `--key-helper` verb, the panel, i18n, UntestedTags,
+docs/TODO). Nothing run live, nothing as root, no keeper/daemon/gateway
+against real state, ports or `/run`, no real key, no container.*
+
+### What was checked
+
+- **Helper socket through the fence.** `<state>/key-helper/claude.sock`
+  is `0600` in a `0700` dir and the daemon also refuses any peer whose
+  `SO_PEERCRED` uid is not its own. Every fence masks the whole state dir
+  (`private_state_paths` starts with it); `prepare_spawn` returns the dir
+  only for a helper CLI the user chose *and* the keeper still offers, and
+  only `wrap_pty_options_bwrap` binds it (`--ro-bind`, after the mask) —
+  agent tabs and the shell shim; `one_shot_command` (push preflight) and
+  every other CLI's fence get nothing, nor does a container (state dir not
+  mounted). Read-only: the fenced Claude can connect (unix `connect` needs
+  no writable mount) but cannot unlink or replace the socket. A pathname
+  socket, so the Landlock abstract-socket scope does not apply. So the
+  reachable set is: anything inside a chosen Claude's fence (its tools,
+  the project's build scripts it runs) and the user's own unfenced
+  processes (who can ask the keeper directly anyway) — the same set that
+  could read `ANTHROPIC_API_KEY` under the P3b env design. Other projects'
+  fenced agents get it only if they are Claude, which the user chose for
+  every project.
+- **`.claude/settings.json`.** Written only through `HomeFile` (no symlink
+  following, atomic) in Tabtivity's agent homes from `agent_auth`'s place
+  step; a merge (other keys kept), removal only of a value that is ours
+  (`--key-helper` and `<PREFIX>ADMIN_KEY_SECRET` both in it); off with no
+  file → nothing created. `agent_global` merges the same file by fragment
+  and unmerges only its own values, so neither undoes the other. An agent
+  rewriting the entry is harmless (it is reset at the next spawn and only
+  a chosen Claude's fence reaches the socket). Found: findings 1, 2.
+- **Containers.** Only `docker exec`'s client environment holds the value;
+  the argv names the variable (`is_secret_exec_env` covers `key_envs()`,
+  tested); a container tab (`cmd == "docker"`) skips the tmux wrap, so no
+  launcher script or `-e NAME=value`; nothing in the create-time config,
+  image, volume or `docker inspect`; `SECRET` in the name stops a legacy
+  twin (tested). Residual as documented (the exec'd agent's environment
+  in the container, root on the host).
+- **Keeper.** Per-uid cap from `SO_PEERCRED` at accept (the request cannot
+  claim a uid); `UidSlot`/permit dropped on every path (task end, timeout
+  drop, panic unwind, cap refusal). List stored in `meta.json` via
+  `write_atomic` `0600` under the write lock; KEY written before META and
+  `meta_of` requires the key file, so a crash between them never carries
+  a withdrawn key's list over (a new key still starts empty). Fingerprints
+  (SHA-256 + length; fine for high-entropy keys) in `previous.json`
+  `0600`, deduplicated, capped at 32. Found: findings 3, 5, 6.
+- **Running Claude after withdraw/list removal.** Claude caches the
+  helper's answer (5 min by default, per its docs) and re-runs it; every
+  call goes daemon → keeper `get`, so the next one after a withdraw, list
+  removal *or the user's own switch-back* answers `no-key`/`not-chosen`:
+  exit 1, one stderr line naming the way back, nothing on stdout. No loop
+  of its own; Claude's retries are bounded by the helper cap (finding 4)
+  and the keeper's per-uid cap; `no-key` is not logged or audited.
+- Desktop: unchanged apart from `sync_helper_settings` reading each
+  home's `.claude/settings.json` once per place step (returns at once
+  without our marker) and the inert `--key-helper` verb. i18n: 6 new keys
+  and 3 changed, in all 5 languages. UntestedTags `server.agentKeys.users`
+  and `agents.adminKey.helper` registered and rendered. TODO #2359–#2361,
+  #2365 accurate.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **medium** (data loss) | `sync_helper_settings` parsed `.claude/settings.json` with `unwrap_or({})`: a file that did not parse (hand-edited, or read half-written while Claude saved it) was rewritten as `{"apiKeyHelper": …}`, dropping every other setting (model, permissions, Tabtivity's own hooks). | fixed `42ef3e18`: left alone (as `agent_global` does); an empty file counts as fresh; test `an_unreadable_settings_file_or_an_unknown_binary_leaves_the_setting_alone` |
+| 2 | low–medium | The helper names `current_exe()`, which after a package update replaced the running daemon reads `<path> (deleted)`: the next place step rewrote every home's helper to that non-existent path, failing every Claude helper call until the daemon restarted. With no exe at all while on, the helper was *removed*. | fixed `42ef3e18`: the path without ` (deleted)` (the new binary answers the same verb); unknown → setting left as is; test `a_replaced_binary_is_named_by_its_path` |
+| 3 | low | The keeper closes a connection over its per-uid cap (4) unanswered, and the daemon failed at once — a burst of one user's own traffic (several tabs opening: reconcile fingerprints + `offered` per spawn + each new Claude's helper `get`) could fail a start with an opaque EOF, more so where NSS is slow. | fixed `42ef3e18`: the daemon's requests (all reads) are re-sent up to 3 times, 150/300/450 ms apart, only when closed unanswered (connect errors and timeouts fail at once); test `a_request_the_keeper_turned_away_at_its_cap_is_sent_again` |
+| 4 | low | The helper socket spawned a thread per connection, unbounded; anything in a chosen Claude's fence could flood the user's daemon with threads (and each one a keeper call). | fixed `42ef3e18`: at most 8 calls in flight, more closed unanswered; test `helper_calls_in_flight_are_capped_and_given_back` |
+| 5 | low | `user-remove` leaves the name on a key's list; the panel sends the whole list back on every Allow/Remove, and the gateway refused any list naming a non-account → every edit of that key failed `unknown_user` until the stale name was removed first. | fixed `5754ed20`: a name already on the list is accepted (one neither an account nor listed still 400); gateway test extended |
+| 6 | low | Names of removed accounts are never pruned from key lists: re-adding the same account (`user-add` of the kept Unix account) restores its access to the key without the admin choosing again. Visible in the panel meanwhile (with a Remove button). | open (judgment: pruning needs a helper→keeper or gateway-reload→keeper path; the keeper refuses a removed user anyway) |
+| 7 | low (text) | Manage CLIs help for Claude still names `{env}` = `ANTHROPIC_API_KEY` (no longer used for Claude) and says "tabs already running keep what they started with" — a running Claude loses the key at its next helper call after a withdraw, list removal *and* the user's own switch-back (`not-chosen`). | open (judgment with the "Needs the user" item on running Claude; the text follows whatever is decided) |
+| 8 | info | Any fenced agent in the same scope (Codex, Gemini …) shares the home and can write `.claude/settings.json` hooks that then run inside the next chosen Claude's fence, which reaches the helper. | open (not new: under the env design such a hook saw `ANTHROPIC_API_KEY`; the home is the user's agents' shared space) |
+| 9 | info | `Fingerprints` answers any server user, listed or not: it reveals that a CLI has a key (and its length, and rotations) to users not on its list, against "indistinguishable from none". No key material. | open (judgment: limit to listed users, at the cost of not recognising a key after one's removal from the list) |
+| 10 | info | Keeper deadline is now 2 s; the exchange includes NSS (`getgrouplist`), which with sssd on a cold cache can take longer. The daemon's read timeout was 3 s already. | open (watch in the live run) |
+| 11 | info | A user's own `apiKeyHelper` in the Tabtivity-wide layer (`agent-global`, possibly imported from `~/.claude/settings.json`) and ours alternate per spawn while Claude is on the admin's key. | open (contradictory setup, edge) |
+
+### Gates (worktree, 2026-10-03, at `5754ed20` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **700 files, 7090 tests**, all pass |
+| `cargo test --workspace -q --no-fail-fast` | **3624 passed, 0 failed, 3 ignored** (+4: src-tauri lib `agent_keys`; the gateway test extended; the known flakies passed this run) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3172 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1), `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (RC/AR shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 9129792b..HEAD` | green |
+| `git diff --check` | clean |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+### Needs the user
+
+- Finding 6 (prune removed accounts from key lists?), finding 7 together
+  with § P3b decisions' "running Claude loses the key" item (should a
+  switch-back also stop a running Claude, and the help text follow),
+  finding 9 (fingerprints only for listed users?).
+- Everything in § P3b decisions "Needs the user" stands.

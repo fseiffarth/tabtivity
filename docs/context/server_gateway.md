@@ -413,7 +413,12 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
   connections, at most 4 per caller uid (counted at accept, by
   `SO_PEERCRED`), each exchange 2 s; a connection over a cap is closed
   unanswered. One user holding connections open leaves the other 28 slots
-  to everyone else.
+  to everyone else. The daemon's own requests only read, so one closed
+  unanswered is sent again up to 3 times (150/300/450 ms apart): a burst of
+  the user's own spawns and Claude helper calls must not fail a start. The
+  daemon's helper socket answers at most 8 calls at once (anything in a
+  chosen Claude's fence can connect; a flood gets closed connections, not
+  a thread each). (P3b decisions review.)
 - **Shims on a server.** The daemon now writes the shell tabs' agent shims
   (`agent_bin::install`, in `main`), and `<slug>-serverd --agent-shim`
   marks server mode for that process only (`mark_server_process`): a tab
