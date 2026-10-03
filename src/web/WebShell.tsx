@@ -11,6 +11,7 @@ import ReactDOM from "react-dom/client";
 import { ConfirmDialog, MessageDialog } from "../components/common/PromptDialogs";
 import { ServerFilePicker, type ServerFilePickerProps } from "../components/common/ServerFilePicker";
 import { UntestedTag } from "../components/common/UntestedTag";
+import { SharePresence } from "../components/server/ServerSharing";
 import { useT } from "../lib/i18n";
 import { linkState, onLinkState, type LinkState } from "../lib/transport/linkState";
 import { setDialogAdapter, type DialogAdapter, type MessageOptions, type OpenOptions, type SaveOptions } from "../lib/transport/dialogAdapter";
@@ -130,6 +131,7 @@ export function WebShell(_: { client: WsClient }) {
     <>
       <ServerLinkBanner />
       <WebDialogHost />
+      <SharePresence />
     </>
   );
 }

@@ -139,6 +139,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "root_mcp.rs",
     "search.rs",
     "settings.rs",
+    "share.rs",
     "sheets.rs",
     "skills.rs",
     "slurm.rs",

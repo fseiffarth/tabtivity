@@ -377,6 +377,9 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# The shared-project tests (`services::server::share`) drive the real share
+# hub on a temp socket: the daemon's client against the hub it talks to.
+app-gateway = { path = "../src-gateway" }
 # The browser desktop client's socket test drives `web_client::routes` on a
 # real listener; the version is axum's own (the `ws` feature pulls it in).
 tokio-tungstenite = "0.29"

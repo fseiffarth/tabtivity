@@ -13,12 +13,16 @@
 # checks that root (not the gateway's account) is refused by a daemon socket,
 # lists every loopback listener each user owns (each must need a token or be
 # a CLI's own sign-in listener: see docs/context/server_gateway.md), checks
-# that the key keeper answers by uid (P3b), and runs the admin helper's
-# prerequisite check.
+# that the key keeper answers by uid (P3b), checks the share hub (P4: a
+# non-member cannot read a hub, a viewer cannot push or write one, a revoked
+# member loses access at once), and runs the admin helper's prerequisite
+# check.
 #
-# It changes nothing: no account, file or unit is created, modified or
-# stopped (root's connect to the first user's socket starts that user's
-# daemon by socket activation, as any gateway request would). Exit status:
+# It changes nothing but one throwaway share the first user makes and
+# deletes again (it waits out the hub's retention window in its holding
+# area): no account or unit is created, modified or stopped (root's connect
+# to the first user's socket starts that user's daemon by socket
+# activation, as any gateway request would). Exit status:
 # 0 when every assertion held, 1 otherwise.
 set -uo pipefail
 
@@ -212,6 +216,57 @@ else
   done
   out="$(keeper_says nobody '{"op":"offered"}')"
   if printf '%s' "$out" | grep -q '"error":"refused"'; then pass "the keeper refuses a non-server account"; else fail "the keeper refuses a non-server account" "got: $(printf '%s' "$out" | head -c 200)"; fi
+fi
+
+echo "── shared projects: the hub decides by uid, read access by named ACL ──"
+# Hosted plan §6.2–§6.6 (P4): a non-member cannot list the shared root or
+# read a hub; a viewer reads it but cannot write it or push through the hub;
+# a revoked member loses read access at the next path lookup.
+HUB="/run/$APP_SLUG/hub.sock"
+SHARED="/srv/$APP_SLUG/shared"
+hub_says() { printf '%s\n' "$2" | runuser -u "$1" -- nc -U -N "$HUB" 2>&1; }
+said() { printf '%s' "$1" | grep -q "$2"; }
+if [ ! -S "$HUB" ]; then
+  fail "the share hub's socket exists" "$HUB is missing: systemctl enable --now ${APP_SLUG}-hub.socket"
+elif ! command -v nc >/dev/null; then
+  fail "nc is installed (for the hub checks)" "apt install netcat-openbsd"
+else
+  A="$1" B="$2"
+  expect_eacces "$B cannot list the shared root" "$B" ls "$SHARED"
+  out="$(hub_says "$A" '{"op":"create","name":"isolation test"}')"
+  id="$(printf '%s' "$out" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p')"
+  if [ -z "$id" ]; then
+    fail "$A can make a share" "got: $(printf '%s' "$out" | head -c 200)"
+  else
+    pass "$A can make a share"
+    hubdir="$SHARED/$id.git"
+    if runuser -u "$A" -- cat "$hubdir/HEAD" >/dev/null 2>&1; then pass "the owner reads her hub"; else fail "the owner reads her hub" "cat $hubdir/HEAD failed as $A"; fi
+    expect_eacces "$B (no member) cannot read $A's hub" "$B" cat "$hubdir/HEAD"
+    expect_eacces "$B (no member) cannot list $A's hub" "$B" ls "$hubdir"
+    out="$(hub_says "$B" "{\"op\":\"grant\",\"share\":\"$id\",\"user\":\"$B\",\"role\":\"editor\"}")"
+    if said "$out" '"error":"unknown-share"'; then pass "$B cannot grant himself $A's share"; else fail "$B cannot grant himself $A's share" "got: $(printf '%s' "$out" | head -c 200)"; fi
+    out="$(hub_says "$A" "{\"op\":\"grant\",\"share\":\"$id\",\"user\":\"$B\",\"role\":\"viewer\"}")"
+    if said "$out" '"ok":true'; then
+      pass "$A grants $B viewer"
+      if runuser -u "$B" -- cat "$hubdir/HEAD" >/dev/null 2>&1; then pass "a viewer reads the hub"; else fail "a viewer reads the hub" "cat $hubdir/HEAD failed as $B"; fi
+      expect_eacces "a viewer cannot write the hub's config" "$B" sh -c "printf x >> '$hubdir/config'"
+      expect_eacces "a viewer cannot plant hooks in the hub" "$B" mkdir "$hubdir/hooks"
+      zero=0000000000000000000000000000000000000000
+      out="$(hub_says "$B" "{\"op\":\"push\",\"share\":\"$id\",\"updates\":[{\"ref\":\"refs/heads/$B/x\",\"old\":\"$zero\",\"new\":\"1111111111111111111111111111111111111111\"}],\"bytes\":0}")"
+      if said "$out" '"error":"ref-refused"'; then pass "a viewer cannot push"; else fail "a viewer cannot push" "got: $(printf '%s' "$out" | head -c 200)"; fi
+      out="$(hub_says "$A" "{\"op\":\"revoke\",\"share\":\"$id\",\"user\":\"$B\"}")"
+      if said "$out" '"ok":true'; then pass "$A revokes $B"; else fail "$A revokes $B" "got: $(printf '%s' "$out" | head -c 200)"; fi
+      expect_eacces "a revoked member cannot read the hub" "$B" cat "$hubdir/HEAD"
+      out="$(hub_says "$B" '{"op":"list"}')"
+      if said "$out" '"ok":true' && ! said "$out" "$id"; then pass "the share is gone from the revoked member's list"; else fail "the share is gone from the revoked member's list" "got: $(printf '%s' "$out" | head -c 200)"; fi
+    else
+      fail "$A grants $B viewer" "got: $(printf '%s' "$out" | head -c 200)"
+    fi
+    out="$(hub_says "$A" "{\"op\":\"delete\",\"share\":\"$id\"}")"
+    if said "$out" '"ok":true'; then pass "$A deletes the throwaway share"; else fail "$A deletes the throwaway share" "got: $(printf '%s' "$out" | head -c 200)"; fi
+  fi
+  out="$(hub_says nobody '{"op":"list"}')"
+  if said "$out" '"error":"refused"'; then pass "the hub refuses a non-server account"; else fail "the hub refuses a non-server account" "got: $(printf '%s' "$out" | head -c 200)"; fi
 fi
 
 echo

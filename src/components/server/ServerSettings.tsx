@@ -17,13 +17,14 @@ import { SettingsCard, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { ServerSecrets } from "./ServerSecrets";
 import { ServerAgentKeys } from "./ServerAgentKeys";
+import { ServerSharing } from "./ServerSharing";
 
 type Feature = "mail" | "calendar" | "todo";
 const FEATURES: Feature[] = ["mail", "calendar", "todo"];
 
 interface Policy {
   schema: number;
-  features: { mail: boolean; calendar: boolean; todo: boolean; calendar_sharing: boolean };
+  features: { mail: boolean; calendar: boolean; todo: boolean; calendar_sharing: boolean; project_sharing?: boolean };
   ollama_allowed_models?: string[];
 }
 
@@ -132,6 +133,12 @@ export function ServerSettings() {
             disabled={busy}
             onChange={(event) => void save({ ...policy, features: { ...policy.features, calendar_sharing: event.target.checked } })}
           />
+          <ToggleRow
+            label={t("server.settings.projectSharing")}
+            checked={policy.features.project_sharing !== false}
+            disabled={busy}
+            onChange={(event) => void save({ ...policy, features: { ...policy.features, project_sharing: event.target.checked } })}
+          />
           <SettingsCard>
             <label className="settings-card-label" htmlFor="server-allowed-models">{t("server.settings.models")}</label>
             <textarea
@@ -159,6 +166,7 @@ export function ServerSettings() {
       )}
       {status && <p className="settings-help">{status}</p>}
       {admin && <ServerAgentKeys />}
+      <ServerSharing />
       <ServerSecrets />
     </>
   );

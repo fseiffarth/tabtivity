@@ -6094,6 +6094,7 @@ dependencies = [
  "aes-gcm",
  "ammonia",
  "app-core",
+ "app-gateway",
  "arboard",
  "argon2",
  "async-imap",

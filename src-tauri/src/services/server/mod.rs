@@ -56,6 +56,11 @@ pub mod policy;
 #[path = "../../../../src-gateway/src/keys_wire.rs"]
 pub mod keys_wire;
 pub mod agent_keys;
+/// The share hub's protocol (shared projects, plan §6.2), same source as
+/// the hub's.
+#[path = "../../../../src-gateway/src/hub_wire.rs"]
+pub mod hub_wire;
+pub mod share;
 
 pub const MODE_ENV: &str = wire::env::MODE;
 pub const SOCKET_ENV: &str = wire::env::SOCKET;

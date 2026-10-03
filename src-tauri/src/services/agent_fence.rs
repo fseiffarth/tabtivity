@@ -1304,6 +1304,9 @@ pub fn wrap_pty_options_bwrap(
     );
     // Last: overlapping roots and allowlists must not reopen private stores.
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
+    // A hosted server's shared hubs: all hidden but this scope's own
+    // project's, read-only (plan §6.3); a no-op everywhere else.
+    crate::services::server::share::apply_fence(&mut args, roots);
     // A hosted server's administrator's key, for a CLI this user runs on it
     // (plan §5.4); a no-op everywhere else. A variable CLI gets it in its
     // environment below; a helper CLI (Claude's `apiKeyHelper`) gets the
@@ -1758,6 +1761,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         settings().agent_fence_cargo_credentials.unwrap_or(false)));
     guard_git_control(&mut argv, crate::services::git_guard::guard_paths(&roots, Some(cwd)));
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
+    crate::services::server::share::apply_fence(&mut argv, &roots);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
     let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, argv);

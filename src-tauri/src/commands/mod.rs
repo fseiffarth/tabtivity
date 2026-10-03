@@ -69,6 +69,7 @@ pub mod root_mcp;
 pub mod screenshot;
 pub mod search;
 pub mod settings;
+pub mod share;
 pub mod sheets;
 pub mod skills;
 pub mod slurm;

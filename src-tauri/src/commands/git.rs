@@ -476,11 +476,27 @@ pub(crate) fn hookless_git_command_in<S: AsRef<str>, P: AsRef<Path>>(
     hardened_git_command_in(project_dir, args)
 }
 
+/// The subcommand of a git argument list: the first argument after any
+/// leading `-c key=value` pairs.
+fn subcommand_of<S: AsRef<str>>(args: &[S]) -> Option<&str> {
+    let mut rest = args.iter().map(|a| a.as_ref());
+    loop {
+        match rest.next()? {
+            "-c" => {
+                rest.next()?;
+            }
+            sub => return Some(sub),
+        }
+    }
+}
+
 fn git_command_in<S: AsRef<str>>(project_dir: &Path, args: &[S], hooks: Hooks) -> std::process::Command {
-    // `init` creates a new repository here. An ancestor may itself be a repo
-    // (including a shared temp root); pinning its common dir would make the
-    // new repository incomplete and send later commands to the ancestor.
-    let initializing = args.first().is_some_and(|arg| arg.as_ref() == "init");
+    // `init` creates a new repository here, and `clone` a new one below it
+    // (a shared project's clone-to-add, hosted plan §6.2). An ancestor may
+    // itself be a repo (including a shared temp root); pinning its common dir
+    // would make the new repository incomplete and send later commands to the
+    // ancestor. The subcommand follows any leading `-c key=value` pairs.
+    let initializing = subcommand_of(args).is_some_and(|sub| sub == "init" || sub == "clone");
     if !initializing {
         sanitize_repo_git_config(project_dir);
     }
