@@ -33,6 +33,16 @@ Tailscale Serve (TLS) ─► 127.0.0.1:8740  tabtivity-gateway  (user tabtivity-
   header and its own routing cookie before forwarding, then sets
   `x-gateway-user/role/device`. The daemon trusts them only because its
   socket admits the gateway's uid alone.
+- **The role is the gateway's alone.** Behind the gateway the daemon signs a
+  browser in only by its device-key session; the single-user token link
+  (`/desktop/login`, an `Admin` session) is a 404 there, because the token
+  file sits in the account's own state dir. A socket's role is fixed at its
+  upgrade, so the gateway closes an account's live sockets when its role
+  changes.
+- **Bounded like the sidecar.** Both listeners are `limits.rs`'s
+  `GuardedListener` (compiled in by `#[path]`): a connection cap and
+  handshake/body/idle deadlines, so idle connections from a tailnet peer or
+  a local user cannot exhaust the gateway for everyone.
 
 ## Why socket activation instead of the helper starting daemons
 
