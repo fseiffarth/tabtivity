@@ -460,8 +460,39 @@ fn local_tmux_args_for(
     session_env: bool,
     fenced: bool,
 ) -> Vec<String> {
+    local_tmux_args_on(session, line, env, session_env, fenced, socket_args())
+}
+
+/// A vendor's API-key variable in [`SECRET_ENV`] (the registry's
+/// `api_key_env` column, where a hosted server delivers the administrator's
+/// key), as opposed to Tabtivity's own tokens.
+fn is_vendor_key(key: &str) -> bool {
+    crate::commands::agents::api_key_envs().contains(&key)
+}
+
+/// Does this tab claim `key`'s `update-environment` slot? Tabtivity's own
+/// tokens: always. A vendor's API-key variable only on Tabtivity's own tmux
+/// server (`own_server`: [`socket_args`] names one — a hosted server's
+/// `-L <slug>`) or when this tab carries one: on a desktop the tmux server is
+/// the user's own, and listing `ANTHROPIC_API_KEY` there globally would make
+/// every attach — the user's own sessions' and every Tabtivity tab's — copy
+/// or drop the user's own key (P3b review).
+fn claims_update_slot(key: &str, env: &HashMap<String, String>, own_server: bool) -> bool {
+    !is_vendor_key(key) || own_server || env.contains_key(key)
+}
+
+/// [`local_tmux_args_for`] on the tmux server `socket` names ([`socket_args`]).
+fn local_tmux_args_on(
+    session: &str,
+    line: Option<&str>,
+    env: &HashMap<String, String>,
+    session_env: bool,
+    fenced: bool,
+    socket: Vec<String>,
+) -> Vec<String> {
     let pairs = session_env_pairs(env);
-    let mut args: Vec<String> = socket_args();
+    let own_server = !socket.is_empty();
+    let mut args: Vec<String> = socket;
     args.extend([
         "set-option".into(),
         "-g".into(),
@@ -478,6 +509,9 @@ fn local_tmux_args_for(
         // removed, so a tab never inherits the token of the tab that started the
         // server. Fixed slots: idempotent, and the user's own entries are kept.
         for (i, key) in SECRET_ENV.iter().enumerate() {
+            if !claims_update_slot(key, env, own_server) {
+                continue;
+            }
             args.extend([
                 "set-option".into(),
                 "-g".into(),
@@ -1082,7 +1116,9 @@ mod tests {
         assert!(!leaks(&launched), "{launched:?}");
         // Instead every secret key is listed in `update-environment`, ahead of
         // `new-session`, so tmux copies it from the client's environment.
-        let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "claude", &[], &env, true);
+        // (On Tabtivity's own tmux server, as a hosted server's: there every
+        // vendor key's slot is claimed too, see the test below.)
+        let args = local_tmux_args_on(concat!(crate::app_slug!(), "-x"), Some("claude"), &env, true, false, vec!["-L".into(), "own".into()]);
         let new_session = args.iter().position(|a| a == "new-session").unwrap();
         for (i, key) in SECRET_ENV.iter().enumerate() {
             let slot = format!("update-environment[{}]", SECRET_UPDATE_ENV_SLOT + i);
@@ -1096,6 +1132,39 @@ mod tests {
         // The < 3.2 fallback has no update-environment step (unchanged shape).
         let old = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "", &[], &env, false);
         assert!(!old.iter().any(|a| a.starts_with("update-environment")));
+    }
+
+    /// P3b review: on a desktop the tmux server is the user's own (no `-L`),
+    /// so a vendor's API-key variable is listed in its global
+    /// `update-environment` only by a tab that carries one — never by every
+    /// tab, which would copy or drop the user's own `ANTHROPIC_API_KEY` at
+    /// every attach of their own sessions. Tabtivity's own tokens and, on
+    /// Tabtivity's own tmux server (a hosted server's), every slot are claimed
+    /// as before.
+    #[test]
+    fn a_vendor_key_slot_is_claimed_on_the_users_own_tmux_only_by_a_tab_carrying_it() {
+        let slots = |args: &[String]| -> Vec<String> {
+            args.windows(4)
+                .filter(|w| w[0] == "set-option" && w[2].starts_with("update-environment["))
+                .map(|w| w[3].clone())
+                .collect()
+        };
+        let session = concat!(crate::app_slug!(), "-x");
+        let own: Vec<&str> = SECRET_ENV.iter().copied().filter(|k| !is_vendor_key(k)).collect();
+        assert!(!own.is_empty() && own.len() < SECRET_ENV.len());
+        // Desktop, a tab without any vendor key: only Tabtivity's tokens.
+        let plain = local_tmux_args_on(session, Some("claude"), &env_of(&[]), true, true, Vec::new());
+        assert_eq!(slots(&plain), own);
+        // Desktop, a tab carrying one: that one too, still never on argv.
+        let carrying = env_of(&[("GEMINI_API_KEY", "own-key-s3cret")]);
+        let args = local_tmux_args_on(session, Some("gemini"), &carrying, true, true, Vec::new());
+        let mut want = own.clone();
+        want.push("GEMINI_API_KEY");
+        assert_eq!(slots(&args), want);
+        assert!(!args.iter().any(|a| a.contains("s3cret")), "{args:?}");
+        // Tabtivity's own tmux server: every slot, whatever the tab carries.
+        let server = local_tmux_args_on(session, Some("claude"), &env_of(&[]), true, true, vec!["-L".into(), "own".into()]);
+        assert_eq!(slots(&server), SECRET_ENV.to_vec());
     }
 
     /// Live check against a real tmux on a private socket (skipped when tmux is
