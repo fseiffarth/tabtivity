@@ -233,6 +233,12 @@ fn cookie_token(headers: &HeaderMap) -> Option<&str> {
     session_cookie_in(&crate::brand::PAIR, headers.get(header::COOKIE)?.to_str().ok()?)
 }
 
+/// The phone store's session token in a request, for the browser transport
+/// behind the gateway (`web_client::ServerLink`).
+pub fn device_session_cookie(headers: &HeaderMap) -> Option<&str> {
+    cookie_token(headers)
+}
+
 /// The session token in a `Cookie` header: the cookie under its current name,
 /// else under the name an older build's host set (counted as a legacy hit).
 fn session_cookie_in<'a>(pair: &crate::brand::Pair, cookies: &'a str) -> Option<&'a str> {
@@ -527,7 +533,7 @@ fn catalog_stale(state: &HostState) {
         .invalidate();
 }
 
-async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
+async fn security_headers(State(secure): State<bool>, request: Request<Body>, next: Next) -> Response<Body> {
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
     let frame = request.uri().path() == PDF_FRAME_PATH;
     // The browser desktop client's pages get the desktop's CSP with its
@@ -566,7 +572,7 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> 
             .remove(web_client::INLINE_SCRIPT_HASHES)
             .and_then(|v| v.to_str().ok().map(str::to_string))
             .unwrap_or_default();
-        let csp = web_client::page_csp(host.as_deref().unwrap_or("127.0.0.1"), &hashes);
+        let csp = web_client::page_csp(host.as_deref().unwrap_or("127.0.0.1"), &hashes, secure);
         if let Ok(value) = HeaderValue::from_str(&csp) {
             headers.insert(header::CONTENT_SECURITY_POLICY, value);
         }
@@ -4507,6 +4513,8 @@ where
 /// The whole HTTP surface in one place, so tests can drive every route
 /// through the same middleware stack the sidecar serves.
 fn router(state: HostState) -> Router {
+    // Behind the gateway the socket is `wss:`; the CSP names it so.
+    let secure = state.web.secure();
     Router::new()
         .route("/healthz", get(health))
         .route("/api/v1/pair", post(pair))
@@ -4627,12 +4635,31 @@ fn router(state: HostState) -> Router {
         // catch-all by its static prefix.
         .merge(web_client::routes(state.web))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
-        .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn_with_state(secure, security_headers))
+}
+
+/// Where the host listens.
+pub enum Listen {
+    /// The Mobile sidecar: loopback on `port`, Tailscale Serve in front, the
+    /// user-content origin on the next port.
+    Loopback { port: u16 },
+    /// The per-user server daemon (hosted plan §3.1): a unix socket only
+    /// `peer_uid` — the gateway — may connect to; the gateway's public host is
+    /// what `Host` carries, and `/content/*` is served on this socket too, for
+    /// the gateway to forward from `content_origin` (none → no tickets).
+    Unix { path: PathBuf, peer_uid: Option<u32>, content_origin: Option<String> },
 }
 
 pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     let config = HostConfig::load(&state_dir)?;
     verify_tailscale_serve(&config.origin, config.host.port)?;
+    let port = config.host.port;
+    run_with(config, Listen::Loopback { port }).await
+}
+
+/// The host's whole life on `listen`: the sidecar's and the daemon's one body.
+pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> {
+    let state_dir = config.state_dir.clone();
     let auth = Arc::new(Mutex::new(AuthStore::open(
         &config.control_dir,
         config.origin.clone(),
@@ -4646,7 +4673,7 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     crate::services::mail_engine::install_crypto_provider();
     let web_events = Arc::new(web_client::WebEvents::default());
     let core_ctx = app_core::CoreCtx::system(Arc::new(crate::standalone_core_state()), web_events.clone());
-    let web = web_client::WebClientState::new(
+    let mut web = web_client::WebClientState::new(
         config.host.browser_client == Some(true),
         core_ctx.clone(),
         web_events,
@@ -4654,16 +4681,23 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         config.host.port,
         web_client::bundle_dir(&config.control_dir),
     );
+    if let Listen::Unix { content_origin, .. } = &listen {
+        web = web.behind_gateway(web_client::ServerLink {
+            public_host: crate::services::server::host_of(&config.origin),
+            content_origin: content_origin.clone(),
+            auth: auth.clone(),
+        });
+    }
     if web.enabled {
-        match (&web.bundle, web.has_token()) {
-            (Some(bundle), true) => eprintln!(
-                "desktop client: serving {} at http://127.0.0.1:{}/desktop/ (sign in with the link in Settings → Mobile → Browser access, or the token in {})",
+        match (&web.bundle, web.has_token(), &listen) {
+            (Some(bundle), _, Listen::Unix { .. }) => eprintln!("desktop client: serving {} at {}/desktop/ behind the gateway", bundle.display(), config.origin),
+            (Some(bundle), true, Listen::Loopback { port }) => eprintln!(
+                "desktop client: serving {} at http://127.0.0.1:{port}/desktop/ (sign in with the link in Settings → Mobile → Browser access, or the token in {})",
                 bundle.display(),
-                config.host.port,
                 config.control_dir.join(web_client::TOKEN_FILE).display()
             ),
-            (None, _) => eprintln!("desktop client: on, but no web bundle was found (npm run web:bundle)"),
-            (_, false) => eprintln!("desktop client: on, but no login token could be written"),
+            (None, _, _) => eprintln!("desktop client: on, but no web bundle was found (npm run web:bundle)"),
+            (_, false, _) => eprintln!("desktop client: on, but no login token could be written"),
         }
     }
     let state = HostState {
@@ -4682,7 +4716,7 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
     // a different origin from the app's, so a project's HTML never runs on
     // it. Only with the browser client on; a bind failure is reported, not
     // fatal — the app runs without "open outside".
-    if web.enabled {
+    if web.enabled && matches!(listen, Listen::Loopback { .. }) {
         let content_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), web.content_port);
         match tokio::net::TcpListener::bind(content_address).await {
             Ok(listener) => {
@@ -4733,36 +4767,57 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         shutdown_tx.subscribe(),
     ));
     tokio::spawn(alarms::run(state.config.state_dir.clone(), state.auth.clone(), shutdown_tx.subscribe()));
-    let publisher_shutdown = shutdown_tx.clone();
-    let publisher_origin = config.origin.clone();
-    let publisher_failure = serve_failure.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.tick().await;
-        loop {
+    if matches!(listen, Listen::Loopback { .. }) {
+        let publisher_shutdown = shutdown_tx.clone();
+        let publisher_origin = config.origin.clone();
+        let publisher_failure = serve_failure.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
             interval.tick().await;
-            if let Err(error) = verify_tailscale_serve(&publisher_origin, port) {
-                *publisher_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
-                let _ = publisher_shutdown.send(true);
-                break;
-            }
-        }
-    });
-    let app = router(state);
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
-        .map_err(|e| format!("bind {address}: {e}"))?;
-    axum::serve(limits::GuardedListener::new(listener), app)
-        .with_graceful_shutdown(async move {
-            while !*shutdown_rx.borrow() {
-                if shutdown_rx.changed().await.is_err() {
+            loop {
+                interval.tick().await;
+                if let Err(error) = verify_tailscale_serve(&publisher_origin, port) {
+                    *publisher_failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                    let _ = publisher_shutdown.send(true);
                     break;
                 }
             }
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+        });
+    }
+    let shutdown = async move {
+        while !*shutdown_rx.borrow() {
+            if shutdown_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    };
+    match listen {
+        Listen::Loopback { port } => {
+            let app = router(state);
+            let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+            let listener = tokio::net::TcpListener::bind(address)
+                .await
+                .map_err(|e| format!("bind {address}: {e}"))?;
+            axum::serve(limits::GuardedListener::new(listener), app)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(unix)]
+        Listen::Unix { path, peer_uid, .. } => {
+            // The content routes ride the same socket: the gateway forwards
+            // `/content/*` from the user-content origin here.
+            let app = router(state).merge(web_client::content_routes(web.clone()));
+            let listener = bind_unix(&path)?;
+            axum::serve(limits::PeerGatedUnixListener::new(listener, peer_uid), app)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_file(&path);
+        }
+        #[cfg(not(unix))]
+        Listen::Unix { .. } => return Err("the per-user daemon runs on Linux only".into()),
+    }
     // Nothing outlives a clean stop: the PTYs browser clients spawned here
     // (tmux attach clients, mostly — the sessions live on) go with the
     // process, as the window's do at its exit.
@@ -4773,6 +4828,24 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }
     Ok(())
+}
+
+/// Bind the daemon's socket: a stale file from a previous run is removed
+/// first, the new one is `0660` — its group is the directory's (the helper
+/// makes `/run/<slug>/users` setgid to the gateway's group), so the gateway
+/// may connect and nobody else may even try.
+#[cfg(unix)]
+fn bind_unix(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) | Err(_) => {}
+    }
+    let listener = tokio::net::UnixListener::bind(path).map_err(|e| format!("bind {}: {e}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|e| format!("chmod {}: {e}", path.display()))?;
+    Ok(listener)
 }
 
 #[cfg(test)]

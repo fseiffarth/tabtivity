@@ -163,7 +163,7 @@ const MOBILE_SCROLLBACK_LINES: usize = crate::services::ssh_exec::TMUX_HISTORY_L
 
 fn tmux_capture_command(tmux_name: &str) -> Command {
     // Tabtivity's effective PATH, as for the attach (see `tmux_attach_command`).
-    let mut command = crate::paths::command_no_window("tmux");
+    let mut command = crate::services::tmux_local::tmux_command();
     command.args([
         "-u",
         "capture-pane",
@@ -187,7 +187,7 @@ fn tmux_capture_command(tmux_name: &str) -> Command {
 
 /// The tmux *window* geometry, which is what the pane is actually rendered at.
 fn tmux_window_size_command(tmux_name: &str) -> Command {
-    let mut command = crate::paths::command_no_window("tmux");
+    let mut command = crate::services::tmux_local::tmux_command();
     command.args([
         "-u",
         "display-message",

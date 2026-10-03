@@ -110,7 +110,7 @@ pub async fn local_tmux_list() -> Result<Vec<crate::services::ssh_exec::TmuxSess
         return Ok(Vec::new());
     }
     app_core::rt::spawn_blocking(|| {
-        let out = crate::paths::command_no_window("tmux")
+        let out = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_ls_args())
             .output();
         match out {
@@ -130,7 +130,7 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
         return Ok(());
     }
     app_core::rt::spawn_blocking(move || {
-        let output = crate::paths::command_no_window("tmux")
+        let output = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_kill_args(&session))
             .output()
             .map_err(|e| format!("could not run tmux: {e}"))?;
@@ -187,7 +187,7 @@ pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String
         return Ok(None);
     }
     app_core::rt::spawn_blocking(move || {
-        let output = crate::paths::command_no_window("tmux")
+        let output = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_screen_args(&session))
             .output()
             .ok()?;
@@ -210,7 +210,7 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
         return Ok(());
     }
     app_core::rt::spawn_blocking(move || {
-        let _ = crate::paths::command_no_window("tmux")
+        let _ = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_rename_args(
                 &session, &new_name,
             ))

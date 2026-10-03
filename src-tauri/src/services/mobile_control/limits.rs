@@ -266,6 +266,102 @@ impl AsyncWrite for GuardedStream {
     }
 }
 
+/// The per-user daemon's listener (hosted plan §3.1): a unix socket whose
+/// every connection must come from one uid — the gateway's — by
+/// `SO_PEERCRED`, checked here before a byte is read. The user's own shells
+/// (same uid as the daemon) are refused too: the daemon trusts the gateway's
+/// routing headers only because nothing else can reach it. Bounded like the
+/// loopback listener; the handshake/body/idle deadlines are the gateway's.
+#[cfg(unix)]
+pub struct PeerGatedUnixListener {
+    inner: tokio::net::UnixListener,
+    /// The one uid allowed; `None` = this process's own (local tests).
+    peer_uid: Option<u32>,
+    permits: Arc<Semaphore>,
+    refused: Arc<std::sync::atomic::AtomicU64>,
+}
+
+#[cfg(unix)]
+impl PeerGatedUnixListener {
+    pub fn new(inner: tokio::net::UnixListener, peer_uid: Option<u32>) -> Self {
+        Self { inner, peer_uid, permits: Arc::new(Semaphore::new(MAX_CONNECTIONS)), refused: Arc::default() }
+    }
+
+    /// Connections turned away for coming from another uid.
+    pub fn refused_counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.refused.clone()
+    }
+
+    /// Does a connection from `uid` pass? `peer_uid` when set, else our own.
+    pub fn allows(peer_uid: Option<u32>, uid: u32) -> bool {
+        // SAFETY: getuid has no preconditions.
+        let own = unsafe { libc::getuid() };
+        uid == peer_uid.unwrap_or(own)
+    }
+}
+
+/// A unix stream holding its connection permit.
+#[cfg(unix)]
+pub struct PermitUnixStream {
+    inner: tokio::net::UnixStream,
+    _permit: OwnedSemaphorePermit,
+}
+
+#[cfg(unix)]
+impl AsyncRead for PermitUnixStream {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+#[cfg(unix)]
+impl AsyncWrite for PermitUnixStream {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(unix)]
+impl axum::serve::Listener for PeerGatedUnixListener {
+    type Io = PermitUnixStream;
+    type Addr = tokio::net::unix::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let Ok(permit) = self.permits.clone().acquire_owned().await else {
+                std::future::pending::<()>().await;
+                unreachable!("the semaphore is never closed");
+            };
+            match self.inner.accept().await {
+                Ok((stream, addr)) => {
+                    let uid = stream.peer_cred().ok().map(|c| c.uid());
+                    match uid {
+                        Some(uid) if Self::allows(self.peer_uid, uid) => return (PermitUnixStream { inner: stream, _permit: permit }, addr),
+                        _ => {
+                            // Dropped unanswered: the peer learns nothing but "closed".
+                            self.refused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        self.inner.local_addr()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

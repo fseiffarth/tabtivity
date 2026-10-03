@@ -627,7 +627,7 @@ fn mobile_local(project: &ProjectRecord) -> bool {
 /// Mac, or picks `/usr/bin/tmux` against a server a `~/.local/bin/tmux` started
 /// — and tmux refuses a client of another protocol version.
 fn tmux_ls_command(format: &str) -> Command {
-    let mut command = crate::paths::command_no_window("tmux");
+    let mut command = crate::services::tmux_local::tmux_command();
     command.args(["ls", "-F", format]);
     command
 }

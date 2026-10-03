@@ -1881,7 +1881,7 @@ pub fn live_unfenced_by_scope(pid_of: impl Fn(&str) -> Option<u32>) -> HashMap<S
     // A tmux tab's registry pid is the tmux *client*; its agent lives under
     // the server's pane.
     let panes = if tabs.iter().any(|(_, t)| t.tmux_session.is_some()) {
-        paths::command_no_window("tmux")
+        crate::services::tmux_local::tmux_command()
             .args(["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}"])
             .output()
             .ok()

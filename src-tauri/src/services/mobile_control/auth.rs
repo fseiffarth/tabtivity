@@ -104,6 +104,39 @@ impl Default for DeviceFile {
     }
 }
 
+/// A server invite (hosted plan §4.1), written by the admin helper into the
+/// user's control dir: the hash of a single-use pairing code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteFile {
+    /// [`invite_hash`] of the code.
+    pub hash: String,
+    pub expires_at: u64,
+    #[serde(default)]
+    pub attempts: u8,
+}
+
+/// The invite file's name under the control dir.
+pub const INVITE_FILE: &str = "invite.json";
+/// How long an invite may be redeemed.
+pub const INVITE_TTL: u64 = 24 * 60 * 60;
+
+/// `hex(SHA-256("invite\n" ‖ code))`: what the helper writes and what
+/// [`AuthStore::pair`] compares. Both sides of the server build know it.
+pub fn invite_hash(code: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = Sha256::new();
+    hasher.update(b"invite\n");
+    hasher.update(code.as_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Write the invite for `code` into `control_dir` (the helper's step, done
+/// as the user; also what a test does to enrol a first device).
+pub fn write_invite(control_dir: &Path, code: &str, expires_at: u64) -> Result<(), String> {
+    store::ensure_private_dir(control_dir)?;
+    store::write_json_atomic(&control_dir.join(INVITE_FILE), &InviteFile { hash: invite_hash(code), expires_at, attempts: 0 }, 0o600)
+}
+
 #[derive(Clone)]
 struct PairCode {
     hash: [u8; 32],
@@ -284,19 +317,28 @@ impl AuthStore {
             return Err("invalid_pairing_code".into());
         }
         let supplied = self.keyed(b"pair", code.as_bytes());
-        let Some(pairing) = self.pairing.as_mut() else {
-            return Err("invalid_pairing_code".into());
-        };
-        if pairing.expires_at < now() {
-            self.pairing = None;
-            return Err("invalid_pairing_code".into());
-        }
-        if !bool::from(pairing.hash.ct_eq(&supplied)) {
-            pairing.attempts += 1;
-            if pairing.attempts >= PAIR_CODE_ATTEMPTS {
+        // The code the window (or a signed-in client) minted, else — on a
+        // server — the invite the admin helper left in the control dir.
+        let mut invite_used = false;
+        match self.pairing.as_mut() {
+            Some(pairing) if pairing.expires_at < now() => {
                 self.pairing = None;
+                return Err("invalid_pairing_code".into());
             }
-            return Err("invalid_pairing_code".into());
+            Some(pairing) if !bool::from(pairing.hash.ct_eq(&supplied)) => {
+                pairing.attempts += 1;
+                if pairing.attempts >= PAIR_CODE_ATTEMPTS {
+                    self.pairing = None;
+                }
+                return Err("invalid_pairing_code".into());
+            }
+            Some(_) => {}
+            None => {
+                if !self.invite_matches(code) {
+                    return Err("invalid_pairing_code".into());
+                }
+                invite_used = true;
+            }
         }
         let clean_name = name.trim().chars().take(64).collect::<String>();
         if clean_name.is_empty() {
@@ -311,6 +353,9 @@ impl AuthStore {
         PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?;
         // Everything is validated; only now is the code spent.
         self.pairing = None;
+        if invite_used {
+            let _ = fs::remove_file(self.control_dir.join(INVITE_FILE));
+        }
         let id = random_id::<20>()?;
         self.devices.devices.push(Device {
             id: id.clone(),
@@ -322,6 +367,31 @@ impl AuthStore {
         self.save_devices()?;
         self.audit("paired", Some(&id));
         Ok(id)
+    }
+
+    /// Does `code` match a live invite in the control dir? The file is the
+    /// admin helper's (hosted plan §4.1: `user add` writes it as the user,
+    /// `0600`), never the gateway's — so a compromised gateway cannot enrol a
+    /// device. A wrong guess counts like a pairing-code miss, and the file is
+    /// removed after [`PAIR_CODE_ATTEMPTS`] of them or when it has expired.
+    fn invite_matches(&mut self, code: &str) -> bool {
+        let path = self.control_dir.join(INVITE_FILE);
+        let Ok(mut invite) = store::read_json::<InviteFile>(&path) else { return false };
+        if invite.expires_at < now() {
+            let _ = fs::remove_file(&path);
+            return false;
+        }
+        let supplied = invite_hash(code);
+        if invite.hash.len() == supplied.len() && bool::from(invite.hash.as_bytes().ct_eq(supplied.as_bytes())) {
+            return true;
+        }
+        invite.attempts += 1;
+        if invite.attempts >= PAIR_CODE_ATTEMPTS {
+            let _ = fs::remove_file(&path);
+        } else {
+            let _ = store::write_json_atomic(&path, &invite, 0o600);
+        }
+        false
     }
 
     pub fn challenge(&mut self, device_id: &str) -> Result<(String, String, u64), String> {
@@ -597,6 +667,38 @@ impl AuthStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invite_file_enrols_once_and_wears_out_like_a_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut store = AuthStore::open(&control, "https://desk.example.ts.net".into()).unwrap();
+        let key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        use p256::pkcs8::EncodePublicKey;
+        let public = Base64UrlUnpadded::encode_string(key.verifying_key().to_public_key_der().unwrap().as_bytes());
+        assert_eq!(store.pair("12345678", "Laptop", &public), Err("invalid_pairing_code".into()), "no code, no invite");
+        write_invite(&control, "12345678", now() + 60).unwrap();
+        for _ in 0..PAIR_CODE_ATTEMPTS - 1 {
+            assert!(store.pair("00000000", "Laptop", &public).is_err());
+        }
+        assert!(control.join(INVITE_FILE).exists(), "still one guess left");
+        store.pair("12345678", "Laptop", &public).expect("the invite enrols");
+        assert!(!control.join(INVITE_FILE).exists(), "spent");
+        assert!(store.pair("12345678", "Laptop", &public).is_err());
+        // Too many misses retire the file; an expired invite is gone at first use.
+        // (A fresh store: the pair rate limit is per process, ten a minute.)
+        let mut store = AuthStore::open(&control, "https://desk.example.ts.net".into()).unwrap();
+        write_invite(&control, "22222222", now() + 60).unwrap();
+        for _ in 0..PAIR_CODE_ATTEMPTS {
+            assert!(store.pair("00000000", "Laptop", &public).is_err());
+        }
+        assert!(!control.join(INVITE_FILE).exists());
+        write_invite(&control, "33333333", now() - 1).unwrap();
+        assert!(store.pair("33333333", "Laptop", &public).is_err());
+        assert!(!control.join(INVITE_FILE).exists());
+        assert_eq!(invite_hash("x").len(), 64);
+        assert_ne!(invite_hash("x"), invite_hash("y"));
+    }
     use p256::{
         ecdsa::{signature::Signer, SigningKey},
         elliptic_curve::rand_core::OsRng,

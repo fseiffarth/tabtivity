@@ -108,6 +108,8 @@ pub mod model_allowlist;
 // Hosted plan §3.5: a picked server file as a single-use grant, so the mail
 // commands never take a frontend path even in the browser client.
 pub mod pick_grants;
+// Server mode: the per-user daemon behind the gateway (hosted plan §10 P3).
+pub mod server;
 // Local-model mail assistant (Group Q, #203–#208): the loopback-only /api/chat
 // helper, prompt builders and defensive JSON parsers. AI never touches the net.
 pub mod mail_ai;

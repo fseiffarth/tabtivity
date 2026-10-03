@@ -74,6 +74,26 @@ pub fn kill_failure_is_already_gone(stderr: &str) -> bool {
         || stderr.contains("failed to connect to server")
 }
 
+/// The tmux client every local spawn, attach and probe runs: the app's PATH
+/// (`paths::command_no_window`) and, in server mode, `-L <socket>` — the
+/// dedicated server of `services::server::tmux_socket` (plan §3.1), so a
+/// user's SSH-started tmux never hosts the app's sessions. The desktop passes
+/// no `-L` and shares the default server as before.
+pub fn tmux_command() -> std::process::Command {
+    let mut cmd = crate::paths::command_no_window("tmux");
+    cmd.args(socket_args());
+    cmd
+}
+
+/// `["-L", "<socket>"]` in server mode, nothing otherwise — what a tmux argv
+/// assembled by hand (the PTY's own client, `local_tmux_args_with`) starts with.
+pub fn socket_args() -> Vec<String> {
+    match crate::services::server::tmux_socket() {
+        Some(socket) => vec!["-L".into(), socket],
+        None => Vec::new(),
+    }
+}
+
 /// End every tmux session Tabtivity created on the local machine — the clean-quit
 /// reap (TODO #85). Blocking; callers off the main thread wrap it in
 /// `spawn_blocking`, the exit path runs it inline.
@@ -93,7 +113,7 @@ pub fn kill_app_sessions() -> Result<(), String> {
     if !tmux_available() {
         return Ok(());
     }
-    let listed = crate::paths::command_no_window("tmux")
+    let listed = tmux_command()
         .args(local_tmux_ls_args())
         .output()
         .map_err(|e| format!("could not list tmux sessions: {e}"))?;
@@ -105,7 +125,7 @@ pub fn kill_app_sessions() -> Result<(), String> {
     let sessions = crate::services::ssh_exec::parse_tmux_ls(&String::from_utf8_lossy(&listed.stdout));
     let mut failures = Vec::new();
     for name in sessions_to_reap(sessions.iter().map(|s| s.name.as_str())) {
-        let output = crate::paths::command_no_window("tmux")
+        let output = tmux_command()
             .args(local_tmux_kill_args(&name))
             .output()
             .map_err(|e| format!("could not run tmux: {e}"))?;
@@ -435,13 +455,14 @@ fn local_tmux_args_for(
     fenced: bool,
 ) -> Vec<String> {
     let pairs = session_env_pairs(env);
-    let mut args: Vec<String> = vec![
+    let mut args: Vec<String> = socket_args();
+    args.extend([
         "set-option".into(),
         "-g".into(),
         "history-limit".into(),
         TMUX_HISTORY_LINES.to_string(),
         ";".into(),
-    ];
+    ]);
     if session_env {
         // #864: a secret never rides `-e KEY=VALUE` — this client's argv is
         // world-readable for the tab's life. It is in the client's environment
@@ -696,8 +717,13 @@ pub fn spawn_detached_with(opts: &PtyOptions, socket: Option<&str>) -> Result<()
     }
     let args = detached_argv(session, opts);
     let mut cmd = crate::paths::command_no_window("tmux");
-    if let Some(socket) = socket {
-        cmd.args(["-L", socket, "-f", "/dev/null"]);
+    match socket {
+        Some(socket) => {
+            cmd.args(["-L", socket, "-f", "/dev/null"]);
+        }
+        None => {
+            cmd.args(socket_args());
+        }
     }
     cmd.args(&args);
     if !opts.cwd.is_empty() {

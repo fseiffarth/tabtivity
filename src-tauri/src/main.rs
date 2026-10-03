@@ -22,6 +22,12 @@ fn main() {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(app_lib::services::fence_scope::run(&args));
     }
+    // `tabtivity --serverd`: the per-user server daemon (hosted plan §3.1),
+    // the same entry as the `tabtivity-serverd` binary.
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--serverd")) {
+        app_lib::services::server::daemon::main();
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--mobile-host")) {
         let state_dir = app_lib::storage::state_dir();
         let runtime = tokio::runtime::Builder::new_multi_thread()

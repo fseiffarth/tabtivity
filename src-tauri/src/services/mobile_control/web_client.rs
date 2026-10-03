@@ -91,6 +91,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, Semaphore};
 
 use crate::services::core_dispatch::{self, Role};
+use crate::services::server;
 
 /// The frame protocol version, in `hello` and `server_capabilities`.
 pub const PROTOCOL: u32 = 1;
@@ -463,10 +464,36 @@ struct Live {
     ptys: Arc<Mutex<HashSet<String>>>,
 }
 
+/// What a host behind the gateway (the per-user daemon, hosted plan §3.1)
+/// adds: the public host every request carries, the user-content origin the
+/// gateway serves tickets on, and the phone's device-key sessions, which sign
+/// a browser in too — the token link is the single-user sidecar's way in.
+pub struct ServerLink {
+    /// `host[:port]` of the gateway's origin, what `Host` must be.
+    pub public_host: String,
+    /// `https://host[:port]` the gateway forwards `/content/*` from; `None`
+    /// → no tickets are minted.
+    pub content_origin: Option<String>,
+    /// The daemon's device sessions (`/api/v1/auth/*`): a request carrying
+    /// one is signed in, with the role the gateway's header names.
+    pub auth: Arc<Mutex<super::auth::AuthStore>>,
+}
+
+/// A signed-in request's session, to re-check while its socket lives.
+#[derive(Clone)]
+pub enum SessionRef {
+    /// A token-link session (`WebSessions`).
+    Web(String),
+    /// A device-key session of the phone store (`ServerLink::auth`).
+    Device(String),
+}
+
 #[derive(Clone)]
 pub struct WebClientState {
     /// `MobileHostSettings.browser_client`: off → every route here is a 404.
     pub enabled: bool,
+    /// Set when this host serves behind the gateway.
+    pub server: Option<Arc<ServerLink>>,
     /// The system context whose sink is [`WebEvents`]; a call's context is
     /// `with_caller(Client(id))` of it.
     pub ctx: CoreCtx,
@@ -497,6 +524,7 @@ impl WebClientState {
         }
         Self {
             enabled,
+            server: None,
             ctx,
             events,
             sessions: Arc::default(),
@@ -605,11 +633,83 @@ impl WebClientState {
         out
     }
 
-    /// The session cookie's token and role, if the request carries a live one.
-    fn authenticate(&self, headers: &HeaderMap) -> Option<(String, Role)> {
-        let token = session_cookie(headers)?;
-        let role = self.lock_sessions().touch(&token)?;
-        Some((token, role))
+    /// This host serves behind the gateway: `link` says how.
+    pub fn behind_gateway(mut self, link: ServerLink) -> Self {
+        self.server = Some(Arc::new(link));
+        self
+    }
+
+    /// The request's live session and its role: a token-link session of this
+    /// transport, or — behind the gateway — a device-key session of the
+    /// phone store, whose role is what the gateway's header names.
+    fn authenticate(&self, headers: &HeaderMap) -> Option<(SessionRef, Role)> {
+        if let Some(token) = session_cookie(headers) {
+            if let Some(role) = self.lock_sessions().touch(&token) {
+                return Some((SessionRef::Web(token), role));
+            }
+        }
+        let link = self.server.as_ref()?;
+        let token = super::host::device_session_cookie(headers)?;
+        link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token)?;
+        Some((SessionRef::Device(token.to_string()), server::gateway_role_in(headers)))
+    }
+
+    /// Is `session` still live? Slides it. The socket loop asks every ping.
+    fn session_live(&self, session: &SessionRef) -> bool {
+        match session {
+            SessionRef::Web(token) => self.lock_sessions().touch(token).is_some(),
+            SessionRef::Device(token) => self
+                .server
+                .as_ref()
+                .is_some_and(|link| link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token).is_some()),
+        }
+    }
+
+    fn end_session(&self, session: &SessionRef) {
+        match session {
+            SessionRef::Web(token) => self.lock_sessions().logout(token),
+            SessionRef::Device(token) => {
+                if let Some(link) = &self.server {
+                    link.auth.lock().unwrap_or_else(PoisonError::into_inner).logout(token);
+                }
+            }
+        }
+    }
+
+    /// Does the request's `Host` belong to this host? Loopback on the port,
+    /// or the gateway's public host behind it.
+    fn host_allowed(&self, headers: &HeaderMap, port: u16) -> bool {
+        if loopback_request(headers, port) {
+            return true;
+        }
+        let Some(link) = &self.server else { return false };
+        headers.get(header::HOST).and_then(|v| v.to_str().ok()) == Some(link.public_host.as_str())
+    }
+
+    /// The socket's `Origin` is this host's own: `http://<loopback host>`, or
+    /// `https://<public host>` behind the gateway.
+    fn origin_allowed(&self, headers: &HeaderMap) -> bool {
+        let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else { return false };
+        if let Some(link) = &self.server {
+            if origin == format!("https://{}", link.public_host) {
+                return true;
+            }
+        }
+        loopback_origin(headers, self.port)
+    }
+
+    /// A content ticket's URL: the user-content origin behind the gateway,
+    /// the next loopback port otherwise; `None` when no such origin exists.
+    fn content_url(&self, ticket: &str) -> Option<String> {
+        match &self.server {
+            Some(link) => link.content_origin.as_ref().map(|origin| format!("{origin}/content/{ticket}")),
+            None => Some(format!("http://127.0.0.1:{}/content/{ticket}", self.content_port)),
+        }
+    }
+
+    /// Whether the connection is TLS-fronted (the gateway's), for the CSP.
+    pub fn secure(&self) -> bool {
+        self.server.is_some()
     }
 
     /// Whether a login token exists (the login route works).
@@ -621,7 +721,7 @@ impl WebClientState {
 /// The user-content origin's port: the next one up (plan §3.5 asks for a
 /// separate origin; on loopback a second port is the one unambiguous way).
 pub fn content_port_for(port: u16) -> u16 {
-    port.checked_add(1).unwrap_or(port - 1)
+    port.checked_add(1).unwrap_or(port.saturating_sub(1))
 }
 
 /// Where the web bundle is: `<ENV_PREFIX>WEB_DIST`, else the dev checkout's
@@ -761,7 +861,7 @@ pub fn content_routes(state: WebClientState) -> Router {
 
 /// The refusal every route here starts with: off, or not loopback → 404.
 fn guard(state: &WebClientState, headers: &HeaderMap) -> Option<Response<Body>> {
-    (!state.enabled || !loopback_request(headers, state.port)).then(not_found)
+    (!state.enabled || !state.host_allowed(headers, state.port)).then(not_found)
 }
 
 async fn redirect_to_app(State(state): State<WebClientState>, headers: HeaderMap) -> Response<Body> {
@@ -930,7 +1030,7 @@ async fn socket(
     if let Some(refused) = guard(&state, &headers) {
         return refused;
     }
-    if !loopback_origin(&headers, state.port) || headers.get(header::ORIGIN).is_none() {
+    if !state.origin_allowed(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some((session, role)) = state.authenticate(&headers) else {
@@ -1034,7 +1134,7 @@ fn killed_pty_id(cmd: &str, args: &Value) -> Option<String> {
 /// One client's connection, from `hello` to the grace timer after it closes.
 /// `role` is the session's, decided at login — never by anything the client
 /// sends on the socket.
-async fn serve_socket(socket: WebSocket, state: WebClientState, session: String, role: Role, resume: Option<String>) {
+async fn serve_socket(socket: WebSocket, state: WebClientState, session: SessionRef, role: Role, resume: Option<String>) {
     // Resume keeps the id (and with it the terminal router's view keys and the
     // PTYs) when the page that lost its link is back inside the grace window
     // — or before the server even noticed the old link die.
@@ -1074,7 +1174,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
                             Inbound::Call { id, cmd, args: _ } if cmd == LOGOUT_CMD => {
                                 // Answered in line, then the connection ends:
                                 // the session is gone, nothing more is served.
-                                state.lock_sessions().logout(&session);
+                                state.end_session(&session);
                                 let _ = ws_tx.send(Message::Text(ret_frame(id, &Ok(Value::Null)).into())).await;
                                 break;
                             }
@@ -1137,7 +1237,7 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: String,
             }
             _ = ping.tick() => {
                 // The session must still be live, and the peer must answer.
-                if state.lock_sessions().touch(&session).is_none() { break; }
+                if !state.session_live(&session) { break; }
                 if unanswered_pings >= 2 { break; }
                 unanswered_pings += 1;
                 if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
@@ -1224,8 +1324,13 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, r
             };
             let project_id = args.get("projectId").and_then(Value::as_str).map(str::to_string);
             let download = args.get("download").and_then(Value::as_bool).unwrap_or(false);
-            let ticket = state.tickets.lock().unwrap_or_else(PoisonError::into_inner).mint(path, project_id, download);
-            let out = ticket.map(|t| json!({ "url": format!("http://127.0.0.1:{}/content/{t}", state.content_port) })).map_err(Value::String);
+            let out = match state.tickets.lock().unwrap_or_else(PoisonError::into_inner).mint(path, project_id, download) {
+                Ok(ticket) => match state.content_url(&ticket) {
+                    Some(url) => Ok(json!({ "url": url })),
+                    None => Err(Value::String("desktop_file_ticket: this server has no user-content origin".into())),
+                },
+                Err(e) => Err(Value::String(e)),
+            };
             return Answer::Text(ret_frame(id, &out));
         }
         FILE_GRANT_CMD => {
@@ -1323,7 +1428,11 @@ fn active_type(mime: &str) -> bool {
 }
 
 async fn content(State(state): State<WebClientState>, headers: HeaderMap, RoutePath(ticket): RoutePath<String>) -> Response<Body> {
-    if !state.enabled || !loopback_request(&headers, state.content_port) {
+    let content_host_ok = match &state.server {
+        Some(link) => link.content_origin.as_deref().map(server::host_of).is_some_and(|host| headers.get(header::HOST).and_then(|v| v.to_str().ok()) == Some(host.as_str())),
+        None => loopback_request(&headers, state.content_port),
+    };
+    if !state.enabled || !content_host_ok {
         return not_found();
     }
     let Some((path, project_id, download)) = state.tickets.lock().unwrap_or_else(PoisonError::into_inner).get(&ticket) else {
@@ -1367,10 +1476,11 @@ fn disposition_header(kind: &str, name: &str) -> String {
 
 /// The CSP of the web bundle's pages: the desktop's (`tauri.conf.json`) with
 /// the socket in `connect-src` and the shell's inline-script hashes.
-pub fn page_csp(host: &str, inline_hashes: &str) -> String {
+pub fn page_csp(host: &str, inline_hashes: &str, secure: bool) -> String {
     let hashes = if inline_hashes.is_empty() { String::new() } else { format!(" {inline_hashes}") };
+    let ws = if secure { "wss" } else { "ws" };
     format!(
-        "default-src 'self'; script-src 'self' blob:{hashes}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' ws://{host}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        "default-src 'self'; script-src 'self' blob:{hashes}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' {ws}://{host}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
 }
 
@@ -1427,8 +1537,9 @@ mod tests {
         assert_eq!(hashes.len(), 2);
         let expected = format!("'sha256-{}'", base64ct::Base64::encode_string(&Sha256::digest(b"var a=1;")));
         assert_eq!(hashes[0], expected);
-        assert!(page_csp("127.0.0.1:8742", &hashes.join(" ")).contains(&expected));
-        assert!(page_csp("127.0.0.1:8742", "").contains("connect-src 'self' ws://127.0.0.1:8742;"));
+        assert!(page_csp("127.0.0.1:8742", &hashes.join(" "), false).contains(&expected));
+        assert!(page_csp("127.0.0.1:8742", "", false).contains("connect-src 'self' ws://127.0.0.1:8742;"));
+        assert!(page_csp("desk.example.ts.net", "", true).contains("connect-src 'self' wss://desk.example.ts.net;"));
     }
 
     #[test]
