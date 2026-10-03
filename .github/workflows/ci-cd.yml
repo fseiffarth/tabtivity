@@ -69,7 +69,7 @@ jobs:
           echo "Scanning ${base}..${HEAD_SHA}"
           scripts/privacy-check.sh "$base" "$HEAD_SHA"
 
-  # The app's name is spelled in the brand modules only (src-tauri/src/brand.rs,
+  # The app's name is spelled in the brand modules only (src-core/src/brand.rs,
   # src/lib/brand.ts, scripts/lib/brand.sh); everything else reads it from
   # there. This fails when a tracked file outside the script's commented
   # allowlist spells it itself. No hook runs it, so CI is where it is enforced.

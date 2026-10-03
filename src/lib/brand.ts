@@ -3,7 +3,7 @@
  * `BRAND.display` (the i18n dictionaries through their `{app}` placeholder),
  * and every name the frontend persists or shares with the backend is built
  * here, so a rename edits this file and its Rust twin
- * `src-tauri/src/brand.rs`, nothing else. The phone PWA imports this module
+ * `src-core/src/brand.rs`, nothing else. The phone PWA imports this module
  * too.
  *
  * Each such name comes as a pair: `NAMES.x`, built from the current brand,

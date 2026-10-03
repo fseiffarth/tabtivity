@@ -1,5 +1,5 @@
 /**
- * Reads the backend brand module (`src-tauri/src/brand.rs`) so a test can hold
+ * Reads the backend brand module (`src-core/src/brand.rs`) so a test can hold
  * the frontend's copy of a name to it. The two sides are built separately, so
  * nothing but a test keeps a shared name — a protocol, a storage key, a
  * header — the same on both.
@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 
 // vitest runs from the repo root, as the other source-reading tests assume.
-const SOURCE: string = readFileSync("src-tauri/src/brand.rs", "utf8");
+const SOURCE: string = readFileSync("src-core/src/brand.rs", "utf8");
 
 function macroLiteral(name: string): string {
   const m = new RegExp(`macro_rules! ${name} \\{\\s*\\(\\) => \\{\\s*"([^"]*)"`).exec(SOURCE);

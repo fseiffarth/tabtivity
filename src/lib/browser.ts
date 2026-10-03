@@ -261,7 +261,7 @@ export interface Phrase {
  * like a crash.
  *
  * The list is therefore a **contract with the Rust side**: `REASON_TOKENS` in
- * `src-tauri/src/services/web_safety.rs` is the canonical enumeration, a Rust
+ * `src-core/src/services/web_safety.rs` is the canonical enumeration, a Rust
  * test proves it covers every `BlockReason`/`ConfirmReason` variant, and
  * `src/__tests__/browser/BrowserTripwire.test.ts` reads that array out of the Rust
  * source and fails if any entry is missing here or from `en`. Neither half can

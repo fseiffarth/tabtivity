@@ -47,7 +47,7 @@ REPO_LOWER="$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]')"
 
 skip() {
   case "$1" in
-    src-tauri/src/brand.rs | src/lib/brand.ts) return 0 ;;
+    src-core/src/brand.rs | src/lib/brand.ts) return 0 ;;
     scripts/rename-codemods/* | scripts/brand-flip.sh | scripts/brand-check.sh | scripts/lib/brand.sh) return 0 ;;
     src-tauri/src/services/app_update.rs) return 0 ;;
     test-fixtures/* | src/__tests__/fixtures/* | src-tauri/tests/fixtures/*) return 0 ;;

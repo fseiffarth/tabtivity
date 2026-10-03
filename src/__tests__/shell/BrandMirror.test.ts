@@ -1,6 +1,6 @@
 /**
  * The frontend brand module (`src/lib/brand.ts`) and the backend one
- * (`src-tauri/src/brand.rs`) are built separately, yet many names cross
+ * (`src-core/src/brand.rs`) are built separately, yet many names cross
  * between them: a header the webview sends and the backend reads, a tab
  * command one side saves and the other maps, a folder both look into. This
  * holds every shared name to the backend's, for the current brand and the old
