@@ -106,6 +106,8 @@ StateDirectory={state}\n\
 StateDirectoryMode=0755\n\
 Restart=on-failure\n\
 RestartSec=2\n\
+# Two descriptors per forwarded connection (server::MAX_CONNECTIONS of them).\n\
+LimitNOFILE=8192\n\
 NoNewPrivileges=yes\n\
 ProtectSystem=strict\n\
 ProtectHome=yes\n\
@@ -274,6 +276,7 @@ mod tests {
         assert!(tmux.contains(&format!("-L {SLUG} -D")) && tmux.contains("PrivateTmp=yes") && tmux.contains("RuntimeDirectoryMode=0700"));
         assert!(serverd_socket().contains("SocketMode=0660") && serverd_socket().contains(&format!("SocketGroup={SLUG}-gw")));
         assert!(gateway_service().contains("ProtectSystem=strict"), "the gateway runs no fence; harden it");
+        assert!(gateway_service().contains("\nLimitNOFILE=8192\n"), "room for server::MAX_CONNECTIONS forwarded connections");
     }
 
     #[test]

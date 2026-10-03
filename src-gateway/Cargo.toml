@@ -46,5 +46,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# `limits.rs` (compiled from src-tauri) tests its deadlines on a paused clock.
+tokio = { version = "1.52.3", features = ["full", "test-util"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.29"

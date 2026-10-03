@@ -31,6 +31,15 @@ pub mod prereq;
 pub mod statics;
 pub mod units;
 
+/// The sidecar's accept-side bounds (connection cap, handshake, body and
+/// idle deadlines), the same file: without them any tailnet peer — or any
+/// local user, the listeners being on loopback — could hold the gateway's
+/// descriptors with idle connections and take every account offline.
+#[cfg(unix)]
+#[allow(dead_code)]
+#[path = "../../src-tauri/src/services/mobile_control/limits.rs"]
+pub mod limits;
+
 #[cfg(unix)]
 pub mod helper;
 #[cfg(unix)]

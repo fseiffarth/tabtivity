@@ -1,4 +1,6 @@
-//! Accept-side bounds for the mobile host.
+//! Accept-side bounds for the mobile host — and for the server gateway,
+//! which compiles this file by `#[path]` (`src-gateway/src/lib.rs`): keep it
+//! to `std`, `tokio` and `axum`, no `crate::` paths.
 //!
 //! `axum::serve` applies none of its own: hyper has no default header-read
 //! timeout and nothing capped concurrent connections, so an unauthenticated
@@ -71,9 +73,16 @@ pub struct GuardedListener {
 
 impl GuardedListener {
     pub fn new(inner: TcpListener) -> Self {
+        Self::with_capacity(inner, MAX_CONNECTIONS)
+    }
+
+    /// The same bounds with room for `connections` at once: the server
+    /// gateway (`src-gateway`, which compiles this file by `#[path]`) fronts
+    /// every account's devices, not one phone.
+    pub fn with_capacity(inner: TcpListener, connections: usize) -> Self {
         Self {
             inner,
-            permits: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            permits: Arc::new(Semaphore::new(connections)),
         }
     }
 }
@@ -271,7 +280,8 @@ impl AsyncWrite for GuardedStream {
 /// `SO_PEERCRED`, checked here before a byte is read. The user's own shells
 /// (same uid as the daemon) are refused too: the daemon trusts the gateway's
 /// routing headers only because nothing else can reach it. Bounded like the
-/// loopback listener; the handshake/body/idle deadlines are the gateway's.
+/// loopback listener; the handshake/body/idle deadlines are the gateway's
+/// (its listeners are this file's [`GuardedListener`]).
 #[cfg(unix)]
 pub struct PeerGatedUnixListener {
     inner: tokio::net::UnixListener,

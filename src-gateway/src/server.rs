@@ -50,6 +50,12 @@ const PAIR_PER_MINUTE: u32 = 20;
 const AUTH_PER_MINUTE: u32 = 240;
 /// How often the account table is re-read for revocations.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
+/// Connections the app listener holds at once (every account's phones and
+/// browsers together; each forwarded one costs a second descriptor for the
+/// daemon's socket — the unit's `LimitNOFILE` leaves room for both).
+pub const MAX_CONNECTIONS: usize = 2048;
+/// The user-content listener: short-lived ticket fetches.
+pub const MAX_CONTENT_CONNECTIONS: usize = 256;
 
 struct Window {
     started: Instant,
@@ -535,7 +541,7 @@ pub async fn serve(config: GatewayConfig) -> Result<(), String> {
         let content_listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?;
         let app = content_router(gw.clone());
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(content_listener, app).await {
+            if let Err(error) = axum::serve(crate::limits::GuardedListener::with_capacity(content_listener, MAX_CONTENT_CONNECTIONS), app).await {
                 eprintln!("gateway: content listener: {error}");
             }
         });
@@ -549,7 +555,7 @@ pub async fn serve(config: GatewayConfig) -> Result<(), String> {
         }
     });
     eprintln!("gateway: {} on {} ({} accounts)", gw.config.origin, gw.config.listen, gw.db().accounts.len());
-    axum::serve(listener, router(gw)).await.map_err(|e| e.to_string())
+    axum::serve(crate::limits::GuardedListener::with_capacity(listener, MAX_CONNECTIONS), router(gw)).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
