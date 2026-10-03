@@ -14,8 +14,8 @@
 //!   header (a browser page) is refused outright.
 //! * **What it forwards**: only the provider paths an agent needs
 //!   ([`allowed`]: messages, token counting, the model list), only a fixed
-//!   set of request headers, the token replaced by the key. The response is
-//!   streamed back as it arrives.
+//!   set of request headers, the token replaced by the key. A streamed
+//!   response passes back as it arrives.
 //! * **Budgets**: before a request is forwarded, the user's billed tokens of
 //!   the month ([`keys_wire::billed`]) are checked against their budget (the
 //!   user's own, else the key's default, else none); over it → `403`. The
@@ -23,7 +23,9 @@
 //! * **Usage**: every `messages` answer is metered from the provider's own
 //!   `usage` fields (the JSON answer, or the stream's `message_start` /
 //!   `message_delta` events) and added to the user's month — also when the
-//!   client goes away mid-stream (what was seen until then).
+//!   client goes away mid-stream (what was seen until then, the streamed
+//!   text standing in for an output count that never came). A JSON answer is
+//!   metered whole before it is handed over.
 //! * **Revocation**: the token is looked up per request, so taking a user off
 //!   the key's list, a renewed token, a withdrawn key or a switch to direct
 //!   delivery stops the next request (`401`; Claude then runs its helper
@@ -60,6 +62,10 @@ pub const MAX_PER_USER: usize = 16;
 pub const AUDIT_EVERY: u64 = 10 * 60;
 /// A non-streamed answer is metered when it is no larger than this.
 const MAX_METERED_JSON: usize = 8 * 1024 * 1024;
+/// Bytes of streamed text per output token, for a stream that ended before
+/// the provider's final count (a conservative guess: English runs nearer
+/// four, so an interrupted answer is billed a little high, never free).
+const BYTES_PER_TOKEN_ESTIMATE: u64 = 3;
 pub const VERB_USED: &str = "agent-key-brokered";
 pub const VERB_OVER_BUDGET: &str = "agent-key-over-budget";
 
@@ -75,7 +81,9 @@ pub fn allowed(cli: &str, method: &Method, rest: &str) -> bool {
         "claude" => match (method, rest) {
             (&Method::POST, "v1/messages" | "v1/messages/count_tokens") => true,
             (&Method::GET, "v1/models") => true,
-            (&Method::GET, model) => model.strip_prefix("v1/models/").is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'@'))),
+            // A model id; `.` and `..` would be dot segments the URL parser
+            // resolves (`v1/models/..` is `v1/`), so they are no id.
+            (&Method::GET, model) => model.strip_prefix("v1/models/").is_some_and(|id| !id.is_empty() && id != "." && id != ".." && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'@'))),
             _ => false,
         },
         _ => false,
@@ -244,6 +252,12 @@ fn take_usage(into: &mut Usage, usage: &Value) {
 /// Meters one `messages` answer as it streams past and records it when the
 /// answer is done or dropped (a client gone mid-stream still pays for what
 /// the provider produced until then).
+///
+/// A stream's output count arrives only in its closing `message_delta`, so
+/// a client that stops reading just before it would have had every word for
+/// one token. Until that count is seen, the text the stream carried
+/// (`content_block_delta`s) stands in for it, estimated at
+/// [`BYTES_PER_TOKEN_ESTIMATE`].
 pub struct Meter {
     broker: Arc<Broker>,
     cli: String,
@@ -253,11 +267,15 @@ pub struct Meter {
     pending: Vec<u8>,
     usage: Usage,
     overflow: bool,
+    /// Bytes of streamed content seen (text, tool input, thinking).
+    streamed: u64,
+    /// The stream's closing count (`message_delta` with `usage`) was seen.
+    counted: bool,
 }
 
 impl Meter {
     fn new(broker: Arc<Broker>, cli: &str, user: &str, sse: bool) -> Self {
-        Meter { broker, cli: cli.into(), user: user.into(), sse, pending: Vec::new(), usage: Usage::default(), overflow: false }
+        Meter { broker, cli: cli.into(), user: user.into(), sse, pending: Vec::new(), usage: Usage::default(), overflow: false, streamed: 0, counted: false }
     }
 
     pub fn feed(&mut self, chunk: &[u8]) {
@@ -293,6 +311,16 @@ impl Meter {
             Some("message_delta") => {
                 if let Some(usage) = event.get("usage") {
                     take_usage(&mut self.usage, usage);
+                    self.counted = true;
+                }
+            }
+            Some("content_block_delta") => {
+                if let Some(delta) = event.get("delta") {
+                    for field in ["text", "partial_json", "thinking"] {
+                        if let Some(text) = delta.get(field).and_then(Value::as_str) {
+                            self.streamed = self.streamed.saturating_add(text.len() as u64);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -314,6 +342,9 @@ impl Drop for Meter {
         if self.sse && !self.pending.is_empty() {
             let rest = std::mem::take(&mut self.pending);
             self.line(&rest);
+        }
+        if self.sse && !self.counted {
+            self.usage.output = self.usage.output.max(self.streamed.div_ceil(BYTES_PER_TOKEN_ESTIMATE));
         }
         self.usage.requests = 1;
         self.broker.record(&self.cli, &self.user, &self.usage);
@@ -378,7 +409,7 @@ async fn handle(State(broker): State<Arc<Broker>>, RoutePath((cli, rest)): Route
     key_value.set_sensitive(true);
     out.insert(HeaderName::from_static("x-api-key"), key_value);
     drop(key);
-    let answer = match broker.client.request(method.clone(), &url).headers(out).body(body).send().await {
+    let mut answer = match broker.client.request(method.clone(), &url).headers(out).body(body).send().await {
         Ok(answer) => answer,
         Err(e) => {
             eprintln!("broker: {cli}: upstream: {}", e.without_url());
@@ -396,7 +427,33 @@ async fn handle(State(broker): State<Arc<Broker>>, RoutePath((cli, rest)): Route
         }
     }
     let sse = answer.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("text/event-stream"));
-    let meter = (metered && status.is_success()).then(|| Meter::new(broker.clone(), &cli, &user, sse));
+    let mut meter = (metered && status.is_success()).then(|| Meter::new(broker.clone(), &cli, &user, sse));
+    if let Some(mut json) = meter.take_if(|_| !sse) {
+        // A JSON answer names its `usage` last: were it streamed through, a
+        // client could read the content and leave before the count. It is
+        // metered whole first, then handed over.
+        let mut whole = Vec::new();
+        loop {
+            match answer.chunk().await {
+                Ok(Some(chunk)) if whole.len() + chunk.len() <= MAX_METERED_JSON => {
+                    json.feed(&chunk);
+                    whole.extend_from_slice(&chunk);
+                }
+                Ok(Some(_)) => return refuse(StatusCode::BAD_GATEWAY, "api_error", "the provider's answer is too large for the key broker"),
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("broker: {cli}: upstream: {}", e.without_url());
+                    return refuse(StatusCode::BAD_GATEWAY, "api_error", "the provider's answer broke off");
+                }
+            }
+        }
+        drop(json);
+        drop((slot, _permit));
+        let mut response = Response::new(Body::from(whole));
+        *response.status_mut() = status;
+        *response.headers_mut() = response_headers;
+        return response;
+    }
     let state = (answer, meter, slot, _permit);
     let stream = futures_util::stream::unfold(Some(state), |state| async move {
         let (mut answer, mut meter, slot, permit) = state?;

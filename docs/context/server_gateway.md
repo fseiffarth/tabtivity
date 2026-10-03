@@ -479,7 +479,10 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
   the administrator's key); a fixed list of request headers, the token
   replaced by the key in the provider's key header (the client's `x-api-key` and
   `Authorization` both dropped), cookies and everything else stay behind.
-  Answers stream back as they arrive (`reqwest` `chunk()` → axum body).
+  Streamed answers pass back as they arrive (`reqwest` `chunk()` → axum
+  body); a metered JSON answer is read whole and metered first (its
+  `usage` comes last, so a client could otherwise take the content and
+  leave before the count).
 - **Budgets and metering.** Monthly (UTC calendar month), in *billed
   tokens*: input, cache writes and output in full, cache reads at a tenth
   (`keys_wire::billed`, roughly the price ratio; one number whatever the
@@ -490,7 +493,10 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
   read from the provider's own answer: the JSON `usage`, or the stream's
   `message_start` / `message_delta` events (each field the larger seen).
   The meter records on drop, so a client gone mid-stream still pays for
-  what was produced until then. Twelve months kept per user.
+  what was produced until then; a stream's output count comes only in its
+  closing `message_delta`, so one left before it bills the streamed text
+  instead (deltas' bytes at three a token — an interrupted answer is billed
+  a little high, never free). Twelve months kept per user.
 - **"Into the user's own stats"**: the user's daemon asks the keeper for
   its own month (`Request::Usage`, listed users only) and Manage CLIs shows
   it beside the switch; the transcripts the token-stats recap already reads

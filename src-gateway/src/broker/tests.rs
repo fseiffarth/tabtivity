@@ -213,6 +213,36 @@ fn the_meter_reads_split_events_and_records_on_drop() {
     assert_eq!((usage.input, usage.output, usage.requests), (10, 14, 2));
 }
 
+/// P5 review: a stream left before its closing count still bills the text
+/// it carried, and a JSON answer is metered before its first byte is handed
+/// over — leaving early never makes a request free.
+#[test]
+fn a_stream_left_before_its_count_bills_the_text_it_carried() {
+    let dir = tempfile::tempdir().unwrap();
+    let broker = Arc::new(Broker::new(dir.path().to_path_buf(), HashMap::new()).unwrap());
+    let mut meter = Meter::new(broker, "claude", "dave", true);
+    meter.feed(b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9,\"output_tokens\":1}}}\n\n");
+    meter.feed(b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello world!\"}}\n\n");
+    meter.feed(b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"a\\\":1}\"}}\n\n");
+    drop(meter);
+    let usage = keeper::usage_in(dir.path(), "claude", "dave").months.into_values().next().unwrap();
+    assert_eq!((usage.input, usage.output, usage.requests), (9, 7, 1), "12 + 7 bytes at three a token, not the one token message_start names");
+}
+
+#[tokio::test]
+async fn a_json_answer_is_metered_before_it_is_handed_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let (alice, _) = brokered(dir.path());
+    let (upstream, _) = fake_provider().await;
+    let base = start(dir.path(), upstream).await;
+    let response = reqwest::Client::new().post(format!("{base}/v1/messages")).header("x-api-key", &alice).body(r#"{"model":"m"}"#).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    // Nothing of the body read yet, and the client goes: already counted.
+    drop(response);
+    let usage = keeper::usage_in(dir.path(), "claude", "alice").months.remove(&keys_wire::month_of(crate::now())).unwrap_or_default();
+    assert_eq!((usage.input, usage.output, usage.requests), (7, 3, 1));
+}
+
 #[test]
 fn only_the_paths_an_agent_needs_are_forwarded() {
     for (method, rest, ok) in [
@@ -221,6 +251,9 @@ fn only_the_paths_an_agent_needs_are_forwarded() {
         (Method::GET, "v1/models", true),
         (Method::GET, "v1/models/claude-x-1", true),
         (Method::GET, "v1/models/../files", false),
+        (Method::GET, "v1/models/..", false),
+        (Method::GET, "v1/models/.", false),
+        (Method::GET, "v1/models/claude-3.5", true),
         (Method::GET, "v1/messages", false),
         (Method::POST, "v1/messages/batches", false),
         (Method::POST, "v1/files", false),
