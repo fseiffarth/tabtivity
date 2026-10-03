@@ -330,8 +330,9 @@ pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Resu
 /// the ask is open again, so the card stays usable and a retry is not told
 /// `answered`. Only that answer is undone — another view's answer
 /// (`answered`), an ask a newer one of this tab has replaced since
-/// (`superseded`), or one withdrawn, expired or whose tab is gone (`gone`)
-/// stays closed. Reopening an ask already open again is not an error.
+/// (`superseded`), one the agent withdrew after it was answered
+/// (`answered`: `markup_withdraw` spends the receipt), or one withdrawn,
+/// expired or whose tab is gone (`gone`) stays closed. Reopening an ask already open again is not an error.
 pub fn reopen(project: &str, target: &str, id: &str, receipt: &str) -> Result<(), AnswerError> {
     let mut asks = store().lock().unwrap_or_else(|p| p.into_inner());
     let gone = prune(&mut asks);
@@ -669,7 +670,14 @@ fn call_withdraw(project: &str, target: &str, args: &Value) -> Value {
     let gone = prune(&mut asks);
     let withdrawn = match open_index(&asks, project, target, &args.id) {
         Ok(at) => { asks[at].state = State::Withdrawn; true }
-        Err(_) => false,
+        Err(_) => {
+            // Answered, its prompt maybe still on its way: the agent no longer
+            // wants it, so a failed delivery must not bring the card back.
+            if let Some(ask) = asks.iter_mut().find(|a| a.id == args.id && a.project == project && a.target == target && a.state == State::Answered) {
+                ask.receipt = None;
+            }
+            false
+        }
     };
     drop(asks);
     if gone || withdrawn { changed(); }
@@ -1019,6 +1027,13 @@ mod tests {
         let newer_id = newer["id"].as_str().unwrap();
         call(&s, TOOL_WITHDRAW, json!({"id": newer_id}), &ctx_on());
         assert_eq!(reopen(&project, &target, newer_id, "x"), Err(AnswerError::Gone));
+        // Withdrawn while its answer was on the way: a failed delivery does
+        // not bring it back.
+        let last = call(&s, TOOL_ASK, json!({"questions": [q("c?", &["x", "y"])]}), &ctx_on())["id"].as_str().unwrap().to_string();
+        let taken = answer(&project, &target, &last, &pick).unwrap();
+        assert_eq!(call(&s, TOOL_WITHDRAW, json!({"id": last}), &ctx_on())["status"], "not_open");
+        assert_eq!(reopen(&project, &target, &last, &taken.receipt), Err(AnswerError::Answered));
+        assert!(list(&project, &target, Shown::All).is_empty());
         root_mcp::revoke_tab(&s.identity.tab);
         sweep();
         assert_eq!(reopen(&project, &target, &id, &second.receipt), Err(AnswerError::Gone), "the tab is gone");
