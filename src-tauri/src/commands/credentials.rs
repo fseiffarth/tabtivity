@@ -220,6 +220,9 @@ pub async fn credential_paste_to_pty(
     submit: Option<bool>,
 ) -> Result<bool, String> {
     let registry = ctx.get::<RegistryState>();
+    // A server client's login runs in its own PTY onto the tab (TODO #2347):
+    // that is where `pty_write` saw it typed, and where the secret goes.
+    let pty = crate::commands::terminal::pty_id_for(&ctx, registry, pty);
     let account = target.account();
     // The destination must be a terminal the backend has *seen* run the login this
     // credential belongs to (see the login-PTY registry above). Without this the

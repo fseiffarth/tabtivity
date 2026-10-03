@@ -9,7 +9,7 @@ pub type RegistryState = Arc<Mutex<PtyRegistry>>;
 /// The PTY the caller means by `id`: a server client's own attach PTY onto
 /// that tab when it has one (TODO #2347, `PtyRegistry::resolve`), else `id`.
 /// A desktop window never has one, so its calls skip the lookup.
-fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> String {
+pub(crate) fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> String {
     match ctx.caller {
         app_core::Caller::Client(_) => registry.lock().unwrap().resolve(&ctx.caller, &id),
         _ => id,
@@ -368,6 +368,7 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     // (TODO #2347). Its route goes with it: nothing else will ever end it.
     let resolved = pty_id_for(&ctx, registry, id.clone());
     if resolved != id {
+        crate::commands::credentials::forget_login_pty(&resolved);
         let taken = registry.lock().unwrap().take(&resolved);
         crate::terminal::route_remove_all_views(&resolved);
         if let Some(taken) = taken {
