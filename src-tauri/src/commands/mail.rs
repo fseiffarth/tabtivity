@@ -2373,7 +2373,7 @@ async fn sync_inner(
             .unwrap_or(false);
     // How many messages the model may look at per sync, and how long each may
     // take — the classifier is best-effort filing, not a sync precondition.
-    let mut classify_budget: u32 = 20;
+    let mut classify_budget: u32 = classify_budget_per_sync(crate::services::server::is_server());
 
     let mut new_messages = 0u32;
     let mut filtered = 0u32;
@@ -3485,6 +3485,19 @@ async fn fetch_message_text(
     .map_err(|e| e.to_string())??;
 
     Ok((header, text))
+}
+
+/// How many new inbox messages one sync may hand the local classifier. On a
+/// hosted server every user's sync loads the model on the one shared Ollama
+/// (and evicts whatever another user had loaded), so a server classifies a
+/// quarter as many per sync (final review A5); the rest stay unmarked, as a
+/// message the model declined would.
+fn classify_budget_per_sync(server: bool) -> u32 {
+    if server {
+        5
+    } else {
+        20
+    }
 }
 
 /// Run the local model over the still-unmarked new inbox messages a sync just
@@ -5089,6 +5102,12 @@ mod tests {
 
     use super::*;
     use crate::schema::mail::{MailSecurity, MailServer};
+
+    #[test]
+    fn a_server_classifies_fewer_messages_per_sync() {
+        assert_eq!(classify_budget_per_sync(false), 20);
+        assert!(classify_budget_per_sync(true) < classify_budget_per_sync(false));
+    }
 
     #[test]
     fn server_search_cap_reports_omitted_matches() {
