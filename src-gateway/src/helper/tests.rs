@@ -231,6 +231,7 @@ fn verbs_on_existing_users_take_names_from_the_table_only() {
     let remove = plan_user_remove(&db, "alice").unwrap().to_string();
     assert!(!remove.contains("userdel") && !remove.contains("rm "), "the account and its home are never deleted:\n{remove}");
     assert!(remove.contains(&format!("gpasswd --delete alice {}", users())));
+    assert!(remove.contains(&format!("{SLUG}-gateway hub-forget alice")), "a removed account's hub ACL entries go too:\n{remove}");
 }
 
 #[test]
@@ -265,6 +266,12 @@ fn install_creates_only_what_is_missing_and_never_runs_installers_as_root() {
     assert!(text.contains(&format!("--shell /usr/sbin/nologin {}\n", names::auth_account())), "{text}");
     assert!(text.contains(&format!("enable --now {SLUG}-auth-keeper.socket")));
     assert!(!text.contains(&names::keeper_state_dir().display().to_string()), "the helper never makes or chowns the key directory");
+    // The share hub (plan §6.2): its own account, the shared root `0711` and
+    // the hub's, `/srv/<slug>` root's, its socket enabled.
+    assert!(text.contains(&format!("--shell /usr/sbin/nologin {}\n", names::hub_account())), "{text}");
+    assert!(text.contains(&format!("directory /srv/{SLUG}/shared (711, {})", names::hub_account())), "{text}");
+    assert!(text.contains(&format!("directory /srv/{SLUG} (755, root)")), "{text}");
+    assert!(text.contains(&format!("enable --now {SLUG}-hub.socket")));
     let with_auth = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }.with(&names::auth_account(), 992, &[]);
     assert!(!plan_install(&with_auth, "https://desk.example.ts.net", None).unwrap().to_string().contains(&format!("nologin {}\n", names::auth_account())));
     assert!(plan_install(&accounts, "http://plain.example", None).is_err());
@@ -338,7 +345,11 @@ fn install_prepares_the_proc_exception_group_and_only_prints_the_mount_line() {
     assert!(text.contains(&names::proc_dropin("polkit.service").display().to_string()));
     assert!(text.contains("systemctl try-restart polkit.service"));
     assert!(text.contains("print (not applied) the /etc/fstab line") && text.contains("hidepid=invisible"), "{text}");
-    let accounts = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }.with(&names::gateway_account(), 990, &[]).with(&names::cli_account(), 991, &[]);
+    let accounts = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }
+        .with(&names::gateway_account(), 990, &[])
+        .with(&names::cli_account(), 991, &[])
+        .with(&names::hub_account(), 988, &[])
+        .with("root", 0, &[]);
     let plan = plan_install(&accounts, "https://desk.example.ts.net", None).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut rec = Recorder { accounts: Some(&accounts), ..Recorder::default() };

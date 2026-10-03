@@ -27,11 +27,15 @@ pub struct Features {
     pub todo: bool,
     /// Opening a calendar or todo list to other users (P4c).
     pub calendar_sharing: bool,
+    /// Sharing a project with other users through the hub (P4a/P4b). Off:
+    /// no new share and no new member; existing shares keep working until
+    /// their owners stop them.
+    pub project_sharing: bool,
 }
 
 impl Default for Features {
     fn default() -> Self {
-        Self { mail: true, calendar: true, todo: true, calendar_sharing: true }
+        Self { mail: true, calendar: true, todo: true, calendar_sharing: true, project_sharing: true }
     }
 }
 
@@ -68,7 +72,7 @@ impl Policy {
     pub fn fail_closed() -> Policy {
         Policy {
             schema: 1,
-            features: Features { mail: false, calendar: false, todo: false, calendar_sharing: false },
+            features: Features { mail: false, calendar: false, todo: false, calendar_sharing: false, project_sharing: false },
             ollama_allowed_models: Some(Vec::new()),
         }
     }
@@ -106,7 +110,8 @@ mod tests {
         assert!(!policy.features.mail && policy.features.calendar, "missing keys keep their default");
         std::fs::write(&path, b"{oops").unwrap();
         assert!(Policy::load(&path).is_err());
-        assert!(!Policy::fail_closed().features.todo);
+        assert!(!Policy::fail_closed().features.todo && !Policy::fail_closed().features.project_sharing);
+        assert!(policy.features.project_sharing, "a policy written before project sharing existed allows it");
         let mut p = Policy { ollama_allowed_models: Some(vec!["llama3:8b".into(), "hf.co/x/y".into()]), ..Policy::default() };
         assert!(p.validate().is_ok());
         p.ollama_allowed_models = Some(vec!["bad model".into()]);

@@ -27,6 +27,17 @@ pub fn auth_account() -> String {
     format!("{SERVER_ACCOUNT_PREFIX}auth")
 }
 
+/// The share hub's account (`<slug>-hub`, plan §6.2): owns every bare hub
+/// under [`shared_root`] and is the only uid that ever writes one.
+pub fn hub_account() -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}hub")
+}
+
+/// The shared-calendar service's account (`<slug>-cal`, plan §6.7).
+pub fn calendar_account() -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}cal")
+}
+
 /// The `/proc` exception group (`<slug>-proc`): `/proc` is mounted
 /// `hidepid=invisible,gid=<this group>`, and only the system services that
 /// must see every process are in it — never a server user. On a machine with
@@ -72,6 +83,16 @@ pub fn serverd_unit(user: &str, kind: &str) -> String {
 /// `<slug>-auth-keeper.socket` / `.service`: the key keeper.
 pub fn keeper_unit(kind: &str) -> String {
     format!("{SERVER_ACCOUNT_PREFIX}auth-keeper.{kind}")
+}
+
+/// `<slug>-hub.socket` / `.service`: the share hub.
+pub fn hub_unit(kind: &str) -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}hub.{kind}")
+}
+
+/// `<slug>-calendar.socket` / `.service`: the shared-calendar service.
+pub fn calendar_unit(kind: &str) -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}calendar.{kind}")
 }
 
 pub fn tmux_unit(user: &str) -> String {
@@ -133,6 +154,42 @@ pub fn keeper_socket() -> PathBuf {
     PathBuf::from("/run").join(SLUG).join(crate::keys_wire::SOCKET_NAME)
 }
 
+/// `/run/<slug>/hub.sock`: the share hub's socket (systemd's, `0666`; the
+/// hub decides by the caller's uid).
+pub fn hub_socket() -> PathBuf {
+    PathBuf::from("/run").join(SLUG).join(crate::hub_wire::SOCKET_NAME)
+}
+
+/// `/var/lib/<slug>-hub`: the hub's table of shares, its audit log and the
+/// bundles of pushes in flight (`0700`).
+pub fn hub_state_dir() -> PathBuf {
+    PathBuf::from("/var/lib").join(format!("{SERVER_ACCOUNT_PREFIX}hub"))
+}
+
+/// `/srv/<slug>`: root's, `0755`.
+pub fn srv_dir() -> PathBuf {
+    PathBuf::from("/srv").join(SLUG)
+}
+
+/// `/srv/<slug>/shared`: the bare hubs, `<id>.git` each. `0711` and the
+/// hub's: everyone may pass through, nobody but the hub may list it, and
+/// each hub inside is `0700` with a named-user entry per member (§6.2).
+/// Every fence mounts a tmpfs over it and binds back only its own
+/// project's hub (§6.3).
+pub fn shared_root() -> PathBuf {
+    srv_dir().join("shared")
+}
+
+/// `/run/<slug>/calendar.sock`: the shared-calendar service (plan §6.7).
+pub fn calendar_socket() -> PathBuf {
+    PathBuf::from("/run").join(SLUG).join("calendar.sock")
+}
+
+/// `/var/lib/<slug>-calendar`: shared calendars and their members (`0700`).
+pub fn calendar_state_dir() -> PathBuf {
+    PathBuf::from("/var/lib").join(format!("{SERVER_ACCOUNT_PREFIX}calendar"))
+}
+
 /// `/opt/<slug>/agents`: the server-wide CLI install root (§5.1).
 pub fn cli_root() -> PathBuf {
     PathBuf::from("/opt").join(SLUG).join("agents")
@@ -159,5 +216,8 @@ mod tests {
         assert_eq!(crate::wire::socket_path(&socket_dir(), "bob"), PathBuf::from(format!("/run/{SLUG}/users/bob.sock")));
         assert_eq!(keeper_socket(), PathBuf::from(format!("/run/{SLUG}/auth.sock")));
         assert_eq!((auth_account(), keeper_unit("socket")), (format!("{SLUG}-auth"), format!("{SLUG}-auth-keeper.socket")));
+        assert_eq!((hub_account(), hub_unit("service"), hub_socket()), (format!("{SLUG}-hub"), format!("{SLUG}-hub.service"), PathBuf::from(format!("/run/{SLUG}/hub.sock"))));
+        assert_eq!(shared_root(), PathBuf::from(format!("/srv/{SLUG}/shared")));
+        assert_eq!((calendar_account(), calendar_unit("socket"), calendar_socket()), (format!("{SLUG}-cal"), format!("{SLUG}-calendar.socket"), PathBuf::from(format!("/run/{SLUG}/calendar.sock"))));
     }
 }

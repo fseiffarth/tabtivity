@@ -271,6 +271,73 @@ CapabilityBoundingSet=\n",
     )
 }
 
+/// The share hub's socket (plan §6.2): root's, `0666` in the root-owned
+/// `/run/<slug>`, like the key keeper's — the hub decides by each caller's
+/// uid. Fenced agents never reach it (a fresh tmpfs over `/run`); their
+/// pushes go through the user's daemon (§6.3).
+pub fn hub_socket() -> String {
+    format!(
+        "[Unit]\n\
+Description={DISPLAY} share hub socket\n\
+\n\
+[Socket]\n\
+ListenStream={path}\n\
+SocketUser=root\n\
+SocketGroup=root\n\
+SocketMode=0666\n\
+DirectoryMode=0755\n\
+Accept=no\n\
+\n\
+[Install]\n\
+WantedBy=sockets.target\n",
+        path = names::hub_socket().display(),
+    )
+}
+
+/// The share hub: owns `/srv/<slug>/shared` (the one writable path) and
+/// runs git on it, as `<slug>-hub`, with no network and no capabilities.
+/// `UMask=0077`: a new hub is the hub's alone until its ACL names someone.
+pub fn hub_service() -> String {
+    format!(
+        "[Unit]\n\
+Description={DISPLAY} share hub (shared projects' bare repositories)\n\
+Requires={socket}\n\
+After={socket}\n\
+\n\
+[Service]\n\
+Type=simple\n\
+User={hub}\n\
+Group={hub}\n\
+ExecStart={bin} hub\n\
+StateDirectory={state}\n\
+StateDirectoryMode=0700\n\
+ReadWritePaths={shared}\n\
+UMask=0077\n\
+Restart=on-failure\n\
+RestartSec=2\n\
+NoNewPrivileges=yes\n\
+ProtectSystem=strict\n\
+ProtectHome=yes\n\
+PrivateTmp=yes\n\
+PrivateDevices=yes\n\
+PrivateNetwork=yes\n\
+ProtectProc=invisible\n\
+ProtectKernelTunables=yes\n\
+ProtectKernelModules=yes\n\
+ProtectControlGroups=yes\n\
+RestrictAddressFamilies=AF_UNIX\n\
+RestrictNamespaces=yes\n\
+LockPersonality=yes\n\
+SystemCallArchitectures=native\n\
+CapabilityBoundingSet=\n",
+        socket = names::hub_unit("socket"),
+        hub = names::hub_account(),
+        bin = names::gateway_binary().display(),
+        state = names::hub_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+        shared = names::shared_root().display(),
+    )
+}
+
 /// The drop-in giving a system unit the `/proc` exception group.
 pub fn proc_dropin() -> String {
     format!("# {DISPLAY}: /proc is hidepid=invisible; this service must see every process.\n[Service]\nSupplementaryGroups={}\n", names::proc_group())
@@ -328,6 +395,8 @@ pub fn render_all(d: &Deployment) -> Rendered {
         (PathBuf::from("/etc/tmpfiles.d").join(format!("{SLUG}.conf")), tmpfiles(), 0o644),
         (unit(names::keeper_unit("socket")), keeper_socket(), 0o644),
         (unit(names::keeper_unit("service")), keeper_service(), 0o644),
+        (unit(names::hub_unit("socket")), hub_socket(), 0o644),
+        (unit(names::hub_unit("service")), hub_service(), 0o644),
     ]
 }
 
@@ -362,7 +431,7 @@ mod tests {
     #[test]
     fn the_install_set_is_complete_and_the_env_file_names_the_deployment() {
         let all = render_all(&deployment());
-        assert_eq!(all.len(), 9);
+        assert_eq!(all.len(), 11);
         let env_file = &all[0].1;
         assert!(env_file.contains("SERVER_ORIGIN=https://desk.example.ts.net\n"), "{env_file}");
         assert!(env_file.contains("SERVER_GATEWAY_UID=990\n"));
@@ -377,6 +446,16 @@ mod tests {
         assert!(socket.contains(&format!("ListenStream=/run/{SLUG}/auth.sock\n")) && socket.contains("SocketUser=root\n") && socket.contains("SocketMode=0666\n"), "{socket}");
         let service = keeper_service();
         for needed in ["StateDirectoryMode=0700\n", &format!("User={SLUG}-auth\n"), &format!("StateDirectory={SLUG}-auth\n"), "UMask=0077\n", "PrivateNetwork=yes\n", "RestrictAddressFamilies=AF_UNIX\n", "ProtectSystem=strict\n", "-gateway keeper\n"] {
+            assert!(service.contains(needed), "{needed} missing:\n{service}");
+        }
+    }
+
+    #[test]
+    fn the_share_hub_owns_only_the_shared_root_and_has_no_network() {
+        let socket = hub_socket();
+        assert!(socket.contains(&format!("ListenStream=/run/{SLUG}/hub.sock\n")) && socket.contains("SocketMode=0666\n") && socket.contains("SocketUser=root\n"), "{socket}");
+        let service = hub_service();
+        for needed in [&format!("User={SLUG}-hub\n"), &format!("ReadWritePaths=/srv/{SLUG}/shared\n"), "ProtectSystem=strict\n", "PrivateNetwork=yes\n", "UMask=0077\n", "-gateway hub\n", "CapabilityBoundingSet=\n"] {
             assert!(service.contains(needed), "{needed} missing:\n{service}");
         }
     }

@@ -209,6 +209,14 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     if accounts.lookup(&auth).is_none() {
         steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", nologin, &auth]));
     }
+    // The share hub's account and its root (plan §6.2): `/srv/<slug>` is
+    // root's, the shared root the hub's, `0711` — passable, never listable.
+    let hub = names::hub_account();
+    if accounts.lookup(&hub).is_none() {
+        steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", nologin, &hub]));
+    }
+    steps.push(Step::OwnedDir { path: names::srv_dir(), mode: 0o755, owner: "root".into() });
+    steps.push(Step::OwnedDir { path: names::shared_root(), mode: 0o711, owner: hub });
     // `/proc` hidepid=invisible with an exception group for the system
     // services that must see every process (polkit, on a desktop machine).
     if !accounts.group_exists(&names::proc_group()) {
@@ -226,6 +234,7 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     steps.push(run(&["systemctl", "daemon-reload"]));
     steps.push(run(&["systemctl", "enable", "--now", &names::gateway_unit()]));
     steps.push(run(&["systemctl", "enable", "--now", &names::keeper_unit("socket")]));
+    steps.push(run(&["systemctl", "enable", "--now", &names::hub_unit("socket")]));
     for unit in names::PROC_EXCEPTION_UNITS {
         steps.push(run(&["systemctl", "try-restart", unit]));
     }
@@ -274,6 +283,9 @@ pub fn plan_user_remove(db: &Db, user: &str) -> Result<Plan, String> {
             Step::Remove(units::user_slice_path(user)),
             run(&["systemctl", "daemon-reload"]),
             run(&["gpasswd", "--delete", user, &names::users_group()]),
+            // Their named ACL entries on every shared hub go too: a removed
+            // account must not keep reading by path (plan §6.6).
+            run(&[&names::gateway_binary().to_string_lossy(), "hub-forget", user]),
             Step::Audit { user: user.into(), verb: "user-remove".into() },
         ],
     })

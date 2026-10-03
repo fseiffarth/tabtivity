@@ -9,8 +9,10 @@ fn main() {
         match args.first().map(String::as_str) {
             Some("serve") | None => {}
             Some("keeper") => std::process::exit(keeper(&args[1..])),
+            Some("hub") => std::process::exit(hub(&args[1..])),
+            Some("hub-forget") => std::process::exit(hub_forget(&args[1..])),
             Some("--help") | Some("-h") => {
-                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).");
+                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).");
                 return;
             }
             Some(other) => {
@@ -77,6 +79,76 @@ fn keeper(args: &[String]) -> i32 {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{slug}-gateway keeper: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway hub`: the share hub (hosted plan §6.2), started by
+/// `<slug>-hub.service` as `<slug>-hub` on the socket its socket unit
+/// passes; `--socket` binds one itself (a manual test), `--root`/`--dir`
+/// name other places.
+#[cfg(unix)]
+fn hub(args: &[String]) -> i32 {
+    use app_gateway::hub;
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let mut service = hub::default_hub();
+    if let (Some(root), Some(dir)) = (value("--root"), value("--dir")) {
+        service = hub::Hub::new(root.into(), dir.into(), Box::new(hub::SystemHubPeers));
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway hub: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match app_gateway::keeper::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let path = value("--socket").ok_or("no socket from systemd and no --socket PATH")?;
+                tokio::net::UnixListener::bind(&path).map_err(|e| format!("bind {path}: {e}"))?
+            }
+        };
+        eprintln!("{slug}-gateway hub: serving {}", service.root().display());
+        hub::serve(std::sync::Arc::new(service), listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway hub: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway hub-forget USER`: as root, ask the hub to take USER off
+/// every share (their named ACL entries go with it).
+#[cfg(unix)]
+fn hub_forget(args: &[String]) -> i32 {
+    use app_gateway::hub_wire::Request;
+    let slug = app_gateway::brand::SLUG;
+    let Some(user) = args.first().filter(|u| app_gateway::wire::valid_account_name(u)) else {
+        eprintln!("{slug}-gateway hub-forget: an account name is needed");
+        return 2;
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway hub-forget: runtime: {error}");
+            return 1;
+        }
+    };
+    match runtime.block_on(app_gateway::hub::ask(&app_gateway::names::hub_socket(), &Request::Forget { user: user.clone() }, b"")) {
+        Ok(reply) if reply.ok => 0,
+        Ok(reply) => {
+            eprintln!("{slug}-gateway hub-forget: {}", reply.error.unwrap_or_default());
+            1
+        }
+        Err(error) => {
+            eprintln!("{slug}-gateway hub-forget: {error}");
             1
         }
     }

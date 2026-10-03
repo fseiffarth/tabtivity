@@ -100,7 +100,7 @@ impl Peers for SystemPeers {
     }
 }
 
-fn name_of_uid(uid: u32) -> Option<String> {
+pub(crate) fn name_of_uid(uid: u32) -> Option<String> {
     let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
     let mut buf = vec![0 as libc::c_char; 16 * 1024];
     let mut result: *mut libc::passwd = std::ptr::null_mut();

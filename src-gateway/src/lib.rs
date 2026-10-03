@@ -14,6 +14,9 @@
 //! * **Key keeper** ([`keeper`]): the administrator's agent API keys
 //!   (plan §5.4, P3b), held by `<slug>-auth`, handed to a server user's own
 //!   daemon by uid; the gateway offers and withdraws, never reads one back.
+//! * **Share hub** ([`hub`]): `<slug>-hub`, the owner of every bare hub a
+//!   project is shared through (plan §6.2–§6.6, P4); named-user ACLs
+//!   ([`acl`]) for read access, ref rules for pushes.
 //! * [`units`] renders the systemd units and slices; [`prereq`] checks the
 //!   deployment prerequisites of §8.
 //!
@@ -25,6 +28,8 @@ pub mod brand;
 pub mod wire;
 /// The key keeper's protocol, shared with the daemon by `#[path]`.
 pub mod keys_wire;
+/// The share hub's protocol, shared with the daemon by `#[path]`.
+pub mod hub_wire;
 
 pub mod audit;
 pub mod config;
@@ -49,6 +54,9 @@ pub mod limits;
 pub mod helper;
 #[cfg(unix)]
 pub mod keeper;
+#[cfg(unix)]
+pub mod hub;
+pub mod acl;
 pub mod sudoers;
 #[cfg(unix)]
 pub mod proxy;
