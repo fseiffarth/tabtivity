@@ -421,27 +421,39 @@ fn reconcile_home_with(state_dir: &Path, home: &Path, step: Step, holds_key: &Ho
 /// A login a tab wrote all the same — a tab from before the switch
 /// refreshing its token, a `/login` in the tab — is still adopted first, so
 /// a rotated refresh token is not lost; but never a file holding the
-/// administrator's key (a CLI that saved the key it was handed), and nothing
-/// when that cannot be told: the administrator's key never becomes the
-/// user's own login. Only single-file logins are adopted here (every CLI
-/// that can take a key keeps one).
+/// administrator's key (a CLI that saved the key it was handed): the
+/// administrator's key never becomes the user's own login. When that cannot
+/// be told (the keeper unreachable, the key withdrawn), the written file is
+/// neither adopted nor removed — it stays in the home until it can be told:
+/// removing it would lose the only copy of a rotated refresh token, and no
+/// new agent runs beside it meanwhile, since the same keeper answer fails
+/// the next spawn (`agent_keys::inject_env`). Only single-file logins are
+/// adopted here (every CLI that can take a key keeps one).
 fn beside_admin_key(cli: &str, state_dir: &Path, store_dir: &Path, paths: &[AuthPath], home: &Path, step: Step, holds_key: &HoldsAdminKey) {
+    // The bytes of a login file a tab wrote since the store last placed one.
+    let written = |path: &AuthPath| -> Option<Vec<u8>> {
+        let bytes = content(HomeFile::open_existing(home, path.rel)?.read())?;
+        let unchanged = read_placed(store_dir, home, &leaf_of(path.rel)).as_deref() == Some(digest(&bytes).as_str())
+            || content(std::fs::read(store_path_in(state_dir, cli, path)).ok()).as_deref() == Some(bytes.as_slice());
+        (!unchanged).then_some(bytes)
+    };
+    let files = || paths.iter().filter(|p| p.kind == AuthKind::File);
     if step.adopts() {
-        for path in paths.iter().filter(|p| p.kind == AuthKind::File) {
-            let Some(copy) = HomeFile::open_existing(home, path.rel) else { continue };
-            let Some(bytes) = content(copy.read()) else { continue };
-            let leaf = leaf_of(path.rel);
+        for path in files() {
+            let Some(bytes) = written(path) else { continue };
             let store = store_path_in(state_dir, cli, path);
-            let hash = digest(&bytes);
-            let unchanged = read_placed(store_dir, home, &leaf).as_deref() == Some(hash.as_str())
-                || content(std::fs::read(&store).ok()).as_deref() == Some(bytes.as_slice());
-            if !unchanged && holds_key(cli, &bytes) == Some(false) && adopt(cli, store_dir, &store, home, &bytes) {
-                write_placed(store_dir, home, &leaf, &hash);
+            if holds_key(cli, &bytes) == Some(false) && adopt(cli, store_dir, &store, home, &bytes) {
+                write_placed(store_dir, home, &leaf_of(path.rel), &digest(&bytes));
             }
         }
     }
     if step.places() {
-        remove_copies(home, paths);
+        let undecided: Vec<&str> = files()
+            .filter(|path| written(path).is_some_and(|bytes| holds_key(cli, &bytes).is_none()))
+            .map(|path| path.rel)
+            .collect();
+        let leave: Vec<AuthPath> = paths.iter().filter(|p| !undecided.contains(&p.rel)).copied().collect();
+        remove_copies(home, &leave);
         if cli == "claude" {
             if let Some(file) = HomeFile::open_existing(home, ".claude.json") {
                 strip_claude_identity(&file);
@@ -934,18 +946,30 @@ mod tests {
         reconcile_home_with(&state, &home, Step::Both, &never);
         assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
         assert!(!home.join(creds).exists());
-        // A file holding the administrator's key, or one that cannot be
-        // checked, is never adopted.
-        for verdict in [Some(true), None] {
-            std::fs::write(home.join(creds), b"{\"admin\":1}").unwrap();
-            reconcile_home_with(&state, &home, Step::Both, &move |_: &str, _: &[u8]| verdict);
-            assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}", "{verdict:?}");
-            assert!(!home.join(creds).exists());
-        }
+        // A file holding the administrator's key is never adopted, and
+        // leaves the home.
+        std::fs::write(home.join(creds), b"{\"admin\":1}").unwrap();
+        reconcile_home_with(&state, &home, Step::Both, &|_: &str, _: &[u8]| Some(true));
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert!(!home.join(creds).exists());
+        // One that cannot be checked (keeper down, key withdrawn) is neither
+        // adopted nor removed — it may be the only copy of a rotated refresh
+        // token (P3b review) — through the keeper's adopt-then-place passes
+        // too; once it can be told, it is adopted and leaves.
+        std::fs::write(home.join(creds), b"{\"own\":3}").unwrap();
+        let unknown = |_: &str, _: &[u8]| None;
+        reconcile_home_with(&state, &home, Step::Both, &unknown);
+        reconcile_home_with(&state, &home, Step::Adopt, &unknown);
+        reconcile_home_with(&state, &home, Step::Place, &unknown);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":2}");
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "kept until it can be told");
+        reconcile_home_with(&state, &home, Step::Both, &never);
+        assert_eq!(std::fs::read(store_of(&state, "claude", creds)).unwrap(), b"{\"own\":3}");
+        assert!(!home.join(creds).exists());
 
         crate::services::server::agent_keys::set_choice_in(&state, "claude", false).unwrap();
         reconcile_home_in(&state, &home);
-        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":2}", "switching back places the login again");
+        assert_eq!(std::fs::read(home.join(creds)).unwrap(), b"{\"own\":3}", "switching back places the login again");
         let rows = status_with(&state, tmp.path(), &["claude".to_string()].into_iter().collect());
         let claude = rows.iter().find(|r| r.id == "claude").unwrap();
         assert_eq!((claude.api_key_env.as_deref(), claude.admin_key_offered, claude.uses_admin_key), (Some("ANTHROPIC_API_KEY"), true, false));
