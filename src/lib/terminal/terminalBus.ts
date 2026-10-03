@@ -159,12 +159,19 @@ export function sliceBeyond(snapshot: PtyScrollback, seen: number | undefined): 
   if (seen === undefined || seen <= snapshot.startOffset) {
     return { data: snapshot.data, range: { startOffset: snapshot.startOffset, endOffset: snapshot.endOffset } };
   }
-  // Offsets count bytes of decoded text as the backend emitted them; the
-  // retained tail is that same text, so a string slice at the difference is
-  // the right cut (`outputAfterScrollback` in TerminalView makes the same one).
+  // Offsets count UTF-8 bytes of the text as the backend emitted it, not
+  // UTF-16 code units: the cut is made in the encoded bytes and decoded back,
+  // as `outputAfterScrollback` in TerminalView does (final review B8 — a
+  // string slice garbled every replay past non-ASCII output such as `⏺`/`│`).
   const cut = seen - snapshot.startOffset;
-  return { data: snapshot.data.slice(cut), range: { startOffset: seen, endOffset: snapshot.endOffset } };
+  return {
+    data: BYTE_DECODER.decode(BYTE_ENCODER.encode(snapshot.data).slice(cut)),
+    range: { startOffset: seen, endOffset: snapshot.endOffset },
+  };
 }
+
+const BYTE_ENCODER = new TextEncoder();
+const BYTE_DECODER = new TextDecoder();
 
 function subscribe<H>(registry: Map<string, Set<H>>, id: string, handler: H): () => void {
   ensureStarted();
@@ -181,7 +188,14 @@ function subscribe<H>(registry: Map<string, Set<H>>, id: string, handler: H): ()
 }
 
 export function onTerminalOutput(id: string, handler: OutputHandler): () => void {
-  return subscribe(outputHandlers, id, handler);
+  const unsubscribe = subscribe(outputHandlers, id, handler);
+  return () => {
+    unsubscribe();
+    // Only a pane still listening is caught up after a link drop; a PTY no
+    // pane shows any more needs no offset (one entry per PTY otherwise
+    // outlived every closed tab).
+    if (!outputHandlers.has(id)) lastEndOffset.delete(id);
+  };
 }
 
 export function onTerminalReplay(id: string, handler: OutputHandler): () => void {
