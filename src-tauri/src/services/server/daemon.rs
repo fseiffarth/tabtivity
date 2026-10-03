@@ -285,6 +285,15 @@ mod tests {
         // The browser shell asks for a sign-in; through another host nothing exists.
         let (status, _, _) = raw(&socket, "GET", "/desktop/", &[], None).await;
         assert_eq!(status, 401);
+        // The single-user token link (an admin session) does not exist behind
+        // the gateway: the token file is the account's own to read, so a
+        // link signed with it must not raise a user to admin.
+        let token = std::fs::read_to_string(state_dir.join("mobile-control").join(crate::services::mobile_control::web_client::TOKEN_FILE)).expect("the token file");
+        let link = crate::services::mobile_control::web_client::login_url(0, token.trim());
+        let path = &link[link.find("/desktop/login").unwrap()..];
+        let (status, headers, _) = raw(&socket, "GET", path, &[], None).await;
+        assert_eq!(status, 404, "no token login behind the gateway");
+        assert!(header(&headers, "set-cookie").is_none());
         let mut other = UnixStream::connect(&socket).await.unwrap();
         other.write_all(b"GET /desktop/ HTTP/1.1\r\nHost: other.example\r\nConnection: close\r\n\r\n").await.unwrap();
         let mut bytes = Vec::new();

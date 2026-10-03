@@ -642,13 +642,17 @@ impl WebClientState {
     /// The request's live session and its role: a token-link session of this
     /// transport, or — behind the gateway — a device-key session of the
     /// phone store, whose role is what the gateway's header names.
+    ///
+    /// Behind the gateway only the device session counts: the token link is
+    /// the single-user sidecar's, and its session is the box owner's `Admin`
+    /// — on a server the token file is the account's own to read, so honouring
+    /// it would let any user raise their role past the gateway's.
     fn authenticate(&self, headers: &HeaderMap) -> Option<(SessionRef, Role)> {
-        if let Some(token) = session_cookie(headers) {
-            if let Some(role) = self.lock_sessions().touch(&token) {
-                return Some((SessionRef::Web(token), role));
-            }
-        }
-        let link = self.server.as_ref()?;
+        let Some(link) = self.server.as_ref() else {
+            let token = session_cookie(headers)?;
+            let role = self.lock_sessions().touch(&token)?;
+            return Some((SessionRef::Web(token), role));
+        };
         let token = super::host::device_session_cookie(headers)?;
         link.auth.lock().unwrap_or_else(PoisonError::into_inner).touch(token)?;
         Some((SessionRef::Device(token.to_string()), server::gateway_role_in(headers)))
@@ -874,6 +878,11 @@ async fn redirect_to_app(State(state): State<WebClientState>, headers: HeaderMap
 async fn login(State(state): State<WebClientState>, headers: HeaderMap, Query(query): Query<LoginQuery>) -> Response<Body> {
     if let Some(refused) = guard(&state, &headers) {
         return refused;
+    }
+    // Behind the gateway a device signs in with its key; the token link (an
+    // `Admin` session) does not exist there — see `authenticate`.
+    if state.server.is_some() {
+        return not_found();
     }
     // Read at every login: a rotated token file takes effect at once.
     let Ok(expected) = login_token(&state.control_dir) else {
