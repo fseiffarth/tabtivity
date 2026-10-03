@@ -1685,11 +1685,26 @@ pub async fn mail_pgp_import_pick(
     let Some(picked) = rx.await.map_err(|e| e.to_string())? else {
         return Ok(Vec::new());
     };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("could not read that file: {e}"))?;
+    pgp_import_from(state, path).await
+}
+
+/// [`mail_pgp_import_pick`] for a file the browser client picked in its
+/// server-side picker (hosted plan §3.5): `grant` is the single-use id the
+/// transport minted for that pick (`services::pick_grants`), never a path —
+/// rule 2 holds in the browser too. The same import, the same size cap.
+#[tauri::command]
+pub async fn mail_pgp_import_grant(ctx: Ctx, grant: String) -> Result<Vec<PgpKeyInfo>, String> {
+    let state = ctx.get::<MailState>();
+    let picked = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    pgp_import_from(state, picked).await
+}
+
+async fn pgp_import_from(state: &MailState, path: PathBuf) -> Result<Vec<PgpKeyInfo>, String> {
     let rt = state.clone();
     tokio::task::spawn_blocking(move || {
-        let path = picked
-            .into_path()
-            .map_err(|e| format!("could not read that file: {e}"))?;
         // A key file is small; anything huge is not one, and reading it would be
         // the only unbounded read in the mail subsystem.
         let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -4144,6 +4159,18 @@ pub async fn mail_contacts_import(app: AppHandle) -> Result<MailContactsImportRe
         });
     };
     let source = chosen.into_path().map_err(|e| e.to_string())?;
+    contacts_import_from(source).await
+}
+
+/// [`mail_contacts_import`] for a file the browser client picked; `grant` as
+/// in [`mail_pgp_import_grant`].
+#[tauri::command]
+pub async fn mail_contacts_import_grant(ctx: Ctx, grant: String) -> Result<MailContactsImportReport, String> {
+    let picked = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    contacts_import_from(picked).await
+}
+
+async fn contacts_import_from(source: PathBuf) -> Result<MailContactsImportReport, String> {
     tokio::task::spawn_blocking(move || {
         let meta = std::fs::metadata(&source).map_err(|e| e.to_string())?;
         if !meta.is_file() {
@@ -4288,22 +4315,7 @@ const HARVEST_SCAN_CAP: u32 = 50_000;
 /// otherwise how many cards were written.
 #[tauri::command]
 pub async fn mail_contacts_export(app: AppHandle, ids: Vec<String>) -> Result<Option<u32>, String> {
-    let cards = tokio::task::spawn_blocking(move || {
-        let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let book = read_contacts(&contacts_path())?;
-        let wanted: std::collections::HashSet<String> = ids.into_iter().collect();
-        Ok::<_, String>(
-            book.contacts
-                .into_iter()
-                .filter(|c| wanted.is_empty() || wanted.contains(&c.id))
-                .collect::<Vec<_>>(),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    if cards.is_empty() {
-        return Err("there are no contacts to export".into());
-    }
+    let (vcards, count) = contacts_export_text(ids).await?;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
@@ -4319,9 +4331,42 @@ pub async fn mail_contacts_export(app: AppHandle, ids: Vec<String>) -> Result<Op
         return Ok(None);
     };
     let dest = chosen.into_path().map_err(|e| e.to_string())?;
+    write_export(vcards, count, dest).await
+}
+
+/// [`mail_contacts_export`] to a destination the browser client picked;
+/// `grant` as in [`mail_pgp_import_grant`].
+#[tauri::command]
+pub async fn mail_contacts_export_grant(ctx: Ctx, ids: Vec<String>, grant: String) -> Result<Option<u32>, String> {
+    let (vcards, count) = contacts_export_text(ids).await?;
+    let dest = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    write_export(vcards, count, dest).await
+}
+
+/// The cards `ids` name (every card when empty) as vCard text, and how many.
+async fn contacts_export_text(ids: Vec<String>) -> Result<(String, u32), String> {
     tokio::task::spawn_blocking(move || {
-        std::fs::write(&dest, mail_contacts::to_vcards(&cards)).map_err(|e| e.to_string())?;
-        Ok(Some(cards.len() as u32))
+        let _guard = CONTACTS_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let book = read_contacts(&contacts_path())?;
+        let wanted: std::collections::HashSet<String> = ids.into_iter().collect();
+        let cards: Vec<_> = book
+            .contacts
+            .into_iter()
+            .filter(|c| wanted.is_empty() || wanted.contains(&c.id))
+            .collect();
+        if cards.is_empty() {
+            return Err("there are no contacts to export".to_string());
+        }
+        Ok((mail_contacts::to_vcards(&cards), cards.len() as u32))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+async fn write_export(vcards: String, count: u32, dest: PathBuf) -> Result<Option<u32>, String> {
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(&dest, vcards).map_err(|e| e.to_string())?;
+        Ok(Some(count))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4359,13 +4404,37 @@ pub async fn mail_attach_pick(
     let Some(chosen) = chosen else {
         return Ok(Vec::new());
     };
+    let paths: Vec<PathBuf> = chosen.into_iter().filter_map(|f| f.into_path().ok()).collect();
+    stage_attachments(state, draft_id, paths).await
+}
 
+/// [`mail_attach_pick`] for files the browser client picked: one single-use
+/// `grant` per file (`services::pick_grants`), the same copy into the draft's
+/// staging directory, the same boundary — ids come back, nothing else.
+#[tauri::command]
+pub async fn mail_attach_grants(
+    ctx: Ctx,
+    draft_id: String,
+    grants: Vec<String>,
+) -> Result<Vec<StagedAttachment>, String> {
+    let state = ctx.get::<MailState>();
+    let mut picked = Vec::with_capacity(grants.len());
+    for grant in &grants {
+        picked.push(crate::services::pick_grants::redeem(ctx.get(), grant)?);
+    }
+    stage_attachments(state, draft_id, picked).await
+}
+
+async fn stage_attachments(
+    state: &MailState,
+    draft_id: String,
+    paths: Vec<PathBuf>,
+) -> Result<Vec<StagedAttachment>, String> {
     let rt = state.clone();
     tokio::task::spawn_blocking(move || {
         let store = store_of(&rt)?;
         let mut out = Vec::new();
-        for file in chosen {
-            let Ok(path) = file.into_path() else { continue };
+        for path in paths {
             let Ok(meta) = std::fs::metadata(&path) else {
                 continue;
             };
@@ -4512,7 +4581,27 @@ pub async fn mail_attachment_save(
         return Ok(None);
     };
     let target = chosen.into_path().map_err(|e| e.to_string())?;
+    let _ = meta;
+    write_attachment_to(bytes, target).await
+}
 
+/// [`mail_attachment_save`] to a destination the browser client picked;
+/// `grant` as in [`mail_pgp_import_grant`].
+#[tauri::command]
+pub async fn mail_attachment_save_grant(
+    ctx: Ctx,
+    message_id: String,
+    part_id: String,
+    grant: String,
+) -> Result<Option<String>, String> {
+    let state = ctx.get::<MailState>();
+    let rt = state.clone();
+    let (_meta, bytes) = load_attachment(&rt, &message_id, &part_id).await?;
+    let target = crate::services::pick_grants::redeem(ctx.get(), &grant)?;
+    write_attachment_to(bytes, target).await
+}
+
+async fn write_attachment_to(bytes: Vec<u8>, target: PathBuf) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || {
         // A plain write of the already-decoded blob to the path the dialog
         // returned. We do not create directories, do not follow the name, do

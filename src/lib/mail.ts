@@ -22,6 +22,8 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { open as pickOnServer, save as saveOnServer } from "@tauri-apps/plugin-dialog";
+import { isServerClient } from "./transport/linkState";
 import { stripFormatControls } from "./textSafety";
 import { formatBytes } from "./formatBytes";
 import { hashString } from "./theme/categoryColor";
@@ -494,8 +496,34 @@ export function mailContactsSetCollect(enabled: boolean): Promise<void> {
 
 /** Pick a `.vcf`, `.ldif` or Thunderbird `abook.sqlite` (backend dialog) and
  *  merge it into the book. */
-export function mailContactsImport(): Promise<MailContactsImportReport> {
+export async function mailContactsImport(): Promise<MailContactsImportReport> {
+  if (isServerClient()) {
+    const grant = await grantForPick(
+      await pickOnServer({ multiple: false, directory: false, filters: [{ name: "Address book", extensions: ["vcf", "vcard", "ldif", "ldi", "sqlite"] }] }),
+    );
+    if (!grant) return { cancelled: true, added: 0, merged: 0, skipped: 0, lists: 0 };
+    return invoke<MailContactsImportReport>("mail_contacts_import_grant", { grant: grant[0] });
+  }
   return invoke<MailContactsImportReport>("mail_contacts_import");
+}
+
+/**
+ * The browser client's half of the mail file commands (hosted plan §3.5): the
+ * server-side picker hands back paths, and the mail commands take none (their
+ * rule 2) — so each pick is turned into a single-use grant the transport
+ * minted for it (`desktop_file_grant`), and the `*_grant` command redeems it.
+ * `null` when the pick was cancelled.
+ */
+async function grantForPick(picked: string | string[] | null): Promise<string[] | null> {
+  if (picked === null) return null;
+  const paths = Array.isArray(picked) ? picked : [picked];
+  if (paths.length === 0) return null;
+  const grants: string[] = [];
+  for (const path of paths) {
+    const { grant } = await invoke<{ grant: string }>("desktop_file_grant", { path });
+    grants.push(grant);
+  }
+  return grants;
 }
 
 /** Merge every address book of every Thunderbird profile on this machine
@@ -511,7 +539,12 @@ export function mailContactsHarvestInbox(): Promise<MailContactsImportReport> {
 
 /** Save cards as a `.vcf` (backend dialog): these ids, or every card when
  *  empty. `null` when the dialog was cancelled, else how many were written. */
-export function mailContactsExport(ids: string[] = []): Promise<number | null> {
+export async function mailContactsExport(ids: string[] = []): Promise<number | null> {
+  if (isServerClient()) {
+    const grant = await grantForPick(await saveOnServer({ defaultPath: "contacts.vcf", filters: [{ name: "vCard", extensions: ["vcf"] }] }));
+    if (!grant) return null;
+    return invoke<number | null>("mail_contacts_export_grant", { ids, grant: grant[0] });
+  }
   return invoke<number | null>("mail_contacts_export", { ids });
 }
 
@@ -725,7 +758,12 @@ export function mailDraftSend(
  * The frontend supplies no path and learns none — the copy is the boundary, so a
  * compose window cannot re-read the original file later either.
  */
-export function mailAttachPick(draftId: string): Promise<StagedAttachment[]> {
+export async function mailAttachPick(draftId: string): Promise<StagedAttachment[]> {
+  if (isServerClient()) {
+    const grants = await grantForPick(await pickOnServer({ multiple: true, directory: false }));
+    if (!grants) return [];
+    return invoke<StagedAttachment[]>("mail_attach_grants", { draftId, grants });
+  }
   return invoke<StagedAttachment[]>("mail_attach_pick", { draftId });
 }
 
@@ -740,10 +778,15 @@ export function mailAttachRemove(draftId: string, stagedId: string): Promise<voi
  * (in which case nothing was written). There is no bulk "save all" — one dialog
  * per file is deliberate friction at the exact point the boundary is crossed.
  */
-export function mailAttachmentSave(
+export async function mailAttachmentSave(
   messageId: string,
   partId: string,
 ): Promise<string | null> {
+  if (isServerClient()) {
+    const grant = await grantForPick(await saveOnServer({}));
+    if (!grant) return null;
+    return invoke<string | null>("mail_attachment_save_grant", { messageId, partId, grant: grant[0] });
+  }
   return invoke<string | null>("mail_attachment_save", { messageId, partId });
 }
 
@@ -873,7 +916,12 @@ export function mailPgpImport(armored: string): Promise<PgpKeyInfo[]> {
 }
 
 /** Import from a file the user picks in the OS dialog the **backend** raises. */
-export function mailPgpImportPick(): Promise<PgpKeyInfo[]> {
+export async function mailPgpImportPick(): Promise<PgpKeyInfo[]> {
+  if (isServerClient()) {
+    const grant = await grantForPick(await pickOnServer({ multiple: false, directory: false, filters: [{ name: "OpenPGP key", extensions: ["asc", "gpg", "pgp", "key"] }] }));
+    if (!grant) return [];
+    return invoke<PgpKeyInfo[]>("mail_pgp_import_grant", { grant: grant[0] });
+  }
   return invoke<PgpKeyInfo[]>("mail_pgp_import_pick");
 }
 

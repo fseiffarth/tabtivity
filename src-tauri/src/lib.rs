@@ -1040,6 +1040,7 @@ fn core_state(
     caldav_state: &commands::caldav::CalDavState,
     usage_watch: &services::usage_stats::UsageWatchState,
     mobile_desktop: &commands::mobile_control::MobileDesktopState,
+    pick_grants: &services::pick_grants::PickGrantsState,
 ) -> app_core::CoreState {
     app_core::CoreState::new()
         .manage(pty_registry.clone())
@@ -1056,6 +1057,7 @@ fn core_state(
         .manage(caldav_state.clone())
         .manage(usage_watch.clone())
         .manage(mobile_desktop.clone())
+        .manage(pick_grants.clone())
 }
 
 /// The process-wide singletons every host manages (`core_state`), built in
@@ -1098,6 +1100,9 @@ struct Singletons {
     /// has seen since the last flush (see `services::usage_stats`).
     usage_watch: services::usage_stats::UsageWatchState,
     mobile_desktop: commands::mobile_control::MobileDesktopState,
+    /// Picked server files as single-use grants for the browser client's mail
+    /// file commands (`services::pick_grants`); empty in the window.
+    pick_grants: services::pick_grants::PickGrantsState,
 }
 
 impl Singletons {
@@ -1117,6 +1122,7 @@ impl Singletons {
             caldav_state: Default::default(),
             usage_watch: services::usage_stats::new_state(),
             mobile_desktop: commands::mobile_control::MobileDesktopState::default(),
+            pick_grants: services::pick_grants::new_state(),
         }
     }
 
@@ -1137,6 +1143,7 @@ impl Singletons {
             &self.caldav_state,
             &self.usage_watch,
             &self.mobile_desktop,
+            &self.pick_grants,
         )
     }
 }
@@ -1236,6 +1243,7 @@ pub fn run() {
         caldav_state,
         usage_watch,
         mobile_desktop,
+        pick_grants,
     } = s;
 
     with_macos_menu(with_webview_crash_reporter(tauri::Builder::default()))
@@ -1256,6 +1264,7 @@ pub fn run() {
         .manage(caldav_state)
         .manage(usage_watch.clone())
         .manage(mobile_desktop.clone())
+        .manage(pick_grants)
         .setup(move |_app| {
             // First: converted commands and services read their `CoreCtx`
             // from here, and `rt::spawn` needs Tauri's runtime installed.
@@ -1748,9 +1757,11 @@ pub fn run() {
             commands::mail::mail_contact_list_delete,
             commands::mail::mail_contacts_set_collect,
             commands::mail::mail_contacts_import,
+            commands::mail::mail_contacts_import_grant,
             commands::mail::mail_contacts_import_thunderbird,
             commands::mail::mail_contacts_harvest_inbox,
             commands::mail::mail_contacts_export,
+            commands::mail::mail_contacts_export_grant,
             commands::mail::mail_filters_apply,
             // Local-model mail assistant (Group Q, #203–#208). Every one runs a
             // prompt against a loopback Ollama via `services::mail_ai`, which
@@ -1771,8 +1782,10 @@ pub fn run() {
             commands::mail::mail_agent_marks,
             commands::mail::mail_draft_send,
             commands::mail::mail_attach_pick,
+            commands::mail::mail_attach_grants,
             commands::mail::mail_attach_remove,
             commands::mail::mail_attachment_save,
+            commands::mail::mail_attachment_save_grant,
             commands::mail::mail_attachment_save_to_project,
             commands::mail::mail_attachment_preview,
             commands::mail::mail_staged_preview,
@@ -1795,6 +1808,7 @@ pub fn run() {
             commands::mail::mail_pgp_generate,
             commands::mail::mail_pgp_import,
             commands::mail::mail_pgp_import_pick,
+            commands::mail::mail_pgp_import_grant,
             commands::mail::mail_pgp_export,
             commands::mail::mail_pgp_set_verified,
             commands::mail::mail_pgp_bind,

@@ -115,6 +115,9 @@ pub const TOKEN_FILE: &str = "web-client.token";
 /// The commands the transport answers itself, before the dispatcher.
 pub const CAPABILITIES_CMD: &str = "server_capabilities";
 pub const FILE_TICKET_CMD: &str = "desktop_file_ticket";
+/// A picked server file as a single-use grant for the mail file commands
+/// (`services::pick_grants`): `{path} → {grant}`.
+pub const FILE_GRANT_CMD: &str = "desktop_file_grant";
 
 // ── Clients and events ───────────────────────────────────────────────────
 
@@ -968,6 +971,21 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, ptys: &Arc<Mutex<Has
             }
             let ticket = state.tickets.lock().unwrap_or_else(PoisonError::into_inner).mint(path, project_id, download);
             let out = ticket.map(|t| json!({ "url": format!("http://127.0.0.1:{}/content/{t}", state.content_port) })).map_err(Value::String);
+            return Answer::Text(ret_frame(id, &out));
+        }
+        FILE_GRANT_CMD => {
+            let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+            if path.is_empty() {
+                return Answer::Text(ret_frame(id, &Err(Value::String("desktop_file_grant: missing path".into()))));
+            }
+            let out = match (ctx.state.try_get::<crate::services::pick_grants::PickGrantsState>(), random_token()) {
+                (Some(grants), Ok(grant)) => {
+                    let grant = grants.lock().unwrap_or_else(PoisonError::into_inner).grant(std::path::PathBuf::from(path), grant);
+                    Ok(json!({ "grant": grant }))
+                }
+                (None, _) => Err(Value::String("desktop_file_grant: this host keeps no grants".into())),
+                (_, Err(e)) => Err(Value::String(e)),
+            };
             return Answer::Text(ret_frame(id, &out));
         }
         "read_file_bytes" => {
