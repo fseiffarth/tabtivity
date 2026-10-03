@@ -16,10 +16,27 @@ use crate::brand::{self, SLUG};
 use crate::services::mobile_control::config::{HostConfig, MobileHostSettings};
 use crate::services::mobile_control::host::{self, Listen};
 
+/// The fence's helper verb (`agent_fence::seccomp_launcher` puts it after the
+/// running binary's path).
+#[cfg(target_os = "linux")]
+const FENCE_SCOPE_ARG: &str = "--fence-scope";
+
 /// `tabtivity-serverd`: the process's whole life. Exits non-zero on a
 /// configuration or bind error so `Restart=on-failure` keeps retrying what
 /// can heal and the journal says what cannot.
 pub fn main() -> ! {
+    // `<slug>-serverd --fence-scope <bwrap> [args…]`: the agent fence's step
+    // before bwrap (`services::fence_scope`). The fence names the running
+    // binary as its helper (`fence_scope::helper_for`, where Landlock has the
+    // abstract-socket scope), so on a server every fenced agent execs this
+    // binary first — as the desktop binary's `main` does, before anything
+    // else, with the argv as given (paths need not be UTF-8) and no change
+    // to the environment the agent inherits.
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(FENCE_SCOPE_ARG)) {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        std::process::exit(crate::services::fence_scope::run(&args));
+    }
     // Before anything reads a path, and while this is the only thread.
     separate_from_the_desktop();
     crate::services::brand_migration::hits::install();
@@ -309,6 +326,17 @@ mod tests {
     use crate::services::mobile_control::auth;
 
     const ORIGIN: &str = "https://desk.example.ts.net";
+
+    /// The fence execs `<this binary> --fence-scope <bwrap> …` where Landlock
+    /// scopes abstract sockets; `main` must answer that verb, or every fenced
+    /// agent of a server fails with "unknown argument" (P3b review).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn main_answers_the_fence_scope_verb_the_fence_execs() {
+        let (_, args) = crate::services::agent_fence::seccomp_launcher("/usr/bin/bwrap", Some("/usr/lib/x/serverd"), std::path::Path::new("/f"), vec!["--".into()]);
+        let helper = args.iter().position(|a| a == "/usr/lib/x/serverd").unwrap();
+        assert_eq!(args[helper + 2], super::FENCE_SCOPE_ARG, "{args:?}");
+    }
 
     /// One HTTP/1.1 request over the daemon's socket, `Connection: close`.
     async fn raw(socket: &std::path::Path, method: &str, path: &str, headers: &[(&str, &str)], body: Option<&str>) -> (u16, Vec<(String, String)>, String) {
