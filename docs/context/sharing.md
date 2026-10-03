@@ -75,7 +75,10 @@ never paths.
   greys the row (the pill does not yet, #2373). Delete moves the hub to
   `.deleted/` for 30 days; `user-remove` asks the hub (root-only `forget`) to
   take the account off every share, so its ACL entries go with its
-  membership.
+  membership. A revoke whose ACL walk fails half-way keeps the account in
+  the share's `revoking` list (off the table, so no push) and is retried at
+  every hub request until the walk completes. A `shares.json` that exists
+  but cannot be parsed is never replaced: every change is refused instead.
 - **Remote, VM and container projects are refused** (one human assumed by
   lockstep, byte-sync, worker sync).
 - The admin's **`project_sharing`** switch (new in `policy.json`) stops new
@@ -91,13 +94,28 @@ never paths.
    replaces the git call by one that runs nothing and says why.
 2. **The agent-facing surface is reviewed before an agent reads it.**
    `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.mcp.json`, `.envrc` at any depth and
-   everything under `.claude/`, `.codex/`, `.gemini/`, `.cursor/`. The rule is
+   everything under `.claude/`, `.codex/`, `.gemini/`, `.cursor/` (the plan's
+   list), plus the project files of every other CLI Tabtivity launches
+   (`CLAUDE.local.md`, `AGENTS.override.md`, `.agents/`, `.agent/`, `.kiro/`,
+   `.clinerules`, `.vibe/`, `.opencode/`, `opencode.json(c)`, `.factory/`,
+   `.cursorrules`, Copilot's `.github/` instructions and agents;
+   `share::AGENT_PATHSPEC`). The rule is
    on commits, not on files: an agent-facing change is *unreviewed* when it is
    in HEAD, came from the hub (reachable from `refs/remotes/shared/*`) and is
    not behind a commit this user marked reviewed (the owner's HEAD at sharing,
    a merge made after its review, an accepted review, each of their own
    pushes). So it catches every way in — a fresh clone, a merge through the
-   app, a `git merge` in a terminal — and none of the user's own edits. While
+   app, a `git merge` in a terminal — and none of the user's own edits.
+   "Came from the hub" survives the hub branch going away: the app's fetch
+   keeps every tip it moves away under `refs/shared-seen/<oid>` (dropping
+   those a branch still reaches), the check also reads the tracking refs'
+   reflogs (a terminal `git fetch`), and a merge commit's own change is
+   read with `diff-tree -c` (an "evil" merge). Residual: a `git pull` or
+   `git fetch` *by path* in a terminal, followed by the branch's deletion
+   before any app fetch, leaves no trace. **Stop sharing** keeps the
+   owner's link (as `deleted`) while such changes are unreviewed, so the
+   gate holds; reviewing them lets it go, and a new share is refused until
+   then. A share that is gone still shows its project's review. While
    anything is unreviewed, **every agent start in the project is refused**
    (fenced or in a container, failing closed when the check cannot run) and so
    is a push (a push would mark it reviewed). A merge through the app shows the
@@ -138,6 +156,15 @@ a separate uid and the fence confines agents per scope.
 - **Alarms are per viewer:** reminder state (fired, snoozed, dismissed) is each
   daemon's own record; the service holds definitions only. Headless (no-window)
   reminders do not see shared calendars yet (#2369).
+- **Bounded so it always comes back:** a stored calendar is at most 12 MB
+  (`cal_wire::MAX_CALENDAR_BYTES`, under the 16 MB answer line), so `get`
+  and `unshare` always fit; `unshare` moves the file to the service's own
+  `returned/` for 30 days rather than deleting it, and a daemon that cannot
+  write the answer into `calendar.json` keeps it in
+  `<state>/shared-calendars-returned/<id>.json` and says so.
+- **One wait per daemon:** the browser's pages share a single long poll at
+  the service (six connections per account, 64 overall), so open pages never
+  starve their user's own edits or other users.
 - **Agents read nothing and write nothing there:** the fence hides the
   socket; the agent-facing calendar paths read and write `calendar.json` only
   (on a server they do not run at all yet, #2339); a proposal naming a
