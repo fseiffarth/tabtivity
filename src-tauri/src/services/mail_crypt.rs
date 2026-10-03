@@ -364,8 +364,14 @@ impl LabelSet {
     /// by anyone who can write the mail folder, and an arbitrary string here
     /// could only ever make the store unopenable.
     fn of_key_file(pair: &crate::brand::Pair, file: &MailKeyFile) -> Result<Self, String> {
+        Self::of_entry(pair, file.labels.as_deref())
+    }
+
+    /// The set one wrapped master key names (the file's own, or a
+    /// [`PreviousKey`]'s): the same reading as [`LabelSet::of_key_file`].
+    fn of_entry(pair: &crate::brand::Pair, labels: Option<&str>) -> Result<Self, String> {
         let (current, legacy) = (Self::of(&pair.cur), Self::of(&pair.legacy));
-        match file.labels.as_deref() {
+        match labels {
             None => {
                 if legacy != current {
                     crate::brand::legacy_hit("mail-labels");
@@ -414,6 +420,12 @@ pub struct MailKeys {
     /// (Phase 4) is sealed under this rather than under `field`, so the mail
     /// index and the private keys are not one compromise.
     pub wrap: Key,
+    /// The keys of master keys a re-key is moving the store away from
+    /// (hosted plan §6.8: revoking a device re-keys a server's mailbox), newest
+    /// first. Read with [`MailKeys::open_any`] until every value is sealed
+    /// under `master`, never written with. Empty outside a re-key — always on
+    /// the desktop.
+    previous: Vec<MailKeys>,
 }
 
 impl std::fmt::Debug for MailKeys {
@@ -448,7 +460,49 @@ impl MailKeys {
             wrap: subkey(&hk, &labels.label("wrap")),
             master,
             labels: Box::new(labels),
+            previous: Vec::new(),
         }
+    }
+
+    /// A re-key is under way: some values may still be sealed under a
+    /// previous master key.
+    pub fn rekeying(&self) -> bool {
+        !self.previous.is_empty()
+    }
+
+    /// The previous masters' keys, newest first.
+    pub fn previous(&self) -> &[MailKeys] {
+        &self.previous
+    }
+
+    /// Open `sealed` with the subkey `pick` names: under the current master
+    /// first, then under each previous one. The flag: it opened under the
+    /// current master (nothing to re-seal). Outside a re-key this is
+    /// [`open`] with the current key.
+    pub fn open_any(&self, pick: impl Fn(&MailKeys) -> &Key, aad: &[u8], sealed: &[u8]) -> Result<(Zeroizing<Vec<u8>>, bool), CryptError> {
+        match open(pick(self), aad, sealed) {
+            Ok(plain) => return Ok((plain, true)),
+            Err(CryptError::NotAuthentic) => {}
+            Err(other) => return Err(other),
+        }
+        for old in &self.previous {
+            if let Ok(plain) = open(pick(old), aad, sealed) {
+                return Ok((plain, false));
+            }
+        }
+        Err(CryptError::NotAuthentic)
+    }
+
+    /// Whether `other` derives from the same current master key.
+    pub fn same_master(&self, other: &MailKeys) -> bool {
+        use subtle::ConstantTimeEq;
+        bool::from(self.master.as_bytes().ct_eq(other.master.as_bytes()))
+    }
+
+    /// A short, non-secret name for the current master (a keyed digest under
+    /// `name`): what a re-key's progress marker records as its target.
+    pub fn fingerprint(&self) -> String {
+        hmac_hex(&self.name, &[b"rekey-target"])[..16].to_string()
     }
 
     /// Whether these keys belong to a store still written under the app's
@@ -526,6 +580,22 @@ pub struct MailKeyFile {
     /// while the app's name is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<String>,
+    /// Master keys a re-key is moving the store away from, newest first,
+    /// wrapped under the same KEK as `wrapped` (hosted plan §6.8). Written
+    /// only by a server's rotation ([`rotate_device_key_file`]) and dropped
+    /// once every value is re-sealed ([`retire_previous_with`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous: Vec<PreviousKey>,
+}
+
+/// One previous master key in `key.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviousKey {
+    /// Base64 of `seal(kek, <its label set's wrap AAD>, master)`.
+    pub wrapped: String,
+    /// Its label set, as [`MailKeyFile::labels`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<String>,
 }
 
 const KEY_FILE_VERSION: u32 = 1;
@@ -583,6 +653,41 @@ fn harden(path: &Path, mode: u32) {
     {
         let _ = (path, mode);
     }
+}
+
+/// [`write_bytes_atomic`], synced: the file before the rename, the directory
+/// after. What a re-key writes, because dropping the old key afterwards
+/// relies on the re-sealed copy being on disk, not in a page cache.
+pub fn write_bytes_durable(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let parent = path.parent().ok_or("no parent directory")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let mut name = path.file_name().ok_or("no file name")?.to_os_string();
+    name.push(".rekey");
+    let tmp = parent.join(name);
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        harden(&tmp, 0o600);
+        file.write_all(bytes).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// The lock every write of a sealed file *beside* the database takes (the
+/// account list, the filter rules, the address book, the OpenPGP keyring),
+/// holding the number of key switches so far. A switch of the store's keys
+/// (a rotation, a finished re-key) bumps it under the lock; a writer reads
+/// its keys under it, so nothing is sealed under keys that were replaced
+/// while it held them — which a re-key that already moved the file would
+/// never see again.
+pub fn side_files() -> std::sync::MutexGuard<'static, u64> {
+    static SIDE_FILES: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    SIDE_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 const B64: base64::engine::general_purpose::GeneralPurpose =
@@ -651,22 +756,81 @@ pub fn unlock_with_device_key(dir: &Path, k: &crate::services::server::secrets::
     unwrap_master(&device_kek_from(k), &file)
 }
 
-/// A device-mode `key.json` re-wrapped from `old` K to `new` K, as the bytes
-/// to write (the vault's rotation writes them beside the original and
-/// switches atomically). The store's master key — what every sealed row is
-/// under — stays: only its wrap changes.
-pub fn rewrap_device_key_file(
+/// A device-mode `key.json` for a rotation from `old` K to `new` K, as the
+/// bytes to write (the vault's rotation writes them beside the original and
+/// switches atomically). A **fresh master key** becomes the current one and
+/// every master the file held moves to `previous`, all wrapped under the new
+/// K (hosted plan §6.8, user decision 2026-10-03): mail written from the
+/// switch on is sealed under a master no old K ever wrapped, so a revoked
+/// device with copies of the old `key.json` and `wraps.json` opens nothing
+/// new. The store re-seals what is already there in the background
+/// (`MailStore::rekey_step`) and then drops `previous`
+/// ([`retire_previous_with`]); until then it reads with every key.
+pub fn rotate_device_key_file(
     dir: &Path,
     old: &crate::services::server::secrets::MasterKey,
     new: &crate::services::server::secrets::MasterKey,
 ) -> Result<Vec<u8>, String> {
-    let mut file = read_key_file(dir)?.ok_or_else(|| "this mailbox is not encrypted".to_string())?;
+    let file = read_key_file(dir)?.ok_or_else(|| "this mailbox is not encrypted".to_string())?;
     if file.mode != UnlockMode::Device {
         return Err("this mailbox is not sealed under the secrets key".into());
     }
     let keys = unwrap_master(&device_kek_from(old), &file)?;
-    file.wrapped = B64.encode(seal(&device_kek_from(new), keys.labels.wrap_aad.as_bytes(), keys.master.as_bytes()));
-    serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())
+    let kek = device_kek_from(new);
+    let pair = crate::brand::PAIR;
+    let labels = LabelSet::current(&pair);
+    let master = Key::random()?;
+    let mut previous = vec![previous_entry(&kek, &keys)];
+    previous.extend(keys.previous.iter().map(|old| previous_entry(&kek, old)));
+    let next = MailKeyFile {
+        version: KEY_FILE_VERSION,
+        mode: UnlockMode::Device,
+        kdf: file.kdf,
+        salt: file.salt,
+        wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
+        labels: labels.key_file_entry(&pair),
+        previous,
+    };
+    serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())
+}
+
+/// `keys`' master wrapped under `kek`, for `previous`.
+fn previous_entry(kek: &Key, keys: &MailKeys) -> PreviousKey {
+    PreviousKey {
+        wrapped: B64.encode(seal(kek, keys.labels.wrap_aad.as_bytes(), keys.master.as_bytes())),
+        labels: keys.labels.key_file_entry(&crate::brand::PAIR),
+    }
+}
+
+/// A re-key finished: every value of the store is sealed under `keys`'
+/// current master. Drop `previous` from the device-mode `key.json`, opened
+/// with `k` — only if its current master is still `keys`' (a rotation since
+/// made a newer one, and the re-key goes on towards that: `Ok(false)`). The
+/// caller holds the vault's lock ([`retire_previous`]), so no rotation
+/// rewrites the file in between. Synced: from here on the old master is
+/// gone, and nothing it sealed may still be in a page cache only.
+pub fn retire_previous_with(dir: &Path, k: &crate::services::server::secrets::MasterKey, keys: &MailKeys) -> Result<bool, String> {
+    let mut file = read_key_file(dir)?.ok_or_else(|| "this mailbox is not encrypted".to_string())?;
+    if file.mode != UnlockMode::Device {
+        return Err("this mailbox is not sealed under the secrets key".into());
+    }
+    let on_disk = unwrap_master(&device_kek_from(k), &file)?;
+    if !on_disk.same_master(keys) {
+        return Ok(false);
+    }
+    if file.previous.is_empty() {
+        return Ok(true);
+    }
+    file.previous.clear();
+    let json = serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())?;
+    write_bytes_durable(&key_file_path(dir), &json)?;
+    Ok(true)
+}
+
+/// [`retire_previous_with`] under the server vault's lock, with its K.
+pub fn retire_previous(dir: &Path, keys: &MailKeys) -> Result<bool, String> {
+    let vault = crate::services::server::vault::vault().ok_or_else(|| DEVICE_LOCKED.to_string())?;
+    vault.with_key(|k| retire_previous_with(dir, k.ok_or_else(|| DEVICE_LOCKED.to_string())?, keys))
 }
 
 /// A device-mode key file opened with `kek` (`None`: K is locked).
@@ -769,7 +933,24 @@ fn unwrap_master_for(pair: &crate::brand::Pair, kek: &Key, file: &MailKeyFile) -
         .as_slice()
         .try_into()
         .map_err(|_| "the mail key file is corrupt".to_string())?;
-    Ok(MailKeys::derive_with(Key::from_bytes(arr), labels))
+    let mut keys = MailKeys::derive_with(Key::from_bytes(arr), labels);
+    // A re-key under way: every previous master opens with the same KEK. One
+    // that does not is a damaged file — the values under it would read as
+    // damaged — so the whole unlock fails rather than half-opening.
+    for entry in &file.previous {
+        let labels = LabelSet::of_entry(pair, entry.labels.as_deref())?;
+        let wrapped = B64
+            .decode(&entry.wrapped)
+            .map_err(|_| "the mail key file is corrupt".to_string())?;
+        let master = open(kek, labels.wrap_aad.as_bytes(), &wrapped)
+            .map_err(|_| "a previous mail store key did not fit — the key file is damaged".to_string())?;
+        let arr: [u8; 32] = master
+            .as_slice()
+            .try_into()
+            .map_err(|_| "the mail key file is corrupt".to_string())?;
+        keys.previous.push(MailKeys::derive_with(Key::from_bytes(arr), labels));
+    }
+    Ok(keys)
 }
 
 /// Open a passphrase store.
@@ -825,6 +1006,7 @@ pub fn enable_with_keychain(dir: &Path) -> Result<MailKeys, String> {
         salt: B64.encode(fresh_salt()?),
         wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
         labels: labels.key_file_entry(&pair),
+        previous: Vec::new(),
     };
     write_key_file(dir, &file)?;
     Ok(MailKeys::derive_with(master, labels))
@@ -846,6 +1028,7 @@ pub fn enable_with_device(dir: &Path, kek: &Key) -> Result<MailKeys, String> {
         salt: B64.encode(fresh_salt()?),
         wrapped: B64.encode(seal(kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
         labels: labels.key_file_entry(&pair),
+        previous: Vec::new(),
     };
     write_key_file(dir, &file)?;
     Ok(MailKeys::derive_with(master, labels))
@@ -888,6 +1071,7 @@ fn enable_with_passphrase_for(pair: &crate::brand::Pair, dir: &Path, passphrase:
         salt: B64.encode(&salt),
         wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
         labels: labels.key_file_entry(pair),
+        previous: Vec::new(),
     };
     write_key_file(dir, &file)?;
     Ok(MailKeys::derive_with(master, labels))
@@ -956,6 +1140,8 @@ fn rewrap_with(
         // store is sealed under does not change with how it unlocks.
         wrapped: B64.encode(seal(&kek, keys.labels.wrap_aad.as_bytes(), keys.master.as_bytes())),
         labels: keys.labels.key_file_entry(&crate::brand::PAIR),
+        // A re-key under way keeps its previous masters, under the new KEK.
+        previous: keys.previous.iter().map(|old| previous_entry(&kek, old)).collect(),
     };
     write_key_file(dir, &file)?;
     // Leaving a stale KEK behind when switching *away* from the keychain would
@@ -1289,6 +1475,7 @@ mod tests {
             salt: B64.encode(&salt),
             wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
             labels: labels.key_file_entry(pair),
+            previous: Vec::new(),
         };
         write_key_file(dir, &file).unwrap();
         MailKeys::derive_with(master, labels)

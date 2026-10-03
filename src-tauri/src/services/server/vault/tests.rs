@@ -199,7 +199,12 @@ fn assert_opens(vault: &Vault, dir: &Path, mail: &crate::services::mail_crypt::M
     let k = vault.key().expect("unlocked");
     assert_eq!(vault.credential("imap:alice@mail.example").as_deref(), Some("hunter2"));
     let opened = crate::services::mail_crypt::unlock_with_device_key(&dir.join("mail"), &k).expect("mail opens with the current K");
-    assert_eq!(opened.field.as_bytes(), mail.field.as_bytes(), "the mail store's own key is unchanged");
+    // The rotation gave the mail store a fresh master; what was sealed under
+    // the old one still opens, through `previous`, until a re-key retires it.
+    let before = crate::services::mail_crypt::seal(&mail.field, b"row", b"sealed before the revoke");
+    let (plain, current) = opened.open_any(|k| &k.field, b"row", &before).expect("mail sealed before still opens");
+    assert_eq!(plain.as_slice(), b"sealed before the revoke");
+    assert!(!current && opened.rekeying(), "under a previous master: the store has a fresh one");
     let file = WrapFile::load(dir).unwrap();
     assert_eq!(file.check.as_deref(), Some(secrets::key_check(&k).as_str()));
     assert!(!file.rotate, "nothing pending");
@@ -493,6 +498,41 @@ fn a_revoke_recommends_a_new_recovery_code_until_one_is_made() {
     vault.wrap_missing(&[spare.key()]);
     revoke_offline(dir.path(), &spare.id).unwrap();
     assert!(vault.status().new_code_recommended);
+}
+
+/// The mail store hears about every rotation that committed — a revoke
+/// while unlocked, a pending one at the next release — with the vault's
+/// lock released (the listener reads through `with_key` itself), and about
+/// nothing else.
+#[test]
+fn rotation_listeners_run_after_each_committed_rotation() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let tablet = Device::new("dev_tablet_00001");
+    let laptop = Device::new("dev_laptop_00001");
+    let vault = Arc::new(vault_in(dir.path(), hold.clone()));
+    vault.set_up(&[phone.key(), tablet.key(), laptop.key()]).unwrap();
+    let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    {
+        let (fired, vault2) = (fired.clone(), vault.clone());
+        vault.on_rotate("test", move || {
+            // Not under the vault's lock: this would deadlock if it were.
+            vault2.with_key(|k| assert!(k.is_some()));
+            fired.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    let count = || fired.load(std::sync::atomic::Ordering::SeqCst);
+    vault.drop_wrap(&phone.id);
+    vault.wrap_missing(&[phone.key()]);
+    assert_eq!(count(), 0, "no rotation, no call");
+    vault.revoke(&phone.id, &[tablet.key(), laptop.key()]).unwrap();
+    assert_eq!(count(), 1, "a revoke while unlocked");
+    hold.clear().unwrap();
+    vault.revoke(&tablet.id, &[laptop.key()]).unwrap();
+    assert_eq!(count(), 1, "locked: the rotation waits");
+    release(&vault, &laptop).unwrap();
+    assert_eq!(count(), 2, "and runs at the release");
 }
 
 // ── Re-pinning a lost identity key (user decision 2026-10-03) ──────────────

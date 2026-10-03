@@ -184,7 +184,7 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap(),
-        json!({ "available": true, "setUp": false, "unlocked": false, "enrolled": false, "recoveryCode": false, "newCodeRecommended": false, "identity": null })
+        json!({ "available": true, "setUp": false, "unlocked": false, "enrolled": false, "recoveryCode": false, "newCodeRecommended": false, "mailRekey": null, "identity": null })
     );
 
     // Enrol an ECDH key: the session alone is not enough.
@@ -311,18 +311,29 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     let k_after = hold.get().unwrap().expect("still unlocked");
     assert_ne!(k_after.bytes(), k_before.bytes(), "a new K");
     assert!(old_wraps.contains(&device_id) && !std::fs::read_to_string(state_dir.join("secrets/wraps.json")).unwrap().contains(&device_id));
+    // The mailbox got a fresh master key (user decision 2026-10-03): mail
+    // sealed before opens through `previous` until a re-key retires it, and
+    // nothing in the key file opens with the old K.
+    let before = mail_crypt::seal(&keys.field, b"row", b"before the revoke");
     match mail_crypt::unlock(&mail_dir) {
-        Unlock::Ready(opened) => assert_eq!(opened.field.as_bytes(), keys.field.as_bytes()),
+        Unlock::Ready(opened) => {
+            assert_ne!(opened.field.as_bytes(), keys.field.as_bytes(), "a fresh mail master");
+            assert!(opened.rekeying());
+            assert_eq!(opened.open_any(|k| &k.field, b"row", &before).unwrap().0.as_slice(), b"before the revoke");
+        }
         other => panic!("{other:?}"),
     }
+    assert!(mail_crypt::unlock_with_device_key(&mail_dir, &k_before).is_err(), "the old K opens no mail key");
     assert_eq!(remote_credentials::get("imap:alice@mail.example").as_deref(), Some("hunter2"));
     let (status, _, _) = raw(&socket, "GET", "/api/v1/secrets", Some(&cookie), None).await;
     assert_eq!(status, 401, "the phone's session went with it");
-    // The tablet's Server settings: a new recovery code is recommended.
+    // The tablet's Server settings: a new recovery code is recommended, and
+    // the mailbox re-key waits (no mail store is open in this test).
     let (status, _, body) = raw(&socket, "GET", "/api/v1/secrets", Some(&tablet_cookie), None).await;
     assert_eq!(status, 200, "{body}");
     let state: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(state["newCodeRecommended"], true, "{state}");
+    assert_eq!(state["mailRekey"]["state"], "waiting", "{state}");
     // A reboot: the tablet releases the new K; the recovery code still fits.
     hold.clear().unwrap();
     let (status, body) = unlock(&socket, &tablet_cookie, &tablet_id, &tablet_ecdh, &identity).await;
@@ -335,6 +346,23 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/recover", Some(&tablet_cookie), Some(&json!({ "code": code }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(hold.get().unwrap().unwrap().bytes(), k_after.bytes());
+
+    // The mailbox re-key, as the daemon's thread runs it: the store moves
+    // every row, then the old master is retired under the vault's lock.
+    let ring = match mail_crypt::unlock(&mail_dir) {
+        Unlock::Ready(keys) => Arc::new(keys),
+        other => panic!("{other:?}"),
+    };
+    let store = app_lib::services::mail_store::MailStore::open_with_keys(&mail_dir, Some(ring.clone())).unwrap();
+    while store.rekey_step().unwrap() != app_lib::services::mail_store::RekeyStep::Done {}
+    app_lib::services::mail_rekey::reseal_side_files(&mail_dir, &ring).unwrap();
+    assert!(mail_crypt::retire_previous(&mail_dir, &ring).unwrap());
+    match mail_crypt::unlock(&mail_dir) {
+        Unlock::Ready(keys) => assert!(!keys.rekeying() && keys.same_master(&ring), "only the new master is left"),
+        other => panic!("{other:?}"),
+    }
+    let (_, _, body) = raw(&socket, "GET", "/api/v1/secrets", Some(&tablet_cookie), None).await;
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["mailRekey"], Value::Null);
 
     // A new recovery code (signed, by the remaining tablet) clears the advice.
     let body = signed(&socket, &tablet_cookie, &tablet_signing, &tablet_id, "secrets-recovery-code").await;

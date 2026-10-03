@@ -194,11 +194,26 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
     let vault = crate::services::server::vault::vault();
     let had_key = vault.is_some_and(|v| v.key().is_some());
     let opened = open_store(&mail_dir())?;
+    let rekeying = opened.keys.as_ref().is_some_and(|k| k.rekeying());
     set_session_keys(opened.keys.clone());
     rt.store = Some(opened.store.clone());
     let waiting = waits_for_release(&opened.note, had_key);
     rt.unlock_note = opened.note;
     drop(rt);
+    // On a server, a rotation (a device revoked) gives the store a fresh
+    // master key: switch to it and re-key in the background. A store whose
+    // key file still lists a previous master (a re-key a restart cut short)
+    // resumes now.
+    if let Some(vault) = vault {
+        let rotated = state.clone();
+        vault.on_rotate("mail", move || {
+            let state = rotated.clone();
+            std::thread::spawn(move || after_rotation(&state));
+        });
+    }
+    if rekeying {
+        start_rekey(state);
+    }
     // On a server, a store waiting for the device-released key reopens the
     // moment a device (or the recovery code) puts it back. On a thread: the
     // listener also runs at once when the key is already there.
@@ -506,6 +521,113 @@ fn set_encrypt_preference(value: Option<bool>) {
     });
 }
 
+// ── Re-keying after a revoke (hosted plan §6.8) ────────────────────────────
+//
+// User decision 2026-10-03: revoking a device on a server also re-keys the
+// mailbox. The vault's rotation writes a fresh master key into `key.json`
+// and keeps the old one in its `previous` list (`mail_crypt::
+// rotate_device_key_file`); here the open store and the session switch to
+// it at once, so new mail is sealed under it, and a background thread moves
+// what is already there (`MailStore::rekey_step`, one batch per lock hold),
+// re-seals the files beside the database, and only then retires the old
+// master (`mail_crypt::retire_previous`, under the vault's lock, synced).
+//
+// Lock order, outermost first: `REFRESH` → the vault's lock (released again
+// inside `mail_crypt::unlock`) → the runtime (`MailState`, released again)
+// → `mail_crypt::side_files` → the store's connection. The vault's lock is
+// a leaf towards mail: nothing under it touches the database or the files
+// beside it, and its listeners run after it is released.
+
+static REKEY_RUNNING: AtomicBool = AtomicBool::new(false);
+static REKEY_AGAIN: AtomicBool = AtomicBool::new(false);
+/// Serializes key refreshes, so an older `key.json` is never applied over a
+/// newer one.
+static REFRESH: Mutex<()> = Mutex::new(());
+/// The pause between two re-key batches: mail commands get the store's lock
+/// in between.
+const REKEY_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The open store if it is the persistent, encrypted one (not the
+/// memory-only stand-in) — without opening anything.
+fn open_persistent_store(state: &MailState) -> Option<Arc<MailStore>> {
+    let rt = state.lock().ok()?;
+    rt.store.clone().filter(|s| s.is_encrypted() && !s.is_ephemeral() && rt.unlock_note.is_none())
+}
+
+/// Follow `key.json` after a rotation or a finished re-key: the session's
+/// keys and the open store switch to what it holds now, side files first
+/// and under their lock, so no writer keeps sealing with the replaced keys.
+/// Whether a re-key is (still) due.
+fn refresh_keys(state: &MailState) -> Result<bool, String> {
+    let _serial = REFRESH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(store) = open_persistent_store(state) else { return Ok(false) };
+    let keys = match mail_crypt::unlock(store.dir()) {
+        mail_crypt::Unlock::Ready(keys) => Arc::new(keys),
+        mail_crypt::Unlock::Unavailable(why) => return Err(why),
+        _ => return Ok(false),
+    };
+    let mut side = mail_crypt::side_files();
+    *side += 1;
+    set_session_keys(Some(keys.clone()));
+    store.switch_keys(keys.clone())?;
+    Ok(keys.rekeying())
+}
+
+/// A rotation committed: switch to the fresh master key and re-key.
+fn after_rotation(state: &MailState) {
+    match refresh_keys(state) {
+        Ok(true) => start_rekey(state),
+        Ok(false) => {}
+        Err(error) => eprintln!("mail: switching to the rotated key failed (the next open does): {error}"),
+    }
+}
+
+/// Start the re-key thread, or have the running one look again.
+fn start_rekey(state: &MailState) {
+    REKEY_AGAIN.store(true, Ordering::SeqCst);
+    if REKEY_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let state = state.clone();
+    std::thread::spawn(move || loop {
+        REKEY_AGAIN.store(false, Ordering::SeqCst);
+        rekey_run(&state);
+        REKEY_RUNNING.store(false, Ordering::SeqCst);
+        if !REKEY_AGAIN.load(Ordering::SeqCst) || REKEY_RUNNING.swap(true, Ordering::SeqCst) {
+            break;
+        }
+    });
+}
+
+/// The re-key thread's view of this process: the runtime's open store, the
+/// key refresh above, the vault for retiring.
+struct RekeyHost<'a>(&'a MailState);
+
+impl crate::services::mail_rekey::Host for RekeyHost<'_> {
+    fn store(&self) -> Option<Arc<MailStore>> {
+        open_persistent_store(self.0)
+    }
+
+    fn refresh(&self) -> Result<bool, String> {
+        refresh_keys(self.0)
+    }
+
+    fn retire(&self, dir: &Path, keys: &MailKeys) -> Result<bool, String> {
+        mail_crypt::retire_previous(dir, keys)
+    }
+
+    fn wait_for_unlock(&self) {
+        if let Some(vault) = crate::services::server::vault::vault() {
+            let state = self.0.clone();
+            vault.on_unlock("mail-rekey", move || start_rekey(&state));
+        }
+    }
+}
+
+fn rekey_run(state: &MailState) {
+    crate::services::mail_rekey::run(&RekeyHost(state), REKEY_PAUSE);
+}
+
 // ── OpenPGP ─────────────────────────────────────────────────────────────────
 
 /// The keyring, which exists only when the store is encrypted.
@@ -516,11 +638,15 @@ fn set_encrypt_preference(value: Option<bool>) {
 fn keyring_of(rt: &MailState) -> Result<PgpKeyring, String> {
     // Opening the store is what resolves the unlock and publishes the keys.
     store_of(rt)?;
+    // The keys and the switch count together, under the side-file lock: a
+    // keyring write after a switch is refused, never sealed under keys a
+    // server's re-key is about to retire.
+    let side = mail_crypt::side_files();
     let keys = session_keys().ok_or(
         "turn on encryption for the local mail store first — an OpenPGP private key \
          cannot be kept in a plaintext file",
     )?;
-    PgpKeyring::open(&mail_dir(), &keys)
+    PgpKeyring::open(&mail_dir(), &keys, *side)
 }
 
 /// Whether this message was signed or encrypted, and what came of it.
@@ -684,7 +810,8 @@ fn read_accounts(path: &Path) -> Result<MailAccounts, String> {
         let enc = sealed_twin(path);
         if enc.exists() {
             let raw = std::fs::read(&enc).map_err(|e| e.to_string())?;
-            let plain = mail_crypt::open(&keys.field, &mail_crypt::accounts_aad(), &raw)
+            let (plain, _) = keys
+                .open_any(|k| &k.field, &mail_crypt::accounts_aad(), &raw)
                 .map_err(|e| format!("the mail account list could not be decrypted: {e}"))?;
             return serde_json::from_slice(&plain).map_err(|e| e.to_string());
         }
@@ -699,6 +826,8 @@ fn read_accounts(path: &Path) -> Result<MailAccounts, String> {
 }
 
 fn write_accounts(path: &Path, data: &MailAccounts) -> Result<(), String> {
+    // Keys read under the side-file lock (see `mail_crypt::side_files`).
+    let _side = mail_crypt::side_files();
     let Some(keys) = file_keys() else {
         if let Some(why) = sealed_write_refusal(sealed_twin(path).exists(), false) {
             return Err(why);
@@ -762,7 +891,8 @@ fn read_filters(path: &Path) -> Result<MailFilters, String> {
         let enc = sealed_twin(path);
         if enc.exists() {
             let sealed = std::fs::read(&enc).map_err(|e| e.to_string())?;
-            let plain = mail_crypt::open(&keys.field, &mail_crypt::filters_aad(), &sealed)
+            let (plain, _) = keys
+                .open_any(|k| &k.field, &mail_crypt::filters_aad(), &sealed)
                 .map_err(|e| format!("the mail filter list could not be decrypted: {e}"))?;
             Some(plain.to_vec())
         } else {
@@ -815,6 +945,8 @@ fn parse_filters(bytes: &[u8]) -> MailFilters {
 }
 
 fn write_filters(path: &Path, data: &MailFilters) -> Result<(), String> {
+    // Keys read under the side-file lock (see `mail_crypt::side_files`).
+    let _side = mail_crypt::side_files();
     let Some(keys) = file_keys() else {
         if let Some(why) = sealed_write_refusal(sealed_twin(path).exists(), false) {
             return Err(why);
@@ -871,7 +1003,8 @@ fn read_contacts(path: &Path) -> Result<MailContacts, String> {
         let enc = sealed_twin(path);
         if enc.exists() {
             let sealed = std::fs::read(&enc).map_err(|e| e.to_string())?;
-            let plain = mail_crypt::open(&keys.field, &mail_crypt::contacts_aad(), &sealed)
+            let (plain, _) = keys
+                .open_any(|k| &k.field, &mail_crypt::contacts_aad(), &sealed)
                 .map_err(|e| format!("the address book could not be decrypted: {e}"))?;
             Some(plain.to_vec())
         } else {
@@ -909,6 +1042,8 @@ fn parse_contacts(bytes: &[u8]) -> Result<MailContacts, String> {
 }
 
 fn write_contacts(path: &Path, data: &MailContacts) -> Result<(), String> {
+    // Keys read under the side-file lock (see `mail_crypt::side_files`).
+    let _side = mail_crypt::side_files();
     let Some(keys) = file_keys() else {
         // Stricter than the filters' rule: refused whenever the *mailbox* is
         // encrypted, not only when a sealed twin exists. Collecting writes this
@@ -1638,8 +1773,9 @@ fn open_sealed_file(
     aad: &[u8],
 ) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     match std::fs::read(path) {
-        Ok(raw) => mail_crypt::open(&keys.field, aad, &raw)
-            .map(|plain| Some(Zeroizing::new(plain.to_vec())))
+        Ok(raw) => keys
+            .open_any(|k| &k.field, aad, &raw)
+            .map(|(plain, _)| Some(Zeroizing::new(plain.to_vec())))
             .map_err(|e| format!("{} could not be decrypted: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
@@ -1654,7 +1790,13 @@ fn adopt_keys(rt: &MailState, dir: &Path, keys: Arc<MailKeys>) -> Result<(), Str
         guard.store = None;
     }
     let store = Arc::new(MailStore::open_with_keys(dir, Some(keys.clone()))?);
-    set_session_keys(Some(keys.clone()));
+    {
+        // A switch of keys like a rotation's: a side-file writer still
+        // holding the old ones is refused, not sealed under a dead key.
+        let mut side = mail_crypt::side_files();
+        *side += 1;
+        set_session_keys(Some(keys.clone()));
+    }
     migrate_accounts_file(Some(&keys))?;
     migrate_filters_file(Some(&keys))?;
     migrate_contacts_file(Some(&keys))?;

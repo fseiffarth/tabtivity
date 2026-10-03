@@ -3,11 +3,20 @@
 //! A revoked device keeps its ECDH key, and someone may keep a copy of the
 //! old `wraps.json`: together they open the old K offline. So a revoke mints
 //! a new K and re-seals everything K sealed — the credential store, a
-//! device-mode mail `key.json` (the mail store's own master key stays; only
-//! its wrap changes), the recovery wrap (to the code's public key `R`, so the
-//! code stays valid without being known here) and a wrap per remaining
-//! device. Nothing in the new files opens with the old K. A revoke also
-//! flags "make a new recovery code" (`new_code_recommended`).
+//! device-mode mail `key.json` (with a **fresh mail master key**; the old
+//! one moves to its `previous` list and the store re-seals every row under
+//! the new one in the background: `mail_crypt::rotate_device_key_file`,
+//! `MailStore::rekey_step`), the recovery wrap (to the code's public key
+//! `R`, so the code stays valid without being known here) and a wrap per
+//! remaining device. Nothing in the new files opens with the old K. A
+//! revoke also flags "make a new recovery code" (`new_code_recommended`).
+//!
+//! **Lock order** (hosted plan §6.8): the vault's file lock is a leaf
+//! towards mail — under it only `key.json` is read and written, never the
+//! mail database or the files beside it, and listeners (unlock, rotation)
+//! run after it is released. The mail side takes it only through
+//! [`Vault::with_key`] while holding none of its own locks except
+//! `mail_crypt::side_files` (taken first).
 //!
 //! **Crash safety.** One commit point, the rename of `wraps.json.next` over
 //! `wraps.json`:
@@ -152,7 +161,7 @@ impl Vault {
             return serde_json::to_vec(&sealed).map(Zeroizing::new).map_err(|e| e.to_string());
         }
         let dir = target.parent().ok_or("no mail dir")?;
-        crate::services::mail_crypt::rewrap_device_key_file(dir, old, new).map(Zeroizing::new)
+        crate::services::mail_crypt::rotate_device_key_file(dir, old, new).map(Zeroizing::new)
     }
 
     /// Finish or undo a rotation a crash interrupted, then make sure the
@@ -198,29 +207,39 @@ impl Vault {
     }
 
     /// Delete the wraps `drop` picks, record the pending rotation, and
-    /// rotate now if K is held.
+    /// rotate now if K is held. The rotation listeners run after the lock is
+    /// released.
     pub(super) fn revoke_where(&self, drop: impl Fn(&secrets::DeviceWrap) -> bool, remaining: &[DeviceKey]) -> Result<(), String> {
-        let _guard = self.files();
-        let mut file = WrapFile::load(&self.state_dir)?;
-        let before = file.devices.len();
-        file.devices.retain(|w| !drop(w));
-        if file.devices.len() == before && !file.rotate {
-            return Ok(());
+        let rotated = {
+            let _guard = self.files();
+            let mut file = WrapFile::load(&self.state_dir)?;
+            let before = file.devices.len();
+            file.devices.retain(|w| !drop(w));
+            if file.devices.len() == before && !file.rotate {
+                return Ok(());
+            }
+            if !file.is_set_up() {
+                return file.save(&self.state_dir);
+            }
+            file.rotate = true;
+            if file.devices.len() != before {
+                file.new_code_recommended = true;
+            }
+            // The revoke itself: from here the device's wrap is gone, whatever
+            // happens to the rotation.
+            file.save(&self.state_dir)?;
+            match self.key() {
+                Some(old) => {
+                    self.rotate(&old, &self.live(remaining))?;
+                    true
+                }
+                None => false,
+            }
+        };
+        if rotated {
+            self.notify_rotated();
         }
-        if !file.is_set_up() {
-            return file.save(&self.state_dir);
-        }
-        file.rotate = true;
-        if file.devices.len() != before {
-            file.new_code_recommended = true;
-        }
-        // The revoke itself: from here the device's wrap is gone, whatever
-        // happens to the rotation.
-        file.save(&self.state_dir)?;
-        match self.key() {
-            Some(old) => self.rotate(&old, &self.live(remaining)),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// After a release: drop wraps of devices that are no longer enrolled

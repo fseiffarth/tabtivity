@@ -1704,6 +1704,8 @@ async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> im
             "recoveryCode": status.recovery_code,
             // A device was revoked since the code was made: make a new one.
             "newCodeRecommended": status.new_code_recommended,
+            // The mailbox's re-key after a revoke, while one is under way.
+            "mailRekey": crate::services::mail_rekey::status(&vault.mail_dir()),
             "identity": identity,
         })),
     )

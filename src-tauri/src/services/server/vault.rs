@@ -17,8 +17,9 @@
 //! * **Revoking a device rotates K** ([`rotation`]): a new K, everything
 //!   sealed under the old one re-sealed beside it, one atomic switch; locked,
 //!   the wrap goes at once and the rotation runs at the next release. The
-//!   Server settings then ask for a new recovery code
-//!   ([`VaultStatus::new_code_recommended`]).
+//!   mail store gets a fresh master key and re-seals its rows in the
+//!   background ([`Vault::on_rotate`]), and the Server settings ask for a new
+//!   recovery code ([`VaultStatus::new_code_recommended`]).
 //! * **Enrolment**: a signed-in device registers its ECDH public key with a
 //!   signature of its pairing key (the session cookie alone cannot), and
 //!   pins this daemon's identity key ([`Vault::identity_public`]).
@@ -199,6 +200,8 @@ pub struct Vault {
     hold: Arc<dyn KeyHold>,
     exchanges: Mutex<HashMap<String, Exchange>>,
     listeners: Mutex<Vec<(&'static str, Listener)>>,
+    /// Run after a rotation committed (`on_rotate`).
+    rotate_listeners: Mutex<Vec<(&'static str, Listener)>>,
     /// Serializes read-modify-writes of `wraps.json` and `credentials.json`.
     files: Mutex<()>,
     /// Devices revoked while this vault ran. A route reads its device list
@@ -243,7 +246,15 @@ impl Vault {
     /// The vault of `state_dir`. Finishes or undoes a rotation a crash
     /// interrupted before anything reads a sealed file ([`Vault::settle`]).
     pub fn new(state_dir: PathBuf, hold: Arc<dyn KeyHold>) -> Self {
-        let vault = Self { state_dir, hold, exchanges: Mutex::default(), listeners: Mutex::default(), files: Mutex::default(), revoked: Mutex::default() };
+        let vault = Self {
+            state_dir,
+            hold,
+            exchanges: Mutex::default(),
+            listeners: Mutex::default(),
+            rotate_listeners: Mutex::default(),
+            files: Mutex::default(),
+            revoked: Mutex::default(),
+        };
         {
             let _guard = vault.files();
             vault.settle();
@@ -354,6 +365,30 @@ impl Vault {
         for listener in listeners {
             listener();
         }
+    }
+
+    /// Run `f` after every rotation that committed (a revoke while unlocked,
+    /// a pending one at a release or at daemon start), with the vault's lock
+    /// released: the mail store switches to the fresh master key the
+    /// rotation put into its `key.json` and re-keys. One listener per `name`.
+    pub fn on_rotate(&self, name: &'static str, f: impl Fn() + Send + Sync + 'static) {
+        let mut listeners = self.rotate_listeners.lock().unwrap_or_else(PoisonError::into_inner);
+        listeners.retain(|(n, _)| *n != name);
+        listeners.push((name, Arc::new(f)));
+    }
+
+    fn notify_rotated(&self) {
+        let listeners: Vec<Listener> = self.rotate_listeners.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(_, l)| l.clone()).collect();
+        for listener in listeners {
+            listener();
+        }
+    }
+
+    /// The one mail store a daemon has (`<state>/mail`, as
+    /// `commands::mail::mail_dir`), whose device-mode key file a rotation
+    /// re-keys.
+    pub fn mail_dir(&self) -> PathBuf {
+        self.state_dir.join("mail")
     }
 
     /// Mint K: wraps for every enrolled device, one under a fresh recovery
