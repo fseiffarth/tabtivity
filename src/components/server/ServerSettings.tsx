@@ -1,7 +1,8 @@
 /**
  * The browser client's Server settings (hosted plan §6.7, §3.3): the user's
  * own feature switches, and — for the administrator — the server-wide
- * policy the gateway keeps (feature switches, the Ollama model allowlist).
+ * policy the gateway keeps (feature switches, the Ollama model allowlist)
+ * and the agent API keys it offers every user (`ServerAgentKeys`).
  *
  * Talks to the gateway's own small API (`/gateway/v1/policy`), not to the
  * daemon: the policy is the gateway's file, and only the gateway knows who
@@ -15,6 +16,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { SettingsCard, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { ServerSecrets } from "./ServerSecrets";
+import { ServerAgentKeys } from "./ServerAgentKeys";
 
 type Feature = "mail" | "calendar" | "todo";
 const FEATURES: Feature[] = ["mail", "calendar", "todo"];
@@ -156,6 +158,7 @@ export function ServerSettings() {
         </>
       )}
       {status && <p className="settings-help">{status}</p>}
+      {admin && <ServerAgentKeys />}
       <ServerSecrets />
     </>
   );

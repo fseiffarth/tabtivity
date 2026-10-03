@@ -717,11 +717,18 @@ interface AgentLogin {
    *  names a command where a credential belongs. */
   blocked: { account: string | null; stored: string | null; command: string | null } | null;
   shared: boolean;
+  /** The variable this CLI takes an API key in; `null`: an administrator's
+   *  key cannot reach it. */
+  api_key_env?: string | null;
+  /** A hosted server's administrator offers a key for this CLI. */
+  admin_key_offered?: boolean;
+  /** This user's agents run on that key instead of their own login. */
+  uses_admin_key?: boolean;
 }
 
 /** The shared agent logins: one row per CLI whose login Tabtivity can share,
  *  with the one-click import from this computer and a way out. */
-function AgentLoginsRows() {
+export function AgentLoginsRows() {
   const t = useT();
   const [logins, setLogins] = useState<AgentLogin[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -739,10 +746,10 @@ function AgentLoginsRows() {
   );
   if (!logins) return null;
   const rows = logins.filter((l) => l.shared);
-  const run = (id: string, cmd: "agent_login_import" | "agent_login_sign_out") => {
+  const run = (id: string, cmd: "agent_login_import" | "agent_login_sign_out" | "agent_login_use_admin_key", on?: boolean) => {
     setError(null);
     setBusy(id);
-    invoke(cmd, { id })
+    invoke(cmd, on === undefined ? { id } : { id, on })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => {
         setBusy(null);
@@ -757,11 +764,19 @@ function AgentLoginsRows() {
       <p className="settings-help">{t("settings.agentLoginsHelp")}</p>
       {rows.map((l) => {
         const label = registry.get(l.id) ?? labels.get(l.id) ?? l.id;
-        const state = l.signed_in
+        const own = l.signed_in
           ? l.account
             ? t("settings.agentLoginSignedInAs", { account: l.account })
             : t("settings.agentLoginSignedIn")
           : t("settings.agentLoginNotSignedIn");
+        // A hosted server's administrator's key (plan §5.2): the user's own
+        // choice per CLI, only where one is on offer (or still chosen).
+        const adminKey = !!l.api_key_env && (!!l.admin_key_offered || !!l.uses_admin_key);
+        const state = l.uses_admin_key
+          ? l.admin_key_offered
+            ? t("settings.agentLoginAdminKey")
+            : t("settings.agentLoginAdminKeyGone")
+          : own;
         return (
           <div key={l.id} className="settings-toggle-card-row">
             <span>
@@ -777,6 +792,20 @@ function AgentLoginsRows() {
               )}
             </span>
             <span>
+              {adminKey && (
+                <>
+                  <UntestedTag id="agents.adminKey" />{" "}
+                  <button
+                    type="button"
+                    className="ollama-action-btn"
+                    disabled={busy === l.id}
+                    title={l.uses_admin_key ? undefined : t("settings.agentLoginAdminKeyHelp", { env: l.api_key_env ?? "" })}
+                    onClick={() => run(l.id, "agent_login_use_admin_key", !l.uses_admin_key)}
+                  >
+                    {t(l.uses_admin_key ? "settings.agentLoginUseOwn" : "settings.agentLoginUseAdminKey")}
+                  </button>
+                </>
+              )}
               {l.importable && (
                 <button
                   type="button"
