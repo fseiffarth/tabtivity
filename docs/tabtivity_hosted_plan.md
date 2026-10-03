@@ -870,7 +870,9 @@ assume one human, as the sync plan's §6.1-6.2 already required.
   designed, not built**: two uids writing one tree turns P4 review finding
   11 (git's other program-naming config keys) into a cross-user hole unless
   the tree has no `.git` of its own, and needs a content gate for agent
-  files written live; the choice is the user's (#2382).
+  files written live; the choice is the user's (#2382). *Decided (user,
+  2026-10-04): pair mode is dropped for now* — the design stays documented
+  as an option (#2382); members edit together through their own clones.
 
 ### 6.4 Presence and visibility
 
@@ -1538,8 +1540,8 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   `87d4e713`, `2371b0cd`; Claude only (the other CLIs' base-URL overrides
   are unverified); not run against the provider (#2377).*
 - A shared consumer login, at the admin's own risk, with the §5.4 hardening,
-  enabled per CLI after Q2. *Not built: Q2 enables it only per verified CLI,
-  and no row is verified (#2383).*
+  enabled per CLI after Q2. *Dropped (user, 2026-10-04): won't do (#2383).
+  Admin-provided credentials are API keys only (P3b) and the broker.*
 - OIDC login. *Built `a8301819`, `45ef8ed0`, `04bc7de7`; not run against a
   real provider (#2378).*
 - The Tauri shell's Connect mode. *Built `7e86d0ed`, `d2a109d2`, with one
@@ -1549,8 +1551,8 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   behind the admin's `containers` switch (default off); not run live
   (#2380).*
 - Pair mode and in-tree worktrees for shared projects. *Worktrees built
-  `e36839db` (#2381); pair mode designed, not built — needs the user's
-  decision (#2382).*
+  `e36839db` (#2381); pair mode dropped for now (user, 2026-10-04), its
+  design kept as a documented option (#2382).*
 
 i18n and `UntestedTag` rows land inside each phase, never after it.
 
@@ -1636,7 +1638,9 @@ option is enabled for it (§5.4):
   replica it can't write back, or on an access token alone? How is a leaked
   token revoked? *P5 (2026-10-03): not built.* No CLI's row is verified (it
   needs a real login), and this answer enables the option only per verified
-  CLI — so there is nothing to enable yet (#2383).
+  CLI — so there is nothing to enable yet (#2383). *Dropped (user,
+  2026-10-04): the shared consumer login is not built at all (#2383 won't
+  do); admin credentials are API keys and the broker only.*
 
 **Q3. Editing together.** *Answered (user, 2026-09-29):* per-member clones
 through the `tabtivity-hub` bare repo (§6). A shared tree with worktrees stays a

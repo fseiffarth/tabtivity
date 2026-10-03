@@ -846,7 +846,9 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2382. **Decide and build pair mode (P5, §6.3).** Designed, not built:
+2382. **Pair mode (P5, §6.3) — dropped for now, a documented option.**
+    *User decision (2026-10-04): not built; members edit together through
+    their own clones.* Should it come back, the design is here. Designed, not built:
     `docs/context/sharing.md` § Pair mode. The decision: a shared `.git`
     (needs #2374 settled — every program-naming git config key refused —
     and stays exposed to new git keys) or a tree without `.git`, members
@@ -855,7 +857,9 @@ the desktop groundwork the hosted plan's P1 builds on.*
     binding only the scope's own tree, no in-tree session files there.
     (P5, 2026-10-03.)
 
-2383. **A shared consumer login stays off until Q2's research is done per CLI (P5, §5.4).**
+2383. **A shared consumer login (P5, §5.4).** ❌ **Won't do** (user
+    decision, 2026-10-04): admin-provided credentials are API keys (P3b) and
+    the key broker only. Kept for the record:
     Q2 (answered 2026-09-29) keeps the option but enables it "per CLI
     after that CLI's row is verified": does a refresh rotate the refresh
     token, do two holders refreshing at once invalidate each other, does
