@@ -215,14 +215,18 @@ keyring. `services::server::vault` wires them:
   `key.json` (`mail_crypt::rotate_device_key_file`) has a **fresh mail
   master** and moves every master it held into `previous`, all wrapped
   under the new K — so mail sealed from the switch on opens with no old
-  K. The `on_rotate` listener (`commands::mail`) switches the open store
+  K. The `on_rotate` listener (`commands::mail`, registered before the
+  store's first open so a rotation during the open is not missed; with no
+  store open it still moves the side files' session keys) switches the open store
   and the session to it (`refresh_keys`: side-file lock, then
   `MailStore::switch_keys` under the connection lock — every write reads
   its keys under that lock, so nothing is sealed under replaced keys) and
   starts the re-key thread (`services::mail_rekey::run`): batches of
   `MailStore::rekey_step` (keyed digests; each table of `SEALED_TABLES`
   by rowid; blob files — re-sealed under their new keyed name, rows
-  re-pointed, old file deleted after the commit; the outbox), each one
+  re-pointed in one join per table per batch, old file deleted after the
+  commit; a file already under the new name is adopted only if it opens
+  under the current key, synced first; the outbox), each one
   transaction with its `meta` marker (`rekey_cursor`: target fingerprint,
   stage, rowid / last blob name, blob names to unlink), 20 ms apart; then
   the files beside the database (`reseal_side_files`, all synced); then
@@ -235,15 +239,18 @@ keyring. `services::server::vault` wires them:
   when everything is moved: status `waiting`, an `on_unlock` listener
   finishes it. Side-file writers (accounts, filters, contacts, the PGP
   keyring) take `mail_crypt::side_files` (holding a switch count): a
-  `PgpKeyring` opened before a switch refuses to write after it. **Lock
+  `PgpKeyring` opened before a switch refuses to write after it; a mail
+  reset holds the lock until its carried files are written. **Lock
   order:** `REFRESH` → vault lock (released inside `mail_crypt::unlock`)
   → `MailState` (released) → `side_files` → the store's connection; the
   vault's lock is a leaf towards mail (only `key.json` under it), which is
   why `mail_crypt::rewrap`'s non-device branches stay outside it.
   `GET /api/v1/secrets` carries `mailRekey` (`mail_rekey::status`: the
   thread's word, else `waiting` while `previous` is non-empty). Not
-  vacuumed: freed pages may keep old-master ciphertext of mail from before
-  the revoke, which the revoked device could read anyway. `reply_key`
+  vacuumed: freed pages and old WAL frames may keep old-master ciphertext
+  of mail from before the revoke (and of what was written in the moment
+  between the rotation and the switch), which the revoked device could
+  read anyway; a re-sealed row's same-size record is overwritten in place. `reply_key`
   digests (not recomputable: the `In-Reply-To` is not stored) keep the old
   key until their message is re-synced — the replies strip of older Sent
   mail may miss them; they reveal equality only, of mail from before.

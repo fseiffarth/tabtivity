@@ -1922,3 +1922,125 @@ the code once; **Later** keeps the advice.
 | `git diff --check` | clean |
 | `npm run mobile:bundle` | built (`mobile-dist/` is git-ignored) |
 | `3fdfd335` alone (scratch export) | `cargo test -p tabtivity --no-default-features --lib --test server_secrets`: 3143 + 1 passed |
+
+## Mail re-key review
+
+*Written 2026-10-03 by the re-key reviewer. Range `743dc8bc..d5695eed`;
+fixes on top. Nothing run on a server, nothing as root, no daemon against
+a real state dir or port, the user's mail store untouched.*
+
+### What was checked
+
+- **Crash points**: blob written / rows committed / old file not yet
+  deleted (the marker's `unlink` list), mid side-file reseal
+  (`write_bytes_durable`: tmp + fsync + rename + dir fsync), mid table
+  batch (one transaction with its marker), between the last batch and the
+  retire, after the retire before `rekey_clear`. Durability: bundled
+  SQLite's `synchronous` is FULL (no `SQLITE_DEFAULT_WAL_SYNCHRONOUS` in
+  `libsqlite3-sys`' build flags); the vault's `key.json` move-in is synced
+  before `notify_rotated`. No path found that leaves a value no key on
+  disk opens, apart from the blob adoption fixed below.
+- **Concurrency**: every `seal_*`, `digest_of`, `agent_mark_key`,
+  `blob_name` and `seal_staged` call in `mail_store.rs` runs under `conn`
+  (enumerated); `switch_keys` takes `conn`; sync writes, search
+  (decrypt-on-scan via `open_any`), delete (+ `prune_blobs_locked`), move
+  (`folder_id` only — AAD unaffected), account removal, drafts/staging, a
+  second revoke mid-way (target change resets the marker; a dropped
+  marker's `unlink` files are still found by the next blob stage), a mail
+  reset during the pass (the thread's old `Arc<MailStore>` writes to the
+  unlinked database on Linux; its blob/outbox/side-file passes skip files
+  of the new store, which open under no key of its ring; its retire sees a
+  different master and stops).
+- **Lock order**, every nesting: `REFRESH` → {`MailState`, vault, `side_files`
+  → `conn`}; `MailState` → vault (open); `side_files` → vault (`write_*`'s
+  silent unlock, the reset's `forget`/`enable_default`); `side_files` →
+  `conn` (`switch_keys`); `CONTACTS_LOCK` → `side_files`. No reverse edge:
+  the vault's lock touches only `key.json`, its unlock/rotation listeners
+  run after release and spawn or only flag (`start_rekey`);
+  `PgpKeyring::write` takes `side_files` itself and is never called under a
+  caller's guard; `MailStore` methods never take `side_files`.
+- **Security**: the tests' "revoked device" is K1 plus the old `key.json`
+  (`f.old` derives from it) — what such a device has; the old master opens
+  no checked column, blob, staged file, side file or the key file. The
+  new-code flag is cleared only by `new_recovery_code` (signed route);
+  every `WrapFile` load/save round-trips it, rotations carry it.
+- **Desktop**: `previous` is empty and skipped in `key.json`; `open_any`
+  returns the same errors as `open`; no `on_rotate` without a vault. The
+  only desktop-visible change: `put_blob` and `stage_attachment` now hold
+  the store's lock while writing their file.
+- UI: i18n (now 9 keys × 5), UntestedTags, the phone sheet, polling.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | Medium (perf) | The blob pass ran two `UPDATE … WHERE raw_blob/blob = ?` per moved file. Neither column is indexed and `raw_blob` sits behind the bodies, so each read the whole body cache: up to 400 full scans per batch under the store's lock. | Fixed `d299a57a`: one temp-table join per table per batch. |
+| 2 | Low (data loss) | A file already under a blob's new name (same bytes again since the switch — `put_blob` writes unsynced — or a torn write) was adopted unchecked and unsynced, then the old file deleted: power loss or a torn copy left rows naming nothing readable. | Fixed `d299a57a`: adopted only if it opens under the current key, synced first; else rewritten. Test `a_blob_already_under_its_new_name_is_adopted_only_if_it_opens` (fails on the old code; also covers one blob shared by two rows). |
+| 3 | Low–medium (security) | `on_rotate` was registered after the store's first open. A rotation committing during that open (an open can take long: migration, vacuum; `install_vault` resumes pending rotations at daemon start) went unheard: new mail sealed under the revoked device's master, no re-key, until a restart. | Fixed `0b92e183`: registered before the open; its refresh waits for the runtime lock. Ordering only, not unit-tested (global vault + command state). |
+| 4 | Low (data loss) | A mail reset did not take `side_files`: a re-key reading a side file before the reset removed it and writing it after the carried copy would leave the account list / filters / address book / keyring under the destroyed key. | Fixed `0b92e183`: the reset holds the lock until its files are written (released before `adopt_keys`). |
+| 5 | Low (security) | A rotation with no store open left the side files' silently unlocked session keys on the old master: account/filter edits were sealed under it until the store opened. | Fixed `0b92e183`: `refresh_keys` follows the key file for the session keys too. |
+| 6 | Low (UX) | With the key unlocked but mail not opened since the rotation, the panel said the re-key waited for a device to unlock the key. | Fixed `4b8bb4ca`: "starts the next time mail is opened" (`server.secrets.mailRekey.waitingOpen`, 5 languages; test updated). |
+
+### Open, judgment calls (not changed)
+
+- **Late blob reference.** A blob `put_blob` wrote under the old keys
+  before the switch and that is referenced only after the blob stage moved
+  it would name a deleted file. Same class as `prune_blobs_locked`'s
+  existing race with a concurrent delete; the window is microseconds
+  (`put_blob` → `put_attachment`/`cache_body` back to back) against a
+  blob stage that starts ≥ 8 batches after the switch. Cheap close if
+  wanted: re-seal an *unreferenced* old blob in place under its old name.
+- A reader holding a blob name from `attachment()` can fail once if a
+  batch moves that blob before its `get_blob`; a retry works.
+- **Lock hold times.** A table batch reads all ≤ 200 rows even when the
+  4 MB cap stops early (body read amplification); a blob batch does up to
+  200 durable writes (two fsyncs each) under the lock — well under a
+  second on SSD, seconds on an SD-card/HDD server. Options: a smaller cap
+  on moved files per batch, or `syncfs` once per batch on Linux.
+- **(a) No VACUUM.** Old-master ciphertext of mail written *after* the
+  revoke exists only for writes between the rotation's commit and the
+  store's switch (milliseconds; finding 3 removed the case where it lasted
+  until a restart). A probe (SQLite 3.46) confirms a same-size UPDATE
+  overwrites the record in place, overflow pages included, so after a
+  checkpoint the main file holds no old copy of a re-sealed row. What can
+  remain: WAL frames from before the pass (until reused) and pages freed
+  by deletes or size-changing updates since the revoke. `secure_delete=ON`
+  while re-keying is cheap but does not touch WAL frames; a
+  `wal_checkpoint(TRUNCATE)` before the retire drops them (one statement);
+  an incremental vacuum needs `auto_vacuum` set at creation (a full VACUUM
+  to switch) — not cheap. Recommendation if wanted: TRUNCATE at the end of
+  the pass + `secure_delete` while `rekeying()`.
+- **(b) `reply_key` under the retired key.** To someone holding the old
+  master and the database it reveals equality only — which pre-revoke
+  messages answer a given `Message-ID` — nothing written after the switch
+  (a re-sync rewrites the key under the new one). It *is* recomputable for
+  every lookup that matters: `replies_to` digests a stored message's
+  `rfc_message_id`, which the messages batch already opens; per row,
+  `UPDATE messages SET reply_key = new WHERE reply_key IN (old digests)`
+  through the existing `messages_by_reply_key` index would restore the
+  replies strip and drop the old-key digests. Say if wanted.
+- The "failed" status says it is retried at the next unlock; in practice
+  at the next rotation, daemon restart or reboot (K stays held otherwise).
+- `*.rekey` temp files a crash leaves mid-write are never cleaned (sealed
+  under the current key; clutter only). Live step 1's "no `*.rekey`
+  files" can fail after a crash — not a defect.
+- The thread is not joined at shutdown: process exit ends it and every
+  step is crash-safe (tested); a panic in it would leave `REKEY_RUNNING`
+  set until restart (no panicking path seen).
+
+### Gates (worktree, final tree = `4b8bb4ca` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **699 files, 7085 tests**, all pass |
+| `cargo test --workspace -q --no-fail-fast` | **3592 passed**, 0 failed, 3 ignored (+1); neither known flaky test fired |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3152 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 743dc8bc..HEAD` | green |
+| `git diff --check` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change in the fixes) |
