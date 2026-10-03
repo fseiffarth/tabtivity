@@ -323,6 +323,7 @@ fn friendly_ollama_error(raw: &str) -> String {
 // PATH lookups go through the shared, cross-platform `crate::paths::binary_on_path`
 // (`where` on Windows, `which` elsewhere); see that module for the rationale.
 use crate::paths::binary_on_path;
+use crate::tauri_host::Ctx;
 
 /// True when the `ollama` binary is available. Checks PATH first, then (on
 /// Windows) the well-known per-user install location, since winget/the GUI
@@ -379,9 +380,8 @@ pub fn ollama_install_cmd() -> &'static str {
 ///
 /// Returns the install log on success, or the tail of the output on failure.
 #[tauri::command]
-pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn install_ollama(ctx: Ctx) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     if ollama_is_installed().await {
         return Ok("Ollama is already installed.".to_string());
@@ -410,7 +410,7 @@ pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
     };
 
     let emit = |line: &str| {
-        let _ = app.emit(
+        ctx.emit(
             "ollama-install-progress",
             serde_json::json!({ "line": line }),
         );
@@ -580,9 +580,8 @@ pub async fn vibe_is_installed() -> bool {
 /// Per-OS the command is driven through the native shell: PowerShell on Windows
 /// (uv → `uv tool install mistral-vibe`), the POSIX shell on Linux/macOS.
 #[tauri::command]
-pub async fn install_vibe(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn install_vibe(ctx: Ctx) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     if vibe_is_installed().await {
         return Ok("Vibe is already installed.".to_string());
@@ -612,7 +611,7 @@ pub async fn install_vibe(app: tauri::AppHandle) -> Result<String, String> {
     };
 
     let emit = |line: &str| {
-        let _ = app.emit("vibe-install-progress", serde_json::json!({ "line": line }));
+        ctx.emit("vibe-install-progress", serde_json::json!({ "line": line }));
     };
     emit("Starting Vibe installer…");
 
@@ -1296,13 +1295,12 @@ impl LoadDevice {
 /// live "Loading into memory…" indicator for a load started anywhere.
 #[tauri::command]
 pub async fn load_ollama_model(
-    app: tauri::AppHandle,
+    ctx: Ctx,
     model: String,
     device: Option<LoadDevice>,
 ) -> Result<(), String> {
-    use tauri::Emitter;
 
-    let _ = app.emit(
+    ctx.emit(
         "ollama-load-progress",
         serde_json::json!({ "model": model, "status": "loading" }),
     );
@@ -1312,7 +1310,7 @@ pub async fn load_ollama_model(
     }
     let body = payload.to_string();
     let result = ollama_http("POST", "/api/generate", Some(&body));
-    let _ = app.emit(
+    ctx.emit(
         "ollama-load-progress",
         match &result {
             Ok(_) => serde_json::json!({ "model": model, "status": "success" }),
@@ -1329,9 +1327,8 @@ pub async fn load_ollama_model(
 /// them so the UI can show a live percentage. Blocks until complete — may
 /// take minutes for large models.
 #[tauri::command]
-pub async fn pull_ollama_model(app: tauri::AppHandle, model: String) -> Result<(), String> {
+pub async fn pull_ollama_model(ctx: Ctx, model: String) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     let body = serde_json::json!({"model": model, "stream": true}).to_string();
 
@@ -1389,7 +1386,7 @@ pub async fn pull_ollama_model(app: tauri::AppHandle, model: String) -> Result<(
         // drop the connection. Ollama keeps the partial blobs, and the pending-pull
         // record is left in place so the UI can offer Resume or Delete.
         if take_pause_request(&model) {
-            let _ = app.emit(
+            ctx.emit(
                 "ollama-pull-progress",
                 serde_json::json!({ "model": model, "status": "paused" }),
             );
@@ -1411,7 +1408,7 @@ pub async fn pull_ollama_model(app: tauri::AppHandle, model: String) -> Result<(
                 last_err = Some(err.to_string());
                 continue;
             }
-            let _ = app.emit(
+            ctx.emit(
                 "ollama-pull-progress",
                 serde_json::json!({
                     "model": model,
@@ -3385,7 +3382,7 @@ fn completion_body(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn complete_text(
-    window: tauri::WebviewWindow,
+    ctx: Ctx,
     prefix: String,
     suffix: String,
     model: String,
@@ -3398,7 +3395,6 @@ pub async fn complete_text(
     project_id: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
-    use tauri::Emitter;
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
         let settings = read_settings().unwrap_or_default();
@@ -3438,11 +3434,10 @@ pub async fn complete_text(
                     let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
                     if let Some(end) = stop { text.truncate(end); }
                     published |= !text.is_empty();
-                    // Target only the requesting editor window. IPC Channels bypass
-                    // the embedded browser's origin ACL (see browser.rs tests).
-                    window
-                        .emit_to(window.label(), &event, text)
-                        .map_err(|e| e.to_string())?;
+                    // Target only the requesting editor's client (the calling
+                    // window). IPC Channels bypass the embedded browser's origin
+                    // ACL (see browser.rs tests).
+                    ctx.emit_to_caller(&event, text);
                     Ok(stop.is_some())
                 },
             )

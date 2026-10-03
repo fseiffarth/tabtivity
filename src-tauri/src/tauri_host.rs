@@ -111,6 +111,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "monitor.rs",
     "net_usage.rs",
     "network.rs",
+    "ollama.rs",
     "openvpn.rs",
     "os_clock.rs",
     "pdf_markup.rs",
