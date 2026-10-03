@@ -716,6 +716,16 @@ pub async fn prepare(
     crate::brand::PAIR.export_both(&mut opts.env);
     #[cfg(unix)]
     if opts.tmux_session.is_some() && opts.cmd != "ssh" && opts.cmd != "docker" {
+        // On a hosted server the tmux server is its own unit's (`tmux -L
+        // <slug>`, started by systemd), so a pane does not inherit this
+        // daemon's PATH the way a desktop's tmux inherits the window's: carry
+        // it, the agent shims first — a CLI typed into a shell tab then runs
+        // fenced, with the administrator's key where chosen (plan §5.4).
+        if crate::services::server::is_server() {
+            if let Some(path) = crate::paths::effective_path() {
+                opts.env.entry("PATH".into()).or_insert_with(|| path.to_string_lossy().into_owned());
+            }
+        }
         crate::services::tmux_local::wrap_pty_options_local(&mut opts);
     }
 
