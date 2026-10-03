@@ -42,6 +42,8 @@ const FRONTEND_ONLY = new Set([
   "mobileShellCachePrefix",
   "mobileOpenMessage",
   "mobileNotificationTagPrefix",
+  // The gateway crate builds it from SERVER_ACCOUNT_PREFIX (`names::helper_binary`).
+  "serverAdminHelper",
 ]);
 
 describe("brand mirror", () => {
