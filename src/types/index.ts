@@ -174,6 +174,9 @@ export interface Settings {
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
   mobile_indicator?: boolean;
+  /** Server mode only (hosted plan §6.7): the features this user switched off
+   * for themselves (`"mail"`, `"calendar"`, `"todo"`). Ignored on the desktop. */
+  disabled_features?: string[];
   /** Is the header's machine-state cluster (connection, battery, Mobile, VPN,
    * Machines, CPU/RAM/GPU) expanded into the bar? Unset means collapsed to a
    * single summary lamp; anything non-nominal shows itself regardless. */

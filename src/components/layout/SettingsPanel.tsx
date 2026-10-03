@@ -80,6 +80,7 @@ import { canConnectVpnSilently } from "../../lib/remote/vpn/vpnConnect";
 import { setVpnAutoConnect, vpnUsernameFor } from "../../lib/remote/vpn/vpnAutoConnect";
 import type { StoredVpnConfig } from "../../types";
 import { MobileSettings } from "../mobile/MobileSettings";
+import { ServerSettings } from "../server/ServerSettings";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_INSTRUCTION, MAX_PDF_MARKUP_PROMPT } from "../../lib/viewers/pdfMarkup";
 import { BugIcon, PlayIcon, WarningIcon } from "../common/icons/Icon";
@@ -1880,6 +1881,7 @@ export function SettingsDialog({
                 user unit, launchd agent, or the Windows Run key), so the
                 section is not platform-gated. */}
             <SettingsSection title={t("settings.mobile")} anchor={SETTINGS_ANCHORS.mobile} />
+            <ServerSettings />
             <MobileSettings />
             <ToggleCard
               label={t("settings.mobileIndicator")}
