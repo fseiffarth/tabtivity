@@ -208,6 +208,18 @@ own standalone workspace (Q12). As built:
   server's bundle would give a remote origin the window's IPC — any XSS on the
   server, or the server itself, would then run with this desktop's native
   commands; the capability files forbid a `remote` entry for that reason.
+- **A narrow native surface** (user decision, P5 review finding 10). The
+  window has its own capability, `capabilities/connect.json` (window
+  controls, notifications, the events its bridge needs — no dialog, drag,
+  path, app, menu, tray or webview creation; `default.json` no longer
+  reaches it), and its app commands are narrowed in Rust before they run:
+  `commands::connect::gate_connect_window` wraps the invoke handler and
+  admits only `CONNECT_WINDOW_COMMANDS` (the socket bridge, the download
+  opener, `open_external_url`, the clipboard). A script injected through
+  server-rendered data, or a co-member's file, reaches nothing else of the
+  desktop's IPC. A Tauri app-manifest ACL would do the same but needs every
+  one of the main windows' ~1000 commands listed; the wrapper keeps those
+  untouched.
   Cost: the desktop and the server must speak the same protocol version (the
   `hello` says which), as the phone and its host already must.
 - **The socket is Rust's** (`services::connect`, `commands::connect`). The
@@ -230,8 +242,8 @@ own standalone workspace (Q12). As built:
   with the standalone workspace's local storage.
 - **Native where it is the user's machine**: `wsInternals.ts` takes the
   window's own Tauri internals (captured before the shim replaces them) and
-  answers `CONNECT_NATIVE` client commands (clipboard, `open_external_url`,
-  clock, Super key, power) and the window and notification plugins natively;
+  answers `CONNECT_NATIVE` client commands (clipboard, `open_external_url`)
+  and the window and notification plugins natively;
   `open_file` asks the server for a download ticket and
   `connect_open_download` fetches it (the server's host, `/content/` only,
   a safe file name — no Windows stream, device or trailing dot either —

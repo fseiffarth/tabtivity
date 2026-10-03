@@ -38,15 +38,11 @@ import { dialogAdapter, type MessageOptions, type OpenOptions, type SaveOptions 
 import type { WsClient } from "./wsClient";
 import type { NativeInternals } from "./bridgeSocket";
 
-/** `client` commands the Connect window runs natively on this machine. */
-export const CONNECT_NATIVE = new Set([
-  "copy_text_to_clipboard",
-  "clipboard_has_image",
-  "open_external_url",
-  "os_clock_format",
-  "desktop_owns_super_key",
-  "get_power_state",
-]);
+/** `client` commands the Connect window runs natively on this machine — the
+ *  only app commands it may call besides its socket bridge and the download
+ *  opener (`commands::connect::CONNECT_WINDOW_COMMANDS`); the rest are
+ *  answered by the browser adapters, as in a browser. */
+export const CONNECT_NATIVE = new Set(["copy_text_to_clipboard", "clipboard_has_image", "open_external_url"]);
 
 /** Plugins the Connect window answers natively (real window controls, OS notifications). */
 const CONNECT_NATIVE_PLUGINS = new Set(["window", "webview", "notification"]);

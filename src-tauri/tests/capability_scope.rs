@@ -37,7 +37,7 @@ use serde_json::Value;
 
 /// Labels that must keep working. If one of these ever stops matching, the UI is
 /// silently dead — every `invoke` from that window is rejected by the ACL.
-const MUST_STILL_MATCH: &[&str] = &["main", "detached-p1-g1", "detached-abc", "present-deck1", "connect"];
+const MUST_STILL_MATCH: &[&str] = &["main", "detached-p1-g1", "detached-abc", "present-deck1"];
 
 /// The label the in-app browser's live-page windows use. Nothing but
 /// `browser.json` (which grants nothing) may match it.
@@ -154,6 +154,35 @@ fn the_default_capability_still_reaches_every_shipping_webview() {
             .is_empty(),
         "default.json granting nothing would be a silently dead UI"
     );
+}
+
+/// The Connect window (hosted plan §7.2; user decision, P5 review finding
+/// 10) has its own narrow capability: `default.json` does not reach it, and
+/// `connect.json` grants window controls, notifications and events only.
+#[test]
+fn the_connect_window_has_only_its_own_narrow_capability() {
+    let caps = read_capabilities();
+    let mut reaching: Vec<&String> = caps
+        .iter()
+        .filter(|(_, cap)| patterns(cap, "webviews").iter().chain(patterns(cap, "windows").iter()).any(|p| glob_match(p, "connect")))
+        .map(|(name, _)| name)
+        .collect();
+    reaching.sort();
+    assert_eq!(reaching, ["connect.json"], "only connect.json may reach the Connect window");
+    let granted: Vec<String> = caps["connect.json"]["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().map(str::to_string).unwrap_or_else(|| p["identifier"].as_str().unwrap_or_default().to_string()))
+        .collect();
+    assert!(!granted.is_empty(), "a Connect window granted nothing is dead");
+    for permission in &granted {
+        let allowed = permission.starts_with("core:window:")
+            || permission.starts_with("core:event:")
+            || permission == "core:webview:default"
+            || permission == "notification:default";
+        assert!(allowed, "connect.json grants {permission}: only window controls, notifications and events");
+    }
 }
 
 /// **BC-3.** The browser's own label must reach no permission at all.

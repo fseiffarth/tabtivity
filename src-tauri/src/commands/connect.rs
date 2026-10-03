@@ -57,6 +57,43 @@ struct Frame {
     binary: Option<String>,
 }
 
+/// The app commands the Connect window may call — its whole native surface
+/// (user decision, P5 review finding 10): the socket bridge to the server,
+/// the download opener and an http(s) link opener, and the clipboard.
+/// Window controls and notifications are plugins, granted by
+/// `capabilities/connect.json` alone. Any other command from that window is
+/// refused before it runs, so script injected through server-rendered data
+/// cannot reach the rest of the desktop's IPC.
+pub const CONNECT_WINDOW_COMMANDS: &[&str] = &[
+    "connect_ws_open",
+    "connect_ws_send",
+    "connect_ws_close",
+    "connect_open_download",
+    "open_external_url",
+    "copy_text_to_clipboard",
+    "clipboard_has_image",
+];
+
+/// May the webview labelled `webview` call app command `command`? Every
+/// window but the Connect one may call any.
+pub fn window_may_call(webview: &str, command: &str) -> bool {
+    webview != WINDOW || CONNECT_WINDOW_COMMANDS.contains(&command)
+}
+
+/// Wrap the app's invoke handler with [`window_may_call`].
+pub fn gate_connect_window<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if !window_may_call(invoke.message.webview_ref().label(), invoke.message.command()) {
+            let refused = format!("the Connect window may not call {}", invoke.message.command());
+            invoke.resolver.reject(refused);
+            return true;
+        }
+        handler(invoke)
+    }
+}
+
 fn only_connect(window: &tauri::Window) -> Result<(), String> {
     if window.label() == WINDOW {
         Ok(())
@@ -224,6 +261,21 @@ pub async fn connect_open_download(window: tauri::Window, url: String) -> Result
 mod tests {
     /// P5 review: a closed or reloaded Connect window takes its sockets
     /// with it.
+    /// User decision (P5 review finding 10): the Connect window's app
+    /// commands are its bridge, downloads, links and the clipboard — nothing
+    /// else; the other windows are not narrowed.
+    #[test]
+    fn the_connect_window_calls_only_its_own_commands() {
+        use super::{window_may_call, WINDOW};
+        for allowed in ["connect_ws_open", "connect_ws_send", "connect_ws_close", "connect_open_download", "copy_text_to_clipboard"] {
+            assert!(window_may_call(WINDOW, allowed), "{allowed}");
+        }
+        for refused in ["pty_spawn", "read_file_bytes", "save_settings", "connect_forget", "connect_pair", "openvpn_connect", "os_clock_format"] {
+            assert!(!window_may_call(WINDOW, refused), "{refused}");
+        }
+        assert!(window_may_call("main", "pty_spawn") && window_may_call("detached-p1", "connect_forget"));
+    }
+
     #[test]
     fn closing_the_bridge_closes_every_socket_it_holds() {
         use tokio_tungstenite::tungstenite::Message;

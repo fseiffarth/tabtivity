@@ -1505,7 +1505,10 @@ pub fn run() {
             restore_main_window(_app);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        // The Connect window reaches only its own few app commands
+        // (`commands::connect::CONNECT_WINDOW_COMMANDS`); every other window
+        // the whole set, as before.
+        .invoke_handler(commands::connect::gate_connect_window(tauri::generate_handler![
             // Settings
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -2322,7 +2325,7 @@ pub fn run() {
             commands::spell::spell_dictionaries,
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
-        ])
+        ]))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())
