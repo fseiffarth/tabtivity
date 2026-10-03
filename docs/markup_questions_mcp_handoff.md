@@ -228,3 +228,155 @@ are audited and the audit table labels the class.
   this phase did not touch (`no-explicit-any` etc.).
 - `scripts/brand-check.sh`: OK. `scripts/privacy-check.sh`: OK (also run by
   the pre-commit hook). `git diff --check`: clean.
+
+## P2
+
+Done, on `markup-mcp` (nothing run live):
+
+- `180e14d1` Reopen a markup question whose answer could not be delivered
+- `9373a5a4` Show the agent's markup questions beside the PDF in the desktop markup view
+- `1a5a141f` Add the markup questions MCP switch to Manage CLIs
+
+### The reopen fix (P1 gap)
+
+`markup_mcp_answer` still closes the ask before the window queues the
+prompt, but it now answers `{ prompt, receipt }`. When queueing fails, the
+caller calls **`markup_mcp_reopen({ projectId, scheduleTargetId, askId,
+receipt })`** (service: `markup_mcp::reopen`). It opens the ask again only
+for the answer that receipt names. It refuses, and leaves the ask closed,
+when:
+
+- another view answered it (`answered`, the receipt does not match);
+- a newer ask of the same (project, target) came in after it
+  (`superseded`; an answered ask is not marked superseded by the newer one,
+  so this checks for any later record of the key);
+- it was withdrawn, dismissed or expired, or its session is gone (`gone`).
+
+Reopening an ask that is already open is `Ok` (idempotent). A spent receipt
+(the ask was reopened and then answered again) is `answered`. The answer
+mints a fresh receipt every time. Test:
+`reopen_undoes_only_the_answer_whose_prompt_was_not_delivered`.
+
+P3 must do the same in `MobileBridgeHost`'s `markup_answer`: answer, queue +
+hold, and on a queue failure reopen with the receipt before reporting the
+error to the phone. The receipt never goes to the phone.
+
+### What was built
+
+- **`src/lib/viewers/markupQuestions.ts`** (no React; P3's bridge can reuse
+  it): types `MarkupAsk` / `MarkupQuestion` / `MarkupAnswer`,
+  `MARKUP_MCP_CHANGED`, the four typed calls (`listMarkupQuestions` (null →
+  `[]`), `answerMarkupQuestions`, `reopenMarkupQuestions`,
+  `dismissMarkupQuestions`), `questionReasonKey(code)` (the ask's codes, then
+  the Submit's `markupReasonKey` for queue refusals), `splitRecommended`, the
+  card's pick model (`QuestionPick`, `NO_PICK`, `toggleOption`,
+  `toggleOther`, `answersOf` → one `MarkupAnswer` per question, or `null`
+  while incomplete or Other… is blank), and pin placement (`quoteRects`:
+  the whole quote via `pdfPageMatches`, else its first six words;
+  `pagePins` → `QuestionPin { askId, index, rects, slot }`, with margin slots
+  for a quote that is missing or not found).
+- **`usePdfMarkup.ts`** returns `questions: MarkupQuestions` (`asks`,
+  `answering`, `failure { text, prompt? }`, `answer`, `dismiss`, `focus`,
+  `show`).
+  - Listing runs only while markup mode is on with a target. It re-lists on
+    `markup-mcp-changed` and only while the pane is visible; a change heard
+    while hidden is caught up on show (the effect re-runs on `visible`).
+    Listing pauses while an answer is in flight, so the card does not flicker
+    away between answer and reopen.
+  - Answer: `markup_mcp_answer`, then `queuePromptForTab` + `holdPhonePrompt`.
+    On success the ask is removed locally and a new round starts
+    (`startRound(queued, now, previous.applied)`). On a queue failure it
+    reopens and shows "The questions are still open — try again". If the
+    reopen is refused too, it shows the prompt text to paste.
+  - Round pill: an open ask while the tab is idle is fed to the round
+    machine as `question`. The bar then says "The agent asks about your
+    marks — answer below" (`pdfMarkup.round.asks`), and `canApply` is false
+    while an ask is open.
+- **`src/components/embed/pdf/PdfMarkupQuestions.tsx`**:
+  - `PdfMarkupQuestions`: the card under `PdfMarkupBar`, rendered by
+    `PdfViewer` only while marking.
+  - `AskCard`: the reader's question card classes
+    (`terminal-reader-question` / `-option` / `-recommended`). This is the
+    desktop sibling of the phone's `QuestionList`, so no new row treatment.
+    A single question that is single-select answers on the click. Otherwise
+    the rows toggle (☐/☑ for multiSelect) and **Send answers** sends.
+    Other… opens a text field (max 500). **Answer in chat instead**
+    dismisses.
+  - `useQuestionPins(doc, asks)`: reads `pageTextItemBoxes` only for the
+    pages the questions name, once per document.
+  - `PdfQuestionPins`: the `?n` badges, rendered inside `PdfPageCanvas` (new
+    `questionPins` prop) above the markup layer (z 8). The badge copies the
+    remark marker's pin shape in the accent colour. When the card asks for a
+    question, its quoted words light up with the current-search-hit class.
+  - Pin click → `show(…, "card")` → the card scrolls to that question and
+    flashes it. Chip click → `show(…, "page")` → `scrollIntoPdfBox` on the
+    pin.
+- **`src/components/agents/MarkupMcpSettings.tsx`**: the switch in Manage
+  CLIs → Advanced, after `GitPushMcpSettings` (`markup_mcp ?? true`).
+- CSS: `viewers.css`, after `.file-viewer-pdf-markup-round`.
+- i18n: `pdfMarkup.round.asks`, `pdfMarkup.questions.*` (21 keys),
+  `markupMcp.title` / `.help`, all five languages.
+- Untested rows: `desktop.markup.questions` (card head pill) and `markupMcp`
+  (switch label).
+- Filemap rows for the new files; the backend row of
+  `commands/markup_mcp.rs` names reopen.
+
+### Components P3 can mirror
+
+- The card's behaviour: `AskCard` (direct-pick rule, multiSelect + Send,
+  Other…, dismiss, keep the card on failure).
+- The pick model and answer shape: `answersOf` / `toggleOption` /
+  `toggleOther` in `lib/viewers/markupQuestions.ts`. These are pure, and
+  `mobile-web` can import them as the desktop imports the phone's markup
+  core.
+- Pins: `quoteRects` / `pagePins`, which take the same `TextItemBox` runs.
+  The phone's sealed frame would answer `findText` with rects computed this
+  way.
+
+### Deviations, and why
+
+- **The card shows only while markup mode is on.** The target tab is chosen
+  only then (`chosen` is fixed when markup comes on), and the plan puts the
+  questions in the markup view. Nothing on the Mark up toolbar button tells
+  you an ask is waiting while the mode is off.
+- **The rows are the reader's question card, not a new list.** It is the
+  existing desktop look for the same thing (`LiveQuestion` /
+  `AskedQuestions`). A picked row reuses the answered card's `chosen` look.
+- **The answer starts a round.** The pill follows the agent's turn on the
+  answer, as it does after Submit, and keeps the previous round's `applied`
+  flag.
+- **The quote fallback tries the first six words** before falling back to
+  the margin. Agents' quotes may run across a line break the PDF set
+  differently.
+
+### Gates (at `1a5a141f`)
+
+- `cargo test`: lib 3258 passed, 2 ignored; every other test binary green.
+  New: 1 service test; the command test was extended.
+- `cargo clippy --all-targets -- -D warnings`: clean (rustc 1.97.1).
+- `npm run build`: OK.
+- `npm test`: 695 files, 7084 tests passed. New file
+  `src/__tests__/pdf/PdfMarkupQuestions.test.tsx` has 14 tests: render,
+  click-to-answer delivery, multiSelect + Send, Other…, dismiss, delivery
+  failure → reopen → retry, failure without reopen shows the prompt, refused
+  answer, pane-visibility gating with catch-up, pill + Make these changes,
+  pin placement, pin click and focus, and the pick model.
+- `npm run lint`: 0 errors, 31 warnings, all in files this phase did not
+  change (the same count as P1). The one warning in `PdfViewer.tsx`
+  (`viewPos.initial`) is in an effect P2 did not touch.
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`:
+  OK.
+- `npm run backend:stale` not run (it concerns the main checkout's window).
+  Commits were made with `TABTIVITY_NO_AUTO_DEV_BUILD=1`. The first commit
+  went without it, but the hook declined the build anyway ("inside an agent
+  fence").
+
+### Open for P3/P4
+
+- Phone side (P3); `DEFAULT_INSTRUCTION` sentence, `docs/context`, help doc
+  and QA items (P4).
+- Live QA of the desktop card is owed. Check in particular:
+  - pin placement on real PDFs: rotated pages are excluded by the markup
+    gate, and pins are read at rot 0;
+  - the card's own scroll box at small window heights;
+  - focus behaviour of the Other… field (`autoFocus`).
