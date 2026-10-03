@@ -443,23 +443,7 @@ impl Exec for SystemExec {
 
     fn run_as(&mut self, account: &UnixAccount, argv: &[String], stdin: &str) -> Result<(), String> {
         use std::io::Write;
-        let mut env = vec![
-            format!("HOME={}", account.home.display()),
-            format!("USER={}", account.name),
-            format!("LOGNAME={}", account.name),
-            "PATH=/usr/local/bin:/usr/bin:/bin".to_string(),
-        ];
-        if account.name == names::cli_account() {
-            // The installer needs the root it installs into; `env -i` dropped everything.
-            env.push(format!("{}={}", crate::brand::CURRENT.env_name(wire::env::CLI_ROOT), names::cli_root().display()));
-        }
-        let mut child = std::process::Command::new("runuser")
-            .args(["-u", &account.name, "--", "env", "-i"])
-            .args(&env)
-            .args(argv)
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("runuser: {e}"))?;
+        let mut child = run_as_command(account, argv).stdin(std::process::Stdio::piped()).spawn().map_err(|e| format!("runuser: {e}"))?;
         if let Some(mut pipe) = child.stdin.take() {
             pipe.write_all(stdin.as_bytes()).map_err(|e| e.to_string())?;
         }
@@ -524,6 +508,27 @@ impl Exec for SystemExec {
 fn chown_target_ok(meta: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     meta.is_file() && meta.nlink() == 1
+}
+
+/// `runuser -u <account> -- env -i <fixed env> <argv>`, started in the
+/// account's own home: never in the admin's working directory, which may be a
+/// directory a user controls — an installer reads project config from its
+/// cwd (`npm` takes `./.npmrc`: a registry, scripts), and the CLI account's
+/// installs are what every user then runs.
+fn run_as_command(account: &UnixAccount, argv: &[String]) -> std::process::Command {
+    let mut env = vec![
+        format!("HOME={}", account.home.display()),
+        format!("USER={}", account.name),
+        format!("LOGNAME={}", account.name),
+        "PATH=/usr/local/bin:/usr/bin:/bin".to_string(),
+    ];
+    if account.name == names::cli_account() {
+        // The installer needs the root it installs into; `env -i` dropped everything.
+        env.push(format!("{}={}", crate::brand::CURRENT.env_name(wire::env::CLI_ROOT), names::cli_root().display()));
+    }
+    let mut command = std::process::Command::new("runuser");
+    command.args(["-u", &account.name, "--", "env", "-i"]).args(&env).args(argv).current_dir(&account.home);
+    command
 }
 
 trait NoFollow {

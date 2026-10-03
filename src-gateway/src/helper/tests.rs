@@ -245,3 +245,18 @@ fn only_a_plain_singly_linked_file_is_handed_to_the_gateway() {
     assert!(!chown_target_ok(&std::fs::metadata(&file).unwrap()));
     assert!(!chown_target_ok(&std::fs::metadata(dir.path()).unwrap()), "a directory");
 }
+
+#[test]
+fn a_command_as_an_account_starts_in_its_home_with_a_clean_environment() {
+    let cli = UnixAccount { name: names::cli_account(), uid: 997, gid: 997, home: names::cli_root(), groups: vec![] };
+    let command = run_as_command(&cli, &["/usr/lib/x/serverd".into(), "--install-cli".into(), "claude".into()]);
+    assert_eq!(command.get_current_dir(), Some(names::cli_root().as_path()), "never the admin's cwd (an installer reads ./.npmrc)");
+    let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    assert_eq!(&args[..5], ["-u", names::cli_account().as_str(), "--", "env", "-i"]);
+    assert!(args.iter().any(|a| a.ends_with(&format!("SERVER_CLI_ROOT={}", names::cli_root().display()))), "{args:?}");
+    assert_eq!(args.last().map(String::as_str), Some("claude"));
+    let alice = UnixAccount { name: "alice".into(), uid: 1001, gid: 1001, home: "/home/alice".into(), groups: vec![] };
+    let command = run_as_command(&alice, &["x".into()]);
+    assert_eq!(command.get_current_dir(), Some(std::path::Path::new("/home/alice")));
+    assert!(!command.get_args().any(|a| a.to_string_lossy().contains("SERVER_CLI_ROOT")), "only the CLI account gets the install root");
+}
