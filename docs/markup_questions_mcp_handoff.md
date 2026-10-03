@@ -744,3 +744,81 @@ General review of `8dba5c4c..7adc6570` (plan, P1–P4) on `markup-mcp`,
 - Commits used `TABTIVITY_NO_AUTO_DEV_BUILD=1`.
 - `npm run backend:stale` is not applicable: this is a worktree branch, and
   the review changed no backend code.
+
+## Review 2
+
+Second, independent general review of `8dba5c4c..a3f3726e` (plan, P1–P4 and
+review 1's fixes) on `markup-mcp`, 2026-10-03. Nothing run live; the app was
+not started.
+
+### Checked and sound
+
+- **Lane and secrets.** `/mcp/markup` serves only `Marker`, `/mcp`'s negative
+  list names it, the registry serves the two tools to `Marker` alone, and
+  `handle_with` re-checks class, revocation and the project + target binding.
+  `MARKUP_TOKEN_ENV` is in `SpawnTokenGuard`, the PTY exit path (revoke, then
+  `sweep` outside the token lock — no lock-order inversion with `prune`'s
+  `session_alive`), `tmux_local::SECRET_ENV`, `sandbox::is_secret_exec_env` and
+  the push preflight's strip. Wiring is local project tabs only.
+- **Text.** Every agent string is cleaned (`strip_invisible` drops control
+  characters, ESC included) and rendered as React text on both views; no raw
+  HTML. The answer prompt's fixed first line keeps it off `/ ! # $ @`, `file`
+  can hold no backtick or control character, and the 12 KiB cap holds.
+- **Phone.** No path or raw id crosses (bridge sends `file_name` only, the
+  sidecar re-strips to a bare leaf). The phone bundle has no `invoke`: the
+  card imports only `markupQuestionPicks.ts`; no `React.lazy`. `findText` is
+  bounded both ways (quote ≤ 400, ≤ 32 finite boxes, page within the
+  document); a frame answer that fails validation is dropped and the pin
+  falls back to the margin.
+- **Lifecycle.** Answer, reopen (receipt bound to the answer, spent once,
+  refused after a newer ask), dismiss, withdraw, expiry and session death all
+  run under the store lock; the change hook rings after the lock is dropped.
+  Delivery failure → reopen works the same from the desktop card and the
+  phone bridge. multiSelect and Other… agree end to end (pick model, sidecar
+  shape check, `answer_text`), including review 1's untick.
+- **Hooks.** Listeners, timers and in-flight reads are cleaned up; the
+  desktop list and the phone poll are gated on visibility and paused while an
+  answer is in flight. i18n: the 49 new keys and their placeholders are the
+  same in all five dictionaries. Untested rows exist for all three ids.
+
+### Findings
+
+| # | Severity | Where | What | Status |
+|---|---|---|---|---|
+| 1 | Low (review 1's report-only item) | `src-tauri/src/commands/root_mcp.rs:211`, `services/markup_mcp.rs` `audited` | The lane wrote an audit row for every message, so each new tab's `initialize` / `tools/list` (and `ping`) took ~3 rows of the 500-row ring. | Fixed in `99ee76d1`: only tool calls and refusals (any JSON-RPC error, a refused tool result, a revoked session) are audited; admission failures were and are recorded before the lane. Test `the_audit_keeps_tool_calls_and_refusals_but_not_the_handshake`. Context doc updated. |
+| 2 | Low (cost) | `src/components/embed/pdf/usePdfMarkup.ts:345` | Review 1's marking-off probe (`askWaiting`) depended on `idleIds`, a memo over the `targets` object, so every change of the project's tab list (a relabel, any other tab's update) re-listed every agent tab over IPC — the same pattern review 1 fixed for the open-mode listing. | Fixed in `49bc8a21`: keyed by the joined target ids. Test "is not read again when the project's tabs change but its agent tabs stay" (failed first: 4 reads instead of 2). |
+| 3 | Low (docs) | `docs/help/mobile.md:130` | The help said switching the setting off "applies to newly opened tabs"; running tabs are refused as `off` too. | Fixed in `b367e05a`. |
+
+### Report only
+
+- `useQuestionPins` (`PdfMarkupQuestions.tsx:246`) rebuilds the pins —
+  `pdfPageMatches` over each named page's text runs — on every `PdfCanvas`
+  render while marking with an open ask, and hands each pinned page a new
+  props object. At most four questions; a perf nicety, not a bug.
+- A `markup_withdraw` that lands between an answer and its delivery answers
+  `not_open`; if that delivery then fails, `reopen` brings the ask back. The
+  window is one IPC round trip; left alone.
+- While marking is on with tab A chosen, an ask from tab B about the same
+  file shows nothing (the `askWaiting` hint runs only with marking off). By
+  design (the card is per target), but not said in the context doc.
+- The agent's question text is echoed into the answer prompt, which arrives
+  as the user's own message. Any process in the tab holds the token
+  (documented), so after one tap its words reach the agent as "user" input.
+  The user reads that text in the card first; noted for the threat model.
+- 31bw (Focus banner opens only outbox files) left open, as review 1 did.
+
+### Gates (at the commit that adds this section)
+
+- `cargo test -q`: lib 3261 passed, 2 ignored (was 3260; 1 new); every other
+  binary green.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `npm run build`: OK.
+- `npm run mobile:bundle`: OK; the phone bundle carries no `__TAURI_INTERNALS__`
+  or `markup_mcp_*` command.
+- `npm test`: 697 files, 7107 tests passed (was 7106; 1 new).
+- `npm run lint`: 0 errors, 31 warnings — the same pre-existing set.
+- `scripts/brand-check.sh`: OK.
+- `scripts/privacy-check.sh` (tree and `a3f3726e..HEAD`): OK.
+- `git diff --check`: clean.
+- Commits used `TABTIVITY_NO_AUTO_DEV_BUILD=1`. `npm run backend:stale` is not
+  applicable: a worktree branch, not the running window's tree.
