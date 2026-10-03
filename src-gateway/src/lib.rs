@@ -24,7 +24,9 @@
 //! * [`units`] renders the systemd units and slices; [`prereq`] checks the
 //!   deployment prerequisites of §8.
 //!
-//! Linux only; the crate builds elsewhere so the workspace does.
+//! Linux only: every service module and both binaries are
+//! `cfg(target_os = "linux")`, so the crate still builds (as the shared wire
+//! formats and pure rules) on Windows and macOS and the workspace does.
 
 #[path = "../../src-core/src/brand.rs"]
 pub mod brand;
@@ -53,29 +55,29 @@ pub mod units;
 /// idle deadlines), the same file: without them any tailnet peer — or any
 /// local user, the listeners being on loopback — could hold the gateway's
 /// descriptors with idle connections and take every account offline.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[allow(dead_code)]
 #[path = "../../src-tauri/src/services/mobile_control/limits.rs"]
 pub mod limits;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod helper;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod keeper;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod broker;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod oidc;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod hub;
 pub mod acl;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod calendars;
 pub mod sudoers;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod proxy;
 pub mod rate;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod server;
 
 /// Seconds since the epoch.

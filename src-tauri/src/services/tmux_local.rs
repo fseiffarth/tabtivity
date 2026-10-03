@@ -1386,6 +1386,7 @@ mod tests {
         assert!(twice.iter().any(|a| a.contains("'tmux'")), "{twice:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_spawn_without_a_session_name_is_refused() {
         let mut opts = detached_fixture(concat!(crate::app_slug!(), "-p--shell-x"), "/p");

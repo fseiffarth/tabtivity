@@ -2,7 +2,7 @@
 //! admin runs it with `sudo`; `--dry-run` prints a verb's plan and changes
 //! nothing (and needs no root). Linux only.
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 mod cli {
     use app_gateway::db::{Db, Role};
     use app_gateway::helper::{self, Ctx, Plan, SystemAccounts, SystemExec};
@@ -147,12 +147,12 @@ mod cli {
 }
 
 fn main() {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     if let Err(error) = cli::main() {
         eprintln!("{error}");
         std::process::exit(1);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
         eprintln!("the admin helper runs on Linux only");
         std::process::exit(2);

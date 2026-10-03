@@ -332,8 +332,11 @@ mod tests {
         assert!(binding_in(&control).is_none());
         write_binding(dir.path(), &serde_json::to_string(&binding()).unwrap()).unwrap();
         assert_eq!(binding_in(&control), Some(binding()));
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(binding_path(&control)).unwrap().permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(binding_path(&control)).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         assert!(write_binding(dir.path(), r#"{"issuer":"http://idp.example","client_id":"d","claim":"sub","value":"u"}"#).is_err());
         write_binding(dir.path(), "").unwrap();
         assert!(binding_in(&control).is_none());

@@ -2,7 +2,7 @@
 //! `<slug>-gateway.service` as `<slug>-gw`. Linux only.
 
 fn main() {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let slug = app_gateway::brand::SLUG;
@@ -41,7 +41,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
         eprintln!("the server gateway runs on Linux only");
         std::process::exit(2);
@@ -52,7 +52,7 @@ fn main() {
 /// `<slug>-auth-keeper.service` as `<slug>-auth` on the socket its socket
 /// unit passes; `--socket` binds one itself (a manual test), `--dir` names
 /// another key directory.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn keeper(args: &[String]) -> i32 {
     use app_gateway::keeper::{self, Keeper, SystemPeers};
     let slug = app_gateway::brand::SLUG;
@@ -90,7 +90,7 @@ fn keeper(args: &[String]) -> i32 {
 /// by `<slug>-keybroker.service` as `<slug>-auth` on the loopback port its
 /// socket unit holds; `--listen` binds one itself (a manual test, loopback
 /// only), `--dir` names another key directory.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn broker(args: &[String]) -> i32 {
     use app_gateway::broker::{self, Broker};
     let slug = app_gateway::brand::SLUG;
@@ -131,7 +131,7 @@ fn broker(args: &[String]) -> i32 {
 /// `<slug>-hub.service` as `<slug>-hub` on the socket its socket unit
 /// passes; `--socket` binds one itself (a manual test), `--root`/`--dir`
 /// name other places.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn hub(args: &[String]) -> i32 {
     use app_gateway::hub;
     let slug = app_gateway::brand::SLUG;
@@ -169,7 +169,7 @@ fn hub(args: &[String]) -> i32 {
 
 /// `<slug>-gateway hub-forget USER`: as root, ask the hub to take USER off
 /// every share (their named ACL entries go with it).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn hub_forget(args: &[String]) -> i32 {
     use app_gateway::hub_wire::Request;
     let slug = app_gateway::brand::SLUG;
@@ -199,7 +199,7 @@ fn hub_forget(args: &[String]) -> i32 {
 
 /// `<slug>-gateway calendar`: the shared-calendar service (hosted plan
 /// §6.7), started by `<slug>-calendar.service` as `<slug>-cal`.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn calendar(args: &[String]) -> i32 {
     use app_gateway::calendars;
     let slug = app_gateway::brand::SLUG;

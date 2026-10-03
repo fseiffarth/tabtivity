@@ -386,9 +386,6 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
-# The shared-project tests (`services::server::share`) drive the real share
-# hub on a temp socket: the daemon's client against the hub it talks to.
-app-gateway = { path = "../src-gateway" }
 # The macOS GPU sampler's `ioreg` plist parser is pure and gated
 # `any(target_os = "macos", test)`, so its fixture test runs on every OS;
 # the crate is already the macOS runtime dependency above.
@@ -400,3 +397,11 @@ tower = { version = "0.5", features = ["util"] }
 # wakeup-discipline tests depend on; it is a test-only feature added on top of
 # the main dependency's "full".
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
+
+# The shared-project, shared-calendar and key-keeper tests drive the real
+# server services (hub, calendars, keeper) on temp sockets: the daemon's
+# client against the service it talks to. Those services are Linux-only (the
+# server's one platform), so the crate is too; Windows and macOS test builds
+# never compile it.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+app-gateway = { path = "../src-gateway" }

@@ -558,5 +558,7 @@ fn forget_prefs(state_dir: &Path, id: &str, content: &CalContent) -> Result<(), 
     save_prefs(state_dir, &prefs)
 }
 
-#[cfg(test)]
+// Against the real hub/calendar services, which are Linux-only (`app-gateway`
+// is a Linux dev-dependency).
+#[cfg(all(test, target_os = "linux"))]
 mod tests;

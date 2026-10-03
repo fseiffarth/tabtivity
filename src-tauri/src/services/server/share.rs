@@ -964,5 +964,7 @@ pub fn apply_fence(args: &mut Vec<String>, roots: &[PathBuf]) {
     args.splice(separator..separator, extra);
 }
 
-#[cfg(test)]
+// Against the real hub/calendar services, which are Linux-only (`app-gateway`
+// is a Linux dev-dependency).
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
