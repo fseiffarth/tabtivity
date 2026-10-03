@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::commands::projects::{entry_directory, entry_is_remote, entry_is_vm, read_projects_list, ImportProjectRequest};
 use crate::schema::projects::ProjectEntry;
 use crate::services::server::hub_wire::{Request, Role, ShareInfo};
-use crate::services::server::share::{self, BranchState, Pushed, ShareRow};
+use crate::services::server::share::{self, BranchState, Pushed, Review, ShareRow};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +60,14 @@ fn refusal(entry: &ProjectEntry) -> Option<&'static str> {
 pub async fn share_list() -> Result<ShareOverview, String> {
     let me = me()?;
     off_thread(move || {
-        let rows = share::overview_in(&state_dir(), share::list_at(&share::hub_socket())?)?;
+        let state = state_dir();
+        let mut rows = share::overview_in(&state, share::list_at(&share::hub_socket())?)?;
+        for row in rows.iter_mut() {
+            if let Some(link) = row.project_id.as_deref().and_then(|p| share::link_of(&state, p)) {
+                // A check that cannot run reads as pending: fail closed.
+                row.pending_review = share::unreviewed(&link).unwrap_or_else(|e| vec![e]);
+            }
+        }
         Ok(ShareOverview { me, rows })
     })
     .await
@@ -204,4 +211,37 @@ pub async fn share_presence(project_id: String, open: bool) -> Result<(), String
         hub(Request::Presence { share: link.share, open })
     })
     .await
+}
+
+/// What merging the hub's `branch` would change in agent-facing files
+/// (§6.5 gate 2), shown before the merge.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn share_review(project_id: String, branch: String) -> Result<Review, String> {
+    me()?;
+    off_thread(move || share::review_merge(&link(&project_id)?, &branch)).await
+}
+
+/// Merge the hub's `branch` (hookless; a conflict is aborted and reported).
+/// `digest` is the review the user saw, required when the merge brings
+/// agent-facing changes.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn share_merge(project_id: String, branch: String, digest: Option<String>) -> Result<String, String> {
+    me()?;
+    off_thread(move || share::merge_in(&state_dir(), &link(&project_id)?, &branch, digest.as_deref())).await
+}
+
+/// Agent-facing files already in the project from others, unreviewed (a
+/// fresh clone, a merge made in a terminal), with their content.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn share_pending(project_id: String) -> Result<Option<Review>, String> {
+    me()?;
+    off_thread(move || share::pending_review(&link(&project_id)?)).await
+}
+
+/// The user reviewed what [`share_pending`] showed (`digest`): agents may
+/// start in the project again.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn share_accept(project_id: String, digest: String) -> Result<(), String> {
+    me()?;
+    off_thread(move || share::accept_in(&state_dir(), &link(&project_id)?, &digest)).await
 }

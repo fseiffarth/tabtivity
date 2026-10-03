@@ -404,6 +404,49 @@ pub(crate) fn pin_common_dir(cmd: &mut std::process::Command, project_dir: &Path
     }
 }
 
+/// [`sanitize_repo_git_config`] that **fails closed** (hosted plan §6.5 gate
+/// 1): for a shared project's repo, whose `.git/config` can be reached by
+/// whatever a co-member's merged content makes run. After the strip every
+/// config file is listed again; a file that cannot be listed, or a
+/// denylisted key that survived, is an error and the git call is refused.
+fn sanitize_repo_git_config_strict(project_dir: &Path) -> Result<(), String> {
+    for config in repo_config_files(project_dir) {
+        sanitize_git_config_file(&config);
+        if let Some(key) = surviving_denylisted_key(&config)? {
+            return Err(format!(
+                "{} still sets {key} after sanitizing; git is not run in this shared project until it is removed",
+                config.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The first [`CONFIG_DENYLIST`] key `config_path` still sets; `Err` when the
+/// file is there but cannot be listed.
+fn surviving_denylisted_key(config_path: &Path) -> Result<Option<String>, String> {
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let path = config_path.to_str().ok_or_else(|| format!("{}: not a UTF-8 path", config_path.display()))?;
+    let listed = crate::paths::command_no_window("git")
+        .args(["config", "--file", path, "--name-only", "--list", "--no-includes"])
+        .output()
+        .map_err(|e| format!("git config: {e}"))?;
+    if !listed.status.success() {
+        return Err(format!("{} cannot be read as git config, so git is not run in this shared project", config_path.display()));
+    }
+    Ok(String::from_utf8_lossy(&listed.stdout).lines().map(str::trim).find(|k| is_denylisted_config_key(k)).map(str::to_string))
+}
+
+/// A command that runs nothing and fails with `message` on stderr — what a
+/// git call becomes when [`sanitize_repo_git_config_strict`] refuses it.
+fn refusing_command(message: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("/bin/sh");
+    cmd.args(["-c", "printf '%s\\n' \"$1\" >&2; exit 128", "sh", message]);
+    cmd
+}
+
 fn sanitize_git_config_file(config_path: &Path) {
     let Some(config_path_str) = config_path.to_str() else {
         return;
@@ -497,7 +540,16 @@ fn git_command_in<S: AsRef<str>>(project_dir: &Path, args: &[S], hooks: Hooks) -
     // would make the new repository incomplete and send later commands to the
     // ancestor. The subcommand follows any leading `-c key=value` pairs.
     let initializing = subcommand_of(args).is_some_and(|sub| sub == "init" || sub == "clone");
-    if !initializing {
+    // A project shared through a hosted server's hub (plan §6.5 gate 1): its
+    // hooks can arrive by merge, so a hooked verb runs hookless here, and
+    // config sanitizing fails closed.
+    let shared = !initializing && crate::services::server::share::is_shared_dir(project_dir);
+    let hooks = if shared { Hooks::Off } else { hooks };
+    if shared {
+        if let Err(message) = sanitize_repo_git_config_strict(project_dir) {
+            return refusing_command(&message);
+        }
+    } else if !initializing {
         sanitize_repo_git_config(project_dir);
     }
     let mut cmd = git_command(args, hooks);
@@ -1541,6 +1593,11 @@ pub(crate) fn scoped_token_config(origins: &[String], username: &str) -> Vec<Str
 /// hooks are its own business — so only local repos are gated.
 pub(crate) fn require_hook_trust(target: Option<&RemoteTarget>, project_dir: &str) -> Result<(), String> {
     if target.is_some() {
+        return Ok(());
+    }
+    // A shared project's clone runs no hook at all (plan §6.5): nothing to
+    // approve, and no approval could make one run.
+    if crate::services::server::share::is_shared_dir(Path::new(project_dir)) {
         return Ok(());
     }
     crate::services::exec_trust::require(
@@ -5264,5 +5321,51 @@ filename note.txt
         let _ = run_git(None, dir, &["status", "--porcelain"]);
         let _ = run_git(None, dir, &["diff"]);
         assert!(!marker.exists(), "implicit bare repo: clean filter ran through run_git");
+    }
+}
+
+/// Hosted plan §6.5 gate 1: in a shared project's repo, config sanitizing
+/// fails closed and a refused call runs nothing.
+#[cfg(all(test, unix))]
+mod shared_gate_tests {
+    use super::*;
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).output().unwrap();
+        assert!(out.status.success());
+        dir
+    }
+
+    #[test]
+    fn strict_sanitizing_strips_and_then_refuses_what_it_cannot_read() {
+        let dir = repo();
+        let config = dir.path().join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[filter \"x\"]\n\tclean = touch /tmp/pwned\n");
+        std::fs::write(&config, &text).unwrap();
+        sanitize_repo_git_config_strict(dir.path()).unwrap();
+        assert!(!std::fs::read_to_string(&config).unwrap().contains("pwned"), "the filter is gone");
+        // A config git cannot parse: refused, not skipped.
+        std::fs::write(&config, "[core\n\tbare = false\n").unwrap();
+        let error = sanitize_repo_git_config_strict(dir.path()).unwrap_err();
+        assert!(error.contains("cannot be read"), "{error}");
+        // The lenient path the desktop keeps does not refuse.
+        sanitize_repo_git_config(dir.path());
+    }
+
+    #[test]
+    fn a_refused_call_runs_nothing_and_says_why() {
+        let out = refusing_command("refused: because").output().unwrap();
+        assert_eq!(out.status.code(), Some(128));
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "refused: because");
+        assert!(out.stdout.is_empty());
+    }
+
+    #[test]
+    fn the_subcommand_follows_leading_config_pairs() {
+        assert_eq!(subcommand_of(&["-c", "safe.directory=/x", "clone", "a"]), Some("clone"));
+        assert_eq!(subcommand_of(&["status"]), Some("status"));
+        assert_eq!(subcommand_of(&["-c", "a=b"]), None);
     }
 }

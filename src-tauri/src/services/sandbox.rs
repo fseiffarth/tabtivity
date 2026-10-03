@@ -689,6 +689,11 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     if !opts.sandbox {
         return Ok(());
     }
+    // A shared project's unreviewed agent instructions stop a container agent
+    // too (hosted plan §6.5 gate 2), not only a fenced one.
+    if let Some(dir) = opts.project_id.as_deref().and_then(project_dir_for) {
+        crate::services::server::share::spawn_gate(&[std::path::PathBuf::from(dir)])?;
+    }
     // Defence-in-depth: containers are local-only. Never docker-wrap a remote
     // project (resolved explicitly from the tab's owning project id).
     //

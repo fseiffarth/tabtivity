@@ -1263,6 +1263,10 @@ pub fn wrap_pty_options_bwrap(
         return Err(fence_unavailable_message());
     }
     let bwrap = crate::paths::system_executable("bwrap").ok_or_else(fence_unavailable_message)?;
+    // A hosted server's shared project: no agent starts on agent
+    // instructions from other members this user has not reviewed (plan
+    // §6.5 gate 2); a no-op everywhere else.
+    crate::services::server::share::spawn_gate(roots)?;
     // Before `opts.cmd` becomes bwrap below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";

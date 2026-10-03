@@ -83,6 +83,11 @@ pub struct Link {
     /// owner"). The local project is never removed by either.
     #[serde(default = "active")]
     pub state: String,
+    /// Commits this user has reviewed the agent-facing files up to (§6.5
+    /// gate 2): the owner's HEAD when sharing, each merge made after a
+    /// review, each push of their own. Newest last, a few kept.
+    #[serde(default)]
+    pub reviewed: Vec<String>,
 }
 
 fn active() -> String {
@@ -312,6 +317,12 @@ pub fn push_in(state_dir: &Path, socket: &Path, link: &Link, user: &str) -> Resu
         return Err("This project is no longer shared".into());
     }
     let dir = &link.dir;
+    // A push marks what it sends as this user's own, reviewed work: so
+    // nothing unreviewed from others may ride along.
+    let pending = unreviewed(link)?;
+    if !pending.is_empty() {
+        return Err(format!("Review the agent instructions merged from other members first ({})", pending.join(", ")));
+    }
     fetch(dir, &link.hub)?;
     let branch = current_branch(dir)?;
     let tip = git_in(dir, None, &["rev-parse", "--verify", "HEAD^{commit}"])?;
@@ -353,6 +364,8 @@ pub fn push_in(state_dir: &Path, socket: &Path, link: &Link, user: &str) -> Resu
     };
     expect_ok(ask_at(socket, &request, (bytes > 0).then_some(bundle.as_path()))?)?;
     let _ = fetch(dir, &link.hub);
+    // What this user pushed is their own work: reviewed by definition.
+    mark_reviewed(state_dir, dir, &tip)?;
     Ok(Pushed { branch: target, commit: tip, unchanged: false })
 }
 
@@ -410,7 +423,8 @@ pub fn create_in(state_dir: &Path, socket: &Path, project_id: &str, dir: &Path, 
     let hub = PathBuf::from(&share.path);
     exclude_app_dir(dir)?;
     set_remote(dir, &hub)?;
-    let link = Link { share: share.id.clone(), role: "owner".into(), owner: user.to_string(), hub, dir: dir.to_path_buf(), state: active() };
+    let head = git_in(dir, None, &["rev-parse", "HEAD"])?;
+    let link = Link { share: share.id.clone(), role: "owner".into(), owner: user.to_string(), hub, dir: dir.to_path_buf(), state: active(), reviewed: vec![head] };
     set_link(state_dir, project_id, link.clone())?;
     push_in(state_dir, socket, &link, user)?;
     Ok(share)
@@ -459,6 +473,9 @@ pub struct ShareRow {
     pub presence: Vec<hub_wire::Presence>,
     /// The local project this share is, when there is one.
     pub project_id: Option<String>,
+    /// Agent-facing files in that project from others, not yet reviewed
+    /// (filled by the caller; §6.5 gate 2).
+    pub pending_review: Vec<String>,
 }
 
 /// Merge the hub's list with the local map: a share the hub no longer lists
@@ -487,7 +504,7 @@ pub fn overview_in(state_dir: &Path, hub_shares: Vec<ShareInfo>) -> Result<Vec<S
             changed = true;
         }
         if !by_id.contains_key(&link.share) {
-            rows.push(ShareRow { id: link.share.clone(), name: link.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), owner: link.owner.clone(), role: link.role.clone(), state: state.into(), members: Vec::new(), presence: Vec::new(), project_id: Some(project.clone()) });
+            rows.push(ShareRow { id: link.share.clone(), name: link.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), owner: link.owner.clone(), role: link.role.clone(), state: state.into(), members: Vec::new(), presence: Vec::new(), project_id: Some(project.clone()), pending_review: Vec::new() });
         }
     }
     if changed {
@@ -504,6 +521,7 @@ pub fn overview_in(state_dir: &Path, hub_shares: Vec<ShareInfo>) -> Result<Vec<S
             members: info.members,
             presence: info.presence,
             project_id,
+            pending_review: Vec::new(),
         });
     }
     Ok(rows)
@@ -511,7 +529,8 @@ pub fn overview_in(state_dir: &Path, hub_shares: Vec<ShareInfo>) -> Result<Vec<S
 
 /// Record that `project_id` is share `info` (after a clone was registered).
 pub fn adopt_in(state_dir: &Path, project_id: &str, info: &ShareInfo, dir: &Path) -> Result<(), String> {
-    set_link(state_dir, project_id, Link { share: info.id.clone(), role: info.role.clone(), owner: info.owner.clone(), hub: PathBuf::from(&info.path), dir: dir.to_path_buf(), state: active() })
+    // Nothing of a fresh clone is reviewed: everything in it came from others.
+    set_link(state_dir, project_id, Link { share: info.id.clone(), role: info.role.clone(), owner: info.owner.clone(), hub: PathBuf::from(&info.path), dir: dir.to_path_buf(), state: active(), reviewed: Vec::new() })
 }
 
 /// The owner deleted the share (or stopped sharing): forget the link.
@@ -522,6 +541,200 @@ pub fn forget_in(state_dir: &Path, project_id: &str) -> Result<(), String> {
 /// The project ids whose links name `share`.
 pub fn projects_of(state_dir: &Path, share: &str) -> Vec<String> {
     load_map(state_dir).links.into_iter().filter(|(_, l)| l.share == share).map(|(p, _)| p).collect()
+}
+
+// ── Gate 2: the agent-facing surface, reviewed before an agent reads it ────
+
+/// Paths an agent CLI reads as instructions or configuration (§6.5 gate 2),
+/// at any depth: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.mcp.json`,
+/// `.envrc`, and everything under `.claude/`, `.codex/`, `.gemini/`,
+/// `.cursor/` (Claude's `settings.json` hooks included).
+pub const AGENT_PATHSPEC: &[&str] = &[
+    ":(glob)**/CLAUDE.md",
+    ":(glob)**/AGENTS.md",
+    ":(glob)**/GEMINI.md",
+    ":(glob)**/.mcp.json",
+    ":(glob)**/.envrc",
+    ":(glob)**/.claude/**",
+    ":(glob)**/.codex/**",
+    ":(glob)**/.gemini/**",
+    ":(glob)**/.cursor/**",
+];
+/// Reviewed commits remembered per link.
+const KEEP_REVIEWED: usize = 16;
+/// The most diff text a review shows (and binds its digest to).
+const MAX_REVIEW_BYTES: usize = 256 * 1024;
+
+fn with_pathspec(mut args: Vec<&str>) -> Vec<&str> {
+    args.push("--");
+    args.extend_from_slice(AGENT_PATHSPEC);
+    args
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Agent-facing paths the checked-out branch holds from commits that came
+/// from the hub (a co-member's, or the owner's for a member) and were never
+/// reviewed — however they got into HEAD (a Tabtivity merge, a `git merge`
+/// in a terminal, the first clone). Errors fail closed at the caller.
+pub fn unreviewed(link: &Link) -> Result<Vec<String>, String> {
+    let dir = &link.dir;
+    let not: Vec<String> = link.reviewed.iter().filter(|c| hub_wire::valid_oid(c)).map(|c| format!("^{c}")).collect();
+    let not_refs: Vec<&str> = not.iter().map(String::as_str).collect();
+    let mut head_args = vec!["rev-list", "--ignore-missing", "HEAD"];
+    head_args.extend(&not_refs);
+    let in_head: std::collections::BTreeSet<String> = git_in(dir, None, &with_pathspec(head_args))?.lines().map(str::to_string).collect();
+    if in_head.is_empty() {
+        return Ok(Vec::new());
+    }
+    let remotes = format!("--remotes={REMOTE}");
+    let mut hub_args = vec!["rev-list", "--ignore-missing", remotes.as_str()];
+    hub_args.extend(&not_refs);
+    let from_hub: Vec<String> = git_in(dir, None, &with_pathspec(hub_args))?.lines().filter(|c| in_head.contains(*c)).map(str::to_string).collect();
+    let mut paths = std::collections::BTreeSet::new();
+    for commit in from_hub {
+        let changed = git_in(dir, None, &with_pathspec(vec!["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", &commit]))?;
+        paths.extend(changed.lines().filter(|l| !l.is_empty()).map(str::to_string));
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn mark_reviewed(state_dir: &Path, dir: &Path, commit: &str) -> Result<(), String> {
+    let mut map = load_map(state_dir);
+    let Some(link) = map.links.values_mut().find(|l| l.dir == dir) else { return Ok(()) };
+    link.reviewed.retain(|c| c != commit);
+    link.reviewed.push(commit.to_string());
+    let excess = link.reviewed.len().saturating_sub(KEEP_REVIEWED);
+    link.reviewed.drain(..excess);
+    save_map(state_dir, &map)
+}
+
+/// Agent-facing changes awaiting this user's review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Review {
+    /// What a merge would bring in (`<REMOTE>/<branch>`), or the checked-out
+    /// commit for a review of what is already there.
+    pub commit: String,
+    pub paths: Vec<String>,
+    /// The changes as text (a diff, or the files' content), capped.
+    pub text: String,
+    pub truncated: bool,
+    /// Binds an approval to exactly what was shown.
+    pub digest: String,
+}
+
+fn review_of(commit: String, paths: Vec<String>, mut text: String) -> Review {
+    let truncated = text.len() > MAX_REVIEW_BYTES;
+    if truncated {
+        let mut end = MAX_REVIEW_BYTES;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    let digest = sha256_hex(format!("{commit}\n{}\n{text}", paths.join("\n")).as_bytes());
+    Review { commit, paths, text, truncated, digest }
+}
+
+/// What merging the hub's `branch` would change in agent-facing files —
+/// shown before the merge (§6.5 gate 2).
+pub fn review_merge(link: &Link, branch: &str) -> Result<Review, String> {
+    if link.state != "active" {
+        return Err("This project is no longer shared".into());
+    }
+    fetch(&link.dir, &link.hub)?;
+    let tracking = format!("refs/remotes/{REMOTE}/{branch}");
+    let commit = git_in(&link.dir, None, &["rev-parse", "--verify", &format!("{tracking}^{{commit}}")]).map_err(|_| format!("The shared project has no branch '{branch}'"))?;
+    let range = format!("HEAD...{commit}");
+    let paths: Vec<String> = git_in(&link.dir, None, &with_pathspec(vec!["diff", "--name-only", &range]))?.lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
+    let text = if paths.is_empty() { String::new() } else { git_in(&link.dir, None, &with_pathspec(vec!["diff", &range]))? };
+    Ok(review_of(commit, paths, text))
+}
+
+/// Merge the hub's `branch` into the checked-out one — refused when it
+/// changes agent-facing files and `digest` is not the review of exactly
+/// those changes. Hookless (a shared clone runs none); a conflict is
+/// aborted and reported, never resolved here. Trust-gated files a merge
+/// changes (a `latexmkrc`, a prettier config) ask again at their next use,
+/// because `exec_trust` approvals are bound to content.
+pub fn merge_in(state_dir: &Path, link: &Link, branch: &str, digest: Option<&str>) -> Result<String, String> {
+    let review = review_merge(link, branch)?;
+    if !review.paths.is_empty() && digest != Some(review.digest.as_str()) {
+        return Err(format!("Review the agent instructions this merge brings in first ({})", review.paths.join(", ")));
+    }
+    let dir = &link.dir;
+    if let Err(e) = git_in(dir, None, &["merge", "--no-edit", "--no-verify", &review.commit]) {
+        let _ = git_in(dir, None, &["merge", "--abort"]);
+        return Err(format!("The merge did not go through and was undone; resolve it in a terminal or ask the other member ({e})"));
+    }
+    let head = git_in(dir, None, &["rev-parse", "HEAD"])?;
+    // Reviewed: what was shown is now in HEAD.
+    mark_reviewed(state_dir, dir, &head)?;
+    if review.paths.is_empty() {
+        // Nothing agent-facing came in, yet the commits did: remember the
+        // merged commit too, so the next check does not walk them again.
+        mark_reviewed(state_dir, dir, &review.commit)?;
+    }
+    Ok(head)
+}
+
+/// The agent-facing files of the checked-out commit that came from others
+/// unreviewed (a fresh clone, a merge made outside the app), with their
+/// current content.
+pub fn pending_review(link: &Link) -> Result<Option<Review>, String> {
+    let paths = unreviewed(link)?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let head = git_in(&link.dir, None, &["rev-parse", "HEAD"])?;
+    let mut text = String::new();
+    for path in &paths {
+        let shown = git_in(&link.dir, None, &["show", &format!("{head}:{path}")]).unwrap_or_else(|_| "(removed)".to_string());
+        text.push_str(&format!("── {path} ──\n{shown}\n"));
+    }
+    Ok(Some(review_of(head, paths, text)))
+}
+
+/// The user reviewed [`pending_review`]: mark the checked-out commit.
+pub fn accept_in(state_dir: &Path, link: &Link, digest: &str) -> Result<(), String> {
+    let Some(review) = pending_review(link)? else { return Ok(()) };
+    if review.digest != digest {
+        return Err("The files changed after they were shown; review them again".into());
+    }
+    mark_reviewed(state_dir, &link.dir, &review.commit)
+}
+
+/// Refuse an agent spawn in a shared project whose agent-facing files hold
+/// changes from others this user has not reviewed (§6.5 gate 2: "before B's
+/// next agent spawn reads them"). Fails closed: a repo the check cannot
+/// read refuses too. Nothing on the desktop.
+pub fn spawn_gate_in(state_dir: &Path, roots: &[PathBuf], server: bool) -> Result<(), String> {
+    if !server {
+        return Ok(());
+    }
+    let map = load_map(state_dir);
+    for link in map.links.values().filter(|l| roots.iter().any(|r| r.starts_with(&l.dir) || l.dir.starts_with(r))) {
+        let name = link.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match unreviewed(link) {
+            Ok(paths) if paths.is_empty() => {}
+            Ok(paths) => {
+                return Err(format!(
+                    "The shared project '{name}' has agent instructions from other members you have not reviewed ({}); review them in Settings → Mobile → Server → Shared projects before starting an agent there",
+                    paths.join(", ")
+                ))
+            }
+            Err(e) => return Err(format!("The shared project '{name}' could not be checked for unreviewed agent instructions, so no agent starts there: {e}")),
+        }
+    }
+    Ok(())
+}
+
+pub fn spawn_gate(roots: &[PathBuf]) -> Result<(), String> {
+    spawn_gate_in(&crate::storage::state_dir(), roots, super::is_server())
 }
 
 // ── The fence ──────────────────────────────────────────────────────────────

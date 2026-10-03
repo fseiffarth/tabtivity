@@ -34,6 +34,16 @@ interface ShareRow {
   members: Member[];
   presence: { user: string; since: number }[];
   projectId: string | null;
+  /** Agent-facing files from others not yet reviewed (§6.5 gate 2). */
+  pendingReview?: string[];
+}
+
+interface Review {
+  commit: string;
+  paths: string[];
+  text: string;
+  truncated: boolean;
+  digest: string;
 }
 
 interface Overview {
@@ -90,12 +100,17 @@ export function ServerSharing() {
   const pushed = (p: { branch: string; unchanged: boolean }) =>
     p.unchanged ? t("server.sharing.unchanged") : t("server.sharing.pushed", { branch: p.branch.replace(/^refs\/heads\//, "") });
 
-  const fetchRow = (row: ShareRow) =>
-    run(`fetch-${row.id}`, async () => {
-      const report = await invoke<BranchState[]>("share_fetch", { projectId: row.projectId });
-      setBranches((b) => ({ ...b, [row.id]: report }));
-      return null;
-    });
+  const tools = (row: ShareRow) =>
+    row.projectId ? (
+      <ShareTools
+        projectId={row.projectId}
+        pending={row.pendingReview ?? []}
+        branches={branches[row.id] ?? []}
+        disabled={busy !== null}
+        run={(job) => run(`tools-${row.id}`, job)}
+        onBranches={(report) => setBranches((b) => ({ ...b, [row.id]: report }))}
+      />
+    ) : null;
 
   return (
     <>
@@ -192,6 +207,7 @@ export function ServerSharing() {
                 {t("server.sharing.grant")}
               </button>
             </div>
+            {tools(row)}
             <div className="settings-link-row">
               {row.projectId && (
                 <button
@@ -232,11 +248,7 @@ export function ServerSharing() {
             {!gone && row.presence.length > 0 && (
               <p className="settings-help">{t("server.sharing.here", { users: row.presence.map((p) => p.user).join(", ") })}</p>
             )}
-            {(branches[row.id] ?? []).map((b) => (
-              <p key={b.name} className="settings-help">
-                {t("server.sharing.branch", { name: b.name, ahead: b.ahead, behind: b.behind })}
-              </p>
-            ))}
+            {!gone && tools(row)}
             {!gone && (
               <div className="settings-link-row">
                 {!row.projectId && (
@@ -255,11 +267,6 @@ export function ServerSharing() {
                     {t("server.sharing.add")}
                   </button>
                 )}
-                {row.projectId && (
-                  <button type="button" className="settings-btn sm" disabled={busy !== null} onClick={() => void fetchRow(row)}>
-                    {t("server.sharing.fetch")}
-                  </button>
-                )}
                 {row.projectId && row.role === "editor" && (
                   <button
                     type="button"
@@ -276,6 +283,138 @@ export function ServerSharing() {
         );
       })}
       {status && <p className="settings-help">{status}</p>}
+    </>
+  );
+}
+
+/**
+ * A shared project's own tools (§6.3, §6.5 gate 2): Fetch and its branch
+ * report, a merge of a hub branch — shown for review first when it changes
+ * agent-facing files, and bound to what was shown — and the review of
+ * agent instructions already in the project from others (a fresh clone, a
+ * merge made in a terminal), without which no agent starts there.
+ */
+function ShareTools({
+  projectId,
+  pending,
+  branches,
+  disabled,
+  run,
+  onBranches,
+}: {
+  projectId: string;
+  pending: string[];
+  branches: BranchState[];
+  disabled: boolean;
+  run: (job: () => Promise<string | null>) => Promise<void>;
+  onBranches: (report: BranchState[]) => void;
+}) {
+  const t = useT();
+  const [review, setReview] = useState<{ kind: "pending" | "merge"; branch?: string; review: Review } | null>(null);
+
+  const merge = (branch: string, digest: string | null) =>
+    run(async () => {
+      await invoke("share_merge", { projectId, branch, digest });
+      setReview(null);
+      onBranches(await invoke<BranchState[]>("share_fetch", { projectId }));
+      return t("server.sharing.merged");
+    });
+
+  return (
+    <>
+      {pending.length > 0 && (
+        <p className="settings-help">
+          <UntestedTag id="server.sharing.review" /> {t("server.sharing.pending", { paths: pending.join(", ") })}
+        </p>
+      )}
+      {branches.map((b) => (
+        <div key={b.name} className="settings-link-row">
+          <span className="settings-help">{t("server.sharing.branch", { name: b.name, ahead: b.ahead, behind: b.behind })}</span>
+          {b.ahead > 0 && (
+            <button
+              type="button"
+              className="settings-btn sm"
+              disabled={disabled}
+              onClick={() =>
+                void run(async () => {
+                  const r = await invoke<Review>("share_review", { projectId, branch: b.name });
+                  if (r.paths.length === 0) {
+                    await merge(b.name, null);
+                    return null;
+                  }
+                  setReview({ kind: "merge", branch: b.name, review: r });
+                  return null;
+                })
+              }
+            >
+              {t("server.sharing.merge", { branch: b.name })}
+            </button>
+          )}
+        </div>
+      ))}
+      {review && (
+        <SettingsCard>
+          <p className="settings-help">
+            {t(review.kind === "merge" ? "server.sharing.reviewMerge" : "server.sharing.reviewPending", { paths: review.review.paths.join(", ") })}
+          </p>
+          <pre className="settings-prompt-text" style={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap" }}>
+            {review.review.text}
+            {review.review.truncated ? "\n…" : ""}
+          </pre>
+          <div className="settings-link-row">
+            <button
+              type="button"
+              className="settings-btn sm"
+              disabled={disabled}
+              onClick={() =>
+                review.kind === "merge" && review.branch
+                  ? void merge(review.branch, review.review.digest)
+                  : void run(async () => {
+                      await invoke("share_accept", { projectId, digest: review.review.digest });
+                      setReview(null);
+                      return t("server.sharing.reviewed");
+                    })
+              }
+            >
+              {t(review.kind === "merge" ? "server.sharing.confirmMerge" : "server.sharing.accept")}
+            </button>
+            <button type="button" className="settings-btn sm" disabled={disabled} onClick={() => setReview(null)}>
+              {t("common.cancel")}
+            </button>
+          </div>
+        </SettingsCard>
+      )}
+      <div className="settings-link-row">
+        <button
+          type="button"
+          className="settings-btn sm"
+          disabled={disabled}
+          onClick={() =>
+            void run(async () => {
+              onBranches(await invoke<BranchState[]>("share_fetch", { projectId }));
+              return null;
+            })
+          }
+        >
+          {t("server.sharing.fetch")}
+        </button>
+        {pending.length > 0 && (
+          <button
+            type="button"
+            className="settings-btn sm"
+            disabled={disabled}
+            onClick={() =>
+              void run(async () => {
+                const r = await invoke<Review | null>("share_pending", { projectId });
+                if (r) setReview({ kind: "pending", review: r });
+                return null;
+              })
+            }
+          >
+            {t("server.sharing.review")}
+          </button>
+        )}
+      </div>
     </>
   );
 }
