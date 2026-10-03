@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn the_stock_file_grants_a_plain_user_nothing() {
         let root = fixture(&[("/etc/sudoers", UBUNTU), ("/etc/sudoers.d/README", "# nothing\n")]);
-        let groups = vec!["alice".to_string(), "tabtivity-users".to_string()];
+        let groups = vec!["alice".to_string(), "users_group".to_string()];
         assert_eq!(rule_for(root.path(), &alice(&groups)).unwrap(), None, "a Defaults:alice line grants nothing");
         let sudo = vec!["alice".to_string(), "sudo".to_string()];
         assert!(rule_for(root.path(), &alice(&sudo)).unwrap().unwrap().starts_with("%sudo"));
