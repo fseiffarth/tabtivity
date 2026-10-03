@@ -13,7 +13,7 @@
 
 use crate::services::openvpn;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use crate::tauri_host::Ctx;
 
 /// Which secrets `config` needs the user to supply, so the UI can show exactly
 /// those fields. The two are independent — a config can need both.
@@ -59,7 +59,7 @@ pub struct VpnAuthNeeds {
 /// and prompted ever after.
 #[tauri::command]
 pub async fn openvpn_connect(
-    app: AppHandle,
+    ctx: Ctx,
     config: String,
     username: Option<String>,
     password: Option<String>,
@@ -108,7 +108,7 @@ pub async fn openvpn_connect(
             &pw,
             key_passphrase.as_deref(),
             |line| {
-                let _ = app.emit(
+                ctx.emit(
                     "openvpn-progress",
                     serde_json::json!({ "config": config, "line": line }),
                 );
