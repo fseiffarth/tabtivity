@@ -198,6 +198,8 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
                 disabled={busy !== null || !online}
                 sendingLabel={t("mobile.markup.questions.sending")}
                 onPick={(row) => {
+                  // A ticked Other… tapped again: untick it (`QuestionRows`).
+                  if (row.key === OTHER) { setPick(index, toggleOther(questions[index], pick)); return; }
                   const next = setPick(index, toggleOption(questions[index], pick, row.key as number));
                   if (onTap) void send(ask, next);
                 }}

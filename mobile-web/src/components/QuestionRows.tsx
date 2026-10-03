@@ -17,7 +17,8 @@ export type QuestionRow = {
   /** The row the dialog highlights — the one Enter would take. */
   current?: boolean;
   /** A row the reader picked; `undefined` where rows are not picked but
-   * answer on the tap. Shown as a tick box when `box` is set. */
+   * answer on the tap. Shown as a tick box when `box` is set. A picked
+   * free-text row's tap goes to `onPick` (to untick it), not to its field. */
   checked?: boolean;
   box?: boolean;
   /** A row answered by words typed under it rather than by the tap. */
@@ -69,7 +70,7 @@ export function QuestionRows({ rows, disabled, sendingLabel, onPick, onType, typ
         aria-pressed={row.checked}
         aria-expanded={row.freeText ? typing === row.key : undefined}
         disabled={disabled}
-        onClick={() => row.freeText ? setTyping((open) => open === row.key ? null : row.key) : onPick(row)}>
+        onClick={() => row.freeText && !picked ? setTyping((open) => open === row.key ? null : row.key) : onPick(row)}>
         <span>
           <strong>
             {row.box && <span className="question-box" aria-hidden="true">{picked ? "☑" : "☐"} </span>}

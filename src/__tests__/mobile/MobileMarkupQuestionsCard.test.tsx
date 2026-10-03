@@ -227,6 +227,31 @@ describe("MarkupView · the agent's questions", () => {
     ]));
   });
 
+  it("unticks a typed Other… with a second tap, keeping the other picks", async () => {
+    const calls = desktop(() => [TWO]);
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    fireEvent.click(within(card).getByRole("button", { name: /colour/ }));
+    fireEvent.click(within(card).getAllByRole("button", { name: /Other…/ })[0]);
+    fireEvent.change(within(card).getByRole("textbox"), { target: { value: "both" } });
+    fireEvent.click(within(card).getByRole("button", { name: "OK" }));
+    const other = () => within(card).getAllByRole("button", { name: /Other…/ })[0];
+    expect(other().getAttribute("aria-pressed")).toBe("true");
+    // The second tap unticks it rather than opening the field again.
+    fireEvent.click(other());
+    expect(other().getAttribute("aria-pressed")).toBe("false");
+    expect(within(card).queryByRole("textbox")).toBeNull();
+    expect(within(card).getByRole("button", { name: /colour/ }).getAttribute("aria-pressed")).toBe("true");
+    // A third tap opens the field again.
+    fireEvent.click(other());
+    expect(within(card).getByRole("textbox")).toBeTruthy();
+    fireEvent.click(other());
+    fireEvent.click(within(card).getByRole("button", { name: /Yes/ }));
+    fireEvent.click(within(card).getByRole("button", { name: "Send answers" }));
+    await waitFor(() => expect(posted(calls, "/markup/answer")).toEqual([{ ask_id: ASK, answers: [{ options: [0] }, { options: [0] }] }]));
+  });
+
   it("keeps the card when the answer could not be delivered, and closes it to answer in the chat", async () => {
     const calls = desktop(() => [TWO], () => ({ status: 409, body: { error: "delivery_failed" } }));
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);

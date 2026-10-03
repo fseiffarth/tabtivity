@@ -102,8 +102,6 @@ phone or desktop with its own instruction keeps it unchanged.
   of the user — and nothing more: only the user's tap writes into the tab.
 - **Every question must be answered** (single-select: exactly one). Partial
   answers go through **Answer in chat instead**.
-- A multiSelect **Other…** cannot be unticked once typed; retype it or answer
-  in chat.
 - The desktop card shows only while markup mode is on (the target tab is
   chosen when it comes on); the Mark up button does not hint at a waiting ask.
 - The phone's Focus banner opens only files in the tab's outbox: the phone

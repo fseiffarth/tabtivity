@@ -3700,8 +3700,10 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
-- [ ] **31bv — A typed Other… answer in a multi-pick markup question can be
-  unticked** (open, 2026-10-03; from the markup questions MCP,
+- [~] **31bv — A typed Other… answer in a multi-pick markup question can be
+  unticked** (✅ fixed 2026-10-03 in review 1: a ticked Other… row's tap
+  unticks it, a further tap opens the field — `QuestionRows` sends a picked
+  free-text row to `onPick`; ⚠️ never run on a phone; from the markup questions MCP,
   `docs/context/markup_mcp.md`). In the phone's markup questions card
   (`MarkupQuestionsCard.tsx`), once Other… holds typed words on a
   "Pick any that apply." question, tapping its row again does not untick
@@ -3709,7 +3711,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   pick model already supports it (`toggleOther` clears a set Other…); the
   row's tap goes to the text field instead. Make a second tap on a ticked
   Other… row untick it, as the desktop card's row does.
-  - [ ] 🤖 Automated test
+  - [x] 🤖 Automated test (`MobileMarkupQuestionsCard.test.tsx` "unticks a typed Other…")
   - [ ] 🖐️ Manual test
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)

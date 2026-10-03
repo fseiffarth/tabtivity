@@ -115,7 +115,7 @@ chat. The questions show in the markup view of that tab's PDF:
 
 Tap an option to answer. With several questions, or one that takes more
 than one option, pick and then tap **Send answers**. **Other…** lets you type
-your own answer. **Answer in chat instead** closes the questions so you can
+your own answer (tap it again to clear it). **Answer in chat instead** closes the questions so you can
 reply in the tab. Your answer is typed into the tab as your next message (it
 waits in the queue if the agent is still busy), and the card goes away on
 the desktop and the phone. If it could not be sent, the questions stay open
