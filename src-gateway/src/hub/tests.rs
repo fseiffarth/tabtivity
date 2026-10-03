@@ -287,3 +287,55 @@ async fn the_socket_takes_a_bundle_after_the_line_and_refuses_an_oversized_one()
     let huge = Request::Push { share, updates: vec![RefUpdate { name: "refs/heads/x".into(), old: Z.into(), new: one, force: false }], bytes: hub_wire::MAX_BUNDLE + 1, head: None };
     assert_eq!(ask(&socket, &huge, b"").await.unwrap().error.as_deref(), Some("too-large"));
 }
+
+/// A revoke whose ACL walk fails half-way is not forgotten: the member is
+/// off the table at once (no push), the walk is retried at the next request
+/// to the hub, and a second revoke of the same member retries it too.
+#[test]
+fn a_revoke_whose_walk_failed_is_retried_until_the_entries_are_gone() {
+    let Some(w) = world() else { return };
+    // SAFETY: no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("root reads a 0000 directory; skipped");
+        return;
+    }
+    let share = w.create(ALICE, "Paper");
+    assert!(w.hub.answer(ALICE, Request::Grant { share: share.id.clone(), user: "bob".into(), role: Role::Viewer }, None).ok);
+    let hub = w.hub.hub_path(&share.id);
+    // A directory the walk cannot open: written after the grant, it carries
+    // the inherited entry, then loses every permission bit.
+    let stuck = hub.join("objects").join("zz");
+    std::fs::create_dir(&stuck).unwrap();
+    // SAFETY: no preconditions.
+    let me = unsafe { libc::geteuid() };
+    assert!(acl::users_of(&stuck).unwrap().contains_key(&me));
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0)).unwrap();
+
+    let reply = w.hub.answer(ALICE, Request::Revoke { share: share.id.clone(), user: "bob".into() }, None);
+    assert_eq!(reply.error.as_deref(), Some("failed"));
+    let table = w.hub.load();
+    let row = &table.shares[&share.id];
+    assert!(!row.members.contains_key("bob"), "off the table at once");
+    assert_eq!(row.revoking.get("bob"), Some(&me), "and remembered as not done");
+    // A second revoke is a retry, not "invalid".
+    assert_eq!(w.hub.answer(ALICE, Request::Revoke { share: share.id.clone(), user: "bob".into() }, None).error.as_deref(), Some("failed"));
+
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(w.hub.answer(BOB, Request::List, None).ok);
+    assert!(!acl::users_of(&stuck).unwrap().contains_key(&me), "the next request finished the walk");
+    assert!(w.hub.load().shares[&share.id].revoking.is_empty());
+}
+
+/// A table that is there but cannot be read is never written over (that
+/// would drop every share and every owner's way to revoke).
+#[test]
+fn an_unreadable_table_is_not_replaced() {
+    let Some(w) = world() else { return };
+    let share = w.create(ALICE, "Paper");
+    let table = w.hub.state.join(TABLE_FILE);
+    std::fs::write(&table, b"{ not json").unwrap();
+    assert_eq!(w.hub.answer(ALICE, Request::Create { name: "Other".into() }, None).error.as_deref(), Some("failed"));
+    assert_eq!(w.hub.answer(ALICE, Request::Grant { share: share.id.clone(), user: "bob".into(), role: Role::Viewer }, None).error.as_deref(), Some("failed"));
+    assert_eq!(std::fs::read(&table).unwrap(), b"{ not json", "left for the admin, not emptied");
+}

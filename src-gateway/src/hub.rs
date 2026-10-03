@@ -115,6 +115,11 @@ struct Share {
     /// Where a deleted hub waits (holding area), for the purge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     held_at: Option<PathBuf>,
+    /// Members taken off whose ACL entries are not all gone yet (a walk
+    /// that failed half-way): user → uid. Retried at every request until
+    /// the walk completes, so a failed revoke never leaves read access.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    revoking: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,7 +183,19 @@ impl Hub {
     }
 
     fn load(&self) -> Table {
-        crate::read_regular(&self.state.join(TABLE_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        self.load_checked().unwrap_or_default()
+    }
+
+    /// The table, or why it cannot be read: only a missing file is an empty
+    /// table. A table that is there but unreadable is never written over
+    /// (that would drop every share, and with it every owner's way to
+    /// revoke), and nothing that needs a share's rules is answered from it.
+    fn load_checked(&self) -> Result<Table, String> {
+        match crate::read_regular(&self.state.join(TABLE_FILE)) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{TABLE_FILE}: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Table::default()),
+            Err(e) => Err(format!("{TABLE_FILE}: {e}")),
+        }
     }
 
     fn save(&self, table: &Table) -> Result<(), String> {
@@ -189,7 +206,10 @@ impl Hub {
     /// Read-modify-write the table under its lock.
     fn update<T>(&self, edit: impl FnOnce(&mut Table) -> Result<T, Box<Reply>>) -> Result<T, Box<Reply>> {
         let _guard = self.table.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut table = self.load();
+        let mut table = self.load_checked().map_err(|e| {
+            eprintln!("hub: {e}");
+            Reply::error("failed")
+        })?;
         let out = edit(&mut table)?;
         self.save(&table).map_err(|e| {
             eprintln!("hub: save: {e}");
@@ -207,7 +227,10 @@ impl Hub {
         if !hub_wire::valid_share_id(id) {
             return Err(Reply::error("invalid").into());
         }
-        let table = self.load();
+        let table = self.load_checked().map_err(|e| {
+            eprintln!("hub: {e}");
+            Reply::error("failed")
+        })?;
         let share = table.shares.get(id).filter(|s| s.deleted.is_none()).ok_or_else(|| Reply::error("unknown-share"))?;
         // Not a member reads exactly like no such share.
         let role = share.role_of(user).ok_or_else(|| Reply::error("unknown-share"))?;
@@ -224,6 +247,7 @@ impl Hub {
             return Reply::error("refused");
         };
         self.purge(crate::now());
+        self.retry_revokes();
         match request {
             Request::Create { name } => self.create(&user, &name),
             Request::Grant { share, user: member, role } => self.grant(&user, &share, &member, role),
@@ -247,6 +271,9 @@ impl Hub {
             let mut dropped = Vec::new();
             for (id, share) in t.shares.iter_mut() {
                 if let Some(grant) = share.members.remove(user) {
+                    if share.deleted.is_none() {
+                        share.revoking.insert(user.to_string(), grant.uid);
+                    }
                     dropped.push((id.clone(), grant.uid, share.deleted.is_some()));
                 }
             }
@@ -262,9 +289,7 @@ impl Hub {
             if deleted {
                 continue;
             }
-            let lock = self.share_lock(&id);
-            let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            let walked = acl::set_user_tree(&self.hub_path(&id), uid, false);
+            let walked = self.take_off(&id, user, uid);
             if let Err(e) = &walked {
                 eprintln!("hub: forget {user} on {id}: {e}");
                 failed = true;
@@ -316,7 +341,7 @@ impl Hub {
             return Reply::error("failed");
         }
         let now = crate::now();
-        let share = Share { owner: user.into(), owner_uid: uid, name: name.into(), created: now, members: BTreeMap::new(), deleted: None, held_at: None };
+        let share = Share { owner: user.into(), owner_uid: uid, name: name.into(), created: now, members: BTreeMap::new(), deleted: None, held_at: None, revoking: BTreeMap::new() };
         if let Err(reply) = self.update(|t| {
             t.shares.insert(id.clone(), share.clone());
             Ok(())
@@ -358,6 +383,7 @@ impl Hub {
             let share = t.shares.get_mut(id).ok_or_else(|| Reply::error("unknown-share"))?;
             let since = share.members.get(member).map(|g| g.since).unwrap_or(now);
             share.members.insert(member.to_string(), Grant { uid: member_uid, role, since });
+            share.revoking.remove(member);
             Ok(share.clone())
         });
         match result {
@@ -377,22 +403,29 @@ impl Hub {
         if mine != Role::Owner {
             return Reply::error("not-owner");
         }
-        let Some(grant) = share.members.get(member).cloned() else { return Reply::error("invalid") };
+        let uid = match (share.members.get(member), share.revoking.get(member)) {
+            (Some(grant), _) => grant.uid,
+            // A revoke whose walk failed: take it off again.
+            (None, Some(uid)) => *uid,
+            (None, None) => return Reply::error("invalid"),
+        };
         let lock = self.share_lock(id);
         let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
         // The table first: from here on the member may not push, even if
-        // the walk below fails half-way (it is retried by a second revoke).
+        // the walk below fails half-way (it stays in `revoking` and is
+        // retried at every request until it completes).
         let result = self.update(|t| {
             let share = t.shares.get_mut(id).ok_or_else(|| Reply::error("unknown-share"))?;
             share.members.remove(member);
-            Ok(share.clone())
+            share.revoking.insert(member.to_string(), uid);
+            Ok(())
         });
-        let share = match result {
-            Ok(share) => share,
-            Err(reply) => return *reply,
-        };
+        if let Err(reply) = result {
+            return *reply;
+        }
         self.forget_presence(id, member);
-        let walked = acl::set_user_tree(&self.hub_path(id), grant.uid, false);
+        let walked = self.take_off_locked(id, member, uid);
+        let share = self.load().shares.get(id).cloned().unwrap_or(share);
         if let Err(e) = &walked {
             eprintln!("hub: revoke {id}: {e}");
         }
@@ -418,7 +451,7 @@ impl Hub {
         let holding = self.root.join(HOLDING_DIR);
         let moved = (|| -> Result<PathBuf, String> {
             // Cut every lookup first, then move it out of reach.
-            for uid in share.members.values().map(|g| g.uid).chain([share.owner_uid]) {
+            for uid in share.members.values().map(|g| g.uid).chain(share.revoking.values().copied()).chain([share.owner_uid]) {
                 acl::set_user(&path, uid, false).map_err(|e| e.to_string())?;
             }
             if !holding.is_dir() {
@@ -427,7 +460,7 @@ impl Hub {
             }
             let held = holding.join(format!("{id}.{now}.git"));
             std::fs::rename(&path, &held).map_err(|e| e.to_string())?;
-            for uid in share.members.values().map(|g| g.uid).chain([share.owner_uid]) {
+            for uid in share.members.values().map(|g| g.uid).chain(share.revoking.values().copied()).chain([share.owner_uid]) {
                 let _ = acl::set_user_tree(&held, uid, false);
             }
             Ok(held)
@@ -444,6 +477,8 @@ impl Hub {
             if let Some(share) = t.shares.get_mut(id) {
                 share.deleted = Some(now);
                 share.held_at = Some(held.clone());
+                // The holding area is the hub's alone: nobody passes it.
+                share.revoking.clear();
             }
             Ok(())
         }) {
@@ -452,6 +487,49 @@ impl Hub {
         self.presence.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
         self.audit.record(Row::new(user, None, VERB_DELETE, "ok").resource(id));
         Reply::ok()
+    }
+
+    /// Take `user`'s (uid `uid`) every ACL entry off share `id`'s hub, under
+    /// the share's lock; once the walk completes, `user` leaves `revoking`.
+    fn take_off(&self, id: &str, user: &str, uid: u32) -> Result<(), String> {
+        let lock = self.share_lock(id);
+        let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        self.take_off_locked(id, user, uid)
+    }
+
+    /// [`Hub::take_off`] with the share's lock already held.
+    fn take_off_locked(&self, id: &str, user: &str, uid: u32) -> Result<(), String> {
+        let path = self.hub_path(id);
+        // A hub that is not there holds no entry to take off.
+        if std::fs::symlink_metadata(&path).is_ok() {
+            acl::set_user_tree(&path, uid, false).map_err(|e| e.to_string())?;
+        }
+        self.update(|t| {
+            if let Some(share) = t.shares.get_mut(id) {
+                // Unless they were granted again meanwhile.
+                if share.revoking.get(user) == Some(&uid) {
+                    share.revoking.remove(user);
+                }
+            }
+            Ok(())
+        })
+        .map_err(|reply| reply.error.unwrap_or_default())
+    }
+
+    /// Finish every revoke whose walk failed before.
+    fn retry_revokes(&self) {
+        let pending: Vec<(String, String, u32)> = self
+            .load()
+            .shares
+            .iter()
+            .filter(|(_, s)| s.deleted.is_none())
+            .flat_map(|(id, s)| s.revoking.iter().map(move |(user, uid)| (id.clone(), user.clone(), *uid)))
+            .collect();
+        for (id, user, uid) in pending {
+            if let Err(e) = self.take_off(&id, &user, uid) {
+                eprintln!("hub: revoke {user} on {id} (retry): {e}");
+            }
+        }
     }
 
     /// Drop tombstones and held hubs past the retention window.
