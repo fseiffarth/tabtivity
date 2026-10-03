@@ -48,6 +48,12 @@ pub struct Account {
     pub created_at: u64,
     #[serde(default)]
     pub devices: Vec<Device>,
+    /// Until when (unix seconds) an invite the helper wrote may be redeemed.
+    /// The gateway forwards a pair only while one is pending (or the account
+    /// was active lately), so a pair attempt never wakes an idle daemon by
+    /// socket activation and answers like an unknown account otherwise.
+    #[serde(default)]
+    pub invite_until: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,7 +136,7 @@ impl Db {
         if self.accounts.iter().any(|a| a.name == name || a.uid == uid) {
             return Err(DbError::AccountExists);
         }
-        self.accounts.push(Account { name: name.into(), uid, role, created_at: now, devices: Vec::new() });
+        self.accounts.push(Account { name: name.into(), uid, role, created_at: now, devices: Vec::new(), invite_until: 0 });
         Ok(())
     }
 
@@ -141,6 +147,12 @@ impl Db {
 
     pub fn set_role(&mut self, name: &str, role: Role) -> Result<(), DbError> {
         self.accounts.iter_mut().find(|a| a.name == name).ok_or(DbError::UnknownAccount)?.role = role;
+        Ok(())
+    }
+
+    /// Record that `user` has an invite pending until `until`.
+    pub fn set_invite(&mut self, user: &str, until: u64) -> Result<(), DbError> {
+        self.accounts.iter_mut().find(|a| a.name == user).ok_or(DbError::UnknownAccount)?.invite_until = until;
         Ok(())
     }
 

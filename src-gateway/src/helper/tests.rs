@@ -128,6 +128,7 @@ fn user_add_creates_a_missing_account_and_rechecks_it_before_touching_anything()
     assert!(log.contains(&format!("say pairing code for carol (single use, 24 h): carol:{code}")));
     let db = Db::load(dir.path()).unwrap();
     assert_eq!(db.account("carol").unwrap().uid, 1500);
+    assert_eq!(db.account("carol").unwrap().invite_until, 100 + INVITE_TTL, "the gateway forwards pairs only while an invite is pending");
     assert!(audit::AuditLog::in_dir(dir.path()).rows().iter().any(|r| r.user == "carol" && r.verb == "user-add"));
 }
 

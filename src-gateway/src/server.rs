@@ -3,7 +3,9 @@
 //! * `POST /api/v1/pair` — the code is `user:digits`; forwarded with the
 //!   digits to that account's daemon, which checks the invite the helper
 //!   wrote. A `201` records the device id under that account (refused if the
-//!   id already routes elsewhere).
+//!   id already routes elsewhere). Forwarded only while the account has an
+//!   invite pending or was active lately: otherwise it answers exactly like
+//!   an unknown account, and never starts an idle daemon.
 //! * `POST /api/v1/auth/challenge`, `/auth/session` — routed by the device
 //!   id's owner; the daemon checks the signature. A `200` session also gets
 //!   the routing cookie.
@@ -17,7 +19,7 @@
 //!   daemon's `/content/<ticket>`, cookies stripped.
 //!
 //! Every response of the gateway's own carries the phone's security
-//! headers; forwarded answers carry the daemon's.
+//! headers; forwarded answers carry the daemon's. Rate limits: [`crate::rate`].
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +27,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
+use axum::extract::connect_info::{ConnectInfo, Connected};
+use axum::extract::{DefaultBodyLimit, Extension, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -40,14 +43,15 @@ use crate::config::GatewayConfig;
 use crate::cookie::{self, RoutingKey};
 use crate::db::{self, Account, Db, DbError, Role};
 use crate::policy::Policy;
+use crate::rate::Limits;
 use crate::{proxy, statics, wire};
 
 /// Largest body the gateway itself reads (pair, challenge, session, policy).
 const MAX_OWN_BODY: usize = 64 * 1024;
-/// Pairing attempts per minute, server-wide (each daemon limits its own too).
-const PAIR_PER_MINUTE: u32 = 20;
-/// Challenge + session requests per minute, server-wide.
-const AUTH_PER_MINUTE: u32 = 240;
+/// How long after its last routed request an account still takes a pair
+/// without a pending invite (a signed-in user pairing a second device with a
+/// code their own daemon made). Its daemon is up then anyway.
+const ACTIVE_FOR: Duration = Duration::from_secs(15 * 60);
 /// How often the account table is re-read for revocations.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
 /// Connections the app listener holds at once (every account's phones and
@@ -57,25 +61,20 @@ pub const MAX_CONNECTIONS: usize = 2048;
 /// The user-content listener: short-lived ticket fetches.
 pub const MAX_CONTENT_CONNECTIONS: usize = 256;
 
-struct Window {
-    started: Instant,
-    count: u32,
-}
+/// The TCP peer of a gateway connection (the [`Connected`] info of
+/// [`crate::limits::GuardedListener`]).
+#[derive(Debug, Clone, Copy)]
+pub struct PeerAddr(pub std::net::SocketAddr);
 
-impl Window {
-    fn new() -> Self {
-        Self { started: Instant::now(), count: 0 }
-    }
-
-    /// Count one; `false` once `limit` is passed inside the minute.
-    fn admit(&mut self, limit: u32) -> bool {
-        if self.started.elapsed() >= Duration::from_secs(60) {
-            *self = Window::new();
-        }
-        self.count += 1;
-        self.count <= limit
+impl Connected<axum::serve::IncomingStream<'_, crate::limits::GuardedListener>> for PeerAddr {
+    fn connect_info(stream: axum::serve::IncomingStream<'_, crate::limits::GuardedListener>) -> Self {
+        PeerAddr(*stream.remote_addr())
     }
 }
+
+/// Where a request came from, for the per-source windows ([`crate::rate::source_of`]).
+#[derive(Debug, Clone)]
+pub struct Source(pub String);
 
 struct LiveSocket {
     user: String,
@@ -94,8 +93,9 @@ pub struct Gateway {
     db_stamp: Mutex<Option<SystemTime>>,
     live: Mutex<HashMap<u64, LiveSocket>>,
     next_live: AtomicU64,
-    pair_window: Mutex<Window>,
-    auth_window: Mutex<Window>,
+    limits: Mutex<Limits>,
+    /// Last routed request per account (bounded by the table).
+    active: Mutex<HashMap<String, Instant>>,
 }
 
 pub type Shared = Arc<Gateway>;
@@ -115,8 +115,8 @@ impl Gateway {
             db_stamp: Mutex::new(stamp),
             live: Mutex::default(),
             next_live: AtomicU64::new(1),
-            pair_window: Mutex::new(Window::new()),
-            auth_window: Mutex::new(Window::new()),
+            limits: Mutex::new(Limits::new(Instant::now())),
+            active: Mutex::default(),
         }))
     }
 
@@ -161,6 +161,25 @@ impl Gateway {
     fn register_live(&self, user: &str, device: &str, role: Role, handle: AbortHandle) {
         let id = self.next_live.fetch_add(1, Ordering::Relaxed);
         self.live.lock().unwrap_or_else(PoisonError::into_inner).insert(id, LiveSocket { user: user.into(), device: device.into(), role, handle });
+    }
+
+    fn limits(&self) -> std::sync::MutexGuard<'_, Limits> {
+        self.limits.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn mark_active(&self, user: &str) {
+        self.active.lock().unwrap_or_else(PoisonError::into_inner).insert(user.to_string(), Instant::now());
+    }
+
+    /// May a pair for `account` reach its daemon? Only while the helper's
+    /// invite is pending, or while the account is in use (a routed request
+    /// lately, or a live socket) — then its daemon is running already.
+    fn pairable(&self, account: &Account) -> bool {
+        if account.invite_until > crate::now() {
+            return true;
+        }
+        let recent = self.active.lock().unwrap_or_else(PoisonError::into_inner).get(&account.name).is_some_and(|t| t.elapsed() < ACTIVE_FOR);
+        recent || self.live.lock().unwrap_or_else(PoisonError::into_inner).values().any(|s| s.user == account.name && !s.handle.is_finished())
     }
 
     pub fn live_count(&self) -> usize {
@@ -279,24 +298,34 @@ fn rebuild(status: StatusCode, headers: HeaderMap, body: Bytes) -> Response {
     response
 }
 
-async fn pair(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
+async fn pair(State(gw): State<Shared>, Extension(source): Extension<Source>, headers: HeaderMap, body: Bytes) -> Response {
     if !exact_origin(&gw, &headers) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    if !gw.pair_window.lock().unwrap_or_else(PoisonError::into_inner).admit(PAIR_PER_MINUTE) {
-        return api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
-    }
-    let Ok(Value::Object(mut fields)) = serde_json::from_slice::<Value>(&body) else {
-        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    let stranger = |gw: &Gateway, user: &str, error: &str| {
+        if !gw.limits().pair_stranger(&source.0, Instant::now()) {
+            return api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+        }
+        gw.audit.record(Row::new(user, None, "pair", "refused"));
+        api_error(StatusCode::BAD_REQUEST, error)
     };
-    // An unknown account answers exactly like a wrong code.
+    let Ok(Value::Object(mut fields)) = serde_json::from_slice::<Value>(&body) else {
+        return stranger(&gw, "-", "invalid_request");
+    };
+    // An unknown account, and one with no invite pending that is not in
+    // use, answer exactly like a wrong code — and reach no daemon.
     let Some((user, code)) = fields.get("code").and_then(Value::as_str).and_then(wire::split_routed_code).map(|(u, c)| (u.to_string(), c.to_string())) else {
-        return api_error(StatusCode::BAD_REQUEST, "invalid_pairing_code");
+        return stranger(&gw, "-", "invalid_pairing_code");
     };
     let Some(account) = gw.db().account(&user).cloned() else {
-        gw.audit.record(Row::new("-", None, "pair", "refused"));
-        return api_error(StatusCode::BAD_REQUEST, "invalid_pairing_code");
+        return stranger(&gw, "-", "invalid_pairing_code");
     };
+    if !gw.pairable(&account) {
+        return stranger(&gw, &account.name, "invalid_pairing_code");
+    }
+    if !gw.limits().pair_known(&source.0, &account.name, Instant::now()) {
+        return api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    }
     let device_name = fields.get("device_name").and_then(Value::as_str).unwrap_or_default().to_string();
     fields.insert("code".into(), Value::String(code));
     let request = json_request(&gw, "/api/v1/pair", serde_json::to_vec(&fields).unwrap_or_default(), &headers);
@@ -324,33 +353,36 @@ async fn pair(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -> Resp
     }
 }
 
-/// `challenge` and `session`: routed by the device's owner.
-async fn by_device(gw: &Gateway, path: &str, headers: &HeaderMap, body: &Bytes) -> Result<(Account, String, Request), Response> {
+/// `challenge` and `session`: routed by the device's owner. A device id no
+/// account owns is a stranger's request: counted by source and in the shared
+/// stranger window, never against a paired device's budget.
+async fn by_device(gw: &Gateway, source: &Source, path: &str, headers: &HeaderMap, body: &Bytes) -> Result<(Account, String, Request), Response> {
     if !exact_origin(gw, headers) {
         return Err(api_error(StatusCode::FORBIDDEN, "invalid_origin"));
     }
-    if !gw.auth_window.lock().unwrap_or_else(PoisonError::into_inner).admit(AUTH_PER_MINUTE) {
+    let device = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("device_id").and_then(Value::as_str).map(str::to_string));
+    let known = device.filter(|d| wire::valid_device_id(d)).and_then(|d| gw.db().owner_of(&d).cloned().map(|a| (a, d)));
+    let Some((account, device)) = known else {
+        if !gw.limits().auth_stranger(&source.0, Instant::now()) {
+            return Err(api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
+        }
+        return Err(api_error(StatusCode::BAD_REQUEST, "unknown_device"));
+    };
+    if !gw.limits().auth_known(&device, &account.name, Instant::now()) {
         return Err(api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
     }
-    let device = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("device_id").and_then(Value::as_str).map(str::to_string));
-    let Some(device) = device.filter(|d| wire::valid_device_id(d)) else {
-        return Err(api_error(StatusCode::BAD_REQUEST, "unknown_device"));
-    };
-    let Some(account) = gw.db().owner_of(&device).cloned() else {
-        return Err(api_error(StatusCode::BAD_REQUEST, "unknown_device"));
-    };
     Ok((account, device, json_request(gw, path, body.to_vec(), headers)))
 }
 
-async fn challenge(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
-    match by_device(&gw, "/api/v1/auth/challenge", &headers, &body).await {
+async fn challenge(State(gw): State<Shared>, Extension(source): Extension<Source>, headers: HeaderMap, body: Bytes) -> Response {
+    match by_device(&gw, &source, "/api/v1/auth/challenge", &headers, &body).await {
         Ok((account, device, request)) => forward(&gw, &account, Some(&device), request).await,
         Err(response) => response,
     }
 }
 
-async fn session(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
-    let (account, device, request) = match by_device(&gw, "/api/v1/auth/session", &headers, &body).await {
+async fn session(State(gw): State<Shared>, Extension(source): Extension<Source>, headers: HeaderMap, body: Bytes) -> Response {
+    let (account, device, request) = match by_device(&gw, &source, "/api/v1/auth/session", &headers, &body).await {
         Ok(routed) => routed,
         Err(response) => return response,
     };
@@ -360,6 +392,7 @@ async fn session(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -> R
         if let Ok(v) = HeaderValue::from_str(&cookie::set_cookie(&value)) {
             response.headers_mut().append(header::SET_COOKIE, v);
         }
+        gw.mark_active(&account.name);
         gw.audit.record(Row::new(&account.name, Some(&device), "login", "ok"));
     } else {
         gw.audit.record(Row::new(&account.name, Some(&device), "login", "refused"));
@@ -375,6 +408,7 @@ pair it with the invite code your administrator gave you (<code>name:12345678</c
 async fn routed_or_static(State(gw): State<Shared>, request: Request) -> Response {
     let path = request.uri().path().to_string();
     if let Some((account, device)) = gw.routed(request.headers()) {
+        gw.mark_active(&account.name);
         let logout = request.method() == Method::DELETE && path == "/api/v1/auth/session";
         let mut response = forward(&gw, &account, Some(&device), request).await;
         if logout {
@@ -477,12 +511,20 @@ async fn health() -> Response {
 
 /// Only the public host is answered; the phone's headers on the gateway's own
 /// responses (a forwarded answer already carries the daemon's).
-async fn host_and_headers(State((gw, content)): State<(Shared, bool)>, request: Request, next: Next) -> Response {
+async fn host_and_headers(State((gw, content)): State<(Shared, bool)>, mut request: Request, next: Next) -> Response {
     let want = if content { gw.config.content_origin.as_deref().map(crate::config::host_of) } else { Some(gw.config.public_host()) };
     let host = request.headers().get(header::HOST).and_then(|v| v.to_str().ok());
     if want.is_none() || host != want {
         return StatusCode::NOT_FOUND.into_response();
     }
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<PeerAddr>>()
+        .map(|c| c.0 .0)
+        .or_else(|| request.extensions().get::<ConnectInfo<std::net::SocketAddr>>().map(|c| c.0));
+    let forwarded = request.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let source = Source(crate::rate::source_of(peer, forwarded));
+    request.extensions_mut().insert(source);
     let mut response = next.run(request).await;
     let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
     let headers = response.headers_mut();
@@ -541,7 +583,7 @@ pub async fn serve(config: GatewayConfig) -> Result<(), String> {
         let content_listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?;
         let app = content_router(gw.clone());
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(crate::limits::GuardedListener::with_capacity(content_listener, MAX_CONTENT_CONNECTIONS), app).await {
+            if let Err(error) = axum::serve(crate::limits::GuardedListener::with_capacity(content_listener, MAX_CONTENT_CONNECTIONS), app.into_make_service_with_connect_info::<PeerAddr>()).await {
                 eprintln!("gateway: content listener: {error}");
             }
         });
@@ -555,7 +597,7 @@ pub async fn serve(config: GatewayConfig) -> Result<(), String> {
         }
     });
     eprintln!("gateway: {} on {} ({} accounts)", gw.config.origin, gw.config.listen, gw.db().accounts.len());
-    axum::serve(crate::limits::GuardedListener::with_capacity(listener, MAX_CONNECTIONS), router(gw)).await.map_err(|e| e.to_string())
+    axum::serve(crate::limits::GuardedListener::with_capacity(listener, MAX_CONNECTIONS), router(gw).into_make_service_with_connect_info::<PeerAddr>()).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

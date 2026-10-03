@@ -337,6 +337,9 @@ pub fn execute(plan: &Plan, ctx: &Ctx, exec: &mut dyn Exec) -> Result<(), String
                 let expires = ctx.now + INVITE_TTL;
                 let argv = vec![names::serverd_binary().to_string_lossy().into_owned(), "--write-invite".into(), expires.to_string()];
                 exec.run_as(&account, &argv, &code)?;
+                // Only now may the gateway forward a pair to this account.
+                db::update(&ctx.gateway_dir, |db| db.set_invite(user, expires)).map_err(|e| e.to_string())?;
+                table_touched = true;
                 exec.say(&format!("pairing code for {user} (single use, 24 h): {}", wire::routed_code(user, &code)));
             }
             Step::CliInstall { id } => {

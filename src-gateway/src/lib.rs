@@ -44,6 +44,7 @@ pub mod limits;
 pub mod helper;
 #[cfg(unix)]
 pub mod proxy;
+pub mod rate;
 #[cfg(unix)]
 pub mod server;
 

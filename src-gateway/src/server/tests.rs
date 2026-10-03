@@ -83,7 +83,11 @@ async fn fixture() -> Fixture {
         db.add_account("alice", uid, Role::User, 1)?;
         db.add_account("root_admin", uid.wrapping_add(7), Role::Admin, 1)?;
         // Bob's daemon runs as another uid than the table says: refused.
-        db.add_account("bob", uid.wrapping_add(1), Role::User, 1)
+        db.add_account("bob", uid.wrapping_add(1), Role::User, 1)?;
+        // Carol has no daemon at all and no invite pending.
+        db.add_account("carol", uid.wrapping_add(2), Role::User, 1)?;
+        db.set_invite("alice", u64::MAX)?;
+        db.set_invite("bob", u64::MAX)
     })
     .unwrap();
     fake_daemon(wire::socket_path(&sockets, "alice"), "alice", "alice_device_01").await;
@@ -357,4 +361,58 @@ async fn the_gateway_keeps_no_content() {
         let bytes = std::fs::read(file.unwrap().path()).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains(planted));
     }
+}
+
+/// P3 review finding 13: a pair for an account with no invite pending (and
+/// no recent use) answers like an unknown account and connects to no socket
+/// — so it starts no daemon by socket activation and says nothing about
+/// whether the account exists.
+#[tokio::test]
+async fn a_pair_without_a_pending_invite_reaches_no_daemon() {
+    let f = fixture().await;
+    let body = json!({ "code": "carol:12345678", "device_name": "x", "public_key": "k" }).to_string();
+    let (status, _, answer) = raw(f.addr, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&body)).await;
+    assert_eq!((status, answer.contains("invalid_pairing_code")), (400, true), "not 502: nothing was connected to: {answer}");
+    let unknown = json!({ "code": "zed:12345678", "device_name": "x", "public_key": "k" }).to_string();
+    let (_, _, unknown_answer) = raw(f.addr, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&unknown)).await;
+    assert_eq!(answer, unknown_answer, "the same answer as for nobody");
+    // Once the helper records an invite, the pair is forwarded (and fails
+    // here only because Carol has no daemon).
+    db::update(&f.gw.config.state_dir, |db| db.set_invite("carol", crate::now() + 60)).unwrap();
+    f.gw.reload();
+    let (status, _, _) = raw(f.addr, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&body)).await;
+    assert_eq!(status, 502);
+}
+
+/// P3 review finding 12: strangers flooding the pair and sign-in routes from
+/// many tailnet sources do not lock a paired user out.
+#[tokio::test]
+async fn a_stranger_flood_does_not_lock_out_a_known_user() {
+    let f = fixture().await;
+    let cookie_before = sign_in_alice(&f).await;
+    assert!(!cookie_before.is_empty());
+    for n in 0..(crate::rate::AUTH_STRANGERS + 50) {
+        let source = format!("2001:db8:{:x}::{:x}", n / 250, n % 250);
+        let body = json!({ "device_id": format!("ghost_device_{n:04}"), "nonce": "n", "signature": "s" }).to_string();
+        raw(f.addr, "POST", "/api/v1/auth/challenge", &[("Origin", ORIGIN), ("X-Forwarded-For", &source)], Some(&body)).await;
+    }
+    for n in 0..(crate::rate::PAIR_STRANGERS + 20) {
+        let source = format!("2001:db8:1{:x}::{:x}", n / 250, n % 250);
+        let body = json!({ "code": format!("zed{n}:12345678"), "device_name": "x", "public_key": "k" }).to_string();
+        raw(f.addr, "POST", "/api/v1/pair", &[("Origin", ORIGIN), ("X-Forwarded-For", &source)], Some(&body)).await;
+    }
+    // The stranger windows are shut …
+    let ghost = json!({ "device_id": "ghost_device_9999", "nonce": "n", "signature": "s" }).to_string();
+    let (status, _, _) = raw(f.addr, "POST", "/api/v1/auth/challenge", &[("Origin", ORIGIN), ("X-Forwarded-For", "198.51.100.66")], Some(&ghost)).await;
+    assert_eq!(status, 429);
+    // … and Alice's device still signs in, from the very same source.
+    let session = json!({ "device_id": "alice_device_01", "nonce": "n", "signature": "s" }).to_string();
+    let (status, _, body) = raw(f.addr, "POST", "/api/v1/auth/session", &[("Origin", ORIGIN), ("X-Forwarded-For", "198.51.100.66")], Some(&session)).await;
+    assert_eq!(status, 200, "{body}");
+    // One source spamming Alice's device id is limited on that device only.
+    for _ in 0..crate::rate::AUTH_PER_DEVICE {
+        raw(f.addr, "POST", "/api/v1/auth/challenge", &[("Origin", ORIGIN)], Some(&session)).await;
+    }
+    let (status, _, _) = raw(f.addr, "POST", "/api/v1/auth/challenge", &[("Origin", ORIGIN)], Some(&session)).await;
+    assert_eq!(status, 429);
 }
