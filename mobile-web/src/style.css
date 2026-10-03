@@ -269,10 +269,10 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .tab-card > .tab-card-status.question { --status-face:#493b1d; }
 .tab-card > .tab-card-status.done { --status-face:#193a29; }
 .tab-card > .tab-card-status.interrupted { --status-face:#46202a; }
-/* The Activity pill breathes; the working hexagon is hollow — only its
-   dimmed edge ring is drawn, and a bright line runs around it: a conic sweep
-   whose start angle turns (registered `--hex-run`, so the ring itself stays
-   still), clipped to the same ring. The asking hexagon pulses — it
+/* The Activity pill breathes; the working hexagon is drawn only as a
+   bright line running around its edge: a conic sweep whose start angle turns
+   (registered `--hex-run`, so the shape itself stays still), clipped to the
+   hexagon's edge ring. The asking hexagon pulses — it
    swells and a faint fill glows inside it; the pill's ? tips its head. ✓ and
    ■ land once. The mark's own transform places it on the border, so the pulse
    repeats it. */
@@ -283,7 +283,7 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .agent-status.interrupted .agent-status-glyph { animation:agent-status-stop .45s cubic-bezier(.3,1.5,.5,1) both; }
 @property --hex-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
 .tab-card > .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
-.tab-card > .tab-card-status.working::before { inset:0; background:color-mix(in srgb, currentColor 30%, var(--status-face)); clip-path:var(--hex-ring); }
+.tab-card > .tab-card-status.working::before { display:none; }
 .tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 60%, currentColor 100%); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
 .tab-card > .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
