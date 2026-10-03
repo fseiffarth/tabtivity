@@ -330,7 +330,7 @@ function ShareTools({
     <>
       {pending.length > 0 && (
         <p className="settings-help">
-          <UntestedTag id="server.sharing.review" /> {t("server.sharing.pending", { paths: pending.join(", ") })}
+          <UntestedTag id="server.sharing.review" /> <UntestedTag id="server.sharing.worktrees" /> {t("server.sharing.pending", { paths: pending.join(", ") })}
         </p>
       )}
       {!gone && branches.map((b) => (

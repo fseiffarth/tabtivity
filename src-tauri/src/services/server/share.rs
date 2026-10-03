@@ -712,11 +712,43 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// reviewed — however they got into HEAD (a Tabtivity merge, a `git merge`
 /// in a terminal, the first clone), and wherever the hub's branch that
 /// brought them is now ([`hub_revs`]). Errors fail closed at the caller.
+/// Every checked-out commit of the project's repository: the main working
+/// tree's and each linked worktree's (the in-tree `.tabtivity/worktrees/`
+/// ones, P5), as `(worktree dir, commit)`. A worktree on an unborn branch or
+/// a detached one without a commit has none. The review gate covers all of
+/// them: an agent can start in any, so what any of them holds counts.
+pub fn checked_out(dir: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+    let listing = git_in(dir, None, &["worktree", "list", "--porcelain"])?;
+    let mut heads = Vec::new();
+    let mut current: Option<PathBuf> = None;
+    for line in listing.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(PathBuf::from(path));
+        } else if let (Some(oid), Some(path)) = (line.strip_prefix("HEAD "), current.as_ref()) {
+            if hub_wire::valid_oid(oid) && !oid.bytes().all(|b| b == b'0') {
+                heads.push((path.clone(), oid.to_string()));
+            }
+        }
+    }
+    if heads.is_empty() {
+        // `worktree list` names no HEAD on a repo with no commit yet.
+        if let Ok(head) = git_in(dir, None, &["rev-parse", "--verify", "-q", "HEAD"]) {
+            heads.push((dir.to_path_buf(), head));
+        }
+    }
+    Ok(heads)
+}
+
 pub fn unreviewed(link: &Link) -> Result<Vec<String>, String> {
     let dir = &link.dir;
     let not: Vec<String> = link.reviewed.iter().filter(|c| hub_wire::valid_oid(c)).map(|c| format!("^{c}")).collect();
     let not_refs: Vec<&str> = not.iter().map(String::as_str).collect();
-    let mut head_args = vec!["rev-list", "--ignore-missing", "HEAD"];
+    let heads = checked_out(dir)?;
+    if heads.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut head_args = vec!["rev-list", "--ignore-missing"];
+    head_args.extend(heads.iter().map(|(_, oid)| oid.as_str()));
     head_args.extend(&not_refs);
     let in_head: std::collections::BTreeSet<String> = git_in(dir, None, &with_pathspec(head_args))?.lines().map(str::to_string).collect();
     if in_head.is_empty() {
@@ -826,13 +858,21 @@ pub fn pending_review(link: &Link) -> Result<Option<Review>, String> {
     if paths.is_empty() {
         return Ok(None);
     }
-    let head = git_in(&link.dir, None, &["rev-parse", "HEAD"])?;
+    // The files as every checkout holds them; a linked worktree's are named
+    // by its folder. The review's `commit` lists them all, so accepting it
+    // marks every one of them.
+    let mut heads = checked_out(&link.dir)?;
+    heads.dedup_by(|a, b| a.1 == b.1);
     let mut text = String::new();
-    for path in &paths {
-        let shown = git_in(&link.dir, None, &["show", &format!("{head}:{path}")]).unwrap_or_else(|_| "(removed)".to_string());
-        text.push_str(&format!("── {path} ──\n{shown}\n"));
+    for (tree, head) in &heads {
+        let label = if *tree == link.dir { String::new() } else { format!(" (worktree {})", tree.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()) };
+        for path in &paths {
+            let shown = git_in(&link.dir, None, &["show", &format!("{head}:{path}")]).unwrap_or_else(|_| "(removed)".to_string());
+            text.push_str(&format!("── {path}{label} ──\n{shown}\n"));
+        }
     }
-    Ok(Some(review_of(head, paths, text)))
+    let commits: Vec<&str> = heads.iter().map(|(_, oid)| oid.as_str()).collect();
+    Ok(Some(review_of(commits.join(" "), paths, text)))
 }
 
 /// The user reviewed [`pending_review`]: mark the checked-out commit.
@@ -841,7 +881,9 @@ pub fn accept_in(state_dir: &Path, link: &Link, digest: &str) -> Result<(), Stri
         if review.digest != digest {
             return Err("The files changed after they were shown; review them again".into());
         }
-        mark_reviewed(state_dir, &link.dir, &review.commit)?;
+        for commit in review.commit.split(' ').filter(|c| hub_wire::valid_oid(c)) {
+            mark_reviewed(state_dir, &link.dir, commit)?;
+        }
     }
     // An owner's link kept past a stopped share only for this review.
     if link.role == "owner" && link.state != "active" {
