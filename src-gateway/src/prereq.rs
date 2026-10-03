@@ -279,7 +279,7 @@ fn funneled_gateway(status: &serde_json::Value, targets: &[String]) -> Vec<Strin
         let bare = target.trim_start_matches("http://").trim_start_matches("https+insecure://").trim_start_matches("https://");
         let bare = bare.split('/').next().unwrap_or(bare);
         let bare = bare.strip_prefix("localhost:").map(|port| format!("127.0.0.1:{port}")).unwrap_or_else(|| bare.to_string());
-        targets.iter().any(|t| *t == bare)
+        targets.contains(&bare)
     };
     let Some(allow) = status.get("AllowFunnel").and_then(serde_json::Value::as_object) else { return Vec::new() };
     let mut exposed: Vec<String> = allow
