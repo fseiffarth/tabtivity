@@ -537,6 +537,57 @@ per CLI which one their agents run on.
   take it from them, revoke the key at the provider. Remote agents and Codex
   never get the administrator's key.
 
+### Hosted server: sharing projects and calendars
+
+On the hosted server you can share a project, a calendar or a to-do list
+with other users of the same server. Everything is in Settings → Mobile →
+Server.
+
+- **Sharing a project.** Under **Shared projects**, choose one of your git
+  projects and press **Share** (it needs a first commit; remote, VM and
+  container projects cannot be shared). Your project stays where it is; the
+  server keeps a shared copy of its history that only the people you add can
+  read. **Add member** with a user name and a role: a **viewer** may read it,
+  an **editor** may also push branches under their own name
+  (`<name>/<branch>`); only you move your own branches. **Push** sends your
+  checked-out branch, **Stop sharing** removes the shared copy (members keep
+  theirs). The app's own session files are never shared.
+- **A project shared with you** appears under **Shared with you**. **Add to
+  my projects** makes your own copy (a clone) in your projects folder; from
+  then on it is your project, with your own tabs and agents. **Fetch** shows
+  each shared branch against yours (new there / only here); **Merge** takes a
+  branch in. Conflicts are never resolved for you: the merge is undone and
+  you resolve it in a terminal. Who has the project open right now is shown
+  on the card. If you are taken off a share, or the owner stops sharing, the
+  card turns grey ("no longer shared" / "deleted by owner") — your copy is
+  never deleted.
+- **Agent instructions from others are reviewed first.** Files an agent
+  reads as instructions (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.mcp.json`,
+  `.envrc`, and anything in `.claude/`, `.codex/`, `.gemini/`, `.cursor/`)
+  that another member changed are shown before a **Merge** goes through.
+  After you add a shared project, or merge in a terminal, no agent starts in
+  it until you press **Review** and **I have reviewed these**. In a shared
+  project git hooks never run on Commit or Push, and a merged `latexmkrc` or
+  prettier configuration asks for your approval again.
+- **Agents see only their own project's shared copy.** An agent in one
+  shared project cannot read the shared copy of any other.
+- **Sharing a calendar or a to-do list.** Under **Shared calendars and to-do
+  lists**, choose a calendar and press **Share** — it moves from your own
+  calendar to the server's calendar service (you are asked first; **Stop
+  sharing** moves it back). **Open to user** gives a user its **events**, its
+  **to-dos**, or both, each as viewer or editor. Shared calendars appear in
+  the calendar and on the board like your own; a viewer cannot change them,
+  and an editor's change shows on the other members' open pages within
+  moments. A task's mail and file links, the appointment it came from and its
+  project never reach anyone else (you still see them on your own cards), and
+  reminders stay each person's own. Revoking stops their next read; what they
+  copied before stays theirs. The default calendar, CalDAV calendars and
+  subscriptions cannot be shared.
+- **The administrator** can switch off sharing projects and sharing
+  calendars and to-do lists for the whole server. Off means nothing new is
+  shared; existing shared projects keep working, shared calendars opened to
+  you are hidden, and nothing is deleted.
+
 ### Workspace Apps
 
 Each of these replaced a global-app role, on the same reasoning: what sits

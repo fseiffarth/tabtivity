@@ -591,3 +591,80 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+### Z.5 — Left by P4 (sharing; `docs/hosted_handoff.md` § P4)
+
+2366. **Run P4 live on a real server.** The steps are in
+    `docs/hosted_handoff.md` § P4 "Live steps": install (the hub's and the
+    calendar service's accounts and sockets, `/srv/<slug>/shared` `0711`),
+    Alice shares a project, Bob as viewer clones and fetches but cannot
+    push, Carol as editor pushes `carol/main`, Alice merges it after the
+    agent-facing review, revoke and delete grey the rows, a fenced agent
+    sees only its own hub; the P4c exit (Alice opens a calendar's events to
+    Bob as viewer and its to-do list to Carol as editor; Bob can't write,
+    Carol's edit reaches Alice's open page within one change, a task's mail
+    link never reaches Carol, a revoke stops Bob's next read);
+    `scripts/server-isolation-test.sh`'s hub and calendar sections. (P4,
+    2026-10-03.)
+    - [ ] 🖐️ Manual test — the whole § P4 live list on one server with three users.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2367. **Presence on the project pill and a "whose" label on busy state (§6.4).**
+    The hub keeps presence by uid (`Request::Presence`, ten-minute
+    expiry, the browser re-reports every four minutes) and the Sharing
+    panel shows "Open now: …"; the member-count chip on the project pill
+    and the "whose" label in `hostBusy` / the tmux Sessions view are not
+    built. (P4, 2026-10-03.)
+
+2368. **A fenced agent's push in a shared project, through a Tabtivity-side proxy (§6.3).**
+    The fence hides the hub's socket (`/run` is a tmpfs), so an agent cannot
+    push a shared clone; `share_push` is the user's button only. The plan's
+    answer is a proxy of `tabtivity-git`'s `git_push` shape: route the
+    `git_push` MCP tool of a shared project to `share::push_in` (owner by
+    name, editor under `<user>/`), with the same budget and card. Today the
+    tool would push to the clone's upstream — the hub path — and fail on
+    the hub's permissions, harmlessly. (P4, 2026-10-03.)
+
+2369. **Shared calendars on the phone's headless views and in headless reminders.**
+    `calendar_load` merges shared calendars for every page, so a browser or
+    phone *page* shows them and fires their reminders per user; but the
+    Mobile host's headless answers (`mobile_control::headless` month,
+    `headless_board`) and the no-window alarm loop (`mobile_control::alarms`)
+    read `calendar.json` only. Merge through `shared_calendar::global()`
+    there too (read-only on the headless board). (P4c, 2026-10-03.)
+
+2370. **A shared to-do list's own board columns and card order.**
+    The service stores the owner's columns with the list (`Change::Columns`
+    exists) but the board renders the viewer's own `task_columns`, and a
+    drag of a shared card changes only its column (`todo_move_tasks` routes
+    a `PutTask` with the new column; its rank within the column is not
+    shared in v1). Show a shared list's columns on the board and carry the
+    rank. (P4c, 2026-10-03.)
+
+2371. **Decide: per-author trust for the agent-facing review (sync plan Q9).**
+    Every agent-facing change from another member is reviewed today
+    (`share::unreviewed`, a merge's review bound to its digest). The
+    leaning answer is per-author trust (review once per co-member, then
+    trust their commits) — but authorship in git is the committer's claim;
+    the hub would have to record who pushed which commit (it knows the
+    pusher's uid) for that to mean anything. (P4b, 2026-10-03.)
+
+2372. **Hub housekeeping: objects of refused pushes, a size bound per hub.**
+    A push unbundles its objects before the ref rules and the CAS decide,
+    so a refused or stale push leaves unreferenced objects in the hub until
+    a `git gc` the hub never runs; and nothing bounds a hub's size beyond
+    the 4 GiB per push. Add a periodic `gc --prune` (as the hub, hooks off)
+    and a per-hub or per-owner quota. (P4, 2026-10-03.)
+
+2373. **"No longer shared" / "deleted by owner" on the project itself (§6.6).**
+    The user's map keeps the state (`share::Link.state`) and the Sharing
+    panel greys the row, but the project pill and the projects list show
+    the clone as an ordinary project. Show the state where the project is
+    (a greyed chip), never removing it. (P4, 2026-10-03.)

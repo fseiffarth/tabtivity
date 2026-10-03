@@ -65,7 +65,7 @@ tool is unavailable, say so — never skip silently.
   one you're touching: agent_authority, agent_schedule_mcp, agent_sessions,
   brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
   multi_host_remote, openvpn, project_boxes, project_transfer,
-  release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console, server_gateway,
+  release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console, server_gateway, sharing,
   tmux_sessions, usage_stats, vm_projects, web_client.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
 - Updating a wrapped third-party tool: `docs/third_party_update_checklist.md`.

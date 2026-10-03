@@ -452,6 +452,8 @@ admin's browser ─PUT /gateway/v1/agent-keys/<cli>─► gateway (<slug>-gw, ro
 | Sidecar loopback port + content port | desktop only | token link, loopback Host/Origin checks | **not opened** by a daemon (`Listen::Unix`) |
 | tmux server | tmux unit | `/run/<slug>/tmux/<u>` `0700` | closed |
 | Key keeper `/run/<slug>/auth.sock` | systemd (socket unit) | `0666`, decided per caller uid (`SO_PEERCRED`): gateway sets/lists, a server user fetches, others refused; hidden from fences (`/run` tmpfs) | open to every local account by design; a server user can read an offered key |
+| Share hub `/run/<slug>/hub.sock` | systemd (socket unit) | `0666`, per caller uid (`SO_PEERCRED`): server users only, owner/member rules per share; hidden from fences (`/run` tmpfs) | open to every local account by design; a non-member learns nothing about a share ([`sharing.md`](sharing.md)) |
+| Shared-calendar service `/run/<slug>/calendar.sock` | systemd (socket unit) | `0666`, per caller uid and per calendar part; hidden from fences | open to every local account by design; a non-member learns nothing ([`sharing.md`](sharing.md)) |
 | Daemon admin socket | daemon | `<state>/mobile-control/admin.sock` in a `0700` dir | closed |
 | Root MCP listener (`root_mcp.rs`) | desktop window | bearer token | not started by a daemon (#2339) |
 | Shared Ollama `127.0.0.1:11434` | admin's system service | none (decided 2026-10-03) | residual: any shell can drive it; model changes are `admin` |

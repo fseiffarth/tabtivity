@@ -1450,21 +1450,51 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   `agent_auth::tests::a_cli_on_the_admin_key_keeps_no_own_login_in_the_homes`;
   not run on a server, #2363).
 
-**P4: sharing.**
-- *P4a, viewer shares:* hub creation, named-user ACLs, clone-to-add, "Shared
-  with me", presence, revocation, the fence tmpfs over `/srv/tabtivity/shared`,
-  the `safe.directory` pin, and session files kept out of commits. Remote,
-  VM and container projects are refused.
-- *P4b, editor shares, **gated on §6.5**:* `tabtivity-hub` with ref rules, the
-  agent-facing surface review at merge time, hooked verbs refused in
-  shared clones, sanitizing that fails closed, and trust re-asked on merge.
+**P4: sharing.** *Built 2026-10-03 on branch `hosted` (`9a210685`…`a98fce2f`
++ the docs commit); nothing run on a server. Handoff:
+[`hosted_handoff.md`](hosted_handoff.md) § P4; rationale:
+[`context/sharing.md`](context/sharing.md).*
+- *P4a, viewer shares:* ~~hub creation, named-user ACLs, clone-to-add,
+  "Shared with me", presence, revocation, the fence tmpfs over
+  `/srv/tabtivity/shared`, the `safe.directory` pin, and session files kept
+  out of commits. Remote, VM and container projects are refused.~~
+  `9a210685` (`<slug>-hub`: bare hubs, ACLs through the xattrs, bundle pushes
+  with ref rules, delete into a holding area, presence, root-only `forget`
+  for `user-remove`, the admin's new `project_sharing` switch), `696522af`
+  (the daemon's `share_*` commands, clone-to-add through the import path,
+  `.git/info/exclude`, the exact-hub pin — a test pins git's scope: opening
+  checks ownership, the transport does not —, the fence, the Sharing panel).
+  Deviations: the share table and ref rules live in the hub, not the gateway
+  database; hub files are the hub account's (members `r-X`), not root's.
+  **Open:** presence chip on the pill (#2367), greyed state on the pill
+  (#2373), an agent's push through a proxy (#2368).
+- *P4b, editor shares, **gated on §6.5**:* ~~`tabtivity-hub` with ref rules,
+  the agent-facing surface review at merge time, hooked verbs refused in
+  shared clones, sanitizing that fails closed, and trust re-asked on
+  merge.~~ `9a210685` (ref rules), `0692dc21` (hookless and fail-closed git
+  in every shared project; agent-facing changes from the hub stop every
+  agent start and push until reviewed — at a merge through the app (bound to
+  the review's digest), after a clone or a terminal merge; a test pins that a
+  merged trust-gated file asks again and trust never crosses users).
+  **Open:** per-author trust (#2371).
 - *P4c, calendar and todo sharing* (independent of P4a/b; needs only P3):
-  `tabtivity-calendar`, the move-on-first-share, viewer/editor roles, link
+  ~~`tabtivity-calendar`, the move-on-first-share, viewer/editor roles, link
   stripping, per-viewer alarms, read-only agent access, and the sharing
-  switch.
+  switch.~~ `b81cd608` (the service: a JSON file per calendar instead of
+  SQLite, per-part roles, per-record CAS, `wait`), `0ab3ab6d` (merged into
+  `calendar_load`, edits routed, the move and its undo, the owner's links
+  kept on her side, the panel and the long-poll watch). **Open:** headless
+  views and no-window reminders (#2369), a shared list's own columns and
+  ranks (#2370).
   - *Exit:* A opens a calendar's events to B as viewer and its todo list to
     C as editor. B can't write, C's edit reaches A within one patch, a task's
-    mail link never reaches C, and revoking stops B's next read.
+    mail link never reaches C, and revoking stops B's next read. *Built and
+    tested against the real service (`calendars::tests::
+    the_p4c_exit_holds_at_the_service`, `shared_calendar::tests::
+    the_p4c_exit_holds_through_the_daemons`); not run on a server (#2366).*
+- *Sharing tests (§11):* `hub::tests`, `share::tests`, `calendars::tests`,
+  `shared_calendar::tests`; `scripts/server-isolation-test.sh` gained the hub
+  and calendar sections (`a98fce2f`).
 
 **P5: options, each independent.**
 - The API-key broker with per-user budgets (§5.4).
