@@ -14,13 +14,16 @@
  * main-thread fallback, `globalThis.pdfjsWorker`. The legacy build carries
  * the polyfills the newest language features pdf.js leans on need on an
  * older phone browser. Canvas only: no text layer, no annotation layer, no
- * links, no forms — PDF content never becomes DOM.
+ * links, no forms — PDF content never becomes DOM. The page's text is read
+ * for one thing only: where an agent's markup question quotes it
+ * (`findText`), answered as boxes in page points.
  */
 
 import * as worker from "pdfjs-dist/legacy/build/pdf.worker.mjs";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import { acceptToFrame, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FromFrame } from "../markup/frameProtocol";
+import { findQuote, type TextRun } from "../markup/findText";
 
 (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = worker;
 // pdf.js paints a page in animation-frame slices, and a browser starves the
@@ -102,11 +105,46 @@ async function render(n: number, width: number): Promise<void> {
   }
 }
 
+/** The page's text runs in its own viewport at scale 1 — the units the
+ * `meta` sizes are in — as the desktop's `pageText.ts` boxes them. */
+async function textRuns(n: number): Promise<TextRun[]> {
+  const page = await doc!.getPage(n);
+  const viewport = page.getViewport({ scale: 1 });
+  const content = await page.getTextContent();
+  const runs: TextRun[] = [];
+  for (const item of content.items) {
+    if (!("str" in item) || typeof item.str !== "string") continue;
+    if (!item.str) {
+      // pdf.js's bare end-of-line marker: the run before it ends a line.
+      if (item.hasEOL && runs.length > 0) runs[runs.length - 1].eol = true;
+      continue;
+    }
+    const tx = pdfjs.Util.transform(viewport.transform, item.transform);
+    const em = Math.hypot(tx[2], tx[3]);
+    runs.push({ str: item.str, x: tx[4], y: tx[5] - em * 0.8, w: item.width, h: em, ...(item.hasEOL ? { eol: true } : {}) });
+  }
+  page.cleanup();
+  return runs;
+}
+
+async function findText(id: number, n: number, quote: string): Promise<void> {
+  if (!doc || n > doc.numPages) return;
+  let rects: { x: number; y: number; w: number; h: number }[] = [];
+  try {
+    rects = findQuote(await textRuns(n), quote);
+  } catch {
+    // A page whose text cannot be read pins its question in the margin.
+  }
+  post({ type: "found", id, page: n, rects });
+}
+
 window.addEventListener("message", (event) => {
   if (event.source !== window.parent) return;
   const message = acceptToFrame(event.data);
   if (!message) return;
-  queue = queue.then(() => (message.type === "open" ? open(message.bytes) : render(message.n, message.width)));
+  queue = queue.then(() => (message.type === "open" ? open(message.bytes)
+    : message.type === "render" ? render(message.n, message.width)
+      : findText(message.id, message.page, message.quote)));
 });
 
 post({ type: "ready" });
