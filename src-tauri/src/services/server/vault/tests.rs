@@ -69,7 +69,7 @@ fn k_opens_only_after_a_device_releases_it_and_survives_a_restart_not_a_flush() 
     let code = vault.set_up(&[phone.key()]).unwrap();
     assert_eq!(code.len(), 39);
     let k = vault.key().expect("held after set-up");
-    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1 });
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1, recovery_code: true });
     assert!(vault.set_up(&[phone.key()]).is_err(), "never a second K over the first");
     vault.set_credential("imap:alice@mail.example", Some("hunter2")).unwrap();
 
@@ -116,7 +116,7 @@ fn a_copy_of_the_home_opens_nothing_and_the_recovery_code_does() {
     let copy = tempfile::tempdir().unwrap();
     copy_tree(dir.path(), copy.path());
     let thief = vault_in(copy.path(), Arc::new(MemoryHold::default()));
-    assert_eq!(thief.status(), VaultStatus { set_up: true, unlocked: false, wrapped_devices: 1 });
+    assert_eq!(thief.status(), VaultStatus { set_up: true, unlocked: false, wrapped_devices: 1, recovery_code: true });
     assert_eq!(thief.credential("ssh:alice@host.example:22"), None);
     // A device key the thief made up has no wrap; the right device's wrap
     // needs that device's secret.
@@ -168,7 +168,7 @@ fn devices_enrolled_later_get_wraps_and_revoked_ones_lose_theirs() {
     vault.set_up(&[phone.key()]).unwrap();
     assert_eq!(vault.wrap_missing(&[phone.key(), tablet.key()]), 1);
     assert_eq!(vault.status().wrapped_devices, 2);
-    vault.revoke(&phone.id);
+    vault.revoke(&phone.id, &[tablet.key()]).unwrap();
     hold.clear().unwrap();
     assert_eq!(vault.start_unlock(ORIGIN, &phone.id).unwrap(), UnlockStart::NoWrap);
     assert_eq!(vault.wrap_missing(&[phone.key()]), 0, "nothing is wrapped while locked");
@@ -177,8 +177,302 @@ fn devices_enrolled_later_get_wraps_and_revoked_ones_lose_theirs() {
     // the daemon's list no longer has a revoked device): nothing new to wrap.
     assert_eq!(vault.status().wrapped_devices, 1);
     assert_eq!(vault.wrap_missing(&[phone.key()]), 1, "a device enrolled again is wrapped while unlocked");
-    vault.forget_devices();
-    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0 });
+    vault.forget_devices().unwrap();
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: true });
+}
+
+// ── Rotation on revoke (user decision 2026-10-03) ──────────────────────────
+
+/// A server's sealed things: a saved password and a device-mode mail store.
+fn seal_things(vault: &Vault, dir: &Path) -> crate::services::mail_crypt::MailKeys {
+    vault.set_credential("imap:alice@mail.example", Some("hunter2")).unwrap();
+    let k = vault.key().unwrap();
+    crate::services::mail_crypt::enable_with_device(&dir.join("mail"), &crate::services::mail_crypt::device_kek_from(&k)).unwrap()
+}
+
+/// Everything sealed opens with the vault's current K.
+fn assert_opens(vault: &Vault, dir: &Path, mail: &crate::services::mail_crypt::MailKeys) {
+    let k = vault.key().expect("unlocked");
+    assert_eq!(vault.credential("imap:alice@mail.example").as_deref(), Some("hunter2"));
+    let opened = crate::services::mail_crypt::unlock_with_device_key(&dir.join("mail"), &k).expect("mail opens with the current K");
+    assert_eq!(opened.field.as_bytes(), mail.field.as_bytes(), "the mail store's own key is unchanged");
+    let file = WrapFile::load(dir).unwrap();
+    assert_eq!(file.check.as_deref(), Some(secrets::key_check(&k).as_str()));
+    assert!(!file.rotate, "nothing pending");
+    for leftover in ["secrets/rotation.json", "secrets/wraps.json.next", "secrets/credentials.json.next", "mail/key.json.next"] {
+        assert!(!dir.join(leftover).exists(), "{leftover} left behind");
+    }
+}
+
+/// What a revoked device does offline with an old copy of `wraps.json`: its
+/// own wrap and ECDH secret give the K of that time.
+fn offline_k(device: &Device, old_wraps: &WrapFile) -> MasterKey {
+    let wrap = old_wraps.device(&device.id).expect("the old copy has its wrap");
+    let x = PublicKey::from_sec1_bytes(&unb64(&wrap.ephemeral).unwrap()).unwrap();
+    let shared = p256::ecdh::diffie_hellman(device.ecdh.to_nonzero_scalar(), x.as_affine());
+    secrets::unwrap_with_shared(wrap, shared.raw_secret_bytes()).unwrap()
+}
+
+#[test]
+fn revoking_rotates_k_and_a_revoked_device_with_old_wraps_opens_nothing_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let tablet = Device::new("dev_tablet_00001");
+    let vault = vault_in(dir.path(), hold.clone());
+    let code = vault.set_up(&[phone.key(), tablet.key()]).unwrap();
+    let mail = seal_things(&vault, dir.path());
+    let k1 = vault.key().unwrap();
+    // The thief's copy, taken before the revoke.
+    let old_wraps = WrapFile::load(dir.path()).unwrap();
+    assert_eq!(offline_k(&phone, &old_wraps).bytes(), k1.bytes(), "the old copy did open the old K");
+
+    vault.revoke(&phone.id, &[phone.key(), tablet.key()]).unwrap();
+    let k2 = vault.key().expect("still unlocked");
+    assert_ne!(k2.bytes(), k1.bytes(), "a new K");
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 1, recovery_code: true });
+    assert_opens(&vault, dir.path(), &mail);
+    vault.set_credential("smtp:alice@mail.example", Some("n3w")).unwrap();
+
+    // The old K opens none of the files as they are now.
+    assert!(Vault::open_credentials_at(&dir.path().join("secrets/credentials.json"), &k1).is_err(), "credentials");
+    assert!(crate::services::mail_crypt::unlock_with_device_key(&dir.path().join("mail"), &k1).is_err(), "the mail key file");
+    let now = WrapFile::load(dir.path()).unwrap();
+    assert!(now.device(&phone.id).is_none(), "the revoked device has no wrap");
+    assert!(secrets::rewrap_recovery(now.recovery.as_ref().unwrap(), &k1, &MasterKey::generate()).is_err(), "the recovery wrap's A is not under the old K");
+    let text = std::fs::read_to_string(WrapFile::path_in(dir.path())).unwrap();
+    assert!(!text.contains(&b64(k1.bytes())) && !text.contains(&b64(k2.bytes())));
+
+    // A reboot: the remaining device and the same recovery code open the new K.
+    hold.clear().unwrap();
+    assert_eq!(vault.start_unlock(ORIGIN, &phone.id).unwrap(), UnlockStart::NoWrap);
+    release(&vault, &tablet).unwrap();
+    assert_eq!(vault.key().unwrap().bytes(), k2.bytes());
+    assert_eq!(vault.credential("smtp:alice@mail.example").as_deref(), Some("n3w"));
+    hold.clear().unwrap();
+    vault.recover(&code, &[tablet.key()]).unwrap();
+    assert_eq!(vault.key().unwrap().bytes(), k2.bytes(), "the recovery code follows the rotation");
+    assert_opens(&vault, dir.path(), &mail);
+}
+
+#[test]
+fn a_revoke_while_locked_drops_the_wrap_at_once_and_rotates_at_the_next_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let tablet = Device::new("dev_tablet_00001");
+    let vault = vault_in(dir.path(), hold.clone());
+    vault.set_up(&[phone.key(), tablet.key()]).unwrap();
+    let mail = seal_things(&vault, dir.path());
+    let k1 = vault.key().unwrap();
+    hold.clear().unwrap();
+
+    vault.revoke(&phone.id, &[tablet.key()]).unwrap();
+    let file = WrapFile::load(dir.path()).unwrap();
+    assert!(file.rotate && file.device(&phone.id).is_none(), "pending, and the wrap is gone now");
+    assert_eq!(vault.start_unlock(ORIGIN, &phone.id).unwrap(), UnlockStart::NoWrap, "it cannot unlock meanwhile");
+
+    release(&vault, &tablet).unwrap();
+    let k2 = vault.key().unwrap();
+    assert_ne!(k2.bytes(), k1.bytes(), "rotated on release, before anything read with the old K");
+    assert_opens(&vault, dir.path(), &mail);
+}
+
+/// A device revoked where no vault saw it (`--revoke-device` with the
+/// daemon stopped) loses its wrap there, and the next release rotates; a
+/// wrap of a device no longer enrolled is dropped on release too.
+#[test]
+fn an_offline_revoke_and_a_stale_wrap_rotate_at_the_next_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let tablet = Device::new("dev_tablet_00001");
+    let laptop = Device::new("dev_laptop_00001");
+    let vault = vault_in(dir.path(), hold.clone());
+    vault.set_up(&[phone.key(), tablet.key(), laptop.key()]).unwrap();
+    let mail = seal_things(&vault, dir.path());
+    let k1 = vault.key().unwrap();
+    hold.clear().unwrap();
+    revoke_offline(dir.path(), &phone.id).unwrap();
+    assert!(WrapFile::load(dir.path()).unwrap().rotate);
+    // The laptop was dropped from the device list some other way: its wrap
+    // is still there, but the release names only the tablet.
+    release(&vault, &tablet).unwrap();
+    assert_ne!(vault.key().unwrap().bytes(), k1.bytes());
+    let file = WrapFile::load(dir.path()).unwrap();
+    assert_eq!(file.devices.iter().map(|w| w.device_id.as_str()).collect::<Vec<_>>(), [tablet.id.as_str()]);
+    assert_opens(&vault, dir.path(), &mail);
+
+    // Unlocked at daemon start (the keyring kept K over a restart): a
+    // pending rotation runs in `resume`.
+    revoke_offline(dir.path(), &tablet.id).unwrap();
+    let k2 = vault.key().unwrap();
+    let restarted = vault_in(dir.path(), hold.clone());
+    restarted.resume(&[]);
+    assert_ne!(restarted.key().unwrap().bytes(), k2.bytes());
+    assert_eq!(restarted.status().wrapped_devices, 0);
+    assert_opens(&restarted, dir.path(), &mail);
+}
+
+/// The process dies at each step of a rotation; the next start settles it:
+/// whatever K a remaining device (or the hold) gives back opens everything,
+/// and the revoked device has no wrap.
+#[test]
+fn a_crash_at_any_step_of_a_rotation_loses_nothing() {
+    use rotation::Step;
+    for step in [Step::Journal, Step::Sealed, Step::Wraps, Step::Commit, Step::Moved, Step::Held] {
+        let dir = tempfile::tempdir().unwrap();
+        let hold = Arc::new(MemoryHold::default());
+        let phone = Device::new("dev_phone_000001");
+        let tablet = Device::new("dev_tablet_00001");
+        let vault = vault_in(dir.path(), hold.clone());
+        let code = vault.set_up(&[phone.key(), tablet.key()]).unwrap();
+        let mail = seal_things(&vault, dir.path());
+        let k1 = vault.key().unwrap();
+        // The revoke's first half (its own commit), then the rotation dies.
+        let mut file = WrapFile::load(dir.path()).unwrap();
+        file.revoke(&phone.id);
+        file.rotate = true;
+        file.save(dir.path()).unwrap();
+        assert_eq!(vault.rotate_inner(&k1, &[tablet.key()], Some(step)), Err(rotation::CRASHED.to_string()), "{step:?}");
+
+        // The restart.
+        let restarted = vault_in(dir.path(), hold.clone());
+        let committed = !matches!(step, Step::Journal | Step::Sealed | Step::Wraps);
+        match (step, restarted.key()) {
+            (Step::Held, Some(k)) => assert_ne!(k.bytes(), k1.bytes(), "{step:?}: the new K is held"),
+            (Step::Held, None) => panic!("{step:?}: the new K was held"),
+            (_, Some(k)) => {
+                assert!(!committed, "{step:?}: an old K must not stay held after the commit");
+                assert_eq!(k.bytes(), k1.bytes());
+            }
+            (_, None) => assert!(committed, "{step:?}: before the commit the old K stays in force"),
+        }
+        if restarted.key().is_none() {
+            release(&restarted, &tablet).unwrap();
+        } else {
+            restarted.resume(&[tablet.key()]);
+        }
+        assert_ne!(restarted.key().unwrap().bytes(), k1.bytes(), "{step:?}: rotated in the end");
+        assert_opens(&restarted, dir.path(), &mail);
+        assert_eq!(restarted.start_unlock(ORIGIN, &phone.id).unwrap(), UnlockStart::Unlocked);
+        hold.clear().unwrap();
+        assert_eq!(restarted.start_unlock(ORIGIN, &phone.id).unwrap(), UnlockStart::NoWrap, "{step:?}");
+        restarted.recover(&code, &[tablet.key()]).unwrap();
+        assert_opens(&restarted, dir.path(), &mail);
+    }
+}
+
+#[test]
+fn a_v1_recovery_wrap_is_upgraded_when_used_and_flagged_when_it_cannot_follow() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let vault = vault_in(dir.path(), hold.clone());
+    vault.set_up(&[phone.key()]).unwrap();
+    let k = vault.key().unwrap();
+    let code = secrets::recovery_code();
+    let mut file = WrapFile::load(dir.path()).unwrap();
+    file.recovery = Some(secrets::wrap_with_recovery_v1(&k, &code));
+    file.save(dir.path()).unwrap();
+    assert_eq!(vault.repin_offer(ORIGIN), Err("recovery_outdated".into()));
+    hold.clear().unwrap();
+    vault.recover(&code, &[phone.key()]).unwrap();
+    assert!(WrapFile::load(dir.path()).unwrap().recovery.unwrap().is_current(), "upgraded with the code at hand");
+    vault.repin_offer(ORIGIN).unwrap();
+
+    // A v1 wrap at rotation time cannot follow: no recovery code, said so.
+    let mut file = WrapFile::load(dir.path()).unwrap();
+    file.recovery = Some(secrets::wrap_with_recovery_v1(&k, &code));
+    file.save(dir.path()).unwrap();
+    vault.forget_devices().unwrap();
+    assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: false });
+    let fresh = vault.new_recovery_code().unwrap();
+    hold.clear().unwrap();
+    vault.recover(&fresh, &[]).unwrap();
+    assert!(vault.status().recovery_code);
+}
+
+// ── Re-pinning a lost identity key (user decision 2026-10-03) ──────────────
+
+#[test]
+fn a_lost_identity_key_is_re_pinned_only_with_the_recovery_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let vault = vault_in(dir.path(), hold.clone());
+    let code = vault.set_up(&[phone.key()]).unwrap();
+    let pinned = vault.identity_public().unwrap();
+    // The identity key is lost (a partial restore); a new one is made.
+    std::fs::remove_file(dir.path().join("secrets/identity.key")).unwrap();
+    hold.clear().unwrap();
+    let restarted = vault_in(dir.path(), hold.clone());
+    let offer = restarted.repin_offer(ORIGIN).unwrap();
+    assert_ne!(offer.identity, pinned);
+    // The phone's exchange fails against the pinned key ...
+    let start = restarted.start_unlock(ORIGIN, &phone.id).unwrap();
+    let UnlockStart::Locked { payload, signature, .. } = &start else { panic!() };
+    let old = VerifyingKey::from(PublicKey::from_public_key_der(&unb64(&pinned).unwrap()).unwrap());
+    assert!(old.verify(payload.as_bytes(), &Signature::from_slice(&unb64(signature).unwrap()).unwrap()).is_err());
+    // ... and the recovery code re-pins the new one, locked or not.
+    let check = |code: &str, offer: &RepinOffer| {
+        secrets::check_repin(code, &offer.salt, &offer.ephemeral, &offer.nonce, &offer.sealed, &offer.auth_nonce, ORIGIN, &offer.identity, &offer.binding)
+    };
+    assert!(check(&code, &offer));
+    assert!(!check(&secrets::recovery_code(), &offer), "another code");
+    let swapped = RepinOffer { identity: pinned.clone(), ..offer.clone() };
+    assert!(!check(&code, &swapped), "the binding is for one identity");
+    // With the new pin the phone releases K again.
+    release(&restarted, &phone).unwrap();
+    assert!(restarted.key().is_some());
+    // Rotated K: the offer follows, the same code still re-pins.
+    let tablet = Device::new("dev_tablet_00001");
+    restarted.wrap_missing(&[phone.key(), tablet.key()]);
+    restarted.revoke(&tablet.id, &[phone.key()]).unwrap();
+    assert!(check(&code, &restarted.repin_offer(ORIGIN).unwrap()));
+}
+
+/// The vector `src/__tests__/mobile/MobileSecretsRelease.test.ts` checks
+/// `checkRepin` against: made by `print_a_repin_vector`. Its derivations
+/// name the brand slug (`secrets::context`), so a rename remakes it.
+#[test]
+fn the_repin_vector_checks() {
+    let v = &REPIN_VECTOR;
+    assert!(secrets::check_repin(v.code, v.salt, v.ephemeral, v.nonce, v.sealed, v.auth_nonce, ORIGIN, v.identity, v.binding));
+    assert!(!secrets::check_repin(v.code, v.salt, v.ephemeral, v.nonce, v.sealed, v.auth_nonce, ORIGIN, "AAAA", v.binding));
+}
+
+struct Vector {
+    code: &'static str,
+    salt: &'static str,
+    ephemeral: &'static str,
+    nonce: &'static str,
+    sealed: &'static str,
+    auth_nonce: &'static str,
+    identity: &'static str,
+    binding: &'static str,
+}
+
+const REPIN_VECTOR: Vector = Vector {
+    code: "8ef8-e89b-c049-e1a0-373c-4944-2858-41c0",
+    salt: "Y1NhEUVqetU8Ee2LPjHvHw",
+    ephemeral: "BKqQH8LgudJ_fBD56lEsYJdgMFzV0w_C0HtCFcHEHIA6KpWv59lA2SdS6U_GBtuwEgC_9YlyggmP1gtbMjktm50",
+    nonce: "LWrwX_Jrtxdv4NkD",
+    sealed: "gVCmwcvNbmSD-rvI_VQqyOZIC6BbL_WhTVLZJp4qviRmVYkOuyV8rMF-fZtnfj05",
+    auth_nonce: "FjrRrJmXuzIBw9ud",
+    identity: "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKkDURY8Syd9-UTEdLF0YhWAyoWJ34Iaf8hcJyIZne5Z8ERpICQjhw9039TemZ1DEY_mNAye8h1svmWfleHLNOw",
+    binding: "hZ_YVpo4uqHK94P-YZpujj64pDLzzPw5jfLubTaCt_U",
+};
+
+/// Prints a fresh vector (run by hand with `--ignored --nocapture`).
+#[test]
+#[ignore]
+fn print_a_repin_vector() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = vault_in(dir.path(), Arc::new(MemoryHold::default()));
+    let code = vault.set_up(&[]).unwrap();
+    let offer = vault.repin_offer(ORIGIN).unwrap();
+    println!("{} {}", code.as_str(), serde_json::to_string(&offer).unwrap());
 }
 
 /// Two first uses of the identity key at once (two devices enrolling) get

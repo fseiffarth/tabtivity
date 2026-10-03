@@ -1691,7 +1691,94 @@ async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> im
     };
     let enrolled = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys().iter().any(|k| k.id == device_id);
     let status = vault.status();
-    (StatusCode::OK, Json(json!({ "available": true, "setUp": status.set_up, "unlocked": status.unlocked, "enrolled": enrolled })))
+    // The identity a device compares with the one it pinned: a mismatch is
+    // the cue to re-pin with the recovery code, never to trust it silently.
+    let identity = if status.set_up { vault.identity_public().ok() } else { None };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "available": true,
+            "setUp": status.set_up,
+            "unlocked": status.unlocked,
+            "enrolled": enrolled,
+            "recoveryCode": status.recovery_code,
+            "identity": identity,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsChallengeBody {
+    action: String,
+}
+
+/// A nonce for a signed secrets action (set-up, a new recovery code).
+async fn secrets_challenge(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if crate::services::server::vault::vault().is_none() {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    }
+    let Ok(request) = serde_json::from_slice::<SecretsChallengeBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    match state.auth.lock().unwrap_or_else(PoisonError::into_inner).action_challenge(&device_id, &request.action) {
+        Ok((nonce, expires_at)) => (StatusCode::OK, Json(json!({ "nonce": nonce, "expiresAt": expires_at }))),
+        Err(code) if code == "rate_limited" => api_error(StatusCode::TOO_MANY_REQUESTS, &code),
+        Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct SignedActionBody {
+    #[serde(default)]
+    nonce: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+/// The pairing key's signature over an action nonce (user decision
+/// 2026-10-03): a session cookie alone is refused with `signature_required`.
+fn check_signed_action(state: &HostState, device_id: &str, action: &str, body: &[u8]) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let request = serde_json::from_slice::<SignedActionBody>(body).map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
+    let (Some(nonce), Some(signature)) = (request.nonce, request.signature) else {
+        return Err(api_error(StatusCode::FORBIDDEN, "signature_required"));
+    };
+    state
+        .auth
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .verify_action(device_id, action, &nonce, &signature)
+        .map_err(|code| api_error(StatusCode::FORBIDDEN, &code))
+}
+
+/// What a device needs to re-pin a changed identity key with its recovery
+/// code (`Vault::repin_offer`); the code itself never comes here.
+async fn secrets_repin(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    match vault.repin_offer(&state.config.origin) {
+        Ok(offer) => (StatusCode::OK, Json(serde_json::to_value(offer).unwrap_or_default())),
+        Err(code) if code == "not_set_up" || code == "recovery_outdated" => api_error(StatusCode::CONFLICT, &code),
+        Err(error) => {
+            eprintln!("secrets: re-pin offer: {error}");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "identity_unavailable")
+        }
+    }
 }
 
 async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
@@ -1734,7 +1821,8 @@ struct SecretsRecoverBody {
 }
 
 /// Mint K and answer its recovery code — the only time it is ever shown.
-async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+/// Signed by the device's pairing key ([`check_signed_action`]).
+async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
     let device_id = match authenticate(&headers, &state) {
         Ok(device_id) => device_id,
         Err(error) => return error.into_response(),
@@ -1745,6 +1833,9 @@ async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap) -> Re
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server").into_response();
     };
+    if let Err(error) = check_signed_action(&state, &device_id, "secrets-setup", &body) {
+        return error.into_response();
+    }
     let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
     match vault.set_up(&keys) {
         Ok(code) => {
@@ -1757,17 +1848,22 @@ async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap) -> Re
     }
 }
 
-/// A fresh recovery code while unlocked; the old one stops working.
-async fn secrets_new_recovery_code(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error.into_response();
-    }
+/// A fresh recovery code while unlocked; the old one stops working. Signed
+/// by the device's pairing key ([`check_signed_action`]).
+async fn secrets_new_recovery_code(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error.into_response(),
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server").into_response();
     };
+    if let Err(error) = check_signed_action(&state, &device_id, "secrets-recovery-code", &body) {
+        return error.into_response();
+    }
     match vault.new_recovery_code() {
         Ok(code) => {
             let mut response = Json(json!({ "code": code.as_str() })).into_response();
@@ -4708,6 +4804,8 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/secrets/enrol", post(secrets_enrol))
         .route("/api/v1/secrets/unlock", post(secrets_unlock_start))
         .route("/api/v1/secrets/unlock/finish", post(secrets_unlock_finish))
+        .route("/api/v1/secrets/challenge", post(secrets_challenge))
+        .route("/api/v1/secrets/repin", post(secrets_repin))
         .route("/api/v1/secrets/setup", post(secrets_setup))
         .route("/api/v1/secrets/recover", post(secrets_recover))
         .route("/api/v1/secrets/recovery-code", post(secrets_new_recovery_code))

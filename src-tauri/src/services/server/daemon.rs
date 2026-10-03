@@ -125,6 +125,10 @@ pub fn install_vault(state_dir: &std::path::Path) {
     #[cfg(not(target_os = "linux"))]
     let hold: std::sync::Arc<dyn vault::KeyHold> = std::sync::Arc::new(vault::MemoryHold::default());
     let vault = vault::install(Vault::new(state_dir.to_path_buf(), hold));
+    // K survived a restart in the keyring: a rotation a revoke left pending
+    // (locked at the time, or `--revoke-device` with the daemon stopped)
+    // runs now.
+    vault.resume(&crate::services::mobile_control::auth::read_secrets_device_keys(&state_dir.join("mobile-control")));
     let status = vault.status();
     eprintln!(
         "{SLUG}-serverd: secrets key {}",
@@ -210,7 +214,13 @@ pub fn revoke_device(state_dir: &std::path::Path, device_id: &str) -> Result<(),
     match runtime.block_on(admin::admin_call(&socket, &request)) {
         Ok(AdminResponse::Error { message }) => Err(message),
         Ok(_) => Ok(()),
-        Err(_) => AuthStore::open(&control_dir, String::new())?.revoke(device_id),
+        Err(_) => {
+            // No daemon, so no vault in this process: drop the device's wrap
+            // here and leave the rotation of the key to the next release
+            // (or the daemon's next start while the key is still held).
+            AuthStore::open(&control_dir, String::new())?.revoke(device_id)?;
+            super::vault::revoke_offline(state_dir, device_id)
+        }
     }
 }
 

@@ -1,7 +1,9 @@
 //! The device-released secrets key end to end on a daemon (hosted plan §6.8,
-//! TODO #2350): a device pairs, enrols its ECDH key, sets the key up; mail
-//! and saved passwords are sealed under it; a "reboot" (the hold flushed)
-//! locks both; the device's unlock exchange over HTTP opens them again.
+//! TODO #2350): a device pairs, enrols its ECDH key, sets the key up (signed
+//! by its pairing key, not the cookie alone); mail and saved passwords are
+//! sealed under it; a "reboot" (the hold flushed) locks both; the device's
+//! unlock exchange over HTTP opens them again; revoking a device rotates the
+//! key and the other device still opens everything.
 //!
 //! Its own test binary on purpose: it installs the process-wide vault, which
 //! would turn every other test of the library into a server's.
@@ -88,6 +90,57 @@ fn answer(device_id: &str, ecdh: &SecretKey, identity: &str, start: &Value) -> V
     json!({ "id": id, "transport": b64(&t_raw), "nonce": b64(&nonce), "sealed": b64(&sealed) })
 }
 
+/// Pair with a fresh invite and sign in, as the phone does: the pairing
+/// key, the device id, the session cookie.
+async fn pair_and_sign_in(socket: &std::path::Path, state_dir: &std::path::Path, code: &str) -> (SigningKey, String, String) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    auth::write_invite(&state_dir.join("mobile-control"), code, now + 600).unwrap();
+    let signing = SigningKey::random(&mut rand::rngs::OsRng);
+    let public_key = b64(signing.verifying_key().to_public_key_der().unwrap().as_bytes());
+    let (status, _, body) = raw(socket, "POST", "/api/v1/pair", None, Some(&json!({ "code": code, "device_name": "Device", "public_key": public_key }).to_string())).await;
+    assert_eq!(status, 201, "{body}");
+    let device_id = serde_json::from_str::<Value>(&body).unwrap()["device_id"].as_str().unwrap().to_string();
+    let (_, _, body) = raw(socket, "POST", "/api/v1/auth/challenge", None, Some(&json!({ "device_id": device_id }).to_string())).await;
+    let challenge: Value = serde_json::from_str(&body).unwrap();
+    let signature: Signature = signing.sign(challenge["payload"].as_str().unwrap().as_bytes());
+    let session = json!({ "device_id": device_id, "nonce": challenge["nonce"], "signature": b64(&signature.to_bytes()) }).to_string();
+    let (status, headers, body) = raw(socket, "POST", "/api/v1/auth/session", None, Some(&session)).await;
+    assert_eq!(status, 200, "{body}");
+    let cookie = headers.iter().find(|(k, _)| k == "set-cookie").unwrap().1.split(';').next().unwrap().to_string();
+    (signing, device_id, cookie)
+}
+
+/// Enrol an ECDH key (signed); the identity the daemon answers.
+async fn enrol(socket: &std::path::Path, cookie: &str, signing: &SigningKey, device_id: &str, ecdh: &SecretKey) -> String {
+    let ecdh_public = b64(ecdh.public_key().to_encoded_point(false).as_bytes());
+    let enrol_sig: Signature = signing.sign(vault::enrol_payload(ORIGIN, device_id, &ecdh_public).as_bytes());
+    let (status, _, body) = raw(socket, "POST", "/api/v1/secrets/enrol", Some(cookie), Some(&json!({ "ecdh_public_key": ecdh_public, "signature": b64(&enrol_sig.to_bytes()) }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    serde_json::from_str::<Value>(&body).unwrap()["identity"].as_str().unwrap().to_string()
+}
+
+/// A signed action body (set-up, a new recovery code), as `secretsCore.ts`.
+async fn signed(socket: &std::path::Path, cookie: &str, signing: &SigningKey, device_id: &str, action: &str) -> String {
+    let (status, _, body) = raw(socket, "POST", "/api/v1/secrets/challenge", Some(cookie), Some(&json!({ "action": action }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    let challenge: Value = serde_json::from_str(&body).unwrap();
+    let nonce = challenge["nonce"].as_str().unwrap();
+    let payload = Vault::action_payload(ORIGIN, device_id, action, nonce, challenge["expiresAt"].as_u64().unwrap());
+    let signature: Signature = signing.sign(payload.as_bytes());
+    json!({ "nonce": nonce, "signature": b64(&signature.to_bytes()) }).to_string()
+}
+
+/// Lock, then release through the device's unlock exchange over HTTP.
+async fn unlock(socket: &std::path::Path, cookie: &str, device_id: &str, ecdh: &SecretKey, identity: &str) -> (u16, String) {
+    let (status, _, body) = raw(socket, "POST", "/api/v1/secrets/unlock", Some(cookie), Some("{}")).await;
+    assert_eq!(status, 200, "{body}");
+    let start: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(start["state"], "locked", "{body}");
+    let finish = answer(device_id, ecdh, identity, &start);
+    let (status, _, body) = raw(socket, "POST", "/api/v1/secrets/unlock/finish", Some(cookie), Some(&finish.to_string())).await;
+    (status, body)
+}
+
 #[tokio::test]
 async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     let dir = tempfile::tempdir().unwrap();
@@ -129,7 +182,10 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
 
     let (status, _, body) = raw(&socket, "GET", "/api/v1/secrets", Some(&cookie), None).await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!({ "available": true, "setUp": false, "unlocked": false, "enrolled": false }));
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        json!({ "available": true, "setUp": false, "unlocked": false, "enrolled": false, "recoveryCode": false, "identity": null })
+    );
 
     // Enrol an ECDH key: the session alone is not enough.
     let ecdh = SecretKey::random(&mut rand::rngs::OsRng);
@@ -141,17 +197,49 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     assert_eq!(status, 200, "{body}");
     let identity = serde_json::from_str::<Value>(&body).unwrap()["identity"].as_str().unwrap().to_string();
 
-    // Set up: the recovery code, once; the device is wrapped.
-    let (status, headers, body) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some("{}")).await;
+    // Set up: the session cookie alone is refused (user decision
+    // 2026-10-03), so is a signature by another key and a replay.
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some("{}")).await;
+    assert_eq!((status, body.contains("signature_required")), (403, true), "{body}");
+    let stranger = SigningKey::random(&mut rand::rngs::OsRng);
+    let forged = signed(&socket, &cookie, &stranger, &device_id, "secrets-setup").await;
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some(&forged)).await;
+    assert_eq!((status, body.contains("invalid_signature")), (403, true), "{body}");
+    assert!(!vault.status().set_up);
+    // Signed by the pairing key: the recovery code, once; the device is wrapped.
+    let setup = signed(&socket, &cookie, &signing, &device_id, "secrets-setup").await;
+    let (status, headers, body) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some(&setup)).await;
     assert_eq!(status, 200, "{body}");
     assert!(headers.iter().any(|(k, v)| k == "cache-control" && v == "no-store"));
-    let code = serde_json::from_str::<Value>(&body).unwrap()["code"].as_str().unwrap().to_string();
-    let (status, _, _) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some("{}")).await;
+    let first_code = serde_json::from_str::<Value>(&body).unwrap()["code"].as_str().unwrap().to_string();
+    let (status, _, _) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some(&setup)).await;
+    assert_eq!(status, 403, "a spent nonce");
+    let again = signed(&socket, &cookie, &signing, &device_id, "secrets-setup").await;
+    let (status, _, _) = raw(&socket, "POST", "/api/v1/secrets/setup", Some(&cookie), Some(&again)).await;
     assert_eq!(status, 409, "never a second key");
     assert_eq!(vault.status().wrapped_devices, 1);
+    let (status, _, body) = raw(&socket, "GET", "/api/v1/secrets", Some(&cookie), None).await;
+    assert_eq!(status, 200);
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["identity"].as_str(), Some(identity.as_str()), "the state names the identity a device compares");
+
+    // A new recovery code: signed too.
+    let (status, _, _) = raw(&socket, "POST", "/api/v1/secrets/recovery-code", Some(&cookie), Some("{}")).await;
+    assert_eq!(status, 403);
+    let body = signed(&socket, &cookie, &signing, &device_id, "secrets-recovery-code").await;
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/recovery-code", Some(&cookie), Some(&body)).await;
+    assert_eq!(status, 200, "{body}");
+    let code = serde_json::from_str::<Value>(&body).unwrap()["code"].as_str().unwrap().to_string();
+
+    // The re-pin offer checks with the code, from the public fields only.
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/repin", Some(&cookie), Some("{}")).await;
+    assert_eq!(status, 200, "{body}");
+    let offer: Value = serde_json::from_str(&body).unwrap();
+    let field = |name: &str| offer[name].as_str().unwrap().to_string();
+    assert_eq!(field("identity"), identity);
+    assert!(app_lib::services::server::secrets::check_repin(&code, &field("salt"), &field("ephemeral"), &field("nonce"), &field("sealed"), &field("authNonce"), ORIGIN, &identity, &field("binding")));
 
     // Mail and a saved password, sealed under it.
-    let mail_dir = state_dir.join("mail-test");
+    let mail_dir = state_dir.join("mail");
     let keys = mail_crypt::enable_default(&mail_dir).expect("device mode on a server");
     assert_eq!(mail_crypt::read_key_file(&mail_dir).unwrap().unwrap().mode, mail_crypt::UnlockMode::Device);
     remote_credentials::set("imap:alice@mail.example", Some("hunter2")).unwrap();
@@ -207,4 +295,39 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/unlock/finish", Some(&cookie), Some(&finish.to_string())).await;
     assert_eq!(status, 200, "the new key releases K: {body}");
     assert!(hold.get().unwrap().is_some());
+
+    // A second device (a tablet) pairs and enrols while unlocked: wrapped.
+    let (tablet_signing, tablet_id, tablet_cookie) = pair_and_sign_in(&socket, &state_dir, "87654321").await;
+    let tablet_ecdh = SecretKey::random(&mut rand::rngs::OsRng);
+    enrol(&socket, &tablet_cookie, &tablet_signing, &tablet_id, &tablet_ecdh).await;
+    assert_eq!(vault.status().wrapped_devices, 2);
+
+    // Revoking the phone rotates K: mail and the saved password still open
+    // under the new one, and the phone's old wrap is no use.
+    let k_before = hold.get().unwrap().unwrap();
+    let old_wraps = std::fs::read_to_string(state_dir.join("secrets/wraps.json")).unwrap();
+    let (revoke_dir, revoke_id) = (state_dir.clone(), device_id.clone());
+    tokio::task::spawn_blocking(move || daemon::revoke_device(&revoke_dir, &revoke_id)).await.unwrap().unwrap();
+    let k_after = hold.get().unwrap().expect("still unlocked");
+    assert_ne!(k_after.bytes(), k_before.bytes(), "a new K");
+    assert!(old_wraps.contains(&device_id) && !std::fs::read_to_string(state_dir.join("secrets/wraps.json")).unwrap().contains(&device_id));
+    match mail_crypt::unlock(&mail_dir) {
+        Unlock::Ready(opened) => assert_eq!(opened.field.as_bytes(), keys.field.as_bytes()),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(remote_credentials::get("imap:alice@mail.example").as_deref(), Some("hunter2"));
+    let (status, _, _) = raw(&socket, "GET", "/api/v1/secrets", Some(&cookie), None).await;
+    assert_eq!(status, 401, "the phone's session went with it");
+    // A reboot: the tablet releases the new K; the recovery code still fits.
+    hold.clear().unwrap();
+    let (status, body) = unlock(&socket, &tablet_cookie, &tablet_id, &tablet_ecdh, &identity).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(hold.get().unwrap().unwrap().bytes(), k_after.bytes());
+    assert_eq!(remote_credentials::get("imap:alice@mail.example").as_deref(), Some("hunter2"));
+    hold.clear().unwrap();
+    let (status, _, _) = raw(&socket, "POST", "/api/v1/secrets/recover", Some(&tablet_cookie), Some(&json!({ "code": first_code }).to_string())).await;
+    assert_eq!(status, 400, "the code the new one replaced");
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/recover", Some(&tablet_cookie), Some(&json!({ "code": code }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(hold.get().unwrap().unwrap().bytes(), k_after.bytes());
 }

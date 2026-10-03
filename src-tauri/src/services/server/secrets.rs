@@ -17,9 +17,15 @@
 //!   the shared value's `raw_secret_bytes()`) and hands it back; the daemon runs
 //!   the same HKDF and opens the wrap. A disk image holds wraps only; a
 //!   stolen device key holds no wrap.
-//! * **Recovery code:** 128 random bits shown once as eight groups; K is
-//!   sealed under `HKDF(code)` (the code is a key, not a password, so no
-//!   slow KDF is needed).
+//! * **Recovery code:** 128 random bits shown once as eight groups (the code
+//!   is a key, not a password, so no slow KDF is needed). From it and a salt
+//!   come a P-256 key `r` (public half `R` kept in the wrap) and an auth key
+//!   `A`. K is wrapped **to `R`** like a device wrap, so a rotation of K
+//!   (revoking a device) re-wraps the new K for the same code without
+//!   knowing it; `A` is kept sealed under K and is what lets a device check
+//!   a re-pinned identity key ([`identity_binding`]). A v1 wrap (K sealed
+//!   under `HKDF(code)`, from before the rotation) still opens; it cannot
+//!   follow a rotation and is upgraded the next time the code is used.
 
 use std::path::{Path, PathBuf};
 
@@ -38,6 +44,19 @@ use zeroize::Zeroizing;
 /// Domain separation for every derived key here (and the vault's).
 pub(crate) fn context(purpose: &str) -> String {
     format!("{}-secrets-v1:{purpose}", crate::brand::SLUG)
+}
+
+/// A 32-byte key derived from K for one purpose (`"mail-kek"`,
+/// `"credentials"`, `"check"`, `"recovery-auth"`).
+pub fn subkey(key: &MasterKey, purpose: &str) -> Zeroizing<[u8; 32]> {
+    derive(b"", key.bytes(), &context(purpose))
+}
+
+/// A public fingerprint of K, kept in `wraps.json`: tells which K a held key
+/// is (a crash between a rotation's commit and the keyring write leaves the
+/// old one held) without saying anything about it.
+pub fn key_check(key: &MasterKey) -> String {
+    b64(&subkey(key, "check")[..16])
 }
 
 /// K. Zeroed on drop.
@@ -87,12 +106,35 @@ pub struct DeviceWrap {
     pub sealed: String,
 }
 
-/// K sealed under the recovery code.
+/// K sealed for the recovery code.
+///
+/// v2 (every wrap written now): `salt` derives `r`/`R` and `A` from the code;
+/// K is sealed under `HKDF(salt = X, ECDH(X, R), "recovery")`; `auth` is `A`
+/// sealed under `subkey(K, "recovery-auth")`. v1 (no `public`): K sealed
+/// under `HKDF(salt, code, "recovery")`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryWrap {
     pub salt: String,
     pub nonce: String,
     pub sealed: String,
+    /// `R`, SEC1 uncompressed, base64url.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public: Option<String>,
+    /// X's public key, SEC1 uncompressed, base64url.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_nonce: Option<String>,
+    /// `A` sealed under `subkey(K, "recovery-auth")` (AAD `recovery-auth`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+}
+
+impl RecoveryWrap {
+    /// Can follow a rotation of K (and back a re-pin): a v2 wrap.
+    pub fn is_current(&self) -> bool {
+        self.public.is_some() && self.ephemeral.is_some() && self.auth_nonce.is_some() && self.auth.is_some()
+    }
 }
 
 /// `<state_dir>/secrets/wraps.json` (`0600`): every wrap, nothing in the clear.
@@ -102,6 +144,15 @@ pub struct WrapFile {
     pub devices: Vec<DeviceWrap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<RecoveryWrap>,
+    /// Which K this file wraps (a fresh id per K; absent before rotation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// [`key_check`] of that K.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    /// A device was revoked while K was locked: rotate at the next release.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rotate: bool,
 }
 
 impl WrapFile {
@@ -119,11 +170,21 @@ impl WrapFile {
     }
 
     pub fn save(&self, state_dir: &Path) -> Result<(), String> {
-        let path = Self::path_in(state_dir);
+        self.save_to(&Self::path_in(state_dir))
+    }
+
+    /// Write to `path` (a rotation's `wraps.json.next`): atomic, `0600`.
+    pub fn save_to(&self, path: &Path) -> Result<(), String> {
         if let Some(dir) = path.parent() {
             crate::services::mobile_control::store::ensure_private_dir(dir)?;
         }
-        crate::services::mobile_control::store::write_json_atomic(&path, self, 0o600)
+        crate::services::mobile_control::store::write_json_atomic(path, self, 0o600)
+    }
+
+    /// Whether a K exists: a recovery wrap, or (after a rotation that could
+    /// not carry a v1 recovery wrap along) a key check.
+    pub fn is_set_up(&self) -> bool {
+        self.recovery.is_some() || self.check.is_some()
     }
 
     /// Add or replace a device's wrap.
@@ -166,14 +227,17 @@ fn seal(key: &[u8; 32], aad: &[u8], plain: &[u8]) -> (String, String) {
     (b64(&nonce), b64(&sealed))
 }
 
-fn open(key: &[u8; 32], aad: &[u8], nonce: &str, sealed: &str) -> Result<MasterKey, String> {
+fn open_bytes(key: &[u8; 32], aad: &[u8], nonce: &str, sealed: &str) -> Result<Zeroizing<Vec<u8>>, String> {
     let nonce = unb64(nonce)?;
     if nonce.len() != 12 {
         return Err("bad nonce".into());
     }
     let cipher = Aes256Gcm::new_from_slice(key).expect("32-byte key");
-    let plain = Zeroizing::new(cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &unb64(sealed)?, aad }).map_err(|_| "the wrap does not open with this key".to_string())?);
-    MasterKey::from_slice(&plain)
+    Ok(Zeroizing::new(cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &unb64(sealed)?, aad }).map_err(|_| "the wrap does not open with this key".to_string())?))
+}
+
+fn open(key: &[u8; 32], aad: &[u8], nonce: &str, sealed: &str) -> Result<MasterKey, String> {
+    MasterKey::from_slice(&open_bytes(key, aad, nonce, sealed)?)
 }
 
 /// A device's public ECDH key as the browser exports it (`raw`, SEC1
@@ -226,19 +290,127 @@ fn normalize_code(code: &str) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(Zeroizing::new(hex.into_bytes()))
 }
 
+/// The code's P-256 key `r`: `HKDF(salt, code, "recovery-scalar")`, the
+/// first of `…`, `…1`, `…2` that is a valid scalar (all but 2⁻³² of codes
+/// take the first). `mobile-web/src/secretsCore.ts` derives the same.
+fn recovery_scalar(code: &[u8], salt: &[u8]) -> Result<p256::SecretKey, String> {
+    for round in 0..8u8 {
+        let info = if round == 0 { context("recovery-scalar") } else { format!("{}{round}", context("recovery-scalar")) };
+        let bytes = derive(salt, code, &info);
+        if let Ok(key) = p256::SecretKey::from_bytes(p256::FieldBytes::from_slice(bytes.as_ref())) {
+            return Ok(key);
+        }
+    }
+    Err("no recovery key for this code".into())
+}
+
+/// The code's auth key `A`.
+fn recovery_auth_key(code: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
+    derive(salt, code, &context("recovery-auth-key"))
+}
+
+/// Seal `key` to `R`, and `auth` (`A`) under `key`.
+fn seal_recovery(key: &MasterKey, salt: &[u8], public: &PublicKey, auth: &[u8; 32]) -> RecoveryWrap {
+    let x = Ephemeral::random(&mut rand::rngs::OsRng);
+    let x_public = x.public_key().to_encoded_point(false);
+    let shared = x.diffie_hellman(public);
+    let kek = derive(x_public.as_bytes(), shared.raw_secret_bytes(), &context("recovery"));
+    let (nonce, sealed) = seal(&kek, b"recovery", key.bytes());
+    let (auth_nonce, auth) = seal(&subkey(key, "recovery-auth"), b"recovery-auth", auth);
+    RecoveryWrap {
+        salt: b64(salt),
+        nonce,
+        sealed,
+        public: Some(b64(public.to_encoded_point(false).as_bytes())),
+        ephemeral: Some(b64(x_public.as_bytes())),
+        auth_nonce: Some(auth_nonce),
+        auth: Some(auth),
+    }
+}
+
 pub fn wrap_with_recovery(key: &MasterKey, code: &str) -> Result<RecoveryWrap, String> {
     let code = normalize_code(code)?;
     let mut salt = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut salt);
-    let kek = derive(&salt, &code, &context("recovery"));
-    let (nonce, sealed) = seal(&kek, b"recovery", key.bytes());
-    Ok(RecoveryWrap { salt: b64(&salt), nonce, sealed })
+    let r = recovery_scalar(&code, &salt)?;
+    Ok(seal_recovery(key, &salt, &r.public_key(), &recovery_auth_key(&code, &salt)))
+}
+
+/// The same code's wrap for a new K (a rotation): needs the old K (to open
+/// `A`), never the code. A v1 wrap cannot follow.
+pub fn rewrap_recovery(wrap: &RecoveryWrap, old: &MasterKey, new: &MasterKey) -> Result<RecoveryWrap, String> {
+    let (Some(public), Some(auth_nonce), Some(auth)) = (&wrap.public, &wrap.auth_nonce, &wrap.auth) else {
+        return Err("a v1 recovery wrap cannot follow a new key".into());
+    };
+    let public = PublicKey::from_sec1_bytes(&unb64(public)?).map_err(|_| "the recovery wrap is corrupt".to_string())?;
+    let a = open_bytes(&subkey(old, "recovery-auth"), b"recovery-auth", auth_nonce, auth)?;
+    let a: &[u8; 32] = a.as_slice().try_into().map_err(|_| "the recovery wrap is corrupt".to_string())?;
+    Ok(seal_recovery(new, &unb64(&wrap.salt)?, &public, a))
 }
 
 pub fn unwrap_with_recovery(wrap: &RecoveryWrap, code: &str) -> Result<MasterKey, String> {
     let code = normalize_code(code)?;
-    let kek = derive(&unb64(&wrap.salt)?, &code, &context("recovery"));
+    let salt = unb64(&wrap.salt)?;
+    let Some(ephemeral) = &wrap.ephemeral else {
+        // v1.
+        let kek = derive(&salt, &code, &context("recovery"));
+        return open(&kek, b"recovery", &wrap.nonce, &wrap.sealed);
+    };
+    let r = recovery_scalar(&code, &salt)?;
+    let x = PublicKey::from_sec1_bytes(&unb64(ephemeral)?).map_err(|_| "the recovery wrap is corrupt".to_string())?;
+    let shared = p256::ecdh::diffie_hellman(r.to_nonzero_scalar(), x.as_affine());
+    let kek = derive(&unb64(ephemeral)?, shared.raw_secret_bytes(), &context("recovery"));
     open(&kek, b"recovery", &wrap.nonce, &wrap.sealed)
+}
+
+/// What a device checks before it re-pins a changed identity key (user
+/// decision 2026-10-03): `HKDF(ikm = the sealed A, info = context("identity")
+/// ‖ origin ‖ identity)`. The daemon computes it from its `wraps.json`
+/// without K; a device computes the sealed A itself from the recovery code
+/// (→ `r` → K, and `A`) and the wrap's public fields. Someone who has
+/// neither the code nor the daemon's `wraps.json` (a gateway in the middle)
+/// cannot make one for a key of its own.
+pub fn identity_binding(sealed_auth: &[u8], origin: &str, identity: &str) -> String {
+    b64(derive(b"", sealed_auth, &format!("{}\n{origin}\n{identity}", context("identity"))).as_ref())
+}
+
+/// The device's side of a re-pin, as `mobile-web/src/secretsCore.ts`
+/// `checkRepin` does it in WebCrypto: from the code and the offer's public
+/// fields, K (through `r`) and A, then the sealed A as the daemon holds it
+/// (AES-GCM is deterministic given key and nonce), then the binding. True
+/// only if `binding` matches for `identity`. The daemon never runs this; the
+/// tests and the shared vector do.
+#[allow(clippy::too_many_arguments)]
+pub fn check_repin(code: &str, salt: &str, ephemeral: &str, nonce: &str, sealed: &str, auth_nonce: &str, origin: &str, identity: &str, binding: &str) -> bool {
+    let wrap = RecoveryWrap {
+        salt: salt.into(),
+        nonce: nonce.into(),
+        sealed: sealed.into(),
+        public: None,
+        ephemeral: Some(ephemeral.into()),
+        auth_nonce: None,
+        auth: None,
+    };
+    let Ok(k) = unwrap_with_recovery(&wrap, code) else { return false };
+    let (Ok(code), Ok(salt), Ok(auth_nonce)) = (normalize_code(code), unb64(salt), unb64(auth_nonce)) else { return false };
+    if auth_nonce.len() != 12 {
+        return false;
+    }
+    let a = recovery_auth_key(&code, &salt);
+    let cipher = Aes256Gcm::new_from_slice(subkey(&k, "recovery-auth").as_ref()).expect("32-byte key");
+    let Ok(sealed_auth) = cipher.encrypt(Nonce::from_slice(&auth_nonce), Payload { msg: a.as_ref(), aad: b"recovery-auth" }) else { return false };
+    identity_binding(&sealed_auth, origin, identity) == binding
+}
+
+/// A v1 recovery wrap (K under `HKDF(salt, code)`), as builds before the
+/// rotation wrote it — for the upgrade tests.
+#[cfg(test)]
+pub(crate) fn wrap_with_recovery_v1(key: &MasterKey, code: &str) -> RecoveryWrap {
+    let code = normalize_code(code).expect("a code");
+    let salt = [3u8; 16];
+    let kek = derive(&salt, &code, &context("recovery"));
+    let (nonce, sealed) = seal(&kek, b"recovery", key.bytes());
+    RecoveryWrap { salt: b64(&salt), nonce, sealed, public: None, ephemeral: None, auth_nonce: None, auth: None }
 }
 
 /// K in the kernel's per-user persistent keyring (`KEYCTL_GET_PERSISTENT`):
@@ -393,6 +565,50 @@ mod tests {
         assert_eq!(back, file);
         assert!(back.revoke("dev_phone_0001") && back.device("dev_phone_0001").is_none());
         assert!(!back.revoke("dev_phone_0001"));
+    }
+
+    #[test]
+    fn the_recovery_code_follows_a_new_key_without_being_known() {
+        let k1 = MasterKey::generate();
+        let code = recovery_code();
+        let wrap = wrap_with_recovery(&k1, &code).unwrap();
+        assert!(wrap.is_current());
+        let k2 = MasterKey::generate();
+        let next = rewrap_recovery(&wrap, &k1, &k2).unwrap();
+        assert_eq!(next.public, wrap.public, "the same code key R");
+        assert_eq!(next.salt, wrap.salt);
+        assert_eq!(unwrap_with_recovery(&next, &code).unwrap().bytes(), k2.bytes(), "the same code opens the new K");
+        assert!(rewrap_recovery(&wrap, &k2, &k1).is_err(), "only the K it was sealed under re-wraps it");
+        assert!(unwrap_with_recovery(&next, &recovery_code()).is_err());
+        // v1 still opens; it cannot follow a rotation.
+        let v1 = wrap_with_recovery_v1(&k1, &code);
+        assert!(!v1.is_current());
+        assert_eq!(unwrap_with_recovery(&v1, &code).unwrap().bytes(), k1.bytes());
+        assert!(rewrap_recovery(&v1, &k1, &k2).is_err());
+    }
+
+    #[test]
+    fn only_the_code_and_the_daemons_wraps_make_an_identity_binding() {
+        let k = MasterKey::generate();
+        let code = recovery_code();
+        let wrap = wrap_with_recovery(&k, &code).unwrap();
+        let origin = "https://desk.example.ts.net";
+        let binding = identity_binding(&unb64(wrap.auth.as_ref().unwrap()).unwrap(), origin, "NEW_IDENTITY");
+        let check = |code: &str, identity: &str, binding: &str| {
+            check_repin(code, &wrap.salt, wrap.ephemeral.as_ref().unwrap(), &wrap.nonce, &wrap.sealed, wrap.auth_nonce.as_ref().unwrap(), origin, identity, binding)
+        };
+        assert!(check(&code, "NEW_IDENTITY", &binding));
+        assert!(!check(&recovery_code(), "NEW_IDENTITY", &binding), "another code");
+        assert!(!check(&code, "GATEWAY_IDENTITY", &binding), "the binding names one identity");
+        assert!(!check_repin(&code, &wrap.salt, wrap.ephemeral.as_ref().unwrap(), &wrap.nonce, &wrap.sealed, wrap.auth_nonce.as_ref().unwrap(), "https://other.example", "NEW_IDENTITY", &binding));
+        // Someone in the middle wraps a key of its own to R (public) and
+        // binds its identity: without A it cannot make the sealed A the
+        // device recomputes, so the binding fails.
+        let evil = MasterKey::generate();
+        let r = PublicKey::from_sec1_bytes(&unb64(wrap.public.as_ref().unwrap()).unwrap()).unwrap();
+        let forged = seal_recovery(&evil, &unb64(&wrap.salt).unwrap(), &r, &[9u8; 32]);
+        let forged_binding = identity_binding(&unb64(forged.auth.as_ref().unwrap()).unwrap(), origin, "GATEWAY_IDENTITY");
+        assert!(!check_repin(&code, &forged.salt, forged.ephemeral.as_ref().unwrap(), &forged.nonce, &forged.sealed, forged.auth_nonce.as_ref().unwrap(), origin, "GATEWAY_IDENTITY", &forged_binding));
     }
 
     /// The keyring round trip where the kernel lets this process use it. In

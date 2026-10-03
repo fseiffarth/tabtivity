@@ -133,6 +133,9 @@ pub fn read_secrets_device_keys(control_dir: &Path) -> Vec<crate::services::serv
     store::read_json::<DeviceFile>(&control_dir.join("devices.json")).map(|f| device_keys_of(&f)).unwrap_or_default()
 }
 
+/// The actions that need a pairing-key signature on top of the session.
+pub const SIGNED_ACTIONS: [&str; 2] = ["secrets-setup", "secrets-recovery-code"];
+
 /// The invite file's name under the control dir.
 pub const INVITE_FILE: &str = "invite.json";
 /// How long an invite may be redeemed.
@@ -199,6 +202,11 @@ pub struct AuthStore {
     devices: DeviceFile,
     pairing: Option<PairCode>,
     challenges: HashMap<String, Challenge>,
+    /// Single-use nonces for an action that needs the pairing key's
+    /// signature on top of the session (the secrets key's set-up and a new
+    /// recovery code). Apart from `challenges`, so one can never be spent
+    /// as the other.
+    action_challenges: HashMap<String, Challenge>,
     sessions: HashMap<String, Session>,
     tickets: HashMap<String, OpenTicket>,
     attempts: HashMap<String, VecDeque<u64>>,
@@ -256,6 +264,7 @@ impl AuthStore {
             devices,
             pairing: None,
             challenges: HashMap::new(),
+            action_challenges: HashMap::new(),
             sessions: HashMap::new(),
             tickets: HashMap::new(),
             attempts: HashMap::new(),
@@ -271,6 +280,7 @@ impl AuthStore {
     /// exact entry is presented again, so an abandoned login leaked one forever.
     fn sweep_expired(&mut self, t: u64) {
         self.challenges.retain(|_, c| c.expires_at >= t);
+        self.action_challenges.retain(|_, c| c.expires_at >= t);
         self.sessions.retain(|_, s| s.expires_at >= t);
         self.tickets.retain(|_, x| x.expires_at >= t);
     }
@@ -589,11 +599,53 @@ impl AuthStore {
         device.ecdh_public_key = Some(ecdh.to_string());
         if changed {
             if let Some(vault) = crate::services::server::vault::vault() {
-                vault.revoke(device_id);
+                vault.drop_wrap(device_id);
             }
         }
         self.save_devices()?;
         self.audit("secrets_enrolled", Some(device_id));
+        Ok(())
+    }
+
+    /// A nonce for `action` (user decision 2026-10-03: the secrets key's
+    /// set-up and a new recovery code need the pairing key, not only the
+    /// session). The device signs [`Vault::action_payload`] over it, built
+    /// on its own side from these fields, never a text the server sends.
+    ///
+    /// [`Vault::action_payload`]: crate::services::server::vault::Vault::action_payload
+    pub fn action_challenge(&mut self, device_id: &str, action: &str) -> Result<(String, u64), String> {
+        if !SIGNED_ACTIONS.contains(&action) {
+            return Err("unknown_action".into());
+        }
+        if !self.devices.devices.iter().any(|d| d.id == device_id) {
+            return Err("unknown_device".into());
+        }
+        let t = now();
+        self.action_challenges.retain(|_, c| c.expires_at >= t);
+        if self.action_challenges.values().filter(|c| c.device_id == device_id).count() >= 4 || self.action_challenges.len() >= 256 {
+            return Err("rate_limited".into());
+        }
+        let nonce = random_id::<24>()?;
+        let expires_at = t + CHALLENGE_TTL;
+        let payload = crate::services::server::vault::Vault::action_payload(&self.origin, device_id, action, &nonce, expires_at);
+        self.action_challenges.insert(nonce.clone(), Challenge { device_id: device_id.into(), payload, expires_at });
+        Ok((nonce, expires_at))
+    }
+
+    /// Spend an action nonce: the signature must be the device's pairing key
+    /// over the payload made for this device and this action.
+    pub fn verify_action(&mut self, device_id: &str, action: &str, nonce: &str, signature: &str) -> Result<(), String> {
+        let challenge = self.action_challenges.remove(nonce).ok_or("invalid_challenge")?;
+        if challenge.device_id != device_id || challenge.expires_at < now() || !challenge.payload.contains(&format!("\n{action}\n{nonce}\n")) {
+            return Err("invalid_challenge".into());
+        }
+        let device = self.devices.devices.iter().find(|d| d.id == device_id).ok_or("unknown_device")?;
+        let der = Base64UrlUnpadded::decode_vec(&device.public_key).map_err(|_| "invalid_public_key")?;
+        let verifying = VerifyingKey::from(PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?);
+        let sig = Base64UrlUnpadded::decode_vec(signature).map_err(|_| "invalid_signature")?;
+        let sig = Signature::from_slice(&sig).map_err(|_| "invalid_signature")?;
+        verifying.verify(challenge.payload.as_bytes(), &sig).map_err(|_| "invalid_signature")?;
+        self.audit(action, Some(device_id));
         Ok(())
     }
 
@@ -608,12 +660,17 @@ impl AuthStore {
         if before == self.devices.devices.len() {
             return Err("unknown device".into());
         }
-        // §6.8: a revoked device's wrap of the secrets key goes with it.
+        // §6.8: a revoked device's wrap of the secrets key goes with it, and
+        // the key is rotated (now if unlocked, else at the next release), so
+        // the device and an old copy of the wraps open nothing new.
         if let Some(vault) = crate::services::server::vault::vault() {
-            vault.revoke(device_id);
+            if let Err(error) = vault.revoke(device_id, &self.secrets_device_keys()) {
+                eprintln!("secrets: revoking {device_id}: {error} (the rotation is retried at the next release)");
+            }
         }
         self.sessions.retain(|_, s| s.device_id != device_id);
         self.challenges.retain(|_, c| c.device_id != device_id);
+        self.action_challenges.retain(|_, c| c.device_id != device_id);
         self.save_devices()?;
         self.push.forget_device(device_id)?;
         self.audit("revoked", Some(device_id));
@@ -622,11 +679,14 @@ impl AuthStore {
 
     pub fn forget_all(&mut self) -> Result<(), String> {
         if let Some(vault) = crate::services::server::vault::vault() {
-            vault.forget_devices();
+            if let Err(error) = vault.forget_devices() {
+                eprintln!("secrets: forgetting every device: {error} (the rotation is retried at the next release)");
+            }
         }
         self.devices.devices.clear();
         self.sessions.clear();
         self.challenges.clear();
+        self.action_challenges.clear();
         self.pairing = None;
         self.save_devices()?;
         self.push.forget_all()?;
@@ -758,6 +818,52 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
         pkcs8::EncodePublicKey,
     };
+
+    /// User decision 2026-10-03: setting the secrets key up and a new
+    /// recovery code need the pairing key's signature over a single-use
+    /// nonce made for that device and that action.
+    #[test]
+    fn signed_actions_need_the_pairing_key_and_are_single_use() {
+        let dir = tempfile::tempdir().expect("control dir");
+        let origin = "https://desk.example.ts.net";
+        let mut auth = AuthStore::open(dir.path(), origin.into()).expect("auth store");
+        let signing = SigningKey::random(&mut OsRng);
+        let public = Base64UrlUnpadded::encode_string(signing.verifying_key().to_public_key_der().expect("SPKI").as_bytes());
+        let (code, _) = auth.create_pairing_code().expect("pairing code");
+        let device = auth.pair(&code, "Phone", &public).expect("paired");
+        let sign = |key: &SigningKey, action: &str, nonce: &str, expires_at: u64| {
+            let payload = crate::services::server::vault::Vault::action_payload(origin, &device, action, nonce, expires_at);
+            let signature: Signature = key.sign(payload.as_bytes());
+            Base64UrlUnpadded::encode_string(&signature.to_bytes())
+        };
+        assert_eq!(auth.action_challenge(&device, "login"), Err("unknown_action".into()));
+        assert_eq!(auth.action_challenge("dev_nobody", "secrets-setup"), Err("unknown_device".into()));
+
+        let (nonce, expires_at) = auth.action_challenge(&device, "secrets-setup").expect("nonce");
+        let stranger = SigningKey::random(&mut OsRng);
+        assert_eq!(auth.verify_action(&device, "secrets-setup", &nonce, &sign(&stranger, "secrets-setup", &nonce, expires_at)), Err("invalid_signature".into()), "another key");
+        assert_eq!(auth.verify_action(&device, "secrets-setup", &nonce, &sign(&signing, "secrets-setup", &nonce, expires_at)), Err("invalid_challenge".into()), "the failed try spent it");
+
+        let (nonce, expires_at) = auth.action_challenge(&device, "secrets-setup").expect("nonce");
+        let signature = sign(&signing, "secrets-setup", &nonce, expires_at);
+        assert_eq!(auth.verify_action(&device, "secrets-recovery-code", &nonce, &signature), Err("invalid_challenge".into()), "made for another action");
+        let (nonce, expires_at) = auth.action_challenge(&device, "secrets-setup").expect("nonce");
+        let signature = sign(&signing, "secrets-setup", &nonce, expires_at);
+        auth.verify_action(&device, "secrets-setup", &nonce, &signature).expect("signed");
+        assert_eq!(auth.verify_action(&device, "secrets-setup", &nonce, &signature), Err("invalid_challenge".into()), "single use");
+        // A login challenge's signature is no action signature, and the
+        // other way round.
+        let (login_nonce, payload, _) = auth.challenge(&device).expect("challenge");
+        let login_sig: Signature = signing.sign(payload.as_bytes());
+        assert!(auth.verify_action(&device, "secrets-setup", &login_nonce, &Base64UrlUnpadded::encode_string(&login_sig.to_bytes())).is_err());
+        // Bounded per device.
+        for _ in 0..4 {
+            auth.action_challenge(&device, "secrets-recovery-code").expect("nonce");
+        }
+        assert_eq!(auth.action_challenge(&device, "secrets-recovery-code"), Err("rate_limited".into()));
+        auth.revoke(&device).expect("revoke");
+        assert!(auth.action_challenges.is_empty(), "a revoked device's nonces go with it");
+    }
 
     #[test]
     fn pairing_login_and_revocation_are_key_bound() {

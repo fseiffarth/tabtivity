@@ -631,14 +631,8 @@ fn write_keychain_kek(kek: &Key) -> Result<(), String> {
 
 // ── Device-released KEK (hosted server) ────────────────────────────────────
 
-/// The device mode's KEK: `HKDF(K, "mail-kek")` while the server's vault
-/// holds K; `None` on the desktop (no vault) and while locked.
-pub fn device_kek() -> Option<Key> {
-    let vault = crate::services::server::vault::vault()?;
-    Some(device_kek_from(&vault.key()?))
-}
-
-/// [`device_kek`] for a given K (what the tests use).
+/// The device mode's KEK for a given K: `HKDF(K, "mail-kek")`. Callers
+/// get K from [`Vault::with_key`](crate::services::server::vault::Vault::with_key).
 pub fn device_kek_from(k: &crate::services::server::secrets::MasterKey) -> Key {
     let sub = crate::services::server::vault::Vault::subkey(k, "mail-kek");
     let mut key = Key([0u8; 32]);
@@ -646,7 +640,37 @@ pub fn device_kek_from(k: &crate::services::server::secrets::MasterKey) -> Key {
     key
 }
 
+/// Open a device-mode store's keys with a given K (the vault's
+/// [`Vault::with_key`](crate::services::server::vault::Vault::with_key)
+/// hands it in, so no rotation runs between the read and the key).
+pub fn unlock_with_device_key(dir: &Path, k: &crate::services::server::secrets::MasterKey) -> Result<MailKeys, String> {
+    let file = read_key_file(dir)?.ok_or_else(|| "this mailbox is not encrypted".to_string())?;
+    if file.mode != UnlockMode::Device {
+        return Err("this mailbox is not sealed under the secrets key".into());
+    }
+    unwrap_master(&device_kek_from(k), &file)
+}
+
+/// A device-mode `key.json` re-wrapped from `old` K to `new` K, as the bytes
+/// to write (the vault's rotation writes them beside the original and
+/// switches atomically). The store's master key — what every sealed row is
+/// under — stays: only its wrap changes.
+pub fn rewrap_device_key_file(
+    dir: &Path,
+    old: &crate::services::server::secrets::MasterKey,
+    new: &crate::services::server::secrets::MasterKey,
+) -> Result<Vec<u8>, String> {
+    let mut file = read_key_file(dir)?.ok_or_else(|| "this mailbox is not encrypted".to_string())?;
+    if file.mode != UnlockMode::Device {
+        return Err("this mailbox is not sealed under the secrets key".into());
+    }
+    let keys = unwrap_master(&device_kek_from(old), &file)?;
+    file.wrapped = B64.encode(seal(&device_kek_from(new), keys.labels.wrap_aad.as_bytes(), keys.master.as_bytes()));
+    serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())
+}
+
 /// A device-mode key file opened with `kek` (`None`: K is locked).
+#[cfg(test)]
 fn unlock_device_with(file: &MailKeyFile, kek: Option<Key>) -> Unlock {
     match kek {
         Some(kek) => match unwrap_master(&kek, file) {
@@ -704,7 +728,17 @@ pub fn unlock(dir: &Path) -> Unlock {
     }
     match file.mode {
         UnlockMode::Passphrase => Unlock::NeedsPassphrase,
-        UnlockMode::Device => unlock_device_with(&file, device_kek()),
+        // Re-read under the vault's lock: a rotation re-wraps this file.
+        UnlockMode::Device => match crate::services::server::vault::vault() {
+            Some(vault) => vault.with_key(|k| match k {
+                Some(k) => match unlock_with_device_key(dir, k) {
+                    Ok(keys) => Unlock::Ready(keys),
+                    Err(e) => Unlock::Unavailable(e),
+                },
+                None => Unlock::Unavailable(DEVICE_LOCKED.into()),
+            }),
+            None => Unlock::Unavailable(DEVICE_LOCKED.into()),
+        },
         UnlockMode::Keychain => match read_keychain_kek() {
             Some(kek) => match unwrap_master(&kek, &file) {
                 Ok(keys) => Unlock::Ready(keys),
@@ -797,7 +831,7 @@ pub fn enable_with_keychain(dir: &Path) -> Result<MailKeys, String> {
 }
 
 /// Turn on at-rest encryption with a **new** master key, unlocked by the
-/// device-released `kek` ([`device_kek`]).
+/// device-released `kek` ([`device_kek_from`]).
 pub fn enable_with_device(dir: &Path, kek: &Key) -> Result<MailKeys, String> {
     if is_enabled(dir) {
         return Err("this mailbox is already encrypted".into());
@@ -823,8 +857,9 @@ pub fn enable_default(dir: &Path) -> Result<MailKeys, String> {
         if !vault.is_set_up() {
             return Err(DEVICE_NOT_SET_UP.into());
         }
-        let kek = device_kek().ok_or_else(|| DEVICE_LOCKED.to_string())?;
-        return enable_with_device(dir, &kek);
+        // Under the vault's lock: a store sealed under a K that a rotation
+        // retires a moment later would never open again.
+        return vault.with_key(|k| enable_with_device(dir, &device_kek_from(k.ok_or_else(|| DEVICE_LOCKED.to_string())?)));
     }
     enable_with_keychain(dir)
 }
@@ -877,10 +912,26 @@ pub fn rewrap(
     mode: UnlockMode,
     passphrase: Option<&str>,
 ) -> Result<(), String> {
+    // To device mode: under the vault's lock, so a rotation cannot retire
+    // the K this wraps under before the file is written.
+    if mode == UnlockMode::Device {
+        let vault = crate::services::server::vault::vault().ok_or_else(|| DEVICE_LOCKED.to_string())?;
+        return vault.with_key(|k| rewrap_with(dir, keys, mode, passphrase, k));
+    }
+    rewrap_with(dir, keys, mode, passphrase, None)
+}
+
+fn rewrap_with(
+    dir: &Path,
+    keys: &MailKeys,
+    mode: UnlockMode,
+    passphrase: Option<&str>,
+    device_k: Option<&crate::services::server::secrets::MasterKey>,
+) -> Result<(), String> {
     let salt = fresh_salt()?;
     let kdf = KdfParams::default();
     let kek = match mode {
-        UnlockMode::Device => device_kek().ok_or_else(|| DEVICE_LOCKED.to_string())?,
+        UnlockMode::Device => device_kek_from(device_k.ok_or_else(|| DEVICE_LOCKED.to_string())?),
         UnlockMode::Keychain => {
             if !remote_credentials::store_readable() {
                 return Err("the OS keyring is locked, so nothing was changed".into());
