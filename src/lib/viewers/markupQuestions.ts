@@ -13,22 +13,16 @@ import { invoke } from "@tauri-apps/api/core";
 import type { TranslationKey } from "../i18n";
 import { pdfPageMatches, type SyncRect, type TextItemBox } from "./tex/tex";
 import { markupReasonKey } from "./pdfMarkup";
+import type { MarkupAnswer, MarkupQuestion } from "./markupQuestionPicks";
 
 /** Rung by the backend (no payload) whenever an ask opens, closes or expires
  * (`services::markup_mcp::CHANGED_EVENT`). */
 export const MARKUP_MCP_CHANGED = "markup-mcp-changed";
 
-export type MarkupChoice = { label: string; description?: string };
-export type MarkupQuestion = {
-  question: string;
-  header?: string;
-  options: MarkupChoice[];
-  multiSelect: boolean;
-  /** 1-based. */
-  page?: number;
-  /** Words on that page the question is about. */
-  quote?: string;
-};
+export {
+  answersOf, answersOnTap, NO_PICK, splitRecommended, toggleOption, toggleOther,
+  type MarkupAnswer, type MarkupChoice, type MarkupQuestion, type QuestionPick,
+} from "./markupQuestionPicks";
 /** An open ask as `markup_mcp_list` gives it (`services::markup_mcp::AskView`). */
 export type MarkupAsk = {
   id: string;
@@ -38,12 +32,11 @@ export type MarkupAsk = {
   createdAt: string;
   questions: MarkupQuestion[];
 };
-/** One question's answer: option indices and/or a typed **Other…**. */
-export type MarkupAnswer = { options: number[]; other?: string };
 export type MarkupAnswered = { prompt: string; receipt: string };
 
-/** The tab's open asks for the PDF at `path` (absolute). */
-export async function listMarkupQuestions(projectId: string, scheduleTargetId: string, path: string): Promise<MarkupAsk[]> {
+/** The tab's open asks for the PDF at `path` (absolute, or project-relative
+ * from the phone's bridge); every open ask of the tab without one. */
+export async function listMarkupQuestions(projectId: string, scheduleTargetId: string, path?: string): Promise<MarkupAsk[]> {
   const rows = await invoke<MarkupAsk[] | null>("markup_mcp_list", { projectId, scheduleTargetId, path });
   return Array.isArray(rows) ? rows : [];
 }
@@ -75,53 +68,6 @@ const ASK_REASONS: Record<string, TranslationKey> = {
  * the markup Submit's (a queue refusal such as the per-tab schedule cap). */
 export function questionReasonKey(code: string): TranslationKey {
   return ASK_REASONS[code] ?? markupReasonKey(code);
-}
-
-/** The mark Claude Code asks agents to put on the option they would pick,
- * shown as a tag beside the label (the reader's `LiveQuestion` and the phone's
- * `QuestionList` do the same). */
-const RECOMMENDED = /\s+\(Recommended\)$/u;
-
-export function splitRecommended(label: string): { label: string; recommended: boolean } {
-  const hit = RECOMMENDED.exec(label);
-  return hit ? { label: label.slice(0, hit.index), recommended: true } : { label, recommended: false };
-}
-
-/** What the card holds for one question: the rows picked, and the typed
- * **Other…** text (`null` while Other is not chosen). */
-export type QuestionPick = { options: number[]; other: string | null };
-
-export const NO_PICK: QuestionPick = { options: [], other: null };
-
-/** A row clicked: single-select takes it alone (dropping Other), multiSelect
- * toggles it. */
-export function toggleOption(question: MarkupQuestion, pick: QuestionPick, index: number): QuestionPick {
-  if (!question.multiSelect) return { options: [index], other: null };
-  const options = pick.options.includes(index)
-    ? pick.options.filter((i) => i !== index)
-    : [...pick.options, index].sort((a, b) => a - b);
-  return { ...pick, options };
-}
-
-/** **Other…** clicked: single-select drops the rows, multiSelect keeps them;
- * a second click takes it back. */
-export function toggleOther(question: MarkupQuestion, pick: QuestionPick): QuestionPick {
-  if (pick.other !== null) return { ...pick, other: null };
-  return { options: question.multiSelect ? pick.options : [], other: "" };
-}
-
-/** The picks as `markup_mcp_answer` takes them — one per question, in order —
- * or `null` while a question has no answer or an Other… is chosen but blank. */
-export function answersOf(questions: readonly MarkupQuestion[], picks: readonly QuestionPick[]): MarkupAnswer[] | null {
-  const out: MarkupAnswer[] = [];
-  for (let i = 0; i < questions.length; i++) {
-    const pick = picks[i] ?? NO_PICK;
-    const other = pick.other?.trim();
-    if (pick.other !== null && !other) return null;
-    if (pick.options.length === 0 && !other) return null;
-    out.push(other ? { options: pick.options, other } : { options: pick.options });
-  }
-  return out;
 }
 
 /** The boxes (big points) of `quote` on `page`, from the page's text runs:

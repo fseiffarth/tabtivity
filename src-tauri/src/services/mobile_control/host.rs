@@ -4280,6 +4280,257 @@ async fn markup_submit(
     }
 }
 
+// ── Markup questions (`services::markup_mcp`, the phone's half) ──────────────
+
+/// Longest body a markup answer may carry: four **Other…** texts of 500
+/// characters, four bytes each at worst, the option indices and the ask id.
+const MAX_MARKUP_ANSWER_BODY: usize = 16 * 1024;
+
+/// `?source=files:<token>` (a project file's sealed token) or
+/// `?source=outbox:<leaf>` — the file the phone's markup view shows. Left out
+/// by the Focus banner, which asks for every open ask of the tab.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct MarkupQuestionsQuery {
+    source: Option<String>,
+}
+
+/// An ask id as `services::markup_mcp` mints it: `ask-` and hex digits.
+fn valid_ask_id(id: &str) -> bool {
+    id.len() <= 64
+        && id
+            .strip_prefix("ask-")
+            .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// A refusal as a route answers it.
+type ApiRefusal = (StatusCode, Json<serde_json::Value>);
+
+/// The agent tab a markup question route names — its raw project id and
+/// record — and, given the view's `source`, the project-relative path of the
+/// file it shows: a files token unsealed under the file browser's own gates
+/// (as the markup Submit does), or an outbox leaf (`markup::validate_source`).
+/// Only that path goes on to the desktop; nothing of it comes back.
+fn markup_tab(
+    state: &HostState,
+    tab_id: &str,
+    source: Option<&str>,
+) -> Result<(String, ResolvedTab, Option<String>), ApiRefusal> {
+    let catalog = catalog(state)?;
+    let Some((project, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    let (raw_id, kind, tab) = (project.raw_id.clone(), project.public.kind, tab.clone());
+    let Some(source) = source else {
+        return Ok((raw_id, tab, None));
+    };
+    let source = match source.split_once(':') {
+        Some(("files", token)) => markup::MarkupSource::Files(token.to_string()),
+        Some(("outbox", leaf)) => markup::MarkupSource::Outbox(leaf.to_string()),
+        _ => return Err(api_error(StatusCode::BAD_REQUEST, "invalid_source")),
+    };
+    if markup::validate_source(&source).is_err() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_source"));
+    }
+    let rel = match source {
+        markup::MarkupSource::Files(token) => {
+            if !files::files_open(&state.config.state_dir) {
+                return Err(api_error(StatusCode::NOT_FOUND, "files_off"));
+            }
+            if kind != ScopeKind::Project {
+                return Err(api_error(StatusCode::NOT_FOUND, "files_unavailable"));
+            }
+            let rel = files_rel(state, &raw_id, Some(&token))?;
+            if rel.is_empty() {
+                // The root folder's own token names no file.
+                return Err(api_error(StatusCode::BAD_REQUEST, "invalid_source"));
+            }
+            rel
+        }
+        markup::MarkupSource::Outbox(leaf) => format!("{}/{leaf}", outbox::OUTBOX_DIR),
+    };
+    Ok((raw_id, tab, Some(rel)))
+}
+
+/// The name the phone is shown for an ask's file: its bare leaf, without the
+/// send stamps an outbox copy carries — whatever the desktop answered, no
+/// folder crosses.
+fn markup_file_name(name: &str) -> Option<String> {
+    let leaf = outbox::sent_name(name.rsplit(['/', '\\']).next().unwrap_or(name));
+    (!leaf.is_empty()).then(|| leaf.to_string())
+}
+
+/// A markup question refusal under the status the phone reads it by. The
+/// ask's own refusals are conflicts: the card re-lists and goes on.
+fn markup_desktop_error(code: &str) -> ApiRefusal {
+    api_error(
+        match code {
+            "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+            "tab_not_found" => StatusCode::NOT_FOUND,
+            "superseded" | "answered" | "gone" | "delivery_failed" | "not_delivered" => StatusCode::CONFLICT,
+            _ => StatusCode::BAD_REQUEST,
+        },
+        code,
+    )
+}
+
+/// Ask the window. The asks live in its process, beside the root MCP
+/// listener that took them; with no window there is no listener and so no
+/// ask, and the owner has nothing to answer from (headless owner plan) — a
+/// closed desktop is `desktop_unavailable`, which the phone reads as "no
+/// card". Never an error the phone would show.
+async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<DesktopResponse, ApiRefusal> {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(&desktop_socket, &request).await;
+    if desktop_down(&response) {
+        return Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"));
+    }
+    match response {
+        Ok(DesktopResponse::Error { code, .. }) => Err(markup_desktop_error(&code)),
+        Ok(answer) => Ok(answer),
+        Err(_) => Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")),
+    }
+}
+
+/// `GET /api/v1/tabs/{tab_id}/markup/questions[?source=…]` — the agent tab's
+/// open markup question (`services::markup_mcp`) for the phone's markup card,
+/// or every open one for the Focus banner. Each ask carries its random id,
+/// its questions and its file's leaf name — never a path.
+async fn markup_questions(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<MarkupQuestionsQuery>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    let (project_id, tab, path) = match markup_tab(&state, &tab_id, query.source.as_deref()) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request = DesktopRequest::MarkupQuestions { request_id, project_id, tmux_session: tab.tmux_name.clone(), path };
+    match markup_call(&state, request).await {
+        Ok(DesktopResponse::MarkupQuestions { asks }) => {
+            let asks: Vec<_> = asks
+                .into_iter()
+                .filter(|ask| valid_ask_id(&ask.id))
+                .map(|mut ask| {
+                    ask.file_name = ask.file_name.as_deref().and_then(markup_file_name);
+                    ask
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "asks": asks })))
+        }
+        Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        Err(error) => error,
+    }
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/answer` — `{ ask_id, answers: [{
+/// options: number[], other? }] }`, one per question in order. The desktop
+/// checks it against the ask, builds the prompt and queues it into the tab;
+/// the phone never sends prompt text here. `409` with the ask's code when it
+/// does not take the answer (`superseded`, `answered`, `gone`), or when the
+/// prompt could not be queued (`delivery_failed`: the ask is open again).
+async fn markup_answer(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::markup_mcp::{MAX_OPTIONS, MAX_OTHER_CHARS, MAX_QUESTIONS};
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AnswerBody {
+        ask_id: String,
+        answers: Vec<super::protocol::MobileMarkupAnswer>,
+    }
+    let Ok(request) = serde_json::from_slice::<AnswerBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if !valid_ask_id(&request.ask_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let shaped = !request.answers.is_empty()
+        && request.answers.len() <= MAX_QUESTIONS
+        && request.answers.iter().all(|answer| {
+            answer.options.len() <= MAX_OPTIONS
+                && answer.options.iter().all(|&index| (index as usize) < MAX_OPTIONS)
+                && answer.other.as_deref().is_none_or(|text| {
+                    text.chars().count() <= MAX_OTHER_CHARS && !text.chars().any(char::is_control)
+                })
+        });
+    if !shaped {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_answer");
+    }
+    let (project_id, tab, _) = match markup_tab(&state, &tab_id, None) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request = DesktopRequest::MarkupAnswer {
+        request_id,
+        project_id,
+        tmux_session: tab.tmux_name.clone(),
+        ask_id: request.ask_id,
+        answers: request.answers,
+    };
+    match markup_call(&state, request).await {
+        Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "answered": true }))),
+        Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        Err(error) => error,
+    }
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/dismiss` — `{ ask_id }`: **Answer in
+/// chat instead**. The ask closes everywhere; nothing is typed. Idempotent.
+async fn markup_dismiss(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct DismissBody {
+        ask_id: String,
+    }
+    let Ok(request) = serde_json::from_slice::<DismissBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if !valid_ask_id(&request.ask_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let (project_id, tab, _) = match markup_tab(&state, &tab_id, None) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request = DesktopRequest::MarkupDismiss { request_id, project_id, tmux_session: tab.tmux_name.clone(), ask_id: request.ask_id };
+    match markup_call(&state, request).await {
+        Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "dismissed": true }))),
+        Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        Err(error) => error,
+    }
+}
+
 /// The root and raw id a file-browser request reads by (`files.rs`). Closed —
 /// `files_off` — unless the host-wide switch is on, read per request; a box
 /// or the root console is `files_unavailable`.
@@ -4579,6 +4830,15 @@ fn router(state: HostState) -> Router {
         .route(
             "/api/v1/tabs/{tab_id}/markup",
             post(markup_submit).layer(DefaultBodyLimit::max(markup::MAX_MARKUP_BODY)),
+        )
+        .route("/api/v1/tabs/{tab_id}/markup/questions", get(markup_questions))
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/answer",
+            post(markup_answer).layer(DefaultBodyLimit::max(MAX_MARKUP_ANSWER_BODY)),
+        )
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/dismiss",
+            post(markup_dismiss).layer(DefaultBodyLimit::max(1024)),
         )
         .route(
             "/api/v1/tabs/{tab_id}/desktop-images",
@@ -5057,6 +5317,7 @@ mod tests {
         "/api/v1/tabs/anything/transcript",
         "/api/v1/projects/anything/prompts",
         "/api/v1/tabs/anything/desktop-images",
+        "/api/v1/tabs/anything/markup/questions",
     ];
 
     /// The desktop bounds the tail before it sends one; this bounds it again at
@@ -7618,6 +7879,125 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
         let inbox: Vec<_> = std::fs::read_dir(host.root.join(inbox::INBOX_DIR)).unwrap().flatten().collect();
         assert_eq!(inbox.len(), 2, "the layer and one marked copy");
+    }
+
+    /// The markup questions routes: with no window, a quiet
+    /// `desktop_unavailable` (the phone shows no card); with one, the view's
+    /// source goes to the desktop as a project-relative path, the asks come
+    /// back with a bare leaf name and nothing else of the path, and an answer
+    /// crosses as indices and typed text only — shaped here before it goes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn markup_questions_cross_as_leaf_names_and_answers_as_indices() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(64)).await.0;
+        let (_, tab_id) = project_and_tab(&host, &cookie).await;
+        let questions = format!("/api/v1/tabs/{tab_id}/markup/questions");
+        let answer_uri = format!("/api/v1/tabs/{tab_id}/markup/answer");
+        let dismiss_uri = format!("/api/v1/tabs/{tab_id}/markup/dismiss");
+        let ask = "ask-0123456789abcdef";
+        let good = json!({ "ask_id": ask, "answers": [{ "options": [1] }, { "options": [0, 2], "other": "both" }] });
+
+        // No window: no asks to read, nothing to answer.
+        let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good.clone()))).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+
+        // Refused before the desktop is asked.
+        let outbox_leaf = "20261003-101500-draft.pdf";
+        for (uri, code) in [
+            (format!("{questions}?source=elsewhere:x"), "invalid_source"),
+            (format!("{questions}?source=outbox:..%2Fdraft.pdf"), "invalid_source"),
+            (format!("{questions}?source=files:"), "invalid_source"),
+            (format!("{questions}?source=files:AAAA"), "files_off"),
+        ] {
+            let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+            assert!(status.is_client_error(), "{uri} answered {status}: {body}");
+            assert_eq!(json(&body)["error"], code, "{uri}");
+        }
+        for (bad, code) in [
+            (json!({ "ask_id": "held-1", "answers": [{ "options": [0] }] }), "invalid_request"),
+            (json!({ "ask_id": ask, "answers": [{ "options": [0] }], "prompt": "typed here" }), "invalid_request"),
+            (json!({ "ask_id": ask, "answers": [] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": [{ "options": [6] }] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": [{ "options": [], "other": "a\nb" }] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": [{ "other": "x".repeat(501) }] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": vec![json!({ "options": [0] }); 5] }), "invalid_answer"),
+        ] {
+            let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(bad.clone()))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} answered: {body}");
+            assert_eq!(json(&body)["error"], code, "{bad}");
+        }
+        let mut foreign = request_as("POST", &answer_uri, &cookie, Some(good.clone()));
+        foreign.headers_mut().insert(header::ORIGIN, HeaderValue::from_static("https://elsewhere.example"));
+        let (status, ..) = host.send(foreign).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+        let log = seen.clone();
+        let desktop = tokio::spawn(async move {
+            let mut answered = 0;
+            while answered < 5 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                // A reachability probe connects and sends nothing.
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                let response: DesktopResponse = match &request {
+                    DesktopRequest::MarkupQuestions { .. } => serde_json::from_value(json!({
+                        "status": "markup_questions",
+                        "asks": [
+                            { "id": ask, "file": "docs/paper/draft.pdf", "file_name": "docs/paper/20261003-101500-draft.pdf",
+                              "questions": [{ "question": "Figure or paragraph?", "options": [{ "label": "Figure" }, { "label": "Paragraph" }], "page": 2, "quote": "Figure 2" }] },
+                            { "id": "not-an-ask-id", "questions": [] },
+                        ],
+                    }))
+                    .expect("asks"),
+                    DesktopRequest::MarkupAnswer { .. } if answered == 3 => DesktopResponse::Error { code: "superseded".into(), message: "replaced".into() },
+                    DesktopRequest::MarkupAnswer { .. } | DesktopRequest::MarkupDismiss { .. } => DesktopResponse::Seen,
+                    other => panic!("unexpected request {other:?}"),
+                };
+                log.lock().unwrap().push(request);
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+                answered += 1;
+            }
+        });
+
+        let (status, _, body) = host.send(get_as(&format!("{questions}?source=outbox:{outbox_leaf}"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let asks = json(&body)["asks"].clone();
+        assert_eq!(asks.as_array().unwrap().len(), 1, "the malformed id is dropped: {body}");
+        assert_eq!(asks[0]["file_name"], "draft.pdf");
+        assert_eq!(asks[0]["questions"][0]["page"], 2);
+        assert!(!body.contains("docs/") && !body.contains("\"file\"") && !body.contains(RAW_PROJECT), "{body}");
+        let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+
+        let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good.clone()))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["answered"], true);
+        let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "superseded");
+        let (status, _, body) = host.send(request_as("POST", &dismiss_uri, &cookie, Some(json!({ "ask_id": ask })))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["dismissed"], true);
+        desktop.await.expect("fake desktop");
+
+        let seen = seen.lock().unwrap();
+        let DesktopRequest::MarkupQuestions { project_id, path, .. } = &seen[0] else { panic!("{:?}", seen[0]) };
+        assert_eq!(project_id, RAW_PROJECT);
+        assert_eq!(path.as_deref(), Some(format!("{}/{outbox_leaf}", outbox::OUTBOX_DIR).as_str()));
+        assert!(matches!(&seen[1], DesktopRequest::MarkupQuestions { path: None, .. }));
+        let DesktopRequest::MarkupAnswer { ask_id, answers, .. } = &seen[2] else { panic!("{:?}", seen[2]) };
+        assert_eq!(ask_id, ask);
+        assert_eq!(answers[1].options, vec![0, 2]);
+        assert_eq!(answers[1].other.as_deref(), Some("both"));
+        assert!(matches!(&seen[4], DesktopRequest::MarkupDismiss { .. }));
     }
 
     /// The browser's own PDF viewer fetches without the strict session cookie;

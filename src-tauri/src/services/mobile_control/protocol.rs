@@ -758,6 +758,55 @@ pub enum TodoAction {
     },
 }
 
+/// One option of an agent's markup question (`services::markup_mcp::Choice`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupChoice {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// One question of an agent's markup ask, as the phone's markup card shows it
+/// (`services::markup_mcp::Question`). `page` is 1-based; `quote` is words on
+/// that page the phone's sealed frame looks for to pin the question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupQuestion {
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    pub options: Vec<MobileMarkupChoice>,
+    #[serde(default)]
+    pub multi_select: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+}
+
+/// An open ask of the markup questions MCP (`services::markup_mcp`). There
+/// is no field for the file's path: the phone is told its leaf name only, and
+/// the sidecar strips that to a bare leaf once more before it crosses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupAsk {
+    /// The ask's random id (`ask-<hex>`), what an answer names.
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    pub questions: Vec<MobileMarkupQuestion>,
+}
+
+/// One question's answer from the phone: option indices (0-based) and/or a
+/// typed **Other…** text. The desktop checks it against the ask and builds the
+/// prompt; the phone never does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobileMarkupAnswer {
+    #[serde(default)]
+    pub options: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DesktopRequest {
@@ -1052,6 +1101,40 @@ pub enum DesktopRequest {
         project_id: String,
         image_id: String,
     },
+    /// The agent tab's open markup question (`services::markup_mcp`), for the
+    /// phone's markup card and Focus banner. `path` is the project-relative
+    /// path of the file the phone's markup view shows — the sidecar resolved
+    /// it from the view's files token or outbox leaf — and absent asks for
+    /// every open ask of the tab. Answered `MarkupQuestions`; asks carry the
+    /// file's leaf name, never its path.
+    MarkupQuestions {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// Answer that ask: the desktop checks the answers, closes the ask, builds
+    /// the prompt and queues it into the tab as a phone hold does. Answered
+    /// `Seen`; `superseded`, `answered`, `gone` or `invalid_answer` when the
+    /// ask does not take it, `delivery_failed` when the prompt could not be
+    /// queued and the ask is open again, `not_delivered` when it could not be
+    /// reopened either.
+    MarkupAnswer {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        ask_id: String,
+        answers: Vec<MobileMarkupAnswer>,
+    },
+    /// **Answer in chat instead**: close the ask without an answer. Answered
+    /// `Seen`; idempotent.
+    MarkupDismiss {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        ask_id: String,
+    },
     /// The owner wrote a slice with no window answering (headless owner
     /// plan, H3) and a window is open after all: re-read it. `slices` names
     /// what moved — `workspace` (the scope's tab set; `project_id` is the raw
@@ -1106,6 +1189,9 @@ impl DesktopRequest {
             | Self::AgentTranscript { request_id, .. }
             | Self::DesktopImages { request_id, .. }
             | Self::AttachDesktopImage { request_id, .. }
+            | Self::MarkupQuestions { request_id, .. }
+            | Self::MarkupAnswer { request_id, .. }
+            | Self::MarkupDismiss { request_id, .. }
             | Self::Refresh { request_id, .. } => request_id,
         }
     }
@@ -1126,6 +1212,9 @@ impl DesktopRequest {
             // Rides on the project list, which answers without the desktop:
             // a wedged window must not hold that list up for long.
             Self::GitStates { .. } => 3,
+            // Polled every few seconds while a markup view or the Focus chat
+            // is on screen; a wedged window just shows no card.
+            Self::MarkupQuestions { .. } => 3,
             _ => 10,
         })
     }
@@ -1138,7 +1227,7 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } => 20,
-            Self::GitStates { .. } => 2,
+            Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
         })
     }
@@ -1167,7 +1256,9 @@ impl DesktopRequest {
             | Self::ReopenTab { .. }
             | Self::PromptMutate { .. }
             | Self::HoldPrompt { .. }
-            | Self::EditHeldPrompt { .. } => true,
+            | Self::EditHeldPrompt { .. }
+            | Self::MarkupAnswer { .. }
+            | Self::MarkupDismiss { .. } => true,
             Self::Catalog { .. }
             | Self::Activity { .. }
             | Self::GitStates { .. }
@@ -1188,6 +1279,7 @@ impl DesktopRequest {
             | Self::AgentTranscript { .. }
             | Self::DesktopImages { .. }
             | Self::AttachDesktopImage { .. }
+            | Self::MarkupQuestions { .. }
             | Self::Refresh { .. } => false,
         }
     }
@@ -1553,7 +1645,8 @@ pub enum DesktopResponse {
         transcript: crate::services::agent_transcript::AgentTranscript,
     },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
-    /// or [`DesktopRequest::TabPrompt`].
+    /// or [`DesktopRequest::TabPrompt`] — and a delivered
+    /// [`DesktopRequest::MarkupAnswer`] or a [`DesktopRequest::MarkupDismiss`].
     /// Carries nothing: the phone never waits on either, and the sidecar only
     /// needs to know the desktop took the report.
     Seen,
@@ -1569,6 +1662,13 @@ pub enum DesktopResponse {
     /// the phone's own upload gets back.
     Attached {
         attachment: MobileInboxAttachment,
+    },
+    /// Answers [`DesktopRequest::MarkupQuestions`]: the tab's open asks for
+    /// the file shown (at most one today). A markup answer or dismissal is
+    /// acknowledged with `Seen`.
+    MarkupQuestions {
+        #[serde(default)]
+        asks: Vec<MobileMarkupAsk>,
     },
     Error {
         code: String,
@@ -1701,7 +1801,7 @@ mod tests {
     use super::{
         AgentTabPrompt, AgentTabPrompts, AgentTabSchedules, AgentTabStatus, AgentTabTiming, ClosedAgentTab, DesktopRequest,
         DesktopResponse, git_dot, MobileAlertItem,
-        MobileAlertsSnapshot,
+        MobileAlertsSnapshot, MobileMarkupAnswer,
         MobileMailView, MobilePromptInput, MobileScheduleInput, PromptMutation, ScheduleMutation,
     };
     use crate::schema::AgentScheduleRule;
@@ -1970,6 +2070,98 @@ mod tests {
             .expect("serialize held answer");
         assert_eq!(answer["status"], "held");
         assert_eq!(answer["held_id"], "held-1");
+    }
+
+    #[test]
+    fn markup_questions_cross_by_tab_pair_and_answers_stay_strict() {
+        let list = DesktopRequest::MarkupQuestions {
+            request_id: "request-markup".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            path: None,
+        };
+        assert_eq!(list.request_id(), "request-markup");
+        let json = serde_json::to_value(&list).expect("serialize markup list");
+        assert_eq!(json["type"], "markup_questions");
+        // No path: the key is left out, not sent as null.
+        assert_eq!(json.as_object().expect("object").len(), 4, "{json}");
+        let shown = serde_json::to_value(DesktopRequest::MarkupQuestions {
+            request_id: "r".into(),
+            project_id: "p".into(),
+            tmux_session: "t".into(),
+            path: Some("docs/draft.pdf".into()),
+        })
+        .expect("serialize shown");
+        assert_eq!(shown["path"], "docs/draft.pdf");
+        // A read, polled: the short deadlines the project list's git dots use.
+        assert!(!list.is_mutation());
+        assert_eq!(list.response_timeout(), std::time::Duration::from_secs(3));
+        assert_eq!(list.desktop_timeout(), std::time::Duration::from_secs(2));
+
+        let answer = DesktopRequest::MarkupAnswer {
+            request_id: "request-answer".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            ask_id: "ask-0123456789abcdef".into(),
+            answers: vec![
+                MobileMarkupAnswer { options: vec![1], other: None },
+                MobileMarkupAnswer { options: vec![], other: Some("colour".into()) },
+            ],
+        };
+        assert!(answer.is_mutation());
+        assert_eq!(answer.response_timeout(), std::time::Duration::from_secs(10));
+        let json = serde_json::to_value(&answer).expect("serialize answer");
+        assert_eq!(json["type"], "markup_answer");
+        assert_eq!(json["answers"], serde_json::json!([{ "options": [1] }, { "options": [], "other": "colour" }]));
+        let restored: DesktopRequest = serde_json::from_value(json.clone()).expect("round-trip answer");
+        assert!(matches!(restored, DesktopRequest::MarkupAnswer { ref answers, .. } if answers.len() == 2));
+        // Anything but the two fields is refused, as is a negative index.
+        for bad in [
+            serde_json::json!([{ "options": [1], "prompt": "typed by the phone" }]),
+            serde_json::json!([{ "options": [-1] }]),
+        ] {
+            let mut hostile = json.clone();
+            hostile["answers"] = bad;
+            assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+        }
+        let mut hostile = json;
+        hostile["schedule_target_id"] = "must-not-cross".into();
+        assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+
+        let dismiss = DesktopRequest::MarkupDismiss {
+            request_id: "request-dismiss".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            ask_id: "ask-0123456789abcdef".into(),
+        };
+        assert!(dismiss.is_mutation());
+        assert_eq!(serde_json::to_value(&dismiss).expect("dismiss")["type"], "markup_dismiss");
+
+        // The answer: no path field to carry, and a desktop that sent one
+        // (or the camelCase view) loses it on the way through the sidecar.
+        let response: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "markup_questions",
+            "asks": [{
+                "id": "ask-0123456789abcdef",
+                "file": "docs/paper/draft.pdf",
+                "file_name": "draft.pdf",
+                "questions": [{
+                    "question": "Move the paragraph or the figure?",
+                    "options": [{ "label": "The figure" }, { "label": "The paragraph", "description": "Above it" }],
+                    "multi_select": true,
+                    "page": 3,
+                    "quote": "as shown in Figure 2",
+                }],
+            }],
+        }))
+        .expect("decode markup questions");
+        let reencoded = serde_json::to_value(&response).expect("re-encode");
+        assert_eq!(reencoded["asks"][0]["file_name"], "draft.pdf");
+        assert!(reencoded["asks"][0].get("file").is_none(), "{reencoded}");
+        assert_eq!(reencoded["asks"][0]["questions"][0]["multi_select"], true);
+        assert_eq!(reencoded["asks"][0]["questions"][0]["page"], 3);
+        let empty: DesktopResponse = serde_json::from_value(serde_json::json!({ "status": "markup_questions" })).expect("no asks");
+        assert!(matches!(empty, DesktopResponse::MarkupQuestions { ref asks } if asks.is_empty()));
     }
 
     #[test]

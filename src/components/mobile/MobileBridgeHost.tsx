@@ -18,6 +18,8 @@ import { agentTabState, lastTabReadAt, noteUserInput, useActivityStore } from ".
 import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
+import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, reopenMarkupQuestions, type MarkupAnswer } from "../../lib/viewers/markupQuestions";
+import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
@@ -274,6 +276,9 @@ type DesktopRequest =
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
   | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
+  | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
+  | { type: "markup_answer"; request_id: string; project_id: string; tmux_session: string; ask_id: string; answers: MobileMarkupAnswer[] }
+  | { type: "markup_dismiss"; request_id: string; project_id: string; tmux_session: string; ask_id: string }
   | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] };
 type DesktopResponse =
 | { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot }
@@ -298,6 +303,7 @@ type DesktopResponse =
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
   | { status: "attached"; attachment: InboxAttachment }
+  | { status: "markup_questions"; asks: MobileMarkupAsk[] }
   | { status: "error"; code: string; message: string };
 
 /** One agent tab closed in the scope, as the phone's "Recently closed" row
@@ -310,6 +316,16 @@ interface DesktopImage { id: string; name: string; source: string; size?: number
 /** A file that landed in the project's `.tabtivity/inbox/`: what the phone's own
  * upload gets back, so the two ways of filling the inbox read alike. */
 interface InboxAttachment { name: string; reference: string; size: number }
+
+/** An agent's open markup question as the phone gets it
+ * (`protocol::MobileMarkupAsk`): the file's leaf name, never its path. */
+interface MobileMarkupAsk {
+  id: string;
+  file_name?: string;
+  questions: { question: string; header?: string; options: { label: string; description?: string }[]; multi_select: boolean; page?: number; quote?: string }[];
+}
+/** One question's answer from the phone: indices and/or a typed Other…. */
+interface MobileMarkupAnswer { options?: number[]; other?: string | null }
 
 interface CatalogChoice { public: CatalogAgent; item: StaticMenuItem }
 
@@ -2086,6 +2102,94 @@ async function holdTabPrompt(projectId: string, tmuxSession: string, message: st
   return { status: "held", held_id: id };
 }
 
+/** The ask codes `markup_mcp_answer` / `_dismiss` refuse with, passed to the
+ * phone as they are; anything else is the window's own failure. */
+const MARKUP_ASK_CODES = new Set(["superseded", "answered", "gone", "invalid_answer"]);
+
+/** The tab a markup question request names, as `markup_mcp`'s key: the
+ * project and the tab's stable schedule target. A box or the root console
+ * has no project folder for an ask to be bound under, so none is wired. */
+function markupTarget(projectId: string, tmuxSession: string): { projectId: string; target: string } | DesktopResponse {
+  const scope = mobileScope(projectId);
+  if (!scope) return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  const tab = scheduleTargetTab(scope.id, tmuxSession);
+  if (!tab?.scheduleTargetId) return { status: "error", code: "tab_not_found", message: "Agent tab is unavailable" };
+  return { projectId: scope.id, target: tab.scheduleTargetId };
+}
+
+/** The agent tab's open markup question for the phone's markup card (`path`:
+ * the project-relative file its view shows, resolved by the sidecar) or, with
+ * no path, for its Focus banner. The file goes as its leaf name only. */
+async function markupQuestionsFor(projectId: string, tmuxSession: string, path: string | undefined): Promise<DesktopResponse> {
+  const key = markupTarget(projectId, tmuxSession);
+  if ("status" in key) return key;
+  if (!mobileScope(projectId)?.project) return { status: "markup_questions", asks: [] };
+  const asks = await listMarkupQuestions(key.projectId, key.target, path);
+  return {
+    status: "markup_questions",
+    asks: asks.map((ask) => ({
+      id: ask.id,
+      ...(ask.fileName ? { file_name: ask.fileName } : {}),
+      questions: ask.questions.map((question) => ({
+        question: question.question,
+        ...(question.header ? { header: question.header } : {}),
+        options: question.options.map((option) => (option.description ? { label: option.label, description: option.description } : { label: option.label })),
+        multi_select: question.multiSelect,
+        ...(question.page !== undefined ? { page: question.page } : {}),
+        ...(question.quote ? { quote: question.quote } : {}),
+      })),
+    })),
+  };
+}
+
+/** The phone answered an agent's markup question: the desktop takes the
+ * answer (`markup_mcp_answer` builds the prompt; the phone never does) and
+ * delivers it as `holdTabPrompt` delivers a phone prompt — a send-now rule the
+ * scheduler types into the CLI's queue at once. Should that fail, the ask is
+ * reopened with the answer's receipt, exactly as the desktop card does, so
+ * the phone's card stays and a retry is not refused as `answered`. */
+async function answerMarkupFromPhone(projectId: string, tmuxSession: string, askId: string, answers: MobileMarkupAnswer[]): Promise<DesktopResponse> {
+  const key = markupTarget(projectId, tmuxSession);
+  if ("status" in key) return key;
+  const shaped: MarkupAnswer[] = answers.map((answer) => (typeof answer.other === "string"
+    ? { options: answer.options ?? [], other: answer.other }
+    : { options: answer.options ?? [] }));
+  let taken: { prompt: string; receipt: string };
+  try {
+    taken = await answerMarkupQuestions(key.projectId, key.target, askId, shaped);
+  } catch (cause) {
+    const code = markupErrorCode(cause);
+    if (MARKUP_ASK_CODES.has(code)) return { status: "error", code, message: "The agent's questions did not take this answer" };
+    throw cause;
+  }
+  try {
+    const { id } = await queuePromptForTab(key.projectId, key.target, taken.prompt);
+    holdPhonePrompt(id);
+  } catch {
+    try {
+      await reopenMarkupQuestions(key.projectId, key.target, askId, taken.receipt);
+      return { status: "error", code: "delivery_failed", message: "The answer could not be queued; the questions are open again" };
+    } catch {
+      return { status: "error", code: "not_delivered", message: "The answer could not be queued, and the questions have closed" };
+    }
+  }
+  return { status: "seen" };
+}
+
+/** **Answer in chat instead** on the phone: the ask closes everywhere. */
+async function dismissMarkupFromPhone(projectId: string, tmuxSession: string, askId: string): Promise<DesktopResponse> {
+  const key = markupTarget(projectId, tmuxSession);
+  if ("status" in key) return key;
+  try {
+    await dismissMarkupQuestions(key.projectId, key.target, askId);
+  } catch (cause) {
+    const code = markupErrorCode(cause);
+    if (MARKUP_ASK_CODES.has(code)) return { status: "error", code, message: "The agent's questions are no longer open" };
+    throw cause;
+  }
+  return { status: "seen" };
+}
+
 /** New words for a prompt `holdTabPrompt` holds, kept only while the rule is
  * still waiting: `expectExistingOn` makes the backend refuse a rule already
  * delivered (`schedule_gone`) or being typed (`schedule_busy`) instead of
@@ -2319,6 +2423,9 @@ async function handleRequest(
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
     case "desktop_images": return desktopImagesFor(request.project_id);
     case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);
+    case "markup_questions": return markupQuestionsFor(request.project_id, request.tmux_session, request.path ?? undefined);
+    case "markup_answer": return answerMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id, request.answers);
+    case "markup_dismiss": return dismissMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id);
     case "refresh": return refreshSlices(request.project_id, request.slices);
     // A sidecar newer than this window can ask for a kind it does not know.
     // Answered at once and by name: `undefined` failed to deserialize in
@@ -2350,7 +2457,8 @@ export function mutationDomain(type: DesktopRequest["type"]): string | null {
     case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": return "tabs";
     case "todo_mutate": case "alert_resolve": case "calendar_mutate": return "board";
     case "mail_mark": case "mail_reply": return "mail";
-    case "schedule_mutate": case "prompt_mutate": case "hold_prompt": case "edit_held_prompt": return "schedules";
+    // A markup answer queues its prompt as a phone hold does.
+    case "schedule_mutate": case "prompt_mutate": case "hold_prompt": case "edit_held_prompt": case "markup_answer": case "markup_dismiss": return "schedules";
     default: return null;
   }
 }
