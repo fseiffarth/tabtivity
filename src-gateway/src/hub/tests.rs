@@ -310,7 +310,7 @@ fn a_revoke_whose_walk_failed_is_retried_until_the_entries_are_gone() {
     let me = unsafe { libc::geteuid() };
     assert!(acl::users_of(&stuck).unwrap().contains_key(&me));
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o000)).unwrap();
 
     let reply = w.hub.answer(ALICE, Request::Revoke { share: share.id.clone(), user: "bob".into() }, None);
     assert_eq!(reply.error.as_deref(), Some("failed"));
