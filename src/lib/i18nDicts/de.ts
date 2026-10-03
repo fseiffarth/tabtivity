@@ -2734,6 +2734,7 @@ export const dict: Dict = {
   "server.secrets.newCodeLater": "Später",
   "server.secrets.mailRekey.running": "Deine E-Mails werden nach dem Trennen unter einem neuen Schlüssel neu verschlüsselt: {percent} %. Die E-Mails bleiben währenddessen nutzbar.",
   "server.secrets.mailRekey.waiting": "Deine E-Mails werden nach dem Trennen unter einem neuen Schlüssel neu verschlüsselt: Warten, bis ein gekoppeltes Gerät den Schlüssel entsperrt.",
+  "server.secrets.mailRekey.waitingOpen": "Deine E-Mails werden nach dem Trennen unter einem neuen Schlüssel neu verschlüsselt: Das beginnt, sobald die E-Mails auf diesem Server das nächste Mal geöffnet werden.",
   "server.secrets.mailRekey.failed": "Das Neuverschlüsseln deiner E-Mails wurde angehalten: {error}. Beim nächsten Entsperren wird es erneut versucht.",
   "server.settings.error": "Der Server lehnte ab: {error}",
   "filePicker.title": "Datei auf dem Server wählen",

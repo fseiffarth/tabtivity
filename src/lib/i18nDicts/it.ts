@@ -2731,6 +2731,7 @@ export const dict: Dict = {
   "server.secrets.newCodeLater": "Più tardi",
   "server.secrets.mailRekey.running": "Nuova cifratura della posta con una nuova chiave dopo la disconnessione: {percent} %. La posta resta utilizzabile nel frattempo.",
   "server.secrets.mailRekey.waiting": "Nuova cifratura della posta con una nuova chiave dopo la disconnessione: in attesa che un dispositivo associato sblocchi la chiave.",
+  "server.secrets.mailRekey.waitingOpen": "Nuova cifratura della posta con una nuova chiave dopo la disconnessione: inizia la prossima volta che la posta viene aperta su questo server.",
   "server.secrets.mailRekey.failed": "La nuova cifratura della posta si è fermata: {error}. Viene ritentata al prossimo sblocco.",
   "server.settings.error": "Il server ha rifiutato: {error}",
   "filePicker.title": "Scegli un file sul server",

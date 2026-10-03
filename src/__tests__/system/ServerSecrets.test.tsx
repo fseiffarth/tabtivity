@@ -114,14 +114,21 @@ describe("ServerSecrets", () => {
 
   it("shows the mailbox re-key after a revoke while it runs", async () => {
     let rekey: unknown = { state: "running", done: 25, total: 100 };
-    vi.stubGlobal("fetch", vi.fn(() => answer({ available: true, setUp: true, unlocked: true, recoveryCode: true, mailRekey: rekey })));
+    let unlocked = true;
+    vi.stubGlobal("fetch", vi.fn(() => answer({ available: true, setUp: true, unlocked, recoveryCode: true, mailRekey: rekey })));
     const { unmount } = render(<ServerSecrets />);
     expect((await screen.findByTestId("server-mail-rekey")).textContent).toMatch(/25 %/);
     unmount();
+    // Waiting while unlocked: the mail store has not been opened since.
     rekey = { state: "waiting", done: 0, total: 0 };
+    render(<ServerSecrets />);
+    expect((await screen.findByTestId("server-mail-rekey")).textContent).toMatch(/starts the next time mail is opened/);
+    cleanup();
+    unlocked = false;
     render(<ServerSecrets />);
     expect((await screen.findByTestId("server-mail-rekey")).textContent).toMatch(/waiting until a paired device unlocks/);
     cleanup();
+    unlocked = true;
     rekey = null;
     render(<ServerSecrets />);
     await screen.findByText(/Unlocked: mail and saved passwords are open/);

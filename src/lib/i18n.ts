@@ -2789,6 +2789,7 @@ export const enSource = {
   "server.secrets.newCodeLater": "Later",
   "server.secrets.mailRekey.running": "Re-encrypting your mail under a new key after the disconnect: {percent} %. Mail stays usable meanwhile.",
   "server.secrets.mailRekey.waiting": "Re-encrypting your mail under a new key after the disconnect: waiting until a paired device unlocks the key.",
+  "server.secrets.mailRekey.waitingOpen": "Re-encrypting your mail under a new key after the disconnect: starts the next time mail is opened on this server.",
   "server.secrets.mailRekey.failed": "Re-encrypting your mail under a new key stopped: {error}. It is retried at the next unlock.",
   "server.settings.error": "The server refused: {error}",
   "filePicker.title": "Choose a file on the server",

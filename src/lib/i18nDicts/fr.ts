@@ -2733,6 +2733,7 @@ export const dict: Dict = {
   "server.secrets.newCodeLater": "Plus tard",
   "server.secrets.mailRekey.running": "Rechiffrement de vos e-mails sous une nouvelle clé après la déconnexion : {percent} %. Les e-mails restent utilisables pendant ce temps.",
   "server.secrets.mailRekey.waiting": "Rechiffrement de vos e-mails sous une nouvelle clé après la déconnexion : en attente qu’un appareil associé déverrouille la clé.",
+  "server.secrets.mailRekey.waitingOpen": "Rechiffrement de vos e-mails sous une nouvelle clé après la déconnexion : il commence la prochaine fois que la messagerie est ouverte sur ce serveur.",
   "server.secrets.mailRekey.failed": "Le rechiffrement de vos e-mails s’est arrêté : {error}. Il est relancé au prochain déverrouillage.",
   "server.settings.error": "Le serveur a refusé : {error}",
   "filePicker.title": "Choisir un fichier sur le serveur",

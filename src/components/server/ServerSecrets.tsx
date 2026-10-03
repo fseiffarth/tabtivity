@@ -178,7 +178,9 @@ export function ServerSecrets() {
           {rekey.state === "running"
             ? t("server.secrets.mailRekey.running", { percent: String(rekey.total > 0 ? Math.floor((rekey.done * 100) / rekey.total) : 0) })
             : rekey.state === "waiting"
-              ? t("server.secrets.mailRekey.waiting")
+              // Unlocked and still waiting: the store has not been opened
+              // since the rotation (the re-key starts with it), not the key.
+              ? t(state.unlocked ? "server.secrets.mailRekey.waitingOpen" : "server.secrets.mailRekey.waiting")
               : t("server.secrets.mailRekey.failed", { error: rekey.error ?? "" })}{" "}
           <UntestedTag id="server.secrets.mailRekey" />
         </p>

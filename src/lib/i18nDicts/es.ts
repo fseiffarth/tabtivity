@@ -2731,6 +2731,7 @@ export const dict: Dict = {
   "server.secrets.newCodeLater": "Más tarde",
   "server.secrets.mailRekey.running": "Volviendo a cifrar tu correo con una clave nueva tras la desconexión: {percent} %. El correo sigue usable mientras tanto.",
   "server.secrets.mailRekey.waiting": "Volviendo a cifrar tu correo con una clave nueva tras la desconexión: esperando a que un dispositivo vinculado desbloquee la clave.",
+  "server.secrets.mailRekey.waitingOpen": "Volviendo a cifrar tu correo con una clave nueva tras la desconexión: empieza la próxima vez que se abra el correo en este servidor.",
   "server.secrets.mailRekey.failed": "El nuevo cifrado de tu correo se detuvo: {error}. Se reintenta en el próximo desbloqueo.",
   "server.settings.error": "El servidor lo rechazó: {error}",
   "filePicker.title": "Elegir un archivo en el servidor",
