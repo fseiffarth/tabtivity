@@ -500,33 +500,42 @@ which need a paired device or the recovery code. The server's administrator
 
 Every user signs in to their agent CLIs with their own login; that is the
 default and always available. The administrator may additionally offer an
-API key per CLI (plan §5.4), and each user decides per CLI which one their
-agents run on.
+API key per CLI to chosen users (plan §5.4), and each of those users decides
+per CLI which one their agents run on.
 
 - **The administrator** offers keys in Settings → Mobile → Server → **Agent
   credentials** (shown to the administrator only). Each CLI that can take a
   key has a card — today Claude (`ANTHROPIC_API_KEY`), Google Gemini
   (`GEMINI_API_KEY`) and Mistral Vibe (`MISTRAL_API_KEY`); Codex takes a key
-  only through its own login file and is not offered yet. **Save key**
-  offers or replaces a key, **Withdraw** takes it back. A saved key is never
-  shown again; the card says since when and by whom it is offered and which
-  users fetched it lately. The keys are kept by a separate service account
-  of the server (`tabtivity-auth`), never in anyone's settings or home.
+  only through its own login file and is not offered. **Save key** offers or
+  replaces a key, **Withdraw** takes it back. A saved key is never shown
+  again; the card says since when and by whom it is offered and which users
+  fetched it lately. The keys are kept by a separate service account of the
+  server (`tabtivity-auth`), never in anyone's settings or home.
+- **Who may use a key** is chosen per key on its card: a new key may be used
+  by **nobody** until you pick users from the server's accounts and press
+  **Allow**; **Remove** takes a user off again. Replacing a key keeps its
+  list, withdrawing it forgets the list. Each change is logged (who added or
+  removed whom), never the key. A user not on the list does not see the key
+  in Manage CLIs.
 - **A user** picks per CLI in Settings → Manage CLIs → Agent logins: **Use
   the administrator's key** or **Use my own login**. While the
   administrator's key is chosen, that CLI's agents — agent tabs, the root
-  console's Host session, and the CLI typed into a shell tab — get the key
-  in their environment at start, and your own login for that CLI is taken
+  console's Host session, the CLI typed into a shell tab, and agent tabs of a
+  project container — run on it, and your own login for that CLI is taken
   out of the agent homes (it stays saved and comes back when you switch
-  back), so the CLI never has two credentials to choose from. Tabs already
-  running keep what they started with. Claude asks once per project whether
-  to use a key from the environment: answer **Yes**.
+  back), so the CLI never has two credentials to choose from. Gemini and
+  Vibe get the key in their environment at start. Claude fetches it through
+  its `apiKeyHelper` setting, which Tabtivity writes into its own agent homes
+  (and removes again when you switch back): Claude asks no question about an
+  API key and stores nothing of it.
 - **What a key costs.** Every agent of a user who chose it can read the key,
   and there is no per-user budget: usage counts against the administrator's
-  account. Withdrawing a key stops new agents at once (their start fails
-  with a note to switch back to your own login); agents already running keep
-  it, so to take a key from them revoke it at the provider. Remote and
-  container agents do not get the administrator's key.
+  account. Withdrawing a key, or taking a user off its list, makes their next
+  agent start fail with a note to switch back to your own login; a running
+  Claude loses it within minutes, other agents already running keep it — to
+  take it from them, revoke the key at the provider. Remote agents and Codex
+  never get the administrator's key.
 
 ### Workspace Apps
 

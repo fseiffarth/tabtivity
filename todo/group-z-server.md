@@ -479,30 +479,24 @@ the desktop groundwork the hosted plan's P1 builds on.*
 
 ### Z.4 — Left by P3b (the administrator's agent API keys; `docs/hosted_handoff.md` § P3b)
 
-2359. **Deliver an administrator's key to a CLI that takes one only in its login file (Codex).**
-    P3b delivers by environment only (the registry's `api_key_env`):
-    Claude, Gemini and Mistral Vibe. Codex's interactive session takes an
-    API key only from `~/.codex/auth.json` (`codex login --with-api-key`),
-    which is exactly the file `agent_auth` shares as the user's own login —
-    writing the admin's key there would need its own path through the
-    keeper loop (placed per spawn, never adopted, removed on withdraw and
-    on switching back). Plan §5.4 allows "the CLI's own key file"; check
-    first whether a current Codex reads `OPENAI_API_KEY`/`CODEX_API_KEY` in
-    its TUI, which would make it an `api_key_env` row instead. (P3b,
+2359. ~~**Deliver an administrator's key to a CLI that takes one only in its login file (Codex).**~~
+    **Decided no** (user, 2026-10-03; § P3b decisions): Codex is not
+    offered an administrator's key. Its interactive session takes a key
+    only from `~/.codex/auth.json`, the very file `agent_auth` shares as
+    the user's own login, and the admin's key must never become that. The
+    Agent credentials panel has no Codex card (no `api_key_env`). (P3b,
     2026-10-03.)
-    - [ ] 🤖 Automated test — a Codex tab on the admin's key gets it, the
-      user's own `auth.json` never holds it, and switching back restores it.
 
-2360. **Verify the three `api_key_env` rows live (plan Q2) and the CLIs' first-use prompts.**
-    The variables come from the vendors' documentation, not from a run:
-    Claude asks once per home whether to use `ANTHROPIC_API_KEY` ("No" is
-    its recommended answer, which leaves the tab signed out on a server
-    where the own login is taken out); Gemini may need "Gemini API key"
-    picked once in `/auth`; Vibe should start without its key prompt. If
-    the prompts get in the way, pre-answer them per home (Claude:
-    `customApiKeyResponses.approved` holds the key's last 20 characters —
-    a fragment in a user-writable file; or an `apiKeyHelper` that reads the
-    variable), or drop the row. (P3b, 2026-10-03.)
+2360. **Verify the three admin-key rows live (plan Q2) and the CLIs' first-use prompts.**
+    The variables come from the vendors' documentation, not from a run.
+    Claude no longer takes the key from its environment: since the P3b
+    decisions it runs `apiKeyHelper` (`<slug>-serverd --key-helper`), so
+    its "use this API key?" question never comes up — verify that `/status`
+    names the helper and no prompt appears, also in a project container.
+    Gemini may need "Gemini API key" picked once in `/auth`; Vibe should
+    start without its key prompt. If those prompts get in the way,
+    pre-answer them per home or drop the row. (P3b, 2026-10-03; Claude
+    updated by the P3b decisions.)
     - [ ] 🖐️ Manual test — on a server, each of Claude, Gemini and Vibe on the admin's key starts a session that answers a prompt.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -513,14 +507,17 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2361. **Decide: does the admin's key reach remote and container agents?**
-    P3b injects it at local spawns only (fenced tabs, the Host session, a
-    typed CLI through the shim). A remote project's agent runs on the far
-    host with its own logins; a container agent gets the env of
-    `sandbox.rs`'s auth pass-through. Sending the admin's key to a machine
-    the admin does not run, or into a container, widens §5.4's exposure;
-    leaving it out means those agents need the user's own login. Default
-    kept: local only. (P3b, 2026-10-03.)
+2361. ~~**Decide: does the admin's key reach remote and container agents?**~~
+    **Decided** (user, 2026-10-03; § P3b decisions): **containers yes —
+    done**: a project container's agent tab gets the key in its `docker
+    exec` environment (`agent_keys::container_env`; named bare on the argv,
+    the value only in the docker client's environment; Claude's helper
+    prints `<PREFIX>ADMIN_KEY_SECRET` there). **Remote agents no**: a machine
+    the administrator does not run never gets the key; a remote project's
+    agents use the user's own login there. (P3b, 2026-10-03.)
+    - [x] 🤖 Automated test — `agent_keys::tests::
+      a_container_agent_gets_the_key_in_its_exec_environment`,
+      `sandbox::tests::exec_argv_carries_no_admin_key_value`.
 
 2362. **The daemon runs no `agent_auth` keeper loop, no first-start import, no SessionStart hook.**
     Found during P3b: the per-user daemon (`server::daemon::main` →
@@ -567,6 +564,25 @@ the desktop groundwork the hosted plan's P1 builds on.*
     `default-command`), keeping the user's own `~/.tmux.conf` in the loop.
     (P3b review, 2026-10-03.)
     - [ ] 🖐️ Manual test — on a Debian server and a Debian desktop, `command -v claude` in a new shell tab names the shim.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2365. **Run the P3b decisions live: per-key users, Claude's `apiKeyHelper`, container agents.**
+    The steps are in `docs/hosted_handoff.md` § P3b decisions "Live steps":
+    a new key is offered to nobody; Alice allows Bob; Bob's Claude starts
+    with no API-key prompt and `/status` names the helper, nothing of the
+    key in `.claude.json` or the environment; a typed `claude`, the Host
+    session and a container agent tab work too; a daemon restart leaves a
+    running Claude working; taking Bob off the list fails his next tab with
+    the message and his running Claude within minutes; the keeper's
+    per-uid cap holds under a flood. (P3b decisions, 2026-10-03.)
+    - [ ] 🖐️ Manual test — the § P3b decisions live list on one server with two users.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)

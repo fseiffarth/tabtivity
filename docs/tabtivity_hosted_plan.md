@@ -715,6 +715,27 @@ credentials** panel. Users opt in per CLI (§5.2).
     user's own login copies leave the agent homes. A withdraw fails the
     next spawn; running agents keep the key. Audit rows in the keeper's and
     the gateway's logs, never the key.
+  - *Decided (user, 2026-10-03; built, § P3b decisions of the handoff):*
+    - **Per-key user list.** The admin picks, per offered key, which server
+      users may use it (none for a new key); the keeper refuses everyone
+      else's fetch by caller uid and lists the key only to them. Edited from
+      the Agent credentials panel, audited per user added or removed.
+    - **Withdrawn, or taken off the list:** the user's next spawn fails with
+      a message naming both and the way back (unchanged).
+    - **Claude through `apiKeyHelper`**, not its environment: the agent
+      home's settings name `<slug>-serverd --key-helper <socket>`, the
+      user's daemon answers that socket (`<state>/key-helper/claude.sock`)
+      by asking the keeper at every call, and only a chosen Claude's fence
+      gets that one directory bound in read-only. No "use this API key?"
+      prompt, nothing of the key in `.claude.json`; switching back removes
+      the setting. A withdraw or removal reaches a running Claude at its
+      next helper call.
+    - **Project-container agents** get the key in their `docker exec`
+      environment (named on the argv only); **remote agents and Codex do
+      not** (#2359, #2361).
+    - The keeper caps connections per caller uid (4) and each exchange at
+      2 s; it remembers earlier keys as fingerprints only, so a rotated key
+      in a login file is never adopted as the user's own.
 - **API key through a broker (P5).** `tabtivity-keybroker`, running as
   `tabtivity-auth`, holds the key. Agents get a base URL pointing at the broker
   plus a **per-user broker token** (for Claude Code, `ANTHROPIC_BASE_URL`).
@@ -1416,9 +1437,12 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   too), and ~~the per-user, per-CLI choice between one's own login and the
   admin's key~~ `acceb24a`, `b7c5f4b0` (Manage CLIs → Agent logins; "never
   both": the own login leaves the homes while the key is chosen) (§5.2,
-  §5.4). Isolation checks of the keeper `787b7c61`. **Open:** Codex (key
-  file only, #2359), the CLIs' first-use prompts (#2360), remote/container
-  agents (#2361), the live run (#2363).
+  §5.4). Isolation checks of the keeper `787b7c61`. User decisions
+  (2026-10-03, § P3b decisions): ~~a per-key user list~~, ~~Claude through
+  `apiKeyHelper`~~, ~~container agents~~, ~~a per-uid keeper cap~~,
+  ~~earlier keys recognised~~. **Decided no:** Codex (#2359), remote agents
+  (#2361). **Open:** the Gemini/Vibe first-use prompts (#2360), the live
+  run (#2363).
 - *Exit:* one user on their own login and one on the admin's key, for the
   same CLI at once, with neither affecting the other (built: per-user
   choice in each user's own state dir, `agent_keys::tests::
@@ -1526,9 +1550,10 @@ research, not a decision: each CLI's row below is verified before that
 option is enabled for it (§5.4):
 - *API keys (P3b):* which variable or file carries the key, and does the CLI
   accept a base-URL override (needed for the broker)? *As of P3b (vendor
-  docs, not verified live — #2360):* Claude `ANTHROPIC_API_KEY`, Gemini
+  docs, not verified live — #2360):* Claude `ANTHROPIC_API_KEY` (delivered
+  through its `apiKeyHelper` setting since the P3b decisions), Gemini
   `GEMINI_API_KEY`, Mistral Vibe `MISTRAL_API_KEY`; Codex only through its
-  login file (`codex login --with-api-key`), not offered yet (#2359).
+  login file (`codex login --with-api-key`), decided not to offer (#2359).
 - *A shared consumer login (P5):* does a refresh rotate the refresh token? Do
   two holders refreshing at once invalidate each other? Does the CLI run on a
   replica it can't write back, or on an access token alone? How is a leaked
