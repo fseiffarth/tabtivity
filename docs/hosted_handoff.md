@@ -1170,3 +1170,121 @@ server. Not touched as instructed: #2356, #2339, #2347, the idle stop.
 | `scripts/privacy-check.sh 418d6f61..HEAD` | green (10 commits, 4445 added lines); pre-commit hook on every commit |
 | `git diff --check 418d6f61 HEAD` | clean |
 | `ldd target/debug/tabtivity-serverd` (built with `cargo build -p app-serverd` alone) | `linux-vdso.so.1`, `libgcc_s.so.1`, `libm.so.6`, `libc.so.6`, `/lib64/ld-linux-x86-64.so.2` — nothing else |
+
+## P3 part 2 review
+
+*Written 2026-10-03 by the P3 part-2 reviewer. Range `418d6f61..bd805ee5`
+(12 commits), worktree `hosted`. Nothing run live, nothing as root, no
+daemon/gateway against a real state dir or port; the helper and the
+isolation script were not run. `keyctl` is EPERM in this fence (expected).*
+
+### What was checked
+
+- **Vault / crypto:** `secrets.rs` + `vault.rs` + routes in
+  `mobile_control/host.rs`/`auth.rs`, `mobile-web/src/secrets.ts`. P-256
+  ECDH, HKDF-SHA256, AES-256-GCM with random 96-bit nonces (one use per key
+  for the transport key; the per-device KEK is fresh per wrap; the
+  credential store reseals with a fresh nonce under one subkey — fine at
+  this write rate). Signed start binds context, origin, device id, exchange
+  id, X and E; the device checks payload text and signature against the
+  identity pinned at enrolment; exchange single-use, 60 s, bound to the
+  device id; AAD binds device id + exchange id; replay of an answer to a
+  new exchange fails (new E). Revoke deletes the wrap and sessions; a
+  revoked device gets `no-wrap`. Daemons are per uid with their own state
+  dirs, so a device of A has no path to B's vault. Recovery code 128 bits
+  (HKDF, no slow KDF needed). WebCrypto keys non-extractable in the auth
+  IndexedDB. Sealed files 0600 via atomic writes in a 0700 dir. Device-mode
+  mail never opens plaintext on the silent path; the desktop path
+  (`enable_default` → keychain) is unchanged.
+- **Rate limits** (`rate.rs`, gateway `pair`/`by_device`): strangers never
+  reach a known device's windows; known sign-ins are not keyed by source
+  (forgeable `X-Forwarded-For` from a local account); keyed maps bounded at
+  4096 with stale sweep + overflow window; `invite_until` gating.
+- **Sudoers parser**, `ADMIN_GROUPS`, re-checks at execution, nsswitch.
+- **Feature split:** generator reads both attribute forms and gated `mod.rs`
+  cfgs; desktop registration unchanged (P0 completeness and
+  `CONVERTED_COMMAND_FILES` tests green); compiled-out code in the daemon
+  (credentials → vault only, X11 → headless stubs, notifications).
+  **Ran the library's tests in the no-`desktop` build for the first time:
+  3121, one desktop-keychain test failed** → gated, and CI now runs them.
+- **Side by side:** state dir / app home, tmux (`-L <slug>` under
+  `/run/<slug>/tmux/<user>` vs the desktop's default server), control
+  sockets, agent homes, ports; `check`'s `hidepid`/`proc_group`.
+- **Manage CLIs ask-admin**, **VM proxy 407** (128-bit hex token, 0600,
+  constant-time compare, other accounts 407; state dir 0700 keeps the seed
+  private), i18n ×5, UntestedTag rows, file maps.
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 1 | **high** | `commands/mail.rs::store_of` armed `vault.on_unlock` for *any* unlock note, and `on_unlock` fires at once while K is held. A passphrase-mode mailbox on a server, a missing `key.json` with sealed leftovers, or a device store whose wrap does not fit K reopened, failed identically and re-armed — one new thread per round, forever, in the daemon. | fixed `d9dd6aed`: only `DEVICE_LOCKED`/`DEVICE_NOT_SET_UP` with K absent at open waits; the listener reopens only such a store. Test `only_a_store_waiting_for_the_secrets_key_reopens_on_release`. |
+| 2 | **high** (server remote projects) | The daemon's state dir `~/.local/share/<slug>-server/ssh-control` + the master's `cm-<40>.<16>` exceeds `sun_path` for **every** user name (≥108 bytes), and a system unit has no `$XDG_RUNTIME_DIR`, so `pick_control_dir` kept the too-long path: every ssh master on the server would log in and exit. Part 2's dir move made this universal (part 1: names over five letters). | fixed `f2365522`: last fallback `/tmp/<slug>-ssh-<uid>` (the unit's private `/tmp`), used only when it is a 0700 dir owned by this uid and not a link. Tests for both. |
+| 3 | **medium** (desktop regression) | The proxy token changes every existing Proxy VM's user-data once → new instance id → cloud-init's per-instance `ssh` module regenerates host keys (`ssh_deletekeys` defaults on) → `accept-new` refuses the changed key in the per-VM `known_hosts`: the VM was unreachable after its next boot (the handoff's "re-provisioned once" missed this; switching egress mode had the same latent bug). | fixed `6a91339e`: a re-provision (earlier seed, different user-data) drops `<vm dir>/known_hosts` first. Test. |
+| 4 | **medium** (fail open) | The sudoers check compared raw tokens: `"alice" ALL=ALL`, `bob,"alice"`, `ali\ce`, `! alice`, `%"staff"`, a quoted `User_Alias` member — all valid sudoers naming the account — were not matched, so the helper would link a sudo-capable account. | fixed `42b81fa2`: quote/escape-aware user-list tokenizer, same cleaning for alias members. Six new cases in `every_way_of_naming_the_account_counts`. |
+| 5 | **medium** | `Vault::identity` minted the identity key after checking "not found" *outside* the file lock: two first uses at once (two devices enrolling, enrolment beside an unlock start) each wrote a key; a device that pinned the overwritten one fails every exchange (`untrusted`) and, being `enrolled`, never re-enrols. | fixed `2a2aa1ed`: re-read under the lock. Test `concurrent_first_uses_share_one_identity_key`. |
+| 6 | **low** | A device enrolling a **new** ECDH key kept the wrap made for its old one (`wrap_missing` skips devices that have a wrap): it could never release K again (path: a save failure in `secrets.ts` after a successful enrol). | fixed `2a2aa1ed`: `enrol_secrets_key` drops the stale wrap; the route's `wrap_missing` re-wraps while unlocked. Covered in `tests/server_secrets.rs`. |
+| 7 | **low** (test gap) | The daemon's no-`desktop` library tests never ran; one failed there. | fixed `ec303ea5`: test gated on `desktop`; CI step `cargo test -p <app> --no-default-features --lib --test server_secrets`. |
+
+### Judgment calls (open, not changed)
+
+- **Same-uid processes outside the fence can read K.** The persistent
+  keyring is per uid; only the fence's seccomp blocks `keyctl`. A plain
+  shell tab, the user's SSH login, or project code Tabtivity runs on the
+  host (build scripts) can `keyctl` it. The design's adversary is a copy of
+  the home (backup, admin `cp`), and that holds; say so in the user docs.
+- **Set-up and "New recovery code" need only a session cookie**, unlike
+  enrolment (pairing-key signature). A stolen browser session can already
+  open an unfenced shell (→ K), so a signature would not raise the bar
+  today; revisit if server shells get fenced.
+- **Revoke does not rotate K**: a revoked device plus an older copy of
+  `wraps.json` still opens K offline. Rotation means re-sealing the mail KEK
+  and the credential store — a design step.
+- **No re-pin path for the identity key**: if `secrets/identity.key` is lost
+  (partial restore), every device answers `untrusted` forever. A re-enrol
+  on `untrusted` would be TOFU again; needs a decision.
+- **The recovery code crosses the TLS-terminating gateway in clear** (the
+  device exchange does not). The gateway is root's; acceptable, note it.
+- **Persistent keyring expiry** (`persistent_keyring_expiry`, default 3
+  days since the last `KEYCTL_GET_PERSISTENT`): a daemon with no request in
+  that time loses K; mail stays open in the running daemon (session keys),
+  new opens wait for a device. Matches "or after the keyring's expiry".
+- **Rate limits:** whoever knows a device id (not a secret) can exhaust that
+  device's 30/min and the account's 240/min; during an invite or the 15-min
+  active window a pair is forwarded, so timing/answers differ from an
+  unknown account (documented residuals).
+- `check`'s `proc_group` reads `/etc/group` members only (a primary-gid
+  member or an LDAP group is not seen; link-time `check_account` uses the
+  full group list). `mail_encryption_decline` still lets a server user keep
+  a plaintext store by explicit choice.
+- **Exchange table** (32 pending, 60 s): one signed-in device can make
+  others' starts answer `rate_limited` for a minute.
+
+### Gates (worktree, 2026-10-03, at `d9dd6aed` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **697 files, 7071 tests**, all pass (unchanged: no frontend change) |
+| `cargo test --workspace -q --no-fail-fast` | **3563 passed**, 0 failed, 2 ignored, 22 binaries (src-tauri lib 3216, +3) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` (new CI step) | **3122 + 1 passed**, 2 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo build -p app-serverd` + `ldd` | libc, libm, libgcc_s, vdso, ld-linux only |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 418d6f61..HEAD` | green |
+| `git diff --check 418d6f61 HEAD` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change in the review) |
+
+### Live steps added to § P3 part 2's list
+
+- After step 8 (VM proxy): a Proxy VM **made before this build** boots and
+  is reachable over ssh (its host key was re-recorded; no "host key
+  changed").
+- On the server, a remote (ssh) project as Alice connects, and
+  `ls -la /tmp/` inside her daemon's namespace (e.g. from a shell tab:
+  `ls -ld /tmp/*-ssh-$(id -u)`) shows the 0700 control dir.
+- A passphrase-mode mailbox on a server with the key unlocked: the
+  daemon's thread count stays flat (`ls /proc/$(pgrep -u alice -f serverd)/task | wc -l`).
