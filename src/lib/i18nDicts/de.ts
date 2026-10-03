@@ -6447,6 +6447,8 @@ export const dict: Dict = {
   "pdfMarkup.toggle": "Markieren",
   "pdfMarkup.toggleTitle": "Dieses PDF markieren und die Markierungen an einen Agenten-Tab dieses Projekts senden",
   "pdfMarkup.toggleAsks": "Ein Agent-Tab hat Fragen zu diesem PDF — Markieren öffnet sie",
+  "pdfMarkup.questions.elsewhere": "„{tab}“ hat auch Fragen zu diesem PDF",
+  "pdfMarkup.questions.elsewhereShow": "Fragen zeigen",
   "pdfMarkup.toggleArranged": "Markieren arbeitet auf dem gespeicherten PDF — speichere die Seitenänderungen oder mache sie rückgängig",
   "pdfMarkup.toggleClaimed": "Dieses PDF wird in einem anderen Bereich markiert",
   "pdfMarkup.hint": "Auf die Seiten zeichnen — bleibt auf diesem Computer, bis du absendest.",

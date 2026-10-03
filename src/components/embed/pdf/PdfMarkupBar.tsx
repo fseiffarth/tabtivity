@@ -196,7 +196,7 @@ export function PdfMarkupBar({
         </button>
       </div>
       {(round || markup.stale || busy || markup.failure || markup.storage === "unsaved" || markup.changed
-        || markup.leftOut > 0 || markup.limitHit) && (
+        || markup.leftOut > 0 || markup.limitHit || markup.askElsewhere) && (
         <div className="file-viewer-pdf-copy-bar file-viewer-pdf-markup-status" role="status" aria-live="polite">
           {round && roundWords && (
             <span className="file-viewer-pdf-markup-round">
@@ -227,6 +227,20 @@ export function PdfMarkupBar({
             </button>
           )}
           {round && <UntestedTag id="desktop.markup" />}
+          {markup.askElsewhere && (
+            <span>
+              {t("pdfMarkup.questions.elsewhere", { tab: markup.askElsewhere.label })}{" "}
+              <button
+                type="button"
+                className="file-viewer-zoom-btn file-viewer-zoom-text"
+                onClick={() => markup.askElsewhere && markup.chooseTarget(markup.askElsewhere.scheduleTargetId)}
+                disabled={busy}
+              >
+                {t("pdfMarkup.questions.elsewhereShow")}
+              </button>
+              <UntestedTag id="desktop.markup.questions" />
+            </span>
+          )}
           {busy && <span>{t("mobile.markup.sendingMarks")}</span>}
           {markup.storage === "unsaved" && <span>{t("pdfMarkup.unsaved")}</span>}
           {markup.changed && <span>{t("mobile.markup.changed")}</span>}

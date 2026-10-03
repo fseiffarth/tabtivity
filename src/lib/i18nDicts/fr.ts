@@ -6445,6 +6445,8 @@ export const dict: Dict = {
   "pdfMarkup.toggle": "Annoter",
   "pdfMarkup.toggleTitle": "Annoter ce PDF et envoyer les annotations à un onglet d'agent de ce projet",
   "pdfMarkup.toggleAsks": "Un onglet d'agent pose des questions sur ce PDF — Annoter les affiche",
+  "pdfMarkup.questions.elsewhere": "« {tab} » pose aussi des questions sur ce PDF",
+  "pdfMarkup.questions.elsewhereShow": "Voir ses questions",
   "pdfMarkup.toggleArranged": "Annoter travaille sur le PDF enregistré — enregistrez ou annulez d'abord les modifications de pages",
   "pdfMarkup.toggleClaimed": "Ce PDF est en cours d'annotation dans un autre panneau",
   "pdfMarkup.hint": "Dessinez sur les pages — reste sur cet ordinateur jusqu'à l'envoi.",

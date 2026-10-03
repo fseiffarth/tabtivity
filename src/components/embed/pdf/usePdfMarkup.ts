@@ -337,12 +337,15 @@ export function usePdfMarkup({
   const targetId = target?.scheduleTargetId ?? null;
   const asksKey = active && projectId && targetId ? `${projectId}\n${targetId}\n${path}` : null;
   const asks = useMemo(() => (listed && listed.key === asksKey ? listed.asks : []), [listed, asksKey]);
-  // Marking off (todo #2341): every agent tab of the project is asked, none
-  // chosen, whether it has an open ask for this file — the Mark up button
-  // then says so and opens the strip on the asking tab.
+  // The project's other agent tabs are asked whether they have an open ask
+  // for this file: marking off (todo #2341), every one — the Mark up button
+  // then says so and opens the strip on the asking tab; marking, every one
+  // but the chosen — the strip names the asking tab and switches to it.
   // Keyed by the ids, not the `targets` object: a relabel or any other tab's
   // change hands the hook a new list, and must not re-read every tab.
-  const idleIdList = !active && projectId ? targets.map((entry) => entry.scheduleTargetId).join("\n") : "";
+  const idleIdList = projectId
+    ? targets.flatMap((entry) => (active && entry.scheduleTargetId === targetId ? [] : [entry.scheduleTargetId])).join("\n")
+    : "";
   const idleIds = useMemo(() => (idleIdList ? idleIdList.split("\n") : []), [idleIdList]);
   const idleKey = projectId && idleIds.length ? `${projectId}\n${idleIds.join("\n")}\n${path}` : null;
   const [waiting, setWaiting] = useState<{ key: string; target: string | null } | null>(null);
@@ -380,7 +383,7 @@ export function usePdfMarkup({
       live = false;
     };
   }, [asksKey, projectId, targetId, path, visible, answering, asksChanged]);
-  // The same reads while marking is off, one per agent tab, on screen only.
+  // The same reads for the other agent tabs, one per tab, on screen only.
   useEffect(() => {
     if (!idleKey || !projectId || !visible) return;
     let live = true;
@@ -394,8 +397,12 @@ export function usePdfMarkup({
       live = false;
     };
   }, [idleKey, idleIds, projectId, path, visible, asksChanged]);
-  /** The agent tab with an open ask for this file while marking is off. */
-  const askWaiting = waiting && waiting.key === idleKey ? waiting.target : null;
+  /** An agent tab other than the chosen one (any, while marking is off)
+   *  with an open ask for this file. */
+  const askOther = waiting && waiting.key === idleKey ? waiting.target : null;
+  const askWaiting = active ? null : askOther;
+  /** Marking for one tab while another asks about this file. */
+  const askElsewhere = active && askOther ? targets.find((entry) => entry.scheduleTargetId === askOther) ?? null : null;
   // An open ask is the agent asking: the round's pill says so.
   const agent = asks.length > 0 && tabAgent === "idle" ? "question" : tabAgent;
 
@@ -675,6 +682,7 @@ export function usePdfMarkup({
     agent,
     questions,
     askWaiting,
+    askElsewhere,
     round,
     reloaded,
     stale: pdfStale,

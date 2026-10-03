@@ -336,12 +336,17 @@ describe("an ask waiting while marking is off", () => {
     expect(seen?.askWaiting).toBe("s2");
   });
 
-  it("is not listed per tab once marking is on", async () => {
+  it("names another tab that asks while marking for the chosen one, and switches to it", async () => {
     open = [ask([single])];
     render(<Idle active />);
-    await act(async () => {});
-    expect(calls("markup_mcp_list").every(([, args]) => (args as { scheduleTargetId: string }).scheduleTargetId === "s1")).toBe(true);
+    await waitFor(() => expect(seen?.askElsewhere?.scheduleTargetId).toBe("s2"));
+    expect(seen?.target?.scheduleTargetId).toBe("s1");
     expect(seen?.askWaiting).toBeNull();
+    expect(seen?.questions.asks).toEqual([]);
+    act(() => seen?.chooseTarget("s2"));
+    await waitFor(() => expect(seen?.questions.asks).toHaveLength(1));
+    // Now the chosen tab: no other one asks.
+    await waitFor(() => expect(seen?.askElsewhere).toBeNull());
   });
 });
 
