@@ -167,7 +167,13 @@ pub async fn share_add(share: String) -> Result<ProjectEntry, String> {
                 return Err(e);
             }
         };
-        share::adopt_in(&state, &entry.id, &info, &dest)?;
+        // Without its link the clone would be an ordinary project: hooks on,
+        // nothing reviewed. Not registered then, and not kept.
+        if let Err(e) = share::adopt_in(&state, &entry.id, &info, &dest) {
+            let _ = crate::commands::projects::forget_project_blocking(entry.id.clone());
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(e);
+        }
         Ok(entry)
     })
     .await
