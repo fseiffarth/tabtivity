@@ -241,4 +241,3 @@ describe("boxes store — an edit that is not saved is not shown (final review B
     expect(useBoxesStore.getState().boxes[0]).toMatchObject({ color: "#112233", rev: 4 });
   });
 });
-
