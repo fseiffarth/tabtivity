@@ -59,16 +59,22 @@ pub struct ProjectRuntimeSwitchedPayload {
 ///
 /// `previous_local_file` and `next_local_file` are the paths to the respective
 /// `project.json` files.
-pub fn switch(
+/// The half of a project switch that is the backend's wherever it runs
+/// (hosted plan §10 P2, `switch_project_runtime` split): the project's own
+/// name migration happens in the command, then here — the previous project's
+/// elapsed time and tab layout (through the workspace service), the next
+/// project's session, the `project-runtime-switched` event the frontend
+/// restores from, and the container/VM hand-over. A window then hides and
+/// shows the projects' OS windows ([`switch`]); a server has no windows and
+/// stops here (`commands::project_runtime::switch_project_session`).
+pub fn switch_session(
     ctx: &CoreCtx,
-    workspace: &WorkspaceStateArc,
-    win_registry: &WindowRegistryState,
     project_id: Option<&str>,
     previous_project_id: Option<&str>,
     previous_local_file: Option<&str>,
     next_local_file: Option<&str>,
     snapshot: &PreviousProjectSnapshot,
-) -> Result<ProjectRuntimeSwitchedPayload, String> {
+) -> ProjectRuntimeSwitchedPayload {
     // 1. Flush elapsed time for the previous project.
     if snapshot.flush_secs > 0.0 {
         if let Some(prev_id) = previous_project_id {
@@ -111,9 +117,6 @@ pub fn switch(
     let next_terminal_session = project_id
         .map(terminal_service::load_terminal_session)
         .unwrap_or_default();
-    let next_open_apps = project_id
-        .map(terminal_service::load_open_apps)
-        .unwrap_or_default();
     let (next_file_tabs, next_side_panel_folder) = next_local_file
         .map(load_file_tab_session)
         .unwrap_or_default();
@@ -134,6 +137,62 @@ pub fn switch(
         opened_window_ids: vec![],
     };
     ctx.emit("project-runtime-switched", payload.clone());
+
+    // 10. Project containers (#38): tear down the container of the project
+    //     being left — unless tabs are still live inside it (a background
+    //     agent keeps its container until they finish or the app exits) — and
+    //     warm up the next project's. On its own thread, not merely off the
+    //     UI thread: `up()` can build an image (minutes) and must never delay
+    //     the switch; the spawn-path `up()` stays the fallback for tabs
+    //     opened before the warm-up completes, and sandbox's lifecycle lock
+    //     serializes rapid switches. Best-effort by design.
+    {
+        let registry = ctx.get::<crate::commands::terminal::RegistryState>().clone();
+        let prev = previous_project_id.map(String::from);
+        let next = project_id.map(String::from);
+        std::thread::spawn(move || {
+            if let Some(prev) = prev {
+                let live = registry.lock().unwrap().any_live_for_scope(&prev);
+                if !live {
+                    crate::services::sandbox::down_for_project(&prev);
+                    // The container rule, verbatim, for the VM tier
+                    // (`docs/vm_projects_plan.md`): a deactivated VM project
+                    // with no live tabs powers its VM down; live tabs keep it
+                    // up until they close. No-op for every other project.
+                    if crate::services::vm::is_running(&prev) {
+                        crate::services::vm::shutdown(&prev);
+                    }
+                }
+            }
+            if let Some(next) = next {
+                if let Err(e) = crate::services::sandbox::up_for_project(&next) {
+                    eprintln!("sandbox: container for '{next}': {e}");
+                }
+            }
+        });
+    }
+
+    payload
+}
+
+pub fn switch(
+    ctx: &CoreCtx,
+    workspace: &WorkspaceStateArc,
+    win_registry: &WindowRegistryState,
+    project_id: Option<&str>,
+    previous_project_id: Option<&str>,
+    previous_local_file: Option<&str>,
+    next_local_file: Option<&str>,
+    snapshot: &PreviousProjectSnapshot,
+) -> Result<ProjectRuntimeSwitchedPayload, String> {
+    let payload = switch_session(
+        ctx,
+        project_id,
+        previous_project_id,
+        previous_local_file,
+        next_local_file,
+        snapshot,
+    );
 
     // 5. Hide previous project-owned windows.
     //    Acquire WindowRegistry before WorkspaceState (lock order).
@@ -180,8 +239,10 @@ pub fn switch(
         window_service::save_window_session(local_file, &prev_reg_ids);
     }
 
-    // 7. Restore standalone project apps.
+    // 7. Restore standalone project apps — a window's job (OS apps on this
+    //    machine), so their list is read here, not in `switch_session`.
     if let Some(next_id) = project_id {
+        let next_open_apps = terminal_service::load_open_apps(next_id);
         restore_service::restore_project_apps(win_registry, &next_open_apps, next_id);
     }
 
@@ -200,40 +261,6 @@ pub fn switch(
         let wins = win_registry.lock().unwrap();
         window_service::project_tracked_ids(&wins.windows, project_id)
     };
-
-    // 10. Project containers (#38): tear down the container of the project
-    //     being left — unless tabs are still live inside it (a background
-    //     agent keeps its container until they finish or the app exits) — and
-    //     warm up the next project's. On its own thread, not merely off the
-    //     UI thread: `up()` can build an image (minutes) and must never delay
-    //     the switch; the spawn-path `up()` stays the fallback for tabs
-    //     opened before the warm-up completes, and sandbox's lifecycle lock
-    //     serializes rapid switches. Best-effort by design.
-    {
-        let registry = ctx.get::<crate::commands::terminal::RegistryState>().clone();
-        let prev = previous_project_id.map(String::from);
-        let next = project_id.map(String::from);
-        std::thread::spawn(move || {
-            if let Some(prev) = prev {
-                let live = registry.lock().unwrap().any_live_for_scope(&prev);
-                if !live {
-                    crate::services::sandbox::down_for_project(&prev);
-                    // The container rule, verbatim, for the VM tier
-                    // (`docs/vm_projects_plan.md`): a deactivated VM project
-                    // with no live tabs powers its VM down; live tabs keep it
-                    // up until they close. No-op for every other project.
-                    if crate::services::vm::is_running(&prev) {
-                        crate::services::vm::shutdown(&prev);
-                    }
-                }
-            }
-            if let Some(next) = next {
-                if let Err(e) = crate::services::sandbox::up_for_project(&next) {
-                    eprintln!("sandbox: container for '{next}': {e}");
-                }
-            }
-        });
-    }
 
     Ok(ProjectRuntimeSwitchedPayload {
         opened_window_ids,

@@ -476,6 +476,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["load_side_panel_folder", "core"],
   ["save_side_panel_folder", "core"],
   ["switch_project_runtime", "client"],
+  ["switch_project_session", "core"],
   ["add_compute_host", "core"],
   ["adopt_folder_tab_layout", "core"],
   ["archived_mirror_unsynced", "core"],

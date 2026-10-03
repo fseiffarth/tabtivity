@@ -40,6 +40,11 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
       window.open(url, "_blank", "noopener");
       return Promise.resolve();
     }
+    // A project switch's window half has nothing to do in a browser; its
+    // backend half (name migration, layout save, session load, the
+    // `project-runtime-switched` event) runs on the server.
+    case "switch_project_runtime":
+      return client.call("switch_project_session", args);
     // The desktop's own state: nothing to save, nothing to show.
     case "save_window_state":
       return Promise.resolve();

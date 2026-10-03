@@ -684,6 +684,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),
     ("switch_project_runtime", Client),
+    ("switch_project_session", Core),
     // commands/projects.rs
     ("add_compute_host", Core),
     ("adopt_folder_tab_layout", Core),

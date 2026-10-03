@@ -2089,6 +2089,7 @@ pub fn run() {
             commands::workspace::network_identity,
             // Project-runtime switching (replaces switch_project_windows)
             commands::project_runtime::switch_project_runtime,
+            commands::project_runtime::switch_project_session,
             commands::project_runtime::load_side_panel_folder,
             commands::project_runtime::save_side_panel_folder,
             // Git
