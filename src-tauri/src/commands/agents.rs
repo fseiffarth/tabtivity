@@ -896,10 +896,25 @@ pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     run_installer(ctx.0.clone(), spec)
 }
 
+/// On a server (hosted plan §5.1) the CLI install root belongs to the CLI
+/// account, not to any user's daemon — not even the admin's: installs,
+/// updates and removals go through the admin helper on the server itself.
+fn server_installs_are_the_helpers(id: &str) -> Result<(), String> {
+    if crate::services::server::is_server() {
+        return Err(format!(
+            "On this server agent CLIs are installed by the administrator: sudo {}admin-helper cli-install {id}",
+            crate::brand::SERVER_ACCOUNT_PREFIX
+        ));
+    }
+    Ok(())
+}
+
 /// Run `spec`'s installer, streaming its output; the body of [`install_agent`]
 /// and [`update_agent`].
 fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
+
+    server_installs_are_the_helpers(spec.id)?;
 
     let id_owned = spec.id.to_string();
     let emit = move |line: &str| {
@@ -1087,6 +1102,7 @@ fn npm_uninstall_command(pkg: &str) -> std::process::Command {
 #[tauri::command]
 pub async fn uninstall_agent(id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    server_installs_are_the_helpers(spec.id)?;
 
     let cmd_for_platform = if cfg!(windows) {
         spec.install_cmd_windows.unwrap_or(spec.install_cmd)
