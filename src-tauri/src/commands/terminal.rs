@@ -6,6 +6,16 @@ use crate::tauri_host::Ctx;
 
 pub type RegistryState = Arc<Mutex<PtyRegistry>>;
 
+/// The PTY the caller means by `id`: a server client's own attach PTY onto
+/// that tab when it has one (TODO #2347, `PtyRegistry::resolve`), else `id`.
+/// A desktop window never has one, so its calls skip the lookup.
+fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> String {
+    match ctx.caller {
+        app_core::Caller::Client(_) => registry.lock().unwrap().resolve(&ctx.caller, &id),
+        _ => id,
+    }
+}
+
 /// What `pty_spawn` tells the tab it launched.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct PtySpawned {
@@ -15,6 +25,12 @@ pub struct PtySpawned {
     /// The tab's previous process died mid-turn (`agent_turn::bind_tab`): the
     /// tab starts out marked interrupted.
     pub interrupted: bool,
+    /// A server client joined a tab another client already runs (TODO #2347):
+    /// its PTY is one more tmux client of the running session, so nothing may
+    /// be typed into it on the launch's behalf. Never set on the desktop, and
+    /// left out of the answer when unset.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub attached: bool,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -24,6 +40,23 @@ pub async fn pty_spawn(
     session_name: Option<String>,
 ) -> Result<PtySpawned, String> {
     let registry = ctx.get::<RegistryState>();
+    // A server client opening a tab another client already runs in local
+    // tmux gets a tmux client of its own instead of replacing that one's
+    // (TODO #2347). Every desktop window takes the ordinary spawn below.
+    let join = crate::terminal::join_tab(
+        &ctx,
+        registry,
+        &opts,
+        crate::services::tmux_local::attach_argv,
+    )?;
+    if let Some(stale) = join.stale {
+        app_core::rt::spawn_blocking(move || stale.teardown())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if join.attached {
+        return Ok(PtySpawned { attached: true, ..PtySpawned::default() });
+    }
     let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     // The launch assembly is shared with the Mobile sidecar's headless spawn
     // (`services::launch_prep`); this command keeps what needs the window:
@@ -56,7 +89,7 @@ pub async fn pty_spawn(
             ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
     }
-    result.map(|()| PtySpawned { named, interrupted })
+    result.map(|()| PtySpawned { named, interrupted, attached: false })
 }
 
 /// Honest per-scope fence status for the project-pill menu.  This performs no
@@ -230,6 +263,7 @@ pub async fn pty_write(
     // Watch for a Tabtivity-minted interactive login command being typed in, which is
     // what marks this PTY as a legitimate destination for the matching saved
     // credential (see `commands::credentials`).
+    let id = pty_id_for(&ctx, registry, id);
     crate::commands::credentials::note_pty_input(&id, &data);
     let sender = registry.lock().unwrap().input_sender(&id);
     if let Some(sender) = sender {
@@ -249,6 +283,9 @@ pub async fn pty_resize(
     rows: u16,
 ) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();
+    // A server client resizes its own PTY onto the tab, never another
+    // client's: each has its own size (TODO #2347).
+    let id = pty_id_for(&ctx, registry, id);
     crate::terminal::resize_pty(registry, &id, cols, rows)
 }
 
@@ -273,7 +310,9 @@ pub async fn pty_set_visible(
     let window = ctx
         .caller
         .client()
-        .ok_or_else(|| "pty_set_visible: no calling client".to_string())?;
+        .ok_or_else(|| "pty_set_visible: no calling client".to_string())?
+        .clone();
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_set_visible(&ctx, &id, &viewer_id, visible, update_seq, window.as_str());
     Ok(())
 }
@@ -288,13 +327,18 @@ pub async fn pty_set_visible(
 /// byte. A read, not a drain: a third window attaching later gets it too.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_scrollback(
+    ctx: Ctx,
     id: String,
 ) -> Result<crate::terminal::TerminalScrollback, String> {
+    // A server client's catch-up is its own stream's: the offsets it saw are
+    // that PTY's (TODO #2347).
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     Ok(crate::terminal::route_scrollback(&id))
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> Result<(), String> {
+pub async fn pty_remove_view(ctx: Ctx, id: String, viewer_id: String, update_seq: u64) -> Result<(), String> {
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_remove_view(&id, &viewer_id, update_seq);
     Ok(())
 }
@@ -304,12 +348,14 @@ pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> 
 /// stream (`useRemoteSession`/`useRemoteReconnect`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_watch(ctx: Ctx, id: String) -> Result<(), String> {
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_watch(&ctx, &id);
     Ok(())
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pty_unwatch(id: String) -> Result<(), String> {
+pub async fn pty_unwatch(ctx: Ctx, id: String) -> Result<(), String> {
+    let id = pty_id_for(&ctx, ctx.get::<RegistryState>(), id);
     crate::terminal::route_unwatch(&id);
     Ok(())
 }
@@ -317,6 +363,20 @@ pub async fn pty_unwatch(id: String) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     let registry = ctx.get::<RegistryState>();
+    // A server client with its own attach PTY onto the tab closes that one —
+    // a tmux client; the tab's own PTY and the session are another client's
+    // (TODO #2347). Its route goes with it: nothing else will ever end it.
+    let resolved = pty_id_for(&ctx, registry, id.clone());
+    if resolved != id {
+        let taken = registry.lock().unwrap().take(&resolved);
+        crate::terminal::route_remove_all_views(&resolved);
+        if let Some(taken) = taken {
+            app_core::rt::spawn_blocking(move || taken.teardown())
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
     // The terminal is gone, so its login marking must not outlive it and bless a
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);

@@ -449,19 +449,18 @@ impl Tickets {
 
 // ── State ────────────────────────────────────────────────────────────────
 
-/// A client gone within the grace window: what it owned, to adopt or reap.
+/// A client gone within the grace window, to resume or reap. What it owns is
+/// the PTY registry's record (`PtyMeta::client`), keyed by the client id a
+/// resume keeps.
 struct Parked {
-    ptys: HashSet<String>,
     since: Instant,
 }
 
 /// A connected client: the connection holding its id (a page that comes back
 /// with `?resume=` before the server noticed the old link die takes the id
-/// over, and the stale connection must then neither detach nor park it) and
-/// the PTYs it spawned.
+/// over, and the stale connection must then neither detach nor park it).
 struct Live {
     generation: u64,
-    ptys: Arc<Mutex<HashSet<String>>>,
 }
 
 /// What a host behind the gateway (the per-user daemon, hosted plan §3.1)
@@ -553,34 +552,28 @@ impl WebClientState {
     }
 
     /// A new connection's client id and generation. `resume` names the id a
-    /// page held before its link dropped: a parked id is adopted with the
-    /// PTYs it owned; an id the server still counts as connected (its close
-    /// never arrived — the usual case for a link that died, not closed) is
-    /// taken over, and the stale connection, superseded, ends on its own
-    /// (its link is replaced in [`WebEvents`]) without parking anything.
+    /// page held before its link dropped: a parked id is adopted, and with it
+    /// the PTYs the registry records as that client's; an id the server still
+    /// counts as connected (its close never arrived — the usual case for a link
+    /// that died, not closed) is taken over, and the stale connection,
+    /// superseded, ends on its own (its link is replaced in [`WebEvents`])
+    /// without parking anything.
     fn register(&self, resume: Option<String>) -> (ClientId, u64) {
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         // Lock order everywhere: parked before live.
         let mut parked = self.lock_parked();
         let mut live = self.lock_live();
-        let resumed = resume.and_then(|id| {
-            let id = ClientId::new(id);
-            if let Some(p) = parked.remove(&id) {
-                return Some((id, Arc::new(Mutex::new(p.ptys))));
-            }
-            live.get(&id).map(|l| (id.clone(), l.ptys.clone()))
-        });
-        let (client, ptys) = resumed.unwrap_or_else(|| {
-            (ClientId::new(format!("web-{}", self.next_client.fetch_add(1, Ordering::Relaxed))), Arc::default())
-        });
-        live.insert(client.clone(), Live { generation, ptys });
+        let resumed = resume.map(ClientId::new).filter(|id| parked.remove(id).is_some() || live.contains_key(id));
+        let client = resumed
+            .unwrap_or_else(|| ClientId::new(format!("web-{}", self.next_client.fetch_add(1, Ordering::Relaxed))));
+        live.insert(client.clone(), Live { generation });
         (client, generation)
     }
 
     /// The connection `generation` of `client` ended. `true` when it still
-    /// held the id: the id is parked with its PTYs for [`RESUME_GRACE`]. `false`
-    /// when a resumed connection took the id over meanwhile — then nothing
-    /// is parked and the caller must not detach the (new) link either.
+    /// held the id: the id is parked for [`RESUME_GRACE`]. `false` when a
+    /// resumed connection took the id over meanwhile — then nothing is parked
+    /// and the caller must not detach the (new) link either.
     fn release(&self, client: &ClientId, generation: u64) -> bool {
         let mut parked = self.lock_parked();
         let mut live = self.lock_live();
@@ -588,49 +581,20 @@ impl WebClientState {
             Some(l) if l.generation == generation => {}
             _ => return false,
         }
-        let owned = live
-            .remove(client)
-            .map(|l| std::mem::take(&mut *l.ptys.lock().unwrap_or_else(PoisonError::into_inner)))
-            .unwrap_or_default();
-        parked.insert(client.clone(), Parked { ptys: owned, since: Instant::now() });
+        live.remove(client);
+        parked.insert(client.clone(), Parked { since: Instant::now() });
         true
     }
 
-    /// `client` spawned PTY `id`: it owns it now, alone. PTY ids are tab ids,
-    /// the same in every page of the workspace — a reloaded page (a new
-    /// client) or a sibling page re-spawns the ids a parked client still
-    /// lists, and the parked set's reap must not take the live page's PTY.
-    fn note_spawned(&self, client: &ClientId, id: String) {
+    /// Take `client` out of the parked set if it has been there for
+    /// `grace` — it is gone for good. `false` when it came back (or was
+    /// never parked).
+    fn expire(&self, client: &ClientId, grace: Duration) -> bool {
         let mut parked = self.lock_parked();
-        let live = self.lock_live();
-        for p in parked.values_mut() {
-            p.ptys.remove(&id);
+        match parked.get(client) {
+            Some(p) if p.since.elapsed() >= grace => parked.remove(client).is_some(),
+            _ => false,
         }
-        for (other, l) in live.iter() {
-            if other != client {
-                l.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
-            }
-        }
-        if let Some(l) = live.get(client) {
-            l.ptys.lock().unwrap_or_else(PoisonError::into_inner).insert(id);
-        }
-    }
-
-    fn note_killed(&self, client: &ClientId, id: &str) {
-        if let Some(l) = self.lock_live().get(client) {
-            l.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
-        }
-    }
-
-    /// The PTY ids `client` owns right now (connected or parked).
-    #[cfg(test)]
-    fn owned_ptys(&self, client: &ClientId) -> Vec<String> {
-        let mut out: Vec<String> = match self.lock_live().get(client) {
-            Some(l) => l.ptys.lock().unwrap_or_else(PoisonError::into_inner).iter().cloned().collect(),
-            None => self.lock_parked().get(client).map(|p| p.ptys.iter().cloned().collect()).unwrap_or_default(),
-        };
-        out.sort();
-        out
     }
 
     /// This host serves behind the gateway: `link` says how.
@@ -1131,15 +1095,6 @@ fn parse_raw_call(payload: &[u8]) -> Option<(RawCallHeader, &[u8])> {
     Some((header, &payload[4 + hlen..]))
 }
 
-/// The PTY id a `pty_spawn` call names, for the client's ownership record.
-fn spawned_pty_id(cmd: &str, args: &Value) -> Option<String> {
-    (cmd == "pty_spawn").then(|| args.get("opts")?.get("id")?.as_str().map(str::to_string)).flatten()
-}
-
-fn killed_pty_id(cmd: &str, args: &Value) -> Option<String> {
-    (cmd == "pty_kill").then(|| args.get("id")?.as_str().map(str::to_string)).flatten()
-}
-
 /// One client's connection, from `hello` to the grace timer after it closes.
 /// `role` is the session's, decided at login — never by anything the client
 /// sends on the socket.
@@ -1191,10 +1146,9 @@ async fn serve_socket(socket: WebSocket, state: WebClientState, session: Session
                                 let Ok(permit) = calls.clone().acquire_owned().await else { break };
                                 let ctx = call_ctx.clone();
                                 let state = state.clone();
-                                let client = client.clone();
                                 let tx = answer_tx.clone();
                                 tokio::spawn(async move {
-                                    let answer = handle_call(&state, &ctx, &client, role, id, &cmd, args).await;
+                                    let answer = handle_call(&state, &ctx, role, id, &cmd, args).await;
                                     let _ = tx.send(answer);
                                     drop(permit);
                                 });
@@ -1275,28 +1229,23 @@ fn end_connection(state: &WebClientState, client: &ClientId, generation: u64) {
     });
 }
 
-/// After the grace window: drop the client's terminal views and kill the PTYs
-/// it spawned (tmux attach clients; the sessions stay), unless it came back.
+/// After the grace window: drop the client's terminal views and end the PTYs
+/// it spawned, unless it came back.
 fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
-    let parked = {
-        let mut parked = state.lock_parked();
-        match parked.get(client) {
-            Some(p) if p.since.elapsed() >= RESUME_GRACE => parked.remove(client),
-            _ => None,
-        }
-    };
-    let Some(parked) = parked else { return };
+    if state.expire(client, RESUME_GRACE) {
+        reap_client(state, client);
+    }
+}
+
+/// `client` is gone for good. Its PTYs are tmux clients (the sessions live
+/// on), recorded as its by the registry: a tab PTY another page still has an
+/// attach PTY onto passes to that page (`PtyRegistry::release_client`), the
+/// rest are torn down. A PTY id another page re-spawned meanwhile is that
+/// page's and is left alone.
+fn reap_client(state: &WebClientState, client: &ClientId) {
     crate::terminal::route_drop_window_views(client.as_str());
     if let Some(registry) = state.ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
-        let mut taken = Vec::new();
-        {
-            let mut registry = registry.lock().unwrap_or_else(PoisonError::into_inner);
-            for id in &parked.ptys {
-                if let Some(pty) = registry.take(id) {
-                    taken.push(pty);
-                }
-            }
-        }
+        let taken = registry.lock().unwrap_or_else(PoisonError::into_inner).release_client(client);
         crate::terminal::teardown_taken(taken);
     }
 }
@@ -1317,7 +1266,7 @@ fn handed_out_path(role: Role, cmd: &str, args: &Value) -> Result<String, Value>
 /// One text call: the transport's own commands first, then the dispatcher.
 /// Every name is held to the class table for `role` before its arguments
 /// are read, the transport's own included (`transport_refusal`).
-async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, role: Role, id: u64, cmd: &str, args: Value) -> Answer {
+async fn handle_call(state: &WebClientState, ctx: &CoreCtx, role: Role, id: u64, cmd: &str, args: Value) -> Answer {
     if let Some(refused) = transport_refusal(cmd, role) {
         return Answer::Text(ret_frame(id, &Err(serde_json::to_value(refused).unwrap_or(Value::Null))));
     }
@@ -1367,17 +1316,7 @@ async fn handle_call(state: &WebClientState, ctx: &CoreCtx, client: &ClientId, r
         }
         _ => {}
     }
-    let spawned = spawned_pty_id(cmd, &args);
-    let killed = killed_pty_id(cmd, &args);
     let out = core_dispatch::dispatch(ctx, role, cmd, args).await;
-    if out.is_ok() {
-        if let Some(pty) = spawned {
-            state.note_spawned(client, pty);
-        }
-        if let Some(pty) = killed {
-            state.note_killed(client, &pty);
-        }
-    }
     Answer::Text(ret_frame(id, &out))
 }
 
@@ -1918,47 +1857,59 @@ mod tests {
         ws.close(None).await.unwrap();
     }
 
+    /// What a client owns is the PTY registry's record, keyed by the client id
+    /// a resume keeps: a reloaded page re-spawning a tab id takes that PTY
+    /// over, and the parked page's reap leaves it alone (P2 review finding 1);
+    /// a resume of a live id takes it over without parking anything (finding 2).
+    #[cfg(unix)]
     #[test]
-    fn pty_ownership_follows_the_spawn_and_a_resume_takes_a_live_id_over() {
+    fn pty_ownership_lives_in_the_registry_and_a_resume_keeps_it() {
+        use crate::commands::terminal::RegistryState;
+        use crate::terminal::{insert_test_pty, PtyMeta};
         let dir = tempfile::tempdir().unwrap();
         let events = Arc::new(WebEvents::default());
-        let ctx = CoreCtx::system(Arc::new(CoreState::new()), events.clone());
+        let registry: RegistryState = Arc::default();
+        let ctx = CoreCtx::system(Arc::new(CoreState::new().manage(registry.clone())), events.clone());
         let state = WebClientState::new(true, ctx, events, &dir.path().join("mobile-control"), 8742, None);
+        let owned = |client: &ClientId| -> PtyMeta { PtyMeta { client: Some(client.clone()), ..PtyMeta::default() } };
         let (a, gen_a) = state.register(None);
         assert_eq!(a.as_str(), "web-1");
-        state.note_spawned(&a, "tab-1".into());
-        state.note_spawned(&a, "tab-2".into());
-        state.note_killed(&a, "tab-2");
-        assert_eq!(state.owned_ptys(&a), ["tab-1"]);
-        // The link ends: parked with its PTY.
+        insert_test_pty(&registry, "p:tab-1", owned(&a));
+        insert_test_pty(&registry, "p:tab-2", owned(&a));
+        // The link ends: parked, its PTYs untouched.
         assert!(state.release(&a, gen_a));
-        assert_eq!(state.owned_ptys(&a), ["tab-1"]);
-        // A reloaded page is a new client that re-spawns the same tab id: the
-        // PTY is its now, and the parked set's reap must not take it.
+        assert!(!state.expire(&a, RESUME_GRACE), "inside the grace window");
+        // A reloaded page is a new client that re-spawns tab 1: the PTY is its now.
         let (b, gen_b) = state.register(None);
         assert_eq!(b.as_str(), "web-2");
-        state.note_spawned(&b, "tab-1".into());
-        assert!(state.owned_ptys(&a).is_empty());
-        assert_eq!(state.owned_ptys(&b), ["tab-1"]);
-        // The parked page comes back inside the grace window: its id again.
-        let (a2, _) = state.register(Some("web-1".into()));
-        assert_eq!(a2, a);
-        assert!(state.lock_parked().is_empty());
+        insert_test_pty(&registry, "p:tab-1", owned(&b));
+        // The parked page never comes back: its reap takes tab 2 only.
+        assert!(state.expire(&a, Duration::ZERO));
+        reap_client(&state, &a);
+        {
+            let reg = registry.lock().unwrap();
+            assert!(reg.input_sender("p:tab-2").is_none(), "the gone page's own PTY is reaped");
+            assert!(reg.input_sender("p:tab-1").is_some(), "the PTY the reloaded page re-spawned stays");
+        }
         // b's link died unnoticed; the page is back with `?resume=` while the
         // server still counts the old connection live: it takes the id over.
         let (b2, gen_b2) = state.register(Some("web-2".into()));
         assert_eq!(b2, b);
         assert_ne!(gen_b2, gen_b);
-        assert_eq!(state.owned_ptys(&b), ["tab-1"]);
         // The stale connection ends: superseded, it parks nothing.
         assert!(!state.release(&b, gen_b));
         assert!(state.lock_live().contains_key(&b));
         assert!(state.lock_parked().is_empty());
-        // The connection that holds the id ends: parked, PTY and all.
+        // The connection that holds the id ends, and the page resumes in time:
+        // nothing to reap, its PTY is still its.
         assert!(state.release(&b, gen_b2));
-        assert_eq!(state.owned_ptys(&b), ["tab-1"]);
+        let (b3, _) = state.register(Some("web-2".into()));
+        assert_eq!(b3, b);
+        assert!(!state.expire(&b, Duration::ZERO), "resumed, not parked");
+        assert!(registry.lock().unwrap().input_sender("p:tab-1").is_some());
         // An id nobody holds is not resumable: a fresh client.
         let (c, _) = state.register(Some("web-99".into()));
         assert_eq!(c.as_str(), "web-3");
+        crate::terminal::kill_test_ptys(&registry);
     }
 }
