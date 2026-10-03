@@ -559,6 +559,29 @@ describe("installCustomScrollbars discovering late overflow", () => {
     clock.restore();
   });
 
+  it("finds a container that overflows once rows arrive inside it", async () => {
+    const clock = frameClock();
+    // The Git view: its scroll mounts short while the history loads.
+    const { panel, list } = mountList({ scrollHeight: 200, scrollWidth: 100 });
+    const holder = document.createElement("div");
+    list.appendChild(holder);
+    const uninstall = installCustomScrollbars();
+    clock.tick();
+    expect(list.hasAttribute("data-app-scrollbar")).toBe(false);
+
+    // The rows land under a child of the list, not as the list or above it.
+    Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
+    holder.appendChild(document.createElement("div"));
+    await Promise.resolve(); // MutationObserver delivers on a microtask.
+    clock.tick();
+    expect(list.hasAttribute("data-app-scrollbar")).toBe(true);
+    expect(thumbs("vertical")).toBe(1);
+
+    uninstall();
+    panel.remove();
+    clock.restore();
+  });
+
   it("does not look again on a motion that moves nothing", () => {
     const clock = frameClock();
     const { panel, list } = mountList({ scrollHeight: 200, scrollWidth: 100 });
