@@ -45,7 +45,7 @@ use super::{
     scheduler,
     push::{AgentTabRef, PushPrefs},
     sign_in,
-    live_pwa, MOBILE_ASSETS,
+    live_pwa, web_client, MOBILE_ASSETS,
 };
 
 
@@ -89,6 +89,10 @@ struct HostState {
     /// The phone prompts the owner holds with no window, which the
     /// scheduler types into the CLI's queue at once (`scheduler::PhoneHolds`).
     holds: Arc<scheduler::PhoneHolds>,
+    /// The browser desktop client (hosted plan §10 P2): its sessions, its
+    /// connected clients as the core's event sink, and the `CoreCtx` its
+    /// calls are dispatched with.
+    web: web_client::WebClientState,
 }
 
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
@@ -526,6 +530,14 @@ fn catalog_stale(state: &HostState) {
 async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
     let frame = request.uri().path() == PDF_FRAME_PATH;
+    // The browser desktop client's pages get the desktop's CSP with its
+    // socket allowed (`web_client::page_csp`), not the phone's.
+    let desktop = request.uri().path() == "/desktop" || request.uri().path().starts_with("/desktop/");
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
     let mut response = next.run(request).await;
     // The sealed frame answers its own framing rules (`pdf_frame`); a miss
     // there falls back to everyone else's.
@@ -549,7 +561,16 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> 
         "permissions-policy",
         HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY),
     );
-    if !framed {
+    if desktop {
+        let hashes = headers
+            .remove(web_client::INLINE_SCRIPT_HASHES)
+            .and_then(|v| v.to_str().ok().map(str::to_string))
+            .unwrap_or_default();
+        let csp = web_client::page_csp(host.as_deref().unwrap_or("127.0.0.1"), &hashes);
+        if let Ok(value) = HeaderValue::from_str(&csp) {
+            headers.insert(header::CONTENT_SECURITY_POLICY, value);
+        }
+    } else if !framed {
         headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
     }
     response
@@ -4600,9 +4621,13 @@ fn router(state: HostState) -> Router {
         .route(PDF_FRAME_PATH, get(pdf_frame))
         .route("/", get(index))
         .route("/{*path}", get(static_asset))
+        .with_state(state.clone())
+        // The browser desktop client's routes (`/desktop/*`, its socket) sit
+        // under the same limits and headers; `/desktop/…` outranks the PWA's
+        // catch-all by its static prefix.
+        .merge(web_client::routes(state.web))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
         .layer(middleware::from_fn(security_headers))
-        .with_state(state)
 }
 
 pub async fn run(state_dir: PathBuf) -> Result<(), String> {
@@ -4612,6 +4637,35 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         &config.control_dir,
         config.origin.clone(),
     )?));
+    // This process as a host of `app_core` (hosted plan §10 P2): the core's
+    // runtime seam points at this runtime, TLS has its provider before any
+    // client is built, and the browser clients are the event sink of a system
+    // context over fresh singletons. The window's own singletons live in the
+    // window's process; nothing here shares them.
+    app_core::rt::install(tokio::runtime::Handle::current());
+    crate::services::mail_engine::install_crypto_provider();
+    let web_events = Arc::new(web_client::WebEvents::default());
+    let core_ctx = app_core::CoreCtx::system(Arc::new(crate::standalone_core_state()), web_events.clone());
+    let web = web_client::WebClientState::new(
+        config.host.browser_client == Some(true),
+        core_ctx.clone(),
+        web_events,
+        &config.control_dir,
+        config.host.port,
+        web_client::bundle_dir(&config.control_dir),
+    );
+    if web.enabled {
+        match (&web.bundle, &web.token) {
+            (Some(bundle), Some(_)) => eprintln!(
+                "desktop client: serving {} at http://127.0.0.1:{}/desktop/ (sign in with the link in Settings → Mobile → Browser access, or the token in {})",
+                bundle.display(),
+                config.host.port,
+                config.control_dir.join(web_client::TOKEN_FILE).display()
+            ),
+            (None, _) => eprintln!("desktop client: on, but no web bundle was found (npm run web:bundle)"),
+            (_, None) => eprintln!("desktop client: on, but no login token could be written"),
+        }
+    }
     let state = HostState {
         config: config.clone(),
         auth: auth.clone(),
@@ -4621,8 +4675,34 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
         runner: Arc::new(scheduler::TmuxRunner::new(&state_dir, None)),
         holds: Arc::default(),
+        web: web.clone(),
     };
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    // The user-content origin (plan §3.5): ticketed files on the next port,
+    // a different origin from the app's, so a project's HTML never runs on
+    // it. Only with the browser client on; a bind failure is reported, not
+    // fatal — the app runs without "open outside".
+    if web.enabled {
+        let content_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), web.content_port);
+        match tokio::net::TcpListener::bind(content_address).await {
+            Ok(listener) => {
+                let content_app = web_client::content_routes(web.clone());
+                let mut content_shutdown = shutdown_tx.subscribe();
+                tokio::spawn(async move {
+                    let _ = axum::serve(limits::GuardedListener::new(listener), content_app)
+                        .with_graceful_shutdown(async move {
+                            while !*content_shutdown.borrow() {
+                                if content_shutdown.changed().await.is_err() {
+                                    break;
+                                }
+                            }
+                        })
+                        .await;
+                });
+            }
+            Err(error) => eprintln!("desktop client: user-content origin: bind {content_address}: {error}"),
+        }
+    }
     // A Serve verification failure must be a real service failure. A clean
     // graceful shutdown would satisfy systemd's `Restart=on-failure` policy,
     // leaving Mobile permanently down after a transient tailscaled restart.
@@ -4683,6 +4763,12 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         })
         .await
         .map_err(|e| e.to_string())?;
+    // Nothing outlives a clean stop: the PTYs browser clients spawned here
+    // (tmux attach clients, mostly — the sessions live on) go with the
+    // process, as the window's do at its exit.
+    if let Some(registry) = core_ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
+        registry.lock().unwrap_or_else(PoisonError::into_inner).kill_all();
+    }
     if let Some(error) = serve_failure.lock().unwrap_or_else(PoisonError::into_inner).take() {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }
@@ -4793,7 +4879,7 @@ mod tests {
                 state: HostState {
                     config: HostConfig {
                         state_dir,
-                        control_dir,
+                        control_dir: control_dir.clone(),
                         host: MobileHostSettings {
                             display_name: "Desk".into(),
                             ..MobileHostSettings::default()
@@ -4807,6 +4893,11 @@ mod tests {
                     readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
                     runner,
                     holds: Arc::default(),
+                    web: {
+                        let events = Arc::new(web_client::WebEvents::default());
+                        let ctx = app_core::CoreCtx::system(Arc::new(app_core::CoreState::new()), events.clone());
+                        web_client::WebClientState::new(false, ctx, events, &control_dir, 8742, None)
+                    },
                 },
             }
         }

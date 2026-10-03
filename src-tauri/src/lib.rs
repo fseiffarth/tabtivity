@@ -1058,6 +1058,99 @@ fn core_state(
         .manage(mobile_desktop.clone())
 }
 
+/// The process-wide singletons every host manages (`core_state`), built in
+/// one place so the desktop window and a server host (`standalone_core_state`)
+/// start from the same list.
+struct Singletons {
+    pty_registry: RegistryState,
+    win_registry: WindowRegistryState,
+    workspace: WorkspaceStateArc,
+    fs_watch: commands::fs_watch::FsWatchState,
+    /// Pooled SSH/SFTP connections, one per active remote project (Phase 0 of
+    /// the mount-free remote model). Opened on activation, torn down at exit.
+    remote_pool: services::remote::RemotePoolState,
+    /// Single-writer cache of per-project sync manifests (SSH-sync Phase 1).
+    /// Guards every `sync.json` mutation so concurrent syncs/saves can't
+    /// clobber it (G7).
+    sync_manifest: services::remote_sync::SyncManifestState,
+    /// Registry of per-project auto-sync tasks (started on remote_connect,
+    /// stopped on remote_disconnect / app exit). See `services::sync_auto`.
+    auto_sync: services::sync_auto::AutoSyncState,
+    /// Registry of per-project git lockstep tasks (.git watcher + host poll;
+    /// started on remote_connect when enabled, stopped on disconnect / exit).
+    /// See `services::git_peer` (TODO #28n).
+    git_peer: services::git_peer::GitPeerRegistry,
+    /// Registry of per-(project,worker) code-sync fan-outs (multi-host remote,
+    /// `docs/multi_host_remote_plan.md`). Kicked on a worker connect / commit /
+    /// manual "Push code to machines". See `services::worker_sync`.
+    worker_sync: services::worker_sync::WorkerSyncState,
+    /// Cancel flags for in-flight disk-usage scans, one per scanning pane. See
+    /// `commands::disk_usage`.
+    disk_scans: commands::disk_usage::DuScanState,
+    /// The mail client's session state: the lazily-opened local store, the
+    /// in-memory-only passwords for accounts the user chose not to persist, and
+    /// the per-account sync cancel flags. See `commands::mail`.
+    mail_state: commands::mail::MailState,
+    /// CalDAV: session-only passwords for accounts the user chose not to
+    /// persist (docs/caldav_plan.md). Nothing here is ever serialized.
+    caldav_state: commands::caldav::CalDavState,
+    /// Recursive file-churn watcher on the active project + the counters it
+    /// has seen since the last flush (see `services::usage_stats`).
+    usage_watch: services::usage_stats::UsageWatchState,
+    mobile_desktop: commands::mobile_control::MobileDesktopState,
+}
+
+impl Singletons {
+    fn new() -> Self {
+        Self {
+            pty_registry: Arc::new(Mutex::new(PtyRegistry::default())),
+            win_registry: Arc::new(Mutex::new(WindowRegistry::default())),
+            workspace: Arc::new(Mutex::new(WorkspaceState::new())),
+            fs_watch: commands::fs_watch::new_state(),
+            remote_pool: services::remote::new_pool(),
+            sync_manifest: services::remote_sync::new_manifest_state(),
+            auto_sync: services::sync_auto::new_state(),
+            git_peer: services::git_peer::new_registry(),
+            worker_sync: services::worker_sync::new_state(),
+            disk_scans: commands::disk_usage::new_state(),
+            mail_state: commands::mail::new_state(),
+            caldav_state: Default::default(),
+            usage_watch: services::usage_stats::new_state(),
+            mobile_desktop: commands::mobile_control::MobileDesktopState::default(),
+        }
+    }
+
+    /// The core's view of these singletons: clones of the same `Arc`s.
+    fn core_state(&self) -> app_core::CoreState {
+        core_state(
+            &self.pty_registry,
+            &self.win_registry,
+            &self.workspace,
+            &self.fs_watch,
+            &self.remote_pool,
+            &self.sync_manifest,
+            &self.auto_sync,
+            &self.git_peer,
+            &self.worker_sync,
+            &self.disk_scans,
+            &self.mail_state,
+            &self.caldav_state,
+            &self.usage_watch,
+            &self.mobile_desktop,
+        )
+    }
+}
+
+/// The managed singletons for a host that is not the desktop window — the
+/// Mobile sidecar serving a browser (hosted plan §10 P2), later the per-user
+/// daemon. Fresh instances: a second process never shares the window's. Every
+/// type `lib.rs` manages for Tauri is here too, so a converted command's
+/// `ctx.get::<T>()` finds what it would in the window (`CoreState::get`
+/// panics for an unmanaged type).
+pub fn standalone_core_state() -> app_core::CoreState {
+    Singletons::new().core_state()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKit's DMA-BUF renderer SIGBUSes inside Mesa on some driver stacks
@@ -1122,60 +1215,28 @@ pub fn run() {
     // disk indefinitely.
     services::browser_engine::sweep_quarantine();
 
-    let pty_registry: RegistryState = Arc::new(Mutex::new(PtyRegistry::default()));
-    let win_registry: WindowRegistryState = Arc::new(Mutex::new(WindowRegistry::default()));
-    let workspace: WorkspaceStateArc = Arc::new(Mutex::new(WorkspaceState::new()));
-    let fs_watch = commands::fs_watch::new_state();
-    // Pooled SSH/SFTP connections, one per active remote project (Phase 0 of the
-    // mount-free remote model). Opened on activation, torn down at exit below.
-    let remote_pool = services::remote::new_pool();
-    // Single-writer cache of per-project sync manifests (SSH-sync Phase 1). Guards
-    // every `sync.json` mutation so concurrent syncs/saves can't clobber it (G7).
-    let sync_manifest = services::remote_sync::new_manifest_state();
-    // Registry of per-project auto-sync tasks (started on remote_connect, stopped
-    // on remote_disconnect / app exit). See `services::sync_auto`.
-    let auto_sync = services::sync_auto::new_state();
-    // Registry of per-project git lockstep tasks (.git watcher + host poll; started
-    // on remote_connect when enabled, stopped on disconnect / exit). See
-    // `services::git_peer` (TODO #28n).
-    let git_peer = services::git_peer::new_registry();
-    // Registry of per-(project,worker) code-sync fan-outs (multi-host remote,
-    // `docs/multi_host_remote_plan.md`). Kicked on a worker connect / commit /
-    // manual "Push code to machines". See `services::worker_sync`.
-    let worker_sync = services::worker_sync::new_state();
-    // Cancel flags for in-flight disk-usage scans, one per scanning pane. See
-    // `commands::disk_usage`.
-    let disk_scans = commands::disk_usage::new_state();
-    // The mail client's session state: the lazily-opened local store, the
-    // in-memory-only passwords for accounts the user chose not to persist, and
-    // the per-account sync cancel flags. See `commands::mail`.
-    let mail_state = commands::mail::new_state();
-    // CalDAV: session-only passwords for accounts the user chose not to persist
-    // (docs/caldav_plan.md). Nothing here is ever serialized.
-    let caldav_state: commands::caldav::CalDavState = Default::default();
-    // Recursive file-churn watcher on the active project + the counters it has
-    // seen since the last flush (see `services::usage_stats`).
-    let usage_watch = services::usage_stats::new_state();
-    let mobile_desktop = commands::mobile_control::MobileDesktopState::default();
-    // The core's view of the same singletons (`app_core::CoreState`):
-    // clones of the Arcs Tauri manages below, never second instances. Becomes
-    // the system `CoreCtx` in `setup`, once the AppHandle exists.
-    let core_state = core_state(
-        &pty_registry,
-        &win_registry,
-        &workspace,
-        &fs_watch,
-        &remote_pool,
-        &sync_manifest,
-        &auto_sync,
-        &git_peer,
-        &worker_sync,
-        &disk_scans,
-        &mail_state,
-        &caldav_state,
-        &usage_watch,
-        &mobile_desktop,
-    );
+    // The managed singletons, built once and handed to both halves of the
+    // app: Tauri's `State` and the core's `CoreState` (clones of one `Arc`
+    // each, never two values). Also what `standalone_core_state` builds for
+    // a host that is not this window.
+    let s = Singletons::new();
+    let core_state = s.core_state();
+    let Singletons {
+        pty_registry,
+        win_registry,
+        workspace,
+        fs_watch,
+        remote_pool,
+        sync_manifest,
+        auto_sync,
+        git_peer,
+        worker_sync,
+        disk_scans,
+        mail_state,
+        caldav_state,
+        usage_watch,
+        mobile_desktop,
+    } = s;
 
     with_macos_menu(with_webview_crash_reporter(tauri::Builder::default()))
         .manage(pty_registry)
@@ -1462,6 +1523,7 @@ pub fn run() {
             commands::mobile_control::mobile_admin,
             commands::mobile_control::mobile_host_status,
             commands::mobile_control::mobile_host_apply,
+            commands::mobile_control::mobile_browser_client_link,
             commands::mobile_control::mobile_verify_tailscale_serve,
             commands::mobile_control::mobile_tailscale_serve_status,
             commands::mobile_control::mobile_desktop_images,

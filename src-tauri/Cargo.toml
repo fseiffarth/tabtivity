@@ -356,6 +356,9 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# The browser desktop client's socket test drives `web_client::routes` on a
+# real listener; the version is axum's own (the `ws` feature pulls it in).
+tokio-tungstenite = "0.29"
 # The macOS GPU sampler's `ioreg` plist parser is pure and gated
 # `any(target_os = "macos", test)`, so its fixture test runs on every OS;
 # the crate is already the macOS runtime dependency above.

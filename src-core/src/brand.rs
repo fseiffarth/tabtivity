@@ -508,6 +508,11 @@ names! {
     TERMINAL_PROTOCOL / LEGACY_TERMINAL_PROTOCOL = [slug, "-terminal.v1"];
     /// The phone session cookie.
     SESSION_COOKIE / LEGACY_SESSION_COOKIE = ["__Host-", slug, "_session"];
+    /// The browser desktop client's session cookie (hosted plan P2; plain
+    /// http on loopback, so no `__Host-` prefix, which needs `Secure`).
+    DESKTOP_SESSION_COOKIE / LEGACY_DESKTOP_SESSION_COOKIE = [slug, "_desktop_session"];
+    /// WebSocket subprotocol of the browser desktop client.
+    DESKTOP_PROTOCOL / LEGACY_DESKTOP_PROTOCOL = [slug, "-desktop.v1"];
     /// Domain-separation prefix of the phone's signed requests.
     MOBILE_AUTH_CONTEXT / LEGACY_MOBILE_AUTH_CONTEXT = [slug, "-mobile-auth-v1"];
     /// Prefix of the admin control pipe on Windows.
@@ -711,6 +716,8 @@ mod tests {
             (LEGACY_MOBILE_HOST_RUN_VALUE, "EldrunMobileHost"),
             (LEGACY_TERMINAL_PROTOCOL, "eldrun-terminal.v1"),
             (LEGACY_SESSION_COOKIE, "__Host-eldrun_session"),
+            (LEGACY_DESKTOP_SESSION_COOKIE, "eldrun_desktop_session"),
+            (LEGACY_DESKTOP_PROTOCOL, "eldrun-desktop.v1"),
             (LEGACY_MOBILE_AUTH_CONTEXT, "eldrun-mobile-auth-v1"),
             (LEGACY_CONTROL_PIPE_PREFIX, "eldrun-control-"),
             (LEGACY_TMUX_PREFIX, "eldrun-"),

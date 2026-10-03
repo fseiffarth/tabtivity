@@ -38,6 +38,10 @@ pub struct MobileHostSettings {
     /// Keep running when Tabtivity quits (Settings → Mobile, default off).
     #[serde(default)]
     pub stay_after_quit: Option<bool>,
+    /// Serve the desktop app to a browser on this machine (hosted plan §10
+    /// P2, Settings → Mobile → Browser access, default off). Loopback only.
+    #[serde(default)]
+    pub browser_client: Option<bool>,
 }
 
 fn default_name() -> String {
@@ -55,6 +59,7 @@ impl Default for MobileHostSettings {
             port: default_port(),
             serve_origin: None,
             stay_after_quit: None,
+            browser_client: None,
         }
     }
 }

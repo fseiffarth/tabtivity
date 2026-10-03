@@ -82,6 +82,8 @@ function namesFor(b: BrandForms) {
     mcpHelpServer: `${b.slug}-help`,
     /** WebSocket subprotocol of a phone terminal. */
     terminalProtocol: `${b.slug}-terminal.v1`,
+    /** WebSocket subprotocol of the browser desktop client (hosted plan P2). */
+    desktopProtocol: `${b.slug}-desktop.v1`,
     /** Custom-protocol request header: the file to serve. */
     filePathHeader: `x-${b.slug}-path`,
     /** Custom-protocol request header: the project the file belongs to. */

@@ -1033,6 +1033,18 @@ async fn start_installed_host(_config: &HostConfig) -> Result<(), String> {
     Err("unsupported platform".into())
 }
 
+/// The sign-in link for a browser on this machine (hosted plan §10 P2,
+/// Settings → Mobile → Browser access): the sidecar's port and the token in
+/// `<control_dir>/web-client.token`, minted here when the sidecar has not yet.
+/// `admin`: it hands out the box's own access. Loopback only, by construction
+/// of the routes it opens (`mobile_control::web_client`).
+#[tauri::command]
+pub fn mobile_browser_client_link() -> Result<String, String> {
+    let config = HostConfig::load(&storage::state_dir())?;
+    let token = crate::services::mobile_control::web_client::login_token(&config.control_dir)?;
+    Ok(crate::services::mobile_control::web_client::login_url(config.host.port, &token))
+}
+
 #[tauri::command]
 pub async fn mobile_host_apply(enabled: bool) -> Result<(), String> {
     if !enabled {
