@@ -12,8 +12,9 @@
 # no-op that reports success is the failure this guards against). It also
 # checks that root (not the gateway's account) is refused by a daemon socket,
 # lists every loopback listener each user owns (each must need a token or be
-# a CLI's own sign-in listener: see docs/context/server_gateway.md), and runs
-# the admin helper's prerequisite check.
+# a CLI's own sign-in listener: see docs/context/server_gateway.md), checks
+# that the key keeper answers by uid (P3b), and runs the admin helper's
+# prerequisite check.
 #
 # It changes nothing: no account, file or unit is created, modified or
 # stopped (root's connect to the first user's socket starts that user's
@@ -181,6 +182,36 @@ if [ -S "$SOCKETS/$1.sock" ]; then
   fi
 else
   fail "$1's daemon socket exists" "$SOCKETS/$1.sock is missing"
+fi
+
+echo "── the key keeper answers by uid ──"
+# Hosted plan §5.4 (P3b): the administrator's agent API keys sit in a 0700
+# directory of <slug>-auth; its socket offers and lists keys only to the
+# gateway's account, hands a key only to a server user, refuses everyone
+# else. Probed with requests that change nothing (a refused set writes
+# nothing; the fake key never reaches a file).
+KEEPER="/run/$APP_SLUG/auth.sock"
+keeper_says() { printf '%s\n' "$2" | runuser -u "$1" -- nc -U -N "$KEEPER" 2>&1; }
+if [ ! -S "$KEEPER" ]; then
+  fail "the key keeper's socket exists" "$KEEPER is missing: systemctl enable --now ${APP_SLUG}-auth-keeper.socket"
+elif ! command -v nc >/dev/null; then
+  fail "nc is installed (for the keeper checks)" "apt install netcat-openbsd"
+else
+  for u in "$1" "$2"; do
+    expect_eacces "$u cannot list the keeper's key directory"  "$u" ls "/var/lib/${APP_SLUG}-auth"
+    for request in '{"op":"status"}' "{\"op\":\"remove\",\"cli\":\"claude\",\"by\":\"$u\"}"; do
+      out="$(keeper_says "$u" "$request")"
+      if printf '%s' "$out" | grep -q '"error":"refused"'; then
+        pass "the keeper refuses $u an administrator's request (${request%%,*})"
+      else
+        fail "the keeper refuses $u an administrator's request (${request%%,*})" "got: $(printf '%s' "$out" | head -c 200)"
+      fi
+    done
+    out="$(keeper_says "$u" '{"op":"offered"}')"
+    if printf '%s' "$out" | grep -q '"ok":true'; then pass "the keeper lists the offer to $u"; else fail "the keeper lists the offer to $u" "got: $(printf '%s' "$out" | head -c 200)"; fi
+  done
+  out="$(keeper_says nobody '{"op":"offered"}')"
+  if printf '%s' "$out" | grep -q '"error":"refused"'; then pass "the keeper refuses a non-server account"; else fail "the keeper refuses a non-server account" "got: $(printf '%s' "$out" | head -c 200)"; fi
 fi
 
 echo
