@@ -2582,3 +2582,220 @@ against real state, ports or `/run`, no real key, no container.*
   switch-back also stop a running Claude, and the help text follow),
   finding 9 (fingerprints only for listed users?).
 - Everything in § P3b decisions "Needs the user" stands.
+
+## P4
+
+*Written 2026-10-03 by the P4 agent. Base `a4c00c02` (P0–P3b and their
+reviews). Plan §10 P4 — P4a viewer shares, P4c calendar and to-do sharing,
+P4b editor shares with the §6.5 gates — all three built. Nothing run on a
+server, nothing as root, no hub, calendar service, daemon or gateway against
+a real state dir, port, `/srv` or `/run`: both services ran only in tests on
+temp sockets with injected uid classifiers, the daemon side against them;
+ACL tests name this process's own uid (an unmapped uid is EINVAL inside the
+fence's user namespace). Rationale, as built:
+[`context/sharing.md`](context/sharing.md).*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `9a210685` | Gateway crate: `hub_wire.rs` (protocol, ref rules), `acl.rs` (POSIX ACLs straight to the xattrs), `hub.rs` (+ tests: `<slug>-hub` — create, grant/revoke by named ACL, delete into `.deleted/` with a 30-day tombstone, list + presence, bundle pushes checked before any byte and any ref move, root-only `forget`); `policy.features.project_sharing`; units `<slug>-hub.socket`/`.service`; `install` adds `<slug>-hub`, `/srv/<slug>` (root 0755), `/srv/<slug>/shared` (hub 0711), enables the socket; `user-remove` runs `<slug>-gateway hub-forget`; subcommands `hub`, `hub-forget`. |
+| `696522af` | Daemon: `services::server::share` (+ tests against the real hub), `commands/share.rs` (`share_list/_create/_grant/_revoke/_delete/_add/_push/_fetch/_presence`, core), the fence's tmpfs over the shared root with the scope's own hub bound back (both fence wraps), `git_command_in` treats `clone` like `init` (no common-dir pin) and finds the subcommand after `-c` pairs; `ServerSharing.tsx` + `SharePresence` (WebShell), the admin's "Sharing projects" toggle; i18n ×5 (31 keys); UntestedTag `server.sharing`; app-gateway as a dev-dependency of src-tauri. |
+| `b81cd608` | Gateway crate: `cal_wire.rs` (protocol, `clean_record`), `calendars.rs` (+ tests: `<slug>-calendar` as `<slug>-cal`, a JSON file per calendar, per-part roles, per-record CAS, `wait`); units, install step, subcommand `calendar`. |
+| `0ab3ab6d` | Daemon: `services::server::shared_calendar` (+ tests against the real service: the P4c exit), `commands/shared_calendar.rs` (`shared_calendar_list/_share/_grant/_revoke/_unshare/_wait`), `calendar.rs`'s commands merge and route shared records, `refuses_shared_rows` for agents' proposals, `strip_shared` for whole-document saves; `ServerCalendarSharing.tsx` + `SharedCalendarWatch` (WebShell); i18n ×5 (15 keys); UntestedTag `server.calendarSharing`. |
+| `0692dc21` | P4b gates: hookless + strict sanitizing git in every shared project (`sanitize_repo_git_config_strict`, `refusing_command`), `require_hook_trust` asks nothing there; gate 2 (`share::unreviewed`, `review_merge`/`merge_in`, `pending_review`/`accept_in`, `spawn_gate` in the fence wrap and the container wrap, push refused while unreviewed); `share_review/_merge/_pending/_accept`; `exec_trust` test for gate 3; `ShareTools` UI; i18n ×5 (9 keys); UntestedTag `server.sharing.review`. |
+| `a98fce2f` | `scripts/server-isolation-test.sh`: the hub section (non-member can't list the root or read a hub, can't grant himself; viewer reads but can't write config/plant hooks/push; editor can't move main, another's branch or a tag, can't write the hub; revoke → EACCES and gone from the list; non-server account refused) and the calendar section (store unreadable; non-member get refused; viewer reads without the mail link, can't write; revoke stops the next read; take-back). Both make one throwaway share/calendar and take it back. |
+| `591aabf3` | Docs: plan §10 P4, `context/sharing.md` + AGENTS.md entry, the host-channel inventory rows, file maps, TODO Z.5 #2366–#2373, `DOCUMENTATION.md` § Hosted server: sharing projects and calendars. |
+| `892dee3d` | The daemon reads the hub's answer after an upload the hub refused (EPIPE otherwise hid the reason); `backend-stale.sh` watches `cal_wire.rs`. |
+| the commit after | this section. |
+
+### Design (short; the rest is in the context file)
+
+- **By uid, nothing else (§4.3).** Two new system accounts and sockets beside
+  the key keeper: `<slug>-hub` on `/run/<slug>/hub.sock` and `<slug>-cal` on
+  `/run/<slug>/calendar.sock`, both `0666 root` (nobody squats them), both
+  classifying callers with the helper's account rule (`hub::HubPeers`, reused
+  by the calendar service), both hidden from fences by the `/run` tmpfs.
+  Requests name share/calendar ids; no request of one user reaches another's
+  daemon.
+- **Projects.** A bare hub per share, made by the hub (`--template=`: no
+  hooks); read access is named-user ACLs (`r-X` + default ACL; root `0711`);
+  writes only by the hub. Pushes are bundles: role/ref rules before a byte is
+  read, `bundle verify`/`unbundle`, CAS on old values, fast-forward unless
+  forced, one `update-ref` transaction. Members read by path with
+  `safe.directory` pinned to the exact hub; clone-to-add is `--no-local`
+  (another uid's object files are never hardlinked) through the import path.
+  The app's folder is excluded in every repo and a push carrying it refused.
+  The fence shows only the scope's own hub.
+- **Editor gates (§6.5).** Gate 1: hooked verbs run hookless and config
+  sanitizing fails closed in every project of the user's share map. Gate 2:
+  an agent-facing change is unreviewed when it is in HEAD, reachable from the
+  hub's refs and behind no reviewed mark; then every agent start (fence and
+  container) and every push of the project is refused until a review (a merge
+  through the app shows it first, bound to its digest; a clone or terminal
+  merge is accepted in the panel). Gate 3: `exec_trust` is per state dir and
+  content-bound (test).
+- **Calendars.** Sharing moves a calendar into `<slug>-calendar` (put back if
+  refused); `calendar_load` merges `shared:<id>` calendars; edits go to the
+  service with the record's `rev`; the service strips mail/file/event links,
+  `project_id`, `caldav_*` on every way in; the owner's stripped links stay in
+  her own state and on her cards; a long poll (`wait`) reloads open pages
+  within one change; agents never see or write a shared calendar.
+- **Switches.** New `policy.features.project_sharing` (default on; fail
+  closed off): no new share or member. `calendar_sharing` off: nothing new
+  opened, incoming calendars hidden (owners keep theirs); `calendar`/`todo`
+  off close that part. Data never deleted.
+
+### Deviations from the plan (each in the context file)
+
+- Share rows, ref rules and presence live in the hub, not the gateway
+  database; calendar ACLs in the calendar service (as the keeper's lists).
+- Hub `config`/`hooks/` are the hub account's, read-only to members — not
+  root-owned (the hub creates hubs at run time without root).
+- The calendar store is a JSON file per calendar, not SQLite.
+- "Hooked verbs refused in shared clones" is built as "run hookless" (Commit
+  and Push still work; no hook ever runs and no trust is asked).
+- The default calendar, CalDAV calendars and subscriptions are not shareable.
+
+### Done / deferred
+
+Done: every bullet of P4a, P4b and P4c, the P4c exit as automated tests, the
+§11 sharing tests (viewer can't push; editor can't move another's refs or
+main; revoking stops the next fetch — EACCES, live only; hub config/hooks
+unwritable — live only; `.tabtivity/` never reaches a commit; one scope's
+fence can't read another's hub — args pinned, live only) and calendar tests
+(non-member and viewer refused; concurrent edits converge by revision; links
+never reach the service; agent writes refused; switches refuse without
+touching data). Deferred (TODO Z.5): #2366 the live run; #2367 presence chip
+on the pill and "whose" on busy state; #2368 an agent's push through a proxy
+(the `git_push` MCP tool for shared projects); #2369 shared calendars in the
+headless phone views and no-window reminders; #2370 a shared list's own board
+columns and ranks (a drag moves the column only); #2371 per-author trust
+(decision); #2372 hub gc and quotas; #2373 the greyed state on the project
+pill. Not touched: #2339 (root MCP in the daemon — agent calendar tools do not
+run on a server yet), P5's pair mode / worktrees.
+
+### Live steps on a real server (after § P3's, § P3 part 2's, § P3b's)
+
+Three accounts: alice (admin), bob, carol; Alice has a git project with a
+commit, a `CLAUDE.md` and a `.git/hooks/pre-commit` that writes a marker file.
+
+1. Build and install as in § P3 step 1 / § P3 part 2 step 1 (the hub and the
+   calendar service are in `tabtivity-gateway`). `sudo …/tabtivity-admin-helper
+   --dry-run install …` lists `useradd --system … tabtivity-hub` and
+   `… tabtivity-cal`, `directory /srv/tabtivity (755, root)`,
+   `directory /srv/tabtivity/shared (711, tabtivity-hub)`, `systemctl enable
+   --now tabtivity-hub.socket` and `tabtivity-calendar.socket`; run it.
+   `/srv` must be on a filesystem with POSIX ACLs (ext4/xfs default); install
+   the `acl` package for `getfacl`.
+2. Alice → Settings → Mobile → Server → **Shared projects** → choose the
+   project → **Share**. As root: `getfacl /srv/tabtivity/shared/<id>.git` →
+   `user:alice:r-x`, `default:user:alice:r-x`, `group::---`, `other::---`;
+   no `hooks/`. Alice's repo: `.git/info/exclude` has `.tabtivity/`,
+   `git remote -v` names `shared`. As bob: `ls /srv/tabtivity/shared` →
+   Permission denied.
+3. Alice adds **bob viewer** and **carol editor**; `getfacl` names both.
+4. Bob → **Shared with you** → **Add to my projects**: the project appears in
+   his list; the card says agent instructions are not reviewed (`CLAUDE.md`).
+   Open a Claude tab in it → refused naming `CLAUDE.md`. **Review** → **I have
+   reviewed these** → the agent starts; inside it `ls /srv/tabtivity/shared`
+   shows only this project's hub. Bob commits and presses **Push** → refused
+   (viewer).
+5. Carol adds it, reviews, adds `.claude/settings.json`, commits, **Push** →
+   "Pushed carol/main". Alice → **Fetch** → "carol/main: 1 new there" →
+   **Merge carol/main** → the diff of `.claude/settings.json` is shown →
+   **Merge after review** → merged.
+6. Alice commits through the git bar: the `pre-commit` marker is **not**
+   written and no hook-trust dialog appears (a shared project runs no hook).
+   Put `[filter "x"]\n\tclean = …` into her `.git/config` and break the file's
+   syntax: every git call in that project fails naming the config.
+7. Carol pushes an `AGENTS.md` change; Alice in a shell tab: `git fetch
+   shared && git merge shared/carol/main` → her next agent tab there is
+   refused naming `AGENTS.md`, **Push** too; Review → accept → both work.
+8. Bob opens the project: Alice's card shows "Open now: bob" (within four
+   minutes).
+9. Alice → **Revoke bob**: Bob's card turns grey "No longer shared with you";
+   as bob `cat /srv/tabtivity/shared/<id>.git/HEAD` → Permission denied; his
+   clone stays and still opens.
+10. Alice → **Stop sharing**: Carol's card says "Deleted by its owner";
+    `sudo ls /srv/tabtivity/shared/.deleted/` shows `<id>.<time>.git`.
+11. Share a remote, a VM and a container project → each refused with its
+    reason. Alice switches **Sharing projects** off in the admin policy → a new
+    share is refused; an existing one still fetches.
+12. Re-share to bob, then `sudo …/tabtivity-admin-helper user-remove bob` →
+    `getfacl` of the hub no longer names bob.
+13. **P4c exit.** Alice makes a calendar "Lab" with an event and a task made
+    from a mail (mail chip) → **Shared calendars and to-do lists** → **Share**
+    (confirm). Open it to **bob: events viewer** and **carol: to-dos editor**.
+    Bob's calendar shows Lab's events read-only (an edit is refused); his board
+    has no Lab task. Carol's board shows the task without the mail chip; she
+    renames it → Alice's open calendar/board page shows the new title within
+    seconds, without a reload. `sudo cat /var/lib/tabtivity-calendar/<id>.json`
+    has neither the message id nor the subject; Alice's own card still shows
+    the mail chip. **Revoke bob** → Bob's next calendar load has no Lab.
+    **Stop sharing** → Lab is back in Alice's own calendar, mail chip
+    included.
+14. An event reminder on Lab fires on Alice's and Carol's pages
+    independently; dismissing it on one does not dismiss it on the other.
+15. Admin switches **Calendar and to-do sharing** off → Carol's view loses
+    Lab, Alice keeps it; on again → back, nothing lost.
+16. `sudo scripts/server-isolation-test.sh alice bob` (needs `nc`): the hub
+    and calendar sections pass.
+
+### Gotchas for the reviewer and P5
+
+- **One uid in every test.** Hub and calendar tests answer as fixed names on
+  per-account sockets over one store (`HubPeers` fakes); ACL entries are all
+  this process's uid. What another uid can actually read is only proven by the
+  isolation script on a server.
+- **Calendar `wait` re-reads the store every second** besides the change
+  notifier: the daemon tests run one service instance per account over one
+  store, and the re-read is what wakes across instances (in production one
+  instance; it also covers a restart).
+- `git_command_in` asks `share::is_shared_dir` on every local git call in
+  server mode (one small JSON read); the strict path uses `/bin/sh` for the
+  refusing command (server only).
+- The spawn gate fails closed: a shared repo the check cannot read blocks
+  agents there (message names the error). `rev-list --ignore-missing` keeps a
+  pruned reviewed mark from doing that.
+- `share_add` clones with `--origin shared`; members fetch by path. With git
+  2.53 `git fetch shared` from a terminal works without the pin (the transport
+  does not check ownership; see the safe.directory test).
+- The hub unbundles before the CAS/ref checks finish: refused pushes leave
+  objects (#2372).
+- `src-tauri` has `app-gateway` as a **dev-dependency** (the real hub and
+  service in its tests); the gateway crate still depends on nothing of
+  `src-tauri`.
+- `hub_wire.rs` and `cal_wire.rs` join `wire.rs`/`policy.rs`/`keys_wire.rs`
+  as files the daemon compiles by `#[path]` (`backend-stale.sh` watches them).
+- Privacy check: test mail addresses use `example.invalid`.
+
+### Needs the user
+
+- **The gateway is not in the sharing loop** (deviation): share tables and
+  ref rules live in the hub, calendar ACLs in the calendar service. Keep?
+- **Hub files are the hub account's** (members `r-X`), not root-owned. Keep?
+- **Commits in shared clones run hookless** rather than being refused. Keep?
+- **Per-author trust** for the agent-facing review (#2371, Q9): today every
+  change from another member is reviewed.
+- The **default calendar** cannot be shared (new events land in it). Keep?
+- The owner's mail/file links of shared tasks are kept on the owner's side
+  (her cards and unshare) — the service never sees them. Keep?
+- The new admin switch **Sharing projects** (`project_sharing`, default on).
+
+### Gates (worktree, 2026-10-03, at `892dee3d`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **702 files, 7097 tests**, all pass (+2 files, +7 tests) |
+| `cargo test --workspace -q --no-fail-fast` | src-gateway **110** (+20), src-core **99**, integration **169**; src-tauri lib 3283 + 1 failed: the known flaky `codex_bind::tests::a_watched_tree_is_walked_only_after_a_change` — passed alone, and the lib re-run alone: **3284 passed**, 0 failed, 3 ignored (+22) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3189 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings`, `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (RC/AR shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh a4c00c02..HEAD` | green (and the pre-commit hook on every commit) |
+| `git diff --check a4c00c02 HEAD` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
