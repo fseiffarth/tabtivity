@@ -1028,17 +1028,41 @@ availability**.
   until any of the user's devices connects. The UI and one push notification
   say "mail locked since reboot; open Tabtivity on any device". Calendar and
   todo hold no secrets and keep working.
-- **Revoking a device** deletes its wrap.
-- **Recovery.** At mail setup the user gets a one-time **recovery code**, a
-  random key under which one more wrap of K is kept. It is shown once and
-  never stored by Tabtivity. If every device and the code are lost, the sealed
-  store is lost. Mail itself is refetched from IMAP, so what is lost is the
-  saved passwords and local-only data (filters, drafts), and the setup
-  dialog says so.
+- **Revoking a device deletes its wrap and rotates K** (decided
+  2026-10-03). A new K is minted; everything sealed under the old one (the
+  credential store, a device-mode mail `key.json`'s wrap, the recovery
+  wrap) is re-sealed beside the original and a wrap made for every
+  remaining device; one atomic rename of `wraps.json` commits, and a
+  journal lets the next start finish or undo a rotation a crash
+  interrupted, so no crash leaves data that no remaining key opens. While
+  locked, the wrap goes at once and the rotation runs at the next release.
+  A revoked device with an old copy of `wraps.json` then opens nothing new
+  (except mail rows: the mail store's own master key is not re-sealed —
+  "Delete and download again" gives a fresh one).
+- **Recovery.** At setup the user gets a one-time **recovery code**. It is
+  shown once and never stored by Tabtivity. From it come a P-256 key `R`
+  that K is wrapped to (so a rotation re-wraps the new K for the same code
+  without knowing it) and an auth key `A` kept sealed under K. If every
+  device and the code are lost, the sealed store is lost. Mail itself is
+  refetched from IMAP, so what is lost is the saved passwords and
+  local-only data (filters, drafts), and the setup dialog says so.
+  Set-up and a new code need the device's pairing-key signature, like
+  enrolment; a session cookie alone is refused (decided 2026-10-03).
+- **A lost identity key is re-pinned with the recovery code** (decided
+  2026-10-03). A device's pin is first-use only: a changed identity is
+  never adopted silently. The daemon offers the new identity with a
+  binding derived from the sealed `A` in its `wraps.json`; the device
+  recomputes it from the recovery code (→ K and `A`) and the recovery
+  wrap's public fields and re-pins only on a match. The code never leaves
+  the device; a gateway in the middle, having neither the code nor the
+  daemon's files, cannot make a binding for a key of its own.
 - **Residual, stated at enrolment.** Root can read a live daemon's memory and
   the kernel keyring while K is unlocked. The admin is trusted for live data
   (§4.4); what this protects is data at rest, backups, and the user's own
-  agents.
+  agents. **Same-uid processes outside the fence can read K from the
+  keyring** (accepted 2026-10-03): the user's own shell tabs, SSH logins
+  and project scripts run on the host can; fenced agents can't; a copy of
+  the home or a backup can't open it.
 
 ---
 

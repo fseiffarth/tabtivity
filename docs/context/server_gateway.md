@@ -171,14 +171,70 @@ keyring. `services::server::vault` wires them:
   "locked" reads like a locked OS keyring.
 - **Set-up and recovery** are the Server settings' secrets panel: the
   recovery code is shown once and stored nowhere; a new code retires the
-  old wrap.
+  old wrap. Set-up and a new code need the device's **pairing-key
+  signature** over a single-use action nonce (`POST
+  /api/v1/secrets/challenge`, `AuthStore::action_challenge`; payload
+  `context("action")`, origin, device id, action, nonce, expiry, built on
+  the device), like enrolment — a cookie alone gets `403
+  signature_required` (decision 2026-10-03). The browser client signs with
+  the same origin's IndexedDB key (`mobile-web/src/secretsCore.ts`).
+- **Recovery wrap v2.** From the code and a salt: a P-256 key `r` (public
+  `R` in the wrap) and an auth key `A`. K is wrapped *to `R`* (ephemeral
+  X, ECDH, HKDF, AES-GCM), so a rotation re-wraps the new K for the same
+  code without knowing it; `A` is kept sealed under `subkey(K,
+  "recovery-auth")`. v1 wraps (K under `HKDF(code)`) still open and are
+  rewritten as v2 by the next `recover`; one met by a rotation is dropped
+  and the status says `recoveryCode: false` (panel: make a new code).
+- **Revoking rotates K** (`vault/rotation.rs`, decision 2026-10-03). New
+  K; the credential store and a device-mode mail `key.json` (its wrap
+  only — the mail master key stays) are re-sealed beside the originals
+  (`<file>.next`), the recovery wrap re-wrapped, a wrap per remaining
+  device; `rotation.json` names the new key id and the files; **commit =
+  renaming `wraps.json.next` over `wraps.json`**; then the `.next` files
+  move in, the new K goes into the hold, the journal goes. `Vault::new`
+  settles a crash: journal kid ≠ `wraps.json` kid → delete the `.next`
+  files (old K in force); equal → finish the moves. `wraps.json` keeps a
+  `check` (HKDF of K) so a stale K left in the hold is cleared (locked,
+  never wrong). Locked at revoke: the wrap goes at once, `rotate: true`
+  is recorded, the next release rotates before listeners run. Releases
+  also drop wraps of devices no longer enrolled (`--revoke-device` with
+  the daemon stopped drops the wrap itself via `revoke_offline`);
+  `install_vault` resumes a pending rotation while K is held.
+  `mail_crypt`'s device mode opens, enables and rewraps under
+  `Vault::with_key` (the vault's lock), so nothing reads one K's file
+  with another K. A re-enrolment's new ECDH key drops the old wrap
+  without rotating (`drop_wrap`).
+- **Identity re-pin** (decision 2026-10-03). The device's pin is
+  first-use only: a different identity at enrolment or in `GET
+  /api/v1/secrets` (`identity`) is never adopted — `releaseSecrets`
+  answers `untrusted` and the phone/browser asks for the recovery code.
+  `POST /api/v1/secrets/repin` (`Vault::repin_offer`, locked or not)
+  sends the identity, the recovery wrap's public fields and
+  `binding = HKDF(ikm = sealed A, info = context("identity") ‖ origin ‖
+  identity)`. The device derives `r` → K and `A` from the code, re-seals
+  `A` under `subkey(K)` with the wrap's `authNonce` (AES-GCM is
+  deterministic given key and nonce), recomputes the binding and pins
+  only on a match (`secrets::check_repin` = `secretsCore.checkRepin`,
+  shared vector). The code never leaves the device. Forging a binding
+  needs the code or the daemon's `wraps.json` (the sealed A is never
+  sent) — a gateway in the middle has neither.
 - **Residuals.** The identity key sits in the home unsealed (it must work
   while locked): a backup plus the gateway's position on a live connection
-  could impersonate the daemon to a device. Root reads a live daemon's
-  memory and the keyring (§4.4). Same-uid unfenced processes (the user's
-  own shell, a desktop app of the same account) can read the keyring entry;
-  the fence's seccomp keeps every agent out (EPERM observed from a fenced
-  tab, 2026-10-03). The "mail locked since reboot" push is not built.
+  could impersonate the daemon to a device, and the same pair could make a
+  device re-pin a key of its own if the user then types the code. Root
+  reads a live daemon's memory and the keyring (§4.4). **Same-uid unfenced
+  processes can read K from the keyring — accepted (decision 2026-10-03):**
+  the user's own shell tabs, SSH logins and project code run on the host
+  (build scripts, allowed hooks) can `keyctl` it while unlocked; fenced
+  agents can't (seccomp; EPERM observed from a fenced tab, 2026-10-03); a
+  copy of the home or a backup can't open it. The mail store's master key
+  is not rotated on revoke (only its wrap): a revoked device plus an old
+  copy of `key.json` and `wraps.json` still opens mail rows sealed later —
+  the user docs point at mail's "Delete and download again". `A` sealed
+  under an old K lets a revoked device with old wraps forge re-pin
+  bindings until a new recovery code is made. The recovery code crosses
+  the gateway in clear on `recover` (not on re-pin). The "mail locked
+  since reboot" push is not built.
 
 ## Host-channel inventory (§4.4)
 

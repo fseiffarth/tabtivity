@@ -1506,3 +1506,152 @@ Live steps 3–4 of § #2347 change: after **both** pages close and 90 s
 pass, `tmux list-clients` still lists one client (the left-over tab PTY)
 and an agent tab's MCP tools still answer when a new page opens the tab;
 closing the tab (×) ends it.
+
+## Vault decisions
+
+*Written 2026-10-03 by the vault-decisions agent. Base `7d604a95`. The
+four user decisions on the server secrets vault (plan §6.8, P3 part 2
+review "Judgment calls"). Nothing run on a server, nothing as root, no
+daemon/gateway against a real state dir or port: the daemon ran only in
+tests on temp sockets; `keyctl` is EPERM in this fence (expected), so the
+keyring is exercised through `KeyHold`. Rationale, as built:
+[`context/server_gateway.md`](context/server_gateway.md) § Secrets.*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `0e6ba828` | Daemon half: `vault/rotation.rs` (revoke rotates K, journal + atomic commit + `settle`, deferred while locked, `revoke_offline`, `resume` at start, stale wraps dropped on release); recovery wrap v2 in `secrets.rs` (K wrapped to the code's P-256 key, `A` sealed under K, `identity_binding`, `check_repin`); `Vault::with_key` (mail's device mode under the vault lock; the racy `mail_crypt::device_kek` removed); `rewrap_device_key_file`/`unlock_with_device_key`; `AuthStore::action_challenge`/`verify_action`; routes `/api/v1/secrets/challenge`, `/repin`, signed `/setup` + `/recovery-code`; `GET /secrets` adds `identity`, `recoveryCode`. Tests: `vault::tests` (+6), `secrets::tests` (+2), `auth::tests` (+1), `tests/server_secrets.rs` extended (signed set-up, re-pin offer, second device, revoke over the admin socket → rotation, tablet unlock, old code refused). |
+| `f49778aa` | Device half: `mobile-web/src/secretsCore.ts` (crypto with no request layer: `answerUnlock`, `unlockWith`, `signedAction`, `checkRepin`, `repinIdentity`), `authStore.ts` (IndexedDB split from `auth.ts`), `secrets.ts` (pin is first-use only → `untrusted`), `screens/SecretsRepinSheet.tsx`, `ServerSecrets.tsx` (signed set-up/new code, re-pin card, no-recovery-code note); i18n ×5; UntestedTag `server.secrets.repin`, `server.secrets` row extended. Tests: shared re-pin vector in `MobileSecretsRelease.test.ts`, `MobileSecretsRepin.test.tsx` (new), `ServerSecrets.test.tsx` (+3). |
+| the commit after | this section; plan §6.8; context file; `DOCUMENTATION.md` § "Hosted server: the secrets key" (new); TODO #2350; file maps. |
+
+### Design
+
+**1. Same-uid readers of the keyring — accepted, documented.**
+`DOCUMENTATION.md` (new subsection after Tabtivity Mobile; the server was
+not in the user docs before, and `docs/help/` has no server topic, so no
+help topic changed), the context file and plan §6.8 now say: fenced agents
+can't read K; the user's own shell tabs, SSH logins and project scripts run
+on the host can; a copy of the home or a backup can't open it.
+
+**2. Revoking rotates K.** What K seals: `wraps.json` (device + recovery
+wraps), `secrets/credentials.json` (passwords, git tokens) and a
+device-mode `mail/key.json` (the mail master key's *wrap*; the master key
+and the mail rows stay — see "Needs the user"). Protocol, all under the
+vault's file lock:
+
+1. `secrets/rotation.json` = `{kid: <new key id>, files: [re-sealed paths]}`;
+2. each file re-sealed under K' beside its original (`<file>.next`);
+3. new wraps (every remaining enrolled device, the recovery wrap re-wrapped
+   to `R`, `kid`, `check` = HKDF(K')[..16]) as `wraps.json.next`;
+4. **commit**: rename over `wraps.json`;
+5. rename each `.next` over its original;
+6. K' into the hold (replacing K); journal removed.
+
+`Vault::new` runs `settle`: journal kid ≠ `wraps.json` kid → the commit
+never happened → delete the `.next` files (K still in force, `rotate`
+still pending); equal → finish step 5. Then a held key whose check differs
+from `wraps.json`'s is cleared (crash between 4 and 6: locked until a
+device releases K' — never a wrong key, never data no key opens). An
+unreadable journal is left alone (both file sets kept). Revoke =
+delete the device's wrap and set `rotate: true` (that save is the revoke);
+if K is held, rotate now; if locked, the next release (device or recovery
+code) rotates before the unlock listeners run. Releases also drop wraps of
+devices no longer enrolled (a revoke no vault saw); `--revoke-device` with
+the daemon stopped drops the wrap via `vault::revoke_offline`;
+`install_vault` calls `resume` (rotates a pending one if K survived in the
+keyring). Forget-all rotates too (recovery wrap only). A re-enrolment's new
+ECDH key drops the old wrap without rotating (`drop_wrap`). The old K is
+never written anywhere; retiring it = replacing it in the hold.
+
+**Recovery code follows the rotation (preferred option).** v2 recovery
+wrap: from code + salt, `r` (P-256; first HKDF output < n) and `A`; K is
+wrapped to `R = r·G` (ephemeral X, ECDH, HKDF, AES-GCM), and `A` is sealed
+under `subkey(K, "recovery-auth")`. A rotation re-wraps K' to `R` without
+the code. v1 wraps (symmetric, from earlier builds of this branch only)
+still open; `recover` rewrites them as v2; one met by a rotation is
+dropped and `recoveryCode: false` makes the panel ask for a new code.
+
+**3. Re-pin with the recovery code.** The device pin is first-use only now:
+an identity that differs from the pinned one (in `GET /api/v1/secrets`'s
+new `identity`, or answered by a re-enrol) is never adopted;
+`releaseSecrets` answers `untrusted` → the phone shows `SecretsRepinSheet`,
+the browser panel a card. `POST /api/v1/secrets/repin` returns the
+identity, the recovery wrap's public fields (salt, R, X, nonce, sealed,
+authNonce — never the sealed A) and `binding = HKDF(ikm = sealed A, info =
+context("identity") ‖ origin ‖ identity)`, locked or unlocked. The device:
+code → `r` → ECDH(r, X) → K; code → `A`; AES-GCM-encrypt A under
+`subkey(K)` with `authNonce` (deterministic) = the sealed A; recompute the
+binding; pin only on a match, then unlock with the normal exchange. The
+code never leaves the device. A gateway in the middle cannot forge: it can
+wrap a key of its own to the public `R`, but without `A` it cannot produce
+the sealed A the device recomputes. Shared vector: `vault::tests::
+the_repin_vector_checks` ↔ `MobileSecretsRelease.test.ts`.
+
+**4. Signed set-up / new recovery code.** `POST /api/v1/secrets/challenge
+{action}` → `{nonce, expiresAt}` (single use, 60 s, 4 per device, apart
+from login challenges); the device signs `context("action")\norigin\n
+device\naction\nnonce\nexpiry`, built on its side (the nonce is checked to
+be base64url, so the server cannot shape the signed text); `/setup` and
+`/recovery-code` take `{nonce, signature}` — without them `403
+signature_required`, another key or a replay `403`. The browser client
+signs with the same origin's IndexedDB pairing key.
+
+### Live steps (a real server, after § P3 part 2's)
+
+1. In the browser client (paired at `/` first): Settings → Mobile → Server
+   → Secrets key → **Set up** works. In a private window that never paired
+   at `/`, signed in some other way, Set up says "holds no paired device
+   key". `curl` with only the session cookie to
+   `POST /api/v1/secrets/recovery-code` → `403 signature_required`.
+2. Phone + browser enrolled, mail set up, a saved password. Disconnect the
+   phone in the device list while unlocked: daemon log "secrets: rotated
+   the key (1 device wraps)"; mail and the saved password still open;
+   `secrets/wraps.json` has a new `kid`, no phone wrap; no `*.next` or
+   `rotation.json` left in `secrets/` or `mail/`.
+3. Reboot: the browser's sign-in unlocks; mail opens. In a fresh browser
+   the **same** recovery code still unlocks.
+4. Reboot again and revoke a device (`sudo …-admin-helper` revoke) before
+   any device signs in: `wraps.json` shows `"rotate": true` and no wrap for
+   it; the next unlock by a remaining device logs "rotated the key".
+5. `systemctl stop` the daemon, move `secrets/identity.key` away, start it:
+   the phone, after signing in, shows "This server's identity key changed";
+   a wrong code → "does not confirm this key", nothing changes; the right
+   code → trusted, and (after a reboot) mail unlocks without typing again.
+   The browser panel shows the same card.
+
+### Needs the user
+
+- **Mail rows are not re-keyed on revoke.** Only the mail master key's
+  wrap rotates; re-sealing a whole mailbox was not built. A revoked device
+  *plus* an old copy of `mail/key.json` and `wraps.json` still opens mail
+  rows written later. The docs point at mail's "Delete and download again".
+  Build an automatic mail re-key on revoke?
+- **Re-pin residuals.** Someone with a backup of the home *and* the
+  gateway's position could make a device re-pin a key of theirs (the
+  binding is derived from the sealed A in `wraps.json`) — the same pair
+  could already impersonate the daemon with the backed-up identity key. A
+  revoked device with an old `wraps.json` knows A (sealed under the old K)
+  until a new recovery code is made: suggest "make a new recovery code"
+  after revoking a lost device? (Not built.)
+- The recovery code still crosses the gateway in clear on `recover`
+  (unchanged; re-pin does not send it).
+- The phone's re-pin sheet shows once per sign-in; **Later** dismisses it
+  until the next sign-in.
+
+### Gates (worktree, 2026-10-03, at `f49778aa` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test -- --reporter=dot` | **698 files, 7080 tests**, all pass (was 697 / 7071) |
+| `cargo test --workspace -q --no-fail-fast` | **3580 passed**, 1 failed, 3 ignored, 26 binaries — the failure `sysstat::tests::descendant_pids_serves_cache_hit_for_unchanged_generation` is a pre-existing race (a parallel test bumps `PROC_TREE_GEN`); passes alone ×3 and in a re-run of the lib (**3235 passed**, 3 ignored: +1 the by-hand vector printer) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3140 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p tabtivity --no-default-features --lib` / `-p app-serverd` (`-D warnings`) | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 7d604a95..HEAD` | green |
+| `git diff --check` | clean |
+| `npm run mobile:bundle` | built (`mobile-dist/` is git-ignored, nothing to commit) |

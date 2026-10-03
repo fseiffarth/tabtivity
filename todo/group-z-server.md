@@ -367,7 +367,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
     handoff). (P3, 2026-10-03.)
     - [x] 🤖 Automated test — a CI step runs `ldd` on the daemon binary and fails on any GTK/X library (`ci-cd.yml`, "Daemon links no desktop libraries").
 
-2350. **Wire the device-released secrets key (§6.8).** ✅ **Built** (2026-10-03, `c23b3a57`, `fbf124c9`; never on a server): `services::server::vault`, the PWA's `secrets.ts`, `mail_crypt`'s device mode, the sealed credential store, the Server settings' secrets panel (UntestedTag `server.secrets`). **Still open:** the "mail locked since reboot" push. Was: `services::server::secrets` has the primitives (per-device wraps, the
+2350. **Wire the device-released secrets key (§6.8).** ✅ **Built** (2026-10-03, `c23b3a57`, `fbf124c9`; never on a server): `services::server::vault`, the PWA's `secrets.ts`, `mail_crypt`'s device mode, the sealed credential store, the Server settings' secrets panel (UntestedTag `server.secrets`). **Vault decisions (user, 2026-10-03) built** (`0e6ba828`, `f49778aa`; never on a server): revoking a device rotates K (crash-safe, deferred to the next release while locked; the recovery code follows); set-up and a new recovery code need the pairing-key signature; a lost identity key is re-pinned with the recovery code (UntestedTag `server.secrets.repin`); same-uid unfenced readers of the keyring accepted and documented. **Still open:** the "mail locked since reboot" push. Was: `services::server::secrets` has the primitives (per-device wraps, the
     recovery code, the persistent keyring). Missing: the device's ECDH key
     made at pairing (PWA and browser, next to the signing key), the unlock
     exchange on connect (X's public key out, the shared value back encrypted
@@ -376,7 +376,17 @@ the desktop groundwork the hosted plan's P1 builds on.*
     store (IMAP/SMTP/CalDAV/SSH), the recovery-code dialog, and the "mail
     locked since reboot" push. (P3, 2026-10-03.)
     - [x] 🤖 Automated test — the §11 secrets tests: the store opens only after a device releases K; K survives a daemon restart, not a keyring flush; a copy of the home plus the gateway database cannot open it; the recovery code does (`vault::tests`, `tests/server_secrets.rs`, `mail_crypt::tests::a_device_mode_store_opens_only_with_the_released_key`, `MobileSecretsRelease.test.ts`).
+    - [x] 🤖 Automated test — the vault decisions: a revoke rotates K and a revoked device with an old `wraps.json` opens nothing new; locked, the wrap goes at once and the next release rotates; offline revokes and stale wraps rotate on release/start; a crash at each of six rotation steps loses nothing; v1 recovery wraps upgrade; set-up/new code refuse a cookie alone, another key and a replay; the re-pin binding checks only with the right code (Rust/WebCrypto shared vector) (`vault::tests`, `secrets::tests`, `auth::tests::signed_actions_need_the_pairing_key_and_are_single_use`, `tests/server_secrets.rs`, `MobileSecretsRelease.test.ts`, `MobileSecretsRepin.test.tsx`, `ServerSecrets.test.tsx`).
     - [ ] 🖐️ Manual test — on a server: pair a phone, set up mail, restart the daemon (mail stays unlocked), reboot (mail locked until the phone connects).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — on a server with a phone and a paired browser: Set up from the browser works (signed); revoke the phone → mail and saved passwords still open, after a reboot the browser releases the key and the old recovery code still unlocks; revoke while locked → the next unlock rotates; delete `secrets/identity.key`, restart → the phone shows "identity key changed", a wrong code is refused, the right one re-pins and mail opens.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)

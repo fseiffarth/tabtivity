@@ -445,6 +445,47 @@ has, the pill offers **Make these changes**, which sends the go-ahead (edit the
 sources, rebuild, send the PDF back) — its wording is the second field of Home →
 This phone → **Mark up prompt**.
 
+### Hosted server: the secrets key
+
+On a Tabtivity server (the browser client behind the gateway, plan §6.8) your
+mail store and the passwords and tokens you chose to save are sealed under one
+secrets key. It is never written to disk in the clear; it lives in the
+kernel's per-user keyring, so it survives a restart of your Tabtivity
+service but not a reboot. After a reboot it stays locked until one of your
+paired devices signs in and releases it, or you type your recovery code.
+Settings → Mobile → Server → **Secrets key**:
+
+- **Set up the key** and **New recovery code** are signed by the paired
+  device's own key, not just its sign-in session: use the phone app or a
+  browser you paired at the server's address. The recovery code is shown once
+  and stored nowhere.
+- **Revoking a device changes the key.** When a device is disconnected (or
+  every device is forgotten) the server makes a new secrets key and re-seals
+  everything under it; your other devices and the same recovery code keep
+  working. If the key is locked at that moment, the device's access is
+  removed at once and the key changes at the next unlock. A revoked device,
+  even with an old copy of the server's files, opens nothing sealed after
+  that — except mail rows: the mail store's own key stays (re-sealing a whole
+  mailbox is not done), so if a revoked device and an old copy of the
+  server's files may both be in someone's hands, use mail's encryption
+  dialog → **Delete and download again** for a fresh mail key.
+- **"This server's identity key changed."** Your devices remember the
+  server's identity key and release the secrets key only to it. If the server
+  lost that key (a partial restore), the phone shows this prompt after
+  signing in, and Server settings show it too. Enter your recovery code: the
+  device checks the new key against it — the code is not sent — and trusts it
+  only if it fits. A wrong code changes nothing; a code that should fit but
+  doesn't means the key is not your server's: don't trust it.
+
+**Who can read the key while it is unlocked.** Agents in fenced tabs can't:
+the fence blocks the keyring. Anything that runs as you *outside* the fence
+can: your own shell tabs on the server, an SSH login as your account, and
+project scripts Tabtivity runs on the host (build scripts, git hooks you
+allowed). That is by design — the key protects your data at rest. A copy of
+your home directory or a backup cannot open it: it holds only sealed wraps,
+which need a paired device or the recovery code. The server's administrator
+(root) can read a running service's memory and keyring.
+
 ### Workspace Apps
 
 Each of these replaced a global-app role, on the same reasoning: what sits
