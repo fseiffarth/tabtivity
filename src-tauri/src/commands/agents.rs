@@ -42,6 +42,8 @@ struct AgentSpec {
 }
 
 use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath};
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
 
 /// The registry's login paths, for `services::agent_auth`.
 pub fn auth_registry() -> Vec<(&'static str, &'static [AuthPath])> {
@@ -672,7 +674,7 @@ pub struct NodeRuntimeStatus {
 /// [`NODE_MIN_MAJOR`] surfaces the "install Node first" helper.
 #[tauri::command]
 pub async fn node_runtime_status() -> NodeRuntimeStatus {
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         let version = crate::paths::command_no_window("node")
             .arg("--version")
             .output()
@@ -872,13 +874,13 @@ fn manual_install_cmd(spec: &AgentSpec) -> &'static str {
 /// progress. Returns the install log on success, or the tail of the output on
 /// failure. The post-install probe is the real source of truth.
 #[tauri::command]
-pub async fn install_agent(app: tauri::AppHandle, id: String) -> Result<String, String> {
+pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
 
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
-    run_installer(app, spec)
+    run_installer(ctx.0.clone(), spec)
 }
 
 /// Update an installed agent CLI: its official installer run again, which
@@ -886,23 +888,22 @@ pub async fn install_agent(app: tauri::AppHandle, id: String) -> Result<String, 
 /// dirs come ahead of any host copy on PATH (`services::agent_install`). Same
 /// `agent-install-progress` stream as [`install_agent`].
 #[tauri::command]
-pub async fn update_agent(app: tauri::AppHandle, id: String) -> Result<String, String> {
+pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
     if !spec_is_installed(spec) {
         return Err(format!("{} is not installed.", spec.label));
     }
-    run_installer(app, spec)
+    run_installer(ctx.0.clone(), spec)
 }
 
 /// Run `spec`'s installer, streaming its output; the body of [`install_agent`]
 /// and [`update_agent`].
-fn run_installer(app: tauri::AppHandle, spec: &'static AgentSpec) -> Result<String, String> {
+fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
 
     let id_owned = spec.id.to_string();
     let emit = move |line: &str| {
-        let _ = app.emit(
+        ctx.emit(
             "agent-install-progress",
             serde_json::json!({ "id": id_owned, "line": line }),
         );
@@ -1365,7 +1366,7 @@ pub async fn agent_tab_model(
     project_id: Option<String>,
     session_id: String,
 ) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_model(
             &agent,
             project_id.as_deref(),
@@ -1387,7 +1388,7 @@ pub async fn agent_tab_goal(
     project_id: Option<String>,
     session_id: String,
 ) -> Option<bool> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_goal(&agent, project_id.as_deref(), &session_id)
     })
     .await
@@ -1406,7 +1407,7 @@ pub async fn agent_tab_last_prompt(
     project_id: Option<String>,
     session_id: String,
 ) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_last_prompt(
             &agent,
             project_id.as_deref(),
@@ -1429,7 +1430,7 @@ pub async fn agent_tab_recent_prompts(
     project_id: Option<String>,
     session_id: String,
 ) -> Vec<crate::services::agent_session::TranscriptPrompt> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::agent_session_recent_prompts(
             &agent,
             project_id.as_deref(),
@@ -1461,7 +1462,7 @@ pub async fn agent_tab_transcript(
     limit: Option<usize>,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         agent_transcript::agent_session_transcript(
             &agent,
             project_id.as_deref(),
@@ -1493,7 +1494,7 @@ pub async fn agent_tab_changes(
     limit: Option<usize>,
 ) -> crate::services::agent_changes::AgentChanges {
     use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         agent_changes::agent_session_changes(
             &agent,
             project_id.as_deref(),
@@ -1520,7 +1521,7 @@ pub async fn agent_tab_undo_clear(
     project_id: Option<String>,
     session_id: String,
 ) -> Option<crate::services::agent_session::UndoClearPlan> {
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::agent_session::undo_clear_plan(&agent, project_id.as_deref(), &session_id)
     })
     .await
@@ -1895,7 +1896,7 @@ fn host_agent_version_says(
     if stale && !probing.swap(true, Ordering::SeqCst) {
         if let Some(spec) = find_spec(agent).filter(|_| path.is_some()) {
             let path = path.expect("checked above");
-            tauri::async_runtime::spawn(async move {
+            app_core::rt::spawn(async move {
                 let result = probe_agent_version(spec, &path).await;
                 versions::remember(spec.id, result, &path);
                 probing.store(false, Ordering::SeqCst);
@@ -1943,7 +1944,7 @@ pub async fn claude_folder_trusted(
     local_only: Option<bool>,
 ) -> bool {
     let _ = (sandbox, local_only);
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         crate::services::sandbox::claude_folder_trusted(&cwd, project_id.as_deref())
     })
     .await
@@ -1954,7 +1955,7 @@ pub async fn claude_folder_trusted(
 /// (`services::agent_auth`). Never a token.
 #[tauri::command]
 pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
-    tauri::async_runtime::spawn_blocking(crate::services::agent_auth::status)
+    app_core::rt::spawn_blocking(crate::services::agent_auth::status)
         .await
         .unwrap_or_default()
 }
@@ -1964,7 +1965,7 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
 /// files were taken.
 #[tauri::command]
 pub async fn agent_login_import(id: String) -> Result<usize, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::agent_auth::import_from_user_home(&id))
+    app_core::rt::spawn_blocking(move || crate::services::agent_auth::import_from_user_home(&id))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1972,7 +1973,7 @@ pub async fn agent_login_import(id: String) -> Result<usize, String> {
 /// Forget the shared login of `id` everywhere.
 #[tauri::command]
 pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::agent_auth::sign_out(&id))
+    app_core::rt::spawn_blocking(move || crate::services::agent_auth::sign_out(&id))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1981,7 +1982,7 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
 /// and how many files it holds.
 #[tauri::command]
 pub async fn agent_global_status() -> Result<crate::services::agent_global::LayerStatus, String> {
-    tauri::async_runtime::spawn_blocking(crate::services::agent_global::status)
+    app_core::rt::spawn_blocking(crate::services::agent_global::status)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1990,7 +1991,7 @@ pub async fn agent_global_status() -> Result<crate::services::agent_global::Laye
 /// `~/.gemini`; every agent home picks it up at its next tab start.
 #[tauri::command]
 pub async fn agent_global_import() -> Result<crate::services::agent_global::ImportReport, String> {
-    tauri::async_runtime::spawn_blocking(crate::services::agent_global::import_from_user_home)
+    app_core::rt::spawn_blocking(crate::services::agent_global::import_from_user_home)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
@@ -2000,7 +2001,7 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
 /// every Codex tab picks it up at its next start.
 #[tauri::command]
 pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::services::agent_global::set_codex_auto_review(enabled))
+    app_core::rt::spawn_blocking(move || crate::services::agent_global::set_codex_auto_review(enabled))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
@@ -2009,7 +2010,7 @@ pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), Str
 /// Open the Tabtivity-wide layer's folder in the file manager, creating it first.
 #[tauri::command]
 pub async fn agent_global_open() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    app_core::rt::spawn_blocking(|| {
         let dir = crate::services::agent_global::ensure_dir().map_err(|e| e.to_string())?;
         opener::open(&dir).map_err(|e| e.to_string())
     })

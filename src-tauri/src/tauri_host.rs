@@ -84,6 +84,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for Ctx {
 pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "agent_prompts.rs",
     "agent_tasks.rs",
+    "agents.rs",
     "app_update.rs",
     "boxes.rs",
     "brand_migration.rs",
@@ -155,6 +156,13 @@ mod tests {
                 let trimmed = code.trim();
                 if trimmed.starts_with("#[tauri::command") {
                     continue;
+                }
+                // A string literal is data (`mail.rs`'s own source scan spells
+                // the attribute in two halves on purpose); blank it out.
+                let mut code = code.to_string();
+                while let Some(open) = code.find('"') {
+                    let Some(len) = code[open + 1..].find('"') else { break };
+                    code.replace_range(open..open + len + 2, "");
                 }
                 let names_tauri = code.match_indices("tauri").any(|(i, _)| {
                     let before = code[..i].chars().next_back();
