@@ -209,10 +209,12 @@ fn parse_window_size(raw: &str) -> Option<(u16, u16)> {
     Some((cols, rows))
 }
 
-/// `window-size largest` sizes a window to the widest attached client, and tmux
-/// then *pans* any smaller client across it — so a phone fitted to its own
-/// viewport received a ~44-column moving slice of a ~180-column pane with every
-/// line silently truncated. The phone adopts the window geometry instead: its
+/// A window wider than a client's screen is *panned* across it — under
+/// `window-size largest` that was every smaller client, so a phone fitted to its
+/// own viewport received a ~44-column moving slice of a ~180-column pane with
+/// every line silently truncated (`latest`, the policy since tmux 3.2 —
+/// `tmux_local::window_size_policy` — would shrink the desktop's window to the
+/// phone's instead the moment it typed). The phone adopts the window geometry: its
 /// xterm is an offscreen emulator whose column count never had to match the
 /// physical screen, and the reading view re-wraps for display.
 fn window_size(tmux_name: &str) -> Option<(u16, u16)> {

@@ -688,7 +688,7 @@ fn epoch_ms_now() -> i64 {
 /// size, but the phone adopts the window's geometry, and at tmux's default
 /// 80×24 a long footer — Claude's status line, which carries the model — was
 /// cut off, so the phone showed "Agent is working…" with no model. A window
-/// that attaches later resizes it to its own (`window-size largest`).
+/// that attaches later resizes it to its own (`tmux_local::window_size_policy`).
 const HEADLESS_COLS: u16 = 200;
 const HEADLESS_ROWS: u16 = 50;
 

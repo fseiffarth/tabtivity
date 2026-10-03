@@ -261,7 +261,7 @@ pub fn tmux_available() -> bool {
 ///
 /// `-A` = attach if it exists / create otherwise (one command that is both start
 /// and resume). Attach is deliberately non-evicting so desktop and phone clients
-/// coexist. `status off` / `mouse on` / `window-size largest` are session-scoped
+/// coexist. `status off` / `mouse on` / `window-size` ([`window_size_policy`]) are session-scoped
 /// after a literal `;` argv item (tmux splits its argv on a standalone `;`).
 /// `history-limit` alone comes **before** `new-session` and is `-g`: a pane
 /// copies the limit at creation, so a `-t`-scoped set after the fact would leave
@@ -518,7 +518,7 @@ fn local_tmux_args_for(
         "-t",
         session,
         "window-size",
-        "largest",
+        window_size_policy(session_env),
         // A CLI that sees `$TMUX` wraps its OSC 52 copy in tmux's passthrough
         // (`ESC P tmux; …`), which tmux drops unless this is on — Mistral
         // Vibe's "copy this URL (press c)" then copied nothing. Passthrough
@@ -546,6 +546,43 @@ fn local_tmux_args_for(
     ] {
         args.push(tok.to_string());
     }
+    args
+}
+
+/// The `window-size` a Tabtivity session's window gets: `latest` — the size of
+/// the client that most recently typed, resized or attached — from tmux 3.2
+/// (it exists since 3.1; 3.2 is the floor the probe here already knows), else
+/// `largest`.
+///
+/// Every client of a session holds its own PTY with its own size (the desktop
+/// window, each browser page — TODO #2347 — and the phone's bridge), but the
+/// program in the pane sees one size per window, so the option decides whose.
+/// `largest` gave the widest client a fit and panned every smaller one across
+/// a window wider than its screen (a narrow browser page saw a cut-off slice);
+/// `smallest` padded every larger one, and with the phone — which adopts the
+/// window's geometry (`pty_bridge::window_size`) — it could never grow again;
+/// `aggressive-resize` only weighs the clients *looking at* a window, which
+/// all of these always are. `latest` gives the client in use an exact fit and
+/// lets the others pan or pad until they are used, and with the phone it
+/// changes nothing: the phone resizes only to the window's own size. One
+/// client (the desktop alone) gets its own size under any of them.
+pub fn window_size_policy(session_env: bool) -> &'static str {
+    if session_env {
+        "latest"
+    } else {
+        "largest"
+    }
+}
+
+/// The `tmux` argv (the PTY's `cmd` is `tmux`) that attaches one more client
+/// to the existing local session `session`, and never creates one: a server
+/// client's own view of a tab another client runs (TODO #2347,
+/// `terminal::join_tab`). `-u` as the phone's bridge has it: the sidecar is a
+/// headless service with no guaranteed UTF-8 locale. `=` matches the name
+/// exactly.
+pub fn attach_argv(session: &str) -> Vec<String> {
+    let mut args = socket_args();
+    args.extend(["-u".into(), "attach-session".into(), "-t".into(), format!("={session}")]);
     args
 }
 
@@ -845,6 +882,20 @@ mod tests {
                 "None",
             ]
         );
+    }
+
+    /// TODO #2347: every client of a session has its own size, and the window
+    /// follows the one in use — `latest` wherever the tmux is new enough for
+    /// it; the attach a second client runs never creates a session.
+    #[test]
+    fn windows_follow_the_latest_client_and_an_attach_never_creates() {
+        let args = local_tmux_args_with("s1", "", &[], &HashMap::new(), true);
+        let at = args.iter().position(|a| a == "window-size").expect("window-size is set");
+        assert_eq!(args[at + 1], "latest");
+        assert_eq!(window_size_policy(false), "largest", "tmux before 3.2 keeps the old policy");
+        let attach = attach_argv("s1");
+        assert!(attach.ends_with(&["-u".to_string(), "attach-session".into(), "-t".into(), "=s1".into()]), "{attach:?}");
+        assert!(!attach.iter().any(|a| a == "new-session" || a == "-A"));
     }
 
     #[test]
