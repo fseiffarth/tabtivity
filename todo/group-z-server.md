@@ -760,3 +760,24 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+2380. **Run rootless Podman project containers live (P5, §9).** Steps in
+    `docs/hosted_handoff.md` § P5 "Rootless Podman — live steps": Podman
+    and uidmap installed, subordinate ranges, the admin switch on; Bob's
+    container project: the build tab builds into Bob's store, tabs run in
+    it as Bob's uid, files written are Bob's, Alice and rootful Podman see
+    nothing, memory counts in Bob's slice; the switch off refuses new tabs.
+    Open questions only a run answers: rootless Podman from a system
+    service with no user session (no lingering) — `XDG_RUNTIME_DIR` falls
+    back to `/tmp/podman-run-<uid>` in the units' shared private `/tmp`;
+    whether the cgroupfs manager needs `Delegate=yes` on the daemon unit.
+    (P5, 2026-10-03.)
+    - [ ] 🖐️ Manual test — the § P5 rootless Podman live list on a server.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+

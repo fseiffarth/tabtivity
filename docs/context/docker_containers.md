@@ -87,3 +87,37 @@ dir: the new transcript lands there and teardown harvests it into the real
 spec fingerprint** — it changes whenever any project gains a dir, and a
 fingerprint mismatch means recreate, i.e. an unrelated project's agent could
 otherwise kill every live tab of this one.
+
+**On a hosted server: rootless Podman per user** (hosted plan §9, P5).
+The Docker socket is root on the host, so no server user may have it (the
+admin helper refuses an account in the `docker` group). Instead
+`sandbox::Engine::current()` is Podman on a server: the same CLI verbs,
+run by the user's own daemon under the user's uid, every container in that
+user's own user namespace and storage (`~/.local/share/containers`). What
+changes in the argv: `--userns=keep-id` (the `--user uid:gid` the create
+already passes is the user on the host too, so files written into the
+project are theirs), and `--cgroup-manager=cgroupfs --events-backend=file`
+before every subcommand — a server's daemon is a system service with no
+systemd user session, so Podman manages no systemd scopes and the
+containers stay inside the daemon's cgroup, i.e. under the user's slice
+and its memory/task limits. `is_engine_cmd` replaces the `cmd == "docker"`
+checks (tmux and fence wraps skip an engine client). The missing-image tab
+runs `podman build`/`pull` into the user's own store.
+- **Off until the administrator switches it on** (`policy.features.
+  containers`, Server settings; default off, fail-closed off). The
+  container commands are `Core` again (they were `Admin`), gated by that
+  switch through `server::Feature::Containers`; a tab in a project whose
+  container was turned on earlier fails while the switch is off — never a
+  silent fall-back to the host.
+- **Prerequisites** (`<slug>-admin-helper check`, the `podman` row, a
+  warning only): Podman, `newuidmap`/`newgidmap` (package `uidmap`, setuid or
+  file capabilities), and a subordinate uid and gid range for every server
+  user in `/etc/subuid` and `/etc/subgid` (Ubuntu's `useradd` allocates one;
+  a linked older account may need `usermod --add-subuids … --add-subgids …`).
+- **Unchanged**: the P4 spawn gate (a shared project's unreviewed agent
+  files stop a container agent too), the admin's direct key into the exec
+  environment (named on the argv only), a brokered key refused in a
+  container (the broker is on the host's loopback). Not run live: rootless
+  Podman under a system service without lingering, the cgroupfs fallback and
+  `keep-id` with identical-path mounts are from Podman's documentation
+  (#2380).

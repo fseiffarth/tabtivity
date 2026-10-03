@@ -1287,7 +1287,7 @@ terminal on the phone takes that tab over from any other viewer (§3.5).
 | `mobile_control`: raw ids/paths never cross the browser API | Holds for the phone API. **Relaxed** for the web desktop client toward its own user, on a separate route prefix (§4.3). Never crosses users. |
 | Terminal kill reaps the whole subtree | Holds. Stopping the user's slice reaps everything, and a daemon restart does not touch agents (§3.1). |
 | Remoteness explicit; `services::remote` source of truth | Holds; "remote" now means remote *from the server*. Remote projects can't be shared in v1 (§6.2). |
-| Containers: one per local project via `services::sandbox` | `admin`/off in v1: the Docker socket is root on the host. Rootless Podman per user is **P5**. |
+| Containers: one per local project via `services::sandbox` | `admin`/off in v1: the Docker socket is root on the host. Rootless Podman per user is **P5**. *Built (P5):* `sandbox::Engine` runs rootless Podman as the user on a server (`--userns=keep-id`, cgroupfs), the commands are `core` behind the admin's `containers` switch (default off); not run live (#2380). |
 | `hpc_hosts`, `careful_hosts` | Hold, per user. |
 | Permission mode is the CLI's own; Tabtivity injects none | Holds. Neither a user's login nor an admin-provided credential carries a mode. |
 | Gate remote probes on connected; gate hidden panes | Hold, plus the global server-link gate and poller pause (§3.5). |

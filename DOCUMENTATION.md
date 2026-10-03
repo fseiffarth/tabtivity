@@ -465,6 +465,21 @@ provider), then per person `sudo tabtivity-admin-helper user-oidc NAME --sub
 addresses). `user-oidc NAME --clear` and `oidc-clear` take it back. Invite
 codes keep working either way.
 
+### Hosted server: project containers
+
+On a server, "Run this project in a container" works once the administrator
+switches **Project containers** on (Server settings; it is off by default).
+Your containers are rootless Podman containers that run as you: nobody else
+on the server can see or enter them, and files they write in your project are
+yours. A missing image is built into your own image store the first time.
+While the administrator has the switch off, a project with its container on
+does not start new tabs — turn its container off to run them without one.
+
+For the administrator: install `podman` and `uidmap`, make sure every server
+user has a subordinate id range in `/etc/subuid` and `/etc/subgid`
+(`sudo tabtivity-admin-helper check` names who lacks one), then switch
+**Project containers** on.
+
 ### Hosted server: the desktop app as a client
 
 The desktop app can show a server's workspace too, in a window of its own
