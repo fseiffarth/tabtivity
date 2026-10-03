@@ -270,7 +270,8 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .tab-card > .tab-card-status.done { --status-face:#193a29; }
 .tab-card > .tab-card-status.interrupted { --status-face:#46202a; }
 /* The Activity pill breathes; the working hexagon is drawn only as a
-   bright line running around its edge: a conic sweep whose start angle turns
+   solid bright line, four of its six edges long (each edge spans 60° seen
+   from the centre, so 240°), running around its edge: a conic sweep whose start angle turns
    (registered `--hex-run`, so the shape itself stays still), clipped to the
    hexagon's edge ring. The asking hexagon pulses — it
    swells and a faint fill glows inside it; the pill's ? tips its head. ✓ and
@@ -284,7 +285,7 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 @property --hex-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
 .tab-card > .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
 .tab-card > .tab-card-status.working::before { display:none; }
-.tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 60%, currentColor 100%); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
+.tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 120deg, currentColor 0); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
 .tab-card > .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question .agent-status-glyph { animation:none; }
