@@ -39,6 +39,7 @@ use crate::services::core_dispatch::Role;
 
 #[cfg(unix)]
 pub mod daemon;
+pub mod secrets;
 
 /// What the gateway and this daemon agree on, compiled from the gateway's
 /// crate so the two cannot drift (headers, env names, name rules).
