@@ -741,3 +741,22 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+2379. **Run the desktop's Connect mode live; finish its client half (P5, §7.2).**
+    Steps in `docs/hosted_handoff.md` § P5 "Connect mode — live steps": pair
+    the desktop with a server by invite code, open the server window, work
+    in it (terminal, agent, files) beside the standalone window, clipboard
+    and notifications native, Open on a server PDF downloads and opens it,
+    a server restart reconnects. Not built yet: the Connect window's
+    popouts and presenter, native print of a server file, a sign-out inside
+    it, and a webview profile of its own on macOS (`data_store_identifier`).
+    (P5, 2026-10-03.)
+    - [ ] 🖐️ Manual test — the § P5 Connect live list against a real server.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+

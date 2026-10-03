@@ -465,6 +465,19 @@ provider), then per person `sudo tabtivity-admin-helper user-oidc NAME --sub
 addresses). `user-oidc NAME --clear` and `oidc-clear` take it back. Invite
 codes keep working either way.
 
+### Hosted server: the desktop app as a client
+
+The desktop app can show a server's workspace too, in a window of its own
+beside your own workspace (the two never mix). Settings → Mobile → **Connect
+to a server**: the server's address (`https://…`), an invite code from its
+administrator (`name:12345678`) and a name for this computer → **Pair**.
+Then **Open the server window**. Everything in that window — projects,
+terminals, agents, mail — lives on the server, as in the browser; copy and
+paste, notifications and the window itself are this computer's, and opening
+a server file downloads it into your Downloads folder and opens it here.
+**Forget this server** removes this computer's key; remove the device in the
+server's Mobile settings as well.
+
 ### Hosted server: the secrets key
 
 On a Tabtivity server (the browser client behind the gateway, plan §6.8) your

@@ -1161,6 +1161,14 @@ native clipboard, print, notifications, popouts, all shortcuts, and
 open-outside after a download. Every `core` command goes to the server. It is
 the same Tauri app with a second transport, not a new product.
 
+*As built (P5, `docs/context/web_client.md` § The desktop's Connect mode):*
+one deviation — the Connect window runs **this binary's** frontend, not the
+bundle the gateway serves, so no server-supplied code ever holds the
+window's IPC; the socket is opened in Rust (device-key sign-in, the server's
+cookies and `Origin`) and bridged to the window. Clipboard, notifications,
+window controls and open-after-download are native; popouts, print and a
+macOS profile of its own are not built (#2379). Not run live.
+
 ### 7.3 Phone
 
 The PWA does not change. The gateway takes over the sidecar's

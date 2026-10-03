@@ -154,6 +154,53 @@ the sidecar runs. It is additive — the Tauri window behaves exactly as before.
   session load and event (backend). `switch_project_session` is the backend
   half; the browser shim answers the client command with it.
 
+## The desktop's Connect mode (P5, plan §7.2)
+
+The desktop app as a client of a server, in a **Connect** window beside its
+own standalone workspace (Q12). As built:
+
+- **The code is the app's, not the server's.** §7.2 says the shell "loads the
+  same web bundle from the gateway". It does not: the Connect window loads
+  *this binary's* `index.html?connect=1` (`main-connect.tsx`). Loading the
+  server's bundle would give a remote origin the window's IPC — any XSS on the
+  server, or the server itself, would then run with this desktop's native
+  commands; the capability files forbid a `remote` entry for that reason.
+  Cost: the desktop and the server must speak the same protocol version (the
+  `hello` says which), as the phone and its host already must.
+- **The socket is Rust's** (`services::connect`, `commands::connect`). The
+  window's origin is the app's, so it cannot carry the server's
+  `SameSite=Strict` session or pass the socket's exact-`Origin` check. The
+  backend signs in with the device key (challenge, raw `r‖s` signature,
+  session) and opens `wss://…/api/v1/desktop/ws` with the cookies, the
+  server's own `Origin` and the desktop subprotocol, over the app's
+  tokio-rustls stream (platform verifier). Frames are bridged both ways:
+  `connect_ws_open` (on an event name the window registered first, so the
+  `hello` is never emitted unheard), `connect_ws_send`, `connect_ws_close`;
+  binary frames as base64. Only the `connect` window may use them.
+- **Pairing** is the browser's: an invite code (`user:digits`) pairs a P-256
+  key generated in Rust, kept in `<state>/connect/device.key` (`0600`,
+  PKCS#8; the state dir is masked in every fence). The server sees one more
+  device. **Forget** removes the key and the record here; revoke the device
+  on the server too.
+- **Its own webview profile** (`<state>/connect/webview`, Linux and Windows;
+  macOS shares the profile — #2379): the server's frontend state never mixes
+  with the standalone workspace's local storage.
+- **Native where it is the user's machine**: `wsInternals.ts` takes the
+  window's own Tauri internals (captured before the shim replaces them) and
+  answers `CONNECT_NATIVE` client commands (clipboard, `open_external_url`,
+  clock, Super key, power) and the window and notification plugins natively;
+  `open_file` asks the server for a download ticket and
+  `connect_open_download` fetches it (the server's host, `/content/` only,
+  a safe file name, never overwriting) into `~/Downloads` and opens it with
+  the system's default app. Every other command routes exactly as in a
+  browser (`core` to the server, other `client` commands to the browser
+  adapters).
+- **Not built**: popouts and the presenter of the Connect window (the adapter
+  answers them as a browser does), native print of a server file, the
+  desktop's own shortcuts outside the window, a sign-out in the Connect
+  window (WebShell's sign-out navigates to `/desktop/`, which the Connect
+  window does not serve) — #2379.
+
 ## Not done (TODO group Z, #2341–#2346, and #2339)
 
 Popout windows (`?popout=`), browser shortcut alternatives for Ctrl+T/W/N,
