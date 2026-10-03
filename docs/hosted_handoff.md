@@ -2982,7 +2982,7 @@ browser.
 **Live steps** (a real provider, e.g. a Keycloak test realm; TODO #2378):
 1. Register `https://<server>/gateway/v1/oidc/callback` as the client's
    redirect URI (confidential client, code flow, PKCE allowed).
-2. `sudo …/tabtivity-admin-helper --dry-run oidc-set --issuer https://… 
+2. `sudo …/tabtivity-admin-helper --dry-run oidc-set --issuer https://…
    --client-id … --name "Lab SSO"` prints no secret; run it with the secret
    piped in; `sudo ls -l /var/lib/tabtivity-gateway/oidc.json` → `-rw-------
    tabtivity-gw`.
@@ -3096,3 +3096,101 @@ A tab's `podman exec` runs on the host side like `docker exec` did (not
 fenced). The fingerprint of a container spec is computed on the Docker argv
 (the engine's additions come after), so a desktop project moved to a server
 recreates nothing it should not.
+
+### 6. Pair mode and in-tree worktrees for shared projects (§6.3)
+
+| Commit | Content |
+|---|---|
+| `e36839db` | `share::checked_out` (every checkout of the repository: the main one and each linked worktree, from `git worktree list --porcelain`); `unreviewed` walks from all of them; `pending_review` shows the files per checkout ("(worktree <name>)") and its `commit` lists every checked-out commit, which `accept_in` marks; test `a_worktree_holding_unreviewed_agent_files_stops_agents_until_reviewed` (the real hub, a terminal merge in a worktree only); UntestedTag `server.sharing.worktrees`. |
+| `dd581fd5` | Docs: `sharing.md` § In-tree worktrees and § Pair mode (designed, not built), plan §6.3, user docs, TODO #2381–#2383. |
+
+**In-tree worktrees — design**: a member's clone is theirs alone, so its
+worktrees are one uid's tree. Gate 1 (hookless, strict config) already
+covered them (`is_shared_dir` is a prefix test; a worktree's
+`config.worktree` and common config are sanitized). Gate 2 was the gap: it
+read only the main checkout's `HEAD`, so a co-member's `AGENTS.md` merged in
+a worktree started agents there unreviewed. Now every checkout counts, and
+an unreviewed change anywhere stops agents anywhere in the project (simpler
+and fail-closed). Not built: pushing or merging a worktree's branch through
+the app.
+
+**In-tree worktrees — live steps** (TODO #2381): in Bob's shared clone, Git
+history → Worktrees → new worktree `wt` on a new branch; Alice pushes an
+`AGENTS.md` change; Bob in a terminal: `cd …/.tabtivity/worktrees/wt && git
+fetch shared && git merge shared/main`; an agent tab in the main checkout
+and one in `wt` are both refused naming `AGENTS.md`; Shared projects →
+Review shows it labelled "(worktree wt)"; I have reviewed these → both
+start. A commit in `wt` with a `pre-commit` hook in `.git/hooks` writes no
+marker.
+
+**Pair mode — not built; needs the user (#2382).** Two uids writing one tree
+breaks P4's premise that each member's `.git` is theirs alone. With a shared
+`.git`, P4 review finding 11 (git's program-naming config keys beyond the
+denylist) becomes cross-user code execution unless every such key is
+refused (#2374) — and new git releases add keys. Without a `.git` in the
+tree (members commit from their own clones), gate 2 must become a content
+gate on agent files edited live. Both shapes, their hazards and what each
+needs are in `context/sharing.md` § Pair mode. The in-tree session files are
+not a blocker for worktrees (one uid) and are listed there for pair mode.
+
+### 2. A shared consumer login — not built, as Q2 requires (§5.4)
+
+Q2 (answered 2026-09-29) keeps the option but says each CLI's row "is
+verified before that option is enabled for it", and the rows are research
+only a real login can answer (refresh-token rotation, two holders refreshing
+at once, a replica the CLI cannot write back or an access token alone, how a
+leaked token is revoked). Nothing may be run against a real provider here,
+so no CLI can pass, and Q11's "at the admin's own risk, terms quoted"
+presupposes an option that can be enabled. Building the keeper-refreshed
+replica machinery with every CLI locked off would ship untested code with no
+effect, so it was not built. TODO #2383 lists the four checks per CLI and
+what to build for the CLIs that pass; plan Q2 records the status.
+
+### Done and remaining
+
+- **Done**: 1 the key broker; 3 OIDC login; 4 the Tauri shell's Connect
+  mode (one deviation: its own bundle, not the gateway's); 5 rootless Podman
+  per user (behind an admin switch, default off); 6 in-tree worktrees for
+  shared projects.
+- **Remaining**: 6 pair mode (designed; the shape is the user's decision,
+  #2382); 2 a shared consumer login (held off by Q2 until each CLI's row is
+  verified live, #2383).
+- **Red commit**: `45ef8ed0` (OIDC PWA) left a `tsc` error in
+  `MobileAuth.test.ts` (`toBe` with two arguments) — vitest passed, `npm
+  run build` would have failed at that commit; fixed in `7e86d0ed`. Every
+  other commit was checked with the gates that cover what it touched.
+
+### Needs the user
+
+- **Pair mode's shape** (#2382), and with a shared `.git` the key list of
+  #2374.
+- **Connect mode's deviation**: the window runs this binary's frontend, not
+  the gateway's bundle (no server-supplied code with native IPC). Keep?
+- **Broker scope**: Claude only (the other CLIs' base-URL overrides are
+  unverified); budgets in billed tokens (cache reads at a tenth) per UTC
+  month; a budget refusal is `403`. Keep, or price per model?
+- **Containers on a server** are `Core` again (the user's own rootless
+  Podman) behind a new admin switch, **off by default**. Keep the default?
+- **OIDC**: the gateway reads a token's claims unverified to route it (the
+  daemon verifies); links by `sub` or by a provider-verified `email`. Keep
+  email links?
+- **Connect pairing key** lives in a `0600` file in the state dir, not the
+  OS keychain (as the daemon's identity key). Keep?
+- **A shared consumer login**: run Q2's checks (#2383) or drop the option.
+
+### Gates (worktree, 2026-10-03, at `94acc183` + this docs commit, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **704 files, 7111 tests**, all pass (+2 files, +13 tests) |
+| `cargo test --workspace -q --no-fail-fast` | **all pass**: src-tauri lib **3301** (+12), 3 ignored; src-gateway **128** (+15); src-core 99; integration 169; the known flakies passed this run |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3205 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1), `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (RC/AR shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 233b7330..HEAD` | green (5940 added lines, 83 paths, 0 binaries); four false positives reworded before committing (a cookie named `secret`, a `client_secret` literal, a JWT-shaped test vector — now built from its parts — and a unit instance name) |
+| `git diff --check 233b7330 HEAD` | clean (two whitespace slips fixed in this commit) |
+| `npm run mobile:bundle` | green (`mobile-web/` changed) |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |

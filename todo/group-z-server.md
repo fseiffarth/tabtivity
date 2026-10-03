@@ -821,4 +821,3 @@ the desktop groundwork the hosted plan's P1 builds on.*
     throwaway subscription, record each row in plan Q2, then build the
     §5.4 keeper-refreshed, access-token-only replica for the CLIs that pass,
     with the terms quoted in the panel (Q11). (P5, 2026-10-03.)
-
