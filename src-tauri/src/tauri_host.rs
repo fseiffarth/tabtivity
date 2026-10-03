@@ -129,6 +129,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "sync.rs",
     "synctex.rs",
     "terminal.rs",
+    "tex.rs",
     "timer.rs",
     "usage_stats.rs",
 ];
