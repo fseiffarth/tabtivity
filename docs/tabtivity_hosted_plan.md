@@ -1532,14 +1532,25 @@ rationale: [`context/server_gateway.md`](context/server_gateway.md).*
   `shared_calendar::tests`; `scripts/server-isolation-test.sh` gained the hub
   and calendar sections (`a98fce2f`).
 
-**P5: options, each independent.**
-- The API-key broker with per-user budgets (§5.4).
+**P5: options, each independent.** *(Base `233b7330`; `docs/hosted_handoff.md`
+§ P5.)*
+- The API-key broker with per-user budgets (§5.4). *Built `3c38d6c4`,
+  `87d4e713`, `2371b0cd`; Claude only (the other CLIs' base-URL overrides
+  are unverified); not run against the provider (#2377).*
 - A shared consumer login, at the admin's own risk, with the §5.4 hardening,
-  enabled per CLI after Q2.
-- OIDC login.
-- The Tauri shell's Connect mode.
-- Rootless Podman per user.
-- Pair mode and in-tree worktrees for shared projects.
+  enabled per CLI after Q2. *Not built: Q2 enables it only per verified CLI,
+  and no row is verified (#2383).*
+- OIDC login. *Built `a8301819`, `45ef8ed0`, `04bc7de7`; not run against a
+  real provider (#2378).*
+- The Tauri shell's Connect mode. *Built `7e86d0ed`, `d2a109d2`, with one
+  deviation (the window runs this binary's bundle, not the gateway's); not
+  run live (#2379).*
+- Rootless Podman per user. *Built `d063d126`, `362b6e7c`, `dac408da`;
+  behind the admin's `containers` switch (default off); not run live
+  (#2380).*
+- Pair mode and in-tree worktrees for shared projects. *Worktrees built
+  `e36839db` (#2381); pair mode designed, not built — needs the user's
+  decision (#2382).*
 
 i18n and `UntestedTag` rows land inside each phase, never after it.
 
@@ -1623,7 +1634,9 @@ option is enabled for it (§5.4):
 - *A shared consumer login (P5):* does a refresh rotate the refresh token? Do
   two holders refreshing at once invalidate each other? Does the CLI run on a
   replica it can't write back, or on an access token alone? How is a leaked
-  token revoked?
+  token revoked? *P5 (2026-10-03): not built.* No CLI's row is verified (it
+  needs a real login), and this answer enables the option only per verified
+  CLI — so there is nothing to enable yet (#2383).
 
 **Q3. Editing together.** *Answered (user, 2026-09-29):* per-member clones
 through the `tabtivity-hub` bare repo (§6). A shared tree with worktrees stays a

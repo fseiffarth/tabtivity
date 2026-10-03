@@ -816,8 +816,8 @@ the desktop groundwork the hosted plan's P1 builds on.*
     the CLI run on a replica it cannot write back or on an access token
     alone, how is a leaked token revoked. None of that can be answered
     without a real login, so P5 built nothing (`docs/hosted_handoff.md` §
-    P5, item 2). To do: run those four checks for Claude and Codex (the
-    others keep keyrings or databases, `agent_auth`'s `shared: false`) on a
+    P5, item 2). To do: run those four checks for Claude and Codex (and any
+    other CLI whose login `agent_auth` keeps as a file) on a
     throwaway subscription, record each row in plan Q2, then build the
     §5.4 keeper-refreshed, access-token-only replica for the CLIs that pass,
     with the terms quoted in the panel (Q11). (P5, 2026-10-03.)
