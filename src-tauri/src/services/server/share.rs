@@ -231,11 +231,82 @@ fn git_in(dir: &Path, hub: Option<&Path>, args: &[&str]) -> Result<String, Strin
     }
 }
 
-/// Fetch every branch and tag of the hub into `refs/remotes/<REMOTE>/*`.
+/// Where a clone keeps the tips the hub's branches held before a fetch
+/// moved them away (a forced move, a deleted branch): commits that came from
+/// the hub stay known as such (§6.5 gate 2) after the remote-tracking ref
+/// that named them is gone. One ref per commit, `<SEEN_NS><oid>`.
+pub const SEEN_NS: &str = "refs/shared-seen/";
+
+/// The remote-tracking refs of the hub: `(oid, name)`.
+fn tracking_tips(dir: &Path) -> Result<Vec<(String, String)>, String> {
+    let text = git_in(dir, None, &["for-each-ref", "--format=%(objectname) %(refname)", &format!("refs/remotes/{REMOTE}/")])?;
+    Ok(text.lines().filter_map(|l| l.split_once(' ')).filter(|(oid, _)| hub_wire::valid_oid(oid)).map(|(oid, name)| (oid.to_string(), name.to_string())).collect())
+}
+
+/// Fetch every branch of the hub into `refs/remotes/<REMOTE>/*`. The tips
+/// held before are first kept under [`SEEN_NS`], and only those the new
+/// tips still reach are dropped again — so a co-member who deletes or
+/// force-moves a branch after this user merged it cannot make its commits
+/// look like this user's own (fails safe: an error leaves them kept).
 pub fn fetch(dir: &Path, hub: &Path) -> Result<(), String> {
+    let before = tracking_tips(dir)?;
+    if !before.is_empty() {
+        let tips: std::collections::BTreeSet<&str> = before.iter().map(|(oid, _)| oid.as_str()).collect();
+        let script: String = tips.iter().map(|oid| format!("update {SEEN_NS}{oid} {oid}\n")).collect();
+        git_stdin(dir, &["update-ref", "--stdin"], &script)?;
+    }
     let hub_s = hub.to_string_lossy();
     let spec = format!("+refs/heads/*:refs/remotes/{REMOTE}/*");
-    git_in(dir, Some(hub), &["fetch", "--quiet", "--prune", "--no-write-fetch-head", &hub_s, &spec]).map(|_| ())
+    git_in(dir, Some(hub), &["fetch", "--quiet", "--prune", "--no-write-fetch-head", &hub_s, &spec])?;
+    let after = tracking_tips(dir)?;
+    if after.is_empty() {
+        return Ok(());
+    }
+    // Every kept tip a current branch still reaches carries nothing new.
+    let mut args = vec!["for-each-ref".to_string(), "--format=%(refname)".to_string()];
+    args.extend(after.iter().map(|(_, name)| format!("--merged={name}")));
+    args.push(SEEN_NS.to_string());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let covered = git_in(dir, None, &args)?;
+    let script: String = covered.lines().filter(|l| l.starts_with(SEEN_NS)).map(|name| format!("delete {name}\n")).collect();
+    if !script.is_empty() {
+        git_stdin(dir, &["update-ref", "--stdin"], &script)?;
+    }
+    Ok(())
+}
+
+/// [`git_in`] with `input` on stdin.
+fn git_stdin(dir: &Path, args: &[&str], input: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut child = crate::commands::git::hookless_git_command_in(dir, args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git: {e}"))?;
+    child.stdin.take().ok_or("git: no stdin")?.write_all(input.as_bytes()).map_err(|e| format!("git: {e}"))?;
+    let out = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Every commit this clone ever knew as a hub branch's tip: the
+/// remote-tracking refs now, every value their reflogs recorded (a terminal
+/// `git fetch` that force-moved one), and the tips [`fetch`] kept.
+fn hub_revs(dir: &Path) -> Result<Vec<String>, String> {
+    let mut revs = vec![format!("--remotes={REMOTE}"), format!("--glob={SEEN_NS}*")];
+    let mut seen = std::collections::BTreeSet::new();
+    for (_, name) in tracking_tips(dir)? {
+        for oid in git_in(dir, None, &["reflog", "show", "--format=%H", &name])?.lines() {
+            if hub_wire::valid_oid(oid) && seen.insert(oid.to_string()) {
+                revs.push(oid.to_string());
+            }
+        }
+    }
+    Ok(revs)
 }
 
 /// Point the repo's `<REMOTE>` remote at the hub (for the user's own
@@ -554,12 +625,21 @@ pub fn projects_of(state_dir: &Path, share: &str) -> Vec<String> {
 // ── Gate 2: the agent-facing surface, reviewed before an agent reads it ────
 
 /// Paths an agent CLI reads as instructions or configuration (§6.5 gate 2),
-/// at any depth: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.mcp.json`,
-/// `.envrc`, and everything under `.claude/`, `.codex/`, `.gemini/`,
-/// `.cursor/` (Claude's `settings.json` hooks included).
+/// at any depth: the plan's `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+/// `.mcp.json`, `.envrc`, and everything under `.claude/`, `.codex/`,
+/// `.gemini/`, `.cursor/` (Claude's `settings.json` hooks included) — and
+/// the project files of the other CLIs Tabtivity launches: Claude's
+/// `CLAUDE.local.md`, Codex's `AGENTS.override.md` and `.agents/` skills,
+/// Antigravity's `.agent/`, Kiro's `.kiro/`, Cline's `.clinerules`,
+/// Vibe's `.vibe/`, OpenCode's `opencode.json(c)` and `.opencode/`, Droid's
+/// `.factory/`, Cursor's `.cursorrules`, Copilot's
+/// `.github/copilot-instructions.md`, `.github/instructions/` and
+/// `.github/agents/`.
 pub const AGENT_PATHSPEC: &[&str] = &[
     ":(glob)**/CLAUDE.md",
+    ":(glob)**/CLAUDE.local.md",
     ":(glob)**/AGENTS.md",
+    ":(glob)**/AGENTS.override.md",
     ":(glob)**/GEMINI.md",
     ":(glob)**/.mcp.json",
     ":(glob)**/.envrc",
@@ -567,6 +647,20 @@ pub const AGENT_PATHSPEC: &[&str] = &[
     ":(glob)**/.codex/**",
     ":(glob)**/.gemini/**",
     ":(glob)**/.cursor/**",
+    ":(glob)**/.cursorrules",
+    ":(glob)**/.agents/**",
+    ":(glob)**/.agent/**",
+    ":(glob)**/.kiro/**",
+    ":(glob)**/.clinerules",
+    ":(glob)**/.clinerules/**",
+    ":(glob)**/.vibe/**",
+    ":(glob)**/.opencode/**",
+    ":(glob)**/opencode.json",
+    ":(glob)**/opencode.jsonc",
+    ":(glob)**/.factory/**",
+    ":(glob)**/.github/copilot-instructions.md",
+    ":(glob)**/.github/instructions/**",
+    ":(glob)**/.github/agents/**",
 ];
 /// Reviewed commits remembered per link.
 const KEEP_REVIEWED: usize = 16;
@@ -587,7 +681,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Agent-facing paths the checked-out branch holds from commits that came
 /// from the hub (a co-member's, or the owner's for a member) and were never
 /// reviewed — however they got into HEAD (a Tabtivity merge, a `git merge`
-/// in a terminal, the first clone). Errors fail closed at the caller.
+/// in a terminal, the first clone), and wherever the hub's branch that
+/// brought them is now ([`hub_revs`]). Errors fail closed at the caller.
 pub fn unreviewed(link: &Link) -> Result<Vec<String>, String> {
     let dir = &link.dir;
     let not: Vec<String> = link.reviewed.iter().filter(|c| hub_wire::valid_oid(c)).map(|c| format!("^{c}")).collect();
@@ -598,13 +693,17 @@ pub fn unreviewed(link: &Link) -> Result<Vec<String>, String> {
     if in_head.is_empty() {
         return Ok(Vec::new());
     }
-    let remotes = format!("--remotes={REMOTE}");
-    let mut hub_args = vec!["rev-list", "--ignore-missing", remotes.as_str()];
+    let hub_revs = hub_revs(dir)?;
+    let mut hub_args = vec!["rev-list", "--ignore-missing"];
+    hub_args.extend(hub_revs.iter().map(String::as_str));
     hub_args.extend(&not_refs);
     let from_hub: Vec<String> = git_in(dir, None, &with_pathspec(hub_args))?.lines().filter(|c| in_head.contains(*c)).map(str::to_string).collect();
     let mut paths = std::collections::BTreeSet::new();
     for commit in from_hub {
-        let changed = git_in(dir, None, &with_pathspec(vec!["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", &commit]))?;
+        // `-c`: a merge commit's own changes too (an "evil" merge whose
+        // result matches neither parent); plain `diff-tree` lists nothing
+        // for a merge.
+        let changed = git_in(dir, None, &with_pathspec(vec!["diff-tree", "-c", "--root", "--no-commit-id", "--name-only", "-r", &commit]))?;
         paths.extend(changed.lines().filter(|l| !l.is_empty()).map(str::to_string));
     }
     Ok(paths.into_iter().collect())
