@@ -301,6 +301,11 @@ pub fn read(root: &Path, name: &str) -> Result<(Vec<u8>, &'static str), OutboxEr
     Ok((bytes, kind))
 }
 
+/// Whether [`read`] would serve the leaf `name`, without reading it.
+pub fn exists(root: &Path, name: &str) -> bool {
+    outbox_dir(root).ok().flatten().is_some_and(|dir| probe(&dir, name).is_some())
+}
+
 /// Delete one listed file, by the leaf the listing handed out.
 ///
 /// Exactly what [`read`] would serve is what this removes: `probe` re-proves

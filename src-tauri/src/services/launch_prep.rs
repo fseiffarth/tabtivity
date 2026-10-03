@@ -410,6 +410,12 @@ pub async fn prepare(
     if agent_spawn {
         crate::services::root_mcp::apply_help_to_spawn(&mut opts);
     }
+    // The markup questions server (`services::markup_mcp`): a LOCAL project
+    // agent tab with a schedule target, after help — it merges into the same
+    // Vibe env.
+    if agent_spawn && !root_agent && reader_project.is_none() {
+        crate::services::root_mcp::apply_markup_to_spawn(&mut opts);
+    }
     let mcp_spawn_guard = agent_spawn
         .then(|| crate::services::root_mcp::SpawnTokenGuard::new(&opts));
 

@@ -65,6 +65,10 @@ pub const GIT_URL_ENV: &str = crate::app_env!("GIT_MCP_URL");
 /// tab while the help server is on.
 pub const HELP_TOKEN_ENV: &str = crate::app_env!("HELP_MCP_TOKEN");
 pub const HELP_URL_ENV: &str = crate::app_env!("HELP_MCP_URL");
+/// The markup identity's pair (`services::markup_mcp`), set for a local
+/// project-agent tab with a schedule target while the server is on.
+pub const MARKUP_TOKEN_ENV: &str = crate::app_env!("MARKUP_MCP_TOKEN");
+pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 
@@ -100,13 +104,14 @@ pub struct PushBinding { pub dir: std::path::PathBuf }
 /// The lane a caller class occupies on its tab: a tab holds at most one
 /// session per lane, and a respawn replaces only the session of its own lane.
 /// Root, local-model and reader tokens share the root lane; the schedule,
-/// push and help identities each ride beside it.
+/// push, help and markup identities each ride beside it.
 fn lane(caller: Caller) -> u8 {
     match caller {
         Caller::Agent | Caller::LocalModel | Caller::Reader => 0,
         Caller::Scheduler => 1,
         Caller::Pusher => 2,
         Caller::Helper => 3,
+        Caller::Marker => 4,
     }
 }
 static TOKENS: OnceLock<std::sync::Mutex<HashMap<String, Session>>> = OnceLock::new();
@@ -149,7 +154,7 @@ fn register_token(token: String, identity: Identity, read_mail: bool) {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().lock().unwrap_or_else(|p| p.into_inner()).values() {
-        if s.identity.tab == tab && s.identity.caller != Caller::Helper {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker) {
             *s.projects_grant.lock().unwrap_or_else(|p| p.into_inner()) = grant.clone();
         }
     }
@@ -176,11 +181,11 @@ pub fn revoke_tab(tab: &str) -> bool {
     });
     held
 }
-/// Whether a spawn of `tab` still holds a root-lane session (the help lane
-/// owns no sandbox view, so it never keeps one alive).
+/// Whether a spawn of `tab` still holds a root-lane session (the help and
+/// markup lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().lock().unwrap_or_else(|p| p.into_inner()).values()
-        .any(|s| s.identity.tab == tab && s.identity.caller != Caller::Helper)
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -224,6 +229,18 @@ pub(crate) fn test_session_with(caller: Caller, tab: &str, state: &Path, endpoin
     let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
     (token, session)
 }
+/// A session bound to a project and schedule target, as the markup and
+/// schedule identities are at spawn.
+#[cfg(test)]
+pub(crate) fn test_session_bound(caller: Caller, tab: &str, project: &str, target: &str) -> (String, Session) {
+    let token = mint_token().unwrap();
+    register_token(token.clone(), Identity {
+        tab: tab.to_string(), caller, project: Some(project.to_string()),
+        schedule_target: Some(ScheduleBinding { target: target.to_string(), agent: "claude".into() }), push: None, endpoint: None,
+    }, false);
+    let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
+    (token, session)
+}
 /// A root session that reads every project (`Session::projects_grant`, unfenced).
 #[cfg(test)]
 pub(crate) fn test_session_reading_projects(caller: Caller, tab: &str, state: &Path) -> (String, Session) {
@@ -253,6 +270,10 @@ pub enum Caller {
     /// Any local agent tab's help identity (`services::help_mcp`): served the
     /// read-only help tools on `/mcp/help` and nothing else.
     Helper,
+    /// A local project-agent tab's markup identity (`services::markup_mcp`),
+    /// bound at spawn to its project and schedule target: served
+    /// `markup_ask` / `markup_withdraw` on `/mcp/markup` and nothing else.
+    Marker,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -347,10 +368,10 @@ pub struct SessionInfo {
     pub access: Access,
     pub project: Option<String>,
 }
-/// Help sessions are left out: one per agent tab, nothing to grant, and they
-/// end with their tab or the `help_mcp` switch.
+/// Help and markup sessions are left out: one per agent tab, nothing to
+/// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values().filter(|s| s.identity.caller != Caller::Helper).map(|s| SessionInfo {
+    tokens().lock().unwrap_or_else(|p| p.into_inner()).values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -359,7 +380,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -558,25 +579,26 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, armed: bool }
+pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
             token: opts.env.get(TOKEN_ENV).or_else(|| opts.env.get(SCHEDULE_TOKEN_ENV)).cloned(),
             push: opts.env.get(GIT_TOKEN_ENV).cloned(),
             help: opts.env.get(HELP_TOKEN_ENV).cloned(),
+            markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
             armed: true,
         }
     }
     pub fn keep(&mut self) { self.armed = false; }
     /// Whether this spawn was handed a listed token (root, reader, schedule
-    /// or push); the help token alone does not count.
+    /// or push); the help and markup tokens alone do not count.
     pub fn holds_token(&self) -> bool { self.token.is_some() || self.push.is_some() }
 }
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help].into_iter().flatten() { revoke_token(token); }
+            for token in [&self.token, &self.push, &self.help, &self.markup].into_iter().flatten() { revoke_token(token); }
         }
     }
 }
@@ -791,6 +813,66 @@ pub fn apply_help_to_spawn(opts: &mut PtyOptions) {
     apply_help_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
     if opts.env.get(HELP_TOKEN_ENV) == Some(&token) {
         register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None }, false);
+    }
+}
+
+/// Hand a local project-agent tab the markup questions server
+/// (`services::markup_mcp`). Pure over `runtime` so it is testable;
+/// [`apply_markup_to_spawn`] decides who qualifies. Wired as help is: Claude
+/// and Codex on their own command line (joining the servers already named),
+/// a tool-tagged local Vibe model merged into its MCP env — so this runs
+/// after the root, schedule, push and help wiring — and every other agent CLI
+/// the inert env pair. A tab without a project or schedule target, a
+/// container tab and an untagged local model get nothing.
+pub fn apply_markup_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.project_id.is_none() || opts.schedule_target_id.as_deref().is_none_or(str::is_empty)
+        || opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = markup_endpoint_url(runtime.port);
+    let name = super::markup_mcp::SERVER_NAME;
+    opts.env.insert(MARKUP_TOKEN_ENV.into(), token.into());
+    opts.env.insert(MARKUP_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": MARKUP_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, MARKUP_TOKEN_ENV);
+    }
+}
+
+pub fn markup_endpoint_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp/markup")
+}
+
+/// [`apply_markup_to_spawn_with`] for a real spawn: a local project-agent
+/// tab with a valid schedule target (not a container tab; not a remote,
+/// worker, container or VM project) while the listener is up and
+/// `Settings::markup_mcp` is on. The token binds the project and target, the
+/// key every ask is stored under.
+pub fn apply_markup_to_spawn(opts: &mut PtyOptions) {
+    let Some(project) = opts.project_id.as_deref() else { return };
+    if !super::agent_fence::is_agent(opts) || opts.sandbox
+        || super::remote::remote_target_for_host(project, opts.remote_host_id.as_deref().unwrap_or("primary")).is_some()
+        || super::sandbox::sandbox_spec_for(project).is_some_and(|s| s.enabled)
+        || super::vm::vm_spec_for(project).is_some() { return; }
+    let Some(target) = opts.schedule_target_id.clone() else { return };
+    if super::agent_tasks::validate_id("schedule target", &target).is_err() { return; }
+    let Some(runtime) = runtime() else { return };
+    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
+    if !settings.markup_mcp() { return; }
+    let Some(token) = mint_token() else { return };
+    let agent = basename(&opts.cmd).to_string();
+    apply_markup_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    if opts.env.get(MARKUP_TOKEN_ENV) == Some(&token) {
+        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
     }
 }
 
@@ -3314,6 +3396,87 @@ mod tests {
         assert!(!tab_active(tab), "a help session alone does not hold the tab's sandbox view");
         assert!(revoke_tab(tab));
         assert!(help2.check().is_err());
+    }
+
+    /// The markup lane: only a project tab with a schedule target, never a
+    /// container tab or an untagged local model; Claude and Codex are named
+    /// the server beside help, never twice, never with the token in argv.
+    #[test]
+    fn markup_wiring_needs_a_target_and_joins_the_other_servers() {
+        let runtime = rt();
+        for cli in super::super::markup_mcp::WIRED_CLIS {
+            let mut root = opts(cli, &[], None);
+            root.schedule_target_id = Some("t".into());
+            apply_markup_to_spawn_with(&mut root, &runtime, "marktok", &[]);
+            assert!(root.env.is_empty() && root.args.is_empty(), "root scope");
+            let mut project = opts(cli, &[], Some("p"));
+            apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
+            assert!(project.env.is_empty(), "no target");
+            project.schedule_target_id = Some(String::new());
+            apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
+            assert!(project.env.is_empty(), "empty target");
+            project.schedule_target_id = Some("t".into());
+            project.sandbox = true;
+            apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
+            assert!(project.env.is_empty(), "container tab");
+            project.sandbox = false;
+            apply_help_to_spawn_with(&mut project, &runtime, "helptok", &[]);
+            apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
+            apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
+            let argv = project.args.join(" ");
+            assert!(argv.contains(concat!(crate::app_slug!(), "-help")) && argv.contains(concat!(crate::app_slug!(), "-markup")), "{argv}");
+            assert_eq!(argv.matches("/mcp/markup").count(), 1, "never twice: {argv}");
+            assert!(!argv.contains("marktok") && !argv.contains("helptok"));
+            assert_eq!(project.env[MARKUP_TOKEN_ENV], "marktok");
+            assert_eq!(project.env[MARKUP_URL_ENV], "http://127.0.0.1:4321/mcp/markup");
+        }
+        let mut claude = opts("claude", &[], Some("p"));
+        claude.schedule_target_id = Some("t".into());
+        apply_help_to_spawn_with(&mut claude, &runtime, "helptok", &[]);
+        apply_markup_to_spawn_with(&mut claude, &runtime, "marktok", &[]);
+        assert_eq!(claude.args.iter().filter(|a| *a == "--mcp-config").count(), 1);
+        let mut gemini = opts("gemini", &[], Some("p"));
+        gemini.schedule_target_id = Some("t".into());
+        apply_markup_to_spawn_with(&mut gemini, &runtime, "marktok", &[]);
+        assert!(gemini.args.is_empty());
+        assert_eq!(gemini.env[MARKUP_TOKEN_ENV], "marktok");
+        // A tool-tagged local model: merged after help; an untagged one: nothing.
+        let tagged = vec!["gemma4:e4b".to_string()];
+        let mut o = opts("vibe", &[], Some("p"));
+        o.schedule_target_id = Some("t".into());
+        o.env.insert(crate::app_env!("LOCAL_MODEL").into(), "gemma4:e4b".into());
+        apply_help_to_spawn_with(&mut o, &rt(), "helptok", &tagged);
+        apply_markup_to_spawn_with(&mut o, &rt(), "marktok", &tagged);
+        let servers: Value = serde_json::from_str(&o.env["VIBE_MCP_SERVERS"]).unwrap();
+        let names: Vec<_> = servers.as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap()).collect();
+        assert_eq!(names, [concat!(crate::app_slug!(), "-help"), concat!(crate::app_slug!(), "-markup")]);
+        assert_eq!(servers[1]["api_key_env"], MARKUP_TOKEN_ENV);
+        assert!(!o.env["VIBE_MCP_SERVERS"].contains("marktok"));
+        let mut o = opts("vibe", &[], Some("p"));
+        o.schedule_target_id = Some("t".into());
+        o.env.insert(crate::app_env!("LOCAL_MODEL").into(), "llama3:latest".into());
+        apply_markup_to_spawn_with(&mut o, &rt(), "marktok", &tagged);
+        assert!(!o.env.contains_key(MARKUP_TOKEN_ENV));
+    }
+
+    /// The markup lane rides beside the others like help: hidden from MCP
+    /// session access, not re-grantable, never keeps a tab "active", and a
+    /// respawn replaces only its own lane.
+    #[test]
+    fn markup_tokens_are_a_separate_lane_per_tab() {
+        let tab = "p:markup-lane";
+        let (root_token, root) = test_session_with(Caller::Scheduler, tab, Path::new("/nonexistent"), None);
+        let (_, help) = test_session_with(Caller::Helper, tab, Path::new("/nonexistent"), None);
+        let (_, mark) = test_session_bound(Caller::Marker, tab, "p", "t");
+        assert!(root.check().is_ok() && help.check().is_ok() && mark.check().is_ok());
+        assert!(sessions().iter().all(|s| s.caller != Caller::Marker));
+        assert!(set_access(&mark.id, Access::initial(Caller::Marker)).is_err());
+        let (_, mark2) = test_session_bound(Caller::Marker, tab, "p", "t");
+        assert!(mark.check().is_err() && mark2.check().is_ok() && help.check().is_ok(), "a respawn replaces its own lane");
+        revoke_token(&root_token);
+        assert!(!tab_active(tab), "help and markup sessions do not hold the tab's sandbox view");
+        assert!(revoke_tab(tab));
+        assert!(mark2.check().is_err() && !session_alive(&mark2.id));
     }
 
     /// Missing keys retain old defaults; an unavailable policy file refuses.

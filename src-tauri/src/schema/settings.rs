@@ -204,6 +204,11 @@ pub struct Settings {
     /// it and makes `/mcp/help` refuse the tabs that already hold a token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_mcp: Option<bool>,
+    /// The markup questions server (`services::markup_mcp`) handed to every
+    /// local project-agent tab. **Absent means on**; a stored `false` stops
+    /// new tabs getting it and makes `markup_ask` answer `off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markup_mcp: Option<bool>,
     /// Root-agent write review: absent/unknown = all, or destructive / off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_mcp_review: Option<String>,
@@ -1026,6 +1031,12 @@ impl Settings {
     /// Whether the help MCP is handed to agent tabs. On unless switched off.
     pub fn help_mcp(&self) -> bool {
         self.help_mcp.unwrap_or(true)
+    }
+
+    /// Whether the markup questions MCP is handed to agent tabs. On unless
+    /// switched off.
+    pub fn markup_mcp(&self) -> bool {
+        self.markup_mcp.unwrap_or(true)
     }
 
     /// The agent CLIs [`Self::root_mcp_agents`] names, with its `root_agents`

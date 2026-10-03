@@ -208,6 +208,24 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
+    if session.identity.caller == root_mcp::Caller::Marker {
+        // The markup lane (`services::markup_mcp`): the switch is read per
+        // call and answered as a normal `off` result, so the agent can tell
+        // the user where to turn it on. Audited like push: session, tool and
+        // a fixed category, never the text.
+        if session.check().is_err() {
+            security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("revoked"));
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let outcome = tokio::task::spawn_blocking(move || {
+            let (_global, _own) = (global, own);
+            crate::services::markup_mcp::handle_message(&session, &message)
+        }).await;
+        let Ok(reply) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+        let reason = reply.as_ref().and_then(crate::services::markup_mcp::refusal_reason);
+        security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+    }
     if session.identity.caller == root_mcp::Caller::Scheduler {
         if session.identity.project.as_deref().is_none_or(|p| crate::services::schedule_mcp::level(p).is_err()) || session.check().is_err() {
             security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("policy_disabled"));
@@ -398,6 +416,7 @@ pub fn start(app: AppHandle) {
             .route("/mcp/schedule", post(handle))
             .route("/mcp/git", post(handle))
             .route("/mcp/help", post(handle))
+            .route("/mcp/markup", post(handle))
             .layer(axum::middleware::map_response(close_connection))
             .with_state(ServerState { app, port: addr.port() });
         let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
@@ -653,6 +672,8 @@ pub async fn root_mcp_session_revoke(app: AppHandle, id: String, remove_proposal
         if remove_proposals == Some(true) { crate::services::schedule_mcp::remove_proposals(&id)?; }
         // A push proposal is useless without the session that made it.
         if crate::services::git_push_mcp::remove_for_session(&id) { let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
+        // A markup question dies with its session (the sweep rings its event).
+        crate::services::markup_mcp::sweep();
         let _ = app.emit("agent-schedules-changed", ());
         let _ = app.emit(SESSIONS_EVENT, ());
         Ok(())
@@ -684,10 +705,13 @@ pub fn git_push_mcp_clear(app: AppHandle, id: String) -> Result<crate::services:
 
 fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
     match path {
-        "/mcp" => !matches!(caller, root_mcp::Caller::Scheduler | root_mcp::Caller::Pusher | root_mcp::Caller::Helper),
+        // A negative list: every lane class with its own route must be named
+        // here, or the root registry would serve it.
+        "/mcp" => !matches!(caller, root_mcp::Caller::Scheduler | root_mcp::Caller::Pusher | root_mcp::Caller::Helper | root_mcp::Caller::Marker),
         "/mcp/schedule" => caller == root_mcp::Caller::Scheduler,
         "/mcp/git" => caller == root_mcp::Caller::Pusher,
         "/mcp/help" => caller == root_mcp::Caller::Helper,
+        "/mcp/markup" => caller == root_mcp::Caller::Marker,
         _ => false,
     }
 }
@@ -732,9 +756,38 @@ mod security_tests {
         assert!(matches!(admit(post("/mcp/help", "0".repeat(64).as_str()), 8765).await, Err(StatusCode::UNAUTHORIZED)));
         root_mcp::revoke_tab(&helper.identity.tab);
         assert!(matches!(admit(post("/mcp/help", &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "a closed tab's token");
-        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher] {
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher, root_mcp::Caller::Marker] {
             let (token, session) = root_mcp::test_session(caller);
             assert!(matches!(admit(post("/mcp/help", &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "{caller:?}");
+            root_mcp::revoke_tab(&session.identity.tab);
+        }
+    }
+    /// The markup identity reaches `/mcp/markup` and nothing else — the root
+    /// route's negative list names it — and no other class reaches
+    /// `/mcp/markup`. Refused at admission, before the body.
+    #[tokio::test]
+    async fn markup_route_is_its_own_lane() {
+        let post = |path: &str, token: &str| Request::builder().method("POST").uri(path).header("host", "127.0.0.1:8765")
+            .header("content-type", "application/json").header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from("not json")).unwrap();
+        let (token, marker) = root_mcp::test_session_bound(root_mcp::Caller::Marker, "p:markup-route", "p", "t");
+        for path in ["/mcp", "/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/other"] {
+            assert!(!path_serves(path, root_mcp::Caller::Marker), "{path}");
+            assert!(matches!(admit(post(path, &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "{path}");
+        }
+        assert!(matches!(admit(post("/mcp/markup", &token), 8765).await, Err(StatusCode::BAD_REQUEST)));
+        let mut req = post("/mcp/markup", &token);
+        req.headers_mut().insert(header::ORIGIN, "http://127.0.0.1:8765".parse().unwrap());
+        assert!(matches!(admit(req, 8765).await, Err(StatusCode::FORBIDDEN)));
+        let mut req = post("/mcp/markup", &token);
+        req.headers_mut().insert(header::HOST, format!("{}:{}", root_mcp::READER_GUEST_HOST, root_mcp::READER_GUEST_PORT).parse().unwrap());
+        assert!(matches!(admit(req, 8765).await, Err(StatusCode::FORBIDDEN)));
+        root_mcp::revoke_tab(&marker.identity.tab);
+        assert!(matches!(admit(post("/mcp/markup", &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "a closed tab's token");
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher, root_mcp::Caller::Helper] {
+            let (token, session) = root_mcp::test_session(caller);
+            assert!(!path_serves("/mcp/markup", caller), "{caller:?}");
+            assert!(matches!(admit(post("/mcp/markup", &token), 8765).await, Err(StatusCode::UNAUTHORIZED)), "{caller:?}");
             root_mcp::revoke_tab(&session.identity.tab);
         }
     }

@@ -391,6 +391,8 @@ const SECRET_ENV: &[&str] = &[
     crate::services::root_mcp::GIT_TOKEN_ENV,
     crate::services::root_mcp::HELP_TOKEN_ENV,
     crate::services::copilot_auth::TOKEN_ENV,
+    // Appended, not inserted: each key keeps its `update-environment` slot.
+    crate::services::root_mcp::MARKUP_TOKEN_ENV,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -981,6 +983,7 @@ mod tests {
             (crate::services::root_mcp::TOKEN_ENV, "root-s3cret"),
             (crate::services::root_mcp::SCHEDULE_TOKEN_ENV, "sched-s3cret"),
             (crate::services::root_mcp::HELP_TOKEN_ENV, "help-s3cret"),
+            (crate::services::root_mcp::MARKUP_TOKEN_ENV, "markup-s3cret"),
             (crate::services::copilot_auth::TOKEN_ENV, "gho_copilot-s3cret"),
         ]);
         let leaks = |args: &[String]| args.iter().any(|a| a.contains("s3cret"));

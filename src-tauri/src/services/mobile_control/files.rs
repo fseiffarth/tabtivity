@@ -400,6 +400,17 @@ pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesErro
     Ok((bytes, kind))
 }
 
+/// Whether `rel` names a regular file of the project, reached from the root
+/// one checked name at a time with no link on the way — what [`read`] would
+/// open, without reading it.
+pub fn exists(root: &Path, rel: &str) -> bool {
+    if rel.is_empty() || !valid_rel(rel) {
+        return false;
+    }
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    ProjectDir::open(root, parent).ok().and_then(|dir| dir.open_file(name)).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

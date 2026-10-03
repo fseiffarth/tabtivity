@@ -1183,6 +1183,7 @@ pub fn spawn_pty(
         .or_else(|| opts.env.get(crate::services::root_mcp::SCHEDULE_TOKEN_ENV)).cloned();
     let help_token = opts.env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned();
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
+    let markup_token = opts.env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned();
     tokio::spawn(async move {
         let emitter = app.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
@@ -1259,6 +1260,12 @@ pub fn spawn_pty(
             if let Some(token) = push_token {
                 crate::services::root_mcp::revoke_token(&token);
                 let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+            }
+            if let Some(token) = markup_token {
+                // The tab's open markup question goes with its session; the
+                // sweep rings `markup-mcp-changed` through the change hook.
+                crate::services::root_mcp::revoke_token(&token);
+                crate::services::markup_mcp::sweep();
             }
             if let Some(token) = mcp_token {
                 let state = crate::storage::state_dir();
