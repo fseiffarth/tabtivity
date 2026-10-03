@@ -329,11 +329,13 @@ pub fn docker_create_args(
 }
 
 /// Whether a tab variable's VALUE must stay off the `docker exec` argv (#864):
-/// the forwarded agent credentials and Tabtivity's MCP bearer tokens. The docker
+/// the forwarded agent credentials, a hosted server's administrator's keys
+/// (`agent_keys::key_envs`) and Tabtivity's MCP bearer tokens. The docker
 /// client stays alive for the tab's whole life, and `/proc/<pid>/cmdline` is
 /// readable by every local user — not only this uid.
 fn is_secret_exec_env(key: &str) -> bool {
     crate::services::ssh_exec::AGENT_AUTH_ENV.contains(&key)
+        || crate::services::server::agent_keys::key_envs().contains(&key)
         || [
             crate::services::root_mcp::TOKEN_ENV,
             crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
@@ -733,6 +735,10 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
         (opts.cmd.clone(), opts.args.clone())
     };
 
+    // A hosted server's administrator's key for an agent this user runs on
+    // it (plan §5.4): into the exec's environment, its value off the argv
+    // ([`is_secret_exec_env`]); a withdrawn key fails the spawn here.
+    crate::services::server::agent_keys::container_env(&cmd, &mut opts.env)?;
     // opts.env is already resolved (TABTIVITY_TAB_UID, resume args' env, etc.).
     let env: BTreeMap<String, String> = opts.env.clone().into_iter().collect();
     // Auth env is read at exec (not create) so rotated tokens are picked up
@@ -2157,6 +2163,24 @@ mod tests {
         assert_eq!(client.get("ANTHROPIC_API_KEY").map(String::as_str), Some("auth-s3cret"));
         assert_eq!(client.get("OPENAI_API_KEY").map(String::as_str), Some("auth-wins-s3cret"));
         assert!(!client.contains_key(crate::app_env!("TAB_UID")));
+    }
+
+    /// A hosted server's administrator's keys (plan §5.4, P3b decisions):
+    /// named on the exec argv, their values only in the client's environment.
+    #[test]
+    fn exec_argv_carries_no_admin_key_value() {
+        let helper = crate::services::server::agent_keys::CONTAINER_KEY_ENV;
+        let envs = env(&[(helper, "admin-s3cret"), ("MISTRAL_API_KEY", "vibe-s3cret")]);
+        let out = docker_exec_args(concat!(crate::app_slug!(), "-p1"), "/p", &envs, &BTreeMap::new(), "/tmp/x.pid", "claude", &[]);
+        assert!(!out.iter().any(|a| a.contains("s3cret")), "{out:?}");
+        assert!(has_flag_value(&out, "-e", helper) && has_flag_value(&out, "-e", "MISTRAL_API_KEY"), "{out:?}");
+        let client = docker_exec_client_env(&envs, &BTreeMap::new());
+        assert_eq!(client.get(helper).map(String::as_str), Some("admin-s3cret"));
+        // No legacy-named twin of the key is ever exported (it would ride the
+        // argv by value).
+        let mut tab: std::collections::HashMap<String, String> = [(helper.to_string(), "admin-s3cret".to_string())].into();
+        crate::brand::PAIR.export_both(&mut tab);
+        assert_eq!(tab.len(), 1, "{tab:?}");
     }
 
     #[test]

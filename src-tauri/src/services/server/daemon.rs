@@ -25,6 +25,15 @@ const FENCE_SCOPE_ARG: &str = "--fence-scope";
 /// configuration or bind error so `Restart=on-failure` keeps retrying what
 /// can heal and the journal says what cannot.
 pub fn main() -> ! {
+    // `<slug>-serverd --key-helper <socket>`: Claude's `apiKeyHelper` on a
+    // server (`agent_keys::sync_helper_settings` names this binary) — prints
+    // the key this user's daemon answers on its helper socket. First and
+    // touching nothing else: it runs inside the agent fence, every few
+    // minutes of a Claude session.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(super::agent_keys::HELPER_ARG)) {
+        let socket = std::env::args_os().nth(2).unwrap_or_default();
+        std::process::exit(super::agent_keys::run_helper(&socket));
+    }
     // `<slug>-serverd --fence-scope <bwrap> [args…]`: the agent fence's step
     // before bwrap (`services::fence_scope`). The fence names the running
     // binary as its helper (`fence_scope::helper_for`, where Landlock has the
@@ -89,6 +98,9 @@ pub fn main() -> ! {
     if let Err(error) = crate::services::agent_bin::install() {
         eprintln!("{SLUG}-serverd: agent shims: {error}");
     }
+    // Claude's `apiKeyHelper` asks here for the administrator's key (plan
+    // §5.4); a no-op until this user chooses it, answered per call.
+    super::agent_keys::serve_helpers();
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {

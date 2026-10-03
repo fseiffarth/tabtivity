@@ -2,6 +2,14 @@
 
 use app_lib::brand::SLUG;
 fn main() {
+    // `tabtivity --key-helper <socket>`: a hosted server's Claude
+    // `apiKeyHelper` (`services::server::agent_keys`) — prints the key the
+    // daemon's helper socket answers, and nothing else; first, so it touches
+    // no state (it runs inside the agent fence).
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::server::agent_keys::HELPER_ARG)) {
+        let socket = std::env::args_os().nth(2).unwrap_or_default();
+        std::process::exit(app_lib::services::server::agent_keys::run_helper(&socket));
+    }
     // Before anything looks a name up: where a lookup that only finds the old
     // name is counted (`<state>/legacy-hits.json`).
     app_lib::services::brand_migration::hits::install();

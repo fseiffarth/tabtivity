@@ -411,6 +411,11 @@ fn reconcile_home_with(state_dir: &Path, home: &Path, step: Step, holds_key: &Ho
             link_claude_identity(&store_dir, home);
         }
     }
+    // Claude's `apiKeyHelper` follows the same choice (hosted plan §5.4):
+    // set while it runs on the administrator's key, gone (only ours) after.
+    if step.places() {
+        crate::services::server::agent_keys::sync_helper_settings(state_dir, home, &on_admin_key);
+    }
 }
 
 /// A CLI this user runs on the administrator's API key (hosted plan §5.2,
