@@ -580,7 +580,18 @@ impl AuthStore {
     pub fn enrol_secrets_key(&mut self, device_id: &str, ecdh: &str, signature: &str) -> Result<(), String> {
         let device = self.devices.devices.iter_mut().find(|d| d.id == device_id).ok_or("unknown_device")?;
         crate::services::server::vault::Vault::check_enrolment(&self.origin, device_id, &device.public_key, ecdh, signature)?;
+        // A new key for a device that had one (its browser lost the old
+        // private key, or a save failed after an earlier enrolment): the wrap
+        // made for the old key can never be opened again, and `wrap_missing`
+        // skips a device that has a wrap — drop it, so the caller's
+        // `wrap_missing` (while unlocked) or the next release wraps the new one.
+        let changed = device.ecdh_public_key.as_deref().is_some_and(|old| old != ecdh);
         device.ecdh_public_key = Some(ecdh.to_string());
+        if changed {
+            if let Some(vault) = crate::services::server::vault::vault() {
+                vault.revoke(device_id);
+            }
+        }
         self.save_devices()?;
         self.audit("secrets_enrolled", Some(device_id));
         Ok(())

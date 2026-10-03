@@ -181,6 +181,30 @@ fn devices_enrolled_later_get_wraps_and_revoked_ones_lose_theirs() {
     assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0 });
 }
 
+/// Two first uses of the identity key at once (two devices enrolling) get
+/// one key: a device that pinned a key overwritten a moment later could
+/// never verify an unlock exchange again.
+#[test]
+fn concurrent_first_uses_share_one_identity_key() {
+    for _ in 0..20 {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(vault_in(dir.path(), Arc::new(MemoryHold::default())));
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let (vault, barrier) = (vault.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    vault.identity_public().unwrap()
+                })
+            })
+            .collect();
+        let keys: Vec<String> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert!(keys.iter().all(|k| *k == keys[0]), "one identity: {keys:?}");
+        assert_eq!(vault.identity_public().unwrap(), keys[0], "and it is the one on disk");
+    }
+}
+
 #[test]
 fn enrolment_needs_the_devices_pairing_key() {
     use p256::ecdsa::signature::Signer;

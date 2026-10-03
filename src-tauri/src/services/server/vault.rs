@@ -360,6 +360,14 @@ impl Vault {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let _guard = self.files();
+                // Two first uses at once (two devices enrolling, an enrolment
+                // beside an unlock start): the one that waited must take the
+                // key the other just wrote, or a device would pin a key
+                // that is then overwritten and never verify an exchange again.
+                if let Ok(bytes) = std::fs::read(&path) {
+                    let bytes = Zeroizing::new(bytes);
+                    return SigningKey::from_slice(&bytes).map_err(|_| "identity.key is not a P-256 key".to_string());
+                }
                 let key = SigningKey::random(&mut rand::rngs::OsRng);
                 crate::services::mobile_control::store::ensure_private_dir(&self.dir())?;
                 crate::services::mobile_control::store::write_bytes_atomic(&path, &Zeroizing::new(key.to_bytes().to_vec()), 0o600)?;

@@ -189,4 +189,22 @@ async fn a_device_releases_the_key_that_seals_mail_and_saved_passwords() {
     let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/recover", Some(&cookie), Some(&json!({ "code": code }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     assert!(hold.get().unwrap().is_some());
+
+    // The phone enrols a new ECDH key (its browser lost the old one): the
+    // wrap made for the old key is replaced, so the new key releases K.
+    let ecdh2 = SecretKey::random(&mut rand::rngs::OsRng);
+    let ecdh2_public = b64(ecdh2.public_key().to_encoded_point(false).as_bytes());
+    let enrol_sig: Signature = signing.sign(vault::enrol_payload(ORIGIN, &device_id, &ecdh2_public).as_bytes());
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/enrol", Some(&cookie), Some(&json!({ "ecdh_public_key": ecdh2_public, "signature": b64(&enrol_sig.to_bytes()) }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["identity"].as_str(), Some(identity.as_str()), "the identity key is stable");
+    assert_eq!(vault.status().wrapped_devices, 1);
+    hold.clear().unwrap();
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/unlock", Some(&cookie), Some("{}")).await;
+    assert_eq!(status, 200, "{body}");
+    let start: Value = serde_json::from_str(&body).unwrap();
+    let finish = answer(&device_id, &ecdh2, &identity, &start);
+    let (status, _, body) = raw(&socket, "POST", "/api/v1/secrets/unlock/finish", Some(&cookie), Some(&finish.to_string())).await;
+    assert_eq!(status, 200, "the new key releases K: {body}");
+    assert!(hold.get().unwrap().is_some());
 }
