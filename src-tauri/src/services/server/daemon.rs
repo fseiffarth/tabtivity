@@ -71,6 +71,9 @@ pub fn main() -> ! {
             "--write-invite" => read_secret_line().and_then(|code| write_invite(&crate::storage::state_dir(), &code, args.get(1).map(String::as_str))),
             "--revoke-device" => read_secret_line().and_then(|id| revoke_device(&crate::storage::state_dir(), &id)),
             "--install-cli" => install_cli(args.get(1).map(String::as_str).unwrap_or_default()),
+            // The admin helper's OIDC link (P5), as this account's own uid:
+            // JSON on stdin, empty to remove.
+            "--write-oidc-binding" => read_stdin_text(8 * 1024).and_then(|text| super::oidc::write_binding(&crate::storage::state_dir(), &text)),
             other => Err(format!("unknown argument {other:?}")),
         };
         match result {
@@ -241,6 +244,14 @@ fn read_secret_line() -> Result<String, String> {
     std::io::stdin().take(256).read_to_end(&mut buf).map_err(|e| format!("stdin: {e}"))?;
     let line = String::from_utf8(buf).map_err(|_| "stdin is not text".to_string())?;
     Ok(line.trim().to_string())
+}
+
+/// Up to `max` bytes of stdin, as text.
+fn read_stdin_text(max: u64) -> Result<String, String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::io::stdin().take(max).read_to_end(&mut buf).map_err(|e| format!("stdin: {e}"))?;
+    String::from_utf8(buf).map_err(|_| "stdin is not text".to_string())
 }
 
 /// `--write-invite <expires_at>` (code on stdin): the admin helper's invite,
@@ -443,6 +454,11 @@ mod tests {
         assert!(!state_dir.join("mobile-control").join(auth::INVITE_FILE).exists(), "the invite is spent");
         let (status, _, body) = raw(&socket, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&pair("12345678"))).await;
         assert_eq!(status, 400, "a spent invite enrols nothing: {body}");
+        // An identity provider's token pairs nothing without this account's
+        // binding (P5 OIDC), whatever the token says.
+        let forged = json!({ "oidc_token": "e30.e30.c2ln", "device_name": "Laptop", "public_key": public_key }).to_string();
+        let (status, _, body) = raw(&socket, "POST", "/api/v1/pair", &[("Origin", ORIGIN)], Some(&forged)).await;
+        assert_eq!((status, body.contains("invalid_oidc")), (400, true), "{body}");
 
         // Sign the daemon's nonce.
         let (status, _, body) = raw(&socket, "POST", "/api/v1/auth/challenge", &[("Origin", ORIGIN)], Some(&json!({ "device_id": device_id }).to_string())).await;

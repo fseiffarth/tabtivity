@@ -20,6 +20,12 @@ mod cli {
   role NAME admin|user\n\
   device-revoke NAME DEVICE_ID\n\
   cli-install ID            (install or update an agent CLI, as {cli})\n\
+  oidc-set --issuer https://IDP --client-id ID --name LABEL\n\
+                            (sign-in through an identity provider; the client\n\
+                             secret is read from stdin)\n\
+  oidc-clear                (invites only again)\n\
+  user-oidc NAME --sub ID | --email ADDRESS | --clear\n\
+                            (who may pair NAME's devices by signing in there)\n\
   check                     (the deployment prerequisites; no root needed)\n",
             cli = names::cli_account()
         )
@@ -100,6 +106,25 @@ mod cli {
             }
             "device-revoke" => helper::plan_device_revoke(&db()?, positional(&args, 1)?, positional(&args, 2)?)?,
             "cli-install" => helper::plan_cli_install(positional(&args, 1)?)?,
+            "oidc-set" => {
+                let issuer = value(&mut args, "--issuer")?.ok_or("oidc-set needs --issuer https://IDP")?;
+                let client = value(&mut args, "--client-id")?.ok_or("oidc-set needs --client-id ID")?;
+                let name = value(&mut args, "--name")?.ok_or("oidc-set needs --name LABEL (the sign-in button's)")?;
+                helper::plan_oidc_set(&issuer, &client, &name)?
+            }
+            "oidc-clear" => helper::plan_oidc_clear(),
+            "user-oidc" => {
+                let link = if flag(&mut args, "--clear") {
+                    None
+                } else if let Some(sub) = value(&mut args, "--sub")? {
+                    Some(app_gateway::oidc_wire::Link { claim: "sub".into(), value: sub })
+                } else if let Some(email) = value(&mut args, "--email")? {
+                    Some(app_gateway::oidc_wire::Link { claim: "email".into(), value: email })
+                } else {
+                    return Err("user-oidc needs --sub ID, --email ADDRESS or --clear".into());
+                };
+                helper::plan_user_oidc(&db()?, positional(&args, 1)?, link)?
+            }
             "--help" | "-h" | "help" => {
                 print!("{}", usage());
                 return Ok(());

@@ -36,6 +36,8 @@ pub mod keys_wire;
 pub mod hub_wire;
 /// The shared-calendar service's protocol, shared with the daemon by `#[path]`.
 pub mod cal_wire;
+/// OIDC sign-in's shared rules (nonce, claims, link), shared with the daemon by `#[path]`.
+pub mod oidc_wire;
 
 pub mod audit;
 pub mod config;
@@ -62,6 +64,8 @@ pub mod helper;
 pub mod keeper;
 #[cfg(unix)]
 pub mod broker;
+#[cfg(unix)]
+pub mod oidc;
 #[cfg(unix)]
 pub mod hub;
 pub mod acl;

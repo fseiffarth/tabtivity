@@ -135,9 +135,14 @@ impl Default for HeadlessSpawner {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PairBody {
+    #[serde(default)]
     code: String,
     device_name: String,
     public_key: String,
+    /// An identity provider's ID token in place of a code (a hosted server,
+    /// routed here by the gateway's OIDC callback; plan P5).
+    #[serde(default)]
+    oidc_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -636,6 +641,20 @@ async fn pair(
 ) -> impl IntoResponse {
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if let Some(token) = body.oidc_token.as_deref() {
+        // The provider's sign-in instead of a code: this daemon checks the
+        // token itself (signature, issuer, audience, its own binding, the
+        // nonce bound to this very key) before the store registers it.
+        let control_dir = state.auth.lock().unwrap_or_else(PoisonError::into_inner).control_dir().to_path_buf();
+        if let Err(reason) = crate::services::server::oidc::check(&control_dir, token, &body.public_key).await {
+            eprintln!("pair: identity provider sign-in refused: {reason}");
+            return api_error(StatusCode::BAD_REQUEST, "invalid_oidc");
+        }
+        return match state.auth.lock().unwrap_or_else(PoisonError::into_inner).pair_verified(&body.device_name, &body.public_key) {
+            Ok(device_id) => (StatusCode::CREATED, Json(json!({ "device_id": device_id }))),
+            Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
+        };
     }
     match state
         .auth

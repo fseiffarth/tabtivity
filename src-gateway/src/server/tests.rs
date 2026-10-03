@@ -30,7 +30,9 @@ async fn fake_daemon(socket: std::path::PathBuf, user: &'static str, device_id: 
         .route(
             "/api/v1/pair",
             post(move |Json(body): Json<Value>| async move {
-                if body["code"] == "12345678" {
+                // An OIDC pair carries a token instead: its checks are the
+                // daemon's own (`services::server::oidc` tests).
+                if body["code"] == "12345678" || body["oidc_token"].as_str().is_some_and(|t| t.split('.').count() == 3) {
                     (StatusCode::CREATED, Json(json!({ "device_id": device_id })))
                 } else {
                     (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_pairing_code", "got": body["code"] })))
@@ -516,4 +518,98 @@ async fn a_stranger_flood_does_not_lock_out_a_known_user() {
     }
     let (status, _, _) = raw(f.addr, "POST", "/api/v1/auth/challenge", &[("Origin", ORIGIN)], Some(&session)).await;
     assert_eq!(status, 429);
+}
+
+/// A fake identity provider on loopback: discovery, and a token endpoint
+/// that checks the client secret and the PKCE verifier and answers an ID
+/// token for `sub` with the nonce the test hands it.
+struct FakeIdp {
+    issuer: String,
+    sub: Arc<Mutex<String>>,
+    nonce: Arc<Mutex<String>>,
+    challenge: Arc<Mutex<String>>,
+}
+
+async fn fake_idp() -> FakeIdp {
+    use base64ct::Encoding;
+    use sha2::Digest;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let issuer = format!("http://{}", listener.local_addr().unwrap());
+    let (sub, nonce, challenge) = (Arc::new(Mutex::new("u-alice".to_string())), Arc::new(Mutex::new(String::new())), Arc::new(Mutex::new(String::new())));
+    let (iss, s, n, c) = (issuer.clone(), sub.clone(), nonce.clone(), challenge.clone());
+    let discovery = json!({ "issuer": issuer, "authorization_endpoint": format!("{issuer}/auth"), "token_endpoint": format!("{issuer}/token") });
+    let app = Router::new().route("/.well-known/openid-configuration", get(move || async move { Json(discovery) })).route(
+        "/token",
+        post(move |body: String| async move {
+            let field = |name: &str| body.split('&').find_map(|p| p.strip_prefix(&format!("{name}="))).unwrap_or("").to_string();
+            let verifier_ok = base64ct::Base64UrlUnpadded::encode_string(&sha2::Sha256::digest(field("code_verifier").as_bytes())) == *c.lock().unwrap();
+            if field("client_secret") != "fake-client-pass" || field("code") != "good-code" || !verifier_ok {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_grant" })));
+            }
+            let claims = json!({ "iss": iss, "aud": "desk", "sub": *s.lock().unwrap(), "nonce": *n.lock().unwrap(), "exp": crate::now() + 300, "iat": crate::now() });
+            let token = format!("e30.{}.c2ln", base64ct::Base64UrlUnpadded::encode_string(claims.to_string().as_bytes()));
+            (StatusCode::OK, Json(json!({ "id_token": token, "token_type": "Bearer" })))
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    FakeIdp { issuer, sub, nonce, challenge }
+}
+
+/// P5 OIDC: a provider sign-in pairs the key the browser started with, for
+/// the account linked to that person, only in the browser that started it.
+#[tokio::test]
+async fn a_provider_sign_in_pairs_the_starting_browsers_key_for_the_linked_account() {
+    let f = fixture().await;
+    let (status, _, body) = raw(f.addr, "GET", "/gateway/v1/oidc", &[], None).await;
+    assert_eq!((status, body.contains("\"enabled\":false")), (200, true), "{body}");
+    let idp = fake_idp().await;
+    crate::oidc::OidcConfig { issuer: idp.issuer.clone(), client_id: "desk".into(), client_secret: "fake-client-pass".into(), name: "Lab SSO".into() }.save(&f.gw.config.state_dir).unwrap();
+    db::update(&f.gw.config.state_dir, |db| db.set_oidc("alice", Some(crate::oidc_wire::Link { claim: "sub".into(), value: "u-alice".into() }))).unwrap();
+    *f.gw.db_stamp.lock().unwrap() = None;
+    f.gw.reload();
+    let (_, _, body) = raw(f.addr, "GET", "/gateway/v1/oidc", &[], None).await;
+    assert!(body.contains("Lab SSO") && !body.contains("fake-client-pass"), "{body}");
+    const KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfakefakefakefakefakefakefakefake";
+    let start = |origin: &'static str| {
+        let body = json!({ "public_key": KEY, "device_name": "Lab laptop" }).to_string();
+        async move { raw(f.addr, "POST", "/gateway/v1/oidc/start", &[("Origin", origin)], Some(&body)).await }
+    };
+    assert_eq!(start("https://evil.example").await.0, 403);
+    let begin = || async {
+        let (status, headers, body) = start(ORIGIN).await;
+        assert_eq!(status, 200, "{body}");
+        let url = serde_json::from_str::<Value>(&body).unwrap()["url"].as_str().unwrap().to_string();
+        let param = |name: &str| url.split(&format!("{name}=")).nth(1).unwrap().split('&').next().unwrap().to_string();
+        (set_cookies(&headers).remove(0), url.clone(), param("state"), param("nonce"), param("code_challenge"))
+    };
+    let (binder, url, state, nonce, challenge) = begin().await;
+    assert!(url.starts_with(&format!("{}/auth?", idp.issuer)) && binder.starts_with(crate::oidc::BINDER_COOKIE));
+    assert_eq!(nonce, crate::oidc_wire::nonce_for(KEY), "the nonce binds the key being paired");
+    *idp.nonce.lock().unwrap() = nonce;
+    *idp.challenge.lock().unwrap() = challenge;
+    // Another browser (no binder) cannot complete it, and the try is spent.
+    let callback = format!("/gateway/v1/oidc/callback?code=good-code&state={state}");
+    let (status, headers, _) = raw(f.addr, "GET", &callback, &[("Cookie", "__Host-oidc_binder=not-it")], None).await;
+    let location = |headers: &[(String, String)]| headers.iter().find(|(k, _)| k == "location").map(|(_, v)| v.clone()).unwrap_or_default();
+    assert_eq!((status, location(&headers)), (303, "/?oidc=expired".to_string()));
+    let (binder, _, state, nonce, challenge) = begin().await;
+    *idp.nonce.lock().unwrap() = nonce;
+    *idp.challenge.lock().unwrap() = challenge;
+    let (status, headers, _) = raw(f.addr, "GET", &format!("/gateway/v1/oidc/callback?code=good-code&state={state}"), &[("Cookie", &binder)], None).await;
+    assert_eq!((status, location(&headers)), (303, "/?oidc=paired&device=alice_device_01".to_string()));
+    assert!(headers.iter().any(|(k, v)| k == "set-cookie" && v.contains("Max-Age=0")), "the binder is cleared");
+    assert!(f.gw.db().routes("alice", "alice_device_01"));
+    // A person no account is linked to pairs nothing.
+    *idp.sub.lock().unwrap() = "u-stranger".into();
+    let (binder, _, state, nonce, challenge) = begin().await;
+    *idp.nonce.lock().unwrap() = nonce;
+    *idp.challenge.lock().unwrap() = challenge;
+    let (_, headers, _) = raw(f.addr, "GET", &format!("/gateway/v1/oidc/callback?code=good-code&state={state}"), &[("Cookie", &binder)], None).await;
+    assert_eq!(location(&headers), "/?oidc=unknown");
+    // A provider refusal (or a wrong code) ends at the start page too.
+    let (binder, _, state, _, _) = begin().await;
+    let (_, headers, _) = raw(f.addr, "GET", &format!("/gateway/v1/oidc/callback?code=bad&state={state}"), &[("Cookie", &binder)], None).await;
+    assert_eq!(location(&headers), "/?oidc=provider");
+    let audit = std::fs::read_to_string(f.gw.config.state_dir.join(crate::audit::AUDIT_FILE)).unwrap();
+    assert!(audit.contains("pair-oidc") && !audit.contains("u-alice") && !audit.contains("fake-client-pass"), "{audit}");
 }

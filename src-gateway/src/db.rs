@@ -54,6 +54,12 @@ pub struct Account {
     /// socket activation and answers like an unknown account otherwise.
     #[serde(default)]
     pub invite_until: u64,
+    /// The identity-provider person who may pair devices for this account by
+    /// signing in there (P5 OIDC; set by the admin helper's `user-oidc`).
+    /// Routing only: the account's daemon checks the token against its own
+    /// copy of the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<crate::oidc_wire::Link>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +142,7 @@ impl Db {
         if self.accounts.iter().any(|a| a.name == name || a.uid == uid) {
             return Err(DbError::AccountExists);
         }
-        self.accounts.push(Account { name: name.into(), uid, role, created_at: now, devices: Vec::new(), invite_until: 0 });
+        self.accounts.push(Account { name: name.into(), uid, role, created_at: now, devices: Vec::new(), invite_until: 0, oidc: None });
         Ok(())
     }
 
@@ -154,6 +160,27 @@ impl Db {
     pub fn set_invite(&mut self, user: &str, until: u64) -> Result<(), DbError> {
         self.accounts.iter_mut().find(|a| a.name == user).ok_or(DbError::UnknownAccount)?.invite_until = until;
         Ok(())
+    }
+
+    /// Link `user` to an identity-provider person, or unlink (`None`). One
+    /// person routes to one account: a link another account has is refused.
+    pub fn set_oidc(&mut self, user: &str, link: Option<crate::oidc_wire::Link>) -> Result<(), DbError> {
+        if let Some(link) = &link {
+            if !link.valid() {
+                return Err(DbError::InvalidName);
+            }
+            if self.accounts.iter().any(|a| a.name != user && a.oidc.as_ref().is_some_and(|l| l.claim == link.claim && l.value.eq_ignore_ascii_case(&link.value))) {
+                return Err(DbError::AccountExists);
+            }
+        }
+        self.accounts.iter_mut().find(|a| a.name == user).ok_or(DbError::UnknownAccount)?.oidc = link;
+        Ok(())
+    }
+
+    /// The account whose link names the person `claims` describe (claims of
+    /// a token the provider's token endpoint answered).
+    pub fn account_for_claims(&self, claims: &serde_json::Value) -> Option<&Account> {
+        self.accounts.iter().find(|a| a.oidc.as_ref().is_some_and(|link| crate::oidc_wire::names(claims, link)))
     }
 
     pub fn add_device(&mut self, user: &str, id: &str, name: &str, now: u64) -> Result<(), DbError> {

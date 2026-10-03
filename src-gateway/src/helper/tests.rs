@@ -52,6 +52,8 @@ struct Recorder<'a> {
     /// `useradd` "creates" the account here, as the real one would.
     accounts: Option<&'a FakeAccounts>,
     stdin_seen: Vec<(String, String)>,
+    /// What `read_secret` answers (`None`: no input).
+    secret: Option<String>,
 }
 
 impl Exec for Recorder<'_> {
@@ -92,6 +94,9 @@ impl Exec for Recorder<'_> {
     }
     fn say(&mut self, line: &str) {
         self.log.push(format!("say {line}"));
+    }
+    fn read_secret(&mut self, _: &str) -> Result<String, String> {
+        self.secret.clone().ok_or_else(|| "no input".into())
     }
 }
 
@@ -365,4 +370,51 @@ fn install_prepares_the_proc_exception_group_and_only_prints_the_mount_line() {
     // A member of the exception group is never linked.
     let member = UnixAccount { name: "alice".into(), uid: 1001, gid: 1001, home: "/home/alice".into(), groups: vec![users(), names::proc_group()] };
     assert!(check_account(&member).unwrap_err().contains("exception group"));
+}
+
+/// P5 OIDC: the provider's settings land in the gateway's state with the
+/// secret from stdin only; a link goes to the table (routing) and, by the
+/// user's own uid, to the daemon's binding (authority).
+#[test]
+fn oidc_set_reads_the_secret_from_stdin_and_a_link_reaches_both_sides() {
+    let accounts = FakeAccounts::default().with(&names::gateway_account(), 990, &[]).with("alice", 1001, &["alice", &users()]).with("bob", 1002, &["bob", &users()]);
+    let dir = tempfile::tempdir().unwrap();
+    db::update(dir.path(), |db| {
+        db.add_account("alice", 1001, Role::User, 1)?;
+        db.add_account("bob", 1002, Role::User, 1)
+    })
+    .unwrap();
+    assert!(plan_oidc_set("http://idp.example", "desk", "Lab SSO").is_err(), "https only");
+    assert!(plan_oidc_set("https://idp.example", "desk", "").is_err());
+    let set = plan_oidc_set("https://idp.example/realms/lab/", "desk", "Lab SSO").unwrap();
+    let text = set.to_string();
+    assert!(text.contains("https://idp.example/realms/lab (client desk") && text.contains("stdin"), "{text}");
+    let ctx = Ctx { accounts: &accounts, gateway_dir: dir.path().into(), now: 5 };
+    let link = |sub: &str| Some(crate::oidc_wire::Link { claim: "sub".into(), value: sub.into() });
+    // Linking before a provider exists fails at execution.
+    let early = plan_user_oidc(&Db::load(dir.path()).unwrap(), "alice", link("u-1")).unwrap();
+    assert!(execute(&early, &ctx, &mut Recorder::default()).unwrap_err().contains("oidc-set"));
+    assert!(execute(&set, &ctx, &mut Recorder::default()).unwrap_err().contains("no input"), "no secret, nothing written");
+    assert!(crate::oidc::OidcConfig::load(dir.path()).is_none());
+    let mut rec = Recorder { secret: Some("fake-client-pass".into()), ..Recorder::default() };
+    execute(&set, &ctx, &mut rec).unwrap();
+    let config = crate::oidc::OidcConfig::load(dir.path()).unwrap();
+    assert_eq!((config.issuer.as_str(), config.client_secret.as_str()), ("https://idp.example/realms/lab", "fake-client-pass"));
+    assert!(rec.log.iter().any(|l| l.starts_with("hand to")), "the gateway's account must read it");
+    let plan = plan_user_oidc(&Db::load(dir.path()).unwrap(), "alice", link("u-1")).unwrap();
+    let mut rec = Recorder::default();
+    execute(&plan, &ctx, &mut rec).unwrap();
+    assert!(rec.log.iter().any(|l| l == &format!("as alice: /usr/lib/{SLUG}/{SLUG}-serverd --write-oidc-binding")), "{:?}", rec.log);
+    let (who, binding) = &rec.stdin_seen[0];
+    let binding: crate::oidc_wire::Binding = serde_json::from_str(binding).unwrap();
+    assert_eq!((who.as_str(), binding.issuer.as_str(), binding.client_id.as_str(), binding.link.value.as_str()), ("alice", "https://idp.example/realms/lab", "desk", "u-1"));
+    assert!(!rec.stdin_seen[0].1.contains("fake-client-pass"), "the daemon never gets the client secret");
+    assert_eq!(Db::load(dir.path()).unwrap().account("alice").unwrap().oidc, link("u-1"));
+    // One person, one account.
+    assert!(plan_user_oidc(&Db::load(dir.path()).unwrap(), "bob", link("U-1")).unwrap_err().contains("already linked"));
+    let unlink = plan_user_oidc(&Db::load(dir.path()).unwrap(), "alice", None).unwrap();
+    let mut rec = Recorder::default();
+    execute(&unlink, &ctx, &mut rec).unwrap();
+    assert_eq!(rec.stdin_seen[0].1, "", "an empty binding removes the daemon's");
+    assert_eq!(Db::load(dir.path()).unwrap().account("alice").unwrap().oidc, None);
 }

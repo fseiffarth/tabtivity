@@ -126,6 +126,15 @@ pub enum Step {
     /// someone's desktop — is the admin's step.
     ProcMountLine,
     Audit { user: String, verb: String },
+    /// The identity provider (P5 OIDC): `oidc.json` in the gateway's state,
+    /// `0600`, the client secret read from stdin at execution — never part
+    /// of the plan, never an argument.
+    OidcSet { issuer: String, client_id: String, name: String },
+    OidcClear,
+    /// Link (or with `None` unlink) `user` to a provider person: the
+    /// gateway's table (routing) and, by the user's own uid, the daemon's
+    /// binding (what it checks a token against).
+    OidcLink { user: String, link: Option<crate::oidc_wire::Link> },
 }
 
 impl fmt::Display for Step {
@@ -145,6 +154,10 @@ impl fmt::Display for Step {
             Step::Invite { user } => write!(f, "invite: a new pairing code for {user}, written as {user}"),
             Step::CliInstall { id } => write!(f, "install or update the {id} CLI as {} into {}", names::cli_account(), names::cli_root().display()),
             Step::Audit { user, verb } => write!(f, "audit: {verb} {user}"),
+            Step::OidcSet { issuer, client_id, name } => write!(f, "identity provider: {issuer} (client {client_id}, \"{name}\"), the client secret read from stdin, into the gateway's state (0600)"),
+            Step::OidcClear => write!(f, "identity provider: removed (invites only)"),
+            Step::OidcLink { user, link: Some(link) } => write!(f, "{user} pairs devices by signing in as {}={} (gateway table, and {user}'s own binding)", link.claim, link.value),
+            Step::OidcLink { user, link: None } => write!(f, "{user} no longer pairs devices through the identity provider"),
             Step::ProcMountLine => write!(
                 f,
                 "print (not applied) the /etc/fstab line: {} — then `mount -o remount /proc`",
@@ -327,6 +340,45 @@ pub fn valid_cli_id(id: &str) -> bool {
     (1..=32).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// `oidc-set`: sign-in through an identity provider (P5). The client secret
+/// is read from stdin when the plan runs; `--dry-run` never asks for it.
+pub fn plan_oidc_set(issuer: &str, client_id: &str, name: &str) -> Result<Plan, String> {
+    let issuer = issuer.trim().trim_end_matches('/').to_string();
+    if !crate::oidc_wire::valid_issuer(&issuer) {
+        return Err(format!("{issuer:?} is not an https issuer URL"));
+    }
+    if !crate::oidc::valid_settings(&issuer, client_id, name) {
+        return Err("a client id (≤ 256 characters) and a label (1–64 characters) are needed".into());
+    }
+    Ok(Plan {
+        verb: "oidc-set".into(),
+        steps: vec![Step::OidcSet { issuer, client_id: client_id.into(), name: name.into() }, Step::Audit { user: "-".into(), verb: "oidc-set".into() }],
+    })
+}
+
+pub fn plan_oidc_clear() -> Plan {
+    Plan { verb: "oidc-clear".into(), steps: vec![Step::OidcClear, Step::Audit { user: "-".into(), verb: "oidc-clear".into() }] }
+}
+
+/// `user-oidc NAME --sub ID | --email ADDRESS | --clear`: who may pair this
+/// account's devices by signing in at the provider.
+pub fn plan_user_oidc(db: &Db, user: &str, link: Option<crate::oidc_wire::Link>) -> Result<Plan, String> {
+    known(db, user)?;
+    if let Some(link) = &link {
+        if !link.valid() {
+            return Err("an identity is --sub ID or --email ADDRESS (at most 256 characters)".into());
+        }
+        if db.accounts.iter().any(|a| a.name != user && a.oidc.as_ref().is_some_and(|l| l.claim == link.claim && l.value.eq_ignore_ascii_case(&link.value))) {
+            return Err("another account is already linked to that person".into());
+        }
+    }
+    let verb = if link.is_some() { "oidc-link" } else { "oidc-unlink" };
+    Ok(Plan {
+        verb: format!("user-oidc {user}"),
+        steps: vec![Step::CheckLinkable { user: user.into() }, Step::OidcLink { user: user.into(), link }, Step::Audit { user: user.into(), verb: verb.into() }],
+    })
+}
+
 pub fn plan_cli_install(id: &str) -> Result<Plan, String> {
     if !valid_cli_id(id) {
         return Err(format!("{id:?} is not a CLI id"));
@@ -346,6 +398,10 @@ pub trait Exec {
     /// Give the gateway's state files to its account (after a root write).
     fn hand_to_gateway(&mut self, dir: &Path, gateway: &UnixAccount) -> Result<(), String>;
     fn say(&mut self, line: &str);
+    /// One line of secret input (stdin), never echoed.
+    fn read_secret(&mut self, _what: &str) -> Result<String, String> {
+        Err("no input available".into())
+    }
 }
 
 /// Where execution writes the gateway's table and audit log.
@@ -425,6 +481,37 @@ pub fn execute(plan: &Plan, ctx: &Ctx, exec: &mut dyn Exec) -> Result<(), String
             Step::Audit { user, verb } => {
                 audit::AuditLog::in_dir(&ctx.gateway_dir).record(audit::Row::new(user, None, verb, "ok").resource("admin-helper"));
                 table_touched = true;
+            }
+            Step::OidcSet { issuer, client_id, name } => {
+                let client_secret = exec.read_secret("the client secret")?;
+                let config = crate::oidc::OidcConfig { issuer: issuer.clone(), client_id: client_id.clone(), client_secret, name: name.clone() };
+                if !config.valid() {
+                    return Err("the identity provider's settings are not valid (https issuer, client id, secret, a label of at most 64 characters)".into());
+                }
+                config.save(&ctx.gateway_dir).map_err(|e| format!("{}: {e}", crate::oidc::CONFIG_FILE))?;
+                table_touched = true;
+                exec.say("the sign-in button appears on the pairing page; link each account with user-oidc");
+            }
+            Step::OidcClear => {
+                exec.remove(&ctx.gateway_dir.join(crate::oidc::CONFIG_FILE))?;
+            }
+            Step::OidcLink { user, link } => {
+                let account = lookup(user)?;
+                let stdin = match link {
+                    Some(link) => {
+                        let config = crate::oidc::OidcConfig::load(&ctx.gateway_dir).ok_or("no identity provider is set up: run oidc-set first")?;
+                        let binding = crate::oidc_wire::Binding { issuer: config.issuer, client_id: config.client_id, link: link.clone() };
+                        serde_json::to_string(&binding).map_err(|e| e.to_string())?
+                    }
+                    None => String::new(),
+                };
+                db::update(&ctx.gateway_dir, |db| db.set_oidc(user, link.clone())).map_err(|e| match e {
+                    db::DbError::AccountExists => "another account is already linked to that person".to_string(),
+                    other => other.to_string(),
+                })?;
+                table_touched = true;
+                let argv = vec![names::serverd_binary().to_string_lossy().into_owned(), "--write-oidc-binding".into()];
+                exec.run_as(&account, &argv, &stdin)?;
             }
             Step::ProcMountLine => {
                 let gid = ctx.accounts.group_gid(&names::proc_group()).ok_or_else(|| format!("no group {}", names::proc_group()))?;
@@ -571,7 +658,7 @@ impl Exec for SystemExec {
     }
 
     fn hand_to_gateway(&mut self, dir: &Path, gateway: &UnixAccount) -> Result<(), String> {
-        for leaf in [db::DB_FILE, db::LOCK_FILE, audit::AUDIT_FILE] {
+        for leaf in [db::DB_FILE, db::LOCK_FILE, audit::AUDIT_FILE, crate::oidc::CONFIG_FILE] {
             let path = dir.join(leaf);
             if let Ok(file) = std::fs::OpenOptions::new().read(true).custom_flags_nofollow().open(&path) {
                 // Only the plain file root just wrote: a hard link the
@@ -589,6 +676,19 @@ impl Exec for SystemExec {
 
     fn say(&mut self, line: &str) {
         println!("{line}");
+    }
+
+    fn read_secret(&mut self, what: &str) -> Result<String, String> {
+        use std::io::Read;
+        eprintln!("{what} (one line on stdin):");
+        let mut buf = Vec::new();
+        std::io::stdin().take(2048).read_to_end(&mut buf).map_err(|e| format!("stdin: {e}"))?;
+        let line = String::from_utf8(buf).map_err(|_| "stdin is not text".to_string())?;
+        let line = line.lines().next().unwrap_or_default().trim().to_string();
+        if line.is_empty() {
+            return Err(format!("{what}: nothing on stdin"));
+        }
+        Ok(line)
     }
 }
 

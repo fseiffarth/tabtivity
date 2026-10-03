@@ -66,6 +66,10 @@ pub mod share;
 #[path = "../../../../src-gateway/src/cal_wire.rs"]
 pub mod cal_wire;
 pub mod shared_calendar;
+/// OIDC sign-in's shared rules (P5): the gateway's file, compiled here too.
+#[path = "../../../../src-gateway/src/oidc_wire.rs"]
+pub mod oidc_wire;
+pub mod oidc;
 
 pub const MODE_ENV: &str = wire::env::MODE;
 pub const SOCKET_ENV: &str = wire::env::SOCKET;

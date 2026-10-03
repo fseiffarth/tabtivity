@@ -249,6 +249,10 @@ url = "2"
 axum = { version = "0.8", features = ["ws"] }
 base64ct = { version = "1", features = ["alloc"] }
 p256 = { version = "0.13", features = ["ecdsa", "ecdh", "pkcs8"] }
+# RS256 signatures of an identity provider's ID tokens (hosted plan P5, OIDC
+# sign-in: `services::server::oidc`); ES256 goes through p256 above. Already
+# in the tree through rustls.
+ring = "0.17"
 # Web Push payload encryption for Tabtivity Mobile (`mobile_control::push`, RFC
 # 8291 `aes128gcm`). The RFC fixes AES-128-GCM, so the at-rest XChaCha choice
 # above does not apply; the nonce is derived per message from a fresh salt and

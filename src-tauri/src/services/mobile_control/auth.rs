@@ -52,7 +52,24 @@ pub const SESSION_MAX: u64 = 12 * 60 * 60;
 pub const OPEN_TICKET_TTL: u64 = 5 * 60;
 const MAX_OPEN_TICKETS: usize = 64;
 
-fn now() -> u64 {
+/// A device's name (trimmed, at most 64 characters) and public key (a P-256
+/// SPKI, base64url, bounded before it is parsed), or the pairing error.
+fn checked_device(name: &str, public_key: &str) -> Result<String, String> {
+    let clean_name = name.trim().chars().take(64).collect::<String>();
+    if clean_name.is_empty() {
+        return Err("device_name_required".into());
+    }
+    let der = Base64UrlUnpadded::decode_vec(public_key).map_err(|_| "invalid_public_key")?;
+    // Length first: the bound exists so an unauthenticated caller cannot
+    // hand the SPKI parser an arbitrarily long buffer.
+    if der.len() > 256 {
+        return Err("invalid_public_key".into());
+    }
+    PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?;
+    Ok(clean_name)
+}
+
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -326,6 +343,11 @@ impl AuthStore {
         store::write_json_atomic(&self.control_dir.join("devices.json"), &self.devices, 0o600)
     }
 
+    /// Where the device list, invites and (on a server) the OIDC binding live.
+    pub fn control_dir(&self) -> &Path {
+        &self.control_dir
+    }
+
     pub fn create_pairing_code(&mut self) -> Result<(String, u64), String> {
         // Rejection-sample below the largest multiple of 10^8 that fits a u32:
         // a bare modulo skews codes under 94 967 296 by ~2%.
@@ -374,22 +396,26 @@ impl AuthStore {
                 invite_used = true;
             }
         }
-        let clean_name = name.trim().chars().take(64).collect::<String>();
-        if clean_name.is_empty() {
-            return Err("device_name_required".into());
-        }
-        let der = Base64UrlUnpadded::decode_vec(public_key).map_err(|_| "invalid_public_key")?;
-        // Length first: the bound exists so an unauthenticated caller cannot
-        // hand the SPKI parser an arbitrarily long buffer.
-        if der.len() > 256 {
-            return Err("invalid_public_key".into());
-        }
-        PublicKey::from_public_key_der(&der).map_err(|_| "invalid_public_key")?;
+        let clean_name = checked_device(name, public_key)?;
         // Everything is validated; only now is the code spent.
         self.pairing = None;
         if invite_used {
             let _ = fs::remove_file(self.control_dir.join(INVITE_FILE));
         }
+        self.register(clean_name, public_key)
+    }
+
+    /// Pair a device whose right to pair was proven elsewhere: an identity
+    /// provider's sign-in the caller verified for this account
+    /// (`services::server::oidc::check`, hosted plan P5). Rate-limited like
+    /// a code.
+    pub fn pair_verified(&mut self, name: &str, public_key: &str) -> Result<String, String> {
+        self.rate_limit("pair", PAIR_ATTEMPT_BUDGET)?;
+        let clean_name = checked_device(name, public_key)?;
+        self.register(clean_name, public_key)
+    }
+
+    fn register(&mut self, clean_name: String, public_key: &str) -> Result<String, String> {
         let id = random_id::<20>()?;
         self.devices.devices.push(Device {
             id: id.clone(),

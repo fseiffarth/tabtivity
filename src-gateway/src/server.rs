@@ -15,6 +15,8 @@
 //! * Without one: `/api/*` is `401`, `/desktop*` a sign-in page, other `GET`s
 //!   the PWA's files from disk.
 //! * `/gateway/v1/{audit,policy,status}` — the gateway's own small API.
+//! * `/gateway/v1/oidc[/start|/callback]` — sign-in through an identity
+//!   provider pairs a device in place of an invite (P5, [`crate::oidc`]).
 //! * `/gateway/v1/agent-keys[/<cli>[/users|/delivery|/budget|/renew-token]]` —
 //!   the administrator's agent API keys (plan §5.4): listed, offered,
 //!   withdrawn, given their users, switched to the broker, budgeted and their
@@ -101,6 +103,8 @@ pub struct Gateway {
     limits: Mutex<Limits>,
     /// Last routed request per account (bounded by the table).
     active: Mutex<HashMap<String, Instant>>,
+    /// OIDC sign-ins in flight and the provider's endpoints (P5).
+    oidc: crate::oidc::Flow,
 }
 
 pub type Shared = Arc<Gateway>;
@@ -122,6 +126,7 @@ impl Gateway {
             next_live: AtomicU64::new(1),
             limits: Mutex::new(Limits::new(Instant::now())),
             active: Mutex::default(),
+            oidc: crate::oidc::Flow::new()?,
         }))
     }
 
@@ -403,6 +408,146 @@ async fn session(State(gw): State<Shared>, Extension(source): Extension<Source>,
         gw.audit.record(Row::new(&account.name, Some(&device), "login", "refused"));
     }
     response
+}
+
+// ── OIDC sign-in (P5) ─────────────────────────────────────────────────────
+
+fn redirect_uri(gw: &Gateway) -> String {
+    format!("{}/gateway/v1/oidc/callback", gw.config.origin)
+}
+
+/// Whether the server offers a provider sign-in, and its label (public: the
+/// pairing screen asks before anyone is signed in).
+async fn oidc_info(State(gw): State<Shared>) -> Response {
+    let body = match crate::oidc::OidcConfig::load(&gw.config.state_dir) {
+        Some(config) => json!({ "enabled": true, "name": config.name }),
+        None => json!({ "enabled": false }),
+    };
+    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OidcStartBody {
+    public_key: String,
+    device_name: String,
+}
+
+/// Start a provider sign-in that pairs this browser's key: the binder
+/// cookie, and the provider's URL to send the browser to.
+async fn oidc_start(State(gw): State<Shared>, Extension(source): Extension<Source>, headers: HeaderMap, body: Bytes) -> Response {
+    if !exact_origin(&gw, &headers) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    // Nobody is known yet: every start counts against the stranger windows.
+    if !gw.limits().pair_stranger(&source.0, Instant::now()) {
+        return api_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    }
+    let Some(config) = crate::oidc::OidcConfig::load(&gw.config.state_dir) else {
+        return api_error(StatusCode::NOT_FOUND, "oidc_off");
+    };
+    let Ok(OidcStartBody { public_key, device_name }) = serde_json::from_slice::<OidcStartBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if device_name.trim().is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "device_name_required");
+    }
+    let provider = match gw.oidc.provider(&config).await {
+        Ok(provider) => provider,
+        Err(error) => {
+            eprintln!("gateway: oidc discovery: {error}");
+            return api_error(StatusCode::BAD_GATEWAY, "provider_unreachable");
+        }
+    };
+    match gw.oidc.begin(&config, &provider, &redirect_uri(&gw), &public_key, &device_name, crate::now()) {
+        Ok((binder, url)) => {
+            let mut response = (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({ "url": url }))).into_response();
+            if let Ok(v) = HeaderValue::from_str(&crate::oidc::binder_cookie(&binder)) {
+                response.headers_mut().append(header::SET_COOKIE, v);
+            }
+            response
+        }
+        Err(code) => api_error(StatusCode::BAD_REQUEST, code),
+    }
+}
+
+/// Back to the start page with an outcome the pairing screen reads, the
+/// binder cookie cleared.
+fn oidc_back(outcome: &str, device: Option<&str>) -> Response {
+    let mut location = format!("/?oidc={outcome}");
+    if let Some(device) = device {
+        location.push_str("&device=");
+        location.push_str(device);
+    }
+    let mut response = (StatusCode::SEE_OTHER, [(header::LOCATION, location.as_str()), (header::CACHE_CONTROL, "no-store")]).into_response();
+    if let Ok(v) = HeaderValue::from_str(&crate::oidc::clear_binder_cookie()) {
+        response.headers_mut().append(header::SET_COOKIE, v);
+    }
+    response
+}
+
+#[derive(serde::Deserialize)]
+struct OidcCallback {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+/// The provider's redirect back: the pending sign-in of *this* browser (its
+/// binder cookie), the code exchanged, the ID token routed by the linked
+/// account to its daemon, which verifies it and pairs the key.
+async fn oidc_callback(State(gw): State<Shared>, Extension(source): Extension<Source>, headers: HeaderMap, axum::extract::Query(query): axum::extract::Query<OidcCallback>) -> Response {
+    if !gw.limits().pair_stranger(&source.0, Instant::now()) {
+        return oidc_back("busy", None);
+    }
+    let binder = cookie_values(&headers).iter().find_map(|c| crate::oidc::binder_from(c).map(str::to_string));
+    let (Some(state), Some(binder)) = (query.state, binder) else { return oidc_back("refused", None) };
+    let Some(pending) = gw.oidc.take(&state, &binder, crate::now()) else { return oidc_back("expired", None) };
+    // The provider's own error (cancelled, denied) carries no code.
+    let Some(code) = query.code.filter(|c| !c.is_empty() && c.len() <= 4096) else { return oidc_back("refused", None) };
+    let Some(config) = crate::oidc::OidcConfig::load(&gw.config.state_dir) else { return oidc_back("refused", None) };
+    let token = match gw.oidc.provider(&config).await {
+        Ok(provider) => gw.oidc.exchange(&config, &provider, &redirect_uri(&gw), &code, &pending.verifier).await,
+        Err(error) => Err(error),
+    };
+    let token = match token {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("gateway: oidc: {error}");
+            return oidc_back("provider", None);
+        }
+    };
+    // Read only to route: the token came straight from the token endpoint
+    // over TLS, and the account's daemon checks its signature before it
+    // trusts anything in it.
+    let account = crate::oidc_wire::claims_unverified(&token)
+        .filter(|claims| claims.get("iss").and_then(Value::as_str) == Some(config.issuer.as_str()))
+        .and_then(|claims| gw.db().account_for_claims(&claims).cloned());
+    let Some(account) = account else {
+        gw.audit.record(Row::new("-", None, "pair-oidc", "unknown"));
+        return oidc_back("unknown", None);
+    };
+    let body = json!({ "oidc_token": token, "device_name": pending.device_name, "public_key": pending.public_key });
+    let request = json_request(&gw, "/api/v1/pair", serde_json::to_vec(&body).unwrap_or_default(), &headers);
+    let (status, _, response_body) = buffered(forward(&gw, &account, None, request).await).await;
+    let device_id = serde_json::from_slice::<Value>(&response_body).ok().and_then(|v| v.get("device_id").and_then(Value::as_str).map(str::to_string));
+    let (StatusCode::CREATED, Some(device_id)) = (status, device_id) else {
+        gw.audit.record(Row::new(&account.name, None, "pair-oidc", "refused"));
+        return oidc_back("refused", None);
+    };
+    match db::update(&gw.config.state_dir, |db| db.add_device(&account.name, &device_id, &pending.device_name, crate::now())) {
+        Ok(()) => {
+            gw.reload();
+            gw.audit.record(Row::new(&account.name, Some(&device_id), "pair-oidc", "ok"));
+            oidc_back("paired", Some(&device_id))
+        }
+        Err(error) => {
+            eprintln!("gateway: oidc pair for {}: {error}", account.name);
+            gw.audit.record(Row::new(&account.name, None, "pair-oidc", "refused"));
+            oidc_back("refused", None)
+        }
+    }
 }
 
 const SIGN_IN_PAGE: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><title>Sign in</title>\
@@ -810,6 +955,9 @@ pub fn router(gw: Shared) -> Router {
         .route("/api/v1/pair", post(pair))
         .route("/api/v1/auth/challenge", post(challenge))
         .route("/api/v1/auth/session", post(session).delete(routed_or_static))
+        .route("/gateway/v1/oidc", get(oidc_info))
+        .route("/gateway/v1/oidc/start", post(oidc_start))
+        .route("/gateway/v1/oidc/callback", get(oidc_callback))
         .route("/gateway/v1/audit", get(own_audit))
         .route("/gateway/v1/policy", get(policy_get).put(policy_put))
         .route("/gateway/v1/status", get(status))
