@@ -1241,6 +1241,11 @@ pub async fn calendar_replace_events(
     events: Vec<CalendarEvent>,
     tasks: Vec<CalendarTask>,
 ) -> Result<CalendarData, String> {
+    // A shared calendar lives in the server's calendar service: a bulk
+    // write would put its records into `calendar.json` beside it.
+    if crate::services::server::shared_calendar::is_shared_id(&calendar_id) {
+        return Err("A shared calendar cannot be replaced in bulk; import into a calendar of your own".to_string());
+    }
     run_off_thread(move || replace_calendar_events_at(&calendar_path(), &calendar_id, events, tasks))
         .await
 }
