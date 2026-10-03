@@ -218,4 +218,3 @@ host on the same machine needs the third Serve port (`--https=10000`,
 origin `https://HOST:10000`). Shared Ollama: the admin's service owns
 11434; the desktop's own `ensure_ollama_running` only starts a user-level
 one when nothing answers. Not run live.
-
