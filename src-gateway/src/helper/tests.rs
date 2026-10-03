@@ -233,3 +233,15 @@ fn check_reads_each_server_users_home() {
     assert_eq!(homes.verdict, prereq::Verdict::Fail);
     assert!(homes.detail.contains("alice"));
 }
+
+#[test]
+fn only_a_plain_singly_linked_file_is_handed_to_the_gateway() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gateway.json");
+    std::fs::write(&file, b"{}").unwrap();
+    assert!(chown_target_ok(&std::fs::metadata(&file).unwrap()));
+    // A hard link the gateway's account planted to another file: never chowned.
+    std::fs::hard_link(&file, dir.path().join("gateway.lock")).unwrap();
+    assert!(!chown_target_ok(&std::fs::metadata(&file).unwrap()));
+    assert!(!chown_target_ok(&std::fs::metadata(dir.path()).unwrap()), "a directory");
+}

@@ -67,9 +67,14 @@ impl AuditLog {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o640).custom_flags(libc::O_NOFOLLOW);
+            // The helper appends as root in the gateway's own directory:
+            // no planted symlink or FIFO is followed or waited on.
+            options.mode(0o640).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let mut file = options.open(&self.path)?;
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::other("not a regular file"));
+        }
         file.write_all(&line)?;
         if file.metadata().map(|m| m.len()).unwrap_or(0) > TRIM_AT_BYTES {
             drop(file);
@@ -80,7 +85,7 @@ impl AuditLog {
 
     /// Keep the newest `keep` rows.
     pub fn trim(&self, keep: usize) -> std::io::Result<()> {
-        let text = std::fs::read_to_string(&self.path)?;
+        let text = String::from_utf8_lossy(&crate::read_regular(&self.path)?).into_owned();
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.len().saturating_sub(keep);
         let mut out = lines[start..].join("\n");
@@ -90,8 +95,7 @@ impl AuditLog {
 
     /// Every row, oldest first (unparseable lines skipped).
     pub fn rows(&self) -> Vec<Row> {
-        std::fs::read_to_string(&self.path)
-            .unwrap_or_default()
+        String::from_utf8_lossy(&crate::read_regular(&self.path).unwrap_or_default())
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()

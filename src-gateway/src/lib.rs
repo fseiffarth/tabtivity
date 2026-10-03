@@ -88,8 +88,47 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8], mode: u32) -> std::io:
     result
 }
 
+/// Read a regular file without following a final symlink and without
+/// blocking on a FIFO. The helper runs as root over the gateway's state
+/// directory, which the gateway's account owns: a symlink or FIFO planted
+/// there must not make root read (or hang on) anything else.
+pub fn read_regular(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(format!("{}: not a regular file", path.display())));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn read_regular_refuses_symlinks_and_fifos() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::write(&real, b"x").unwrap();
+        assert_eq!(super::read_regular(&real).unwrap(), b"x");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(super::read_regular(&link).is_err(), "a planted symlink is not followed");
+        let fifo = dir.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(super::read_regular(&fifo).is_err(), "a FIFO is refused, not waited on");
+    }
+
     #[test]
     fn write_atomic_replaces_and_sets_the_mode() {
         let dir = tempfile::tempdir().unwrap();

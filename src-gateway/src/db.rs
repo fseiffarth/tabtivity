@@ -96,7 +96,7 @@ impl Db {
     /// Read the table; a missing file is an empty table, a corrupt one an
     /// error (never silently empty: that would drop every account).
     pub fn load(dir: &Path) -> Result<Db, DbError> {
-        match std::fs::read(Self::path_in(dir)) {
+        match crate::read_regular(&Self::path_in(dir)) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| DbError::Io(format!("{}: {e}", Self::path_in(dir).display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Db::default()),
             Err(e) => Err(DbError::Io(e.to_string())),
@@ -182,12 +182,20 @@ pub struct Lock {
 
 impl Lock {
     pub fn exclusive(dir: &Path) -> Result<Lock, DbError> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(dir.join(LOCK_FILE))
-            .map_err(|e| DbError::Io(format!("{}: {e}", dir.join(LOCK_FILE).display())))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(false).write(true);
+        // The helper takes this lock as root in a directory the gateway's
+        // account owns: never through a planted symlink (root would create
+        // or open whatever it names).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options.open(dir.join(LOCK_FILE)).map_err(|e| DbError::Io(format!("{}: {e}", dir.join(LOCK_FILE).display())))?;
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return Err(DbError::Io(format!("{}: not a regular file", dir.join(LOCK_FILE).display())));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
@@ -234,5 +242,24 @@ mod tests {
         std::fs::write(Db::path_in(dir.path()), b"{not json").unwrap();
         assert!(Db::load(dir.path()).is_err());
         assert!(update(dir.path(), |db| db.add_account("bob", 1002, Role::User, 7)).is_err(), "a corrupt table is never overwritten");
+    }
+
+    /// The helper edits the table as root in the gateway's own directory: a
+    /// symlink the gateway's account planted there leads nowhere.
+    #[cfg(unix)]
+    #[test]
+    fn planted_symlinks_are_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("created-by-root"), state.join(LOCK_FILE)).unwrap();
+        assert!(update(&state, |db| db.add_account("alice", 1001, Role::User, 5)).is_err());
+        assert!(!elsewhere.join("created-by-root").exists(), "the lock's symlink was not followed");
+        std::fs::remove_file(state.join(LOCK_FILE)).unwrap();
+        std::fs::write(elsewhere.join("secret"), b"{}").unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("secret"), Db::path_in(&state)).unwrap();
+        assert!(Db::load(&state).is_err(), "the table's symlink is not read");
     }
 }

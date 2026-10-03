@@ -500,6 +500,13 @@ impl Exec for SystemExec {
         for leaf in [db::DB_FILE, db::LOCK_FILE, audit::AUDIT_FILE] {
             let path = dir.join(leaf);
             if let Ok(file) = std::fs::OpenOptions::new().read(true).custom_flags_nofollow().open(&path) {
+                // Only the plain file root just wrote: a hard link the
+                // gateway's account planted to someone else's file is never
+                // handed to it.
+                let meta = file.metadata().map_err(|e| format!("{}: {e}", path.display()))?;
+                if !chown_target_ok(&meta) {
+                    return Err(format!("{}: not a plain file with one link; refusing to change its owner", path.display()));
+                }
                 std::os::unix::fs::fchown(&file, Some(gateway.uid), Some(gateway.gid)).map_err(|e| format!("{}: {e}", path.display()))?;
             }
         }
@@ -511,6 +518,14 @@ impl Exec for SystemExec {
     }
 }
 
+/// May root hand this file to the gateway's account? A regular file with a
+/// single link only (`fs.protected_hardlinks` normally stops the link being
+/// made at all; this does not rely on it).
+fn chown_target_ok(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.is_file() && meta.nlink() == 1
+}
+
 trait NoFollow {
     fn custom_flags_nofollow(&mut self) -> &mut Self;
 }
@@ -518,7 +533,7 @@ trait NoFollow {
 impl NoFollow for std::fs::OpenOptions {
     fn custom_flags_nofollow(&mut self) -> &mut Self {
         use std::os::unix::fs::OpenOptionsExt;
-        self.custom_flags(libc::O_NOFOLLOW)
+        self.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
     }
 }
 
