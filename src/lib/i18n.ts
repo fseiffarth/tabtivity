@@ -2851,6 +2851,7 @@ export const enSource = {
   "agents.askAdminMissing": "{label} is not installed on this server. Ask the administrator to install it; they run:",
   "server.secrets.header": "Secrets key",
   "server.secrets.help": "On this server your mail store and the passwords you chose to save are sealed under one key that only your paired devices (or your recovery code) can unlock. It is never written to disk in the clear: after a server reboot it stays locked until one of your devices signs in.",
+  "server.secrets.connectNote": "In the desktop app's Connect window the secrets key cannot be set up, given a new recovery code or unlocked after a server reboot yet. Do that from the phone app or a browser signed in to this server; mail and saved passwords stay locked after a reboot until one of those signs in.",
   "server.secrets.notSetUp": "Not set up yet — mail on this server waits until it is.",
   "server.secrets.setUp": "Set up the key",
   "server.secrets.codeIntro": "Your recovery code. Write it down now: it is shown only this once and stored nowhere.",

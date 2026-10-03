@@ -26,6 +26,20 @@ export function isServerClient(): boolean {
   return serverClient;
 }
 
+let connectWindow = false;
+
+/** Called by the Connect window's entry (hosted plan §7.2), before the app
+ * loads. */
+export function markConnectWindow(): void {
+  connectWindow = true;
+}
+
+/** True in the desktop app's Connect window, where the page's origin is the
+ * desktop app's own, not the server's. */
+export function isConnectWindow(): boolean {
+  return connectWindow;
+}
+
 let adminInstallsClis = false;
 
 /** Set from the hello: this backend is a hosted server, where agent CLIs are

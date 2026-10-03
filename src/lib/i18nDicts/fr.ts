@@ -2790,6 +2790,7 @@ export const dict: Dict = {
   "agents.askAdminMissing": "{label} n'est pas installé sur ce serveur. Demande à l'administrateur de l'installer ; il lance :",
   "server.secrets.header": "Clé des secrets",
   "server.secrets.help": "Sur ce serveur, ton stockage de courrier et les mots de passe que tu as choisi d'enregistrer sont scellés sous une clé que seuls tes appareils associés (ou ton code de récupération) peuvent déverrouiller. Elle n'est jamais écrite en clair : après un redémarrage du serveur, elle reste verrouillée jusqu'à ce qu'un de tes appareils se connecte.",
+  "server.secrets.connectNote": "Dans la fenêtre Connect de l’app de bureau, la clé des secrets ne peut pas encore être configurée, recevoir un nouveau code de récupération ni être déverrouillée après un redémarrage du serveur. Faites-le depuis l’app mobile ou un navigateur connecté à ce serveur ; après un redémarrage, le courrier et les mots de passe enregistrés restent verrouillés jusqu’à ce que l’un d’eux se connecte.",
   "server.secrets.notSetUp": "Pas encore configurée — le courrier sur ce serveur attend qu'elle le soit.",
   "server.secrets.setUp": "Configurer la clé",
   "server.secrets.codeIntro": "Ton code de récupération. Note-le maintenant : il n'est affiché que cette fois et n'est enregistré nulle part.",

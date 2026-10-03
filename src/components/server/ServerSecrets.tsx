@@ -22,6 +22,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { SettingsCard } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
+import { isConnectWindow } from "../../lib/transport/linkState";
 import { loadSecrets, repinIdentity, signedAction, unlockWith, type Post } from "../../../mobile-web/src/secretsCore";
 
 /** The mailbox's re-key after a revoke (`services::mail_rekey`). */
@@ -89,6 +90,19 @@ export function ServerSecrets() {
     return () => window.clearInterval(timer);
   }, [rekeying, refresh]);
 
+  // The Connect window's pairing key lives in the desktop app, not in this
+  // page's origin, and it does not enrol or release the key yet (TODO #2379,
+  // final review B12): say so instead of offering buttons that are refused.
+  if (isConnectWindow()) {
+    return (
+      <>
+        <div className="settings-subheader">
+          {t("server.secrets.header")} <UntestedTag id="server.secrets.connect" />
+        </div>
+        <p className="settings-help">{t("server.secrets.connectNote")}</p>
+      </>
+    );
+  }
   if (!state?.available) return null;
 
   const run = async (work: () => Promise<void>) => {

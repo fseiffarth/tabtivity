@@ -766,8 +766,14 @@ the desktop groundwork the hosted plan's P1 builds on.*
     and notifications native, Open on a server PDF downloads and opens it,
     a server restart reconnects. Not built yet: the Connect window's
     popouts and presenter, native print of a server file, a sign-out inside
-    it, and a webview profile of its own on macOS (`data_store_identifier`).
-    (P5, 2026-10-03.)
+    it, a webview profile of its own on macOS (`data_store_identifier`), and
+    the secrets key (final review B12): the Connect window's pairing key is a
+    Rust file (`services::connect`) that never enrols an ECDH key or releases
+    the server's secrets key, so Set up / New recovery code cannot be signed
+    there and a Connect-only user's mail and saved passwords stay locked
+    after a server reboot until a phone or browser signs in (Server → Secrets
+    says so in Connect mode). Do the enrol/release exchange in Rust after
+    sign-in. (P5, 2026-10-03.)
     - [ ] 🖐️ Manual test — the § P5 Connect live list against a real server.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)

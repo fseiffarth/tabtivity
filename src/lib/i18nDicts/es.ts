@@ -2788,6 +2788,7 @@ export const dict: Dict = {
   "agents.askAdminMissing": "{label} no está instalado en este servidor. Pide al administrador que lo instale; ejecuta:",
   "server.secrets.header": "Clave de secretos",
   "server.secrets.help": "En este servidor, tu almacén de correo y las contraseñas que elegiste guardar están sellados con una clave que solo tus dispositivos emparejados (o tu código de recuperación) pueden desbloquear. Nunca se guarda en claro: tras reiniciar el servidor sigue bloqueada hasta que uno de tus dispositivos inicie sesión.",
+  "server.secrets.connectNote": "En la ventana Connect de la app de escritorio todavía no se puede configurar la clave de secretos, crear un nuevo código de recuperación ni desbloquearla tras reiniciar el servidor. Hazlo desde la app del móvil o un navegador con sesión en este servidor; el correo y las contraseñas guardadas siguen bloqueados tras un reinicio hasta que uno de ellos inicie sesión.",
   "server.secrets.notSetUp": "Aún sin configurar: el correo en este servidor espera hasta que lo esté.",
   "server.secrets.setUp": "Configurar la clave",
   "server.secrets.codeIntro": "Tu código de recuperación. Anótalo ahora: solo se muestra esta vez y no se guarda en ningún sitio.",

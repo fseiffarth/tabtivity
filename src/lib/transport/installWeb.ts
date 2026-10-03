@@ -11,7 +11,7 @@
  * is pulled in — `main-web.tsx` awaits `whenReady()` for exactly that.
  */
 import { NAMES } from "../brand";
-import { linkState, markCliInstallsByAdmin, markServerClient, setLinkState } from "./linkState";
+import { linkState, markCliInstallsByAdmin, markServerClient, setLinkState, markConnectWindow } from "./linkState";
 import { WsClient, type Hello } from "./wsClient";
 import { installWsInternals, type WsInternals } from "./wsInternals";
 import { bridgeSocketFactory, type NativeInternals } from "./bridgeSocket";
@@ -47,6 +47,7 @@ export function installConnectTransport(): WebTransport {
   if (!native || typeof native.invoke !== "function") throw new Error("the Connect window needs the desktop app");
   const nativeInternals: NativeInternals = { invoke: native.invoke.bind(native), transformCallback: native.transformCallback.bind(native) };
   const client = new WsClient({ url: "connect://server/api/v1/desktop/ws", protocol: NAMES.desktopProtocol, socket: bridgeSocketFactory(nativeInternals) });
+  markConnectWindow();
   return installTransport(client, nativeInternals);
 }
 

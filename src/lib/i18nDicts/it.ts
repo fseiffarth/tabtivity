@@ -2788,6 +2788,7 @@ export const dict: Dict = {
   "agents.askAdminMissing": "{label} non è installato su questo server. Chiedi all'amministratore di installarlo; esegue:",
   "server.secrets.header": "Chiave dei segreti",
   "server.secrets.help": "Su questo server l'archivio della posta e le password che hai scelto di salvare sono sigillati con una chiave che solo i tuoi dispositivi associati (o il tuo codice di recupero) possono sbloccare. Non viene mai scritta in chiaro: dopo un riavvio del server resta bloccata finché uno dei tuoi dispositivi accede.",
+  "server.secrets.connectNote": "Nella finestra Connect dell’app desktop la chiave dei segreti non si può ancora configurare, dotare di un nuovo codice di recupero né sbloccare dopo un riavvio del server. Fallo dall’app sul telefono o da un browser connesso a questo server; dopo un riavvio posta e password salvate restano bloccate finché uno di questi non accede.",
   "server.secrets.notSetUp": "Non ancora configurata: la posta su questo server attende finché non lo è.",
   "server.secrets.setUp": "Configura la chiave",
   "server.secrets.codeIntro": "Il tuo codice di recupero. Annotalo ora: viene mostrato solo questa volta e non è salvato da nessuna parte.",

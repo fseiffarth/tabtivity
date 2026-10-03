@@ -2791,6 +2791,7 @@ export const dict: Dict = {
   "agents.askAdminMissing": "{label} ist auf diesem Server nicht installiert. Bitte den Administrator, es zu installieren; er führt aus:",
   "server.secrets.header": "Geheimnisschlüssel",
   "server.secrets.help": "Auf diesem Server sind dein Mail-Speicher und die Passwörter, die du speichern wolltest, unter einem Schlüssel versiegelt, den nur deine gekoppelten Geräte (oder dein Wiederherstellungscode) entsperren können. Er wird nie im Klartext gespeichert: Nach einem Neustart des Servers bleibt er gesperrt, bis sich eines deiner Geräte anmeldet.",
+  "server.secrets.connectNote": "Im Connect-Fenster der Desktop-App lässt sich der Geheimnisschlüssel noch nicht einrichten, mit einem neuen Wiederherstellungscode versehen oder nach einem Neustart des Servers entsperren. Erledigen Sie das in der Handy-App oder in einem bei diesem Server angemeldeten Browser; Mail und gespeicherte Passwörter bleiben nach einem Neustart gesperrt, bis sich eines davon anmeldet.",
   "server.secrets.notSetUp": "Noch nicht eingerichtet — Mail auf diesem Server wartet, bis er es ist.",
   "server.secrets.setUp": "Schlüssel einrichten",
   "server.secrets.codeIntro": "Dein Wiederherstellungscode. Schreib ihn jetzt auf: Er wird nur dieses eine Mal gezeigt und nirgends gespeichert.",
