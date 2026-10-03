@@ -94,8 +94,9 @@ home_of() { getent passwd "$1" | cut -d: -f6; }
 uid_of() { id -u "$1"; }
 
 state_of() {
-  # The daemon's state dir: XDG_DATA_HOME is not set by the unit.
-  printf '%s/.local/share/%s' "$(home_of "$1")" "$APP_SLUG"
+  # The daemon's state dir (serverd keeps it apart from the desktop app's,
+  # `daemon::server_dirs`): XDG_DATA_HOME is not set by the unit.
+  printf '%s/.local/share/%s-server' "$(home_of "$1")" "$APP_SLUG"
 }
 
 against() {

@@ -71,17 +71,72 @@ pub fn userns(p: &dyn Probe) -> Check {
     }
 }
 
-/// `/proc` mounted `hidepid=invisible` (or `2`).
+/// A group's gid and members from `/etc/group`.
+fn group_entry(p: &dyn Probe, name: &str) -> Option<(u32, Vec<String>)> {
+    let text = p.read(Path::new("/etc/group"))?;
+    text.lines().find_map(|line| {
+        let mut f = line.split(':');
+        (f.next()? == name).then_some(())?;
+        let gid = f.nth(1)?.parse().ok()?;
+        let members = f.next().unwrap_or("").split(',').filter(|m| !m.is_empty()).map(str::to_string).collect();
+        Some((gid, members))
+    })
+}
+
+/// Does the machine run a graphical session (a display manager)? Then it
+/// is someone's desktop, and polkit must see every process.
+pub fn graphical(p: &dyn Probe) -> bool {
+    p.run(&["systemctl", "is-active", "display-manager.service"]).is_ok_and(|out| out.trim() == "active")
+}
+
+/// `/proc` mounted `hidepid=invisible` (or `2`). On a machine with a
+/// graphical session it also needs `gid=` the exception group
+/// (`names::proc_group`) and polkit in that group by its drop-in, or a
+/// desktop session's authorizations break (user decision 2026-10-03).
 pub fn hidepid(p: &dyn Probe) -> Check {
     let mounts = p.read(Path::new("/proc/self/mounts")).unwrap_or_default();
     let proc_line = mounts.lines().find(|l| {
         let mut f = l.split_whitespace();
         f.next() == Some("proc") && f.next() == Some("/proc")
     });
-    match proc_line {
-        Some(line) if line.contains("hidepid=invisible") || line.contains("hidepid=2") => check("hidepid", Verdict::Ok, "/proc is hidepid=invisible"),
-        Some(_) => check("hidepid", Verdict::Fail, "/proc is not mounted hidepid=invisible: users see each other's processes and command lines"),
-        None => check("hidepid", Verdict::Fail, "no /proc mount found"),
+    let Some(line) = proc_line else {
+        return check("hidepid", Verdict::Fail, "no /proc mount found");
+    };
+    let options: Vec<&str> = line.split_whitespace().nth(3).unwrap_or("").split(',').collect();
+    if !options.iter().any(|o| *o == "hidepid=invisible" || *o == "hidepid=2") {
+        return check("hidepid", Verdict::Fail, "/proc is not mounted hidepid=invisible: users see each other's processes and command lines");
+    }
+    if !graphical(p) {
+        return check("hidepid", Verdict::Ok, "/proc is hidepid=invisible (no graphical session)");
+    }
+    let group = names::proc_group();
+    let mount_gid = options.iter().find_map(|o| o.strip_prefix("gid=")).and_then(|g| g.parse::<u32>().ok());
+    let Some((group_gid, _)) = group_entry(p, &group) else {
+        return check("hidepid", Verdict::Fail, format!("a graphical session runs here, and the /proc exception group {group} does not exist: run the helper's install"));
+    };
+    if mount_gid != Some(group_gid) {
+        return check("hidepid", Verdict::Fail, format!("a graphical session runs here: /proc needs gid={group_gid} ({group}) beside hidepid=invisible, or polkit cannot see the session's processes (the install printed the fstab line)"));
+    }
+    let missing: Vec<String> = names::PROC_EXCEPTION_UNITS
+        .iter()
+        .filter(|unit| !p.read(&names::proc_dropin(unit)).is_some_and(|text| text.lines().any(|l| l.trim() == format!("SupplementaryGroups={group}"))))
+        .map(|unit| unit.to_string())
+        .collect();
+    if !missing.is_empty() {
+        return check("hidepid", Verdict::Fail, format!("a graphical session runs here and {} is not in {group} (no drop-in): run the helper's install", missing.join(", ")));
+    }
+    check("hidepid", Verdict::Ok, format!("/proc is hidepid=invisible,gid={group_gid}; {} see every process", names::PROC_EXCEPTION_UNITS.join(", ")))
+}
+
+/// No server user is in the `/proc` exception group.
+pub fn proc_group_members(p: &dyn Probe, users: &[String]) -> Check {
+    let group = names::proc_group();
+    let members = group_entry(p, &group).map(|(_, m)| m).unwrap_or_default();
+    let bad: Vec<&String> = users.iter().filter(|u| members.contains(u)).collect();
+    if bad.is_empty() {
+        check("proc_group", Verdict::Ok, format!("no server user is in {group}"))
+    } else {
+        check("proc_group", Verdict::Fail, format!("server users in {group} see every process: {}", bad.iter().map(|u| u.as_str()).collect::<Vec<_>>().join(", ")))
     }
 }
 
@@ -159,7 +214,8 @@ pub fn socket_dir(p: &dyn Probe) -> Check {
 
 /// Every check, in order.
 pub fn all(p: &dyn Probe, user_homes: &[(String, PathBuf)]) -> Vec<Check> {
-    vec![userns(p), hidepid(p), ptrace_scope(p), persistent_keyring(p), private_tmp(p), homes(p, user_homes), tmux(p), socket_dir(p)]
+    let users: Vec<String> = user_homes.iter().map(|(u, _)| u.clone()).collect();
+    vec![userns(p), hidepid(p), proc_group_members(p, &users), ptrace_scope(p), persistent_keyring(p), private_tmp(p), homes(p, user_homes), tmux(p), socket_dir(p)]
 }
 
 /// The real machine.
@@ -266,6 +322,26 @@ mod tests {
         assert!(checks.iter().all(|c| c.verdict == Verdict::Ok), "{checks:#?}");
     }
 
+    /// Someone's desktop (user decision 2026-10-03): a display manager runs,
+    /// so hidepid alone is an error — polkit needs the exception group.
+    #[test]
+    fn a_desktop_machine_needs_the_proc_exception_group() {
+        let group = names::proc_group();
+        let mut f = good();
+        f.commands.insert("systemctl".into(), Ok("active\n".into()));
+        assert_eq!(hidepid(&f).verdict, Verdict::Fail, "no group yet");
+        f.files.insert("/etc/group".into(), format!("users:x:100:\n{group}:x:989:\n"));
+        assert!(hidepid(&f).detail.contains("gid=989"), "{:?}", hidepid(&f));
+        f.files.insert("/proc/self/mounts".into(), "proc /proc proc rw,nosuid,nodev,noexec,relatime,hidepid=invisible,gid=989 0 0\n".into());
+        assert!(hidepid(&f).detail.contains("polkit.service"), "the drop-in is missing: {:?}", hidepid(&f));
+        f.files.insert(names::proc_dropin("polkit.service"), crate::units::proc_dropin());
+        assert_eq!(hidepid(&f).verdict, Verdict::Ok, "{:?}", hidepid(&f));
+        // A headless server needs no exception.
+        let mut g = good();
+        g.commands.insert("systemctl".into(), Err("inactive".into()));
+        assert_eq!(hidepid(&g).verdict, Verdict::Ok);
+    }
+
     #[test]
     fn each_missing_prerequisite_fails_by_name() {
         let homes = [("alice".to_string(), PathBuf::from("/home/alice"))];
@@ -279,8 +355,9 @@ mod tests {
         f.commands.insert("bwrap".into(), Err("setting up uid map: Permission denied".into()));
         f.files.insert("/proc/sys/kernel/apparmor_restrict_unprivileged_userns".into(), "1".into());
         f.commands.insert("tmux".into(), Ok("tmux 3.0a".into()));
+        f.files.insert("/etc/group".into(), format!("{}:x:989:alice\n", names::proc_group()));
         let failed: Vec<&str> = all(&f, &homes).iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.id).collect();
-        assert_eq!(failed, ["userns", "hidepid", "ptrace_scope", "persistent_keyring", "private_tmp", "homes_0700", "tmux", "socket_dir"]);
+        assert_eq!(failed, ["userns", "hidepid", "proc_group", "ptrace_scope", "persistent_keyring", "private_tmp", "homes_0700", "tmux", "socket_dir"]);
         assert!(userns(&f).detail.contains("AppArmor"));
         f.files.insert("/proc/sys/kernel/unprivileged_userns_clone".into(), "0".into());
         assert!(userns(&f).detail.contains("unprivileged_userns_clone"));

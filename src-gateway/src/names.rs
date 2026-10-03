@@ -21,6 +21,27 @@ pub fn cli_account() -> String {
     format!("{SERVER_ACCOUNT_PREFIX}cli")
 }
 
+/// The `/proc` exception group (`<slug>-proc`): `/proc` is mounted
+/// `hidepid=invisible,gid=<this group>`, and only the system services that
+/// must see every process are in it — never a server user. On a machine with
+/// a graphical session polkit needs it, or authorizations of a desktop
+/// session fail (hosted plan §8).
+pub fn proc_group() -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}proc")
+}
+
+/// The system units given [`proc_group`] (`SupplementaryGroups=` drop-ins).
+/// polkit is the one a GNOME/KDE desktop needs: it reads the subject's
+/// `/proc/<pid>` for every authorization. systemd-logind, GDM's workers,
+/// accounts-daemon and colord run as root or only look at their own
+/// processes; add a unit here only for a failure seen with hidepid on.
+pub const PROC_EXCEPTION_UNITS: &[&str] = &["polkit.service"];
+
+/// `/etc/systemd/system/<unit>.d/<slug>-proc.conf`.
+pub fn proc_dropin(unit: &str) -> PathBuf {
+    PathBuf::from("/etc/systemd/system").join(format!("{unit}.d")).join(format!("{SERVER_ACCOUNT_PREFIX}proc.conf"))
+}
+
 /// The population's slice, the ceiling for every user together.
 pub fn population_slice() -> String {
     format!("{SERVER_ACCOUNT_PREFIX}users.slice")
@@ -53,6 +74,10 @@ pub fn lib_dir() -> PathBuf {
 
 pub fn serverd_binary() -> PathBuf {
     lib_dir().join(format!("{SERVER_ACCOUNT_PREFIX}serverd"))
+}
+
+pub fn helper_binary() -> PathBuf {
+    lib_dir().join(format!("{SERVER_ACCOUNT_PREFIX}admin-helper"))
 }
 
 pub fn gateway_binary() -> PathBuf {

@@ -20,6 +20,8 @@ use crate::services::mobile_control::host::{self, Listen};
 /// configuration or bind error so `Restart=on-failure` keeps retrying what
 /// can heal and the journal says what cannot.
 pub fn main() -> ! {
+    // Before anything reads a path, and while this is the only thread.
+    separate_from_the_desktop();
     crate::services::brand_migration::hits::install();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--serverd") {
@@ -85,6 +87,30 @@ pub async fn run(config: ServerConfig) -> Result<(), String> {
         config.gateway_uid.map(|uid| format!(" (uid {uid})")).unwrap_or_default()
     );
     host::run_with(host, listen).await
+}
+
+/// The daemon's own state dir and app home, apart from the desktop app's
+/// (`~/.local/share/<slug>-server`, `~/<slug>-server`): the server may run
+/// on a machine that is also someone's desktop, and the same account may run
+/// the desktop app beside its daemon (plan §12 Q12, "separate apps"). Two
+/// processes over one `state_dir` would share `projects.json`, session
+/// state, the mobile control dir (its admin socket and device keys), agent
+/// homes and the mail store. An explicit `<PREFIX>STATE_DIR` / `<PREFIX>HOME`
+/// wins (tests, a custom layout).
+pub fn server_dirs(home: &std::path::Path) -> (PathBuf, PathBuf) {
+    (home.join(".local").join("share").join(format!("{SLUG}-server")), home.join(format!("{SLUG}-server")))
+}
+
+fn separate_from_the_desktop() {
+    let (state, app_home) = server_dirs(&crate::paths::home_dir());
+    for (name, dir) in [("STATE_DIR", state), ("HOME", app_home)] {
+        let key = brand::CURRENT.env_name(name);
+        if std::env::var_os(&key).is_none() {
+            // Single-threaded here (the first thing `main` does); every
+            // child the daemon starts inherits the same layout.
+            std::env::set_var(&key, dir);
+        }
+    }
 }
 
 /// The account's secrets vault (hosted plan §6.8), installed before anything
@@ -434,6 +460,20 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut bytes)).await.expect("the server closes");
         assert!(bytes.is_empty(), "nothing is answered: {:?}", String::from_utf8_lossy(&bytes));
         assert_eq!(refused.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    /// Side by side with the desktop app (plan §12 Q12): the daemon's state
+    /// dir and app home are never the desktop's.
+    #[test]
+    fn the_daemon_keeps_its_state_apart_from_the_desktop_app() {
+        let home = std::path::Path::new("/home/alice");
+        let (state, app_home) = server_dirs(home);
+        assert_eq!(state, home.join(".local/share").join(format!("{SLUG}-server")));
+        assert_eq!(app_home, home.join(format!("{SLUG}-server")));
+        let desktop_state = home.join(".local/share").join(SLUG);
+        assert_ne!(state, desktop_state);
+        assert!(!state.starts_with(&desktop_state) && !desktop_state.starts_with(&state));
+        assert_ne!(app_home, home.join(SLUG));
     }
 
     #[test]

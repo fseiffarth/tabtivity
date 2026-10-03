@@ -27,8 +27,8 @@ impl Accounts for FakeAccounts {
     fn lookup(&self, name: &str) -> Option<UnixAccount> {
         self.accounts.borrow().get(name).cloned()
     }
-    fn group_exists(&self, name: &str) -> bool {
-        self.groups.iter().any(|g| g == name)
+    fn group_gid(&self, name: &str) -> Option<u32> {
+        self.groups.iter().position(|g| g == name).map(|i| 990 - i as u32)
     }
     fn sudo_rule(&self, account: &UnixAccount) -> Result<Option<String>, String> {
         match self.sudoers_root.borrow().as_deref() {
@@ -253,7 +253,7 @@ fn revoking_a_device_drops_the_route_and_asks_the_users_daemon_as_the_user() {
 
 #[test]
 fn install_creates_only_what_is_missing_and_never_runs_installers_as_root() {
-    let accounts = FakeAccounts { groups: vec![users()], ..FakeAccounts::default() }.with(&names::gateway_account(), 990, &[]);
+    let accounts = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }.with(&names::gateway_account(), 990, &[]);
     let plan = plan_install(&accounts, "https://desk.example.ts.net", Some("https://desk.example.ts.net:8443")).unwrap();
     let text = plan.to_string();
     assert!(!text.contains("groupadd"), "the group exists");
@@ -317,4 +317,30 @@ fn a_command_as_an_account_starts_in_its_home_with_a_clean_environment() {
     let command = run_as_command(&alice, &["x".into()]);
     assert_eq!(command.get_current_dir(), Some(std::path::Path::new("/home/alice")));
     assert!(!command.get_args().any(|a| a.to_string_lossy().contains("SERVER_CLI_ROOT")), "only the CLI account gets the install root");
+}
+
+/// The machine may be someone's desktop (user decision 2026-10-03): `/proc`
+/// is hidepid=invisible with an exception group that polkit is given by a
+/// drop-in — never a server user — and the fstab line is printed, not applied.
+#[test]
+fn install_prepares_the_proc_exception_group_and_only_prints_the_mount_line() {
+    let accounts = FakeAccounts { groups: vec![users()], ..FakeAccounts::default() }.with(&names::gateway_account(), 990, &[]);
+    let plan = plan_install(&accounts, "https://desk.example.ts.net", None).unwrap();
+    let text = plan.to_string();
+    assert!(text.contains(&format!("groupadd --system {}", names::proc_group())), "{text}");
+    assert!(text.contains(&names::proc_dropin("polkit.service").display().to_string()));
+    assert!(text.contains("systemctl try-restart polkit.service"));
+    assert!(text.contains("print (not applied) the /etc/fstab line") && text.contains("hidepid=invisible"), "{text}");
+    let accounts = FakeAccounts { groups: vec![users(), names::proc_group()], ..FakeAccounts::default() }.with(&names::gateway_account(), 990, &[]).with(&names::cli_account(), 991, &[]);
+    let plan = plan_install(&accounts, "https://desk.example.ts.net", None).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rec = Recorder { accounts: Some(&accounts), ..Recorder::default() };
+    execute(&plan, &Ctx { accounts: &accounts, gateway_dir: dir.path().into(), now: 1 }, &mut rec).unwrap();
+    let log = rec.log.join("\n");
+    assert!(log.contains("SupplementaryGroups") || log.contains(&names::proc_dropin("polkit.service").display().to_string()), "{log}");
+    assert!(log.contains("proc /proc proc defaults,nosuid,nodev,noexec,hidepid=invisible,gid=989 0 0"), "{log}");
+    assert!(!rec.log.iter().any(|l| !l.starts_with("say ") && (l.contains("mount") || l.contains("fstab"))), "nothing mounts or writes fstab: {log}");
+    // A member of the exception group is never linked.
+    let member = UnixAccount { name: "alice".into(), uid: 1001, gid: 1001, home: "/home/alice".into(), groups: vec![users(), names::proc_group()] };
+    assert!(check_account(&member).unwrap_err().contains("exception group"));
 }

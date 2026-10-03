@@ -53,7 +53,10 @@ pub struct UnixAccount {
 /// The machine's account database.
 pub trait Accounts {
     fn lookup(&self, name: &str) -> Option<UnixAccount>;
-    fn group_exists(&self, name: &str) -> bool;
+    fn group_exists(&self, name: &str) -> bool {
+        self.group_gid(name).is_some()
+    }
+    fn group_gid(&self, name: &str) -> Option<u32>;
     /// The first sudoers rule naming `account`; an error when sudoers cannot
     /// be read completely (the caller refuses then).
     fn sudo_rule(&self, account: &UnixAccount) -> Result<Option<String>, String>;
@@ -83,6 +86,9 @@ pub fn check_account(account: &UnixAccount) -> Result<(), String> {
     }
     if let Some(group) = account.groups.iter().find(|g| ADMIN_GROUPS.contains(&g.as_str())) {
         return Err(format!("{} is in {group}: an account that can become root is never a server user", account.name));
+    }
+    if account.groups.contains(&names::proc_group()) {
+        return Err(format!("{} is in {}, the /proc exception group: a server user must not see other users' processes", account.name, names::proc_group()));
     }
     if !account.groups.contains(&names::users_group()) {
         return Err(format!("{} is not in {}: add them first (usermod -aG {} {})", account.name, names::users_group(), names::users_group(), account.name));
@@ -114,6 +120,11 @@ pub enum Step {
     Invite { user: String },
     /// A CLI installed or updated by `<slug>-cli` into the install root.
     CliInstall { id: String },
+    /// Print the `/etc/fstab` line for `/proc` (`hidepid=invisible`, the
+    /// exception group's gid, looked up at execution) and how to apply it.
+    /// Never applied by the helper: remounting `/proc` on a live machine —
+    /// someone's desktop — is the admin's step.
+    ProcMountLine,
     Audit { user: String, verb: String },
 }
 
@@ -134,6 +145,11 @@ impl fmt::Display for Step {
             Step::Invite { user } => write!(f, "invite: a new pairing code for {user}, written as {user}"),
             Step::CliInstall { id } => write!(f, "install or update the {id} CLI as {} into {}", names::cli_account(), names::cli_root().display()),
             Step::Audit { user, verb } => write!(f, "audit: {verb} {user}"),
+            Step::ProcMountLine => write!(
+                f,
+                "print (not applied) the /etc/fstab line: {} — then `mount -o remount /proc`",
+                crate::units::proc_fstab_line(0).replace("gid=0", &format!("gid=<gid of {}>", names::proc_group()))
+            ),
         }
     }
 }
@@ -187,6 +203,14 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
         steps.push(run(&["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", &cli_root.to_string_lossy(), "--shell", nologin, &cli]));
     }
     steps.push(Step::OwnedDir { path: cli_root, mode: 0o755, owner: cli });
+    // `/proc` hidepid=invisible with an exception group for the system
+    // services that must see every process (polkit, on a desktop machine).
+    if !accounts.group_exists(&names::proc_group()) {
+        steps.push(run(&["groupadd", "--system", &names::proc_group()]));
+    }
+    for unit in names::PROC_EXCEPTION_UNITS {
+        steps.push(Step::Write { path: names::proc_dropin(unit), contents: crate::units::proc_dropin(), mode: 0o644 });
+    }
     steps.push(Step::ServerEnv { origin: origin.clone(), content_origin: content_origin.clone() });
     let probe = Deployment { origin, content_origin, gateway_uid: 0 };
     for (path, contents, mode) in units::render_all(&probe).into_iter().skip(1) {
@@ -195,6 +219,10 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     steps.push(run(&["systemd-tmpfiles", "--create"]));
     steps.push(run(&["systemctl", "daemon-reload"]));
     steps.push(run(&["systemctl", "enable", "--now", &names::gateway_unit()]));
+    for unit in names::PROC_EXCEPTION_UNITS {
+        steps.push(run(&["systemctl", "try-restart", unit]));
+    }
+    steps.push(Step::ProcMountLine);
     Ok(Plan { verb: "install".into(), steps })
 }
 
@@ -371,6 +399,14 @@ pub fn execute(plan: &Plan, ctx: &Ctx, exec: &mut dyn Exec) -> Result<(), String
                 audit::AuditLog::in_dir(&ctx.gateway_dir).record(audit::Row::new(user, None, verb, "ok").resource("admin-helper"));
                 table_touched = true;
             }
+            Step::ProcMountLine => {
+                let gid = ctx.accounts.group_gid(&names::proc_group()).ok_or_else(|| format!("no group {}", names::proc_group()))?;
+                exec.say(&format!(
+                    "/proc: put this line in /etc/fstab (replacing any proc line), then run `mount -o remount /proc` and `{} check`:\n  {}",
+                    names::helper_binary().display(),
+                    crate::units::proc_fstab_line(gid)
+                ));
+            }
         }
     }
     if table_touched {
@@ -425,14 +461,14 @@ impl Accounts for SystemAccounts {
         crate::sudoers::rule_for(Path::new("/"), &crate::sudoers::Subject { name: &account.name, uid: account.uid, gid: account.gid, groups: &account.groups })
     }
 
-    fn group_exists(&self, name: &str) -> bool {
-        let Ok(cname) = std::ffi::CString::new(name) else { return false };
+    fn group_gid(&self, name: &str) -> Option<u32> {
+        let cname = std::ffi::CString::new(name).ok()?;
         let mut grp: libc::group = unsafe { std::mem::zeroed() };
         let mut buf = vec![0 as libc::c_char; 16 * 1024];
         let mut result: *mut libc::group = std::ptr::null_mut();
         // SAFETY: valid pointers for the call.
         let rc = unsafe { libc::getgrnam_r(cname.as_ptr(), &mut grp, buf.as_mut_ptr(), buf.len(), &mut result) };
-        rc == 0 && !result.is_null()
+        (rc == 0 && !result.is_null()).then_some(grp.gr_gid)
     }
 }
 

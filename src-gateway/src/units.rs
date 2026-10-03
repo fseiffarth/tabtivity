@@ -203,6 +203,16 @@ PrivateTmp=yes\n\
     )
 }
 
+/// The drop-in giving a system unit the `/proc` exception group.
+pub fn proc_dropin() -> String {
+    format!("# {DISPLAY}: /proc is hidepid=invisible; this service must see every process.\n[Service]\nSupplementaryGroups={}\n", names::proc_group())
+}
+
+/// The `/etc/fstab` line for `/proc` with the exception group's gid.
+pub fn proc_fstab_line(gid: u32) -> String {
+    format!("proc /proc proc defaults,nosuid,nodev,noexec,hidepid=invisible,gid={gid} 0 0")
+}
+
 pub fn tmux_service() -> String {
     let tmuxdir = names::tmux_dir("x").parent().map(|p| p.display().to_string()).unwrap_or_default();
     let runtime = tmuxdir.trim_start_matches("/run/").to_string();
