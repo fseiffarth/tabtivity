@@ -1535,7 +1535,7 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
                 continue;
             };
             let mut stream = std::mem::replace(&mut server, next);
-            let app = ctx.clone();
+            let ctx = ctx.clone();
             let state = state.clone();
             let token = token.clone();
             app_core::rt::spawn(async move {
@@ -1556,7 +1556,7 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
 }
 
 #[cfg(not(any(unix, windows)))]
-pub fn start_desktop_bridge(_: AppHandle, _: MobileDesktopState) {}
+pub fn start_desktop_bridge(_: CoreCtx, _: MobileDesktopState) {}
 
 #[cfg(test)]
 mod prune_tests {
