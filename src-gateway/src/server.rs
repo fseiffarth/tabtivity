@@ -599,12 +599,26 @@ async fn agent_key_users(State(gw): State<Shared>, RoutePath(cli): RoutePath<Str
     let Ok(UsersBody { users }) = serde_json::from_slice::<UsersBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let known = {
+    if users.len() > keys_wire::MAX_USERS {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let unknown: Vec<String> = {
         let db = gw.db();
-        users.len() <= keys_wire::MAX_USERS && users.iter().all(|u| db.accounts.iter().any(|a| &a.name == u))
+        users.iter().filter(|u| !db.accounts.iter().any(|a| &a.name == *u)).cloned().collect()
     };
-    if !known {
-        return api_error(StatusCode::BAD_REQUEST, "unknown_user");
+    // A name may stay on the list after its account was removed
+    // (`user-remove`); the panel sends the list back with it, so such a name
+    // is accepted as long as it is already there — it never blocks allowing
+    // or removing someone else. A name that is neither an account nor on the
+    // list is refused.
+    if !unknown.is_empty() {
+        let listed: Vec<String> = match crate::keeper::ask(&gw.config.keeper_socket, &keys_wire::Request::Status).await {
+            Ok(reply) if reply.ok => reply.status.into_iter().find(|k| k.cli == cli).map(|k| k.allowed).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if !unknown.iter().all(|u| listed.contains(u)) {
+            return api_error(StatusCode::BAD_REQUEST, "unknown_user");
+        }
     }
     let request = keys_wire::Request::Users { cli: cli.clone(), users, by: account.name.clone() };
     match crate::keeper::ask(&gw.config.keeper_socket, &request).await {

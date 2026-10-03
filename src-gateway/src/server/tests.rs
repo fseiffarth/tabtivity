@@ -403,6 +403,22 @@ async fn only_an_admin_offers_an_agent_key_and_it_never_comes_back() {
     let (_, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
     let v: Value = serde_json::from_str(&answer).unwrap();
     assert_eq!(v["keys"][0]["allowed"], json!(["alice"]), "{answer}");
+    // P3b decisions review: a removed account still on the list (the panel
+    // sends it back) never blocks allowing someone else, and can be removed.
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&users(&["alice", "bob"]))).await;
+    assert_eq!(status, 200, "{answer}");
+    db::update(&f.gw.config.state_dir, |db| db.remove_account("bob").map(|_| ())).unwrap();
+    *f.gw.db_stamp.lock().unwrap() = None;
+    f.gw.reload();
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&users(&["alice", "bob", "carol"]))).await;
+    assert_eq!(status, 200, "{answer}");
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&users(&["alice", "bob", "carol", "mallory"]))).await;
+    assert_eq!((status, answer.contains("unknown_user")), (400, true), "{answer}");
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/users", &[("Cookie", &cookie), ("Origin", ORIGIN)], Some(&users(&["alice", "carol"]))).await;
+    assert_eq!(status, 200, "{answer}");
+    let (_, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
+    let v: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(v["keys"][0]["allowed"], json!(["alice", "carol"]), "{answer}");
     let (status, _, _) = raw(f.addr, "DELETE", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", ORIGIN)], None).await;
     assert_eq!(status, 200);
     assert!(!keys.join("claude").join(crate::keeper::KEY_FILE).exists());
