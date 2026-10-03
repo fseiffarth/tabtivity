@@ -296,6 +296,36 @@ pub fn opens_as_program(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, ext)| PROGRAMS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
+/// May a downloaded server file be opened with the system's default app?
+/// An allowlist of inert viewer types (final review A4): documents, pictures
+/// and plain text whose usual viewers show them and run nothing. Anything
+/// else — a program, but also an extension no list foresaw (`.terminal`,
+/// `.fileloc`, `.library-ms`, `.iso`, an extensionless script some file
+/// managers offer to run) — is only shown in its folder: the server, or a
+/// co-member of a shared project, chose its name. Legacy Office formats
+/// (`.doc`/`.xls`/`.ppt`) and SVG/HTML stay out: they carry macros or script.
+pub fn opens_as_inert_viewer(name: &str) -> bool {
+    const INERT: &[&str] = &[
+        "pdf", "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "avif", "txt", "md", "csv", "tsv", "log", "json", "yaml", "yml", "toml",
+        "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "mp3", "wav", "ogg", "flac", "mp4", "webm", "mkv", "mov",
+    ];
+    if opens_as_program(name) {
+        return false;
+    }
+    name.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && INERT.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// Windows: give a downloaded server file the Mark of the Web (an NTFS
+/// `Zone.Identifier` stream, Internet zone), as a browser download gets, so
+/// SmartScreen and Office's Protected View treat it as from the internet.
+/// Best effort: a FAT drive has no streams.
+#[cfg(windows)]
+pub fn mark_of_the_web(path: &Path, origin: &str) {
+    let mut stream = path.as_os_str().to_owned();
+    stream.push(":Zone.Identifier");
+    let _ = std::fs::write(PathBuf::from(stream), format!("[ZoneTransfer]\r\nZoneId=3\r\nHostUrl={origin}\r\n"));
+}
+
 fn unique(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {

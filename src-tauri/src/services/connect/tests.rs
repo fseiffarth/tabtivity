@@ -149,4 +149,12 @@ fn addresses_and_names_are_strict() {
     for document in ["report.pdf", "notes.md", "photo.jpeg", "Makefile", "data.csv"] {
         assert!(!opens_as_program(document), "{document}");
     }
+    // Final review A4: opened directly only from an allowlist; the rest —
+    // programs, and anything no list foresaw — is shown in its folder.
+    for inert in ["report.PDF", "notes.md", "photo.jpeg", "data.csv", "slides.pptx", "song.ogg"] {
+        assert!(opens_as_inert_viewer(inert), "{inert}");
+    }
+    for shown in ["setup.exe", "x.terminal", "y.fileloc", "z.library-ms", "disk.iso", "script", "Makefile", "page.html", "pic.svg", "old.doc", ".pdf", "a.sh"] {
+        assert!(!opens_as_inert_viewer(shown), "{shown}");
+    }
 }

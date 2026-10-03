@@ -504,8 +504,11 @@ administrator (`name:12345678`) and a name for this computer → **Pair**.
 Then **Open the server window**. Everything in that window — projects,
 terminals, agents, mail — lives on the server, as in the browser; copy and
 paste, notifications and the window itself are this computer's, and opening
-a server file downloads it into your Downloads folder and opens it here
-(a program — `.exe`, `.bat`, `.sh`, … — is saved there but not opened).
+a server file downloads it into your Downloads folder and opens it here —
+documents, pictures, plain text and media only; anything else (a program,
+a script, a disk image, a type the app does not know) is saved there and
+shown in its folder instead, and on Windows every download carries the Mark
+of the Web.
 **Forget this server** removes this computer's key; remove the device in the
 server's Mobile settings as well.
 

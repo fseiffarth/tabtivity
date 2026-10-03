@@ -236,9 +236,13 @@ own standalone workspace (Q12). As built:
   `connect_open_download` fetches it (the server's host, `/content/` only,
   a safe file name — no Windows stream, device or trailing dot either —
   never overwriting) into `~/Downloads` and opens it with the system's
-  default app, unless its name is a program's (`connect::opens_as_program`:
-  `.exe`, `.bat`, `.desktop`, `.sh`, …), which is kept but not opened — the
-  server or a co-member named it. Every other command routes exactly as in a
+  default app only when it is an inert viewer type
+  (`connect::opens_as_inert_viewer`: an allowlist of documents, pictures,
+  plain text, media; never a program per `opens_as_program`); anything else
+  is kept and shown in its folder — the server or a co-member named it, and
+  a denylist misses what nobody foresaw (`.terminal`, `.fileloc`,
+  `.library-ms`, `.iso`, extensionless scripts; final review A4). On Windows
+  the file gets the Mark of the Web (`Zone.Identifier`, Internet zone). Every other command routes exactly as in a
   browser (`core` to the server, other `client` commands to the browser
   adapters).
 - **Not built**: popouts and the presenter of the Connect window (the adapter

@@ -197,15 +197,24 @@ pub fn connect_ws_close(window: tauri::Window, bridge: tauri::State<'_, ConnectB
 
 /// Open a server file on this machine (§7.2 "open-outside after a
 /// download"): the ticket URL the server minted is downloaded into the
-/// user's Downloads folder and opened with the system's default app.
+/// user's Downloads folder and opened with the system's default app — only
+/// an inert viewer type (`connect::opens_as_inert_viewer`); anything else is
+/// shown in its folder instead, and the answer says why.
 #[tauri::command]
 pub async fn connect_open_download(window: tauri::Window, url: String) -> Result<String, String> {
     only_connect(&window)?;
     let paired = connect::paired_in(&crate::storage::state_dir()).ok_or("this computer is not paired with a server")?;
     let dir = crate::paths::home_dir().join("Downloads");
     let path = connect::download_ticket(&paired.origin, &url, &dir).await?;
-    if path.file_name().and_then(|n| n.to_str()).is_none_or(connect::opens_as_program) {
-        return Err(format!("Saved to {}; not opened, because it would run as a program on this computer", path.display()));
+    #[cfg(windows)]
+    connect::mark_of_the_web(&path, &paired.origin);
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    if !connect::opens_as_inert_viewer(name) {
+        if let Some(folder) = path.parent() {
+            let _ = opener::open(folder);
+        }
+        let why = if connect::opens_as_program(name) { "it would run as a program on this computer" } else { "only documents, pictures and plain text are opened directly" };
+        return Err(format!("Saved to {} and shown in its folder; not opened, because {why}", path.display()));
     }
     opener::open(&path).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
