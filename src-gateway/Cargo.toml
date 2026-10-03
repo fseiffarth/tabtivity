@@ -1,0 +1,50 @@
+[package]
+name = "app-gateway"
+# Not bumped with the app (`scripts/bump-version.sh` tracks src-tauri); the
+# gateway and the daemons ship as one release (hosted plan §8).
+version = "0.1.0"
+edition = "2021"
+description = "The server gateway (auth routing to per-user daemons, audit log) and the admin helper of the hosted server."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "app_gateway"
+
+# The gateway: the server's only listening port (behind Tailscale Serve),
+# routing each device to its own account's daemon socket. Linux only.
+[[bin]]
+name = "tabtivity-gateway"
+path = "src/bin/gateway.rs"
+
+# The admin helper: the only root code of the server (hosted plan §3.1),
+# a fixed verb set the admin runs with sudo. Linux only.
+[[bin]]
+name = "tabtivity-admin-helper"
+path = "src/bin/admin_helper.rs"
+
+# No core services, ever (hosted plan §3.1: "it links no core services, and
+# it reads no user files"): no `app-core`, no `src-tauri`. The brand module is
+# compiled in by path, as `src-tauri/build.rs` does.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.52.3", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+hmac = "0.12"
+sha2 = "0.10"
+base64ct = { version = "1", features = ["alloc"] }
+subtle = "2"
+rand = "0.8"
+mime_guess = "2.0.5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+futures-util = "0.3"
+tokio-tungstenite = "0.29"

@@ -134,6 +134,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64ct",
+ "futures-util",
+ "hmac",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "mime_guess",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

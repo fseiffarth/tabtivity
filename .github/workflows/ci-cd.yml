@@ -173,6 +173,9 @@ jobs:
       - name: Lint core crate
         run: cargo clippy --manifest-path src-core/Cargo.toml --all-targets -- -D warnings
 
+      - name: Lint gateway crate
+        run: cargo clippy --manifest-path src-gateway/Cargo.toml --all-targets -- -D warnings
+
   test:
     name: test
     runs-on: ubuntu-24.04
@@ -221,6 +224,9 @@ jobs:
 
       - name: Run core crate tests
         run: cargo test --manifest-path src-core/Cargo.toml
+
+      - name: Run gateway crate tests
+        run: cargo test --manifest-path src-gateway/Cargo.toml
 
   test-windows:
     name: test-windows

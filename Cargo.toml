@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-core", "src-tauri"]
+members = ["src-core", "src-tauri", "src-gateway"]
 exclude = ["src-tauri/patches"]
 resolver = "2"
 

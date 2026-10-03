@@ -82,6 +82,8 @@ ALLOW=(
   'Cargo.toml'
   'Cargo.lock'
   'src-tauri/Cargo.toml'
+  # The server's binaries are named after the app (hosted plan §8.1). Stays.
+  'src-gateway/Cargo.toml'
   'package.json'
   'package-lock.json'
   'src-tauri/tauri.conf.json'

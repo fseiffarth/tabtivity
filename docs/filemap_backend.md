@@ -31,6 +31,19 @@ only when breaking it does damage. The *why* goes in code comments or
 | `src/ctx.rs` | `CoreCtx { state, events, caller }` — what a command body or service gets instead of Tauri. `CoreState`: the managed singletons keyed by type (`manage` builder, `get` panics like Tauri's `State`; a host hands Tauri and the core clones of ONE `Arc`, never two values). `EventSink`: `emit_json`/`emit_json_to(ClientId)` take one pre-serialized payload; `emit`/`emit_to` on `dyn EventSink` serialize once. `Caller::{System, Local, Client}`; `ClientId` (desktop: the window label, `MAIN`). `NullEvents`, `RecordingEvents` for tests. |
 | `src/rt.rs` | The runtime seam: `spawn`/`spawn_blocking`/`block_on` on the handle the host `install`ed, else the current runtime, else a lazily built fallback (Tauri's `async_runtime` semantics, so the §3.2 swap is mechanical). |
 
+**Gateway crate (`../../src-gateway/`, package `app-gateway`, lib `app_gateway`)** — the hosted server's gateway and admin helper (plan §3.1, §4, §8; `docs/context/server_gateway.md`). Links no core service: `brand.rs` is compiled in by path. Linux only at run time; builds everywhere.
+
+| File | Purpose |
+|------|---------|
+| `src/wire.rs` | What gateway and daemon must agree on: the `x-gateway-*` headers, env names, account-name / device-id rules, `user:code` routed pairing codes, `/content/<user>/<ticket>`, socket paths. The daemon compiles it by `#[path]` (`services::server`), so the two cannot drift. |
+| `src/policy.rs` | The server-wide policy file (admin feature switches for mail/calendar/todo/sharing, the Ollama allowlist): missing → defaults, corrupt → the daemon fails closed. Also compiled into the daemon by `#[path]`. |
+| `src/server.rs` (+ `server/tests.rs`) | The gateway's HTTP surface: pair by code prefix, challenge/session by device owner, the routing cookie, every other request to the caller's own daemon (WebSocket splices registered so a revocation aborts them), PWA statics before sign-in, `/gateway/v1/{audit,policy,status}`, the content listener. Tests run it against fake daemons on real unix sockets. |
+| `src/proxy.rs` | HTTP/1.1 over a daemon's unix socket with upgrades spliced; the daemon end must be the account's uid or root (socket activation). |
+| `src/db.rs` / `src/cookie.rs` / `src/audit.rs` | The account table (`gateway.json`, `flock`ed, atomic; a device id routes to one account only), the HMAC routing cookie, the audit log (JSON lines, bounded, no content, no IPs). |
+| `src/helper.rs` (+ `helper/tests.rs`) | The admin helper's verbs as `Plan`s of `Step`s (`--dry-run` prints them) and their execution; hard rules: names not paths, no chown of a user's tree, invites written by the user's own uid with the code on stdin, only uid ≥ 1000 non-sudo members of `<slug>-users`, CLI installs as `<slug>-cli`. |
+| `src/units.rs` / `src/prereq.rs` / `src/names.rs` | The systemd units, slices, tmpfiles and `server.env` as text; the §8 prerequisite checks behind a `Probe`; the fixed account, unit and path names. |
+| `src/bin/gateway.rs` / `src/bin/admin_helper.rs` | `tabtivity-gateway serve`; `tabtivity-admin-helper` (install, user-add/remove, invite, role, device-revoke, cli-install, check). |
+
 **Commands (`commands/`)** — Tauri command handlers exposed to the frontend.
 
 | File | Purpose |

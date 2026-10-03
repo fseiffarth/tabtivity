@@ -46,6 +46,9 @@ pub const ORIGIN_ENV: &str = "SERVER_ORIGIN";
 pub const CONTENT_ORIGIN_ENV: &str = "SERVER_CONTENT_ORIGIN";
 pub const TMUX_SOCKET_ENV: &str = "TMUX_SOCKET";
 pub const CLI_ROOT_ENV: &str = "SERVER_CLI_ROOT";
+/// The account this daemon serves, by name — what a pairing code is prefixed
+/// with so the gateway can route a new device's `pair` (`user:code`).
+pub const USER_ENV: &str = "SERVER_USER";
 
 /// The account the gateway routed this request for (its user name).
 pub const USER_HEADER: &str = "x-gateway-user";
@@ -150,6 +153,22 @@ pub fn gateway_role_in(headers: &axum::http::HeaderMap) -> Role {
         .and_then(|v| v.to_str().ok())
         .map(Role::parse)
         .unwrap_or(Role::User)
+}
+
+/// The account name the unit set, in server mode.
+pub fn user_name() -> Option<String> {
+    static USER: OnceLock<Option<String>> = OnceLock::new();
+    USER.get_or_init(|| is_server().then(|| brand::env(USER_ENV)).flatten().filter(|s| !s.trim().is_empty())).clone()
+}
+
+/// A pairing code as the gateway needs it: `user:code` on a server (the
+/// gateway routes a new device's `pair` by the prefix and forwards the eight
+/// digits), the bare code on the desktop.
+pub fn routed_pairing_code(code: &str) -> String {
+    match user_name() {
+        Some(user) => format!("{user}:{code}"),
+        None => code.to_string(),
+    }
 }
 
 /// The server-wide CLI install root (plan §5.1): `<PREFIX>SERVER_CLI_ROOT`
