@@ -49,7 +49,7 @@ import { useConnectDialogStore } from "./remote/connectDialog";
 import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteConnect";
 import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../components/projects/scaffold";
 import type { SavedPasswordState } from "../components/projects/useSavedCredential";
-import { IS_WINDOWS } from "../lib/platform";
+import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY } from "../lib/brand";
@@ -1454,7 +1454,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       const tabs = tabsStore.tabsByScope[id] ?? [];
       const ptyTabs = tabs.filter((tab) => isPtyTabKind(tab.kind));
       const localPersistenceEnabled =
-        !IS_WINDOWS &&
+        !IS_HOST_WINDOWS &&
         useSettingsStore.getState().settings?.persist_local_sessions !== false;
       const tmuxTargets = projectTmuxTargets(project, tabs, localPersistenceEnabled);
       // Closing a project stops what runs HERE. A persistent session on a remote

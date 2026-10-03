@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../../lib/i18n";
-import { PLATFORM } from "../../../lib/platform";
+import { HOST_OS } from "../../../lib/platform";
 import {
   NODE_DOWNLOAD_URL,
   NODE_INSTALL,
@@ -131,7 +131,7 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
                       type="button"
                       className="settings-btn sm"
                       onClick={() => {
-                        const { command, shellKind } = NODE_INSTALL[PLATFORM];
+                        const { command, shellKind } = NODE_INSTALL[HOST_OS];
                         runInTerminal(t("install.nodeTabLabel"), command, shellKind);
                       }}
                     >

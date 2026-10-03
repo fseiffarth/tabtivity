@@ -6,7 +6,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
-import { IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
@@ -342,10 +342,10 @@ export function MobileSettings() {
       // own interpreter in the OS default shell.
       tabs.addTabToScope(ROOT_SCOPE, {
         label: tr("mobile.phoneInstallTab"),
-        cmd: IS_WINDOWS ? "" : "/bin/bash",
+        cmd: IS_HOST_WINDOWS ? "" : "/bin/bash",
         cwd: rootDir ?? "",
         kind: "shell",
-        initialInput: IS_WINDOWS
+        initialInput: IS_HOST_WINDOWS
           ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`
           : `bash "${scriptPath.replace(/(["\\$`])/g, "\\$1")}"`,
       });
@@ -496,7 +496,7 @@ export function MobileSettings() {
       <p className="settings-help">
         {t("mobile.scopeHelp")}
       </p>
-      {IS_WINDOWS && (
+      {IS_HOST_WINDOWS && (
         <p className="settings-help">
           {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
         </p>

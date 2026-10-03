@@ -71,7 +71,7 @@ import {
 } from "../../lib/window/coords";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
-import { IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, restoreBoxScope, useBoxesStore } from "../../stores/boxes";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -198,7 +198,7 @@ function CenterPanelImpl() {
   // Persistent LOCAL (tmux) sessions (TODO #85): default ON on Unix (no tmux on
   // Windows). Folded here so the per-pane decision below is a cheap boolean AND.
   const localPersistEnabled = useSettingsStore(
-    (s) => !IS_WINDOWS && s.settings?.persist_local_sessions !== false,
+    (s) => !IS_HOST_WINDOWS && s.settings?.persist_local_sessions !== false,
   );
   // Stable per-scope connect handler. TabPane is memoized, so the pane layer only
   // stays cheap to re-render (e.g. every frame of a divider drag) if its props are

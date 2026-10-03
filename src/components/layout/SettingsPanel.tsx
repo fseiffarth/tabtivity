@@ -73,7 +73,7 @@ import { Dropdown } from "../common/Dropdown";
 import { PasswordInput } from "../common/PasswordInput";
 import { useT, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
-import { IS_MAC, IS_WINDOWS, PLATFORM } from "../../lib/platform";
+import { IS_HOST_WINDOWS, IS_MAC, PLATFORM } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { useHintsStore } from "../../stores/hints";
 import { canConnectVpnSilently } from "../../lib/remote/vpn/vpnConnect";
@@ -224,7 +224,7 @@ function VmInstallSettings() {
           className="settings-btn"
           onClick={() => {
             setInstalling(true);
-            runInstallInTab(t("projectDialog.vmInstallLabel"), doctor.install_command!, IS_WINDOWS ? "default" : "bash");
+            runInstallInTab(t("projectDialog.vmInstallLabel"), doctor.install_command!, IS_HOST_WINDOWS ? "default" : "bash");
           }}
         >
           {t("projectDialog.vmInstallBtn")}
@@ -1359,7 +1359,7 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ run_scripts_in_background: e.target.checked })}
             />
 
-            {!IS_WINDOWS && (
+            {!IS_HOST_WINDOWS && (
               <ToggleCard
                 label={t("settings.persistLocal")}
                 checked={settings?.persist_local_sessions ?? true}

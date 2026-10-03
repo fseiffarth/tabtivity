@@ -11,7 +11,7 @@ import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
-import { PLATFORM } from "../../lib/platform";
+import { HOST_OS } from "../../lib/platform";
 import {
   NODE_DOWNLOAD_URL,
   NODE_INSTALL,
@@ -1072,7 +1072,7 @@ function NodeRuntimeNotice() {
   if (!status || (status.npm && !status.too_old)) return null;
   const tooOld = status.npm && status.too_old;
 
-  const { command, shellKey, shellKind } = NODE_INSTALL[PLATFORM];
+  const { command, shellKey, shellKind } = NODE_INSTALL[HOST_OS];
   return (
     <div className="ollama-vibe-section agent-list-entry">
       <div className="settings-subheader">

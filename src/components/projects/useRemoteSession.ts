@@ -12,7 +12,7 @@ import { joinRemotePath, parseSshAddress, type ParsedSshAddress } from "./scaffo
 import { useRemoteBrowse } from "./useRemoteBrowse";
 import { rememberArg, useSavedCredential } from "./useSavedCredential";
 import { useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
-import { IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import {
   forgetConnection,
   markConnectionOpened,
@@ -188,7 +188,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
 
   // Windows has no ssh ControlMaster socket, so a non-headless login can't be
   // ridden for SFTP browsing — that mode falls back to typing the remote path.
-  const winManual = IS_WINDOWS && !headless;
+  const winManual = IS_HOST_WINDOWS && !headless;
 
   // Which step of the remote flow we're on. Local projects ignore this (the
   // dialog renders its single form whenever the project isn't remote).

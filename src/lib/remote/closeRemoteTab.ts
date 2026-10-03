@@ -29,7 +29,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { invoke } from "@tauri-apps/api/core";
 import { isRelaunchableLocalTab, isResumableAgentTab, isSavedWhileLive } from "../../stores/tabs";
 import { shouldPersistLocalTab, shouldPersistTab } from "../terminal/tmuxSession";
-import { IS_WINDOWS } from "../platform";
+import { IS_HOST_WINDOWS } from "../platform";
 import { noteClosedAgentTab } from "../../stores/agents/closedAgentTabs";
 import { MOBILE_ACCESS_KEY } from "../brand";
 
@@ -75,7 +75,7 @@ export function persistentSessionOf(
  * session is reattachable rather than orphaned.
  */
 export function localPersistentSessionOf(scope: string, tab: TabEntry): string | null {
-  if (IS_WINDOWS) return null;
+  if (IS_HOST_WINDOWS) return null;
   if (tab.kind !== "shell" || !tab.tmuxSession) return null;
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   const localRunning =
@@ -95,7 +95,7 @@ export function localPersistentSessionOf(scope: string, tab: TabEntry): string |
  * window onto it must not take it down.
  */
 export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | null {
-  if (IS_WINDOWS || tab.tmuxAttach || !tab.tmuxSession) return null;
+  if (IS_HOST_WINDOWS || tab.tmuxAttach || !tab.tmuxSession) return null;
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   const localRunning =
     !project?.remote ||

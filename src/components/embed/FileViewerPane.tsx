@@ -148,7 +148,7 @@ import {
   relativePathWithin,
   toFileUri,
 } from "../../lib/paths";
-import { IS_MAC, IS_WINDOWS } from "../../lib/platform";
+import { IS_HOST_MAC, IS_HOST_WINDOWS, IS_MAC } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
   resolveProjectDirectory,
@@ -8572,9 +8572,9 @@ function useBlobUrl(path: string, type: string) {
  *  one-click "Install LaTeX" prompt shown when no TeX engine is on PATH. These
  *  are best-effort defaults the user can edit in the spawned terminal: MiKTeX on
  *  Windows, MacTeX on macOS (Homebrew), TeX Live on Linux (Debian/Ubuntu apt). */
-const TEX_INSTALL_CMD = IS_WINDOWS
+const TEX_INSTALL_CMD = IS_HOST_WINDOWS
   ? "winget install --id MiKTeX.MiKTeX -e"
-  : IS_MAC
+  : IS_HOST_MAC
     ? "brew install --cask mactex-no-gui"
     : "sudo apt-get install -y texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended latexmk";
 
@@ -9324,7 +9324,7 @@ function TexView({
   onCompileOptsChange?: (patch: Partial<TexCompileOpts>) => void;
 }) {
   const t = useT();
-  const texInstallLabel = IS_WINDOWS ? t("fileViewer.texInstallMiktex") : t("fileViewer.texInstallLatex");
+  const texInstallLabel = IS_HOST_WINDOWS ? t("fileViewer.texInstallMiktex") : t("fileViewer.texInstallLatex");
   const {
     error, draft, setDraft, loaded, isDirty, saving, saveError, save,
     undo, redo, canUndo, canRedo, externalChange, reloadFromDisk, keepMine,
@@ -9974,7 +9974,7 @@ function TexView({
               className="ollama-action-btn primary"
               title={t("projectDialog.runInTerminalTitle")}
               onClick={() =>
-                runInstallInTab(texInstallLabel, TEX_INSTALL_CMD, IS_WINDOWS ? "default" : "bash")
+                runInstallInTab(texInstallLabel, TEX_INSTALL_CMD, IS_HOST_WINDOWS ? "default" : "bash")
               }
             >
               {t("ollama.runInTerminal")}

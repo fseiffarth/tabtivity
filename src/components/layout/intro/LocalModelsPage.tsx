@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../../lib/i18n";
 import { formatBytes } from "../../../lib/formatBytes";
-import { IS_WINDOWS } from "../../../lib/platform";
+import { IS_HOST_WINDOWS } from "../../../lib/platform";
 import { runInstallInTab } from "../../../lib/installCommand";
 import { useOllamaStatus } from "../../../lib/ollamaStatus";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../../lib/agents/localDrivers";
@@ -158,7 +158,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
     if (!command) return;
     // The install script registers a system service and asks for sudo — a
     // visible terminal can answer that, the headless `install_ollama` cannot.
-    const windows = strategy?.os ? strategy.os === "windows" : IS_WINDOWS;
+    const windows = strategy?.os ? strategy.os === "windows" : IS_HOST_WINDOWS;
     runInstallInTab(t("install.ollamaTabLabel"), command, windows ? "default" : "bash");
     onClose();
   };

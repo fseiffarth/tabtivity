@@ -23,6 +23,7 @@ import {
   type WindowFrame,
 } from "../../lib/window/coords";
 import { bindDragRelease, dragPlatform, PLATFORM } from "../../lib/window/dragPlatform";
+import { HOST_OS } from "../../lib/platform";
 import { newDropToken, probeDropTarget } from "../../lib/window/dropClaim";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSettingsStore } from "../../stores/settings";
@@ -3136,7 +3137,7 @@ export function FileTree({
       runScript(entry.path, projectDir, projectId, args);
       return;
     }
-    const interp = shellRunnerFor(entry.extension, PLATFORM) as ScriptShell | null;
+    const interp = shellRunnerFor(entry.extension, HOST_OS) as ScriptShell | null;
     if (!interp) return; // not a shell type we know how to run
     const plan = shellScriptRunPlan({
       project,
@@ -3890,7 +3891,7 @@ export function FileTree({
           const dirTotal = e.is_dir ? dirSizes[e.path] : undefined;
           const dirIgnored = e.is_dir && !isGitignored && !isHiddenExt ? dirIgnoredBytes[e.path] : undefined;
           const dirShown = dirTotal !== undefined ? dirTotal - (dirIgnored ?? 0) : undefined;
-          const canShRun = !e.is_dir && shellRunnerFor(e.extension, PLATFORM) !== null;
+          const canShRun = !e.is_dir && shellRunnerFor(e.extension, HOST_OS) !== null;
           // Run only for a Python "main" script — one with a module-level
           // `if __name__ == "__main__":` guard — not for every importable module,
           // which has nothing useful to execute. The verdict comes from the
@@ -4918,7 +4919,7 @@ export function FileTree({
           {!tooltip.entry.is_dir && (
             isPythonPath(tooltip.entry.path)
               ? (isMainScriptCached(pyMainCache, tooltip.entry.path) || runArgsByPath[tooltip.entry.path])
-              : shellRunnerFor(tooltip.entry.extension, PLATFORM) !== null
+              : shellRunnerFor(tooltip.entry.extension, HOST_OS) !== null
           ) && (
             <>
               {(isPythonPath(tooltip.entry.path)
