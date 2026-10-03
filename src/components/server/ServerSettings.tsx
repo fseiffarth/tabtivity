@@ -18,6 +18,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ServerSecrets } from "./ServerSecrets";
 import { ServerAgentKeys } from "./ServerAgentKeys";
 import { ServerSharing } from "./ServerSharing";
+import { ServerCalendarSharing } from "./ServerCalendarSharing";
 
 type Feature = "mail" | "calendar" | "todo";
 const FEATURES: Feature[] = ["mail", "calendar", "todo"];
@@ -167,6 +168,7 @@ export function ServerSettings() {
       {status && <p className="settings-help">{status}</p>}
       {admin && <ServerAgentKeys />}
       <ServerSharing />
+      <ServerCalendarSharing />
       <ServerSecrets />
     </>
   );

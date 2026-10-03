@@ -453,11 +453,14 @@ impl Calendars {
             if now != revs {
                 return Reply { changed: true, ..Reply::ok() };
             }
-            match tokio::time::timeout_at(deadline, rx.changed()).await {
-                Ok(Ok(())) => continue,
-                // Timed out, or the sender is gone: nothing changed.
-                _ => return Reply::ok(),
+            if tokio::time::Instant::now() >= deadline {
+                return Reply::ok();
             }
+            // Woken by a change, or every second anyway: a look at the
+            // store is cheap, and a change no notifier saw (a second
+            // service process over one store, a restart) is still found.
+            let tick = (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline);
+            let _ = tokio::time::timeout_at(tick, rx.changed()).await;
         }
     }
 }

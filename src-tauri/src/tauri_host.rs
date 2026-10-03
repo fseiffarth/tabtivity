@@ -140,6 +140,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "search.rs",
     "settings.rs",
     "share.rs",
+    "shared_calendar.rs",
     "sheets.rs",
     "skills.rs",
     "slurm.rs",

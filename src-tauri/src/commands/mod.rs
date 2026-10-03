@@ -70,6 +70,7 @@ pub mod screenshot;
 pub mod search;
 pub mod settings;
 pub mod share;
+pub mod shared_calendar;
 pub mod sheets;
 pub mod skills;
 pub mod slurm;

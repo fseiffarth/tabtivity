@@ -61,6 +61,11 @@ pub mod agent_keys;
 #[path = "../../../../src-gateway/src/hub_wire.rs"]
 pub mod hub_wire;
 pub mod share;
+/// The shared-calendar service's protocol (plan §6.7), same source as the
+/// service's.
+#[path = "../../../../src-gateway/src/cal_wire.rs"]
+pub mod cal_wire;
+pub mod shared_calendar;
 
 pub const MODE_ENV: &str = wire::env::MODE;
 pub const SOCKET_ENV: &str = wire::env::SOCKET;
