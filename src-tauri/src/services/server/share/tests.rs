@@ -137,7 +137,8 @@ fn an_owner_shares_a_viewer_clones_and_fetches_and_a_revoke_greys_the_row() {
     commit(&clone, "b.txt", "bob's\n");
     assert!(push_in(&bob_state, &bob_sock, &bob_link, "bob").unwrap_err().contains("not push"));
     let forced = Link { role: "editor".into(), ..bob_link.clone() };
-    assert!(push_in(&bob_state, &bob_sock, &forced, "bob").unwrap_err().contains("may not move"), "the hub refuses a viewer whatever the daemon claims");
+    let error = push_in(&bob_state, &bob_sock, &forced, "bob").unwrap_err();
+    assert!(error.contains("may not move"), "the hub refuses a viewer whatever the daemon claims, and says so: {error}");
 
     // Alice moves on; Bob's fetch reports it, and resolves nothing.
     let two = commit(&dir, "c.txt", "two\n");

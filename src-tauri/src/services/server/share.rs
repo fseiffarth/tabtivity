@@ -158,15 +158,23 @@ pub fn ask_at(socket: &Path, request: &Request, bundle: Option<&Path>) -> Result
     let mut line = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     line.push(b'\n');
     stream.write_all(&line).map_err(|e| format!("the share hub: {e}"))?;
+    // The hub refuses a push before reading its bundle (a viewer's, an
+    // oversized one) and closes: the upload then breaks, and the answer
+    // already sent says why — read it rather than report the broken pipe.
+    let mut upload = Ok(0);
     if let Some(path) = bundle {
         let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut file, &mut stream).map_err(|e| format!("the share hub: {e}"))?;
+        upload = std::io::copy(&mut file, &mut stream);
     }
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let mut answer = Vec::new();
-    stream.take(hub_wire::MAX_LINE as u64 + 1).read_to_end(&mut answer).map_err(|e| format!("the share hub: {e}"))?;
+    let read = stream.take(hub_wire::MAX_LINE as u64 + 1).read_to_end(&mut answer);
     let end = answer.iter().position(|&b| b == b'\n').unwrap_or(answer.len());
     if end == 0 {
+        if let Err(e) = upload {
+            return Err(format!("the share hub: {e}"));
+        }
+        read.map_err(|e| format!("the share hub: {e}"))?;
         return Err("the share hub closed the connection without an answer".into());
     }
     serde_json::from_slice::<Reply>(&answer[..end]).map_err(|e| format!("the share hub's answer: {e}"))
