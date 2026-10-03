@@ -271,6 +271,70 @@ CapabilityBoundingSet=\n",
     )
 }
 
+/// The key broker's port (plan §5.4, P5): systemd holds `127.0.0.1:<port>`
+/// from boot, so no local account can listen there first and collect the
+/// broker tokens other users' agents send.
+pub fn broker_socket() -> String {
+    format!(
+        "[Unit]\n\
+Description={DISPLAY} key broker port\n\
+\n\
+[Socket]\n\
+ListenStream=127.0.0.1:{port}\n\
+BindIPv6Only=default\n\
+NoDelay=yes\n\
+Accept=no\n\
+\n\
+[Install]\n\
+WantedBy=sockets.target\n",
+        port = crate::keys_wire::BROKER_PORT,
+    )
+}
+
+/// The key broker: calls the provider with the administrator's key for users
+/// presenting a broker token, as the key keeper's account (it reads the
+/// keeper's state and writes the month counts there). It needs the network,
+/// so unlike the keeper no `PrivateNetwork=`; otherwise hardened alike.
+pub fn broker_service() -> String {
+    format!(
+        "[Unit]\n\
+Description={DISPLAY} key broker (the administrator's agent API keys, by token and budget)\n\
+Requires={socket}\n\
+After={socket} network-online.target\n\
+Wants=network-online.target\n\
+\n\
+[Service]\n\
+Type=simple\n\
+User={auth}\n\
+Group={auth}\n\
+ExecStart={bin} broker\n\
+StateDirectory={state}\n\
+StateDirectoryMode=0700\n\
+UMask=0077\n\
+Restart=on-failure\n\
+RestartSec=2\n\
+NoNewPrivileges=yes\n\
+ProtectSystem=strict\n\
+ProtectHome=yes\n\
+PrivateTmp=yes\n\
+PrivateDevices=yes\n\
+ProtectProc=invisible\n\
+ProtectKernelTunables=yes\n\
+ProtectKernelModules=yes\n\
+ProtectControlGroups=yes\n\
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\n\
+RestrictNamespaces=yes\n\
+LockPersonality=yes\n\
+MemoryDenyWriteExecute=yes\n\
+SystemCallArchitectures=native\n\
+CapabilityBoundingSet=\n",
+        socket = names::broker_unit("socket"),
+        auth = names::auth_account(),
+        bin = names::gateway_binary().display(),
+        state = names::keeper_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
+    )
+}
+
 /// The share hub's socket (plan §6.2): root's, `0666` in the root-owned
 /// `/run/<slug>`, like the key keeper's — the hub decides by each caller's
 /// uid. Fenced agents never reach it (a fresh tmpfs over `/run`); their
@@ -458,6 +522,8 @@ pub fn render_all(d: &Deployment) -> Rendered {
         (PathBuf::from("/etc/tmpfiles.d").join(format!("{SLUG}.conf")), tmpfiles(), 0o644),
         (unit(names::keeper_unit("socket")), keeper_socket(), 0o644),
         (unit(names::keeper_unit("service")), keeper_service(), 0o644),
+        (unit(names::broker_unit("socket")), broker_socket(), 0o644),
+        (unit(names::broker_unit("service")), broker_service(), 0o644),
         (unit(names::hub_unit("socket")), hub_socket(), 0o644),
         (unit(names::hub_unit("service")), hub_service(), 0o644),
         (unit(names::calendar_unit("socket")), calendar_socket(), 0o644),
@@ -496,13 +562,24 @@ mod tests {
     #[test]
     fn the_install_set_is_complete_and_the_env_file_names_the_deployment() {
         let all = render_all(&deployment());
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 15);
         let env_file = &all[0].1;
         assert!(env_file.contains("SERVER_ORIGIN=https://desk.example.ts.net\n"), "{env_file}");
         assert!(env_file.contains("SERVER_GATEWAY_UID=990\n"));
         assert!(env_file.contains(&format!("SERVER_CLI_ROOT=/opt/{SLUG}/agents")));
         assert!(tmpfiles().contains(&format!("d /run/{SLUG}/users 0750 root {SLUG}-gw")));
         assert!(all.iter().all(|(p, _, mode)| p.is_absolute() && *mode == 0o644));
+    }
+
+    #[test]
+    fn the_key_broker_holds_its_loopback_port_from_boot_and_runs_as_the_keeper() {
+        let socket = broker_socket();
+        assert!(socket.contains(&format!("ListenStream=127.0.0.1:{}\n", crate::keys_wire::BROKER_PORT)), "{socket}");
+        let service = broker_service();
+        for needed in [&format!("User={SLUG}-auth\n"), &format!("StateDirectory={SLUG}-auth\n"), "UMask=0077\n", "ProtectSystem=strict\n", "-gateway broker\n", "CapabilityBoundingSet=\n", &format!("Requires={SLUG}-keybroker.socket\n")] {
+            assert!(service.contains(needed), "{needed} missing:\n{service}");
+        }
+        assert!(!service.contains("PrivateNetwork"), "the broker calls the provider");
     }
 
     #[test]

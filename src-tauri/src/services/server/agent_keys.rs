@@ -655,7 +655,7 @@ pub(crate) mod tests {
                 let on_offer = |cli: &str| key.is_some() && offered.contains(&cli);
                 let reply = match serde_json::from_str::<Request>(line.trim()) {
                     Ok(Request::Offered) => Reply {
-                        offered: offered.iter().filter(|c| on_offer(c)).map(|c| Offer { cli: c.to_string(), updated: 1 }).collect(),
+                        offered: offered.iter().filter(|c| on_offer(c)).map(|c| Offer { cli: c.to_string(), updated: 1, base_url: None }).collect(),
                         ..Reply::ok()
                     },
                     Ok(Request::Get { cli }) => match key {
@@ -913,7 +913,7 @@ pub(crate) mod tests {
                 }
                 let mut line = String::new();
                 let _ = BufReader::new(&stream).read_line(&mut line);
-                let mut out = serde_json::to_vec(&Reply { offered: vec![Offer { cli: "claude".into(), updated: 1 }], ..Reply::ok() }).unwrap();
+                let mut out = serde_json::to_vec(&Reply { offered: vec![Offer { cli: "claude".into(), updated: 1, base_url: None }], ..Reply::ok() }).unwrap();
                 out.push(b'\n');
                 let _ = (&stream).write_all(&out);
             }

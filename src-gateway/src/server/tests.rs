@@ -419,6 +419,24 @@ async fn only_an_admin_offers_an_agent_key_and_it_never_comes_back() {
     let (_, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
     let v: Value = serde_json::from_str(&answer).unwrap();
     assert_eq!(v["keys"][0]["allowed"], json!(["alice", "carol"]), "{answer}");
+    // P5 broker: delivery, budgets and token renewal — admin's origin only,
+    // strict bodies, and the keeper's own refusals passed on.
+    let admin = [("Cookie", cookie.as_str()), ("Origin", ORIGIN)];
+    let put = |path: &'static str, body: &'static str| raw(f.addr, "PUT", path, &admin, Some(body));
+    assert_eq!(raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/delivery", &[("Cookie", &cookie), ("Origin", "https://evil.example")], Some(r#"{"broker":true}"#)).await.0, 403);
+    assert_eq!(put("/gateway/v1/agent-keys/claude/delivery", r#"{"broker":"yes"}"#).await.0, 400);
+    assert_eq!(put("/gateway/v1/agent-keys/claude/delivery", r#"{"broker":true}"#).await.0, 200);
+    assert_eq!(put("/gateway/v1/agent-keys/claude/budget", r#"{"tokens":500000}"#).await.0, 200);
+    assert_eq!(put("/gateway/v1/agent-keys/claude/budget", r#"{"user":"carol","tokens":9}"#).await.0, 200);
+    assert_eq!(put("/gateway/v1/agent-keys/claude/budget", r#"{"user":"Bad Name","tokens":9}"#).await.0, 400);
+    assert_eq!(raw(f.addr, "POST", "/gateway/v1/agent-keys/claude/renew-token", &admin, Some(r#"{"user":"carol"}"#)).await.0, 200);
+    let (_, _, answer) = raw(f.addr, "GET", "/gateway/v1/agent-keys", &[("Cookie", &cookie)], None).await;
+    let v: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!((v["keys"][0]["broker"].as_bool(), v["keys"][0]["default_budget"].as_u64(), v["keys"][0]["budgets"]["carol"].as_u64()), (Some(true), Some(500000), Some(9)), "{answer}");
+    let (status, _, answer) = raw(f.addr, "PUT", "/gateway/v1/agent-keys/claude/delivery", &admin, Some(r#"{"broker":false}"#)).await;
+    assert_eq!(status, 200, "{answer}");
+    let audit = std::fs::read_to_string(f.gw.config.state_dir.join(crate::audit::AUDIT_FILE)).unwrap();
+    assert!(audit.contains("agent-key-delivery") && audit.contains("agent-key-budget") && audit.contains("agent-key-token-renew"), "{audit}");
     let (status, _, _) = raw(f.addr, "DELETE", "/gateway/v1/agent-keys/claude", &[("Cookie", &cookie), ("Origin", ORIGIN)], None).await;
     assert_eq!(status, 200);
     assert!(!keys.join("claude").join(crate::keeper::KEY_FILE).exists());

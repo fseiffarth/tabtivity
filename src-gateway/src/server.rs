@@ -15,9 +15,11 @@
 //! * Without one: `/api/*` is `401`, `/desktop*` a sign-in page, other `GET`s
 //!   the PWA's files from disk.
 //! * `/gateway/v1/{audit,policy,status}` — the gateway's own small API.
-//! * `/gateway/v1/agent-keys[/<cli>[/users]]` — the administrator's agent API
-//!   keys (plan §5.4): listed, offered, withdrawn and given their users through
-//!   the key keeper ([`crate::keeper`]); a key goes in, never comes back out.
+//! * `/gateway/v1/agent-keys[/<cli>[/users|/delivery|/budget|/renew-token]]` —
+//!   the administrator's agent API keys (plan §5.4): listed, offered,
+//!   withdrawn, given their users, switched to the broker, budgeted and their
+//!   users' broker tokens renewed, all through the key keeper
+//!   ([`crate::keeper`]); a key goes in, never comes back out.
 //! * The user-content listener: `/content/<user>/<ticket>` → that user's
 //!   daemon's `/content/<ticket>`, cookies stripped.
 //!
@@ -638,6 +640,117 @@ async fn agent_key_users(State(gw): State<Shared>, RoutePath(cli): RoutePath<Str
     }
 }
 
+/// Admin only, exact origin, a valid CLI id: who is asking, or the refusal.
+// A refusal is the answer itself; boxing it would only move the size around.
+#[allow(clippy::result_large_err)]
+fn admin_for_key(gw: &Gateway, cli: &str, headers: &HeaderMap, verb: &str) -> Result<(Account, String), Response> {
+    if !exact_origin(gw, headers) {
+        return Err(api_error(StatusCode::FORBIDDEN, "invalid_origin"));
+    }
+    let Some((account, device)) = gw.routed(headers) else {
+        return Err(api_error(StatusCode::UNAUTHORIZED, "unauthenticated"));
+    };
+    if account.role != Role::Admin {
+        gw.audit.record(Row::new(&account.name, Some(&device), verb, "refused"));
+        return Err(api_error(StatusCode::FORBIDDEN, "admin"));
+    }
+    if !keys_wire::valid_cli_id(cli) {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_cli"));
+    }
+    Ok((account, device))
+}
+
+/// Send an administrator's change to the keeper; audited here (who, which
+/// CLI) and by the keeper.
+async fn keeper_change(gw: &Gateway, account: &Account, device: &str, verb: &str, cli: &str, request: keys_wire::Request) -> Response {
+    match crate::keeper::ask(&gw.config.keeper_socket, &request).await {
+        Ok(reply) if reply.ok => {
+            gw.audit.record(Row::new(&account.name, Some(device), verb, "ok").resource(cli));
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Ok(reply) => {
+            gw.audit.record(Row::new(&account.name, Some(device), verb, "failed").resource(cli));
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": "keeper", "detail": reply.error }))).into_response()
+        }
+        Err(error) => {
+            eprintln!("gateway: key keeper: {error}");
+            gw.audit.record(Row::new(&account.name, Some(device), verb, "failed").resource(cli));
+            api_error(StatusCode::BAD_GATEWAY, "keeper_unreachable")
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeliveryBody {
+    broker: bool,
+}
+
+/// Deliver one CLI's key through the broker or directly (`PUT`, body
+/// `{"broker": bool}`; plan §5.4, P5).
+async fn agent_key_delivery(State(gw): State<Shared>, RoutePath(cli): RoutePath<String>, headers: HeaderMap, body: Bytes) -> Response {
+    const VERB: &str = "agent-key-delivery";
+    let (account, device) = match admin_for_key(&gw, &cli, &headers, VERB) {
+        Ok(who) => who,
+        Err(response) => return response,
+    };
+    let Ok(DeliveryBody { broker }) = serde_json::from_slice::<DeliveryBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let request = keys_wire::Request::Delivery { cli: cli.clone(), broker, by: account.name.clone() };
+    keeper_change(&gw, &account, &device, VERB, &cli, request).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BudgetBody {
+    #[serde(default)]
+    user: Option<String>,
+    tokens: Option<u64>,
+}
+
+/// A monthly budget in billed tokens for one user of a brokered key, or the
+/// key's default (`PUT`, body `{"user"?: name, "tokens": n | null}`).
+async fn agent_key_budget(State(gw): State<Shared>, RoutePath(cli): RoutePath<String>, headers: HeaderMap, body: Bytes) -> Response {
+    const VERB: &str = "agent-key-budget";
+    let (account, device) = match admin_for_key(&gw, &cli, &headers, VERB) {
+        Ok(who) => who,
+        Err(response) => return response,
+    };
+    let Ok(BudgetBody { user, tokens }) = serde_json::from_slice::<BudgetBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if user.as_deref().is_some_and(|u| !wire::valid_account_name(u)) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let request = keys_wire::Request::Budget { cli: cli.clone(), user, tokens, by: account.name.clone() };
+    keeper_change(&gw, &account, &device, VERB, &cli, request).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenewBody {
+    user: String,
+}
+
+/// Drop one user's broker token (`POST`, body `{"user": name}`): their
+/// running agents are cut off at the next request, the key stays.
+async fn agent_key_renew(State(gw): State<Shared>, RoutePath(cli): RoutePath<String>, headers: HeaderMap, body: Bytes) -> Response {
+    const VERB: &str = "agent-key-token-renew";
+    let (account, device) = match admin_for_key(&gw, &cli, &headers, VERB) {
+        Ok(who) => who,
+        Err(response) => return response,
+    };
+    let Ok(RenewBody { user }) = serde_json::from_slice::<RenewBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if !wire::valid_account_name(&user) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let request = keys_wire::Request::RenewToken { cli: cli.clone(), user, by: account.name.clone() };
+    keeper_change(&gw, &account, &device, VERB, &cli, request).await
+}
+
 /// Per account, with no content: name, role, how many devices route, and
 /// whether its daemon socket exists. Admins only. The socket is looked at,
 /// never connected to: a connect is what socket activation starts a daemon
@@ -703,6 +816,9 @@ pub fn router(gw: Shared) -> Router {
         .route("/gateway/v1/agent-keys", get(agent_keys_get))
         .route("/gateway/v1/agent-keys/{cli}", put(agent_key_put).delete(agent_key_delete))
         .route("/gateway/v1/agent-keys/{cli}/users", put(agent_key_users))
+        .route("/gateway/v1/agent-keys/{cli}/delivery", put(agent_key_delivery))
+        .route("/gateway/v1/agent-keys/{cli}/budget", put(agent_key_budget))
+        .route("/gateway/v1/agent-keys/{cli}/renew-token", post(agent_key_renew))
         .layer(DefaultBodyLimit::max(MAX_OWN_BODY));
     own.fallback(routed_or_static)
         .with_state(gw.clone())

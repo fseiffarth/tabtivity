@@ -9,11 +9,12 @@ fn main() {
         match args.first().map(String::as_str) {
             Some("serve") | None => {}
             Some("keeper") => std::process::exit(keeper(&args[1..])),
+            Some("broker") => std::process::exit(broker(&args[1..])),
             Some("hub") => std::process::exit(hub(&args[1..])),
             Some("hub-forget") => std::process::exit(hub_forget(&args[1..])),
             Some("calendar") => std::process::exit(calendar(&args[1..])),
             Some("--help") | Some("-h") => {
-                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
+                println!("{slug}-gateway serve\n{slug}-gateway keeper [--socket PATH] [--dir PATH]\n{slug}-gateway broker [--listen ADDR] [--dir PATH]\n{slug}-gateway hub [--socket PATH] [--root PATH] [--dir PATH]\n{slug}-gateway hub-forget USER\n{slug}-gateway calendar [--socket PATH] [--dir PATH]\n\nserve: routes each signed-in device to its own account's daemon. Configured by the unit's environment (see /etc/{slug}/server.env).\nkeeper: holds the administrator's agent API keys (as {slug}-auth, on the socket systemd passes).\nbroker: calls the provider with an administrator's key for users holding a broker token, within their budgets (as {slug}-auth, on the loopback port systemd passes).\nhub: owns the shared projects' bare repositories (as {slug}-hub, on the socket systemd passes).\nhub-forget: as root, takes a removed account off every shared project (the admin helper's user-remove).\ncalendar: holds the calendars and to-do lists users opened to each other (as {slug}-cal, on the socket systemd passes).");
                 return;
             }
             Some(other) => {
@@ -80,6 +81,47 @@ fn keeper(args: &[String]) -> i32 {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("{slug}-gateway keeper: {error}");
+            1
+        }
+    }
+}
+
+/// `<slug>-gateway broker`: the key broker (hosted plan §5.4, P5), started
+/// by `<slug>-keybroker.service` as `<slug>-auth` on the loopback port its
+/// socket unit holds; `--listen` binds one itself (a manual test, loopback
+/// only), `--dir` names another key directory.
+#[cfg(unix)]
+fn broker(args: &[String]) -> i32 {
+    use app_gateway::broker::{self, Broker};
+    let slug = app_gateway::brand::SLUG;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let dir = value("--dir").map(std::path::PathBuf::from).unwrap_or_else(app_gateway::names::keeper_state_dir);
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{slug}-gateway broker: runtime: {error}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(async {
+        let listener = match broker::activation_listener()? {
+            Some(listener) => listener,
+            None => {
+                let addr: std::net::SocketAddr = value("--listen").ok_or("no socket from systemd and no --listen ADDR")?.parse().map_err(|e| format!("--listen: {e}"))?;
+                if !addr.ip().is_loopback() {
+                    return Err("--listen must be a loopback address".to_string());
+                }
+                tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind {addr}: {e}"))?
+            }
+        };
+        let broker = std::sync::Arc::new(Broker::new(dir, Default::default())?);
+        eprintln!("{slug}-gateway broker: listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or_default());
+        broker::serve(broker, listener).await
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{slug}-gateway broker: {error}");
             1
         }
     }

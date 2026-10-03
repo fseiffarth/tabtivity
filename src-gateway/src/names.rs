@@ -85,6 +85,12 @@ pub fn keeper_unit(kind: &str) -> String {
     format!("{SERVER_ACCOUNT_PREFIX}auth-keeper.{kind}")
 }
 
+/// `<slug>-keybroker.socket` / `.service`: the key broker (plan §5.4, P5),
+/// as [`auth_account`].
+pub fn broker_unit(kind: &str) -> String {
+    format!("{SERVER_ACCOUNT_PREFIX}keybroker.{kind}")
+}
+
 /// `<slug>-hub.socket` / `.service`: the share hub.
 pub fn hub_unit(kind: &str) -> String {
     format!("{SERVER_ACCOUNT_PREFIX}hub.{kind}")
@@ -215,6 +221,7 @@ mod tests {
         assert_eq!(serverd_unit("bob", "socket"), [&format!("{SLUG}-serverd"), "bob.socket"].join("@"));
         assert_eq!(crate::wire::socket_path(&socket_dir(), "bob"), PathBuf::from(format!("/run/{SLUG}/users/bob.sock")));
         assert_eq!(keeper_socket(), PathBuf::from(format!("/run/{SLUG}/auth.sock")));
+        assert_eq!(broker_unit("socket"), format!("{SLUG}-keybroker.socket"));
         assert_eq!((auth_account(), keeper_unit("socket")), (format!("{SLUG}-auth"), format!("{SLUG}-auth-keeper.socket")));
         assert_eq!((hub_account(), hub_unit("service"), hub_socket()), (format!("{SLUG}-hub"), format!("{SLUG}-hub.service"), PathBuf::from(format!("/run/{SLUG}/hub.sock"))));
         assert_eq!(shared_root(), PathBuf::from(format!("/srv/{SLUG}/shared")));

@@ -29,12 +29,22 @@
 //!   most one row per user and CLI per [`DELIVERY_AUDIT_EVERY`], so a user
 //!   cannot flood the log). Never the key, never a fragment of it.
 //!
+//! * **Through the broker** (plan §5.4, P5): for a CLI in
+//!   [`keys_wire::BROKER_CLIS`] the administrator may switch a key to broker
+//!   delivery. `get` then hands a listed user their own **broker token**
+//!   (`<cli>/tokens.json`, minted at the first fetch, dropped when the user
+//!   leaves the list, the key is withdrawn or the delivery changes, or the
+//!   administrator renews it) and the broker's URL — never the key, which
+//!   only [`crate::broker`] (the same account) reads to call the provider.
+//!   Budgets (`meta.json`) and this month's use (`<cli>/usage/<user>.json`,
+//!   the broker's) are listed to the gateway, and to each user their own.
+//!
 //! The administrator's role is the gateway's word (its table, its routing
 //! cookie): the keeper trusts the gateway's uid for "set by this admin", as
 //! every daemon trusts its role header. A compromised gateway can replace or
 //! withdraw keys; it cannot read one.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -43,13 +53,19 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::audit::{AuditLog, Row};
-use crate::keys_wire::{self, Fingerprint, KeyStatus, Offer, Reply, Request, MAX_LINE};
+use crate::keys_wire::{self, Fingerprint, KeyStatus, MonthUsage, Offer, Reply, Request, Usage, MAX_LINE};
 use crate::{names, wire};
 
 pub const KEY_FILE: &str = "api-key";
 pub const META_FILE: &str = "meta.json";
 /// Fingerprints of the CLI's earlier keys (never a key).
 pub const PREVIOUS_FILE: &str = "previous.json";
+/// The users' broker tokens of one CLI (`0600`; the broker reads it).
+pub const TOKENS_FILE: &str = "tokens.json";
+/// The broker's per-user month counts: `<cli>/<USAGE_DIR>/<user>.json`.
+pub const USAGE_DIR: &str = "usage";
+/// Months of use kept per user.
+pub const USAGE_MONTHS: usize = 12;
 /// Connections served at once; more are closed unanswered (local users can
 /// connect; none may hold the keeper).
 pub const MAX_CONNECTIONS: usize = 32;
@@ -67,6 +83,10 @@ pub const VERB_REMOVE: &str = "agent-key-remove";
 pub const VERB_DELIVERED: &str = "agent-key-delivered";
 pub const VERB_USER_ADD: &str = "agent-key-user-add";
 pub const VERB_USER_REMOVE: &str = "agent-key-user-remove";
+pub const VERB_DELIVERY: &str = "agent-key-delivery";
+pub const VERB_BUDGET: &str = "agent-key-budget";
+pub const VERB_RENEW: &str = "agent-key-token-renew";
+pub const VERB_TOKEN: &str = "agent-key-token-delivered";
 
 /// Who is on the other end, by uid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,14 +135,92 @@ pub(crate) fn name_of_uid(uid: u32) -> Option<String> {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Meta {
-    updated: u64,
-    by: String,
+pub(crate) struct Meta {
+    pub(crate) updated: u64,
+    pub(crate) by: String,
     /// The accounts allowed to fetch this key. Empty for a new key: the
     /// administrator names its users explicitly; replacing the key keeps the
     /// list, withdrawing it forgets the list.
     #[serde(default)]
-    users: BTreeSet<String>,
+    pub(crate) users: BTreeSet<String>,
+    /// Delivered through the broker: users get tokens, never the key.
+    #[serde(default)]
+    pub(crate) broker: bool,
+    /// Monthly budget (billed tokens) of a listed user without their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) budgets: BTreeMap<String, u64>,
+}
+
+impl Meta {
+    /// The budget in force for `user` (`None`: no cap).
+    pub(crate) fn budget_of(&self, user: &str) -> Option<u64> {
+        self.budgets.get(user).copied().or(self.default_budget)
+    }
+}
+
+/// `user → token`, one CLI's broker tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Tokens {
+    #[serde(default)]
+    pub(crate) tokens: BTreeMap<String, String>,
+}
+
+/// One user's brokered use of one CLI, by month (`YYYY-MM`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct UsageFile {
+    #[serde(default)]
+    pub(crate) months: BTreeMap<String, Usage>,
+}
+
+/// `cli`'s meta, when a key is on offer (the key file is there).
+pub(crate) fn meta_in(dir: &Path, cli: &str) -> Option<Meta> {
+    if !keys_wire::valid_cli_id(cli) {
+        return None;
+    }
+    let dir = dir.join(cli);
+    let key = std::fs::symlink_metadata(dir.join(KEY_FILE)).ok()?;
+    if !key.is_file() {
+        return None;
+    }
+    Some(crate::read_regular(&dir.join(META_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default())
+}
+
+pub(crate) fn tokens_in(dir: &Path, cli: &str) -> Tokens {
+    crate::read_regular(&dir.join(cli).join(TOKENS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+pub(crate) fn usage_path(dir: &Path, cli: &str, user: &str) -> PathBuf {
+    dir.join(cli).join(USAGE_DIR).join(format!("{user}.json"))
+}
+
+pub(crate) fn usage_in(dir: &Path, cli: &str, user: &str) -> UsageFile {
+    crate::read_regular(&usage_path(dir, cli, user)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// The current key of `cli` in `dir`, if one is on offer. `Err` only when
+/// the file is there but cannot be read.
+pub(crate) fn read_key_in(dir: &Path, cli: &str) -> Result<Option<String>, ()> {
+    match crate::read_regular(&dir.join(cli).join(KEY_FILE)) {
+        Ok(bytes) => Ok(String::from_utf8(bytes).ok().map(|k| k.trim().to_string()).filter(|k| keys_wire::valid_key(k))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => {
+            eprintln!("keeper: {cli}: {e}");
+            Err(())
+        }
+    }
+}
+
+/// A fresh broker token: 32 random bytes, base64url, behind a prefix that
+/// says what it is (it passes [`keys_wire::valid_key`], so it travels the
+/// key's way).
+fn mint_token() -> String {
+    use base64ct::Encoding;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    format!("broker-{}", base64ct::Base64UrlUnpadded::encode_string(&bytes))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,12 +237,20 @@ pub struct Keeper {
     write: Mutex<()>,
     /// `(user, cli)` → when its last fetch was audited.
     delivered: Mutex<HashMap<(String, String), u64>>,
+    /// The broker's loopback port, for the URL a brokered fetch names.
+    broker_port: u16,
 }
 
 impl Keeper {
     pub fn new(dir: PathBuf, peers: Box<dyn Peers>) -> Self {
         let audit = AuditLog::in_dir(&dir);
-        Keeper { dir, audit, peers, write: Mutex::default(), delivered: Mutex::default() }
+        Keeper { dir, audit, peers, write: Mutex::default(), delivered: Mutex::default(), broker_port: keys_wire::BROKER_PORT }
+    }
+
+    /// The broker listens elsewhere (tests).
+    pub fn with_broker_port(mut self, port: u16) -> Self {
+        self.broker_port = port;
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -170,6 +276,10 @@ impl Keeper {
             (Peer::Gateway, Request::Remove { cli, by }) => self.remove(&cli, &by),
             (Peer::Gateway, Request::Users { cli, users, by }) => self.set_users(&cli, &users, &by),
             (Peer::Gateway, Request::Status) => Reply { status: self.status(crate::now()), ..Reply::ok() },
+            (Peer::Gateway, Request::Delivery { cli, broker, by }) => self.set_delivery(&cli, broker, &by),
+            (Peer::Gateway, Request::Budget { cli, user, tokens, by }) => self.set_budget(&cli, user.as_deref(), tokens, &by),
+            (Peer::Gateway, Request::RenewToken { cli, user, by }) => self.renew_token(&cli, &user, &by),
+            (Peer::User(user), Request::Usage { cli }) => self.usage_of(&user, &cli),
             _ => Reply::error("refused"),
         }
     }
@@ -179,12 +289,24 @@ impl Keeper {
     }
 
     fn meta_of(&self, cli: &str) -> Option<Meta> {
-        let dir = self.cli_dir(cli)?;
-        let key = std::fs::symlink_metadata(dir.join(KEY_FILE)).ok()?;
-        if !key.is_file() {
-            return None;
+        meta_in(&self.dir, cli)
+    }
+
+    fn write_meta(&self, cli: &str, meta: &Meta) -> std::io::Result<()> {
+        let bytes = serde_json::to_vec(meta).map_err(std::io::Error::other)?;
+        crate::write_atomic(&self.dir.join(cli).join(META_FILE), &bytes, 0o600)
+    }
+
+    fn write_tokens(&self, cli: &str, tokens: &Tokens) -> std::io::Result<()> {
+        let path = self.dir.join(cli).join(TOKENS_FILE);
+        if tokens.tokens.is_empty() {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            };
         }
-        Some(crate::read_regular(&dir.join(META_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default())
+        let bytes = serde_json::to_vec(tokens).map_err(std::io::Error::other)?;
+        crate::write_atomic(&path, &bytes, 0o600)
     }
 
     /// Every CLI with a key on offer, by id.
@@ -197,7 +319,13 @@ impl Keeper {
             .filter(|id| keys_wire::valid_cli_id(id))
             .collect();
         ids.sort();
-        ids.into_iter().filter_map(|cli| self.meta_of(&cli).map(|m| Offer { cli, updated: m.updated })).collect()
+        ids.into_iter()
+            .filter_map(|cli| {
+                let meta = self.meta_of(&cli)?;
+                let base_url = meta.broker.then(|| keys_wire::broker_url(self.broker_port, &cli));
+                Some(Offer { cli, updated: meta.updated, base_url })
+            })
+            .collect()
     }
 
     /// The offered CLIs whose list names `user`.
@@ -207,26 +335,25 @@ impl Keeper {
 
     /// The current key of `cli`, if one is on offer. `Err` only when the
     /// file is there but cannot be read.
-    fn read_key(&self, dir: &Path, cli: &str) -> Result<Option<String>, ()> {
-        match crate::read_regular(&dir.join(KEY_FILE)) {
-            Ok(bytes) => Ok(String::from_utf8(bytes).ok().map(|k| k.trim().to_string()).filter(|k| keys_wire::valid_key(k))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => {
-                eprintln!("keeper: {cli}: {e}");
-                Err(())
-            }
-        }
+    fn read_key(&self, cli: &str) -> Result<Option<String>, ()> {
+        read_key_in(&self.dir, cli)
     }
 
     fn get(&self, user: &str, cli: &str) -> Reply {
-        let Some(dir) = self.cli_dir(cli) else { return Reply::error("invalid") };
+        if self.cli_dir(cli).is_none() {
+            return Reply::error("invalid");
+        }
         // Not on the list reads exactly like no key at all: a user learns
         // nothing about keys offered to others.
-        if !self.meta_of(cli).is_some_and(|m| m.users.contains(user)) {
+        let Some(meta) = self.meta_of(cli).filter(|m| m.users.contains(user)) else {
             return Reply::error("no-key");
-        }
-        let Ok(key) = self.read_key(&dir, cli) else { return Reply::error("failed") };
+        };
+        let Ok(key) = self.read_key(cli) else { return Reply::error("failed") };
         let Some(key) = key else { return Reply::error("no-key") };
+        if meta.broker {
+            drop(key);
+            return self.token_for(user, cli);
+        }
         let now = crate::now();
         let due = {
             let mut delivered = self.delivered.lock().unwrap_or_else(PoisonError::into_inner);
@@ -243,10 +370,137 @@ impl Keeper {
         Reply { key: Some(key), ..Reply::ok() }
     }
 
+    /// Brokered: `user`'s own token for `cli` (minted at the first fetch)
+    /// and the broker's URL. Never the key.
+    fn token_for(&self, user: &str, cli: &str) -> Reply {
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        // Under the lock: a withdraw or a delivery switch in between must not
+        // leave a token behind it.
+        if !self.meta_of(cli).is_some_and(|m| m.broker && m.users.contains(user)) {
+            return Reply::error("no-key");
+        }
+        let mut tokens = tokens_in(&self.dir, cli);
+        let token = match tokens.tokens.get(user) {
+            Some(token) => token.clone(),
+            None => {
+                let token = mint_token();
+                tokens.tokens.insert(user.to_string(), token.clone());
+                if let Err(e) = self.write_tokens(cli, &tokens) {
+                    eprintln!("keeper: tokens {cli}: {e}");
+                    return Reply::error("failed");
+                }
+                token
+            }
+        };
+        let now = crate::now();
+        let due = {
+            let mut delivered = self.delivered.lock().unwrap_or_else(PoisonError::into_inner);
+            let slot = delivered.entry((user.to_string(), cli.to_string())).or_insert(0);
+            let due = now.saturating_sub(*slot) >= DELIVERY_AUDIT_EVERY;
+            if due {
+                *slot = now;
+            }
+            due
+        };
+        if due {
+            self.audit.record(Row::new(user, None, VERB_TOKEN, "ok").resource(cli));
+        }
+        Reply { key: Some(token), base_url: Some(keys_wire::broker_url(self.broker_port, cli)), ..Reply::ok() }
+    }
+
+    /// Switch `cli`'s delivery. Broker only for a CLI the broker serves;
+    /// every token of the CLI goes either way (a switch back to direct must
+    /// not leave tokens that still spend the key).
+    fn set_delivery(&self, cli: &str, broker: bool, by: &str) -> Reply {
+        let (Some(_), true) = (self.cli_dir(cli), wire::valid_account_name(by)) else {
+            return Reply::error("invalid");
+        };
+        if broker && keys_wire::broker_cli(cli).is_none() {
+            return Reply::error("unsupported");
+        }
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut meta) = self.meta_of(cli) else { return Reply::error("no-key") };
+        meta.broker = broker;
+        let result = self.write_tokens(cli, &Tokens::default()).and_then(|()| self.write_meta(cli, &meta));
+        let resource = format!("{cli}/{}", if broker { "broker" } else { "direct" });
+        self.finish(result, by, VERB_DELIVERY, &resource)
+    }
+
+    fn set_budget(&self, cli: &str, user: Option<&str>, tokens: Option<u64>, by: &str) -> Reply {
+        let valid_user = user.is_none_or(wire::valid_account_name);
+        let (Some(_), true, true) = (self.cli_dir(cli), valid_user, wire::valid_account_name(by)) else {
+            return Reply::error("invalid");
+        };
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut meta) = self.meta_of(cli) else { return Reply::error("no-key") };
+        match (user, tokens) {
+            (None, tokens) => meta.default_budget = tokens,
+            (Some(user), Some(tokens)) => {
+                if meta.budgets.len() >= keys_wire::MAX_USERS && !meta.budgets.contains_key(user) {
+                    return Reply::error("invalid");
+                }
+                meta.budgets.insert(user.to_string(), tokens);
+            }
+            (Some(user), None) => {
+                meta.budgets.remove(user);
+            }
+        }
+        let resource = match user {
+            Some(user) => format!("{cli}/{user}"),
+            None => cli.to_string(),
+        };
+        let result = self.write_meta(cli, &meta);
+        self.finish(result, by, VERB_BUDGET, &resource)
+    }
+
+    fn renew_token(&self, cli: &str, user: &str, by: &str) -> Reply {
+        let (Some(_), true, true) = (self.cli_dir(cli), wire::valid_account_name(user), wire::valid_account_name(by)) else {
+            return Reply::error("invalid");
+        };
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut tokens = tokens_in(&self.dir, cli);
+        if tokens.tokens.remove(user).is_none() {
+            return Reply::ok();
+        }
+        let result = self.write_tokens(cli, &tokens);
+        self.finish(result, by, VERB_RENEW, &format!("{cli}/{user}"))
+    }
+
+    /// A user's own brokered use of `cli` this month (and their budget).
+    fn usage_of(&self, user: &str, cli: &str) -> Reply {
+        if self.cli_dir(cli).is_none() {
+            return Reply::error("invalid");
+        }
+        let Some(meta) = self.meta_of(cli).filter(|m| m.users.contains(user)) else {
+            return Reply::error("no-key");
+        };
+        Reply { usage: Some(self.month_usage(&meta, cli, user, &keys_wire::month_of(crate::now()))), ..Reply::ok() }
+    }
+
+    fn month_usage(&self, meta: &Meta, cli: &str, user: &str, month: &str) -> MonthUsage {
+        let usage = usage_in(&self.dir, cli, user).months.remove(month).unwrap_or_default();
+        MonthUsage { user: user.to_string(), month: month.to_string(), billed: keys_wire::billed(&usage), usage, budget: meta.budget_of(user) }
+    }
+
+    /// Audit an administrator's change and answer it.
+    fn finish(&self, result: std::io::Result<()>, by: &str, verb: &str, resource: &str) -> Reply {
+        match result {
+            Ok(()) => {
+                self.audit.record(Row::new(by, None, verb, "ok").resource(resource));
+                Reply::ok()
+            }
+            Err(e) => {
+                eprintln!("keeper: {verb} {resource}: {e}");
+                self.audit.record(Row::new(by, None, verb, "failed").resource(resource));
+                Reply::error("failed")
+            }
+        }
+    }
+
     /// Fingerprints of the current key and the remembered earlier ones.
     fn fingerprints(&self, cli: &str) -> Reply {
         let Some(dir) = self.cli_dir(cli) else { return Reply::error("invalid") };
-        let Ok(current) = self.read_key(&dir, cli) else { return Reply::error("failed") };
+        let Ok(current) = self.read_key(cli) else { return Reply::error("failed") };
         let mut fingerprints = self.previous_of(&dir).fingerprints;
         fingerprints.extend(current.as_deref().map(keys_wire::fingerprint));
         Reply { fingerprints, ..Reply::ok() }
@@ -259,7 +513,7 @@ impl Keeper {
     /// Remember the current key's fingerprint before it is replaced or
     /// withdrawn (the newest [`keys_wire::MAX_HISTORY`] are kept).
     fn remember_current(&self, dir: &Path, cli: &str) -> std::io::Result<()> {
-        let Ok(Some(current)) = self.read_key(dir, cli) else { return Ok(()) };
+        let Ok(Some(current)) = self.read_key(cli) else { return Ok(()) };
         let print = keys_wire::fingerprint(&current);
         let mut previous = self.previous_of(dir);
         previous.fingerprints.retain(|p| *p != print);
@@ -284,12 +538,13 @@ impl Keeper {
                     std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
                 }
             }
-            // A replaced key keeps its list; a new offer starts with nobody.
-            let users = self.meta_of(cli).map(|m| m.users).unwrap_or_default();
+            // A replaced key keeps its list, delivery and budgets (and the
+            // users' broker tokens: they name the user, not the key); a new
+            // offer starts with nobody.
+            let kept = self.meta_of(cli).unwrap_or_default();
             self.remember_current(&dir, cli)?;
             crate::write_atomic(&dir.join(KEY_FILE), key.as_bytes(), 0o600)?;
-            let meta = serde_json::to_vec(&Meta { updated: crate::now(), by: by.to_string(), users }).map_err(std::io::Error::other)?;
-            crate::write_atomic(&dir.join(META_FILE), &meta, 0o600)
+            self.write_meta(cli, &Meta { updated: crate::now(), by: by.to_string(), ..kept })
         })();
         match result {
             Ok(()) => {
@@ -317,7 +572,7 @@ impl Keeper {
                 return Reply::error("failed");
             }
         }
-        for file in [KEY_FILE, META_FILE] {
+        for file in [KEY_FILE, META_FILE, TOKENS_FILE] {
             match std::fs::remove_file(dir.join(file)) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -338,7 +593,7 @@ impl Keeper {
     /// per user added or removed (resource `<cli>/<user>`).
     fn set_users(&self, cli: &str, users: &[String], by: &str) -> Reply {
         let valid = users.len() <= keys_wire::MAX_USERS && users.iter().all(|u| wire::valid_account_name(u));
-        let (Some(dir), true, true) = (self.cli_dir(cli), valid, wire::valid_account_name(by)) else {
+        let (Some(_), true, true) = (self.cli_dir(cli), valid, wire::valid_account_name(by)) else {
             return Reply::error("invalid");
         };
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
@@ -347,7 +602,12 @@ impl Keeper {
         let added: Vec<String> = wanted.difference(&meta.users).cloned().collect();
         let removed: Vec<String> = meta.users.difference(&wanted).cloned().collect();
         meta.users = wanted;
-        let written = serde_json::to_vec(&meta).map_err(std::io::Error::other).and_then(|bytes| crate::write_atomic(&dir.join(META_FILE), &bytes, 0o600));
+        // A user taken off the list loses their broker token with it.
+        let mut tokens = tokens_in(&self.dir, cli);
+        let before = tokens.tokens.len();
+        tokens.tokens.retain(|user, _| meta.users.contains(user));
+        let dropped = if tokens.tokens.len() != before { self.write_tokens(cli, &tokens) } else { Ok(()) };
+        let written = dropped.and_then(|()| self.write_meta(cli, &meta));
         let result = if written.is_ok() { "ok" } else { "failed" };
         if let Err(e) = written {
             eprintln!("keeper: users {cli}: {e}");
@@ -378,9 +638,33 @@ impl Keeper {
                     .filter(|r| r.verb == VERB_DELIVERED && r.time >= since && r.resource.as_deref() == Some(offer.cli.as_str()))
                     .map(|r| r.user.clone())
                     .collect();
-                KeyStatus { cli: offer.cli, updated: meta.updated, by: meta.by, users: users.into_iter().collect(), allowed: meta.users.into_iter().collect() }
+                let month = keys_wire::month_of(now);
+                let usage = self.usage_rows(&meta, &offer.cli, &month);
+                KeyStatus {
+                    cli: offer.cli,
+                    updated: meta.updated,
+                    by: meta.by.clone(),
+                    users: users.into_iter().collect(),
+                    allowed: meta.users.iter().cloned().collect(),
+                    broker: meta.broker,
+                    default_budget: meta.default_budget,
+                    budgets: meta.budgets.clone(),
+                    usage,
+                }
             })
             .collect()
+    }
+
+    /// This month's brokered use of `cli`, per user who has a usage file.
+    fn usage_rows(&self, meta: &Meta, cli: &str, month: &str) -> Vec<MonthUsage> {
+        let Ok(entries) = std::fs::read_dir(self.dir.join(cli).join(USAGE_DIR)) else { return Vec::new() };
+        let mut users: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string))
+            .filter(|u| wire::valid_account_name(u))
+            .collect();
+        users.sort();
+        users.into_iter().map(|user| self.month_usage(meta, cli, &user, month)).filter(|row| row.usage.requests > 0).collect()
     }
 }
 
@@ -567,6 +851,55 @@ mod tests {
         assert!(rows[0].contains(VERB_USER_ADD) && rows[0].contains("claude/alice") && rows[0].contains(r#""user":"admin""#), "{}", rows[0]);
         assert!(rows[2].contains(VERB_USER_REMOVE) && rows[2].contains("claude/bob"), "{}", rows[2]);
         assert!(!audit.contains(KEY), "{audit}");
+    }
+
+    #[test]
+    fn a_brokered_key_hands_each_listed_user_a_token_never_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let gw = keeper(dir.path(), Peer::Gateway).with_broker_port(9999);
+        let alice = keeper(dir.path(), Peer::User("alice".into())).with_broker_port(9999);
+        let carol = keeper(dir.path(), Peer::User("carol".into()));
+        let delivery = |cli: &str, broker: bool| Request::Delivery { cli: cli.into(), broker, by: "admin".into() };
+        assert_eq!(ask_line(&gw, delivery("claude", true)).error.as_deref(), Some("no-key"));
+        assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: KEY.into(), by: "admin".into() }).ok);
+        assert!(ask_line(&gw, Request::Set { cli: "gemini".into(), key: KEY.into(), by: "admin".into() }).ok);
+        assert_eq!(ask_line(&gw, delivery("gemini", true)).error.as_deref(), Some("unsupported"), "no verified base-URL override");
+        assert_eq!(ask_line(&alice, delivery("claude", true)).error.as_deref(), Some("refused"), "the administrator's switch");
+        allow(&gw, "claude", &["alice"]);
+        assert!(ask_line(&gw, delivery("claude", true)).ok);
+        let offer = ask_line(&alice, Request::Offered).offered.remove(0);
+        assert_eq!(offer.base_url.as_deref(), Some("http://127.0.0.1:9999/claude"));
+        let first = ask_line(&alice, Request::Get { cli: "claude".into() });
+        let token = first.key.clone().unwrap();
+        assert_ne!(token, KEY);
+        assert!(keys_wire::valid_key(&token));
+        assert_eq!(first.base_url.as_deref(), Some("http://127.0.0.1:9999/claude"));
+        assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).key.as_deref(), Some(token.as_str()), "the same token until renewed");
+        assert_eq!(ask_line(&carol, Request::Get { cli: "claude".into() }).error.as_deref(), Some("no-key"), "not listed: no token either");
+        assert_eq!(ask_line(&carol, Request::Usage { cli: "claude".into() }).error.as_deref(), Some("no-key"));
+        // Budgets: the key's default and a user's own; the user sees theirs.
+        let budget = |user: Option<&str>, tokens: Option<u64>| Request::Budget { cli: "claude".into(), user: user.map(str::to_string), tokens, by: "admin".into() };
+        assert!(ask_line(&gw, budget(None, Some(1000))).ok);
+        assert_eq!(ask_line(&alice, Request::Usage { cli: "claude".into() }).usage.unwrap().budget, Some(1000));
+        assert!(ask_line(&gw, budget(Some("alice"), Some(5))).ok);
+        assert_eq!(ask_line(&alice, Request::Usage { cli: "claude".into() }).usage.unwrap().budget, Some(5));
+        assert!(ask_line(&gw, budget(Some("alice"), None)).ok);
+        assert_eq!(ask_line(&alice, Request::Usage { cli: "claude".into() }).usage.unwrap().budget, Some(1000));
+        assert_eq!(ask_line(&gw, budget(Some("Not Valid"), Some(1))).error.as_deref(), Some("invalid"));
+        // A replaced key keeps the delivery, the budgets and the token.
+        assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: "fake-key-ROTATED0123456789ab".into(), by: "admin".into() }).ok);
+        let status = ask_line(&gw, Request::Status).status.into_iter().find(|s| s.cli == "claude").unwrap();
+        assert!(status.broker && status.default_budget == Some(1000));
+        assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).key.as_deref(), Some(token.as_str()));
+        // Withdrawn: tokens go with the key; a re-offer is direct again.
+        assert!(ask_line(&gw, Request::Remove { cli: "claude".into(), by: "admin".into() }).ok);
+        assert!(!dir.path().join("claude").join(TOKENS_FILE).exists());
+        assert!(ask_line(&gw, Request::Set { cli: "claude".into(), key: KEY.into(), by: "admin".into() }).ok);
+        allow(&gw, "claude", &["alice"]);
+        assert_eq!(ask_line(&alice, Request::Get { cli: "claude".into() }).key.as_deref(), Some(KEY));
+        let audit = std::fs::read_to_string(dir.path().join(crate::audit::AUDIT_FILE)).unwrap();
+        assert!(audit.contains(VERB_DELIVERY) && audit.contains(VERB_BUDGET) && audit.contains(VERB_TOKEN));
+        assert!(!audit.contains(&token) && !audit.contains(KEY), "no token or key in the audit");
     }
 
     #[test]

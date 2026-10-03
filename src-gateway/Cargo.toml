@@ -40,6 +40,18 @@ base64ct = { version = "1", features = ["alloc"] }
 subtle = "2"
 rand = "0.8"
 mime_guess = "2.0.5"
+# The key broker (plan §5.4, P5) calls the provider over HTTPS: the same
+# client and TLS stack the app already builds (`rustls-no-provider` takes the
+# ring provider `broker::ensure_crypto` installs), so nothing new is fetched.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
+    "http2",
+    "charset",
+    "gzip",
+    "brotli",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std", "logging"] }
+futures-util = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -48,5 +60,4 @@ libc = "0.2"
 tempfile = "3"
 # `limits.rs` (compiled from src-tauri) tests its deadlines on a paused clock.
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
-futures-util = "0.3"
 tokio-tungstenite = "0.29"

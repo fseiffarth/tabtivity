@@ -14,6 +14,8 @@
 //! * **Key keeper** ([`keeper`]): the administrator's agent API keys
 //!   (plan §5.4, P3b), held by `<slug>-auth`, handed to a server user's own
 //!   daemon by uid; the gateway offers and withdraws, never reads one back.
+//! * **Key broker** ([`broker`]): the administrator's key used for users who
+//!   only ever hold a per-user token, with monthly budgets (plan §5.4, P5).
 //! * **Share hub** ([`hub`]): `<slug>-hub`, the owner of every bare hub a
 //!   project is shared through (plan §6.2–§6.6, P4); named-user ACLs
 //!   ([`acl`]) for read access, ref rules for pushes.
@@ -58,6 +60,8 @@ pub mod limits;
 pub mod helper;
 #[cfg(unix)]
 pub mod keeper;
+#[cfg(unix)]
+pub mod broker;
 #[cfg(unix)]
 pub mod hub;
 pub mod acl;

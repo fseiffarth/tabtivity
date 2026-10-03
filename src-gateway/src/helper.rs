@@ -240,6 +240,7 @@ pub fn plan_install(accounts: &dyn Accounts, origin: &str, content_origin: Optio
     steps.push(run(&["systemctl", "daemon-reload"]));
     steps.push(run(&["systemctl", "enable", "--now", &names::gateway_unit()]));
     steps.push(run(&["systemctl", "enable", "--now", &names::keeper_unit("socket")]));
+    steps.push(run(&["systemctl", "enable", "--now", &names::broker_unit("socket")]));
     steps.push(run(&["systemctl", "enable", "--now", &names::hub_unit("socket")]));
     steps.push(run(&["systemctl", "enable", "--now", &names::calendar_unit("socket")]));
     for unit in names::PROC_EXCEPTION_UNITS {
