@@ -721,3 +721,23 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2378. **Run OIDC sign-in live against a real provider (P5, §4.1).** The steps
+    are in `docs/hosted_handoff.md` § P5 "OIDC — live steps": register the
+    server's callback at the provider (a Keycloak test realm is enough),
+    `oidc-set` with the secret on stdin, `user-oidc bob --sub …`; Bob's new
+    browser shows Sign in with …, comes back paired and signs in; an
+    unlinked person comes back "not linked"; a sign-in URL opened in a
+    second browser comes back "started in another browser"; the gateway's
+    audit has `pair-oidc` rows without identities; both RS256 and ES256
+    realms if the provider allows. (P5, 2026-10-03.)
+    - [ ] 🖐️ Manual test — the § P5 OIDC live list with a real provider.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+

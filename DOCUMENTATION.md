@@ -445,6 +445,26 @@ has, the pill offers **Make these changes**, which sends the go-ahead (edit the
 sources, rebuild, send the PDF back) — its wording is the second field of Home →
 This phone → **Mark up prompt**.
 
+### Hosted server: signing in with your organisation's account
+
+If the administrator connected the server to an identity provider (for
+example a university's single sign-on), the pairing page shows **Sign in
+with …** above the invite-code field. Pressing it takes you to the
+provider's sign-in and back; the browser or phone is then paired with your
+account, exactly as an invite code would pair it, and the app's lock set-up
+follows. It works only for people the administrator linked to an account;
+anyone else comes back with a note to ask for that. A sign-in started in one
+browser can only be finished in that same browser.
+
+For the administrator: `sudo tabtivity-admin-helper oidc-set --issuer
+https://… --client-id … --name "…"` (the client secret is read from the
+input, never typed as an argument; register
+`https://<server>/gateway/v1/oidc/callback` as the redirect address at the
+provider), then per person `sudo tabtivity-admin-helper user-oidc NAME --sub
+<their id>` (or `--email <address>` for providers that confirm email
+addresses). `user-oidc NAME --clear` and `oidc-clear` take it back. Invite
+codes keep working either way.
+
 ### Hosted server: the secrets key
 
 On a Tabtivity server (the browser client behind the gateway, plan §6.8) your

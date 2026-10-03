@@ -525,6 +525,65 @@ agent (fenced, host netns) ─ANTHROPIC_BASE_URL=http://127.0.0.1:8739/claude─
   budget can still run on their own login. Not run against the provider:
   the broker was tested against a fake provider on loopback only (#2377).
 
+## OIDC sign-in (P5, §4.1)
+
+```
+browser ─POST /gateway/v1/oidc/start {public_key}─► gateway: state, PKCE, binder cookie,
+        ◄─ provider URL (nonce = H(public_key)) ───        nonce bound to the key
+        ─► provider sign-in ─► GET /gateway/v1/oidc/callback?code&state (+binder cookie)
+gateway ─code+secret+verifier─► token endpoint ─► ID token
+        ─route by the account linked to its person (gateway.json `oidc`)─►
+daemon  POST /api/v1/pair {oidc_token, public_key}: signature (issuer's JWKS),
+        iss/aud/exp/iat, nonce == H(public_key), its own binding (oidc.json) ─► device
+browser ◄─ 303 /?oidc=paired&device=<id>: the pending key becomes the pairing record
+```
+
+- **What it replaces**: the invite code, and only that. A provider sign-in
+  pairs a device key; sessions remain device-key challenge/response and
+  the gateway's routing cookie. Invites keep working beside it.
+- **Two copies of the link, as with invites.** The admin helper's
+  `user-oidc NAME --sub ID | --email ADDRESS` writes the link into the
+  gateway's table (routing: which account's daemon gets the token) and, by
+  the user's own uid (`<slug>-serverd --write-oidc-binding`, JSON on stdin),
+  the daemon's `mobile-control/oidc.json` with the issuer and client id —
+  what the daemon checks against. One person routes to one account. The
+  gateway never decides: it cannot pair a device for an account without a
+  token the provider signed for that account's person and **for that key**
+  (the nonce is a hash of the public key being paired), and the daemon
+  spends each nonce once.
+- **The gateway as relying party.** `oidc-set --issuer https://… --client-id
+  … --name …` reads the client secret from stdin into `oidc.json` in the
+  gateway's state (`0600`, handed to `<slug>-gw`); discovery from the
+  issuer's `.well-known/openid-configuration` (cached for an hour, the
+  `issuer` inside must match). Start: PKCE S256, `scope=openid email`, a
+  random `state`, and a **binder** — random, its hash kept with the pending
+  sign-in, the value only in a `__Host-oidc_binder` cookie (`Secure`,
+  `HttpOnly`, `SameSite=Lax` because the provider's redirect back is a
+  cross-site top-level navigation). The callback takes the pending sign-in
+  by `state` and the binder together, one try, ten minutes: a sign-in URL
+  someone else started (with their own key) and sent to a victim cannot be
+  completed in the victim's browser — the classic login-CSRF that would
+  otherwise pair the attacker's key to the victim's account. The code is
+  exchanged with the secret (`client_secret_post`) and the verifier; the ID
+  token from the token endpoint is read unverified **for routing only**.
+- **The daemon verifies.** `services::server::oidc::check`: RS256 (`ring`)
+  or ES256 (`p256`) only — never `none`, never HMAC (the client secret
+  could sign that); the key by `kid` from the issuer's JWKS (`jwks_uri`
+  from discovery, HTTPS, cached an hour, re-fetched at most once a minute
+  for an unknown `kid`); then `oidc_wire::check_claims`: `iss`, `aud` (and
+  `azp` when several), `exp` (2 min skew), `iat` no older than 10 minutes,
+  `nonce`, and the person (`sub` exactly, or `email` case-insensitively
+  only with `email_verified: true`).
+- **Rate and noise**: start and callback count against the gateway's
+  stranger windows; at most 256 sign-ins pending; audit rows `pair-oidc`
+  (`ok`, `refused`, `unknown`) without the person's identity or any token.
+- **Residuals**: a compromised gateway (it holds the client secret and
+  terminates the callback) can pair a key of its own to an account whose
+  person signs in *through it* — no worse than its position on live
+  sessions (§ Shape). The daemon fetches the provider's keys itself (it has
+  network; the gateway is not trusted for them). Email links trust the
+  provider's `email_verified`. Not run against a real provider (#2378).
+
 ## Host-channel inventory (§4.4)
 
 | Listener | Who opens it | Protection | Server status |
