@@ -74,6 +74,9 @@ impl Window {
 struct LiveSocket {
     user: String,
     device: String,
+    /// The role the gateway named when the socket opened: the daemon fixes a
+    /// socket's role at its upgrade, so a role change must close it.
+    role: Role,
     handle: AbortHandle,
 }
 
@@ -116,7 +119,8 @@ impl Gateway {
     }
 
     /// Re-read the table when the file changed, then close the sockets of
-    /// devices that no longer route. A corrupt table keeps the last good one.
+    /// devices that no longer route or whose account's role changed. A
+    /// corrupt table keeps the last good one.
     pub fn reload(&self) {
         let stamp = db_stamp(&self.config);
         let mut last = self.db_stamp.lock().unwrap_or_else(PoisonError::into_inner);
@@ -139,7 +143,8 @@ impl Gateway {
             if socket.handle.is_finished() {
                 return false;
             }
-            if !db.routes(&socket.user, &socket.device) {
+            let role_now = db.account(&socket.user).map(|a| a.role);
+            if !db.routes(&socket.user, &socket.device) || role_now != Some(socket.role) {
                 socket.handle.abort();
                 return false;
             }
@@ -147,9 +152,9 @@ impl Gateway {
         });
     }
 
-    fn register_live(&self, user: &str, device: &str, handle: AbortHandle) {
+    fn register_live(&self, user: &str, device: &str, role: Role, handle: AbortHandle) {
         let id = self.next_live.fetch_add(1, Ordering::Relaxed);
-        self.live.lock().unwrap_or_else(PoisonError::into_inner).insert(id, LiveSocket { user: user.into(), device: device.into(), handle });
+        self.live.lock().unwrap_or_else(PoisonError::into_inner).insert(id, LiveSocket { user: user.into(), device: device.into(), role, handle });
     }
 
     pub fn live_count(&self) -> usize {
@@ -227,7 +232,7 @@ async fn forward(gw: &Gateway, account: &Account, device: Option<&str>, request:
     match proxy::forward(stream, prepare(request, account, device)).await {
         Ok((response, splice)) => {
             if let (Some(splice), Some(device)) = (splice, device) {
-                gw.register_live(&account.name, device, splice.abort_handle());
+                gw.register_live(&account.name, device, account.role, splice.abort_handle());
             }
             response
         }
@@ -441,7 +446,10 @@ async fn policy_put(State(gw): State<Shared>, headers: HeaderMap, body: Bytes) -
 }
 
 /// Per account, with no content: name, role, how many devices route, and
-/// whether its daemon socket answers. Admins only.
+/// whether its daemon socket exists. Admins only. The socket is looked at,
+/// never connected to: a connect is what socket activation starts a daemon
+/// (and its tmux) on, and systemd's socket answers whether or not the
+/// daemon runs.
 async fn status(State(gw): State<Shared>, headers: HeaderMap) -> Response {
     let Some((account, _)) = gw.routed(&headers) else {
         return api_error(StatusCode::UNAUTHORIZED, "unauthenticated");
@@ -451,8 +459,8 @@ async fn status(State(gw): State<Shared>, headers: HeaderMap) -> Response {
     }
     let mut rows = Vec::new();
     for a in gw.db().accounts.iter() {
-        let up = proxy::connect(&gw.socket_of(&a.name), a.uid).await.is_ok();
-        rows.push(json!({ "name": a.name, "role": a.role.as_str(), "devices": a.devices.len(), "daemon": if up { "up" } else { "down" } }));
+        let socket = std::fs::symlink_metadata(gw.socket_of(&a.name)).is_ok_and(|m| std::os::unix::fs::FileTypeExt::is_socket(&m.file_type()));
+        rows.push(json!({ "name": a.name, "role": a.role.as_str(), "devices": a.devices.len(), "socket": if socket { "present" } else { "missing" } }));
     }
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({ "accounts": rows, "live_sockets": gw.live_count() }))).into_response()
 }

@@ -265,6 +265,42 @@ async fn revoking_a_device_closes_its_live_socket_and_its_routing() {
     assert!(f.gw.audit.rows().iter().all(|r| r.verb != "pair" || r.user == "alice"));
 }
 
+/// The daemon fixes a socket's role when it opens; a demoted admin's open
+/// socket must not keep the old role, so the gateway closes it.
+#[tokio::test]
+async fn a_role_change_closes_the_accounts_live_sockets() {
+    let f = fixture().await;
+    let cookie = sign_in_alice(&f).await;
+    let stream = TcpStream::connect(f.addr).await.unwrap();
+    let mut request = format!("ws://{HOST}/ws").into_client_request().unwrap();
+    request.headers_mut().insert("cookie", cookie.parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::client_async(request, stream).await.expect("upgrade through the gateway");
+    ws.send(WsMessage::Text("ping".into())).await.unwrap();
+    assert_eq!(ws.next().await.unwrap().unwrap(), WsMessage::Text("ping".into()));
+    // Nothing changed: a reload leaves it open.
+    *f.gw.db_stamp.lock().unwrap() = None;
+    f.gw.reload();
+    assert_eq!(f.gw.live_count(), 1);
+    db::update(&f.gw.config.state_dir, |db| db.set_role("alice", Role::Admin)).unwrap();
+    *f.gw.db_stamp.lock().unwrap() = None;
+    f.gw.reload();
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) | Some(Ok(WsMessage::Close(_))) => break,
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the socket opened under the old role is closed");
+    assert_eq!(f.gw.live_count(), 0);
+    // The device still routes; a new request carries the new role.
+    let (status, _, body) = raw(f.addr, "GET", "/echo", &[("Cookie", &cookie)], None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["headers"]["x-gateway-role"], "admin");
+}
+
 #[tokio::test]
 async fn the_content_origin_routes_by_user_and_strips_cookies() {
     let f = fixture().await;
@@ -302,7 +338,9 @@ async fn only_an_admin_writes_the_policy() {
     assert_eq!(status, 200);
     let v: Value = serde_json::from_str(&answer).unwrap();
     let alice = v["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "alice").unwrap();
-    assert_eq!((alice["daemon"].as_str(), alice["devices"].as_u64()), (Some("up"), Some(1)));
+    assert_eq!((alice["socket"].as_str(), alice["devices"].as_u64()), (Some("present"), Some(1)));
+    let zed = v["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "root_admin").unwrap();
+    assert_eq!(zed["socket"], "missing", "looked at, not connected to");
 }
 
 #[tokio::test]
