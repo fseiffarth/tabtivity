@@ -15,6 +15,10 @@ pub trait Probe {
     fn mode_owner(&self, path: &Path) -> Option<(u32, u32)>;
     /// Run a command; `Ok(stdout)` on exit 0, `Err(stderr or why)` else.
     fn run(&self, argv: &[&str]) -> Result<String, String>;
+    /// Is the check running as root (`sudo … check`, the isolation test)?
+    fn is_root(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +41,9 @@ fn check(id: &'static str, verdict: Verdict, detail: impl Into<String>) -> Check
 
 /// Unprivileged user namespaces, as bubblewrap needs them: the sysctls, then
 /// bubblewrap itself (the AppArmor restriction only shows when it runs).
+/// Run as root, the probe drops to `nobody` first: root may always open a
+/// user namespace, so a root probe would pass on a machine where every
+/// user's agent fails closed.
 pub fn userns(p: &dyn Probe) -> Check {
     let num = |path: &str| p.read(Path::new(path)).and_then(|s| s.trim().parse::<i64>().ok());
     if num("/proc/sys/kernel/unprivileged_userns_clone") == Some(0) {
@@ -45,7 +52,9 @@ pub fn userns(p: &dyn Probe) -> Check {
     if num("/proc/sys/user/max_user_namespaces") == Some(0) {
         return check("userns", Verdict::Fail, "user.max_user_namespaces = 0");
     }
-    match p.run(&["bwrap", "--unshare-user", "--ro-bind", "/", "/", "true"]) {
+    const PROBE: [&str; 6] = ["bwrap", "--unshare-user", "--ro-bind", "/", "/", "true"];
+    let as_nobody: Vec<&str> = ["runuser", "-u", "nobody", "--"].into_iter().chain(PROBE).collect();
+    match p.run(if p.is_root() { &as_nobody } else { &PROBE }) {
         Ok(_) => check("userns", Verdict::Ok, "bubblewrap starts an unprivileged user namespace"),
         Err(e) => {
             let apparmor = num("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") == Some(1);
@@ -183,6 +192,18 @@ impl Probe for System {
             Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
         }
     }
+
+    fn is_root(&self) -> bool {
+        #[cfg(unix)]
+        {
+            // SAFETY: geteuid has no preconditions.
+            unsafe { libc::geteuid() == 0 }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +216,7 @@ mod tests {
         files: HashMap<PathBuf, String>,
         modes: HashMap<PathBuf, (u32, u32)>,
         commands: HashMap<String, Result<String, String>>,
+        root: bool,
     }
 
     impl Probe for Fake {
@@ -207,6 +229,21 @@ mod tests {
         fn run(&self, argv: &[&str]) -> Result<String, String> {
             self.commands.get(argv[0]).cloned().unwrap_or(Err("not found".into()))
         }
+        fn is_root(&self) -> bool {
+            self.root
+        }
+    }
+
+    /// Root may always open a user namespace: a root `check` probes bwrap
+    /// as `nobody`, or it would pass where every user's fence fails.
+    #[test]
+    fn the_userns_probe_never_runs_bubblewrap_as_root() {
+        let mut f = good();
+        f.root = true;
+        f.commands.insert("runuser".into(), Err("bwrap: setting up uid map: Permission denied".into()));
+        assert_eq!(userns(&f).verdict, Verdict::Fail, "bwrap itself (as root) would have passed");
+        f.commands.insert("runuser".into(), Ok(String::new()));
+        assert_eq!(userns(&f).verdict, Verdict::Ok);
     }
 
     fn good() -> Fake {
