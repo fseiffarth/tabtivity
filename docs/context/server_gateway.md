@@ -608,7 +608,7 @@ browser ◄─ 303 /?oidc=paired&device=<id>: the pending key becomes the pairin
 | Daemon admin socket | daemon | `<state>/mobile-control/admin.sock` in a `0700` dir | closed |
 | Root MCP listener (`root_mcp.rs`) | desktop window | bearer token | not started by a daemon (#2339) |
 | Shared Ollama `127.0.0.1:11434` | admin's system service | none (decided 2026-10-03) | residual: any shell can drive it; model changes are `admin` |
-| VM egress proxy (`vm_proxy.rs`) | admin's VMs | per-VM `Proxy-Authorization` credentials (`<vm dir>/proxy.token`), `407` without | closed to other users (`45d1920d`, never booted) |
+| VM egress proxy (`vm_proxy.rs`) | admin's VMs | per-VM `Proxy-Authorization` credentials (`<vm dir>/proxy.token`), `407` without — server only; a desktop VM's proxy stays open (one account on its loopback; not every agent CLI is known to send proxy credentials) | closed to other users (`45d1920d`, never booted) |
 | VM SSH forward (`vm.rs` `alloc_loopback_port`) | admin's VMs | SSH key auth | acceptable |
 | OpenVPN management port | admin | password file | acceptable (admin-only feature) |
 | CLI OAuth callback listeners | a user's CLI | the CLI's `state` | the relay only reaches the caller's own (this phase) |

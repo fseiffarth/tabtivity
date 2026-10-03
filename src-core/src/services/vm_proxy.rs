@@ -18,7 +18,10 @@
 //! server, every user. Each proxy has a per-VM token
 //! ([`guest_proxy_url`] bakes it into the guest's proxy env as
 //! `vm:<token>@…`), and a CONNECT without `Proxy-Authorization: Basic`
-//! of exactly those credentials is refused `407` and logged.
+//! of exactly those credentials is refused `407` and logged. The host decides
+//! whether a VM gets one: a server always, the desktop never (an empty token:
+//! no other account shares its loopback, and not every agent CLI's HTTP stack
+//! is known to send proxy credentials — final review B11).
 //!
 //! Threads, not tokio: VM egress is a handful of long-lived agent-API
 //! connections, not a fan-out workload, and a thread per tunnel keeps the
@@ -45,9 +48,23 @@ pub const GUEST_PROXY_ADDR: &str = "10.0.2.100:3128"; // privacy-check: ok — Q
 /// The user name of the proxy credentials (the token is the secret).
 pub const PROXY_USER: &str = "vm";
 
-/// The guest's proxy URL: the fixed guest address with the VM's credentials.
+/// The guest's proxy URL: the fixed guest address with the VM's credentials
+/// (none for an empty token).
 pub fn guest_proxy_url(token: &str) -> String {
+    if token.is_empty() {
+        return format!("http://{GUEST_PROXY_ADDR}");
+    }
     format!("http://{PROXY_USER}:{token}@{GUEST_PROXY_ADDR}")
+}
+
+/// What a CONNECT must carry: [`basic_credentials`], or nothing for an empty
+/// token (the desktop's open proxy).
+fn credentials_for(token: &str) -> String {
+    if token.is_empty() {
+        String::new()
+    } else {
+        basic_credentials(token)
+    }
 }
 
 /// `Basic base64(vm:<token>)`, the `Proxy-Authorization` value a guest sends.
@@ -209,14 +226,14 @@ pub fn parse_connect_line(line: &str) -> Option<(String, u16)> {
 /// allowlist. Returns the localhost port the `guestfwd` should target.
 /// Idempotent: a live proxy just has its allowlist replaced.
 pub fn ensure_proxy(project_id: &str, allow: Vec<String>, token: &str) -> Result<u16, String> {
-    if token.len() < 16 || !token.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if !token.is_empty() && (token.len() < 16 || !token.bytes().all(|b| b.is_ascii_alphanumeric())) {
         return Err("VM egress proxy: the token must be at least 16 letters or digits".into());
     }
     let mut map = proxies().lock().unwrap();
     if let Some(handle) = map.get(project_id) {
         if !handle.shared.stop.load(Ordering::SeqCst) {
             *handle.shared.allow.lock().unwrap() = allow;
-            *handle.shared.credentials.lock().unwrap() = basic_credentials(token);
+            *handle.shared.credentials.lock().unwrap() = credentials_for(token);
             return Ok(handle.port);
         }
         map.remove(project_id);
@@ -235,7 +252,7 @@ pub fn ensure_proxy(project_id: &str, allow: Vec<String>, token: &str) -> Result
         blocked_total: AtomicU64::new(0),
         started: Instant::now(),
         stop: AtomicBool::new(false),
-        credentials: Mutex::new(basic_credentials(token)),
+        credentials: Mutex::new(credentials_for(token)),
     });
 
     let accept_shared = Arc::clone(&shared);
@@ -412,7 +429,7 @@ fn handle_conn(mut stream: TcpStream, shared: Arc<ProxyShared>) {
     // The VM's own credentials, or nothing: the listener is on loopback,
     // which every local account (every user of a server) can reach.
     let expected = shared.credentials.lock().unwrap().clone();
-    let authorized = head
+    let authorized = expected.is_empty() || head
         .split(|&b| b == b'\n')
         .skip(1)
         .filter_map(|l| std::str::from_utf8(l).ok())
@@ -607,6 +624,20 @@ mod tests {
         assert_eq!(report.total, 2);
         assert_eq!(report.recent[0].target, "allowed.example:443 (no VM credentials)");
         stop_proxy("test-proxy-auth");
+    }
+
+    /// The desktop's proxy (an empty token) asks for no credentials: a bare
+    /// CONNECT is judged by the allowlist alone, as before #2355.
+    #[test]
+    fn an_open_proxy_judges_a_bare_connect_by_the_allowlist() {
+        assert_eq!(guest_proxy_url(""), format!("http://{GUEST_PROXY_ADDR}"));
+        let port = ensure_proxy("test-proxy-open", allow(&["allowed.example"]), "").unwrap();
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        conn.write_all(b"CONNECT evil.example:443 HTTP/1.1\r\nHost: evil.example\r\n\r\n").unwrap();
+        let mut response = String::new();
+        conn.read_to_string(&mut response).unwrap();
+        assert_eq!(status(&response), Some(403), "denied by the allowlist, not 407");
+        stop_proxy("test-proxy-open");
     }
 
     /// The status code of a proxy reply. Compared as a number, so a failing

@@ -1148,8 +1148,8 @@ fn vm_hostname_for(names: &VmNames, project_name: &str) -> String {
 /// The per-project NoCloud `user-data`: the `tabtivity` account with the per-VM
 /// public key, the project dir, and — under `Proxy` egress — the proxy env
 /// pointing at the fixed guest-side `guestfwd` address. Pure.
-/// `proxy` is the VM's egress-proxy token under `Proxy` egress, `None`
-/// otherwise.
+/// `proxy` is the VM's egress-proxy token under `Proxy` egress (empty: no
+/// credentials, the desktop's form), `None` otherwise.
 pub fn cloud_init_user_data(hostname: &str, pubkey: &str, proxy: Option<&str>) -> String {
     cloud_init_user_data_for(&VmNames::of(&crate::brand::CURRENT), hostname, pubkey, proxy)
 }
@@ -1543,8 +1543,12 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
 
     // Egress proxy first — the seed bakes whether proxy env exists, and the
     // netdev needs the listener's port.
+    // Credentials on a server only (#2355's threat is another account on the
+    // shared loopback); a desktop VM keeps its open proxy and the user-data it
+    // always had (final review B11).
     let proxy_token = match spec.egress {
-        VmEgress::Proxy => Some(ensure_proxy_token(&dir)?),
+        VmEgress::Proxy if crate::services::server::is_server() => Some(ensure_proxy_token(&dir)?),
+        VmEgress::Proxy => Some(String::new()),
         _ => None,
     };
     let proxy_port = match &proxy_token {
@@ -2254,6 +2258,17 @@ mod tests {
         assert!(doc.contains("Acquire::https::Proxy \"http://vm:0123456789abcdef0123456789abcdef@"));
         assert!(doc.contains(concat!("/etc/apt/apt.conf.d/95", crate::app_slug!(), "-proxy")));
         assert!(doc.contains("/etc/environment"));
+    }
+
+    /// Final review B11: a desktop VM (no proxy token) is seeded with the
+    /// user-data it always had — no credentials, so cloud-init does not
+    /// re-provision it and its agents need not send proxy credentials.
+    #[test]
+    fn a_desktop_proxy_vm_keeps_the_user_data_without_credentials() {
+        let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", Some(""));
+        assert!(doc.contains("export https_proxy=http://10.0.2.100:3128\n")); // privacy-check: ok — QEMU slirp, not a real host
+        assert!(!doc.contains("vm:"));
+        assert!(doc.contains("Acquire::https::Proxy \"http://10.0.2.100:3128\";")); // privacy-check: ok — QEMU slirp, not a real host
     }
 
     #[test]
