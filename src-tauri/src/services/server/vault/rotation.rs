@@ -213,7 +213,7 @@ impl Vault {
         // happens to the rotation.
         file.save(&self.state_dir)?;
         match self.key() {
-            Some(old) => self.rotate(&old, remaining),
+            Some(old) => self.rotate(&old, &self.live(remaining)),
             None => Ok(()),
         }
     }
@@ -221,7 +221,7 @@ impl Vault {
     /// After a release: drop wraps of devices that are no longer enrolled
     /// and run a pending rotation.
     pub(super) fn catch_up(&self, devices: &[DeviceKey]) {
-        if let Err(error) = self.revoke_where(|w| !devices.iter().any(|d| d.id == w.device_id), devices) {
+        if let Err(error) = self.revoke_where(|w| self.is_revoked(&w.device_id) || !devices.iter().any(|d| d.id == w.device_id), devices) {
             eprintln!("secrets: rotating the key after a revoke failed (retried at the next release): {error}");
         }
     }

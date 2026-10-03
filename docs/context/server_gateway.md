@@ -195,7 +195,13 @@ keyring. `services::server::vault` wires them:
   settles a crash: journal kid ≠ `wraps.json` kid → delete the `.next`
   files (old K in force); equal → finish the moves. `wraps.json` keeps a
   `check` (HKDF of K) so a stale K left in the hold is cleared (locked,
-  never wrong). Locked at revoke: the wrap goes at once, `rotate: true`
+  never wrong), and a release puts K in the hold only if it matches that
+  check, under the vault's lock (a wrap read just before a commit opens
+  the retired K). Every read of K that seals something takes the lock
+  first. A device revoked while the vault runs is remembered
+  (`Vault::revoked`): a device list a route read before the revoke never
+  gets it a wrap again (rotation, `wrap_missing`). The device list is
+  saved before the vault hears of a revoke. Locked at revoke: the wrap goes at once, `rotate: true`
   is recorded, the next release rotates before listeners run. Releases
   also drop wraps of devices no longer enrolled (`--revoke-device` with
   the daemon stopped drops the wrap itself via `revoke_offline`);
@@ -232,7 +238,10 @@ keyring. `services::server::vault` wires them:
   copy of `key.json` and `wraps.json` still opens mail rows sealed later —
   the user docs point at mail's "Delete and download again". `A` sealed
   under an old K lets a revoked device with old wraps forge re-pin
-  bindings until a new recovery code is made. The recovery code crosses
+  bindings until a new recovery code is made (it also needs the gateway's
+  position and the user typing the code; the K it then reaches still
+  needs the *current* `wraps.json`, which with the gateway's position is
+  enough on its own). The recovery code crosses
   the gateway in clear on `recover` (not on re-pin). The "mail locked
   since reboot" push is not built.
 

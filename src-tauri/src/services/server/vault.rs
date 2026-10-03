@@ -38,7 +38,7 @@
 //! identity key and sealed files — nothing that opens without a paired
 //! device or the recovery code.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -196,6 +196,11 @@ pub struct Vault {
     listeners: Mutex<Vec<(&'static str, Listener)>>,
     /// Serializes read-modify-writes of `wraps.json` and `credentials.json`.
     files: Mutex<()>,
+    /// Devices revoked while this vault ran. A route reads its device list
+    /// before it calls in (a release, an enrolment), so a list read just
+    /// before a revoke still names the revoked device: K is never wrapped
+    /// for one of these again. After a restart every list is read afresh.
+    revoked: Mutex<HashSet<String>>,
 }
 
 fn now() -> u64 {
@@ -233,7 +238,7 @@ impl Vault {
     /// The vault of `state_dir`. Finishes or undoes a rotation a crash
     /// interrupted before anything reads a sealed file ([`Vault::settle`]).
     pub fn new(state_dir: PathBuf, hold: Arc<dyn KeyHold>) -> Self {
-        let vault = Self { state_dir, hold, exchanges: Mutex::default(), listeners: Mutex::default(), files: Mutex::default() };
+        let vault = Self { state_dir, hold, exchanges: Mutex::default(), listeners: Mutex::default(), files: Mutex::default(), revoked: Mutex::default() };
         {
             let _guard = vault.files();
             vault.settle();
@@ -247,6 +252,16 @@ impl Vault {
 
     fn files(&self) -> std::sync::MutexGuard<'_, ()> {
         self.files.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `devices` without any this vault saw revoked.
+    fn live(&self, devices: &[DeviceKey]) -> Vec<DeviceKey> {
+        let revoked = self.revoked.lock().unwrap_or_else(PoisonError::into_inner);
+        devices.iter().filter(|d| !revoked.contains(&d.id)).cloned().collect()
+    }
+
+    fn is_revoked(&self, device_id: &str) -> bool {
+        self.revoked.lock().unwrap_or_else(PoisonError::into_inner).contains(device_id)
     }
 
     /// K, while unlocked.
@@ -298,8 +313,24 @@ impl Vault {
     /// while no vault saw it, e.g. by `--revoke-device` with the daemon
     /// stopped) is dropped and K rotated, as is a rotation still pending
     /// from a revoke while locked.
+    ///
+    /// Only the K `wraps.json` names goes into the hold, checked under the
+    /// file lock: a wrap read just before a rotation committed (two devices
+    /// releasing at once around a pending rotation) opens the retired K,
+    /// which would otherwise replace the current one — and a credential
+    /// saved then would be sealed under a key nobody holds any more.
     fn released(&self, key: &MasterKey, devices: &[DeviceKey]) -> Result<(), String> {
-        self.hold.put(key)?;
+        {
+            let _guard = self.files();
+            // A rotation whose files a failure left half moved is finished
+            // before K is used (it would otherwise wait for a restart).
+            self.settle();
+            let file = WrapFile::load(&self.state_dir)?;
+            if file.check.as_ref().is_some_and(|check| *check != secrets::key_check(key)) {
+                return Err("invalid_exchange".into());
+            }
+            self.hold.put(key)?;
+        }
         self.catch_up(devices);
         self.wrap_missing(devices);
         self.notify();
@@ -319,7 +350,10 @@ impl Vault {
     /// exists already (that would orphan everything sealed under it).
     pub fn set_up(&self, devices: &[DeviceKey]) -> Result<Zeroizing<String>, String> {
         let guard = self.files();
-        if WrapFile::load(&self.state_dir)?.recovery.is_some() {
+        // `is_set_up`, not "has a recovery wrap": a rotation that could not
+        // carry a v1 wrap along leaves K without one, and a second set-up
+        // would orphan everything sealed under it.
+        if WrapFile::load(&self.state_dir)?.is_set_up() {
             return Err("the secrets key is set up already".into());
         }
         let key = MasterKey::generate();
@@ -331,7 +365,7 @@ impl Vault {
             check: Some(secrets::key_check(&key)),
             rotate: false,
         };
-        for device in devices {
+        for device in &self.live(devices) {
             if let Ok(public) = secrets::device_key(&device.ecdh) {
                 file.put(secrets::wrap_for_device(&key, &device.id, &public));
             }
@@ -351,8 +385,10 @@ impl Vault {
     /// While unlocked: a fresh recovery code replaces the old one (the old
     /// wrap is gone, so a lost or leaked code stops working). Returned once.
     pub fn new_recovery_code(&self) -> Result<Zeroizing<String>, String> {
-        let key = self.key().ok_or("the secrets key is locked")?;
+        // K read under the lock: one read before a rotation would wrap the
+        // retired K for the new code.
         let _guard = self.files();
+        let key = self.key().ok_or("the secrets key is locked")?;
         let mut file = WrapFile::load(&self.state_dir)?;
         if !file.is_set_up() {
             return Err("the secrets key is not set up".into());
@@ -365,14 +401,15 @@ impl Vault {
 
     /// While unlocked: wrap K for each device that has none. The count made.
     pub fn wrap_missing(&self, devices: &[DeviceKey]) -> usize {
-        let Some(key) = self.key() else { return 0 };
+        let devices = self.live(devices);
         let _guard = self.files();
+        let Some(key) = self.key() else { return 0 };
         let Ok(mut file) = WrapFile::load(&self.state_dir) else { return 0 };
         if !file.is_set_up() {
             return 0;
         }
         let mut made = 0;
-        for device in devices {
+        for device in &devices {
             if file.device(&device.id).is_none() {
                 if let Ok(public) = secrets::device_key(&device.ecdh) {
                     file.put(secrets::wrap_for_device(&key, &device.id, &public));
@@ -402,13 +439,22 @@ impl Vault {
     /// so a copy of the old `wraps.json` and the device's key open nothing
     /// sealed from then on. `remaining`: every other enrolled device.
     pub fn revoke(&self, device_id: &str, remaining: &[DeviceKey]) -> Result<(), String> {
+        self.revoked.lock().unwrap_or_else(PoisonError::into_inner).insert(device_id.to_string());
         let remaining: Vec<DeviceKey> = remaining.iter().filter(|d| d.id != device_id).cloned().collect();
         self.revoke_where(|w| w.device_id == device_id, &remaining)
     }
 
-    /// Every device forgotten: every device wrap goes and K is rotated; the
-    /// recovery code follows the new K.
-    pub fn forget_devices(&self) -> Result<(), String> {
+    /// Every device forgotten (`device_ids`: every one that was paired):
+    /// every device wrap goes and K is rotated; the recovery code follows
+    /// the new K.
+    pub fn forget_devices(&self, device_ids: &[String]) -> Result<(), String> {
+        {
+            let mut revoked = self.revoked.lock().unwrap_or_else(PoisonError::into_inner);
+            revoked.extend(device_ids.iter().cloned());
+            if let Ok(file) = WrapFile::load(&self.state_dir) {
+                revoked.extend(file.devices.iter().map(|w| w.device_id.clone()));
+            }
+        }
         self.revoke_where(|_| true, &[])
     }
 
@@ -476,7 +522,7 @@ impl Vault {
             return Ok(UnlockStart::Unlocked);
         }
         let file = WrapFile::load(&self.state_dir)?;
-        if file.recovery.is_none() {
+        if !file.is_set_up() {
             return Ok(UnlockStart::NotSetUp);
         }
         let Some(wrap) = file.device(device_id) else { return Ok(UnlockStart::NoWrap) };
@@ -627,8 +673,10 @@ impl Vault {
 
     /// Save (`Some`, non-empty) or forget a password. Refused while locked.
     pub fn set_credential(&self, account: &str, secret: Option<&str>) -> Result<(), String> {
-        let key = self.key().ok_or_else(|| concat!("saved passwords are locked until a paired device opens ", crate::app_name!()).to_string())?;
+        // K read under the lock: one read before a rotation would seal a
+        // first credential under the retired K, which nothing opens after.
         let _guard = self.files();
+        let key = self.key().ok_or_else(|| concat!("saved passwords are locked until a paired device opens ", crate::app_name!()).to_string())?;
         let mut map = self.open_credentials(&key)?;
         if let Some(mut old) = map.remove(account) {
             zeroize::Zeroize::zeroize(&mut old);

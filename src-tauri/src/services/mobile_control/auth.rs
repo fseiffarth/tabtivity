@@ -128,9 +128,15 @@ fn device_keys_of(file: &DeviceFile) -> Vec<crate::services::server::vault::Devi
 }
 
 /// [`AuthStore::secrets_device_keys`] from the file, for a caller that does
-/// not hold the store (the Server settings' set-up command).
-pub fn read_secrets_device_keys(control_dir: &Path) -> Vec<crate::services::server::vault::DeviceKey> {
-    store::read_json::<DeviceFile>(&control_dir.join("devices.json")).map(|f| device_keys_of(&f)).unwrap_or_default()
+/// not hold the store (the daemon's start, before the store opens). No file
+/// is no device; an unreadable one is an error, never "no devices" — the
+/// vault drops the wrap of every device a list leaves out.
+pub fn read_secrets_device_keys(control_dir: &Path) -> Result<Vec<crate::services::server::vault::DeviceKey>, String> {
+    let path = control_dir.join("devices.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    store::read_json::<DeviceFile>(&path).map(|f| device_keys_of(&f))
 }
 
 /// The actions that need a pairing-key signature on top of the session.
@@ -660,6 +666,14 @@ impl AuthStore {
         if before == self.devices.devices.len() {
             return Err("unknown device".into());
         }
+        self.sessions.retain(|_, s| s.device_id != device_id);
+        self.challenges.retain(|_, c| c.device_id != device_id);
+        self.action_challenges.retain(|_, c| c.device_id != device_id);
+        // The device list is saved first: a crash before the vault below
+        // leaves a wrap of a device no longer listed, which the next release
+        // drops and rotates for; the other order left a device whose key had
+        // been rotated away still paired on disk, to be wrapped again.
+        let saved = self.save_devices();
         // §6.8: a revoked device's wrap of the secrets key goes with it, and
         // the key is rotated (now if unlocked, else at the next release), so
         // the device and an old copy of the wraps open nothing new.
@@ -668,27 +682,27 @@ impl AuthStore {
                 eprintln!("secrets: revoking {device_id}: {error} (the rotation is retried at the next release)");
             }
         }
-        self.sessions.retain(|_, s| s.device_id != device_id);
-        self.challenges.retain(|_, c| c.device_id != device_id);
-        self.action_challenges.retain(|_, c| c.device_id != device_id);
-        self.save_devices()?;
+        saved?;
         self.push.forget_device(device_id)?;
         self.audit("revoked", Some(device_id));
         Ok(())
     }
 
     pub fn forget_all(&mut self) -> Result<(), String> {
-        if let Some(vault) = crate::services::server::vault::vault() {
-            if let Err(error) = vault.forget_devices() {
-                eprintln!("secrets: forgetting every device: {error} (the rotation is retried at the next release)");
-            }
-        }
+        let forgotten: Vec<String> = self.devices.devices.iter().map(|d| d.id.clone()).collect();
         self.devices.devices.clear();
         self.sessions.clear();
         self.challenges.clear();
         self.action_challenges.clear();
         self.pairing = None;
-        self.save_devices()?;
+        // Saved before the vault hears of it, as in `revoke`.
+        let saved = self.save_devices();
+        if let Some(vault) = crate::services::server::vault::vault() {
+            if let Err(error) = vault.forget_devices(&forgotten) {
+                eprintln!("secrets: forgetting every device: {error} (the rotation is retried at the next release)");
+            }
+        }
+        saved?;
         self.push.forget_all()?;
         let next = random_bytes::<32>()?;
         let key_path = self.control_dir.join("host.key");
@@ -818,6 +832,17 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
         pkcs8::EncodePublicKey,
     };
+
+    /// The daemon's start reads the device list from the file: no file is
+    /// no device, but an unreadable one must not read as "no devices" (the
+    /// vault would drop every device's wrap).
+    #[test]
+    fn an_unreadable_device_file_is_an_error_not_an_empty_list() {
+        let dir = tempfile::tempdir().expect("control dir");
+        assert_eq!(read_secrets_device_keys(dir.path()), Ok(Vec::new()));
+        std::fs::write(dir.path().join("devices.json"), b"{ not json").expect("write");
+        assert!(read_secrets_device_keys(dir.path()).is_err());
+    }
 
     /// User decision 2026-10-03: setting the secrets key up and a new
     /// recovery code need the pairing key's signature over a single-use

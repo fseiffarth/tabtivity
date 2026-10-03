@@ -128,7 +128,11 @@ pub fn install_vault(state_dir: &std::path::Path) {
     // K survived a restart in the keyring: a rotation a revoke left pending
     // (locked at the time, or `--revoke-device` with the daemon stopped)
     // runs now.
-    vault.resume(&crate::services::mobile_control::auth::read_secrets_device_keys(&state_dir.join("mobile-control")));
+    match crate::services::mobile_control::auth::read_secrets_device_keys(&state_dir.join("mobile-control")) {
+        Ok(devices) => vault.resume(&devices),
+        // Never "no devices": that would drop every device's wrap.
+        Err(error) => eprintln!("{SLUG}-serverd: a pending secrets-key rotation waits for the next release ({error})"),
+    }
     let status = vault.status();
     eprintln!(
         "{SLUG}-serverd: secrets key {}",

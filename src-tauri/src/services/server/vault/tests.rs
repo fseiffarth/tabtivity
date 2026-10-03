@@ -176,8 +176,12 @@ fn devices_enrolled_later_get_wraps_and_revoked_ones_lose_theirs() {
     // Released with the enrolled devices' list (here: the tablet's only, as
     // the daemon's list no longer has a revoked device): nothing new to wrap.
     assert_eq!(vault.status().wrapped_devices, 1);
-    assert_eq!(vault.wrap_missing(&[phone.key()]), 1, "a device enrolled again is wrapped while unlocked");
-    vault.forget_devices().unwrap();
+    // A revoked id never comes back (pairing mints a new one): a list read
+    // before the revoke still naming it wraps nothing for it.
+    assert_eq!(vault.wrap_missing(&[phone.key()]), 0, "a revoked device is never wrapped again");
+    let laptop = Device::new("dev_laptop_00001");
+    assert_eq!(vault.wrap_missing(&[laptop.key()]), 1, "a device paired later is wrapped while unlocked");
+    vault.forget_devices(&[]).unwrap();
     assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: true });
 }
 
@@ -385,12 +389,69 @@ fn a_v1_recovery_wrap_is_upgraded_when_used_and_flagged_when_it_cannot_follow() 
     let mut file = WrapFile::load(dir.path()).unwrap();
     file.recovery = Some(secrets::wrap_with_recovery_v1(&k, &code));
     file.save(dir.path()).unwrap();
-    vault.forget_devices().unwrap();
+    vault.forget_devices(&[]).unwrap();
     assert_eq!(vault.status(), VaultStatus { set_up: true, unlocked: true, wrapped_devices: 0, recovery_code: false });
+    // Set up still, with no recovery wrap: a second set-up would orphan K,
+    // and a device wrapped later still gets a locked start, not "not set up".
+    assert!(vault.set_up(&[]).is_err(), "no second K");
+    let tablet = Device::new("dev_tablet_00001");
+    assert_eq!(vault.wrap_missing(&[tablet.key()]), 1);
+    hold.clear().unwrap();
+    assert!(matches!(vault.start_unlock(ORIGIN, &tablet.id).unwrap(), UnlockStart::Locked { .. }));
+    release(&vault, &tablet).unwrap();
     let fresh = vault.new_recovery_code().unwrap();
     hold.clear().unwrap();
     vault.recover(&fresh, &[]).unwrap();
     assert!(vault.status().recovery_code);
+}
+
+/// Races around a rotation (review 2026-10-03): a wrap read before the
+/// commit opens the retired K, and a device list read before a revoke still
+/// names the revoked device. Neither may put the retired K in the hold or
+/// wrap K for the revoked device.
+#[test]
+fn a_retired_key_and_a_stale_device_list_change_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let hold = Arc::new(MemoryHold::default());
+    let phone = Device::new("dev_phone_000001");
+    let tablet = Device::new("dev_tablet_00001");
+    let laptop = Device::new("dev_laptop_00001");
+    let vault = vault_in(dir.path(), hold.clone());
+    vault.set_up(&[phone.key(), tablet.key(), laptop.key()]).unwrap();
+    let mail = seal_things(&vault, dir.path());
+    let k1 = vault.key().unwrap();
+    let stale = [phone.key(), tablet.key(), laptop.key()];
+    let finish = |device: &Device, list: &[DeviceKey]| {
+        let identity = vault.identity_public().unwrap();
+        let start = vault.start_unlock(ORIGIN, &device.id).unwrap();
+        let (id, t, nonce, sealed) = device.answer(&identity, &start);
+        vault.finish_unlock(&device.id, &id, &t, &nonce, &sealed, list)
+    };
+
+    vault.revoke(&phone.id, &[tablet.key(), laptop.key()]).unwrap();
+    let k2 = vault.key().unwrap();
+    // The laptop's release read its wrap before the commit: it hands in K1.
+    hold.clear().unwrap();
+    assert!(vault.released(&k1, &stale).is_err(), "the retired K is refused");
+    assert!(vault.key().is_none(), "and not held");
+    // A release and an enrolment with the list read before the revoke.
+    finish(&tablet, &stale).unwrap();
+    assert_eq!(vault.key().unwrap().bytes(), k2.bytes());
+    vault.released(&k2, &stale).unwrap();
+    assert_eq!(vault.wrap_missing(&stale), 0);
+    assert!(WrapFile::load(dir.path()).unwrap().device(&phone.id).is_none(), "no wrap for the revoked device");
+    assert_opens(&vault, dir.path(), &mail);
+
+    // Revoked while locked, then released with a stale list: the rotation
+    // wraps the new K for the remaining devices only.
+    hold.clear().unwrap();
+    vault.revoke(&laptop.id, &[tablet.key()]).unwrap();
+    let dev = |w: &WrapFile| w.devices.iter().map(|w| w.device_id.clone()).collect::<Vec<String>>();
+    assert_eq!(dev(&WrapFile::load(dir.path()).unwrap()), vec![tablet.id.clone()]);
+    finish(&tablet, &stale).unwrap();
+    assert_ne!(vault.key().unwrap().bytes(), k2.bytes(), "rotated at the release");
+    assert_eq!(dev(&WrapFile::load(dir.path()).unwrap()), vec![tablet.id.clone()], "the stale list wrapped nobody revoked");
+    assert_opens(&vault, dir.path(), &mail);
 }
 
 // ── Re-pinning a lost identity key (user decision 2026-10-03) ──────────────
