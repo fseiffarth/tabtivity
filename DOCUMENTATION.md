@@ -445,6 +445,21 @@ has, the pill offers **Make these changes**, which sends the go-ahead (edit the
 sources, rebuild, send the PDF back) — its wording is the second field of Home →
 This phone → **Mark up prompt**.
 
+**Browser access (the whole desktop app in a browser on this computer).**
+**Settings → Mobile → Browser access** has the Mobile host also serve the
+desktop app at `http://127.0.0.1:<port>/desktop/`, for a browser on this
+computer only (loopback; not through Tailscale). Terminals, agents and files
+run in the host; the browser is a thin client. **Show sign-in link** gives a
+one-time link carrying this computer's sign-in token: that token, a private
+file next to the host's socket, is the whole perimeter — whoever holds it
+(or the link) drives this app with your rights, so on a computer other
+people use, keep it off or rotate it. The window and the browser share one
+state dir: a project's container keeps running while either has tabs in
+it, a VM belongs to the one that booted it (the other is refused), a remote
+project's background sync runs in one of them, and a sync setting changed
+in both at once asks to be done again (`docs/context/web_client.md`). Takes
+effect when the host (re)starts.
+
 ### Hosted server: signing in with your organisation's account
 
 If the administrator connected the server to an identity provider (for

@@ -2532,6 +2532,7 @@ mod tests {
             TypeId::of::<commands::caldav::CalDavState>(),
             TypeId::of::<services::usage_stats::UsageWatchState>(),
             TypeId::of::<commands::mobile_control::MobileDesktopState>(),
+            TypeId::of::<services::pick_grants::PickGrantsState>(),
         ];
         let distinct: std::collections::HashSet<_> = ids.iter().collect();
         assert_eq!(distinct.len(), ids.len(), "two managed singletons share a type");

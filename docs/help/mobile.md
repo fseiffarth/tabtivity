@@ -180,6 +180,18 @@ and **Update** in the header's Mobile menu (or **Settings → Mobile → Update
 mobile host**) does it by hand; either appears only while the server is behind.
 **Reconnect** in that menu restarts the server if it stopped.
 
+## The desktop app in a browser on this computer
+
+**Settings → Mobile → Browser access** has the Mobile host also serve the
+whole desktop app at `http://127.0.0.1:<port>/desktop/` — for a browser on
+this computer only, never through Tailscale. Open **Show sign-in link** once
+in the browser. The link carries this computer's sign-in token, which is the
+whole protection: anyone with it can use the app as you, so keep it off on a
+computer other people use. A project's container or VM, and a remote
+project's background sync, are shared sensibly between the window and the
+browser: a container stays up while either uses it, and a VM opened in one
+is refused in the other until it is shut down there.
+
 ## If a phone goes missing
 
 The header's Mobile button shows the host status. **Revoke** drops one device;

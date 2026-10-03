@@ -147,6 +147,10 @@ existing agent-tab check, which only knows this user's tabs.
 128-bit recovery-code wrap, `wraps.json` `0600`, K in the kernel persistent
 keyring. `services::server::vault` wires them:
 
+- **The desktop binary carries a `--serverd` verb** (`src-tauri/src/main.rs`,
+  the same entry as `tabtivity-serverd`): a development route for running a
+  daemon from a desktop build. Without the unit's environment it exits 2;
+  a deployment runs the `app-serverd` crate's binary, which links no GTK.
 - **Only a daemon has a vault** (`serverd`'s `main` installs it, never
   `run`, so a test serving a daemon cannot turn its test binary into a
   server). Every caller asks `vault::vault()`; `None` is the desktop, whose
