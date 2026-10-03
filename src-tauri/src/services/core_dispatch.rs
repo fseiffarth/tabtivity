@@ -171,7 +171,7 @@ pub async fn dispatch(ctx: &CoreCtx, role: Role, cmd: &str, mut args: Value) -> 
     if let Some(refusal) = refusal(cmd, role) {
         return Err(serde_json::to_value(refusal).unwrap_or(Value::Null));
     }
-    crate::services::model_allowlist::check(cmd, &args)?;
+    crate::services::model_allowlist::check_off_thread(cmd, &args).await?;
     confine_for_user(role, cmd, &mut args)?;
     let run = handler(cmd).expect("refusal() checked the wrapper exists");
     run(ctx.clone(), args).await

@@ -58,14 +58,23 @@ const DEFAULT_OLLAMA_PORT: u16 = 11434;
 /// module hears, and the alternative is a stale endpoint that survives until
 /// relaunch. It is one small JSON read against a file the app already keeps hot.
 fn ollama_addr() -> Result<String, String> {
-    let settings = read_settings();
-    resolve_ollama_addr(
-        settings.as_ref().and_then(|s| s.ollama_host.as_deref()),
-        settings
-            .as_ref()
-            .and_then(|s| s.ollama_allow_remote_host)
-            .unwrap_or(false),
-    )
+    let settings = read_settings().unwrap_or_default();
+    let (host, allow_remote) = host_setting(&settings);
+    resolve_ollama_addr(host, allow_remote)
+}
+
+/// `Settings::ollama_host` and `ollama_allow_remote_host` as this process
+/// honours them. On a hosted server neither is a user's to set (final review
+/// A2): the endpoint is the one shared Ollama on loopback that the admin runs,
+/// so a user's `settings.json` can neither send the daemon's prompts to a
+/// host of their choosing, nor aim it at another account's loopback listener,
+/// nor make the model allowlist's "installed" list come from a server of
+/// their own. The desktop — window and sidecar alike — keeps both settings.
+pub(crate) fn host_setting(settings: &crate::schema::Settings) -> (Option<&str>, bool) {
+    if crate::services::server::is_server() {
+        return (None, false);
+    }
+    (settings.ollama_host.as_deref(), settings.ollama_allow_remote_host.unwrap_or(false))
 }
 
 fn read_settings() -> Option<crate::schema::Settings> {
@@ -255,11 +264,22 @@ pub(crate) fn ollama_http(
     path: &str,
     json_body: Option<&str>,
 ) -> Result<String, String> {
+    // 10-minute timeout accommodates large model pulls
+    ollama_http_within(method, path, json_body, Duration::from_secs(600))
+}
+
+/// [`ollama_http`] with its own read timeout, for a quick question that must
+/// not hold its thread for a pull's ten minutes.
+fn ollama_http_within(
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+) -> Result<String, String> {
     let addr = ollama_addr()?;
     let mut stream = connect_ollama(&addr)?;
-    // 10-minute timeout accommodates large model pulls
     stream
-        .set_read_timeout(Some(Duration::from_secs(600)))
+        .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
 
     let req = match json_body {
@@ -2889,7 +2909,13 @@ pub async fn list_ollama_models() -> Result<Vec<String>, String> {
 /// The names `/api/tags` lists, synchronously — the dispatcher's model
 /// allowlist (`services::model_allowlist`) asks before a request is forwarded.
 pub(crate) fn installed_model_names() -> Result<Vec<String>, String> {
-    let body = ollama_http("GET", "/api/tags", None)?;
+    installed_model_names_within(Duration::from_secs(600))
+}
+
+/// [`installed_model_names`] answered within `read_timeout` (after the
+/// bounded connect), or an error.
+pub(crate) fn installed_model_names_within(read_timeout: Duration) -> Result<Vec<String>, String> {
+    let body = ollama_http_within("GET", "/api/tags", None, read_timeout)?;
     let v: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("ollama json: {e}"))?;
 
@@ -3406,8 +3432,8 @@ pub async fn complete_text(
         let settings = read_settings().unwrap_or_default();
         let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
             .is_some_and(|policy| policy.local_only);
-        let addr = resolve_ollama_addr(settings.ollama_host.as_deref(),
-            !local_only && settings.ollama_allow_remote_host.unwrap_or(false))?;
+        let (host, allow_remote) = host_setting(&settings);
+        let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
         let context = context

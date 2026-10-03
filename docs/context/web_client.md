@@ -35,12 +35,24 @@ the sidecar runs. It is additive — the Tauri window behaves exactly as before.
   answers unknown / client / admin-for-a-user / off before any argument is
   parsed (P0 handoff). A refusal is `{code, reason?}`; a command's own error
   is whatever it was.
-- **The model allowlist is a dispatcher hook, not a UI filter.** Ollama loads
-  whatever a request names, so `complete_text`, `prepare_local_agent`,
-  `prepare_local_launch` and `ensure_vibe_ollama_model` are held to
-  `Settings.ollama_allowed_models` — unset meaning "what the admin pulled"
-  (the admin's pull is the act of allowing) — before the body runs. The
-  desktop window never checks (server mode is additive). P3 adds the UI.
+- **The model allowlist is a check at the request, not a UI filter and not a
+  settings guard.** Ollama loads whatever a request names, so on a server
+  every request that names a model is held to the admin's policy list —
+  unset meaning "what the admin pulled" (the admin's pull is the act of
+  allowing): the dispatcher's `complete_text`, `prepare_local_agent`,
+  `prepare_local_launch` and `ensure_vibe_ollama_model`, and `mail_ai::chat`
+  (summaries, drafts and the classifier every inbox sync runs; final review
+  A1 — the P2 review's "the browser cannot write the model" was wrong:
+  `patch_settings` is `core` and must stay so, being the browser's only
+  settings write). The dispatcher runs it off the async workers, the
+  installed list asked within 2 s and reused for 5 s, a wedged Ollama
+  answering `ollama-unreachable` (B6). On a server `ollama_host` and
+  `ollama_allow_remote_host` are ignored (`ollama::host_setting`): the
+  endpoint is the shared loopback Ollama, so a user can neither egress
+  elsewhere nor aim the daemon at another account's loopback port (A2). The
+  desktop — window and sidecar — never checks and keeps both settings. The
+  root MCP's local-model lane (#2339) must call `check_model` once the daemon
+  serves it.
 - **Sessions and login are the browser's own**, separate from the phone's
   `AuthStore`: a different cookie (`<slug>_desktop_session`, no `__Host-`
   because loopback is plain http and that prefix needs `Secure`), a different

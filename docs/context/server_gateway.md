@@ -125,7 +125,10 @@ The gateway owns `policy.json` (`0644`, in its state dir): the admin's mail /
 calendar / todo / sharing switches and the Ollama allowlist. Daemons read it
 (`<PREFIX>SERVER_POLICY_FILE`); unreadable → every switchable feature off and
 no model allowed (fail closed). On a server the allowlist is **only** the
-policy's — a user's own `settings.json` never widens it. A user's own switches
+policy's — a user's own `settings.json` never widens it, and it holds every
+request that names a model, mail's included (`model_allowlist`); a user's
+`ollama_host` is ignored on a server, the shared loopback Ollama is the only
+endpoint. A user's own switches
 are `Settings.disabled_features`. Off = `core_dispatch` refuses with
 `feature-off`, the phone's routes answer 403, alarms pause; nothing is
 deleted.

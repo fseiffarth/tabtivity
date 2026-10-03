@@ -618,6 +618,7 @@ pub fn apply_to_spawn(opts: &mut PtyOptions) {
     if !settings.root_mcp() { return; }
     let local_only = settings.root_mcp_local_only();
     let tool_agents = settings.root_mcp_agent_list();
+    let host = crate::commands::ollama::host_setting(&settings).0.map(str::to_string);
     let tool_models = settings.ollama_mcp_models.unwrap_or_default();
     let Some(token) = mint_token() else { return };
     let caller = if is_local_model(opts) { Caller::LocalModel } else { Caller::Agent };
@@ -625,7 +626,7 @@ pub fn apply_to_spawn(opts: &mut PtyOptions) {
     // config is: `resolve_ollama_addr` with the remote allowance, so a remote
     // host is *recorded* and refused at read time, not hidden behind an error.
     let endpoint = (caller == Caller::LocalModel)
-        .then(|| crate::commands::ollama::resolve_ollama_addr(settings.ollama_host.as_deref(), true).ok())
+        .then(|| crate::commands::ollama::resolve_ollama_addr(host.as_deref(), true).ok())
         .flatten();
     apply_to_spawn_with(opts, runtime, &token, &tool_agents, &tool_models, local_only);
     if opts.env.get(TOKEN_ENV) == Some(&token) {

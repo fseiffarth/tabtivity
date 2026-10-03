@@ -47,6 +47,14 @@ fn embedding_only_reason(model: &str) -> String {
     )
 }
 
+/// The reason a hosted server refuses a model its administrator did not allow.
+fn model_not_allowed_reason(model: &str) -> String {
+    format!(
+        "the model '{model}' is not one the server's administrator allows — pick an \
+         allowed model for the brain menu's Mail role."
+    )
+}
+
 // ── Settings + model resolution ─────────────────────────────────────────────
 
 fn read_settings() -> Settings {
@@ -143,7 +151,13 @@ pub fn chat(system: &str, user: &str, opts: ChatOptions) -> Result<String, Strin
 
     // Loopback first — before capabilities, before the request, before anything
     // reaches the network.
-    resolve_endpoint(settings.ollama_host.as_deref())?;
+    resolve_endpoint(ollama::host_setting(&settings).0)?;
+    // On a hosted server, only a model the admin allows may be loaded on the
+    // one shared Ollama — the classifier an inbox sync runs included
+    // (`model_allowlist`, final review A1). Nothing off a server.
+    if crate::services::model_allowlist::check_model(&model).is_err() {
+        return Err(model_not_allowed_reason(&model));
+    }
 
     // Empty capabilities = "could not ask" = unknown → allow. Only a *positive*
     // embedding-without-completion is a refusal.

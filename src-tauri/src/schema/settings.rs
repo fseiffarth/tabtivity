@@ -447,12 +447,9 @@ pub struct Settings {
     /// completion-only model working. Read at spawn by `services::root_mcp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_mcp_models: Option<Vec<String>>,
-    /// Server mode (hosted plan §3.3, user decision 2026-10-03): the models a
-    /// browser client's `core` request may name — completion, local-model
-    /// tabs, the Vibe alias. Checked by `services::model_allowlist` in the
-    /// dispatcher before the request reaches the one shared Ollama; the admin's
-    /// own pulls are the default when unset (`None`): a model the admin pulled
-    /// is a model the admin allowed. Read by nothing in the desktop window.
+    /// Kept so older files round-trip; read by nothing. A server's model
+    /// allowlist is the admin's policy (`policy.json`, hosted plan §3.3,
+    /// `services::model_allowlist`), never a user's own settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_allowed_models: Option<Vec<String>>,
     /// Server mode only (hosted plan §6.7): the features this user switched
