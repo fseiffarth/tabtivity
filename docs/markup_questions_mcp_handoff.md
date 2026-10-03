@@ -600,3 +600,66 @@ phone bundle. `listMarkupQuestions`'s `path` is now optional.
     retype it, or answer in chat;
   - a picture opened from the banner needs a tap on Mark up before the card
     shows, because the outbox viewer opens pictures read-only.
+
+## P4
+
+Done, on `markup-mcp` (nothing run live):
+
+- `92cc7eff` Point the default markup instruction at the markup_ask tool
+- `ede5fca7` Document the markup questions MCP and add its QA items
+
+### What was built
+
+- **Instruction.** `markup::DEFAULT_INSTRUCTION` and its phone copy
+  `DEFAULT_MARKUP_INSTRUCTION` (`mobile-web/src/markupInstruction.ts`) end with
+  "If a mark leaves you a choice, ask me with the `markup_ask` tool if you
+  have it — give the page and the words the mark is on — rather than in
+  prose." The desktop's default (`pdfMarkup.ts`) and the Settings → Agents →
+  PDF markup starting text re-export the phone constant, so they follow. The
+  golden `the_prompt_is_deterministic_and_ordered` was updated;
+  `the_phone_shows_the_same_default` holds the copies equal. The prompt
+  budget subtracts the tail's actual length, so the 300-page budget test
+  still means what it says (and passes). A stored own instruction (phone or
+  desktop) is untouched. `docs/mobile_pdf_markup_plan.md` keeps the old text
+  (history).
+- **`docs/context/markup_mcp.md`**: rationale (non-blocking ask, the window
+  delivers, the reopen receipt, one ask per tab, keyed by schedule target,
+  page + quote anchors, the file binding, git push's locality check, budget
+  and refusals, what the phone sees, headless `desktop_unavailable`), known
+  limits, and a nine-step user-run live QA list. AGENTS.md's context list
+  names `markup_mcp`; the backend filemap row of `services/markup_mcp.rs`
+  points at it.
+- **Help**: `docs/help/mobile.md` gains "The agent's questions about your
+  marks" (where the card shows on each side, pins, answering, Other…, Answer
+  in chat instead, supersede, desktop must run, the Manage CLIs switch), a
+  pointer from the Mark up bullet, and the keywords `markup_ask` / `questions
+  about marks`. `real_corpus_parses` is green.
+- **QA** (`todo/group-h-crossplatform.md`, 31bt): five 🖐️ items with the
+  platform pairs — desktop card + pins, phone card + pins, Focus banner,
+  delivery failure → reopen, the switch.
+- **Open issues as TODOs**: 31bv (phone: a typed Other… cannot be unticked),
+  31bw (phone: the banner's Open only for outbox files; a picture needs a tap
+  on Mark up) in group-h; #2341 (desktop: no hint on the Mark up button while
+  marking is off) in `todo/group-m-viewers.md`.
+- **DOCUMENTATION.md**: one paragraph after the phone's markup loop.
+
+### Deviations
+
+- The help section went into the Mobile topic, which already holds the PDF
+  markup text for phone and desktop; there is no desktop viewer topic.
+- No `untested.ts` rows: P2/P3 added `desktop.markup.questions`, `markupMcp`
+  and `mobile.markup.questions`, which the QA items name.
+
+### Gates (at `ede5fca7`)
+
+- `cargo test`: lib 3260 passed, 2 ignored; every other test binary green.
+- `cargo clippy --all-targets -- -D warnings`: clean.
+- `npm run build`: OK.
+- `npm test`: 697 files, 7103 tests passed (unchanged; no TS tests touched).
+- `npm run lint`: 0 errors, 31 warnings (the same pre-existing set).
+- `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check`:
+  OK.
+- `npm run backend:stale` and `npm run mobile:bundle` not run for the main
+  checkout (worktree branch). The phone's default instruction is in the PWA
+  bundle, the desktop's in the binary: both need the rebuild that merging
+  brings. Commits used `TABTIVITY_NO_AUTO_DEV_BUILD=1`.
