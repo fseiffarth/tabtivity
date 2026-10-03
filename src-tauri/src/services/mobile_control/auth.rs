@@ -87,6 +87,11 @@ pub struct Device {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<u64>,
+    /// The device's ECDH public key for the server's device-released secrets
+    /// key (hosted plan §6.8), SEC1 base64url; enrolled after pairing with a
+    /// signature of the pairing key ([`AuthStore::enrol_secrets_key`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecdh_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +118,19 @@ pub struct InviteFile {
     pub expires_at: u64,
     #[serde(default)]
     pub attempts: u8,
+}
+
+fn device_keys_of(file: &DeviceFile) -> Vec<crate::services::server::vault::DeviceKey> {
+    file.devices
+        .iter()
+        .filter_map(|d| d.ecdh_public_key.as_ref().map(|ecdh| crate::services::server::vault::DeviceKey { id: d.id.clone(), ecdh: ecdh.clone() }))
+        .collect()
+}
+
+/// [`AuthStore::secrets_device_keys`] from the file, for a caller that does
+/// not hold the store (the Server settings' set-up command).
+pub fn read_secrets_device_keys(control_dir: &Path) -> Vec<crate::services::server::vault::DeviceKey> {
+    store::read_json::<DeviceFile>(&control_dir.join("devices.json")).map(|f| device_keys_of(&f)).unwrap_or_default()
 }
 
 /// The invite file's name under the control dir.
@@ -363,6 +381,7 @@ impl AuthStore {
             public_key: public_key.into(),
             created_at: now(),
             last_seen_at: None,
+            ecdh_public_key: None,
         });
         self.save_devices()?;
         self.audit("paired", Some(&id));
@@ -555,11 +574,32 @@ impl AuthStore {
             .collect()
     }
 
+    /// Register a signed-in device's ECDH key for the secrets key (§6.8).
+    /// The session alone is not enough: the request carries a signature of
+    /// the device's own pairing key, which a stolen cookie does not have.
+    pub fn enrol_secrets_key(&mut self, device_id: &str, ecdh: &str, signature: &str) -> Result<(), String> {
+        let device = self.devices.devices.iter_mut().find(|d| d.id == device_id).ok_or("unknown_device")?;
+        crate::services::server::vault::Vault::check_enrolment(&self.origin, device_id, &device.public_key, ecdh, signature)?;
+        device.ecdh_public_key = Some(ecdh.to_string());
+        self.save_devices()?;
+        self.audit("secrets_enrolled", Some(device_id));
+        Ok(())
+    }
+
+    /// Every paired device's enrolled ECDH key.
+    pub fn secrets_device_keys(&self) -> Vec<crate::services::server::vault::DeviceKey> {
+        device_keys_of(&self.devices)
+    }
+
     pub fn revoke(&mut self, device_id: &str) -> Result<(), String> {
         let before = self.devices.devices.len();
         self.devices.devices.retain(|d| d.id != device_id);
         if before == self.devices.devices.len() {
             return Err("unknown device".into());
+        }
+        // §6.8: a revoked device's wrap of the secrets key goes with it.
+        if let Some(vault) = crate::services::server::vault::vault() {
+            vault.revoke(device_id);
         }
         self.sessions.retain(|_, s| s.device_id != device_id);
         self.challenges.retain(|_, c| c.device_id != device_id);
@@ -570,6 +610,9 @@ impl AuthStore {
     }
 
     pub fn forget_all(&mut self) -> Result<(), String> {
+        if let Some(vault) = crate::services::server::vault::vault() {
+            vault.forget_devices();
+        }
         self.devices.devices.clear();
         self.sessions.clear();
         self.challenges.clear();

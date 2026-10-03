@@ -1660,6 +1660,164 @@ async fn push_put(
     push_state(&state, &device_id)
 }
 
+// ── The device-released secrets key (hosted plan §6.8) ──────────────────────
+//
+// A server daemon only (`vault::vault()`); the desktop's sidecar answers
+// `available: false` and the phone does nothing more. See `server::vault`.
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsEnrolBody {
+    ecdh_public_key: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsFinishBody {
+    id: String,
+    transport: String,
+    nonce: String,
+    sealed: String,
+}
+
+async fn secrets_state(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error,
+    };
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return (StatusCode::OK, Json(json!({ "available": false })));
+    };
+    let enrolled = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys().iter().any(|k| k.id == device_id);
+    let status = vault.status();
+    (StatusCode::OK, Json(json!({ "available": true, "setUp": status.set_up, "unlocked": status.unlocked, "enrolled": enrolled })))
+}
+
+async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    let Ok(request) = serde_json::from_slice::<SecretsEnrolBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let keys = {
+        let mut auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(code) = auth.enrol_secrets_key(&device_id, &request.ecdh_public_key, &request.signature) {
+            return api_error(StatusCode::BAD_REQUEST, &code);
+        }
+        auth.secrets_device_keys()
+    };
+    let identity = match vault.identity_public() {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("secrets: identity key: {error}");
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "identity_unavailable");
+        }
+    };
+    // Enrolled while K is held: wrapped at once; otherwise at the next release.
+    vault.wrap_missing(&keys);
+    (StatusCode::OK, Json(json!({ "identity": identity })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecretsRecoverBody {
+    code: String,
+}
+
+/// Mint K and answer its recovery code — the only time it is ever shown.
+async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error.into_response(),
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server").into_response();
+    };
+    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    match vault.set_up(&keys) {
+        Ok(code) => {
+            eprintln!("secrets: key set up from device {device_id} ({} device wraps)", keys.len());
+            let mut response = Json(json!({ "code": code.as_str() })).into_response();
+            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => api_error(StatusCode::CONFLICT, &error).into_response(),
+    }
+}
+
+async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    let Ok(request) = serde_json::from_slice::<SecretsRecoverBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let code = zeroize::Zeroizing::new(request.code);
+    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    match vault.recover(&code, &keys) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "state": "unlocked" }))),
+        Err(_) => api_error(StatusCode::BAD_REQUEST, "invalid_recovery_code"),
+    }
+}
+
+async fn secrets_unlock_start(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    match vault.start_unlock(&state.config.origin, &device_id) {
+        Ok(start) => (StatusCode::OK, Json(serde_json::to_value(start).unwrap_or_default())),
+        Err(code) => api_error(StatusCode::TOO_MANY_REQUESTS, &code),
+    }
+}
+
+async fn secrets_unlock_finish(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let device_id = match authenticate(&headers, &state) {
+        Ok(device_id) => device_id,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server");
+    };
+    let Ok(request) = serde_json::from_slice::<SecretsFinishBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let keys = state.auth.lock().unwrap_or_else(PoisonError::into_inner).secrets_device_keys();
+    // The ECDH and the wrap are a few microseconds; the listeners (mail
+    // reopening) run on their own threads.
+    match vault.finish_unlock(&device_id, &request.id, &request.transport, &request.nonce, &request.sealed, &keys) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "state": "unlocked" }))),
+        Err(code) => api_error(StatusCode::BAD_REQUEST, &code),
+    }
+}
+
 async fn push_delete(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
     let device_id = match authenticate(&headers, &state) {
         Ok(device_id) => device_id,
@@ -4525,6 +4683,12 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/alerts", get(alerts).post(alerts_resolve))
         .route("/api/v1/calendar", get(calendar).post(calendar_mutate))
         .route("/api/v1/push", get(push_get).put(push_put).delete(push_delete))
+        .route("/api/v1/secrets", get(secrets_state))
+        .route("/api/v1/secrets/enrol", post(secrets_enrol))
+        .route("/api/v1/secrets/unlock", post(secrets_unlock_start))
+        .route("/api/v1/secrets/unlock/finish", post(secrets_unlock_finish))
+        .route("/api/v1/secrets/setup", post(secrets_setup))
+        .route("/api/v1/secrets/recover", post(secrets_recover))
         .route("/api/v1/mail", get(mail_overview))
         .route("/api/v1/mail/folders/{folder_id}", get(mail_folder))
         .route(

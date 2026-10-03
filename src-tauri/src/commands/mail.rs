@@ -192,8 +192,39 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
     let opened = open_store(&mail_dir())?;
     set_session_keys(opened.keys.clone());
     rt.store = Some(opened.store.clone());
+    let waiting = opened.note.is_some();
     rt.unlock_note = opened.note;
+    drop(rt);
+    // On a server, a store waiting for the device-released key reopens the
+    // moment a device (or the recovery code) puts it back. On a thread: the
+    // listener also runs at once when the key is already there.
+    if waiting {
+        if let Some(vault) = crate::services::server::vault::vault() {
+            let state = state.clone();
+            vault.on_unlock("mail", move || {
+                let state = state.clone();
+                std::thread::spawn(move || reopen_after_release(&state));
+            });
+        }
+    }
     Ok(opened.store)
+}
+
+/// The secrets key came back: drop the memory-only stand-in and open the
+/// real store (or enable a new one) now, so the sealed files beside it find
+/// their key too.
+fn reopen_after_release(state: &MailState) {
+    {
+        let Ok(mut guard) = state.lock() else { return };
+        if guard.unlock_note.is_none() {
+            return;
+        }
+        guard.store = None;
+        guard.unlock_note = None;
+    }
+    if let Err(error) = store_of(state) {
+        eprintln!("mail: reopening after the secrets key came back: {error}");
+    }
 }
 
 // ── The store key, for the session ──────────────────────────────────────────
@@ -404,18 +435,31 @@ fn open_unencrypted_or_enable(dir: &Path) -> Result<OpenedStore, String> {
         // Best effort. A locked keyring at first launch must not stop the mail
         // client from opening at all — the store simply stays plain and the
         // preference stays unset, so the question is asked again later.
-        if let Ok(keys) = mail_crypt::enable_with_keychain(dir) {
-            let keys = Arc::new(keys);
-            let store = Arc::new(MailStore::open_with_keys(dir, Some(keys.clone()))?);
-            migrate_accounts_file(Some(&keys))?;
-            migrate_filters_file(Some(&keys))?;
-            migrate_contacts_file(Some(&keys))?;
-            set_encrypt_preference(Some(true));
-            return Ok(OpenedStore {
-                store,
-                keys: Some(keys),
-                note: None,
-            });
+        match mail_crypt::enable_default(dir) {
+            Ok(keys) => {
+                let keys = Arc::new(keys);
+                let store = Arc::new(MailStore::open_with_keys(dir, Some(keys.clone()))?);
+                migrate_accounts_file(Some(&keys))?;
+                migrate_filters_file(Some(&keys))?;
+                migrate_contacts_file(Some(&keys))?;
+                set_encrypt_preference(Some(true));
+                return Ok(OpenedStore {
+                    store,
+                    keys: Some(keys),
+                    note: None,
+                });
+            }
+            // On a server a mailbox is never started in the clear because
+            // the secrets key is locked or not set up yet: it waits in
+            // memory, and reopens when the key comes back (`store_of`).
+            Err(why) if mail_crypt::device_mode_available() => {
+                return Ok(OpenedStore {
+                    store: Arc::new(MailStore::open_ephemeral()?),
+                    keys: None,
+                    note: Some(UnlockNote::Unavailable(why)),
+                });
+            }
+            Err(_) => {}
         }
     }
     Ok(OpenedStore {
@@ -1358,6 +1402,7 @@ fn encryption_state(rt: &MailState) -> Result<MailEncryptionState, String> {
             mode: file.as_ref().map(|f| match f.mode {
                 mail_crypt::UnlockMode::Keychain => "keychain".to_string(),
                 mail_crypt::UnlockMode::Passphrase => "passphrase".to_string(),
+                mail_crypt::UnlockMode::Device => "device".to_string(),
             }),
             ephemeral: note.is_some(),
             reason: match &note {
@@ -1398,7 +1443,8 @@ pub async fn mail_encryption_enable(
                 let pass = passphrase.unwrap_or_default();
                 mail_crypt::enable_with_passphrase(&dir, &pass)?
             }
-            "keychain" => mail_crypt::enable_with_keychain(&dir)?,
+            // On a server the silent mode is the device-released key.
+            "keychain" | "device" => mail_crypt::enable_default(&dir)?,
             other => return Err(format!("unknown unlock mode '{other}'")),
         };
         adopt_keys(&rt, &dir, Arc::new(keys))?;
@@ -1461,7 +1507,7 @@ pub async fn mail_encryption_reset(
             guard.store = None;
             guard.unlock_note = None;
         }
-        if !matches!(mode.as_str(), "passphrase" | "keychain") {
+        if !matches!(mode.as_str(), "passphrase" | "keychain" | "device") {
             return Err(format!("unknown unlock mode '{mode}'"));
         }
 
@@ -1530,7 +1576,7 @@ pub async fn mail_encryption_reset(
             "passphrase" => {
                 mail_crypt::enable_with_passphrase(&dir, &passphrase.unwrap_or_default())?
             }
-            _ => mail_crypt::enable_with_keychain(&dir)?,
+            _ => mail_crypt::enable_default(&dir)?,
         };
         if let Some(carried) = carried {
             if let Some(plain) = carried.accounts {

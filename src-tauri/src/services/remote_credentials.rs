@@ -350,6 +350,11 @@ fn read_timed<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static, on_time
 /// again. Asking [`cached_keyring_state`] first breaks that loop: while locked, the read
 /// goes to the kernel-keyring cache, which answers immediately and off the bus.
 pub fn get(account: &str) -> Option<String> {
+    // A server daemon has no Secret Service: opt-in passwords live in the
+    // sealed store under the device-released key (hosted plan §6.8).
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return vault.credential(account);
+    }
     #[cfg(target_os = "linux")]
     if cached_keyring_state() != KeyringState::Unlocked {
         return get_cached_only(account).or_else(|| legacy_get(account, false));
@@ -380,6 +385,9 @@ fn get_uncapped(account: &str) -> Option<String> {
 /// the kernel-keyring half would be worse than either — a credential that reads back
 /// fine until the next reboot silently loses it.
 pub fn set(account: &str, password: Option<&str>) -> Result<(), String> {
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return vault.set_credential(account, password);
+    }
     // No longer Linux-only: a locked macOS keychain refuses the write too, and used to
     // reach `delete_credential` with nothing standing in its way (G.24). Windows'
     // store reports `Unlocked` unconditionally, so this is a no-op there.
@@ -472,6 +480,11 @@ pub enum KeyringState {
 /// Service call is overwhelmingly a locked collection waiting on an unlock nobody
 /// answered, and `Locked` is the state with an action behind it.
 pub fn keyring_state() -> KeyringState {
+    // On a server "unlocked" is the vault holding K; locked until a paired
+    // device releases it.
+    if let Some(vault) = crate::services::server::vault::vault() {
+        return if vault.key().is_some() { KeyringState::Unlocked } else { KeyringState::Locked };
+    }
     let state = read_timed(keyring_state_uncapped, KeyringState::Locked);
     remember_keyring_state(state);
     state
@@ -491,6 +504,9 @@ static STATE_CACHE: std::sync::Mutex<Option<(std::time::Instant, KeyringState)>>
 /// Secret Service read?" before *every* read costs a D-Bus round trip only once per
 /// [`STATE_TTL`]. The probe behind it never prompts, so a miss is cheap and safe.
 fn cached_keyring_state() -> KeyringState {
+    if crate::services::server::vault::vault().is_some() {
+        return keyring_state();
+    }
     if let Ok(cache) = STATE_CACHE.lock() {
         if let Some((at, state)) = *cache {
             if at.elapsed() < STATE_TTL {
@@ -597,6 +613,9 @@ fn keyring_state_uncapped() -> KeyringState {
 /// Returns `Ok(())` once the collection is unlocked (including when it already was);
 /// an `Err` if the dialog was dismissed, timed out, or there is no store to unlock.
 pub fn unlock_keyring() -> Result<(), String> {
+    if crate::services::server::vault::vault().is_some() {
+        return Err(concat!("saved passwords on a server unlock when a paired device opens ", crate::app_name!()).into());
+    }
     let out = unlock_keyring_impl();
     // Whichever way the dialog went, the cached reading is now the stale one — and this
     // is precisely the transition [`get`]'s gate must see immediately, since the click

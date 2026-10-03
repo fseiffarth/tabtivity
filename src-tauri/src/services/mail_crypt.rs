@@ -470,7 +470,16 @@ pub enum UnlockMode {
     Keychain,
     /// Argon2id over a passphrase the user types once per session.
     Passphrase,
+    /// A hosted server's device-released key (hosted plan §6.8): the KEK is
+    /// derived from the account's secrets key K, which only a paired device
+    /// (or the recovery code) puts back after a reboot and which lives in the
+    /// kernel keyring, never on disk. Only a server daemon writes this mode;
+    /// the desktop never does.
+    Device,
 }
+
+/// What a device-mode store says while K is locked.
+pub const DEVICE_LOCKED: &str = "mail is locked since the server restarted — open the app on any paired device to unlock it";
 
 /// Argon2id cost parameters, recorded **in the key file**.
 ///
@@ -620,6 +629,43 @@ fn write_keychain_kek(kek: &Key) -> Result<(), String> {
     remote_credentials::set(&remote_credentials::mail_store_key_account(), Some(&encoded))
 }
 
+// ── Device-released KEK (hosted server) ────────────────────────────────────
+
+/// The device mode's KEK: `HKDF(K, "mail-kek")` while the server's vault
+/// holds K; `None` on the desktop (no vault) and while locked.
+pub fn device_kek() -> Option<Key> {
+    let vault = crate::services::server::vault::vault()?;
+    Some(device_kek_from(&vault.key()?))
+}
+
+/// [`device_kek`] for a given K (what the tests use).
+pub fn device_kek_from(k: &crate::services::server::secrets::MasterKey) -> Key {
+    let sub = crate::services::server::vault::Vault::subkey(k, "mail-kek");
+    let mut key = Key([0u8; 32]);
+    key.0.copy_from_slice(sub.as_ref());
+    key
+}
+
+/// A device-mode key file opened with `kek` (`None`: K is locked).
+fn unlock_device_with(file: &MailKeyFile, kek: Option<Key>) -> Unlock {
+    match kek {
+        Some(kek) => match unwrap_master(&kek, file) {
+            Ok(keys) => Unlock::Ready(keys),
+            Err(e) => Unlock::Unavailable(e),
+        },
+        None => Unlock::Unavailable(DEVICE_LOCKED.into()),
+    }
+}
+
+/// What a server says before anyone set the secrets key up.
+pub const DEVICE_NOT_SET_UP: &str = "set up the secrets key first (Settings → Mobile → Server) — mail on a server is sealed under it";
+
+/// Is this process a server daemon with a vault, so new stores are sealed
+/// in device mode rather than under an OS keychain it does not have?
+pub fn device_mode_available() -> bool {
+    crate::services::server::vault::vault().is_some()
+}
+
 // ── Unlocking ───────────────────────────────────────────────────────────────
 
 /// What a silent unlock attempt found.
@@ -658,6 +704,7 @@ pub fn unlock(dir: &Path) -> Unlock {
     }
     match file.mode {
         UnlockMode::Passphrase => Unlock::NeedsPassphrase,
+        UnlockMode::Device => unlock_device_with(&file, device_kek()),
         UnlockMode::Keychain => match read_keychain_kek() {
             Some(kek) => match unwrap_master(&kek, &file) {
                 Ok(keys) => Unlock::Ready(keys),
@@ -749,6 +796,39 @@ pub fn enable_with_keychain(dir: &Path) -> Result<MailKeys, String> {
     Ok(MailKeys::derive_with(master, labels))
 }
 
+/// Turn on at-rest encryption with a **new** master key, unlocked by the
+/// device-released `kek` ([`device_kek`]).
+pub fn enable_with_device(dir: &Path, kek: &Key) -> Result<MailKeys, String> {
+    if is_enabled(dir) {
+        return Err("this mailbox is already encrypted".into());
+    }
+    let master = Key::random()?;
+    let pair = crate::brand::PAIR;
+    let labels = LabelSet::current(&pair);
+    let file = MailKeyFile {
+        version: KEY_FILE_VERSION,
+        mode: UnlockMode::Device,
+        kdf: KdfParams::default(),
+        salt: B64.encode(fresh_salt()?),
+        wrapped: B64.encode(seal(kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
+        labels: labels.key_file_entry(&pair),
+    };
+    write_key_file(dir, &file)?;
+    Ok(MailKeys::derive_with(master, labels))
+}
+
+/// The silent default: device mode on a server, the OS keychain elsewhere.
+pub fn enable_default(dir: &Path) -> Result<MailKeys, String> {
+    if let Some(vault) = crate::services::server::vault::vault() {
+        if !vault.is_set_up() {
+            return Err(DEVICE_NOT_SET_UP.into());
+        }
+        let kek = device_kek().ok_or_else(|| DEVICE_LOCKED.to_string())?;
+        return enable_with_device(dir, &kek);
+    }
+    enable_with_keychain(dir)
+}
+
 /// Turn on at-rest encryption with a **new** master key, unlocked by passphrase.
 pub fn enable_with_passphrase(dir: &Path, passphrase: &str) -> Result<MailKeys, String> {
     enable_with_passphrase_for(&crate::brand::PAIR, dir, passphrase)
@@ -800,6 +880,7 @@ pub fn rewrap(
     let salt = fresh_salt()?;
     let kdf = KdfParams::default();
     let kek = match mode {
+        UnlockMode::Device => device_kek().ok_or_else(|| DEVICE_LOCKED.to_string())?,
         UnlockMode::Keychain => {
             if !remote_credentials::store_readable() {
                 return Err("the OS keyring is locked, so nothing was changed".into());
@@ -856,6 +937,31 @@ mod tests {
 
     fn key() -> Key {
         Key::from_bytes([7u8; 32])
+    }
+
+    /// Hosted plan §6.8: a device-mode store opens with the KEK derived from
+    /// the released K and with nothing else — the key file alone (a backup)
+    /// is useless, and a locked K reads as "locked", not as an error.
+    #[test]
+    fn a_device_mode_store_opens_only_with_the_released_key() {
+        use crate::services::server::secrets::MasterKey;
+        let dir = tempfile::tempdir().unwrap();
+        let k = MasterKey::generate();
+        let keys = enable_with_device(dir.path(), &device_kek_from(&k)).unwrap();
+        let file = read_key_file(dir.path()).unwrap().unwrap();
+        assert_eq!(file.mode, UnlockMode::Device);
+        assert!(!std::fs::read_to_string(key_file_path(dir.path())).unwrap().contains(&B64.encode(k.bytes())));
+        match unlock_device_with(&file, Some(device_kek_from(&k))) {
+            Unlock::Ready(opened) => assert_eq!(opened.master.as_bytes(), keys.master.as_bytes()),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(unlock_device_with(&file, None), Unlock::Unavailable(why) if why == DEVICE_LOCKED));
+        let other = MasterKey::generate();
+        assert!(matches!(unlock_device_with(&file, Some(device_kek_from(&other))), Unlock::Unavailable(_)));
+        assert!(enable_with_device(dir.path(), &device_kek_from(&k)).is_err(), "never over an existing key file");
+        // The desktop has no vault: `unlock` says locked rather than reaching
+        // for a keychain the mode does not use.
+        assert!(matches!(unlock(dir.path()), Unlock::Unavailable(why) if why == DEVICE_LOCKED));
     }
 
     #[test]

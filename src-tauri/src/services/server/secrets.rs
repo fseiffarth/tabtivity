@@ -4,10 +4,9 @@
 //! **persistent keyring**, so it outlives a daemon restart but not a reboot.
 //!
 //! This module is the cryptographic and keyring half, `AppHandle`-free and
-//! unit-tested. The other half — the device's ECDH key made at pairing, the
-//! unlock exchange on connect, `mail_crypt` taking K as its KEK in a
-//! device-released mode, the sealed opt-in password store — is wired by a
-//! later step (`docs/hosted_handoff.md` § P3, TODO group Z).
+//! unit-tested. The wiring — the device's ECDH key, the unlock exchange,
+//! `mail_crypt`'s device-released mode, the sealed password store — is
+//! [`super::vault`].
 //!
 //! * **Wrap for a device:** an ephemeral P-256 key X; `HKDF-SHA256(salt =
 //!   X's public key, ikm = ECDH(X, device), info = context ‖ device id)`;
@@ -34,10 +33,10 @@ use p256::PublicKey;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
-/// Domain separation for every derived key here.
-fn context(purpose: &str) -> String {
+/// Domain separation for every derived key here (and the vault's).
+pub(crate) fn context(purpose: &str) -> String {
     format!("{}-secrets-v1:{purpose}", crate::brand::SLUG)
 }
 
@@ -54,6 +53,17 @@ impl MasterKey {
 
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(Zeroizing::new(bytes))
+    }
+
+    /// Copy 32 bytes straight into the zeroizing buffer — no array on the
+    /// stack in between (P3 review finding 15: `from_bytes(*buf)` left one).
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() != 32 {
+            return Err("not a 32-byte key".into());
+        }
+        let mut key = Zeroizing::new([0u8; 32]);
+        key.copy_from_slice(bytes);
+        Ok(Self(key))
     }
 
     pub fn bytes(&self) -> &[u8; 32] {
@@ -162,10 +172,8 @@ fn open(key: &[u8; 32], aad: &[u8], nonce: &str, sealed: &str) -> Result<MasterK
         return Err("bad nonce".into());
     }
     let cipher = Aes256Gcm::new_from_slice(key).expect("32-byte key");
-    let mut plain = cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &unb64(sealed)?, aad }).map_err(|_| "the wrap does not open with this key".to_string())?;
-    let result = <[u8; 32]>::try_from(plain.as_slice()).map(MasterKey::from_bytes).map_err(|_| "not a 32-byte key".to_string());
-    plain.zeroize();
-    result
+    let plain = Zeroizing::new(cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &unb64(sealed)?, aad }).map_err(|_| "the wrap does not open with this key".to_string())?);
+    MasterKey::from_slice(&plain)
 }
 
 /// A device's public ECDH key as the browser exports it (`raw`, SEC1
@@ -194,13 +202,19 @@ pub fn unwrap_with_shared(wrap: &DeviceWrap, shared: &[u8]) -> Result<MasterKey,
     open(&kek, wrap.device_id.as_bytes(), &wrap.nonce, &wrap.sealed)
 }
 
-/// A fresh recovery code: 128 bits as eight groups of four hex digits.
-pub fn recovery_code() -> String {
-    let mut bytes = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    let code = hex.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap_or_default()).collect::<Vec<_>>().join("-");
-    bytes.zeroize();
+/// A fresh recovery code: 128 bits as eight groups of four hex digits,
+/// zeroized when dropped (it opens K).
+pub fn recovery_code() -> Zeroizing<String> {
+    let mut bytes = Zeroizing::new([0u8; 16]);
+    rand::rngs::OsRng.fill_bytes(bytes.as_mut());
+    let mut code = Zeroizing::new(String::with_capacity(39));
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && i % 2 == 0 {
+            code.push('-');
+        }
+        code.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
+        code.push(char::from_digit(u32::from(b & 0xf), 16).unwrap_or('0'));
+    }
     code
 }
 
@@ -295,13 +309,14 @@ pub mod keyring {
         let ring = persistent()?;
         let desc = std::ffi::CString::new(description).map_err(|e| e.to_string())?;
         let Some(id) = search(ring, &desc) else { return Ok(None) };
-        let mut buf = zeroize::Zeroizing::new([0u8; 32]);
-        // SAFETY: `buf` has room for the 32 bytes asked for.
-        let n = unsafe { libc::syscall(libc::SYS_keyctl, KEYCTL_READ, id, buf.as_mut_ptr(), 32 as libc::size_t) };
+        // Read straight into the key's own zeroizing buffer: no copy.
+        let mut key = MasterKey::from_bytes([0u8; 32]);
+        // SAFETY: the buffer has room for the 32 bytes asked for.
+        let n = unsafe { libc::syscall(libc::SYS_keyctl, KEYCTL_READ, id, key.0.as_mut_ptr(), 32 as libc::size_t) };
         if n != 32 {
             return Err(format!("keyctl read: {}", if n < 0 { last_error() } else { format!("{n} bytes") }));
         }
-        Ok(Some(MasterKey::from_bytes(*buf)))
+        Ok(Some(key))
     }
 
     pub(super) fn clear_as(description: &str) -> Result<(), String> {
@@ -350,8 +365,9 @@ mod tests {
     fn the_recovery_code_opens_its_wrap_and_nothing_else() {
         let k = MasterKey::generate();
         let code = recovery_code();
-        assert_eq!(code.len(), 39, "{code}");
+        assert_eq!(code.len(), 39, "{}", code.as_str());
         let wrap = wrap_with_recovery(&k, &code).unwrap();
+        assert!(code.chars().all(|c| c == '-' || c.is_ascii_hexdigit()), "{}", code.as_str());
         assert_eq!(unwrap_with_recovery(&wrap, &code.to_uppercase().replace('-', " ")).unwrap().bytes(), k.bytes(), "case and separators do not matter");
         assert!(unwrap_with_recovery(&wrap, &recovery_code()).is_err());
         assert!(unwrap_with_recovery(&wrap, "1234").is_err());

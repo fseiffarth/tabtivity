@@ -48,6 +48,8 @@ pub fn main() -> ! {
             std::process::exit(2);
         }
     };
+    harden_process();
+    install_vault(&config.state_dir);
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -83,6 +85,29 @@ pub async fn run(config: ServerConfig) -> Result<(), String> {
         config.gateway_uid.map(|uid| format!(" (uid {uid})")).unwrap_or_default()
     );
     host::run_with(host, listen).await
+}
+
+/// The account's secrets vault (hosted plan §6.8), installed before anything
+/// reads a credential or opens the mail store: from here on opt-in passwords
+/// and new mail stores are sealed under the device-released key. In `main`,
+/// not [`run`], so a test serving a daemon does not install a process-wide
+/// vault under every other test of its binary.
+pub fn install_vault(state_dir: &std::path::Path) {
+    use super::vault::{self, Vault};
+    #[cfg(target_os = "linux")]
+    let hold: std::sync::Arc<dyn vault::KeyHold> = std::sync::Arc::new(vault::KernelKeyring);
+    #[cfg(not(target_os = "linux"))]
+    let hold: std::sync::Arc<dyn vault::KeyHold> = std::sync::Arc::new(vault::MemoryHold::default());
+    let vault = vault::install(Vault::new(state_dir.to_path_buf(), hold));
+    let status = vault.status();
+    eprintln!(
+        "{SLUG}-serverd: secrets key {}",
+        match (status.set_up, status.unlocked) {
+            (false, _) => "not set up yet (Settings → Mobile → Server)",
+            (true, true) => "unlocked (held in the persistent keyring)",
+            (true, false) => "locked until a paired device connects",
+        }
+    );
 }
 
 /// The sidecar's configuration for a daemon: Mobile on, the gateway's origin
@@ -184,9 +209,15 @@ impl app_core::EventSink for StderrEvents {
 /// an installed CLI is updated instead.
 pub fn install_cli(id: &str) -> Result<(), String> {
     use crate::commands::agents;
-    if super::cli_root().is_none() {
+    let Some(root) = super::cli_root() else {
         return Err(format!("{} is not set: run this through the admin helper's cli-install", brand::CURRENT.env_name(super::CLI_ROOT_ENV)));
-    }
+    };
+    // A private temp dir under the install root (P3 review finding 15): the
+    // vendors' installers stage downloads in `$TMPDIR`, and the shared `/tmp`
+    // is every user's. Set before any thread exists.
+    let tmp = root.join(".tmp");
+    crate::services::mobile_control::store::ensure_private_dir(&tmp)?;
+    std::env::set_var("TMPDIR", &tmp);
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     app_core::rt::install(runtime.handle().clone());
     crate::services::mail_engine::install_crypto_provider();
