@@ -194,13 +194,22 @@ pub fn server_policy() -> Option<policy::Policy> {
     if !is_server() {
         return None;
     }
-    let path = brand::env(POLICY_FILE_ENV).filter(|p| !p.trim().is_empty()).map(PathBuf::from)?;
-    Some(cached(&POLICY_CACHE, || {
-        policy::Policy::load(&path).unwrap_or_else(|error| {
-            eprintln!("server policy: {error}; switchable features are off until it reads");
-            policy::Policy::fail_closed()
-        })
-    }))
+    let path = brand::env(POLICY_FILE_ENV).filter(|p| !p.trim().is_empty()).map(PathBuf::from);
+    Some(cached(&POLICY_CACHE, || load_policy(path.as_deref())))
+}
+
+/// The policy at `path`; no path (the unit's environment lost it) or an
+/// unreadable file fails closed, never open — a server daemon without the
+/// admin's policy must not fall back to the user's own `settings.json`.
+fn load_policy(path: Option<&Path>) -> policy::Policy {
+    let Some(path) = path else {
+        eprintln!("server policy: {} is not set; switchable features are off", brand::CURRENT.env_name(POLICY_FILE_ENV));
+        return policy::Policy::fail_closed();
+    };
+    policy::Policy::load(path).unwrap_or_else(|error| {
+        eprintln!("server policy: {error}; switchable features are off until it reads");
+        policy::Policy::fail_closed()
+    })
 }
 
 static POLICY_CACHE: Mutex<Option<(Instant, policy::Policy)>> = Mutex::new(None);
@@ -368,5 +377,16 @@ mod tests {
         assert_eq!(activation_fd(env("42", "0"), 42), None);
         assert_eq!(activation_fd(|_| None, 42), None);
         assert_eq!(content_path("t1"), "/content/t1", "the desktop's path; a server prefixes the user");
+    }
+
+    #[test]
+    fn a_missing_or_broken_policy_fails_closed() {
+        let closed = policy::Policy::fail_closed();
+        assert_eq!(load_policy(None), closed, "no policy path in server mode is not 'everything on'");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("policy.json");
+        std::fs::write(&file, b"{not json").unwrap();
+        assert_eq!(load_policy(Some(&file)), closed);
+        assert_eq!(load_policy(Some(&dir.path().join("absent.json"))), policy::Policy::default(), "no file yet: the defaults");
     }
 }
