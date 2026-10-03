@@ -1088,6 +1088,7 @@ not written.
 |------------|----------------|------------------------|
 | WebKitGTK | 2.52 observed | no renderer-pid API (watchdog probes instead); scrollbar built once; DMABUF off (flicker + SIGBUS) |
 | Tauri / wry / plugins | `^2` | IPC fallback path evaluates PDF bytes as script — keep the custom protocol |
+| `@tauri-apps/api` internals (browser client) | 2.11 | `src/lib/transport/wsInternals.ts` re-implements `window.__TAURI_INTERNALS__` (`invoke`, `transformCallback`, `unregisterCallback`, `convertFileSrc`, `metadata`) and `__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener`, plus the wire shapes of `plugin:event\|*`, `plugin:dialog\|open/save/message` (`buttonsToRust`), `plugin:window\|*`. On an API or plugin-dialog bump: diff `core.js`, `event.js`, `window.js`, `plugin-dialog/dist-js/index.js` against the shim; `WebTransport.test.ts` covers the shapes it knows |
 | `tauri-runtime-wry` | patched 2.11.3 (`src-tauri/patches/`, root `Cargo.toml` `[patch.crates-io]`) | `Context.main_thread` behind an `Arc`, or off-thread `AppHandle` clones race tao's Linux `Rc` and corrupt the heap. On a tauri bump: re-copy the new version and re-apply the `TABTIVITY PATCH` hunk, or drop the patch once upstream fixes it |
 | `@xterm/xterm` + addons | `^5.5`, webgl `^0.18` | key encodings (`ESC [ Z`, CSI-u) the mobile bridge relies on |
 | `pdfjs-dist` | `^6.3` (floor 6.0) | beamer shadow compositing |
