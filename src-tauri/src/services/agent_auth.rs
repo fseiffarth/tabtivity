@@ -374,6 +374,12 @@ pub fn reconcile_home_in(state_dir: &Path, home: &Path) {
 }
 
 fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
+    // The store and the homes are shared by every process on this state dir
+    // (the window, its desktop sidecar, a server's daemon and its shell
+    // shims): one adopt/place at a time, or two could each adopt a different
+    // refresh and place the older one, or leave a login half-removed beside
+    // the administrator's key (final review B4).
+    let _one_at_a_time = storage::FileLock::exclusive(&store_root_in(state_dir));
     reconcile_home_with(state_dir, home, step, &crate::services::server::agent_keys::holds_admin_key);
 }
 

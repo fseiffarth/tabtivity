@@ -17,7 +17,38 @@ served by the Mobile sidecar (`tabtivity --mobile-host`) at
 `window.__TAURI_INTERNALS__` the web entry installs over one WebSocket; the
 sidecar calls the same command bodies the window registers with Tauri. The
 browser is a thin client: terminals, agents, files, git and mail run where
-the sidecar runs. It is additive — the Tauri window behaves exactly as before.
+the sidecar runs. It is additive — the Tauri window behaves as before — but
+the two processes share one state dir with separate in-process registries,
+so what both can run is coordinated across processes (below).
+
+## One state dir, two processes (final review B4)
+
+The window and the sidecar each keep their own registries (containers, VMs,
+sync loops, manifest cache). Without coordination a browser's project switch
+removed the window's running container, the window's start-up sweeps reaped
+the sidecar's containers and VMs, and both ran one remote project's sync
+loops against one mirror and one `sync.json`. Now:
+
+- **Leases** (`services::process_lease`, advisory file locks under
+  `<state_dir>/leases/`, gone with their process): a container is *held*
+  (shared) by every process with tabs in it and removed — by a switch, an
+  exit or a start-up sweep — only when no other process holds it; `up`
+  refuses to recreate one the other still uses. A VM is *claimed*
+  (exclusive) by the process that boots it: the other one is refused, and
+  never reaps it. Each remote project's auto-sync and lockstep loops run in
+  the one process that claimed them; the other skips starting them.
+- **`sync.json` is compare-and-swap across processes** (G7 for real): under
+  the file's lock, a manifest is written only while the file is still the
+  version this process's cache read; otherwise nothing is written, the cache
+  re-reads, and the caller gets "changed by another window — try again".
+- **Shared writers locked across processes**: an agent home's preparation
+  (seeding, global layer, hooks, logins), every `agent_auth` adopt/place
+  step, `exec_trust` approvals (`patch_json`); settings, tab sessions and the
+  other `patch_json` stores already were.
+- Refusal rather than routing: a VM the window runs cannot be used from the
+  browser (and the reverse) until the owner shuts it down. Not covered: a
+  browser opening a local-tmux tab the window has attached gets its own
+  attach client (#2358 covers only the shared-PTY case).
 
 ## Decisions
 

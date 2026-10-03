@@ -1023,10 +1023,15 @@ pub fn up(
 
     match up_decision(&probe_container(&name), &fingerprint) {
         UpAction::UseExisting => {
-            created_set().lock().unwrap().insert(name.clone());
+            mark_created(&name);
             return Ok(name);
         }
         UpAction::Recreate => {
+            // Never under the other process's live tabs (the window and the
+            // desktop sidecar share one state dir, final review B4).
+            let Some(_free) = crate::services::process_lease::free_to_tear_down(&crate::services::process_lease::container_key(&name)) else {
+                return Err(IN_USE_ELSEWHERE.to_string());
+            };
             let _ = docker(&["rm", "-f", &name]);
         }
         UpAction::Create => {}
@@ -1058,9 +1063,20 @@ pub fn up(
             stderr_tail(&out)
         ));
     }
-    created_set().lock().unwrap().insert(name.clone());
+    mark_created(&name);
     Ok(name)
 }
+
+/// This process now uses container `name`: remembered for its own teardown,
+/// and leased so the other process sharing the state dir (window or desktop
+/// sidecar) never removes it under this one's tabs (`process_lease`).
+fn mark_created(name: &str) {
+    created_set().lock().unwrap().insert(name.to_string());
+    crate::services::process_lease::hold(&crate::services::process_lease::container_key(name));
+}
+
+/// `up` refused to recreate a container the other process still runs tabs in.
+const IN_USE_ELSEWHERE: &str = "Project container: its configuration changed, but another window of this app (or its browser access) still runs tabs in it — close those tabs, then open this one again.";
 
 /// Activation warm-up: `up()` for a project *iff* it is a container-toggled,
 /// local project. `Ok(None)` when the toggle is off / the project is remote /
@@ -1092,12 +1108,16 @@ pub fn down_for_project(project_id: &str) {
         return;
     }
     let _guard = lifecycle_lock().lock().unwrap();
-    let _ = docker(&["rm", "-f", &name]);
     created_set().lock().unwrap().remove(&name);
     exec_tabs()
         .lock()
         .unwrap()
         .retain(|_, t| t.container != name);
+    // The other process sharing the state dir may still run tabs in it: then
+    // it stays, and goes with that process's own teardown.
+    if let Some(_free) = crate::services::process_lease::free_to_tear_down(&crate::services::process_lease::container_key(&name)) {
+        let _ = docker(&["rm", "-f", &name]);
+    }
 }
 
 /// App-exit teardown: remove every tabtivity-owned container. Skipped entirely
@@ -1144,24 +1164,35 @@ fn sweep_should_probe(docker_on_path: bool) -> bool {
 fn remove_all_owned() {
     let _guard = lifecycle_lock().lock().unwrap();
     // The owner label, and — after a rename — the one an older build put on
-    // its containers: both are this app's, and both are stale.
+    // its containers: both are this app's, and both are stale — unless the
+    // other process sharing the state dir (window or desktop sidecar) still
+    // runs tabs in one (`process_lease`, final review B4).
     let pair = crate::brand::PAIR;
     for label in crate::services::brand_migration::docker::owner_labels(&pair) {
-        let Ok(out) = docker(&["ps", "-aq", "--filter", &format!("label={label}")]) else {
+        let Ok(out) = docker(&["ps", "-a", "--filter", &format!("label={label}"), "--format", "{{.Names}}"]) else {
             return;
         };
-        let ids: Vec<&str> = std::str::from_utf8(&out.stdout)
-            .unwrap_or("")
-            .split_whitespace()
-            .collect();
-        if ids.is_empty() {
+        let names = container_names(&String::from_utf8_lossy(&out.stdout));
+        if names.is_empty() {
             continue;
         }
         crate::services::brand_migration::docker::swept_legacy(&pair, &label);
+        let free: Vec<_> = names
+            .iter()
+            .filter_map(|name| crate::services::process_lease::free_to_tear_down(&crate::services::process_lease::container_key(name)).map(|lease| (name.as_str(), lease)))
+            .collect();
+        if free.is_empty() {
+            continue;
+        }
         let mut args = vec!["rm", "-f"];
-        args.extend(ids);
+        args.extend(free.iter().map(|(name, _)| *name));
         let _ = docker(&args);
     }
+}
+
+/// The container names `docker ps --format {{.Names}}` printed, one a line.
+fn container_names(stdout: &str) -> Vec<String> {
+    stdout.lines().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).collect()
 }
 
 /// Inspect the named container: does it exist, is it running, and which spec
@@ -1907,6 +1938,12 @@ mod tests {
         assert!(!trust_accepted_for(&serde_json::json!({}), "/p/a"));
     }
     use super::*;
+
+    #[test]
+    fn the_sweep_reads_one_container_name_a_line() {
+        assert_eq!(container_names("a-p1\n\n  b-p2 \n"), vec!["a-p1".to_string(), "b-p2".to_string()]);
+        assert!(container_names("").is_empty());
+    }
 
     #[test]
     fn orphan_sweep_probes_only_when_docker_is_on_path() {

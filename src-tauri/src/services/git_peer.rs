@@ -3327,6 +3327,12 @@ pub async fn start(
     if guard.contains_key(project_id) {
         return;
     }
+    // One lockstep loop per mirror across the window and its desktop sidecar
+    // (`process_lease`, final review B4): the other process may run it.
+    if !crate::services::process_lease::claim(&crate::services::process_lease::git_peer_key(project_id)) {
+        eprintln!("git_peer: {project_id}: another process of this app runs its lockstep");
+        return;
+    }
 
     let (tx, rx) = mpsc::unbounded_channel::<()>();
 
@@ -3353,6 +3359,7 @@ pub async fn stop(reg: &GitPeerRegistry, project_id: &str) {
         t.cancel.notify_one();
         let _ = tokio::time::timeout(Duration::from_secs(5), t.join).await;
     }
+    crate::services::process_lease::release(&crate::services::process_lease::git_peer_key(project_id));
 }
 
 /// Stop every lockstep task (app exit).

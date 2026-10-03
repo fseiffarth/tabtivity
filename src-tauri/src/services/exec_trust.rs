@@ -220,9 +220,12 @@ fn approve_in(
                     approved — run the action again to review the current version."
             .to_string());
     }
-    let mut approvals = load(store);
-    approvals.insert(key(kind, dir), expected.to_string());
-    storage::write_json_atomic(store, &approvals).map_err(|e| e.to_string())
+    // A read-modify-write under the file's lock: the window and its desktop
+    // sidecar both approve into this one store (final review B4).
+    storage::patch_json(store, BTreeMap::<String, String>::new(), |approvals| {
+        approvals.insert(key(kind, dir), expected.to_string());
+        Ok(())
+    })
 }
 
 fn collect(kind: TrustKind, dir: &Path) -> Vec<Subject> {

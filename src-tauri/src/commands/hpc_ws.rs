@@ -1010,16 +1010,17 @@ pub async fn hpc_ws_move_root(
         }
 
         // Byte-sync: markers stay (they are the user's consent), bases clear.
-        let mut manifest = crate::services::remote_sync::load_manifest(&project_id);
-        for entry in manifest.values_mut() {
-            entry.host_size = 0;
-            entry.host_mtime = None;
-            entry.local_size = 0;
-            entry.local_mtime = None;
-            entry.last_pull_ts = None;
-            entry.last_push_ts = None;
-        }
-        if let Err(e) = crate::services::remote_sync::save_manifest(&project_id, &manifest) {
+        let reset = crate::services::remote_sync::update_manifest(&project_id, |manifest| {
+            for entry in manifest.values_mut() {
+                entry.host_size = 0;
+                entry.host_mtime = None;
+                entry.local_size = 0;
+                entry.local_mtime = None;
+                entry.last_pull_ts = None;
+                entry.last_push_ts = None;
+            }
+        });
+        if let Err(e) = reset {
             eprintln!("hpc_ws_move_root: could not reset sync bases: {e}");
         }
 

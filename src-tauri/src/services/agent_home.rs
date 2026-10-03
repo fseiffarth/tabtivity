@@ -124,6 +124,13 @@ fn prepare_home_in(
     seed_scope_state: bool,
 ) -> io::Result<PreparedHome> {
     create_private_dir(&homes_root_in(state_dir))?;
+    // One preparation of a home at a time, across processes too: the window
+    // and its desktop sidecar share the state dir, and two spawns of one
+    // scope must not interleave the seeding, the global layer's merge, the
+    // hook registration or the login placement (final review B4). Outside
+    // the homes root, so no fence ever sees the lock file.
+    let home_key = home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let _one_at_a_time = storage::FileLock::exclusive(&crate::services::process_lease::path_in(state_dir, &format!("home-{home_key}")))?;
     // A home an older build seeded carries its markers under the old name:
     // bring it to the current names first, or it would count as fresh and be
     // seeded a second time. The launch does this for every home; this covers

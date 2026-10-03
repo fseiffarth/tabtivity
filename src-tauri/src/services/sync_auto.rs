@@ -140,6 +140,15 @@ pub async fn start(
     if guard.contains_key(project_id) {
         return; // already running
     }
+    // One loop per mirror: the other process sharing this state dir (the
+    // window or its desktop sidecar) may already run it (`process_lease`,
+    // final review B4); it keeps doing so, and this one's manual syncs still
+    // work (the manifest is compare-and-swap across processes).
+    let key = crate::services::process_lease::remote_sync_key(project_id);
+    if !crate::services::process_lease::claim(&key) {
+        eprintln!("sync_auto: {project_id}: another process of this app runs its auto-sync");
+        return;
+    }
 
     // Mirror watcher → mpsc into the loop (debounced there). The mirror must
     // exist for the recursive watch to attach (connect() already creates it, but
@@ -202,6 +211,7 @@ pub async fn stop(state: &AutoSyncState, project_id: &str) {
         t.cancel.notify_one();
         let _ = tokio::time::timeout(Duration::from_secs(5), t.join).await;
     }
+    crate::services::process_lease::release(&crate::services::process_lease::remote_sync_key(project_id));
 }
 
 /// Stop every auto-sync task. Used at app exit before tearing down the pool.

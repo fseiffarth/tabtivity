@@ -220,6 +220,37 @@ impl FileLock {
     }
 }
 
+impl FileLock {
+    /// Take the exclusive lock beside `path` only if nobody holds it, in this
+    /// process or another: `Ok(None)` when it is held.
+    pub fn try_exclusive(path: &Path) -> std::io::Result<Option<Self>> {
+        let file = open_lock_file(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(e)) => Err(e),
+        }
+    }
+
+    /// Take a shared lock beside `path`, blocking while an exclusive holder
+    /// has it. Any number of shared holders coexist; an exclusive one waits
+    /// for them all.
+    pub fn shared(path: &Path) -> std::io::Result<Self> {
+        let file = open_lock_file(path)?;
+        file.lock_shared()?;
+        Ok(Self { file })
+    }
+}
+
+/// Open (creating) the `<file>.lock` sibling of `path`.
+fn open_lock_file(path: &Path) -> std::io::Result<fs::File> {
+    let lock_path = lock_path_for(path);
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path)
+}
+
 impl Drop for FileLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();

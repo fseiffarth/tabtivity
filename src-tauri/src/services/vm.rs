@@ -236,6 +236,40 @@ pub fn images_dir() -> PathBuf {
     vm_root().join("images")
 }
 
+/// The `process_lease` key of the VM whose directory is `dir`.
+fn lease_key(dir: &Path) -> String {
+    crate::services::process_lease::vm_key(&dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+}
+
+/// The VM's lease while `ensure_booted` boots it: let go again when the boot
+/// fails before the VM is registered, kept once it is.
+struct BootClaim(Option<String>);
+
+impl BootClaim {
+    fn take(key: String) -> Result<Self, String> {
+        if crate::services::process_lease::claim(&key) {
+            Ok(Self(Some(key)))
+        } else {
+            Err(RUNS_ELSEWHERE.to_string())
+        }
+    }
+
+    fn keep(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for BootClaim {
+    fn drop(&mut self) {
+        if let Some(key) = self.0.take() {
+            crate::services::process_lease::release(&key);
+        }
+    }
+}
+
+/// `ensure_booted` refused a VM the other process runs.
+const RUNS_ELSEWHERE: &str = "This project's VM runs in another window of this app (or its browser access) — open the project's tabs there, or close them there first.";
+
 pub fn vm_dir(project_id: &str) -> PathBuf {
     // Project ids are uuids (minted by us); sanitize anyway so a hand-edited
     // projects.json can never traverse out of the vm root.
@@ -1490,6 +1524,10 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
     }
     // Not (live-)registered: clear any stale entry.
     registry().lock().unwrap().remove(project_id);
+    // One QEMU per disk: a VM the other process sharing this state dir (the
+    // window or its desktop sidecar) booted is that process's, never booted a
+    // second time nor reaped from here (`process_lease`, final review B4).
+    let claim = BootClaim::take(lease_key(&vm_dir(project_id)))?;
 
     let spec = vm_spec_for(project_id)
         .ok_or_else(|| format!("project '{project_id}' has no VM config"))?;
@@ -1627,6 +1665,8 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
             runtime: runtime.clone(),
         },
     );
+    // Registered: the VM is this process's until `shutdown` (which lets go).
+    claim.keep();
     // The endpoint must be recorded before readiness: a parallel caller that
     // sees the registry entry may resolve the spec at any point from here.
     record_vm_endpoint(project_id, ssh_port)?;
@@ -1755,6 +1795,11 @@ fn teardown_runtime_files(dir: &Path) {
 /// then SIGKILL after a grace period. Idempotent; also stops the egress
 /// proxy and clears runtime state.
 pub fn shutdown(project_id: &str) {
+    // A VM the other process booted and still runs stays up.
+    let Some(_free) = crate::services::process_lease::free_to_tear_down(&lease_key(&vm_dir(project_id))) else {
+        registry().lock().unwrap().remove(project_id);
+        return;
+    };
     let removed = registry().lock().unwrap().remove(project_id);
     let dir = removed
         .as_ref()
@@ -1827,6 +1872,11 @@ pub fn sweep_orphans() {
         if !dir.is_dir() || entry.file_name() == "images" || entry.file_name() == "bake" {
             continue;
         }
+        // Booted by the other process sharing this state dir, which still
+        // runs it: not an orphan.
+        let Some(_free) = crate::services::process_lease::free_to_tear_down(&lease_key(&dir)) else {
+            continue;
+        };
         let Ok(pid_text) = std::fs::read_to_string(dir.join("qemu.pid")) else {
             teardown_runtime_files(&dir);
             continue;

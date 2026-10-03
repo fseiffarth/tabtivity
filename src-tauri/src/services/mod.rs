@@ -137,6 +137,7 @@ pub mod mobile_control;
 pub mod net_usage;
 pub mod opencode_store;
 pub mod openvpn;
+pub mod process_lease;
 pub mod project_runtime;
 pub mod prompt_blame;
 pub mod remote;
