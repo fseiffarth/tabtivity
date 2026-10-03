@@ -284,6 +284,21 @@ impl Vault {
         Ok(code)
     }
 
+    /// While unlocked: a fresh recovery code replaces the old one (the old
+    /// wrap is gone, so a lost or leaked code stops working). Returned once.
+    pub fn new_recovery_code(&self) -> Result<Zeroizing<String>, String> {
+        let key = self.key().ok_or("the secrets key is locked")?;
+        let _guard = self.files();
+        let mut file = WrapFile::load(&self.state_dir)?;
+        if file.recovery.is_none() {
+            return Err("the secrets key is not set up".into());
+        }
+        let code = secrets::recovery_code();
+        file.recovery = Some(secrets::wrap_with_recovery(&key, &code)?);
+        file.save(&self.state_dir)?;
+        Ok(code)
+    }
+
     /// While unlocked: wrap K for each device that has none. The count made.
     pub fn wrap_missing(&self, devices: &[DeviceKey]) -> usize {
         let Some(key) = self.key() else { return 0 };

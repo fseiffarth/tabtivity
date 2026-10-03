@@ -14,6 +14,7 @@ import { isServerClient } from "../../lib/transport/linkState";
 import { useSettingsStore } from "../../stores/settings";
 import { SettingsCard, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
+import { ServerSecrets } from "./ServerSecrets";
 
 type Feature = "mail" | "calendar" | "todo";
 const FEATURES: Feature[] = ["mail", "calendar", "todo"];
@@ -155,6 +156,7 @@ export function ServerSettings() {
         </>
       )}
       {status && <p className="settings-help">{status}</p>}
+      <ServerSecrets />
     </>
   );
 }

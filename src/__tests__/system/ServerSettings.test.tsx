@@ -63,16 +63,19 @@ describe("ServerSettings", () => {
 
   it("lets the admin save the policy with the model list", async () => {
     markServerClient();
-    const fetch = vi.fn((_url: string, init?: RequestInit) =>
-      init?.method === "PUT" ? answer({ policy: JSON.parse(String(init.body)) }) : answer({ policy: policy(true), role: "admin" }),
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.startsWith("/api/v1/secrets")
+        ? answer({ available: false })
+        : init?.method === "PUT" ? answer({ policy: JSON.parse(String(init.body)) }) : answer({ policy: policy(true), role: "admin" }),
     );
     vi.stubGlobal("fetch", fetch);
     render(<ServerSettings />);
     const models = await screen.findByRole("textbox");
     fireEvent.change(models, { target: { value: "llama3\n\n qwen2.5:7b \n" } });
     fireEvent.click(screen.getByRole("button"));
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
-    const [, init] = fetch.mock.calls[1];
+    const puts = () => fetch.mock.calls.filter(([, init]) => init?.method === "PUT");
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    const [, init] = puts()[0];
     expect(init?.method).toBe("PUT");
     expect(JSON.parse(String(init?.body)).ollama_allowed_models).toEqual(["llama3", "qwen2.5:7b"]);
   });

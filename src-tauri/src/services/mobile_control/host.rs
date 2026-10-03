@@ -1757,6 +1757,27 @@ async fn secrets_setup(State(state): State<HostState>, headers: HeaderMap) -> Re
     }
 }
 
+/// A fresh recovery code while unlocked; the old one stops working.
+async fn secrets_new_recovery_code(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error.into_response();
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
+    }
+    let Some(vault) = crate::services::server::vault::vault() else {
+        return api_error(StatusCode::NOT_FOUND, "not_a_server").into_response();
+    };
+    match vault.new_recovery_code() {
+        Ok(code) => {
+            let mut response = Json(json!({ "code": code.as_str() })).into_response();
+            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => api_error(StatusCode::CONFLICT, &error).into_response(),
+    }
+}
+
 async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
     if let Err(error) = authenticate(&headers, &state) {
         return error;
@@ -4689,6 +4710,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/secrets/unlock/finish", post(secrets_unlock_finish))
         .route("/api/v1/secrets/setup", post(secrets_setup))
         .route("/api/v1/secrets/recover", post(secrets_recover))
+        .route("/api/v1/secrets/recovery-code", post(secrets_new_recovery_code))
         .route("/api/v1/mail", get(mail_overview))
         .route("/api/v1/mail/folders/{folder_id}", get(mail_folder))
         .route(

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AppMark } from "./AppMark";
 import { hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
+import { releaseSecrets } from "./secrets";
 import { connectTrace, getMobileStatus, primeConnection, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
 import { forgetLastPlace, parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
@@ -277,6 +278,9 @@ export function App() {
         reset();
         if (restored) goTo(restored);
         void refreshPush().catch(() => undefined);
+        // A server's secrets key: enrol this device, and release the key
+        // if the server rebooted (`secrets.ts`). Off a server, one GET.
+        void releaseSecrets().then((outcome) => traceConnect(`secrets ${outcome}`));
       } else if (result.kind === "unpaired") {
         forgetLastPlace();
       } else {

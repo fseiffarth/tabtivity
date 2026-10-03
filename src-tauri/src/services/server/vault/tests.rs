@@ -127,6 +127,11 @@ fn a_copy_of_the_home_opens_nothing_and_the_recovery_code_does() {
     assert!(thief.recover(&secrets::recovery_code(), &[]).is_err());
     thief.recover(&code, &[]).unwrap();
     assert_eq!(thief.credential("ssh:alice@host.example:22").as_deref(), Some("s3cret"), "the recovery code does");
+    // A new code retires the old one.
+    let fresh = vault.new_recovery_code().unwrap();
+    let after = vault_in(dir.path(), Arc::new(MemoryHold::default()));
+    assert!(after.recover(&code, &[]).is_err(), "the old code no longer opens it");
+    after.recover(&fresh, &[]).unwrap();
 }
 
 #[test]
