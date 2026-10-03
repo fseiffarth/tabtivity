@@ -321,6 +321,7 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
         }
         #[cfg(not(unix))]
         {
+            let _ = ino;
             false
         }
     });

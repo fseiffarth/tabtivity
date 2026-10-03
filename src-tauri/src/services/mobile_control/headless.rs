@@ -1363,6 +1363,7 @@ fn zone_name(value: &str) -> Option<String> {
 }
 
 /// `…/zoneinfo/Europe/Berlin` → `Europe/Berlin`.
+#[cfg(any(unix, test))]
 fn zone_from_localtime_target(target: &Path) -> Option<String> {
     let text = target.to_string_lossy();
     let (_, zone) = text.rsplit_once("zoneinfo/")?;

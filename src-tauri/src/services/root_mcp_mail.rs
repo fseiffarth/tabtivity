@@ -2160,6 +2160,7 @@ mod tests {
 
     /// A tree of projects on disk and the lists naming them, for `attach`.
     struct Tree {
+        #[cfg_attr(not(unix), allow(dead_code))] // read only by a Unix test; held to keep the tree alive
         dir: tempfile::TempDir,
         projects: std::path::PathBuf,
         state: std::path::PathBuf,

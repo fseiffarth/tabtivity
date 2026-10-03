@@ -90,9 +90,7 @@ impl ManagedProcess {
         #[cfg(not(target_os = "linux"))]
         let mut command = {
             let _ = (&executable, &installation, &project);
-            return Err("copilot_unsupported_platform".into());
-            #[allow(unreachable_code)]
-            tokio::process::Command::new("")
+            Err::<tokio::process::Command, _>("copilot_unsupported_platform")?
         };
         command.env_clear().current_dir(&installation).stdin(Stdio::piped()).stdout(Stdio::piped())
             .stderr(Stdio::null()).kill_on_drop(true);

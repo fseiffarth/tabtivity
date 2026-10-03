@@ -22,7 +22,9 @@
 //! anyway; that build keeps the path-based checks behind the same API.
 //! AppHandle-free and unit-testable.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -230,6 +232,7 @@ pub struct HomeFile {
     name: OsString,
 }
 
+#[cfg(unix)]
 static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl HomeFile {
