@@ -39,11 +39,29 @@ struct AgentSpec {
     /// as does a login kept in a database beside other state (Kiro, Kilo,
     /// OpenClaw) or in the keyring (Copilot: `services::copilot_auth`).
     auth_paths: &'static [AuthPath],
+    /// The environment variable this CLI takes an API key in, where it
+    /// documents one that works for its interactive session — the column
+    /// an administrator's key is delivered through on a hosted server (plan
+    /// §5.4, `services::server::agent_keys`). `None`: the CLI cannot be
+    /// offered one (it takes a key only through its own login file, like
+    /// Codex's `login --with-api-key`, or through a provider-specific config).
+    api_key_env: Option<&'static str>,
 }
 
 use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath};
 use app_core::CoreCtx;
 use crate::tauri_host::Ctx;
+
+/// The environment variable `id` takes an API key in (the registry's
+/// `api_key_env` column), or `None` when the CLI cannot be handed one.
+pub fn api_key_env(id: &str) -> Option<&'static str> {
+    AGENTS.iter().find(|a| a.id == id).and_then(|a| a.api_key_env)
+}
+
+/// Every `api_key_env` the registry names (`tmux_local` keeps each off argv).
+pub fn api_key_envs() -> Vec<&'static str> {
+    AGENTS.iter().filter_map(|a| a.api_key_env).collect()
+}
 
 /// The registry's login paths, for `services::agent_auth`.
 pub fn auth_registry() -> Vec<(&'static str, &'static [AuthPath])> {
@@ -107,6 +125,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/claude"],
         docs: "https://docs.anthropic.com/en/docs/claude-code/setup",
         auth_paths: &[auth_file(".claude/.credentials.json")],
+        api_key_env: Some("ANTHROPIC_API_KEY"),
     },
     AgentSpec {
         id: "codex",
@@ -117,6 +136,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/codex"],
         docs: "https://github.com/openai/codex",
         auth_paths: &[auth_file(".codex/auth.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "antigravity",
@@ -127,6 +147,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/agy", "AppData/Local/agy/bin/agy"],
         docs: "https://antigravity.google/docs/cli/install/",
         auth_paths: &[auth_file(".gemini/antigravity-cli/antigravity-oauth-token")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "gemini",
@@ -137,6 +158,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/gemini"],
         docs: "https://github.com/google-gemini/gemini-cli",
         auth_paths: &[auth_file(".gemini/oauth_creds.json")],
+        api_key_env: Some("GEMINI_API_KEY"),
     },
     AgentSpec {
         id: "kiro",
@@ -152,6 +174,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/kiro-cli"],
         docs: "https://kiro.dev/docs/cli/installation/",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "cline",
@@ -162,6 +185,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://docs.cline.bot/getting-started/installing-cline",
         auth_paths: &[auth_file(".cline/data/settings/providers.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "vibe",
@@ -173,6 +197,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
         docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
         auth_paths: &[auth_file(".vibe/.env")],
+        api_key_env: Some("MISTRAL_API_KEY"),
     },
     AgentSpec {
         id: "aider",
@@ -190,6 +215,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/aider"],
         docs: "https://aider.chat/docs/install.html",
         auth_paths: &[auth_file(".aider/oauth-keys.env")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "opencode",
@@ -200,6 +226,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".opencode/bin/opencode", ".local/bin/opencode"],
         docs: "https://opencode.ai/docs/",
         auth_paths: &[auth_file(".local/share/opencode/auth.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "cursor-agent",
@@ -211,6 +238,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/cursor-agent"],
         docs: "https://cursor.com/docs/cli/installation",
         auth_paths: &[auth_file(".config/cursor/auth.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "copilot",
@@ -221,6 +249,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/copilot"],
         docs: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "droid",
@@ -231,6 +260,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/droid"],
         docs: "https://docs.factory.ai/cli/getting-started/overview",
         auth_paths: &[auth_file(".factory/auth.v2.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "grok",
@@ -245,6 +275,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".grok/bin/grok"],
         docs: "https://docs.x.ai/build/overview",
         auth_paths: &[auth_file(".grok/auth.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "qwen",
@@ -255,6 +286,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/qwen"],
         docs: "https://github.com/QwenLM/qwen-code",
         auth_paths: &[auth_file(".qwen/oauth_creds.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "openclaw",
@@ -273,6 +305,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".openclaw/bin/openclaw", ".local/bin/openclaw"],
         docs: "https://docs.openclaw.ai",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "auggie",
@@ -283,6 +316,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://docs.augmentcode.com/cli/overview",
         auth_paths: &[auth_file(".augment/session.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "kilo",
@@ -293,6 +327,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".kilo/bin/kilo"],
         docs: "https://kilo.ai/docs/code-with-ai/platforms/cli",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "continue",
@@ -305,6 +340,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://docs.continue.dev/cli/quickstart",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "junie",
@@ -315,6 +351,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/junie"],
         docs: "https://junie.jetbrains.com/docs/junie-cli.html",
         auth_paths: &[auth_file(".junie/secure_credentials.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "codebuddy",
@@ -325,6 +362,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://www.codebuddy.ai/docs/cli/README",
         auth_paths: &[auth_dir(".local/share/CodeBuddyExtension/Data/Public/auth")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "goose",
@@ -335,6 +373,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/goose"],
         docs: "https://github.com/aaif-goose/goose",
         auth_paths: &[auth_file(".config/goose/secrets.yaml")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "pi",
@@ -345,6 +384,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
         auth_paths: &[auth_file(".pi/agent/auth.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "plandex",
@@ -355,6 +395,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://docs.plandex.ai/docs/cli-reference/",
         auth_paths: &[auth_file(".plandex-home-v2/auth.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "swe-agent",
@@ -365,6 +406,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/sweagent"],
         docs: "https://swe-agent.com/latest/installation/source/",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "mini-swe-agent",
@@ -375,6 +417,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/mini"],
         docs: "https://mini-swe-agent.com/latest/quickstart/",
         auth_paths: &[auth_file(".config/mini-swe-agent/.env")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "crush",
@@ -385,6 +428,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://github.com/charmbracelet/crush",
         auth_paths: &[],
+        api_key_env: None,
     },
     AgentSpec {
         id: "amp",
@@ -395,6 +439,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[],
         docs: "https://ampcode.com/",
         auth_paths: &[auth_file(".local/share/amp/secrets.json")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "kimi",
@@ -409,6 +454,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".kimi-code/bin/kimi", ".local/bin/kimi"],
         docs: "https://code.kimi.com/kimi-code",
         auth_paths: &[auth_dir(".kimi-code/credentials")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "qoder",
@@ -419,6 +465,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/qoder"],
         docs: "https://docs.qoder.com/cli/installation",
         auth_paths: &[auth_file(".qoder/.auth")],
+        api_key_env: None,
     },
     AgentSpec {
         id: "muse",
@@ -429,6 +476,7 @@ const AGENTS: &[AgentSpec] = &[
         extra_paths: &[".local/bin/muse"],
         docs: "https://dev.meta.ai",
         auth_paths: &[auth_file(".config/muse/auth.json")],
+        api_key_env: None,
     },
 ];
 
@@ -490,6 +538,11 @@ pub fn agent_bins() -> Vec<&'static str> {
 /// tab list is one (`services::mobile_control::discovery`).
 pub fn agent_label_for_bin(bin: &str) -> Option<&'static str> {
     AGENTS.iter().find(|a| a.bin == bin).map(|a| a.label)
+}
+
+/// The registry's display name for an agent id ("claude" → "Claude").
+pub fn agent_label_for_id(id: &str) -> Option<&'static str> {
+    AGENTS.iter().find(|a| a.id == id).map(|a| a.label)
 }
 
 /// The registry id of the agent whose binary is `bin` — what the settings'
@@ -1990,6 +2043,17 @@ pub async fn agent_login_import(id: String) -> Result<usize, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
     app_core::rt::spawn_blocking(move || crate::services::agent_auth::sign_out(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// On a hosted server: run `id`'s agents on the administrator's API key
+/// (`on`) or on the user's own login (hosted plan §5.2). The user's own
+/// choice, per CLI; refused off a server, for a CLI that takes no key by
+/// environment, and (switching on) when no key is on offer.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_login_use_admin_key(id: String, on: bool) -> Result<(), String> {
+    app_core::rt::spawn_blocking(move || crate::services::server::agent_keys::choose(&id, on))
         .await
         .map_err(|e| e.to_string())?
 }

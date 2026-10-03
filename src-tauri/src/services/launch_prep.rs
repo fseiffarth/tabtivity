@@ -675,6 +675,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                crate::services::server::agent_keys::inject_env(&opts.cmd, &mut opts.env)?;
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
             }
             // No fence on this platform (Windows): the same Tabtivity-owned home

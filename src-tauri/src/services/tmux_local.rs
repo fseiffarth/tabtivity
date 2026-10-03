@@ -408,6 +408,12 @@ const SECRET_ENV: &[&str] = &[
     crate::services::root_mcp::GIT_TOKEN_ENV,
     crate::services::root_mcp::HELP_TOKEN_ENV,
     crate::services::copilot_auth::TOKEN_ENV,
+    // Where a hosted server hands an agent the administrator's API key
+    // (`server::agent_keys`, the registry's `api_key_env` column; a test
+    // keeps the two lists equal). A user's own key in one rides the same way.
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "MISTRAL_API_KEY",
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -928,7 +934,9 @@ mod tests {
             // "sk-test" rather than a bare letter: `scripts/privacy-check.sh`
             // clears an api_key whose value is built out of placeholder words, and
             // reports every other one — a fixture must not need the override.
-            ("ANTHROPIC_API_KEY", "sk-test"),
+            // (Not one of the `SECRET_ENV` keys, which ride the client's
+            // environment instead — `ANTHROPIC_API_KEY` is one since P3b.)
+            ("OPENAI_API_KEY", "sk-test"),
             // tmux owns TERM per pane; a bad key would land unquoted in `export`.
             ("TERM", "xterm-256color"),
             ("not a key", "x"),
@@ -939,7 +947,7 @@ mod tests {
             .filter(|w| w[0] == "-e")
             .map(|w| w[1].as_str())
             .collect();
-        assert_eq!(e, vec!["ANTHROPIC_API_KEY=sk-test", concat!(crate::app_upper!(), "_TAB_UID=tab-uid-1")]);
+        assert_eq!(e, vec!["OPENAI_API_KEY=sk-test", concat!(crate::app_upper!(), "_TAB_UID=tab-uid-1")]);
         // …and the flags precede the session name, as tmux requires.
         let dash_s = args.iter().position(|a| a == "-s").unwrap();
         assert!(args.iter().position(|a| a == "-e").unwrap() < dash_s);
@@ -1056,7 +1064,12 @@ mod tests {
             (crate::services::root_mcp::SCHEDULE_TOKEN_ENV, "sched-s3cret"),
             (crate::services::root_mcp::HELP_TOKEN_ENV, "help-s3cret"),
             (crate::services::copilot_auth::TOKEN_ENV, "gho_copilot-s3cret"),
+            ("ANTHROPIC_API_KEY", "admin-key-s3cret"),
         ]);
+        // Every variable an administrator's API key is delivered in is a secret.
+        for var in crate::commands::agents::api_key_envs() {
+            assert!(SECRET_ENV.contains(&var), "{var} must never ride an argv");
+        }
         let leaks = |args: &[String]| args.iter().any(|a| a.contains("s3cret"));
         for cmd in ["", "claude", "bwrap"] {
             let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), cmd, &["--x".into()], &env, true);

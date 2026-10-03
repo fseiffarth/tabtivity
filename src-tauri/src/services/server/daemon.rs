@@ -27,6 +27,19 @@ pub fn main() -> ! {
     if args.first().map(String::as_str) == Some("--serverd") {
         args.remove(0);
     }
+    // `<slug>-serverd --agent-shim <cli> [args…]`: a CLI typed into a shell
+    // tab of this server (the `agent_bin` shims the daemon writes name this
+    // binary). The tab's environment is tmux's, not the unit's, so server mode
+    // is marked here — for the administrator's key (plan §5.4) and every
+    // other server rule the fence follows.
+    if args.first().map(String::as_str) == Some("--agent-shim") {
+        super::mark_server_process();
+        let Some(cli) = args.get(1).cloned() else {
+            eprintln!("agent shim: usage: {SLUG}-serverd --agent-shim <cli> [args…]");
+            std::process::exit(2);
+        };
+        std::process::exit(crate::services::agent_shim::run(&cli, &args[2..]));
+    }
     if let Some(verb) = args.first().cloned() {
         let result = match verb.as_str() {
             "--write-invite" => read_secret_line().and_then(|code| write_invite(&crate::storage::state_dir(), &code, args.get(1).map(String::as_str))),
@@ -52,6 +65,13 @@ pub fn main() -> ! {
     };
     harden_process();
     install_vault(&config.state_dir);
+    // The shell tabs' agent shims (`agent_bin`): a CLI typed into one runs
+    // fenced in the tab's scope, as on the desktop, and gets the
+    // administrator's key the same way an agent tab does. In `main`, not
+    // [`run`]: a test serving a daemon must not write into the state dir.
+    if let Err(error) = crate::services::agent_bin::install() {
+        eprintln!("{SLUG}-serverd: agent shims: {error}");
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {

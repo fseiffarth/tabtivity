@@ -2228,6 +2228,7 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::agent_login_use_admin_key,
             commands::agents::agent_global_status,
             commands::agents::agent_global_import,
             commands::agents::agent_global_set_codex_auto_review,

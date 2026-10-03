@@ -20,6 +20,7 @@
 //! | `SERVER_CONTENT_ORIGIN` | the user-content origin the gateway serves `/content/*` on; unset → no tickets |
 //! | `TMUX_SOCKET` | the tmux server name (`tmux -L …`); server mode defaults it to the slug |
 //! | `SERVER_CLI_ROOT` | the server-wide, admin-owned CLI install root (§5.1) |
+//! | `SERVER_KEEPER_SOCKET` | the key keeper's socket when not `/run/<slug>/auth.sock` (§5.4) |
 //!
 //! **Trust.** The daemon accepts a connection only from the gateway's uid, so
 //! the headers the gateway adds ([`USER_HEADER`], [`ROLE_HEADER`],
@@ -50,6 +51,11 @@ pub mod wire;
 /// Ollama allowlist), same source as the gateway's.
 #[path = "../../../../src-gateway/src/policy.rs"]
 pub mod policy;
+/// The key keeper's protocol (the administrator's agent API keys, plan
+/// §5.4), same source as the gateway's and the keeper's.
+#[path = "../../../../src-gateway/src/keys_wire.rs"]
+pub mod keys_wire;
+pub mod agent_keys;
 
 pub const MODE_ENV: &str = wire::env::MODE;
 pub const SOCKET_ENV: &str = wire::env::SOCKET;
@@ -68,8 +74,18 @@ pub use wire::{DEVICE_HEADER, ROLE_HEADER, USER_HEADER};
 /// Is this process a per-user server daemon? Read once: the unit sets it
 /// before start, and nothing flips it at run time.
 pub fn is_server() -> bool {
-    static MODE: OnceLock<bool> = OnceLock::new();
-    *MODE.get_or_init(|| brand::env(MODE_ENV).as_deref() == Some("1"))
+    *SERVER_MODE.get_or_init(|| brand::env(MODE_ENV).as_deref() == Some("1"))
+}
+
+static SERVER_MODE: OnceLock<bool> = OnceLock::new();
+
+/// This process is the server's own binary run as a helper of a server
+/// tab (the `agent_bin` shim of a shell tab, whose environment comes from
+/// tmux, not the daemon's unit): server mode without the unit's variable,
+/// for this process only — nothing it starts inherits a marker. Before
+/// anything has asked [`is_server`].
+pub fn mark_server_process() {
+    let _ = SERVER_MODE.set(true);
 }
 
 /// The tmux server every spawn, attach and probe uses (`tmux -L <name>`):

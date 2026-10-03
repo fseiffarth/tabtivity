@@ -1317,6 +1317,9 @@ pub fn wrap_pty_options_bwrap(
     if copilot {
         crate::services::copilot_auth::inject_env(&mut opts.env);
     }
+    // A hosted server's administrator's API key, for a CLI this user runs on
+    // it (plan §5.4); a no-op everywhere else.
+    crate::services::server::agent_keys::inject_env(&agent_cmd, &mut opts.env)?;
     Ok(())
 }
 
@@ -1562,6 +1565,7 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
+    crate::services::server::agent_keys::inject_env(&agent_cmd, &mut opts.env)?;
     Ok(())
 }
 

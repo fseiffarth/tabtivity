@@ -33,6 +33,8 @@ pub mod env {
     /// The server-wide policy file the gateway owns and every daemon reads
     /// (feature switches, the Ollama model allowlist).
     pub const POLICY_FILE: &str = "SERVER_POLICY_FILE";
+    /// The key keeper's socket, when not `/run/<slug>/auth.sock` (tests).
+    pub const KEEPER_SOCKET: &str = "SERVER_KEEPER_SOCKET";
 }
 
 /// Is `name` an account name the server accepts? `^[a-z][a-z0-9_]{0,31}$`:

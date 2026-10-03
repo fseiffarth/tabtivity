@@ -206,6 +206,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_login_import", Off(OffReason::LocalCliFiles)),
     ("agent_logins", Core),
     ("agent_login_sign_out", Core),
+    ("agent_login_use_admin_key", Core),
     ("agent_tab_changes", Core),
     ("agent_tab_goal", Core),
     ("agent_tab_last_prompt", Core),
