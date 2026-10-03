@@ -15,7 +15,7 @@
  * page's top margin. A pin scrolls the card to its question; a question's
  * chip scrolls the page to its pin.
  */
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
@@ -245,9 +245,12 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
  */
 export function useQuestionPins(doc: PDFDocumentProxy | null, asks: readonly MarkupAsk[]): Map<number, QuestionPin[]> {
   const [texts, setTexts] = useState<{ doc: PDFDocumentProxy; pages: Map<number, TextItemBox[]> } | null>(null);
-  const pageList = [...new Set(asks.flatMap((ask) => ask.questions.flatMap((q) => (q.page ? [q.page] : []))))]
-    .filter((page) => doc !== null && page <= doc.numPages)
-    .sort((a, b) => a - b);
+  const pageList = useMemo(
+    () => [...new Set(asks.flatMap((ask) => ask.questions.flatMap((q) => (q.page ? [q.page] : []))))]
+      .filter((page) => doc !== null && page <= doc.numPages)
+      .sort((a, b) => a - b),
+    [asks, doc],
+  );
   const wanted = pageList.join(",");
   useEffect(() => {
     if (!doc || !wanted) return;
@@ -269,12 +272,16 @@ export function useQuestionPins(doc: PDFDocumentProxy | null, asks: readonly Mar
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, wanted]);
-  const out = new Map<number, QuestionPin[]>();
-  for (const page of pageList) {
-    const items = texts?.doc === doc ? texts.pages.get(page) ?? null : null;
-    out.set(page, pagePins(asks, page, items));
-  }
-  return out;
+  // Matching the quotes walks every named page's text runs: only again when
+  // the asks or the read text change, not on every render of the viewer.
+  return useMemo(() => {
+    const out = new Map<number, QuestionPin[]>();
+    for (const page of pageList) {
+      const items = texts?.doc === doc ? texts.pages.get(page) ?? null : null;
+      out.set(page, pagePins(asks, page, items));
+    }
+    return out;
+  }, [pageList, texts, doc, asks]);
 }
 
 /** A pin badge's size (CSS px), for placing it above the quoted words. */
