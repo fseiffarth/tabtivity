@@ -818,7 +818,14 @@ export function AgentLoginsRows() {
                     type="button"
                     className="ollama-action-btn"
                     disabled={busy === l.id}
-                    title={l.uses_admin_key ? undefined : t("settings.agentLoginAdminKeyHelp", { env: l.api_key_env ?? "" })}
+                    title={
+                      l.uses_admin_key
+                        ? undefined
+                        : l.id === "claude"
+                          ? // Claude takes it through its apiKeyHelper, never its env var.
+                            t("settings.agentLoginAdminKeyHelpClaude")
+                          : t("settings.agentLoginAdminKeyHelp", { env: l.api_key_env ?? "" })
+                    }
                     onClick={() => run(l.id, "agent_login_use_admin_key", !l.uses_admin_key)}
                   >
                     {t(l.uses_admin_key ? "settings.agentLoginUseOwn" : "settings.agentLoginUseAdminKey")}

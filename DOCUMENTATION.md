@@ -573,7 +573,7 @@ per CLI which one their agents run on.
 
 - **The administrator** offers keys in Settings → Mobile → Server → **Agent
   credentials** (shown to the administrator only). Each CLI that can take a
-  key has a card — today Claude (`ANTHROPIC_API_KEY`), Google Gemini
+  key has a card — today Claude (through its API key helper), Google Gemini
   (`GEMINI_API_KEY`) and Mistral Vibe (`MISTRAL_API_KEY`); Codex takes a key
   only through its own login file and is not offered. **Save key** offers or
   replaces a key, **Withdraw** takes it back. A saved key is never shown
