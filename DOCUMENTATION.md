@@ -637,7 +637,10 @@ Server.
   revoked or stopped, and also if the other member's branch is deleted
   meanwhile. In a shared
   project git hooks never run on Commit or Push, and a merged `latexmkrc` or
-  prettier configuration asks for your approval again.
+  prettier configuration asks for your approval again. Worktrees you make
+  in a shared project (Git history → Worktrees) count as part of it: a
+  change merged into any of them is reviewed before an agent starts anywhere
+  in the project, and the review names the worktree.
 - **Agents see only their own project's shared copy.** An agent in one
   shared project cannot read the shared copy of any other.
 - **Sharing a calendar or a to-do list.** Under **Shared calendars and to-do

@@ -863,6 +863,14 @@ assume one human, as the sync plan's §6.1-6.2 already required.
 - **Later options (P5):** pair mode (one shared tree, for people who accept
   the hazards) and worktrees inside a shared tree. Both need the in-tree
   session files moved into `state_dir` first. Neither is ever the default.
+  *As built (P5, `docs/context/sharing.md` § In-tree worktrees, § Pair
+  mode):* in-tree worktrees of a member's own clone are built — the review
+  gate reads every checkout of the repository (one uid writes them all, so
+  the in-tree session question does not arise there). **Pair mode is
+  designed, not built**: two uids writing one tree turns P4 review finding
+  11 (git's other program-naming config keys) into a cross-user hole unless
+  the tree has no `.git` of its own, and needs a content gate for agent
+  files written live; the choice is the user's (#2382).
 
 ### 6.4 Presence and visibility
 

@@ -781,3 +781,44 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+
+
+2381. **Run the worktree review gate of a shared project live (P5, §6.3).**
+    Steps in `docs/hosted_handoff.md` § P5 "In-tree worktrees — live steps":
+    in a shared clone make a worktree, merge a co-member's `AGENTS.md`
+    change there in a terminal, an agent tab in the main checkout and one in
+    the worktree are both refused, the review names the worktree, accepting
+    it lets both start; a commit in the worktree runs no hook. Pushing a
+    worktree's branch through the app is not built. (P5, 2026-10-03.)
+    - [ ] 🖐️ Manual test — the § P5 worktree list on a server with two users.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2382. **Decide and build pair mode (P5, §6.3).** Designed, not built:
+    `docs/context/sharing.md` § Pair mode. The decision: a shared `.git`
+    (needs #2374 settled — every program-naming git config key refused —
+    and stays exposed to new git keys) or a tree without `.git`, members
+    committing from their own clones, with a content gate for agent files
+    edited live. Either way: named-user `rwX` ACLs by the hub, the fence
+    binding only the scope's own tree, no in-tree session files there.
+    (P5, 2026-10-03.)
+
+2383. **A shared consumer login stays off until Q2's research is done per CLI (P5, §5.4).**
+    Q2 (answered 2026-09-29) keeps the option but enables it "per CLI
+    after that CLI's row is verified": does a refresh rotate the refresh
+    token, do two holders refreshing at once invalidate each other, does
+    the CLI run on a replica it cannot write back or on an access token
+    alone, how is a leaked token revoked. None of that can be answered
+    without a real login, so P5 built nothing (`docs/hosted_handoff.md` §
+    P5, item 2). To do: run those four checks for Claude and Codex (the
+    others keep keyrings or databases, `agent_auth`'s `shared: false`) on a
+    throwaway subscription, record each row in plan Q2, then build the
+    §5.4 keeper-refreshed, access-token-only replica for the CLIs that pass,
+    with the terms quoted in the panel (Q11). (P5, 2026-10-03.)
+

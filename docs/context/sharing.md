@@ -128,6 +128,62 @@ never paths.
 No container gate, as §6.5 argues: each member works in a private clone under
 a separate uid and the fence confines agents per scope.
 
+## In-tree worktrees of a shared project (P5)
+
+A member's clone is their own repository, so worktrees in it
+(`<root>/.tabtivity/worktrees/<name>`, the desktop's one sanctioned place)
+are written by that member's uid alone — no cross-user tree, and none of
+pair mode's hazards. What the gates needed:
+
+- **Gate 2 reads every checkout.** `share::checked_out` lists the main
+  checkout and each linked worktree (`git worktree list --porcelain`), and
+  `unreviewed` walks from all their commits: an agent can start in any of
+  them (a tab's cwd is a worktree; `roots` are the project's), so a
+  co-member's agent file merged into one worktree refuses every agent start
+  in the project until it is reviewed. The review shows the files as each
+  checkout holds them, labelled with the worktree, and accepting it marks
+  every checked-out commit.
+- **Gate 1 already held**: `is_shared_dir` is a prefix test on the project
+  root, so a worktree under it runs hookless with strict config, and
+  `repo_config_files` reads a worktree's own `config.worktree` and its
+  common dir's config.
+- **Not built**: pushing a worktree's branch through the app (the Push
+  button pushes the main checkout's branch; a terminal `git push` to the hub
+  is impossible anyway) and merging into a worktree through the app.
+
+## Pair mode (P5): designed, not built — needs the user
+
+Pair mode is "one shared tree, for people who accept the hazards". Every
+design of it breaks one of P4's premises — *each member's `.git` is theirs
+alone* — and therefore needs a decision before it is built (#2382):
+
+- **With a shared `.git`** (one repo both uids write): hooks and the
+  denylisted config keys are already off (gate 1 fails closed), but P4
+  review finding 11 is exactly here: git's other program-naming keys
+  (`merge.<driver>.driver`, `diff.<driver>.textconv`, `core.sshCommand`,
+  `gpg.program`, `remote.*.uploadpack`, `filter` drivers on paths a member's
+  `.gitattributes` names…) would let one member's config edit run code as
+  the other. That is cross-user code execution unless every such key is
+  refused (#2374's decision), and new git releases add keys.
+- **Without a `.git` in the tree** (the shape this agent would build): the
+  hub makes `/srv/<slug>/pair/<id>/` with named-user `rwX` ACLs (default
+  ACLs on every directory) for its members, refuses and never opens a `.git`
+  there, and each member commits from their **own** clone by copying or
+  syncing the tree in (`git --work-tree=<pair tree>` from their private
+  git dir). The fence binds the pair tree read-write into its own scope only
+  (a tmpfs over `/srv/<slug>/pair`, as for hubs). No in-tree session files
+  are written there (two uids would fight over them). Gate 2 cannot be on
+  commits — a member edits `CLAUDE.md` live — so it becomes a **content
+  gate**: a digest of the agent-facing files as this user last reviewed
+  them; any difference refuses agent starts until reviewed (own edits
+  included: nothing tells whose write it was, since a write into another's
+  file keeps its owner). `exec_trust` stays per user and content-bound.
+- **Hazards that stay, whichever shape**: a member can delete or rewrite
+  anything in the tree (no history there between commits); an agent of one
+  member edits files the other is editing (no locking, no CRDT — §13);
+  a build script one member writes runs as the other when they press Run
+  (exec trust asks, per content, but the trust prompt is the only gate).
+
 ## Calendars and to-do lists: a service, a move
 
 - **Sharing is a move.** A calendar shared for the first time leaves the
