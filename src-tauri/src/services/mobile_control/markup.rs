@@ -40,10 +40,13 @@ pub const MAX_INSTRUCTION: usize = 2_000;
 /// What the agent is told to do with the marks when the phone's settings
 /// hold no instruction of their own. It asks first: a marked PDF is often
 /// built from a `.tex` or `.md` beside it, and an agent told to "apply" the
-/// marks went and edited that file unasked. The phone shows this text as the
+/// marks went and edited that file unasked. Its last sentence points at the
+/// markup questions tool (`services::markup_mcp`), so a mark that leaves a
+/// choice comes back as a card on the page rather than as prose; "if you have
+/// it" covers remote tabs and the switch being off. The phone shows this text as the
 /// setting's starting point (`mobile-web/src/markupInstruction.ts`, kept equal
 /// by a test below).
-pub const DEFAULT_INSTRUCTION: &str = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.";
+pub const DEFAULT_INSTRUCTION: &str = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make. If a mark leaves you a choice, ask me with the `markup_ask` tool if you have it — give the page and the words the mark is on — rather than in prose.";
 /// How far outside its page a mark may reach, in page units — a stroke that
 /// leaves the edge by a hair is still the reader's.
 const EDGE_SLACK: f64 = 2.0;
@@ -831,7 +834,7 @@ mod tests {
              My markup layers, one per page, each the size of that page:\n\
              Page 3: @.", crate::app_slug!(), "/inbox/a.png\n\
              Page 7: @.", crate::app_slug!(), "/inbox/b.png\n\
-             Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.\n\
+             Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make. If a mark leaves you a choice, ask me with the `markup_ask` tool if you have it — give the page and the words the mark is on — rather than in prose.\n\
              Once you have rebuilt the PDF, send it to me with `", crate::app_slug!(), "-send <file>`.")
         );
     }

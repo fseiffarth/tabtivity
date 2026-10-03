@@ -12,7 +12,7 @@ import { NAMES } from "../../src/lib/brand";
 
 /** The desktop's default, shown as the setting's starting point. Equal to
  * `DEFAULT_INSTRUCTION` in `markup.rs` (a test there checks this file). */
-export const DEFAULT_MARKUP_INSTRUCTION = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.";
+export const DEFAULT_MARKUP_INSTRUCTION = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make. If a mark leaves you a choice, ask me with the `markup_ask` tool if you have it — give the page and the words the mark is on — rather than in prose.";
 
 /** The desktop refuses a longer one (`MAX_INSTRUCTION`). */
 export const MAX_MARKUP_INSTRUCTION = 2_000;
