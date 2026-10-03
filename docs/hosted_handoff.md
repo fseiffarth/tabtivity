@@ -2458,7 +2458,7 @@ classifier). Rationale, as built: [`context/server_gateway.md`](context/server_g
 | `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1), `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean |
 | `cargo check --workspace --target x86_64-pc-windows-msvc` (RC/AR shims) | green; the same 5 pre-existing warnings |
 | `scripts/brand-check.sh` | green (50 entries) |
-| `scripts/privacy-check.sh 00f1f3fc..HEAD` | green (4 commits, 27 paths, 0 binaries); two false positives (a vendor variable `=` value in a test, a shell line in the context file) fixed before committing |
+| `scripts/privacy-check.sh 00f1f3fc..HEAD` | green (4 commits, 27 paths, 0 binaries; the handoff commit by its pre-commit hook); four false positives (a vendor variable `=` value in a test and in the live steps, a shell line in the context file, a unit instance name read as an email) reworded before committing |
 | `git diff --check 00f1f3fc HEAD` | clean |
 | `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
 | `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
