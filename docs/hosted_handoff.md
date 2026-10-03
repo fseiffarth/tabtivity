@@ -2314,3 +2314,166 @@ key.*
 | `scripts/privacy-check.sh b501d779..HEAD` | green (4 commits, 6 paths, 0 binaries) |
 | `git diff --check b501d779 HEAD` | clean |
 | `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+## P3b decisions
+
+*Written 2026-10-03 by the P3b-decisions agent. Base `00f1f3fc` (P3b and
+its review). Implements the user's decisions of 2026-10-03 on § P3b's
+"Needs the user" and review findings 6–8. Nothing run on a server, nothing
+as root, no daemon, gateway or keeper against a real state dir, port or
+`/run`, no real API key, no container run: the keeper and the daemon's
+helper socket ran only in tests on temp sockets (fake keepers, injected uid
+classifier). Rationale, as built: [`context/server_gateway.md`](context/server_gateway.md)
+§ Admin-provided API keys.*
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `e9f852ac` | Keeper + gateway: per-key user list (`meta.json` `users`, empty for a new key; kept on replace, forgotten on withdraw); `offered`/`get` only for listed users (`no-key` otherwise — indistinguishable from none); `Request::Users` (gateway only) with one audit row per user added/removed (`agent-key-user-add`/`-remove`, resource `<cli>/<user>`); `Request::Fingerprints` (any server user): length + SHA-256 of the current key and the last 32 replaced/withdrawn ones (`<cli>/previous.json`, never a key); `keys_wire::holds_any`; per-uid cap 4 connections (`PerUid`, counted at accept by `SO_PEERCRED`) and a 2 s deadline (was 5 s); gateway `PUT /gateway/v1/agent-keys/{cli}/users` (admin, exact origin, accounts of its table only) and `accounts` in the GET; isolation script: a user's `users` request is refused. |
+| `cced6cfc` | Daemon: `agent_keys::prepare_spawn` (was `inject_env`): Gemini/Vibe as before; **Claude (`HELPER_CLIS`) gets nothing in its environment** — the spawn checks `offered` (a withdrawn/unlisted key fails the start) and returns the helper dir, which the Linux fence binds read-only after the state mask (`agent_fence::bind_read_only_last`); `sync_helper_settings` (from `agent_auth`'s place step: every spawn and `choose`) writes/removes Claude's `apiKeyHelper` in Tabtivity's agent homes; `serve_helpers` (daemon `main`) answers `<state>/key-helper/claude.sock` by asking the keeper per call; `--key-helper <socket>` verb first in both binaries' `main`; `container_env` + `sandbox::is_secret_exec_env` covers every key variable (`key_envs`); `holds_admin_key` by fingerprints (findings 7, 8). |
+| `c4f3c3ce` | Browser: the admin card's user list (Remove `<user>`, a `Dropdown` over the gateway's accounts + Allow), "nobody may use it yet"; Manage CLIs texts (withdrawn *or taken off its list*; no "answer Yes" for Claude); i18n ×5 (6 new keys, 3 changed); UntestedTag rows `server.agentKeys.users`, `agents.adminKey.helper` (and `agents.adminKey`'s text). |
+| `f8687ba0` | Docs: plan §5.4 / P3b / Q2, context file, `DOCUMENTATION.md` § Hosted server: the administrator's agent API keys, file maps, TODO #2359 (decided no), #2360 (Claude now via helper), #2361 (containers done, remote decided no), new #2365 (live run of the decisions). |
+| the commit after | this section. |
+
+### Design
+
+- **Allowlist (decision 1).** The list lives with the key in the keeper's
+  `0700` state (`meta.json` `0600`), set only by the gateway's uid. Default
+  for a new key: **nobody** — the admin names every user (an explicit
+  selection; offering a key never silently reaches every account). Replacing
+  the key keeps the list; withdrawing forgets it (a re-offer starts empty
+  again). For an unlisted user the keeper answers exactly as if no key
+  existed, so Manage CLIs shows no switch and a user removed from the list
+  fails their next spawn with the withdrawn message, which now names both
+  causes (decision 2).
+- **Claude through `apiKeyHelper` (decision 3), and how it crosses the
+  fence.** The fence mounts a tmpfs on `/run` (no keeper) and masks the
+  whole state dir. So the *daemon* serves the key: one socket per helper
+  CLI, `<state>/key-helper/claude.sock` (`0600`, dir `0700`, same-uid only
+  by `SO_PEERCRED`, which the kernel maps back out of the fence's user
+  namespace). A chosen Claude spawn gets **that one directory** bound
+  read-only at its own path, after the state mask; no other fence (another
+  CLI, a container) sees it. The agent home's `.claude/settings.json` gets
+  `apiKeyHelper` = a POSIX `sh` line that execs `<slug>-serverd --key-helper
+  <socket>` (or, in a container, prints `<PREFIX>ADMIN_KEY_SECRET`). The
+  daemon answers each call only if the user still chose Claude and the
+  keeper still delivers to that uid — so nothing a fenced process can reuse
+  goes beyond "this user's chosen Claude may have the key", and a withdraw
+  or list removal also stops a *running* Claude at its next helper call.
+  **Why per CLI, not per spawn:** a server's tmux tabs outlive a daemon
+  restart and Claude re-runs the helper periodically; a per-spawn listener
+  would die with the daemon, whereas the bound *directory* shows the
+  restarted daemon's fresh socket. Claude Code's documented behaviour this
+  relies on (from the docs, not verified live): `apiKeyHelper` in user
+  settings is run with `/bin/sh`, its stdout is the key, it is re-run after
+  5 minutes by default or on a 401 (`CLAUDE_CODE_API_KEY_HELPER_TTL_MS`
+  overrides; not set), and it ranks below `ANTHROPIC_API_KEY` but above an
+  OAuth login (so "never both" still removes the login). **No env fallback
+  kept** for Claude: if the live run shows otherwise, removing `"claude"`
+  from `agent_keys::HELPER_CLIS` restores the variable path unchanged.
+  Switching back removes the setting (only a value that is ours; a user's
+  own helper is never touched).
+- **Containers (decision 4).** `sandbox::wrap_pty_options_docker` calls
+  `container_env`: Gemini/Vibe their variable, Claude
+  `<PREFIX>ADMIN_KEY_SECRET` (its helper prints it there — the container
+  shares the scope home's settings). Every such name rides the `docker
+  exec` argv bare (`-e NAME`); the value is only in the docker client's
+  environment. Not in the image, the container's create-time config, a
+  volume or `docker inspect`. Residual: the exec'd agent's environment
+  inside the container (as on the host) and the docker client's environ
+  (`0400`, same uid). The `SECRET` in the name keeps
+  `brand::Pair::export_both` from making a legacy twin (which would ride
+  the argv by value — tested). Only container **agent tabs**: a `claude`
+  typed into a container shell gets nothing. Remote agents and Codex:
+  decided no (#2359, #2361).
+- **Fair share (finding 6).** 32 connections, ≤ 4 per caller uid, 2 s per
+  exchange; over a cap the connection is closed unanswered.
+- **Earlier keys (findings 7, 8).** Fingerprints instead of a `get`: any
+  server user may ask (a SHA-256 of a high-entropy key calls no provider);
+  the daemon scans the file (≤ 256 KiB, sliding window per known length).
+  A rotated *or withdrawn* key in a Vibe `.env` is recognised and never
+  adopted; the comparison is no longer audited as a delivery.
+
+### Live steps on a real server (after § P3b's; TODO #2365)
+
+1. Install as § P3b steps 1–2 (Alice admin, Bob user). Check `ls -l
+   /usr/…/tabtivity-serverd` is outside `$HOME` (the fence hides the home;
+   the helper runs that binary inside the fence).
+2. Alice: Agent credentials → Claude → Save key → the card says "nobody may
+   use it yet". Bob's Manage CLIs shows no "Use the administrator's key".
+   As Bob: `printf '{"op":"get","cli":"claude"}\n' | nc -U -N
+   /run/tabtivity/auth.sock` → `{"ok":false,"error":"no-key"}`.
+3. Alice picks bob → **Allow** → "may use it: bob". `sudo tail -2
+   /var/lib/tabtivity-auth/audit.jsonl` → `agent-key-user-add`, user alice,
+   resource `claude/bob`; no key.
+4. Bob → Use the administrator's key. `grep -h apiKeyHelper
+   ~/.local/share/tabtivity-server/agent-homes/*/.claude/settings.json` →
+   the `--key-helper …/key-helper/claude.sock` line; `ls -la
+   ~/.local/share/tabtivity-server/key-helper` → `drwx------`, `claude.sock`
+   `srw-------`.
+5. Bob opens a Claude agent tab: **no API-key question**; `/status` names
+   the API key from `apiKeyHelper`; a prompt is answered. In a Bash tool
+   call: `printenv ANTHROPIC_API_KEY` → nothing; `ls
+   ~/.local/share/tabtivity-server` → only `key-helper`. Outside: `grep -l
+   "<the key's last 16 characters>" -r ~/.local/share/tabtivity-server
+   ~/tabtivity-server` → none (`.claude.json` included); `sudo grep -l
+   "<same>" /proc/*/cmdline /proc/*/environ` → none.
+6. The same in a shell tab (`claude` typed), the root console's Host
+   session, and an agent tab of a project with its container on (docker on
+   the server): each runs on the key with no question; `docker inspect
+   <container>` and `ps -o args -C docker` show the variable's name at most.
+7. Restart Bob's daemon (`sudo systemctl restart` its `tabtivity-serverd@`
+   service instance for `bob`); Bob's running
+   Claude still answers 10 minutes later (its helper reaches the new
+   socket).
+8. Alice → **Remove bob**. Bob's row: "no longer offered to you (withdrawn,
+   or you were taken off its list)"; a new Claude tab fails with that
+   message; the running one fails at its next helper call (≤ ~5 min) with
+   "the administrator no longer offers you this API key …". Audit:
+   `agent-key-user-remove claude/bob`.
+9. Bob → **Use my own login**: the `apiKeyHelper` line is gone from every
+   home's settings, his login is back, a new tab runs on it.
+10. Rotation (finding 7): offer a Vibe key to Bob, Bob uses it, let Vibe
+    save a key into a home's `.vibe/.env` (or put the key there by hand as
+    its `MISTRAL_API_KEY` line), Alice replaces the key; after the next spawn
+    `~/.local/share/tabtivity-server/agent-auth/vibe/` holds no old key, and
+    the keeper's audit has no `agent-key-delivered` row from that check.
+11. Fair share (finding 6): as Bob `for i in $(seq 10); do nc -U
+    /run/tabtivity/auth.sock & done` (idle); at once as Alice's daemon a
+    spawn still succeeds; Bob's extra connections close at once, the four
+    held ones after 2 s.
+12. `sudo scripts/server-isolation-test.sh alice bob`: the keeper section
+    passes (now also: a user's `users` request is refused).
+
+### Gates (worktree, 2026-10-03, at `f8687ba0`, run alone in sequence)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile and web bundles) |
+| `npm test -- --reporter=dot` | **700 files, 7090 tests**, all pass (+1) |
+| `cargo test --workspace -q --no-fail-fast` | **3620 passed, 0 failed, 3 ignored** (src-tauri lib 3262 (+6), src-gateway 90 (+4), src-core 99; the known flakies passed this run) |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3167 + 1 passed**, 3 ignored |
+| `npm run lint` | 0 errors, **31 warnings** (the same pre-existing ones) |
+| `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.97.1), `-p tabtivity --no-default-features --lib`, `-p app-serverd` | clean |
+| `cargo check --workspace --target x86_64-pc-windows-msvc` (RC/AR shims) | green; the same 5 pre-existing warnings |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `scripts/privacy-check.sh 00f1f3fc..HEAD` | green (4 commits, 27 paths, 0 binaries); two false positives (a vendor variable `=` value in a test, a shell line in the context file) fixed before committing |
+| `git diff --check 00f1f3fc HEAD` | clean |
+| `npm run mobile:bundle` | not needed (no `mobile-web/` change) |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+### Needs the user
+
+- **A running Claude loses the key within minutes** of a withdraw or list
+  removal (its helper asks the keeper each time), while Gemini/Vibe agents
+  keep it until they end. Decision 2 asked only for the next start to fail;
+  this is stricter for Claude. Keep, or pin the helper's answer per spawn?
+- **Claude's `apiKeyHelper` behaviour is from the docs**, not a run
+  (#2365): if `/status` or the first start shows otherwise, drop `claude`
+  from `HELPER_CLIS` to return to the environment variable (and its prompt).
+- **Re-offering a withdrawn key forgets its list** (explicit selection
+  again). Keep the list across a withdraw instead?
+- Open from § P3b review and unchanged: #2362 (daemon start-up), #2364
+  (Debian `/etc/profile` PATH), finding 5 (env of panes after switch-back,
+  now only Gemini/Vibe), finding 9 (dev route).
