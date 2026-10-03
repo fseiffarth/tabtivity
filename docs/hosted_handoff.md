@@ -2888,3 +2888,120 @@ fix has a test that fails without it.*
   `AGENTS.md`. Add to step 10: Alice's own **Stop sharing** with such a
   merge unreviewed keeps the Review on her row; after it, **Share** works
   again on the same project.
+
+## P5 (partial)
+
+*Written 2026-10-03 by the P5 agent. Base `233b7330` (P0–P4, every
+follow-up and review). Plan §10 P5, "options, each independent". Nothing run
+on a server, nothing as root, no daemon, gateway, keeper, broker, hub or
+calendar against a real state dir, port, `/srv` or `/run`; no real model
+provider, identity provider, API key or token: the broker ran only against a
+fake provider on loopback, the OIDC flow only against a fake provider on
+loopback and a fixed RS256 vector (signed once with a throwaway key whose
+private half was discarded). This section grows item by item; the list of
+done and remaining items is at its end.*
+
+### 1. The key broker (§5.4)
+
+| Commit | Content |
+|---|---|
+| `3c38d6c4` | Gateway crate: `keys_wire` (`Request::Delivery/Budget/RenewToken/Usage`, `Offer.base_url`, `KeyStatus.broker/default_budget/budgets/usage`, `Reply.base_url/usage`, `BROKER_CLIS` (Claude only), `BROKER_PORT` 8739, `billed`, `month_of`); keeper: per-key delivery, budgets, per-user broker tokens (`<cli>/tokens.json`, minted at the first fetch; dropped on list removal, withdraw, delivery switch, renew), a user's own month; `broker.rs` (+ tests against a fake provider): `<slug>-gateway broker`, token → user (constant time), `Origin` refused, only messages/count_tokens/models forwarded, fixed header list, key swapped in, budget checked before forwarding (`403 permission_error`), usage metered from the answer (JSON or SSE, recorded on drop), 256/16 in flight, audit debounced; units `<slug>-keybroker.socket` (`127.0.0.1:8739`, held from boot) and `.service` (as `<slug>-auth`, hardened, network allowed); install enables the socket; gateway `PUT …/delivery`, `PUT …/budget`, `POST …/renew-token`. |
+| `87d4e713` | Daemon: a brokered Claude spawn gets `ANTHROPIC_BASE_URL` (checked to be loopback http with the CLI's path), the helper hands out the token where it handed out the key, a container spawn of a brokered CLI fails naming the way out; `LoginStatus.admin_key_broker` (the user's month); admin panel `BrokerControls` (delivery switch, default and per-user budgets, each user's month, Renew token), Manage CLIs shows the user's month; i18n ×5 (18 keys, help text changed); UntestedTag `server.agentKeys.broker`. |
+| `2371b0cd` | Docs (context § The key broker + inventory row, plan §5.4 as built, user docs, file maps, TODO #2377) and the isolation script's broker section. |
+
+**Design** (rationale in `context/server_gateway.md` § The key broker): the
+administrator switches a key to broker delivery; listed users then hold only
+a per-user token, the broker (the keeper's account) swaps it for the key,
+meters and budgets. Built on the P3b decisions unchanged: only listed users
+(the keeper mints tokens only for them and the broker re-checks the list per
+request), Claude through the existing `apiKeyHelper` channel (the helper now
+prints the token; Claude re-runs it on a 401, so a renewed token, a removal
+or a switch back reaches a running Claude at its next request rather than
+within ~5 minutes). Gemini/Vibe stay direct-only: their base-URL overrides
+are not verified (Q2's research question), so the keeper refuses broker
+delivery for them.
+
+**Live steps** (a real server, after § P3b decisions'; TODO #2377):
+1. Install as § P3b step 1: `--dry-run install` lists `systemctl enable --now
+   tabtivity-keybroker.socket`; `systemctl status tabtivity-keybroker.socket`
+   active; `sudo ss -ltnp 'sport = :8739'` shows systemd (pid 1) listening.
+2. Alice offers a real Anthropic key to Bob (§ P3b decisions steps 2–4) and
+   presses **Deliver through the key broker** on the Claude card; the card
+   says users get their own token.
+3. Bob opens a Claude agent tab: in a Bash tool call `printenv
+   ANTHROPIC_BASE_URL` → `http://127.0.0.1:8739/claude`, `printenv
+   ANTHROPIC_API_KEY` → nothing; `/status` names the API key from the
+   helper; a prompt is answered. `sudo grep -l "<the key's last 16
+   characters>" /proc/*/environ /proc/*/cmdline` → none of Bob's processes.
+4. `sudo cat /var/lib/tabtivity-auth/claude/usage/bob.json` has this month's
+   counts; Alice's card says "bob: N tokens this month"; Bob's Manage CLIs
+   row shows his month.
+5. Alice sets Bob's budget to 1 → Bob's next prompt fails with "your monthly
+   budget on the administrator's key is used up …"; audit
+   `agent-key-over-budget` (bob). Budget cleared → works again.
+6. **Renew bob's token** while his Claude runs: its next request gets 401,
+   Claude re-runs the helper and carries on (the helper now answers the new
+   token). Verify this re-run on 401 — it is from Claude's docs only.
+7. Bob's project with its container on: a brokered Claude tab there fails
+   naming the broker.
+8. **Deliver directly**: Bob's next Claude tab has no
+   `ANTHROPIC_BASE_URL` and runs on the key as in § P3b decisions.
+9. `curl -s -o /dev/null -w '%{http_code}' -X POST
+   http://127.0.0.1:8739/claude/v1/messages -H 'x-api-key: x'` as any user →
+   401; with `-H 'Origin: https://example.invalid'` → 403.
+10. `sudo scripts/server-isolation-test.sh alice bob`: the broker section passes.
+
+**Gotchas for the reviewer**: `keys_wire.rs` gained fields the daemon
+compiles by `#[path]` (a new daemon against an old keeper reads `base_url:
+None` = direct, fine; an old daemon ignores the new fields). Keeper and
+broker share `StateDirectory=<slug>-auth` (two units, one account). The
+budget is soft by the requests in flight. A budget refusal is `403`, not
+`429`, so Claude shows it instead of retrying. `reqwest`'s gzip feature
+decompresses, so content-encoding is never passed back. The broker's TLS is
+the app's `reqwest`/rustls with the platform verifier (`ensure_crypto`
+installs ring). Tokens survive a key rotation (they name the user).
+
+### 3. OIDC login (§4.1)
+
+| Commit | Content |
+|---|---|
+| `a8301819` | Gateway crate: `oidc_wire.rs` (shared by `#[path]`: `Link`, `Binding`, `nonce_for(public key)`, `claims_unverified`, `check_claims`), `oidc.rs` (config `oidc.json` 0600 in the gateway's state, discovery, pending sign-ins with PKCE and a binder cookie, code exchange), `db` `Account.oidc` + `set_oidc` (one person, one account) + `account_for_claims`, routes `/gateway/v1/oidc[/start|/callback]`, helper steps `OidcSet` (secret via `Exec::read_secret`, never in the plan), `OidcClear`, `OidcLink` (table + `--write-oidc-binding` as the user) and verbs `oidc-set`, `oidc-clear`, `user-oidc`; the gateway's state hand-back now includes `oidc.json`. Daemon: `services::server::oidc` (binding file, JWKS fetch + cache, RS256 via `ring` (new direct dependency, already in the tree) and ES256 via `p256`, `check_claims`, nonce spent once), `AuthStore::pair_verified` (pair's validation split out as `checked_device`/`register`), `host.rs` pair takes `oidc_token`, `--write-oidc-binding` verb; `backend-stale.sh` watches `oidc_wire.rs`. |
+| `45ef8ed0` | PWA: `auth.ts` `oidcProvider`/`startOidc`/`finishOidcReturn`, the pending key in `authStore` across the redirect, `App.begin` finishes a return first (a paired one then goes to the lock set-up), `Pair` shows **Sign in with …** and a failed outcome; i18n ×5 (6 keys); UntestedTag `server.oidc`. |
+| `04bc7de7` | Docs (context § OIDC sign-in, plan §4.1 as built, user docs, file maps, TODO #2378). |
+
+**Design** (rationale in `context/server_gateway.md` § OIDC sign-in): a
+provider sign-in replaces the invite code, nothing else — it pairs a device
+key, and sessions stay device-key challenges. The gateway is the relying
+party and routes; the account's daemon decides (signature, claims, its own
+copy of the link, and a nonce that is a hash of the very key being paired),
+so a compromised gateway cannot pair a key for an account without that
+person signing in through it. The binder cookie stops the login-CSRF where a
+sign-in someone else started (with their key) is completed in a victim's
+browser.
+
+**Live steps** (a real provider, e.g. a Keycloak test realm; TODO #2378):
+1. Register `https://<server>/gateway/v1/oidc/callback` as the client's
+   redirect URI (confidential client, code flow, PKCE allowed).
+2. `sudo …/tabtivity-admin-helper --dry-run oidc-set --issuer https://… 
+   --client-id … --name "Lab SSO"` prints no secret; run it with the secret
+   piped in; `sudo ls -l /var/lib/tabtivity-gateway/oidc.json` → `-rw-------
+   tabtivity-gw`.
+3. `sudo …/tabtivity-admin-helper user-oidc bob --sub <Bob's sub>`; as bob,
+   `ls -l ~/.local/share/tabtivity-server/mobile-control/oidc.json` → `0600`,
+   no secret inside.
+4. A fresh browser at the server: **Sign in with Lab SSO** → the provider →
+   back at the start page, paired, the lock set-up, then signed in as Bob.
+   Gateway audit: `pair-oidc ok` (no identity, no token).
+5. Sign in as a person not linked → "not linked to an account".
+6. Start a sign-in, copy the provider URL into another browser and finish
+   there → "started in another browser"; nothing paired.
+7. `user-oidc bob --clear` → Bob's next provider sign-in pairs nothing.
+8. If the realm can switch to ES256 signing, repeat 4.
+
+**Gotchas for the reviewer**: `oidc_wire::valid_issuer` accepts
+`http://127.0.0.1:` under `cfg(test)` only (the fake provider). The binder
+cookie is `SameSite=Lax` on purpose. The gateway reads the token's claims
+unverified, for routing only (it came from the token endpoint over TLS).
+Spent nonces live in the daemon's memory: a daemon restart forgets them,
+bounded by the 10-minute token age. The gateway's static `SIGN_IN_PAGE`
+still names only the invite code.
