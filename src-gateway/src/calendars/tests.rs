@@ -167,6 +167,38 @@ fn unsharing_hands_everything_back_and_forgets_the_calendar() {
     assert_eq!((back.origin.as_deref(), back.events.len(), back.tasks.len(), back.columns.len()), (Some("local-cal-1"), 1, 1, 1));
     assert!(!s.path(&id).exists());
     assert_eq!(get(&s, BOB, &id).error.as_deref(), Some("unknown-calendar"));
+    // The last copy waits in the service's own holding area, in case the
+    // owner's daemon never stored the answer; nobody lists or reads it.
+    let kept: Vec<_> = std::fs::read_dir(s.dir().join(RETURNED_DIR)).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(kept.len() == 1 && kept[0].starts_with(&format!("{id}.")), "{kept:?}");
+    assert!(s.answer(ALICE, Request::List).list.is_empty());
+}
+
+/// A calendar never grows past what one answer line can carry back: a
+/// stored calendar the service could not send would be lost on unshare.
+#[test]
+fn a_calendar_never_grows_past_what_an_answer_can_carry() {
+    let (_dir, s) = service();
+    let id = share(&s);
+    // Fill it on disk to just under the bound (each record near its own).
+    let text = "x".repeat(cal_wire::MAX_FIELD_CHARS - 10);
+    let mut stored = s.load(&id).unwrap();
+    let mut size = serde_json::to_vec(&stored).unwrap().len();
+    let mut n = 0;
+    while size + 2 * cal_wire::MAX_FIELD_CHARS < cal_wire::MAX_CALENDAR_BYTES {
+        let record = json!({"id": format!("big{n}"), "rev": 1, "title": "t", "notes": text});
+        size += serde_json::to_vec(&record).unwrap().len() + 1;
+        stored.tasks.push(record);
+        n += 1;
+    }
+    s.save(&id, &stored).unwrap();
+    let record = json!({"id": "one-more", "title": "t", "notes": text, "a": text, "b": text});
+    let refused = s.answer(ALICE, Request::Apply { id: id.clone(), change: Change::PutTask { record, base_rev: 0 } }).error;
+    assert_eq!(refused.as_deref(), Some("too-large"));
+    let content = get(&s, ALICE, &id).content.unwrap();
+    assert!(serde_json::to_vec(&Reply { content: Some(content), ..Reply::ok() }).unwrap().len() < cal_wire::MAX_LINE);
+    let back = s.answer(ALICE, Request::Unshare { id: id.clone() });
+    assert!(serde_json::to_vec(&back).unwrap().len() < cal_wire::MAX_LINE, "the whole calendar comes back in one line");
 }
 
 #[tokio::test]

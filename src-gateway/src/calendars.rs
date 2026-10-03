@@ -52,6 +52,12 @@ pub const VERB_SHARE: &str = "calendar-share";
 pub const VERB_GRANT: &str = "calendar-grant";
 pub const VERB_REVOKE: &str = "calendar-revoke";
 pub const VERB_UNSHARE: &str = "calendar-unshare";
+/// Where an unshared calendar's last copy waits (`<dir>/returned/<id>.<time>.json`)
+/// in case its owner's daemon never stored the answer (a broken connection,
+/// a full disk): the service never holds the only copy of what it deleted.
+pub const RETURNED_DIR: &str = "returned";
+/// How long a returned copy is kept.
+pub const RETURNED_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Stored {
@@ -95,6 +101,11 @@ fn rec_id(record: &Value) -> Option<&str> {
 
 fn rec_rev(record: &Value) -> u64 {
     record.get("rev").and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// Is `stored` within [`cal_wire::MAX_CALENDAR_BYTES`]?
+fn fits(stored: &Stored) -> bool {
+    serde_json::to_vec(stored).map(|b| b.len()).unwrap_or(usize::MAX) <= cal_wire::MAX_CALENDAR_BYTES
 }
 
 fn new_id() -> String {
@@ -194,6 +205,7 @@ impl Calendars {
             return Reply::error("refused");
         };
         let sw = self.switches();
+        self.purge_returned();
         match request {
             Request::Share { name, color, origin, events, tasks, columns } => self.share(&user, sw, &name, &color, &origin, events, tasks, columns),
             Request::Grant { id, user: member, events, tasks } => self.grant(&user, sw, &id, &member, events, tasks),
@@ -261,6 +273,9 @@ impl Calendars {
             Err(e) => return Reply::error(e),
         };
         let stored = Stored { owner: user.into(), origin: origin.into(), name: name.into(), color: color.into(), rev: 1, members: BTreeMap::new(), events, tasks, columns };
+        if !fits(&stored) {
+            return Reply::error("too-large");
+        }
         if let Err(e) = self.save(&id, &stored) {
             eprintln!("calendar: share: {e}");
             self.audit.record(Row::new(user, None, VERB_SHARE, "failed"));
@@ -417,6 +432,9 @@ impl Calendars {
                 }
             }
         }
+        if !fits(&stored) {
+            return Reply::error("too-large");
+        }
         stored.rev += 1;
         if let Err(e) = self.save(id, &stored) {
             eprintln!("calendar: apply: {e}");
@@ -432,7 +450,17 @@ impl Calendars {
             Ok(s) => s,
             Err(reply) => return *reply,
         };
-        if let Err(e) = std::fs::remove_file(self.path(id)) {
+        // Out of every member's reach at once, but kept a while: the answer
+        // below is the owner's only other copy.
+        let returned = self.dir.join(RETURNED_DIR);
+        let moved = (|| {
+            use std::os::unix::fs::DirBuilderExt;
+            if !returned.is_dir() {
+                std::fs::DirBuilder::new().mode(0o700).create(&returned)?;
+            }
+            std::fs::rename(self.path(id), returned.join(format!("{id}.{}.json", crate::now())))
+        })();
+        if let Err(e) = moved {
             eprintln!("calendar: unshare: {e}");
             return Reply::error("failed");
         }
@@ -441,6 +469,17 @@ impl Calendars {
         let sw = Switches { sharing: true, events: true, tasks: true };
         let content = CalContent { info: self.info(id, &stored, user, sw), events: stored.events, tasks: stored.tasks, columns: stored.columns, origin: Some(stored.origin) };
         Reply { content: Some(content), ..Reply::ok() }
+    }
+
+    /// Drop returned copies past [`RETURNED_RETENTION`].
+    fn purge_returned(&self) {
+        let Ok(entries) = std::fs::read_dir(self.dir.join(RETURNED_DIR)) else { return };
+        for entry in entries.flatten() {
+            let old = entry.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age > RETURNED_RETENTION);
+            if old && entry.file_type().is_ok_and(|t| t.is_file()) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
 
     /// `wait`: answer at once if `revs` is not what `uid` may see now, else

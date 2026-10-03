@@ -33,6 +33,11 @@ pub const MAX_SHORT_CHARS: usize = 1024;
 pub const MAX_MEMBERS: usize = 256;
 /// Board columns of one shared to-do list.
 pub const MAX_COLUMNS: usize = 64;
+/// One stored calendar, serialized: well under [`MAX_LINE`], so a `get` or
+/// `unshare` answer (which carries the whole calendar) always fits a line —
+/// a calendar the service could store but never send back would be lost on
+/// `unshare`.
+pub const MAX_CALENDAR_BYTES: usize = 12 * 1024 * 1024;
 /// The longest a `wait` may block.
 pub const MAX_WAIT_MS: u64 = 25_000;
 
