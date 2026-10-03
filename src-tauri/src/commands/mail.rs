@@ -191,17 +191,19 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
     if let Some(store) = &rt.store {
         return Ok(store.clone());
     }
+    let vault = crate::services::server::vault::vault();
+    let had_key = vault.is_some_and(|v| v.key().is_some());
     let opened = open_store(&mail_dir())?;
     set_session_keys(opened.keys.clone());
     rt.store = Some(opened.store.clone());
-    let waiting = opened.note.is_some();
+    let waiting = waits_for_release(&opened.note, had_key);
     rt.unlock_note = opened.note;
     drop(rt);
     // On a server, a store waiting for the device-released key reopens the
     // moment a device (or the recovery code) puts it back. On a thread: the
     // listener also runs at once when the key is already there.
     if waiting {
-        if let Some(vault) = crate::services::server::vault::vault() {
+        if let Some(vault) = vault {
             let state = state.clone();
             vault.on_unlock("mail", move || {
                 let state = state.clone();
@@ -212,13 +214,29 @@ fn store_of(state: &MailState) -> Result<Arc<MailStore>, String> {
     Ok(opened.store)
 }
 
+/// Is this store waiting for the server's secrets key — locked, or not set
+/// up yet — rather than for something a release cannot fix (a passphrase, a
+/// missing key file, a key that does not fit)? Only then is a reopen on
+/// release wanted. `had_key`: K was held when the store was opened, so its
+/// failure was not the lock; waiting again would reopen at once, fail the
+/// same way and re-arm forever.
+fn waits_for_release(note: &Option<UnlockNote>, had_key: bool) -> bool {
+    !had_key && is_device_wait(note)
+}
+
+fn is_device_wait(note: &Option<UnlockNote>) -> bool {
+    matches!(note, Some(UnlockNote::Unavailable(why)) if why == mail_crypt::DEVICE_LOCKED || why == mail_crypt::DEVICE_NOT_SET_UP)
+}
+
 /// The secrets key came back: drop the memory-only stand-in and open the
 /// real store (or enable a new one) now, so the sealed files beside it find
 /// their key too.
 fn reopen_after_release(state: &MailState) {
     {
         let Ok(mut guard) = state.lock() else { return };
-        if guard.unlock_note.is_none() {
+        // A passphrase store, or one the user already unlocked meanwhile:
+        // not the release's to reopen.
+        if !is_device_wait(&guard.unlock_note) {
             return;
         }
         guard.store = None;
@@ -4886,6 +4904,21 @@ pub async fn mail_staged_preview(
 
 #[cfg(test)]
 mod tests {
+    /// A server store reopens on release only when the lock was the
+    /// reason: a passphrase store, or a device store that failed with K held,
+    /// re-armed at once and spun a reopen thread forever.
+    #[test]
+    fn only_a_store_waiting_for_the_secrets_key_reopens_on_release() {
+        use crate::services::mail_crypt::{DEVICE_LOCKED, DEVICE_NOT_SET_UP};
+        let locked = Some(super::UnlockNote::Unavailable(DEVICE_LOCKED.into()));
+        assert!(super::waits_for_release(&locked, false));
+        assert!(super::waits_for_release(&Some(super::UnlockNote::Unavailable(DEVICE_NOT_SET_UP.into())), false));
+        assert!(!super::waits_for_release(&locked, true), "K was there: the lock was not the reason");
+        assert!(!super::waits_for_release(&Some(super::UnlockNote::NeedsPassphrase), false));
+        assert!(!super::waits_for_release(&Some(super::UnlockNote::Unavailable("key.json is missing".into())), false));
+        assert!(!super::waits_for_release(&None, false));
+    }
+
     use super::*;
     use crate::schema::mail::{MailSecurity, MailServer};
 
