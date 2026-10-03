@@ -1,6 +1,7 @@
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
+import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { OutboxGallery } from "../components/OutboxGallery";
@@ -440,18 +441,19 @@ function CommandDivider({ command, label, press }: {
 }
 
 /** One answer of the stored session as formatted text (`answerHtml`: the
- * formatting only — nothing in it opens or loads). Memoized on the text, so a
- * poll that brings a new turn does not re-render every answer above it. */
-const AnswerText = memo(function AnswerText({ text }: { text: string }) {
+ * formatting only — nothing in it loads, and a link opens only through the
+ * confirmation `links` puts up). Memoized on the text, so a poll that brings
+ * a new turn does not re-render every answer above it. */
+const AnswerText = memo(function AnswerText({ text, links }: { text: string; links: LinkHandlers }) {
   const html = useMemo(() => answerHtml(text), [text]);
-  return <div className="transcript-md" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="transcript-md" {...links} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** A prompt of the stored session, formatted the same way (`promptHtml`:
  * an answer's formatting, its single line breaks kept). */
-const PromptText = memo(function PromptText({ text }: { text: string }) {
+const PromptText = memo(function PromptText({ text, links }: { text: string; links: LinkHandlers }) {
   const html = useMemo(() => promptHtml(text), [text]);
-  return <div className="transcript-md" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="transcript-md" {...links} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** A subagent the agent spawned, in its place in the chat: what it was sent
@@ -517,6 +519,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
   const { hold, menu } = useMessageMenu();
+  const { links, sheet: linkSheet } = useChatLinks();
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
@@ -539,7 +542,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       ? <CommandDivider command={turn.command} label={promptLabel} press={hold(turn.key, () => turn.text)} />
       : turn.kind === "prompt"
       ? <div className="readable-turn user" role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...hold(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
-          <PromptText text={turn.text} />
+          <PromptText text={turn.text} links={links} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
           {/* The link never acknowledged this prompt's frames: it stays where
@@ -555,13 +558,13 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
         </div>
       : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...hold(turn.key, () => turn.text)}>
           {turn.plan && <small className="transcript-plan-head">{planLabel}{planUntested && <em> · {planUntested}</em>}</small>}
-          <AnswerText text={turn.text} />
+          <AnswerText text={turn.text} links={links} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
         </div>}
     {renderPost && posts?.get(turn.index)?.map((post) => <Fragment key={post.key}>{renderPost(post)}</Fragment>)}
   </Fragment>;
-  })}{menu}</>;
+  })}{menu}{linkSheet}</>;
 });
 
 /** The stored preference key for a tab: the agent behind it, or the shell. */

@@ -367,6 +367,7 @@ export const UNTESTED = {
   "mobile.composer.autoGrow": { area: "mobile", what: "Terminal · Composer grows line by line with a long draft (up to about a third of the screen, then scrolls) and drops back to one line when emptied or sent", tested: "2026-09-28" },
   "mobile.composer.slash": { area: "mobile", what: "Terminal · Composer `/` menu: slash commands per CLI, the ones sent before first", tested: "2026-09-23" },
   "mobile.focus.messageMenu": { area: "mobile", what: "Terminal · Reader click-hold menu on a chat message (copy, read aloud)", tested: "2026-09-23" },
+  "mobile.link.title": { area: "mobile", what: "Terminal · Reader Focus chat: a web link in a message is tappable and always asks first (sheet with the host and full address, Open / Copy link); only http(s) without user:password@ qualifies" },
   "mobile.focus.selectText": { area: "mobile", what: "Terminal · Reader message menu → Select text: pick part of a chat message to copy" },
   "mobile.focus.askedCard": { area: "mobile", what: "Terminal · Reader (phone Chat and the desktop Reader) keeps a question Claude asked (AskUserQuestion) after it is answered: a card in its place with the rows, the chosen ones ticked, a typed answer as its own row, Not answered when it was turned down" },
   "mobile.focus.planBubble": { area: "mobile", what: "Terminal · Reader draws a plan Claude put up for approval (ExitPlanMode) as a violet-outlined answer bubble headed Plan" },

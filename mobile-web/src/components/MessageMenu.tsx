@@ -7,7 +7,7 @@ import { currentSpeechId, speak, speechOutputSupported, spokenText, stopSpeaking
 /** How long a finger rests on a bubble before its menu opens. Long enough
  * that a flick of the chat is never a press, short enough to feel like the
  * platform's own hold. */
-const HOLD_MS = 450;
+export const HOLD_MS = 450;
 /** A press that wanders this far is a scroll, not a hold. */
 const HOLD_SLOP = 12;
 
