@@ -68,6 +68,45 @@ describe("ServerAgentKeys (administrator)", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/gateway/v1/agent-keys/claude", expect.objectContaining({ method: "DELETE" })));
   });
 
+  it("lists who may use a key, nobody at first, and changes it from the account table", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "agent_logins" ? [login("claude", "ANTHROPIC_API_KEY"), login("gemini", "GEMINI_API_KEY")] : null),
+    );
+    const fetch = vi.fn((_url: string, init?: RequestInit) => {
+      if (!init?.method)
+        return answer({
+          keys: [
+            { cli: "claude", updated: 1, by: "alice", users: [], allowed: ["bob"] },
+            { cli: "gemini", updated: 1, by: "alice", users: [], allowed: [] },
+          ],
+          accounts: ["alice", "bob", "carol"],
+        });
+      return answer({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ServerAgentKeys />);
+    expect(await screen.findByText(/may use it: bob/)).toBeTruthy();
+    expect(screen.getByText(/nobody may use it yet/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove bob" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/gateway/v1/agent-keys/claude/users", expect.objectContaining({ method: "PUT", body: JSON.stringify({ users: [] }) })),
+    );
+    expect(await screen.findByText("Who may use the Claude key is saved.")).toBeTruthy();
+
+    // Gemini's picker offers every account; Allow is off until one is picked.
+    const pickers = screen.getAllByRole("button", { name: "Choose a user" });
+    const allow = screen.getAllByRole("button", { name: "Allow" });
+    expect(allow[1].hasAttribute("disabled")).toBe(true);
+    fireEvent.click(pickers[1]);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["alice", "bob", "carol"]);
+    fireEvent.click(screen.getByRole("option", { name: "carol" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Allow" })[1]);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/gateway/v1/agent-keys/gemini/users", expect.objectContaining({ method: "PUT", body: JSON.stringify({ users: ["carol"] }) })),
+    );
+  });
+
   it("renders nothing for a non-admin and says so when the keeper is down", async () => {
     vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY")]));
     vi.stubGlobal("fetch", vi.fn(() => answer({ error: "admin" }, 403)));
@@ -116,7 +155,7 @@ describe("Agent logins: the administrator's key per CLI (a user)", () => {
   it("names a withdrawn key and offers nothing on the desktop", async () => {
     vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY", { uses_admin_key: true })]));
     render(<AgentLoginsRows />);
-    expect(await screen.findByText(/no longer offered/)).toBeTruthy();
+    expect(await screen.findByText(/no longer offered to you \(withdrawn, or you were taken off its list\)/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use my own login" })).toBeTruthy();
     cleanup();
     vi.mocked(invoke).mockImplementation(() => Promise.resolve([login("claude", "ANTHROPIC_API_KEY")]));

@@ -1,7 +1,8 @@
 /**
  * Agent credentials, the administrator's half (hosted plan §5.4, P3b): an
- * API key per agent CLI, offered to every user of the server, each of whom
- * picks it or their own login in Manage CLIs (§5.2).
+ * API key per agent CLI, offered to the users the administrator puts on its
+ * list (nobody until then), each of whom picks it or their own login in
+ * Manage CLIs (§5.2).
  *
  * Talks to the gateway's `/gateway/v1/agent-keys`, which hands keys to the
  * key keeper (`<slug>-auth`) and lists what is on offer — never a key: once
@@ -17,6 +18,7 @@ import { AGENT_ITEMS } from "../tabs/newTabItems";
 import { loginIdForCmd } from "../../lib/agents/signInLaunch";
 import { UntestedTag } from "../common/UntestedTag";
 import { PasswordInput } from "../common/PasswordInput";
+import { Dropdown } from "../common/Dropdown";
 import { SettingsCard } from "../layout/settingsUi";
 
 const KEYS_URL = "/gateway/v1/agent-keys";
@@ -26,6 +28,8 @@ interface KeyStatus {
   updated: number;
   by: string;
   users: string[];
+  /** The accounts allowed to use it; nobody else's agents can. */
+  allowed?: string[];
 }
 
 interface LoginRow {
@@ -36,6 +40,8 @@ interface LoginRow {
 export function ServerAgentKeys() {
   const t = useT();
   const [keys, setKeys] = useState<KeyStatus[] | null>(null);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [picks, setPicks] = useState<Record<string, string>>({});
   const [unreachable, setUnreachable] = useState(false);
   const [clis, setClis] = useState<{ id: string; env: string }[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -47,8 +53,9 @@ export function ServerAgentKeys() {
     fetch(KEYS_URL, { credentials: "same-origin" })
       .then(async (response) => {
         if (response.ok) {
-          const body = (await response.json()) as { keys?: KeyStatus[] };
+          const body = (await response.json()) as { keys?: KeyStatus[]; accounts?: string[] };
           setKeys(body.keys ?? []);
+          setAccounts(body.accounts ?? []);
           setUnreachable(false);
         } else {
           setKeys(null);
@@ -92,6 +99,31 @@ export function ServerAgentKeys() {
     }
   };
 
+  const setUsers = async (cli: string, users: string[]) => {
+    setBusy(cli);
+    setStatus(null);
+    try {
+      const response = await fetch(`${KEYS_URL}/${encodeURIComponent(cli)}/users`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ users }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { error?: string; detail?: string };
+      if (!response.ok) {
+        setStatus(t("server.settings.error", { error: body.detail ?? body.error ?? String(response.status) }));
+        return;
+      }
+      setPicks((p) => ({ ...p, [cli]: "" }));
+      setStatus(t("server.agentKeys.usersSaved", { label: labels.get(cli) ?? cli }));
+      refresh();
+    } catch (e) {
+      setStatus(t("server.settings.error", { error: String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const byCli = new Map((keys ?? []).map((k) => [k.cli, k]));
   return (
     <>
@@ -119,6 +151,49 @@ export function ServerAgentKeys() {
                     ? ` · ${t("server.agentKeys.usedBy", { users: offered.users.join(", ") })}`
                     : ` · ${t("server.agentKeys.unused")}`)}
               </p>
+              {offered && (
+                <>
+                  <p className="settings-help">
+                    <UntestedTag id="server.agentKeys.users" />{" "}
+                    {offered.allowed?.length
+                      ? t("server.agentKeys.allowed", { users: offered.allowed.join(", ") })
+                      : t("server.agentKeys.allowedNone")}
+                  </p>
+                  <div className="settings-link-row">
+                    {(offered.allowed ?? []).map((user) => (
+                      <button
+                        key={user}
+                        type="button"
+                        className="settings-btn sm"
+                        disabled={busy === id}
+                        onClick={() => void setUsers(id, (offered.allowed ?? []).filter((u) => u !== user))}
+                      >
+                        {t("server.agentKeys.removeUser", { user })}
+                      </button>
+                    ))}
+                    {accounts.some((a) => !(offered.allowed ?? []).includes(a)) && (
+                      <>
+                        <Dropdown
+                          ariaLabel={t("server.agentKeys.pickUser")}
+                          placeholder={t("server.agentKeys.pickUser")}
+                          value={picks[id] ?? ""}
+                          disabled={busy === id}
+                          options={accounts.filter((a) => !(offered.allowed ?? []).includes(a)).map((a) => ({ value: a, label: a }))}
+                          onChange={(v) => setPicks((p) => ({ ...p, [id]: v }))}
+                        />
+                        <button
+                          type="button"
+                          className="settings-btn sm"
+                          disabled={busy === id || !picks[id]}
+                          onClick={() => void setUsers(id, [...(offered.allowed ?? []), picks[id]])}
+                        >
+                          {t("server.agentKeys.addUser")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
               <PasswordInput
                 id={`server-agent-key-${id}`}
                 autoComplete="off"

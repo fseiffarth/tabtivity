@@ -795,6 +795,11 @@ export function AgentLoginsRows() {
               {adminKey && (
                 <>
                   <UntestedTag id="agents.adminKey" />{" "}
+                  {l.id === "claude" && (
+                    <>
+                      <UntestedTag id="agents.adminKey.helper" />{" "}
+                    </>
+                  )}
                   <button
                     type="button"
                     className="ollama-action-btn"
