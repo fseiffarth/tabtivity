@@ -1373,6 +1373,24 @@ fn ensure_proxy_token(dir: &Path) -> Result<String, String> {
     Ok(token)
 }
 
+/// A changed user-data moves the instance id, and cloud-init's per-instance
+/// `ssh` module then deletes and regenerates the guest's host keys
+/// (`ssh_deletekeys` defaults on). The per-VM `known_hosts` still holds the
+/// old key, and `accept-new` refuses a *changed* key — so a VM whose config
+/// moved (egress switched, or the proxy token added to an existing Proxy VM)
+/// could no longer be reached. Forget the recorded key when an earlier seed
+/// exists; the first connection records the new one, as at creation.
+fn forget_host_key_on_reprovision(dir: &Path, seed_dir: &Path) -> Result<(), String> {
+    if !seed_dir.join("user-data").is_file() {
+        return Ok(());
+    }
+    match std::fs::remove_file(dir.join("known_hosts")) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("known_hosts: {e}")),
+    }
+}
+
 fn ensure_seed(
     dir: &Path,
     names: &VmNames,
@@ -1393,6 +1411,9 @@ fn ensure_seed(
     let stale = std::fs::read_to_string(seed_dir.join("user-data"))
         .map(|prev| prev != user_data)
         .unwrap_or(true);
+    if stale {
+        forget_host_key_on_reprovision(dir, &seed_dir)?;
+    }
     if stale || !iso.is_file() {
         std::fs::write(seed_dir.join("user-data"), &user_data).map_err(|e| e.to_string())?;
         std::fs::write(seed_dir.join("meta-data"), &meta_data).map_err(|e| e.to_string())?;
@@ -2146,6 +2167,24 @@ mod tests {
     }
 
     // ── cloud-init ─────────────────────────────────────────────────────────
+
+    /// TODO #2355 moved every Proxy VM's user-data (the token): the guest
+    /// regenerates its host keys, so the recorded one must go — but only on a
+    /// re-provision, never at a first boot or a boot with the same config.
+    #[test]
+    fn a_reprovision_forgets_the_recorded_host_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed_dir = dir.path().join("seed");
+        std::fs::create_dir_all(&seed_dir).unwrap();
+        let known = dir.path().join("known_hosts");
+        std::fs::write(&known, "[127.0.0.1]:2222 ssh-ed25519 AAAA\n").unwrap();
+        forget_host_key_on_reprovision(dir.path(), &seed_dir).unwrap();
+        assert!(known.is_file(), "no earlier seed: nothing to forget");
+        std::fs::write(seed_dir.join("user-data"), "#cloud-config\n").unwrap();
+        forget_host_key_on_reprovision(dir.path(), &seed_dir).unwrap();
+        assert!(!known.exists(), "an earlier seed with other user-data: the guest makes new host keys");
+        forget_host_key_on_reprovision(dir.path(), &seed_dir).unwrap();
+    }
 
     #[test]
     fn user_data_carries_user_key_and_project_dir() {
