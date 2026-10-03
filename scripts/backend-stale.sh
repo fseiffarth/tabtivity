@@ -168,7 +168,9 @@ while IFS=' ' read -r ts path; do
     newest_file="$path"
   fi
 done < <(
-  find "$ROOT/src-tauri" \
+  # Both backend crates (src-tauri is the host, src-core the Tauri-free core
+  # it links) plus the workspace manifest and lock file at the root.
+  find "$ROOT/src-tauri" "$ROOT/src-core" "$ROOT/Cargo.toml" "$ROOT/Cargo.lock" \
     -path "$ROOT/src-tauri/target" -prune -o \
     -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name '*.conf.json' \) \
     -printf '%T@ %p\n'
