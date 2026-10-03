@@ -127,7 +127,8 @@ A newer question from the same tab replaces the open one. The desktop must be
 running: with it closed, the phone shows no questions. Remote, VM and
 container tabs don't have the tool. It is on by default; turn it off in
 Settings → Agents → Manage CLIs, under Advanced: **Let project agents ask
-about your PDF marks** (it applies to newly opened tabs).
+about your PDF marks** (new tabs no longer get the tool; tabs already open
+are told it is off when they ask).
 
 ## Project files on the phone
 
