@@ -85,9 +85,16 @@ the sidecar runs. It is additive — the Tauri window behaves exactly as before.
   spawn), and the attach PTY's events carry the tab id. The tab's own PTY
   keeps the tab's identity (tab id, session name, agent records, Reader,
   scheduler); when its client leaves for good while another client is still
-  attached, it is handed to that client and sized like its attach, so the
-  bookkeeping (an agent's MCP grants above all) lives as long as somebody
-  looks. A remote tab (ssh, whose wrap is `new-session -A -D`), a container
+  attached, it is handed to that client and sized like its attach. When the
+  last client leaves, it is left to nobody (`PtyMeta::client = None`)
+  instead of ended: the tmux session lives on, and so does the tab's
+  bookkeeping (an agent's MCP grants above all — ending the PTY revoked them
+  under the running agent, and a later page's respawn minted ones it never
+  saw); the next page attaches to it, and the session's end (a tab close,
+  the agent exiting) or a clean stop ends it (#2347 review). A shared PTY
+  (below) whose spawner leaves passes to a page still viewing it rather
+  than being killed under it. A client never addresses another client's
+  attach PTY by its id, nor spawns over one. A remote tab (ssh, whose wrap is `new-session -A -D`), a container
   tab and every tab on Windows keep the single shared PTY: nothing there to
   attach a second client to.
 - **The window follows the client in use: `window-size latest`.** The

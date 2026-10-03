@@ -702,6 +702,16 @@ pub fn route_move_window_views(from: &str, to: &str, window: &str) {
     target.visible_viewers.extend(moved);
 }
 
+/// The windows (server clients) with a view of route `id`, shown or hidden.
+fn route_viewer_windows(id: &str) -> Vec<String> {
+    routes()
+        .lock()
+        .unwrap()
+        .get(id)
+        .map(OutputRoute::viewer_windows)
+        .unwrap_or_default()
+}
+
 /// Scope teardown owns the PTY, so no view registration may keep its route
 /// alive after the process tree is reaped.
 pub fn route_remove_all_views(id: &str) {
@@ -861,8 +871,10 @@ struct PtyEntry {
 /// session, sized by that client alone.
 #[derive(Clone, Debug, Default)]
 pub struct PtyMeta {
-    /// The server client that spawned it (`Caller::Client`); `None` on the
-    /// desktop. A client gone for good takes its PTYs with it
+    /// The server client that spawned it (`Caller::Client`), or the one it
+    /// was handed to; `None` on the desktop, and on a server for a tab PTY
+    /// of a local tmux session whose last client left. A client gone for
+    /// good takes its PTYs with it unless somebody still needs them
     /// ([`PtyRegistry::release_client`]).
     pub client: Option<ClientId>,
     /// The local tmux session this PTY is a client of, when its spawn was
@@ -1093,6 +1105,12 @@ impl PtyRegistry {
     pub fn resolve(&mut self, caller: &Caller, id: &str) -> String {
         if let Caller::Client(client) = caller {
             let attach = attach_pty_id(id, client);
+            // Another client's attach PTY, named by its id (`<tab>@web-n` is
+            // guessable): never this client's to write to, resize or kill —
+            // it resolves to an id that names nothing.
+            if self.is_foreign_attach(id, client) {
+                return attach;
+            }
             if self.entries.contains_key(&attach) || self.attachable(id, client).is_some() {
                 return attach;
             }
@@ -1100,16 +1118,25 @@ impl PtyRegistry {
         id.to_string()
     }
 
+    /// Whether `id` is an attach PTY that is not `client`'s own.
+    fn is_foreign_attach(&self, id: &str, client: &ClientId) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|e| e.meta.attach_of.is_some() && e.meta.client.as_ref() != Some(client))
+    }
+
     /// The local tmux session `client` may attach to for `tab`: the tab's own
     /// PTY is alive, a client of a local tmux session, and was spawned by a
-    /// *different* server client. `None` means the ordinary spawn: no tab PTY
-    /// (or a dead one) — `new-session -A` re-attaches whatever survived — the
-    /// client respawning its own, or a tab no tmux holds (a remote, container
-    /// or Windows tab keeps the one shared PTY it always had).
+    /// *different* server client — or by one gone for good, which left it to
+    /// nobody ([`Self::release_client`]). `None` means the ordinary spawn: no
+    /// tab PTY (or a dead one) — `new-session -A` re-attaches whatever
+    /// survived — the client respawning its own, or a tab no tmux holds (a
+    /// remote, container or Windows tab keeps the one shared PTY it always
+    /// had).
     pub fn attachable(&mut self, tab: &str, client: &ClientId) -> Option<String> {
         let entry = self.entries.get_mut(tab)?;
         let session = entry.meta.local_tmux.clone()?;
-        if !entry.meta.client.as_ref().is_some_and(|owner| owner != client) {
+        if entry.meta.client.as_ref() == Some(client) {
             return None;
         }
         let alive = !entry.dead.load(Ordering::SeqCst) && matches!(entry.child.try_wait(), Ok(None));
@@ -1117,18 +1144,37 @@ impl PtyRegistry {
     }
 
     /// `client` is gone for good: take every PTY it spawned, for the caller to
-    /// tear down — except a tab PTY another client is still attached to. That
-    /// one is handed to the attached client (it now ends with that client)
-    /// and sized like that client's own attach, so the tab's spawn bookkeeping
-    /// — its agent's MCP grants among it — lives as long as somebody looks.
+    /// tear down — except a tab PTY somebody else still needs:
+    ///
+    /// - another client is attached to it: handed to that client (it now ends
+    ///   with that client) and sized like that client's own attach;
+    /// - another client views it directly (a tab no local tmux holds — remote,
+    ///   container, Windows — whose one PTY every page shares): handed to that
+    ///   client, so its terminal is not killed under it;
+    /// - nobody, but it is a client of a local tmux session, which lives on
+    ///   without it: left to nobody (`client: None`) rather than ended, so the
+    ///   tab's spawn bookkeeping — its agent's MCP grants, fence registration,
+    ///   Codex binding — lives exactly as long as the session does, as a
+    ///   headless spawn's does. Its tmux client ends with the session (and
+    ///   the sweep below takes it then), at a clean stop (`kill_all`), or when
+    ///   a page closes the tab; the next page to open the tab attaches to it.
+    ///
+    /// Also takes every such left-over PTY whose session has ended meanwhile:
+    /// nothing else would ever take it.
     pub fn release_client(&mut self, client: &ClientId) -> Vec<TakenPty> {
+        let ended: Vec<String> = self
+            .entries
+            .iter_mut()
+            .filter(|(_, e)| e.meta.client.is_none() && e.meta.attach_of.is_none() && e.meta.local_tmux.is_some())
+            .filter_map(|(id, e)| matches!(e.child.try_wait(), Ok(Some(_))).then(|| id.clone()))
+            .collect();
+        let mut taken: Vec<TakenPty> = ended.iter().filter_map(|id| self.take(id)).collect();
         let owned: Vec<String> = self
             .entries
             .iter()
             .filter(|(_, e)| e.meta.client.as_ref() == Some(client))
             .map(|(id, _)| id.clone())
             .collect();
-        let mut taken = Vec::new();
         for id in owned {
             let heir = self
                 .entries
@@ -1151,6 +1197,21 @@ impl PtyRegistry {
                     }
                 }
                 continue;
+            }
+            if is_tab {
+                let viewer = route_viewer_windows(&id)
+                    .into_iter()
+                    .find(|w| w.as_str() != client.as_str());
+                if let Some(viewer) = viewer {
+                    if let Some(entry) = self.entries.get_mut(&id) {
+                        entry.meta.client = Some(ClientId::new(viewer));
+                    }
+                    continue;
+                }
+                if let Some(entry) = self.entries.get_mut(&id).filter(|e| e.meta.local_tmux.is_some()) {
+                    entry.meta.client = None;
+                    continue;
+                }
             }
             if let Some(pty) = self.take(&id) {
                 taken.push(pty);
@@ -1262,6 +1323,11 @@ pub struct TakenPty {
 }
 
 impl TakenPty {
+    /// The registry id it was taken under.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// Tear this one PTY down; see [`teardown_taken`].
     pub fn teardown(self) {
         teardown_taken(vec![self]);
@@ -1364,6 +1430,14 @@ pub fn join_tab(
     let attach_id = attach_pty_id(&opts.id, &client);
     let (stale, session) = {
         let mut reg = registry.lock().unwrap();
+        // An attach PTY is a client's view of a tab, never a tab of its own:
+        // a spawn under one's id would replace (kill) it. And the id this
+        // client's attach would take must not be somebody else's PTY.
+        if reg.entries.get(&opts.id).is_some_and(|e| e.meta.attach_of.is_some())
+            || reg.entries.get(&attach_id).is_some_and(|e| e.meta.client.as_ref() != Some(&client))
+        {
+            return Err(format!("terminal: '{}' is not a tab this client may open", opts.id));
+        }
         (reg.take(&attach_id), reg.attachable(&opts.id, &client))
     };
     let Some(session) = session else {
@@ -2693,14 +2767,90 @@ mod client_tests {
             let size = entry.master.get_size().unwrap();
             assert_eq!((size.cols, size.rows), (61, 21));
         }
-        // web-2 goes too: both its PTYs, the attach and the tab's, are taken.
+        // A foreign attach PTY, named by its (guessable) id, is not web-1's
+        // to address; nor may anyone spawn over it.
+        {
+            let mut reg = registry.lock().unwrap();
+            let foreign = reg.resolve(&Caller::Client(web(1)), &attach);
+            assert_ne!(foreign, attach);
+            assert!(!reg.entries.contains_key(&foreign), "names nothing");
+            assert_eq!(reg.resolve(&Caller::Client(web(2)), &attach), attach, "its own client may");
+        }
+        let ctx1 = ctx_as(Caller::Client(web(1)), RecordingEvents::new());
+        let spawn_over = PtyOptions { id: attach.clone(), ..test_opts() };
+        assert!(join_tab(&ctx1, &registry, &spawn_over, |_| Vec::new()).is_err());
+        // web-2 goes too: its attach is taken; the tab PTY, a tmux client
+        // nobody looks at, is left to nobody — the session and the tab's
+        // bookkeeping live on — and the next page attaches to it.
         let taken = registry.lock().unwrap().release_client(&web(2));
-        let mut ids: Vec<String> = taken.iter().map(|t| t.id.clone()).collect();
-        ids.sort();
-        assert_eq!(ids, vec![tab.to_string(), attach.clone()]);
+        let ids: Vec<String> = taken.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ids, vec![attach.clone()]);
         for mut t in taken {
             let _ = t.entry.child.kill();
         }
+        {
+            let mut reg = registry.lock().unwrap();
+            assert_eq!(reg.entries[tab].meta.client, None);
+            assert_eq!(reg.attachable(tab, &web(3)).as_deref(), Some("s"));
+            assert_eq!(reg.resolve(&Caller::Client(web(3)), tab), attach_pty_id(tab, &web(3)));
+            // Its session ends: the next release sweeps it up.
+            let entry = reg.entries.get_mut(tab).unwrap();
+            let _ = entry.child.kill();
+            let _ = entry.child.wait();
+            assert!(reg.release_client(&web(9)).iter().any(|t| t.id == tab));
+            assert!(!reg.entries.contains_key(tab));
+        }
+        kill_test_ptys(&registry);
+    }
+
+    fn test_opts() -> PtyOptions {
+        PtyOptions {
+            id: String::new(),
+            cmd: "sh".to_string(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            local_only: true,
+            sandbox: false,
+            agent: false,
+            project_id: None,
+            schedule_target_id: None,
+            host_session: false,
+            remote_host_id: None,
+            tmux_session: None,
+            tmux_attach: None,
+            host_bound_uid: None,
+        }
+    }
+
+    /// A tab no local tmux holds has one PTY every page shares: the page that
+    /// spawned it leaving must not kill it under a page still viewing it.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_pty_passes_to_a_page_still_viewing_it() {
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let tab = "client-t:shared";
+        insert_test_pty(&registry, tab, PtyMeta { client: Some(web(71)), ..PtyMeta::default() });
+        let seq = route_open(tab);
+        {
+            let mut map = routes().lock().unwrap();
+            view(&mut map, tab, "v1", "web-71");
+            view(&mut map, tab, "v2", "web-72");
+        }
+        route_drop_window_views("web-71");
+        assert!(registry.lock().unwrap().release_client(&web(71)).is_empty());
+        assert_eq!(registry.lock().unwrap().entries[tab].meta.client, Some(web(72)));
+        // The last viewer goes: no tmux session holds it, so it ends.
+        route_drop_window_views("web-72");
+        let taken = registry.lock().unwrap().release_client(&web(72));
+        assert_eq!(taken.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec![tab]);
+        for mut t in taken {
+            let _ = t.entry.child.kill();
+        }
+        route_close(tab, seq);
+        routes().lock().unwrap().remove(tab);
         kill_test_ptys(&registry);
     }
 
@@ -2745,8 +2895,8 @@ mod client_tests {
 
         let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
         let events = RecordingEvents::new();
-        let ctx1 = ctx_as(Caller::Client(web(1)), events.clone());
-        let ctx2 = ctx_as(Caller::Client(web(2)), events.clone());
+        let ctx1 = ctx_as(Caller::Client(web(81)), events.clone());
+        let ctx2 = ctx_as(Caller::Client(web(82)), events.clone());
         let tab = "client-t:tmux";
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let policy = crate::services::tmux_local::window_size_policy(true);
@@ -2784,7 +2934,7 @@ mod client_tests {
         };
 
         // Page 1 opens the tab: the ordinary spawn, the tab's own PTY.
-        route_set_visible(&ctx1, tab, "v1", true, 1, "web-1");
+        route_set_visible(&ctx1, tab, "v1", true, 1, "web-81");
         let join = join_tab(&ctx1, &registry, &opts(100, 30), attach_argv).unwrap();
         assert!(!join.attached && join.stale.is_none(), "nothing to join yet");
         spawn_pty(ctx1.clone(), registry.clone(), opts(100, 30)).unwrap();
@@ -2793,14 +2943,14 @@ mod client_tests {
         // Page 2 opens the same tab: a tmux client of its own, at its size.
         // Its pane registers first, as `pty_set_visible` does: on its own
         // stream already, never on page 1's.
-        let attach = attach_pty_id(tab, &web(2));
+        let attach = attach_pty_id(tab, &web(82));
         let view_id = registry.lock().unwrap().resolve(&ctx2.caller, tab);
         assert_eq!(view_id, attach);
-        route_set_visible(&ctx2, &view_id, "v2", true, 1, "web-2");
+        route_set_visible(&ctx2, &view_id, "v2", true, 1, "web-82");
         let join = join_tab(&ctx2, &registry, &opts(60, 20), attach_argv).unwrap();
         assert!(join.attached);
-        assert_eq!(registry.lock().unwrap().resolve(&Caller::Client(web(2)), tab), attach);
-        assert_eq!(routes().lock().unwrap()[tab].viewer_windows(), vec!["web-1".to_string()]);
+        assert_eq!(registry.lock().unwrap().resolve(&Caller::Client(web(82)), tab), attach);
+        assert_eq!(routes().lock().unwrap()[tab].viewer_windows(), vec!["web-81".to_string()]);
         wait_for("both clients, each its own size", &|| clients() == ["100x30", "60x20"]);
 
         // Each resize reaches its own client; the window follows the latest.
@@ -2829,13 +2979,13 @@ mod client_tests {
                 }
             }
             let has = |c: ClientId| text.get(&Some(c)).is_some_and(|t| t.contains("marker2347"));
-            if has(web(1)) && has(web(2)) {
+            if has(web(81)) && has(web(82)) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         assert!(!text.contains_key(&None), "no chunk is broadcast");
-        for c in [web(1), web(2)] {
+        for c in [web(81), web(82)] {
             assert!(text.get(&Some(c.clone())).is_some_and(|t| t.contains("marker2347")), "{c} saw the typing: {text:?}");
         }
 
@@ -2850,32 +3000,49 @@ mod client_tests {
             .status()
             .is_ok_and(|s| s.success());
         assert!(alive, "the session outlives page 2's client");
-        assert!(registry.lock().unwrap().attachable(tab, &web(2)).is_some(), "page 1's PTY lives");
+        assert!(registry.lock().unwrap().attachable(tab, &web(82)).is_some(), "page 1's PTY lives");
 
         // Page 2 comes back, and page 1 goes for good: the tab PTY is handed
         // to page 2, so the session keeps both clients.
         let join = join_tab(&ctx2, &registry, &opts(60, 20), attach_argv).unwrap();
         assert!(join.attached);
         wait_for("page 2 back", &|| clients().len() == 2);
-        route_drop_window_views("web-1");
-        assert!(registry.lock().unwrap().release_client(&web(1)).is_empty());
-        assert_eq!(registry.lock().unwrap().entries[tab].meta.client, Some(web(2)));
+        route_drop_window_views("web-81");
+        assert!(registry.lock().unwrap().release_client(&web(81)).is_empty());
+        assert_eq!(registry.lock().unwrap().entries[tab].meta.client, Some(web(82)));
         wait_for("the handed-over tab PTY at page 2's size", &|| clients() == ["60x20", "60x20"]);
 
-        // Page 2 goes too: everything it held ends; the session is the
-        // server's (a clean quit or the tab's close kills it, not this).
-        let taken = registry.lock().unwrap().release_client(&web(2));
-        assert_eq!(taken.len(), 2);
+        // Page 2 goes too: its attach ends; the tab PTY is left to nobody —
+        // the session is the server's (a clean quit or the tab's close kills
+        // it, not this) and the tab's bookkeeping lives as long as it does.
+        let taken = registry.lock().unwrap().release_client(&web(82));
+        assert_eq!(taken.len(), 1);
         teardown_taken(taken);
-        wait_for("no clients", &|| clients().is_empty());
+        wait_for("only the tab PTY's client", &|| clients().len() == 1);
+        assert_eq!(registry.lock().unwrap().entries[tab].meta.client, None);
+        // A later page attaches to it, and the session's end ends it.
+        let ctx3 = ctx_as(Caller::Client(web(83)), events.clone());
+        let join = join_tab(&ctx3, &registry, &opts(80, 24), attach_argv).unwrap();
+        assert!(join.attached, "a page opening the tab later attaches");
+        wait_for("page 3 attached", &|| clients().len() == 2);
         let socket_path = tmux(&["display-message", "-p", "#{socket_path}"]);
         tmux(&["kill-server"]);
+        let attach3 = attach_pty_id(tab, &web(83));
+        wait_for("the session's end to reach the tab PTY", &|| {
+            matches!(registry.lock().unwrap().entries.get_mut(tab).map(|e| e.child.try_wait()), Some(Ok(Some(_))))
+        });
+        let taken = registry.lock().unwrap().release_client(&web(83));
+        let mut ids: Vec<String> = taken.iter().map(|t| t.id.clone()).collect();
+        ids.sort();
+        assert_eq!(ids, vec![tab.to_string(), attach3.clone()]);
+        teardown_taken(taken);
         if !socket_path.is_empty() {
             let _ = std::fs::remove_file(socket_path);
         }
-        route_drop_window_views("web-2");
+        route_drop_window_views("web-82");
         let mut map = routes().lock().unwrap();
         map.remove(tab);
         map.remove(&attach);
+        map.remove(&attach3);
     }
 }

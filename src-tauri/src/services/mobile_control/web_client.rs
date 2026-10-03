@@ -1239,13 +1239,20 @@ fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
 
 /// `client` is gone for good. Its PTYs are tmux clients (the sessions live
 /// on), recorded as its by the registry: a tab PTY another page still has an
-/// attach PTY onto passes to that page (`PtyRegistry::release_client`), the
-/// rest are torn down. A PTY id another page re-spawned meanwhile is that
-/// page's and is left alone.
+/// attach PTY onto, or still views, passes to that page; one of a local tmux
+/// session nobody looks at any more is left to nobody, its bookkeeping alive
+/// while the session is (`PtyRegistry::release_client`); the rest are torn
+/// down. A PTY id another page re-spawned meanwhile is that page's and is
+/// left alone.
 fn reap_client(state: &WebClientState, client: &ClientId) {
     crate::terminal::route_drop_window_views(client.as_str());
     if let Some(registry) = state.ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
         let taken = registry.lock().unwrap_or_else(PoisonError::into_inner).release_client(client);
+        for pty in &taken {
+            // As `pty_kill` does: a login marking must not bless a later PTY
+            // that reuses the id.
+            crate::commands::credentials::forget_login_pty(pty.id());
+        }
         crate::terminal::teardown_taken(taken);
     }
 }

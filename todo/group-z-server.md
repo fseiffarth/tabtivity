@@ -307,7 +307,8 @@ the desktop groundwork the hosted plan's P1 builds on.*
     and the pane types nothing); the `pty_*` id commands resolve a client's
     ids to its own PTY; ownership is the registry's (`PtyMeta::client`), and
     a gone owner's tab PTY passes to a client still attached
-    (`release_client`). tmux windows now follow the client in use
+    (`release_client`), or — the last client gone — is left to nobody
+    while its tmux session lives, MCP grants and all (review). tmux windows now follow the client in use
     (`window-size latest` from tmux 3.2). A remote, container or Windows tab
     keeps the one shared PTY. Was: In the sidecar a PTY id is
     the tab id, the same in every page of the workspace: a second page that
