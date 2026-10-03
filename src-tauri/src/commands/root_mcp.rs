@@ -16,7 +16,6 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
 
 use crate::services::root_mcp::{self, Runtime, Stores};
 use crate::storage;
@@ -27,6 +26,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
 
 /// Bounds sockets as well as requests: idle/slow headers otherwise consume
 /// connections before the handler has a chance to authenticate anything.
@@ -101,7 +102,7 @@ pub const SESSIONS_EVENT: &str = "root-mcp-sessions-changed";
 
 #[derive(Clone)]
 struct ServerState {
-    app: AppHandle,
+    ctx: CoreCtx,
     port: u16,
 }
 
@@ -230,7 +231,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let Ok((reply, changed)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         let failed = reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reply.as_ref().and_then(crate::services::schedule_mcp::refusal_reason));
-        if changed { let _ = state.app.emit("agent-schedules-changed", ()); }
+        if changed { state.ctx.emit("agent-schedules-changed", ()); }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
     if session.identity.caller == root_mcp::Caller::Pusher {
@@ -250,13 +251,14 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let reason = reply.as_ref().and_then(crate::services::git_push_mcp::refusal_reason);
         let failed = reason.is_some() || reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reason);
-        if changed { let _ = state.app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
+        if changed { state.ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
     let mail = state
-        .app
-        .try_state::<crate::commands::mail::MailState>()
-        .map(|s| crate::commands::mail::AgentMail(s.inner().clone()));
+        .ctx
+        .state
+        .try_get::<crate::commands::mail::MailState>()
+        .map(|s| crate::commands::mail::AgentMail(s.clone()));
     let outcome = tokio::task::spawn_blocking(move || {
         // Permits live in the worker: an HTTP disconnect cannot free capacity
         // while blocking work is still running.
@@ -310,10 +312,10 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
     security::audit(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed());
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
-        let _ = state.app.emit(CHANGED_EVENT, change);
+        state.ctx.emit(CHANGED_EVENT, change);
     }
     if security::tool(&tool).is_some_and(|t| t.write) {
-        let _ = state.app.emit("root-mcp-review-changed",
+        state.ctx.emit("root-mcp-review-changed",
             crate::services::root_mcp_review::pending_count(&storage::state_dir()));
     }
     match reply {
@@ -355,7 +357,7 @@ async fn close_connection(mut response: Response) -> Response {
 /// the safe direction to fail in.
 /// Raised by [`stop_for_exit`]; the listener stops accepting on it.
 static SHUTDOWN: tokio::sync::Notify = tokio::sync::Notify::const_new();
-static SERVER: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>> = std::sync::Mutex::new(None);
+static SERVER: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> = std::sync::Mutex::new(None);
 
 /// `RunEvent::Exit`: stop accepting, give the workers in flight a short bounded
 /// drain, and remove every per-tab copy — nothing of the endpoint outlives a
@@ -365,23 +367,23 @@ pub fn stop_for_exit() {
     SHUTDOWN.notify_one();
     let handle = SERVER.lock().unwrap_or_else(|p| p.into_inner()).take();
     if let Some(handle) = handle {
-        tauri::async_runtime::block_on(async {
+        app_core::rt::block_on(async {
             let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
         });
     }
     crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
 }
 
-pub fn start(app: AppHandle) {
+pub fn start(ctx: CoreCtx) {
     // Copies a crash left behind: no tab is live yet, so every one of them goes.
     crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
     // Push proposals change state on worker threads; the service stays
     // AppHandle-free and rings this instead.
-    let push_events = app.clone();
+    let push_events = ctx.clone();
     crate::services::git_push_mcp::set_change_hook(Box::new(move || {
-        let _ = push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+        push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     }));
-    let handle = tauri::async_runtime::spawn(async move {
+    let handle = app_core::rt::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
             Ok(listener) => listener,
             Err(error) => {
@@ -399,7 +401,7 @@ pub fn start(app: AppHandle) {
             .route("/mcp/git", post(handle))
             .route("/mcp/help", post(handle))
             .layer(axum::middleware::map_response(close_connection))
-            .with_state(ServerState { app, port: addr.port() });
+            .with_state(ServerState { ctx, port: addr.port() });
         let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
         let serve = axum::serve(listener, router).with_graceful_shutdown(async { SHUTDOWN.notified().await });
         if let Err(error) = serve.await {
@@ -526,18 +528,18 @@ fn review_stores<T>(f: impl FnOnce(&Stores) -> Result<T, String>) -> Result<T, S
         access: Access::initial(root_mcp::Caller::Agent), session: None, deadline: None,
     })
 }
-fn emit_review(app: &AppHandle, changes: Vec<root_mcp::Change>) {
+fn emit_review(ctx: &CoreCtx, changes: Vec<root_mcp::Change>) {
     for change in changes {
-        let _ = app.emit(CHANGED_EVENT, change);
+        ctx.emit(CHANGED_EVENT, change);
     }
-    let _ = app.emit(
+    ctx.emit(
         "root-mcp-review-changed",
         crate::services::root_mcp_review::pending_count(&storage::state_dir()),
     );
 }
 #[tauri::command]
 pub async fn root_mcp_review_list(
-    app: AppHandle,
+    ctx: Ctx,
 ) -> Result<Vec<crate::services::root_mcp_review::ReviewEntry>, String> {
     let (entries, before) = tokio::task::spawn_blocking(|| {
         let before = crate::services::root_mcp_review::pending_count(&storage::state_dir());
@@ -550,13 +552,13 @@ pub async fn root_mcp_review_list(
         .filter(|p| p.proposal.status == "pending")
         .count();
     if count != before {
-        let _ = app.emit("root-mcp-review-changed", count);
+        ctx.emit("root-mcp-review-changed", count);
     }
     Ok(entries)
 }
 #[tauri::command]
 pub async fn root_mcp_review_apply(
-    app: AppHandle,
+    ctx: Ctx,
     id: String,
     digest: String,
 ) -> Result<(), String> {
@@ -565,12 +567,12 @@ pub async fn root_mcp_review_apply(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
 #[tauri::command]
 pub async fn root_mcp_review_reject(
-    app: AppHandle,
+    ctx: Ctx,
     id: String,
     digest: String,
 ) -> Result<(), String> {
@@ -579,12 +581,12 @@ pub async fn root_mcp_review_reject(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
 #[tauri::command]
 pub async fn root_mcp_review_undo(
-    app: AppHandle,
+    ctx: Ctx,
     id: String,
     digest: String,
 ) -> Result<(), String> {
@@ -593,12 +595,12 @@ pub async fn root_mcp_review_undo(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
 #[tauri::command]
 pub async fn root_mcp_review_apply_all(
-    app: AppHandle,
+    ctx: Ctx,
     approvals: Vec<crate::services::root_mcp_review::Approval>,
 ) -> Result<(), String> {
     let result = tokio::task::spawn_blocking(move || {
@@ -606,7 +608,7 @@ pub async fn root_mcp_review_apply_all(
     })
     .await
     .map_err(|e| e.to_string())?;
-    emit_review(&app, result?);
+    emit_review(&ctx, result?);
     Ok(())
 }
 
@@ -620,11 +622,11 @@ pub async fn root_mcp_import_list() -> Result<Vec<crate::services::root_mcp_impo
 }
 /// Imported or discarded: the staged copy goes either way.
 #[tauri::command]
-pub async fn root_mcp_import_remove(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn root_mcp_import_remove(ctx: Ctx, id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || crate::services::root_mcp_import::remove(&storage::state_dir(), &id))
         .await
         .map_err(|e| e.to_string())??;
-    emit_review(&app, Vec::new());
+    emit_review(&ctx, Vec::new());
     Ok(())
 }
 
@@ -638,13 +640,13 @@ pub fn root_mcp_security_status() -> SecurityStatus {
     SecurityStatus { sessions: root_mcp::sessions(), audit: security::audit_rows() }
 }
 #[tauri::command]
-pub async fn root_mcp_session_access(app: AppHandle, id: String, access: Access) -> Result<(), String> {
+pub async fn root_mcp_session_access(ctx: Ctx, id: String, access: Access) -> Result<(), String> {
     tokio::task::spawn_blocking(move || root_mcp::set_access(&id, access)).await.map_err(|e| e.to_string())??;
-    let _ = app.emit(SESSIONS_EVENT, ());
+    ctx.emit(SESSIONS_EVENT, ());
     Ok(())
 }
 #[tauri::command]
-pub async fn root_mcp_session_revoke(app: AppHandle, id: String, remove_proposals: Option<bool>) -> Result<(), String> {
+pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Option<bool>) -> Result<(), String> {
     // Invalidate first, before waiting on the review lock to clean the sandbox.
     let tab = root_mcp::revoke_session(&id)?;
     tokio::task::spawn_blocking(move || {
@@ -652,9 +654,9 @@ pub async fn root_mcp_session_revoke(app: AppHandle, id: String, remove_proposal
         crate::services::agent_tasks::drain_mutations();
         if remove_proposals == Some(true) { crate::services::schedule_mcp::remove_proposals(&id)?; }
         // A push proposal is useless without the session that made it.
-        if crate::services::git_push_mcp::remove_for_session(&id) { let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
-        let _ = app.emit("agent-schedules-changed", ());
-        let _ = app.emit(SESSIONS_EVENT, ());
+        if crate::services::git_push_mcp::remove_for_session(&id) { ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()); }
+        ctx.emit("agent-schedules-changed", ());
+        ctx.emit(SESSIONS_EVENT, ());
         Ok(())
     }).await.map_err(|e| e.to_string())?
 }
@@ -669,16 +671,16 @@ pub fn git_push_mcp_proposals(project_id: String) -> Vec<crate::services::git_pu
 /// bound SHA and the remote, confirms a first URL, then pushes; the reply is
 /// the proposal in its final state.
 #[tauri::command]
-pub async fn git_push_mcp_decide(app: AppHandle, id: String, approve: bool) -> Result<crate::services::git_push_mcp::Proposal, String> {
+pub async fn git_push_mcp_decide(ctx: Ctx, id: String, approve: bool) -> Result<crate::services::git_push_mcp::Proposal, String> {
     let result = tokio::task::spawn_blocking(move || crate::services::git_push_mcp::decide(&id, approve)).await.map_err(|e| e.to_string())?;
-    let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+    ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     result
 }
 /// Close a finished (pushed, failed, dismissed, expired) proposal's card.
 #[tauri::command]
-pub fn git_push_mcp_clear(app: AppHandle, id: String) -> Result<crate::services::git_push_mcp::Proposal, String> {
+pub fn git_push_mcp_clear(ctx: Ctx, id: String) -> Result<crate::services::git_push_mcp::Proposal, String> {
     let result = crate::services::git_push_mcp::clear(&id);
-    let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+    ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     result
 }
 

@@ -5,8 +5,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
+use app_core::CoreCtx;
+use crate::tauri_host::Ctx;
 
 use crate::{
     services::desktop_images::{self, DesktopImage, ImageFolder},
@@ -50,10 +51,11 @@ pub struct MobileDesktopState {
 
 #[tauri::command]
 pub fn mobile_desktop_respond(
-    state: State<'_, MobileDesktopState>,
+    ctx: Ctx,
     request_id: String,
     response: DesktopResponse,
 ) -> Result<(), String> {
+    let state = ctx.get::<MobileDesktopState>();
     let sender = state
         .pending
         .lock()
@@ -92,7 +94,7 @@ fn desktop_image_folders() -> Vec<ImageFolder> {
 /// selection transfer timeout when there is no image, and the sidecar's
 /// deadline for the whole list is a few seconds.
 async fn clipboard_image_entry() -> Option<DesktopImage> {
-    let probe = tauri::async_runtime::spawn_blocking(|| {
+    let probe = app_core::rt::spawn_blocking(|| {
         let mut clipboard = arboard::Clipboard::new().ok()?;
         let image = clipboard.get_image().ok()?;
         Some((image.width as u32, image.height as u32))
@@ -117,7 +119,7 @@ async fn clipboard_image_entry() -> Option<DesktopImage> {
 pub async fn mobile_desktop_images() -> Vec<DesktopImage> {
     let folders = desktop_image_folders();
     let (clipboard, files) = tokio::join!(clipboard_image_entry(), async {
-        tauri::async_runtime::spawn_blocking(move || {
+        app_core::rt::spawn_blocking(move || {
             desktop_images::list(&folders, SystemTime::now())
         })
         .await
@@ -140,7 +142,7 @@ pub async fn mobile_attach_desktop_image(
         return Err("image_not_found".into());
     }
     let root = PathBuf::from(project_dir);
-    tauri::async_runtime::spawn_blocking(move || {
+    app_core::rt::spawn_blocking(move || {
         let (name, bytes) = if image_id == desktop_images::CLIPBOARD_ID {
             let mut clipboard =
                 arboard::Clipboard::new().map_err(|_| "no_clipboard_image".to_string())?;
@@ -182,7 +184,7 @@ pub async fn mobile_attach_desktop_image(
 /// The global inbox, newest first.
 #[tauri::command]
 pub async fn global_inbox_list() -> Vec<inbox::GlobalInboxFile> {
-    tauri::async_runtime::spawn_blocking(|| inbox::list_global(&storage::state_dir()))
+    app_core::rt::spawn_blocking(|| inbox::list_global(&storage::state_dir()))
         .await
         .unwrap_or_default()
 }
@@ -885,7 +887,7 @@ fn launch_host(answering: Option<Option<&str>>, copy: &Path, running: &Path, ver
 /// back to starting the installed copy: an old host is still a working phone,
 /// and Settings → Mobile keeps offering the update by hand.
 pub fn start_host_on_launch() {
-    tauri::async_runtime::spawn(async {
+    app_core::rt::spawn(async {
         let Ok(config) = HostConfig::load(&storage::state_dir()) else {
             return;
         };
@@ -1380,7 +1382,7 @@ fn trusted_peer(stream: &tokio::net::UnixStream) -> bool {
 
 /// One accepted, already-authenticated desktop-control connection: read the
 /// sidecar's request, relay it to the main window, and write the answer back.
-async fn handle_desktop_stream<S>(mut stream: S, app: AppHandle, state: MobileDesktopState)
+async fn handle_desktop_stream<S>(mut stream: S, ctx: CoreCtx, state: MobileDesktopState)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
@@ -1401,7 +1403,17 @@ where
     let mutation = request.is_mutation();
     let (tx, rx) = oneshot::channel();
     state.pending.lock().unwrap().insert(id.clone(), tx);
-    if app.emit_to("main", MOBILE_DESKTOP_EVENT, request).is_err() {
+    // Delivery is best-effort (`EventSink`); what can still fail is the
+    // serialization, so that is the one case answered as unavailable.
+    let delivered = match serde_json::to_string(&request) {
+        Ok(json) => {
+            ctx.events
+                .emit_json_to(&app_core::ClientId::main(), MOBILE_DESKTOP_EVENT, json);
+            true
+        }
+        Err(_) => false,
+    };
+    if !delivered {
         state.pending.lock().unwrap().remove(&id);
         let _ = write_frame(
             &mut stream,
@@ -1434,9 +1446,9 @@ where
 const DESKTOP_BRIDGE_BIND_TRIES: u32 = 5;
 
 #[cfg(unix)]
-pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
+pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
-    tauri::async_runtime::spawn(async move {
+    app_core::rt::spawn(async move {
         use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = socket.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1480,9 +1492,9 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
             if !trusted_peer(&stream) {
                 continue;
             }
-            let app = app.clone();
+            let ctx = ctx.clone();
             let state = state.clone();
-            tauri::async_runtime::spawn(handle_desktop_stream(stream, app, state));
+            app_core::rt::spawn(handle_desktop_stream(stream, ctx, state));
         }
     });
 }
@@ -1491,10 +1503,10 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
 /// sidecar proving itself via the same-user token the listener writes beside
 /// the nominal socket path — see `services::mobile_control::admin::pipe`.
 #[cfg(windows)]
-pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
+pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     use crate::services::mobile_control::admin::pipe;
     let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
-    tauri::async_runtime::spawn(async move {
+    app_core::rt::spawn(async move {
         use tokio::net::windows::named_pipe::ServerOptions;
         let name = pipe::pipe_name(&socket);
         // Either failure leaves every phone request that needs the desktop
@@ -1523,10 +1535,10 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
                 continue;
             };
             let mut stream = std::mem::replace(&mut server, next);
-            let app = app.clone();
+            let app = ctx.clone();
             let state = state.clone();
             let token = token.clone();
-            tauri::async_runtime::spawn(async move {
+            app_core::rt::spawn(async move {
                 let presented = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     read_frame::<String>(&mut stream),
@@ -1537,7 +1549,7 @@ pub fn start_desktop_bridge(app: AppHandle, state: MobileDesktopState) {
                 if !authorized {
                     return;
                 }
-                handle_desktop_stream(stream, app, state).await;
+                handle_desktop_stream(stream, ctx, state).await;
             });
         }
     });

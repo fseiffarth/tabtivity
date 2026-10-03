@@ -1198,11 +1198,8 @@ pub fn run() {
         .setup(move |_app| {
             // First: converted commands and services read their `CoreCtx`
             // from here, and `rt::spawn` needs Tauri's runtime installed.
-            tauri_host::install(_app.handle(), core_state);
-            commands::mobile_control::start_desktop_bridge(
-                _app.handle().clone(),
-                mobile_desktop.clone(),
-            );
+            let core = tauri_host::install(_app.handle(), core_state);
+            commands::mobile_control::start_desktop_bridge(core.clone(), mobile_desktop.clone());
             // The Mobile host's lifetime is the app's: `RunEvent::Exit` stops
             // it, so an enabled configuration has to bring it back here rather
             // than waiting for the next login. Off the main thread, bounded,
@@ -1214,7 +1211,7 @@ pub fn run() {
             services::brand_migration::project::sweep_at_launch();
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
-            commands::root_mcp::start(_app.handle().clone());
+            commands::root_mcp::start(core.clone());
             // A SIGTERM/SIGINT (the dev launcher's Ctrl+C, a `kill`, a session
             // logout) used to end the process with none of the teardown the
             // window's × runs: PTY subtrees, local tmux sessions, the Mobile
