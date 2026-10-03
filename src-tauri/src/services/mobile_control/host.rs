@@ -4850,27 +4850,22 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     Ok(())
 }
 
-/// Bind the daemon's socket: a stale file from a previous run is removed
-/// first, the new one is `0660` — its group is the directory's (the helper
-/// makes `/run/<slug>/users` setgid to the gateway's group), so the gateway
-/// may connect and nobody else may even try.
+/// Bind the daemon's socket. In a deployment the socket unit always makes
+/// it (below); binding here is the unprivileged path tests and a hand-run
+/// daemon use: a stale file is removed first and the new one is `0660`.
 ///
 /// Under socket activation (`<slug>-serverd@.socket`) systemd already made
-/// the socket — `root:<slug>-gw 0660` — and passes it as fd 3; it is adopted
-/// as is (`true`), never re-bound, and never removed at exit.
+/// the socket — `root:<slug>-gw 0660` in a directory only root and the
+/// gateway's group may enter — and passes it as fd 3; it is adopted as is
+/// (`true`), never re-bound, and never removed at exit.
 #[cfg(unix)]
 fn bind_unix(path: &std::path::Path) -> Result<(tokio::net::UnixListener, bool), String> {
     use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::io::FromRawFd;
     if let Some(fd) = crate::services::server::activation_fd(|k| std::env::var(k).ok(), std::process::id()) {
-        // SAFETY: systemd hands this process fd 3 as its listening socket
-        // (LISTEN_PID matched); nothing else in the process owns it.
-        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
-        std_listener.set_nonblocking(true).map_err(|e| format!("activation socket: {e}"))?;
+        let listener = adopt_activation_fd(fd)?;
         std::env::remove_var("LISTEN_PID");
         std::env::remove_var("LISTEN_FDS");
         std::env::remove_var("LISTEN_FDNAMES");
-        let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| format!("activation socket: {e}"))?;
         return Ok((listener, true));
     }
     if let Some(parent) = path.parent() {
@@ -4882,6 +4877,25 @@ fn bind_unix(path: &std::path::Path) -> Result<(tokio::net::UnixListener, bool),
     let listener = tokio::net::UnixListener::bind(path).map_err(|e| format!("bind {}: {e}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|e| format!("chmod {}: {e}", path.display()))?;
     Ok((listener, false))
+}
+
+/// Take over the listening socket systemd passed as `fd`. systemd hands it
+/// over without `FD_CLOEXEC` (it had to survive the exec); left so, every
+/// child this daemon spawns — git, an installer, a tmux that starts its own
+/// server — would inherit the listening socket and could accept the
+/// gateway's connections in the daemon's place. So it is set first.
+#[cfg(unix)]
+fn adopt_activation_fd(fd: i32) -> Result<tokio::net::UnixListener, String> {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: F_SETFD on the descriptor systemd passed this process.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+        return Err(format!("activation socket: {}", std::io::Error::last_os_error()));
+    }
+    // SAFETY: systemd hands this process `fd` as its listening socket
+    // (LISTEN_PID matched); nothing else in the process owns it.
+    let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+    std_listener.set_nonblocking(true).map_err(|e| format!("activation socket: {e}"))?;
+    tokio::net::UnixListener::from_std(std_listener).map_err(|e| format!("activation socket: {e}"))
 }
 
 #[cfg(test)]
@@ -5313,6 +5327,23 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(serde_json::to_vec(body).expect("body")))
             .expect("request")
+    }
+
+    /// The socket systemd passes arrives without `FD_CLOEXEC`; adopted, it
+    /// has it, so no child of the daemon inherits the listener.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_adopted_activation_socket_is_close_on_exec() {
+        use std::os::unix::io::IntoRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let fd = std::os::unix::net::UnixListener::bind(dir.path().join("a.sock")).unwrap().into_raw_fd();
+        // SAFETY: F_SETFD/F_GETFD on a descriptor this test owns.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC, 0, "as systemd passes it");
+        let listener = adopt_activation_fd(fd).unwrap();
+        // SAFETY: as above; the listener still owns `fd`.
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC, libc::FD_CLOEXEC);
+        drop(listener);
     }
 
     /// A phone subscribes only from the exact origin, only to a push vendor's
