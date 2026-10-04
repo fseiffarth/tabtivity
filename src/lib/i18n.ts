@@ -9147,6 +9147,7 @@ export const enSource = {
   "overlayAgent.shownInConsole": "Shown in the root console",
   "overlayAgent.shownInConsoleHint": "Close the root console to work with this agent here.",
   "overlayAgent.rootNotAllowed": "Allow {agent} in the root console: Models & agents → Root chip",
+  "overlayAgent.toggle": "Agent",
   "shortcut.cycleProjectBack": "Cycle to previous project",
   "shortcut.cycleBox": "Cycle to next box",
   "shortcut.cycleBoxBack": "Cycle to previous box",

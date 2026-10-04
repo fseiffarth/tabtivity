@@ -497,9 +497,10 @@ svg.alerts-toggle-icon {
   overflow: hidden;
 }
 /* The body is the root console's `.subwindow-body`, a flex *row*: the hosted
-   pane must take the width, or it shrinks to its toolbar's. */
-.calendar-overlay-body > *,
-.todo-overlay-body > *,
+   pane must take the width, or it shrinks to its toolbar's. The three app
+   overlays share `.app-overlay-body-row`: their pane takes what the docked
+   agent column (fixed width, `flex-shrink: 0`) leaves beside it. */
+.app-overlay-body-row > :not(.overlay-agent-column),
 .models-overlay-body > * {
   flex: 1;
   min-width: 0;
@@ -907,6 +908,12 @@ svg.alerts-toggle-icon {
   align-items: center;
   padding-top: 0;
 }
+/* Mail's stacked tab panes, wrapped so the agent column can sit beside them:
+   the panes fill this box, not the whole body. */
+.mail-overlay-panes {
+  position: relative;
+  min-height: 0;
+}
 .mail-tab-pane {
   position: absolute;
   inset: 0;
@@ -940,6 +947,11 @@ svg.alerts-toggle-icon {
   overflow: clip;
   border-left: 1px solid var(--border-color);
   background: var(--bg-panel);
+}
+/* The title-bar button (OverlayAgentToggle): lit while the column shows, as
+   the ◫ file column's toggle is. */
+.overlay-agent-toggle[aria-pressed="true"] {
+  color: var(--accent);
 }
 .overlay-agent-head {
   flex: 0 0 auto;

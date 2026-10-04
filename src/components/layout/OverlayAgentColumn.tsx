@@ -6,10 +6,14 @@ import { useProjectsStore } from "../../stores/projects";
 import type { SteeringApp } from "../../lib/shortcuts/steeringRegion";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
+import { AGENT_TAB_ACTIONS } from "../../lib/shortcuts/shortcuts";
+import { useChordHint } from "../../lib/shortcuts/shortcutHint";
+import { SparkleIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { TabScopeContext } from "../tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
+import type { OverlayAgentHandle } from "./useOverlayAgent";
 
 interface Props {
   /** The overlay this column docks in. */
@@ -159,6 +163,7 @@ export function OverlayAgentColumn({
             type="button"
             className="subwindow-hide"
             title={t("overlayAgent.openInConsole")}
+            aria-label={t("overlayAgent.openInConsole")}
             onClick={() => {
               useOverlayAgentStore.getState().hide(app);
               useRootOverlayStore.getState().show(tab.key);
@@ -167,7 +172,13 @@ export function OverlayAgentColumn({
             ↗
           </button>
         )}
-        <button type="button" className="subwindow-hide" title={t("overlayAgent.hide")} onClick={hide}>
+        <button
+          type="button"
+          className="subwindow-hide"
+          title={t("overlayAgent.hide")}
+          aria-label={t("overlayAgent.hide")}
+          onClick={hide}
+        >
           ×
         </button>
       </div>
@@ -199,5 +210,32 @@ export function OverlayAgentColumn({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The overlays' title-bar button for the docked agent — the same action as
+ * Ctrl+1 there (`OverlayAgentHandle.toggle`: hides an open column, re-shows a
+ * live docked agent, else docks the default one). It sits in
+ * `.root-overlay-controls` before the approvals pill, a `.subwindow-hide`
+ * like ⤢ and × beside it, and is lit while the column shows (the ◫ file
+ * column's toggle does the same). The glyph is the shared sparkle, the line
+ * icon set's "AI / assistant" mark; the hover names the user's own chord.
+ */
+export function OverlayAgentToggle({ handle }: { handle: OverlayAgentHandle }) {
+  const t = useT();
+  const hint = useChordHint();
+  const label = hint(t("overlayAgent.toggle"), AGENT_TAB_ACTIONS[0]);
+  return (
+    <button
+      type="button"
+      className="subwindow-hide overlay-agent-toggle"
+      title={label}
+      aria-label={label}
+      aria-pressed={handle.showColumn}
+      onClick={handle.toggle}
+    >
+      <SparkleIcon />
+    </button>
   );
 }

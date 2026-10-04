@@ -8906,6 +8906,7 @@ export const dict: Dict = {
   "overlayAgent.shownInConsole": "Mostrato nella console root",
   "overlayAgent.shownInConsoleHint": "Chiudi la console root per lavorare qui con questo agente.",
   "overlayAgent.rootNotAllowed": "Consenti {agent} nella console root: Modelli e agenti → chip Root",
+  "overlayAgent.toggle": "Agente",
   "shortcut.cycleProjectBack": "Passa al progetto precedente",
   "shortcut.cycleBox": "Passa al box successivo",
   "shortcut.cycleBoxBack": "Passa al box precedente",

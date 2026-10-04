@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { addTabToRoot } from "../../stores/rootOverlay";
 import {
   dockedRootTab,
+  overlayAgentMaxWidth,
   useOverlayAgentStore,
   type OverlayAgentDock,
 } from "../../stores/overlayAgent";
@@ -222,4 +223,35 @@ export function useOverlayAgent(app: SteeringApp, live: boolean): OverlayAgentHa
     toggle,
     dismissHint,
   };
+}
+
+/**
+ * The `maxWidth` an overlay hands its `OverlayAgentColumn`: the measured width
+ * of its body (`bodyRef`, the `.subwindow-body` row) run through
+ * `overlayAgentMaxWidth`. The frame moves, resizes and fills
+ * (`useFloatingFrame`), so a ResizeObserver keeps it current; a window
+ * `resize` re-measures too, for WebKitGTK builds that deliver no observer
+ * callback for an OS-level window resize (a filled frame follows the window).
+ * Measured only while `active` (the body is on screen). Never written to the
+ * store: the stored width is the user's, this only caps what is drawn.
+ */
+export function useOverlayAgentMaxWidth(
+  bodyRef: RefObject<HTMLElement | null>,
+  active: boolean,
+): number | undefined {
+  const [bodyWidth, setBodyWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!active || !el) return;
+    const measure = () => setBodyWidth(el.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [bodyRef, active]);
+  return overlayAgentMaxWidth(bodyWidth);
 }

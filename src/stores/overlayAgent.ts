@@ -39,6 +39,24 @@ export function clampOverlayAgentWidth(w: number): number {
   return Math.min(MAX_OVERLAY_AGENT_WIDTH, Math.max(MIN_OVERLAY_AGENT_WIDTH, Math.round(w)));
 }
 
+/** The room the docked column leaves the app beside it (px), while the
+ *  overlay is wide enough for both. */
+export const MIN_OVERLAY_APP_WIDTH = 360;
+
+/**
+ * The widest the column may be drawn in an overlay body `bodyWidth` px wide:
+ * whatever leaves the app {@link MIN_OVERLAY_APP_WIDTH}, but never under the
+ * column's own minimum. So in a frame too narrow for both (the frame's floor is
+ * 420 px), the AGENT keeps its usable minimum and the app gives way — it
+ * narrows, clipped by its body, and comes back as the frame grows. The user
+ * asked for the agent; a terminal squeezed under ~40 columns is no use to them.
+ * `undefined` (no cap) until the body has been measured.
+ */
+export function overlayAgentMaxWidth(bodyWidth: number): number | undefined {
+  if (!(bodyWidth > 0)) return undefined;
+  return Math.max(MIN_OVERLAY_AGENT_WIDTH, Math.floor(bodyWidth - MIN_OVERLAY_APP_WIDTH));
+}
+
 const WIDTH_STORAGE_KEY = storageKey("overlayAgentWidth");
 
 function readPersistedWidth(): number {
