@@ -1240,7 +1240,8 @@ span.files-close { background:transparent; }
 /* The free-text row's field (`freeTextRow`), opened under it by a tap: the
    to-do editor's add row — a field and its button side by side. */
 .question-type { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px 0 4px; }
-.question-type input { min-width:0; border:1px solid #3a3e50; border-radius:12px; padding:11px 13px; background:#171a24; color:#fff; font-size:1rem; }
+.question-type textarea { grid-column:1 / -1; min-width:0; min-height:6.5em; resize:vertical; border:1px solid #3a3e50; border-radius:12px; padding:11px 13px; background:#171a24; color:#fff; font:inherit; font-size:1rem; line-height:1.4; }
+.question-type > button { grid-column:2; }
 .question-type em { grid-column:1 / -1; color:#98a0b4; font-size:.78rem; }
 /* A question kept in the chat once answered (`AskedCard`): the live card's
    rows, no longer buttons — the ones the answer took lit as the highlighted
@@ -1597,6 +1598,9 @@ span.files-close { background:transparent; }
 .markup-questions-fold { color:#98a0b4; }
 .markup-questions-body { display:grid; gap:12px; max-height:min(45vh, 420px); overflow:auto; overscroll-behavior:contain; padding:0 10px 12px; -webkit-user-select:text; user-select:text; }
 .markup-questions-ask { display:grid; gap:12px; }
+/* An ask of several questions: one on show, ‹ n / m › above it. */
+.markup-questions-pager { justify-content:space-between; padding:0; }
+.markup-questions-pager span { font-size:.9rem; font-variant-numeric:tabular-nums; color:#98a0b4; }
 .markup-question { display:grid; gap:8px; padding:4px 0; border-radius:12px; }
 .markup-question.flash { background:#1c2336; }
 .question-tabs .markup-question-n { color:#ffd36b; }

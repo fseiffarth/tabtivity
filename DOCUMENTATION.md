@@ -459,8 +459,9 @@ When a mark leaves the agent a choice, a local Claude, Codex or MCP-enabled
 Vibe tab can ask with its `markup_ask` tool (`docs/context/markup_mcp.md`;
 on by default, Manage CLIs → Advanced). The questions show as a card in that
 tab's markup view, phone and desktop alike, each with a `?n` pin at the words
-it quotes; a tap (or **Other…** with typed words) sends the answer into the tab
-as the next prompt and closes the card everywhere, and **Answer in chat
+it quotes. Several questions show one at a time, paged with ‹ ›. A tap only
+picks (or **Other…** takes typed words); **Send answers** sends them into the
+tab as the next prompt and closes the card everywhere, and **Answer in chat
 instead** closes it unanswered. The phone's chat shows a one-line banner while
 a question is open; on the desktop, with marking off, the **Mark up** button is
 underlined and opens on the asking tab.

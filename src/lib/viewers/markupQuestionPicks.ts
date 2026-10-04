@@ -69,9 +69,3 @@ export function answersOf(questions: readonly MarkupQuestion[], picks: readonly 
   }
   return out;
 }
-
-/** Whether one tap answers the whole ask: a single question, single-select —
- * the card then sends on the tap, as the Focus list does. */
-export function answersOnTap(questions: readonly MarkupQuestion[]): boolean {
-  return questions.length === 1 && !questions[0].multiSelect;
-}

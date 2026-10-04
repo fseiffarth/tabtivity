@@ -34,7 +34,7 @@ vi.mock("../../../mobile-web/src/markup/store", async (original) => ({
 }));
 
 import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
-import { PdfMarkupQuestions, PdfQuestionPins } from "../../components/embed/pdf/PdfMarkupQuestions";
+import { ARRIVAL_GUARD_MS, PdfMarkupQuestions, PdfQuestionPins } from "../../components/embed/pdf/PdfMarkupQuestions";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import {
   answersOf,
@@ -130,6 +130,25 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+/** A new card takes no clicks for `ARRIVAL_GUARD_MS`: `settle` moves the
+ *  clock past that. */
+let skew = 0;
+const settle = () => { skew += ARRIVAL_GUARD_MS; };
+let clock: { mockRestore: () => void } | null = null;
+beforeEach(() => {
+  skew = 0;
+  const real = Date.now.bind(Date);
+  clock = vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
+});
+afterEach(() => clock?.mockRestore());
+/** Pick a row once the card has settled, and send it. */
+async function answerWith(row: RegExp) {
+  const button = await screen.findByRole("button", { name: row });
+  settle();
+  fireEvent.click(button);
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+}
+
 describe("desktop markup questions card", () => {
   it("lists the target tab's ask for this file and renders it as the reader's question card", async () => {
     open = [ask([single])];
@@ -148,10 +167,18 @@ describe("desktop markup questions card", () => {
     expect(screen.getByRole("button", { name: "Answer in chat instead" })).toBeTruthy();
   });
 
-  it("answers a single question on the click and delivers it the Submit's way", async () => {
+  it("a click only picks, even for one single-select question; Send answers delivers it the Submit's way", async () => {
     open = [ask([single])];
     render(<Harness />);
-    fireEvent.click(await screen.findByRole("button", { name: /The figure/ }));
+    const figure = await screen.findByRole("button", { name: /The figure/ });
+    // A stroke ending on the card as it turns up does nothing.
+    fireEvent.click(figure);
+    expect(figure.getAttribute("aria-pressed")).toBe("false");
+    settle();
+    fireEvent.click(figure);
+    expect(figure.getAttribute("aria-pressed")).toBe("true");
+    expect(calls("markup_mcp_answer")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
     await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalledWith("sched-1"));
     expect(calls("markup_mcp_answer")[0][1]).toEqual({ projectId: "p1", scheduleTargetId: "s1", askId: "ask-1", answers: [{ options: [1] }] });
     expect(mocks.queuePromptForTab).toHaveBeenCalledWith("p1", "s1", expect.stringMatching(/^My answers to your markup questions/));
@@ -162,19 +189,32 @@ describe("desktop markup questions card", () => {
     expect(calls("markup_mcp_reopen")).toHaveLength(0);
   });
 
-  it("collects multiSelect picks and every question before Send answers", async () => {
+  it("pages through the questions with ‹ › and collects every one before Send answers", async () => {
     open = [ask([single, multi])];
     render(<Harness />);
     const send = (await screen.findByRole("button", { name: "Send answers" })) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
+    // One question at a time.
+    expect(screen.getByText("1 / 2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Intro/ })).toBeNull();
+    const previous = screen.getByRole("button", { name: "Previous question" }) as HTMLButtonElement;
+    const next = screen.getByRole("button", { name: "Next question" }) as HTMLButtonElement;
+    expect(previous.disabled).toBe(true);
+    settle();
     fireEvent.click(screen.getByRole("button", { name: /The paragraph/ }));
     expect(mocks.invoke.mock.calls.some(([command]) => command === "markup_mcp_answer")).toBe(false);
     expect(send.disabled).toBe(true);
+    fireEvent.click(next);
+    expect(screen.getByText("2 / 2")).toBeTruthy();
+    expect(next.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /The paragraph/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Results/ }));
     fireEvent.click(screen.getByRole("button", { name: /Intro/ }));
     expect(screen.getByRole("button", { name: /Intro/ }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByText("Pick any that apply.")).toBeTruthy();
-    // Single-select keeps one row.
+    // Back again: the first page kept its pick; single-select keeps one row.
+    fireEvent.click(previous);
+    expect(screen.getByRole("button", { name: /The paragraph/ }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /The figure/ }));
     expect(screen.getByRole("button", { name: /The paragraph/ }).getAttribute("aria-pressed")).toBe("false");
     expect(send.disabled).toBe(false);
@@ -186,9 +226,11 @@ describe("desktop markup questions card", () => {
   it("sends a typed Other… answer", async () => {
     open = [ask([single])];
     render(<Harness />);
-    fireEvent.click(await screen.findByRole("button", { name: /Other…/ }));
+    const other = await screen.findByRole("button", { name: /Other…/ });
+    settle();
+    fireEvent.click(other);
     const field = screen.getByRole("textbox", { name: "Type your answer" });
-    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    const send = screen.getByRole("button", { name: "Send answers" }) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
     fireEvent.change(field, { target: { value: "  Both, figure first " } });
     fireEvent.click(send);
@@ -199,7 +241,9 @@ describe("desktop markup questions card", () => {
   it("dismisses with Answer in chat instead", async () => {
     open = [ask([single])];
     render(<Harness />);
-    fireEvent.click(await screen.findByRole("button", { name: "Answer in chat instead" }));
+    const inChat = await screen.findByRole("button", { name: "Answer in chat instead" });
+    settle();
+    fireEvent.click(inChat);
     await waitFor(() => expect(screen.queryByText(single.question)).toBeNull());
     expect(calls("markup_mcp_dismiss")[0][1]).toEqual({ projectId: "p1", scheduleTargetId: "s1", askId: "ask-1" });
     expect(mocks.queuePromptForTab).not.toHaveBeenCalled();
@@ -217,14 +261,15 @@ describe("desktop markup questions card", () => {
     });
     mocks.queuePromptForTab.mockRejectedValueOnce(new Error("Prompt scheduler is not ready"));
     render(<Harness />);
-    fireEvent.click(await screen.findByRole("button", { name: /The paragraph/ }));
+    await answerWith(/The paragraph/);
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("The questions are still open");
     expect(calls("markup_mcp_reopen")[0][1]).toEqual({ projectId: "p1", scheduleTargetId: "s1", askId: "ask-1", receipt: "r-1" });
     expect(mocks.holdPhonePrompt).not.toHaveBeenCalled();
     ring();
-    const retry = screen.getByRole("button", { name: /The paragraph/ }) as HTMLButtonElement;
+    const retry = screen.getByRole("button", { name: "Send answers" }) as HTMLButtonElement;
     await waitFor(() => expect(retry.disabled).toBe(false));
+    settle();
     fireEvent.click(retry);
     await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalledWith("sched-1"));
     expect(calls("markup_mcp_answer")).toHaveLength(2);
@@ -239,7 +284,7 @@ describe("desktop markup questions card", () => {
     });
     mocks.queuePromptForTab.mockRejectedValueOnce(new Error("Prompt scheduler is not ready"));
     render(<Harness />);
-    fireEvent.click(await screen.findByRole("button", { name: /The paragraph/ }));
+    await answerWith(/The paragraph/);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Paste it into the agent's tab");
     expect(alert.textContent).toContain("My answers to your markup questions");
@@ -254,7 +299,7 @@ describe("desktop markup questions card", () => {
       return original(command, args);
     });
     render(<Harness />);
-    fireEvent.click(await screen.findByRole("button", { name: /The paragraph/ }));
+    await answerWith(/The paragraph/);
     expect((await screen.findByRole("alert")).textContent).toContain("they were already answered");
     expect(mocks.queuePromptForTab).not.toHaveBeenCalled();
   });
@@ -280,8 +325,10 @@ describe("desktop markup questions card", () => {
     render(<Harness />);
     await screen.findByText(single.question);
     // A round follows an agent seen asking.
-    fireEvent.click(screen.getByRole("button", { name: /The paragraph/ }));
+    await answerWith(/The paragraph/);
     await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    // A round went out but the file did not change: nothing to reload.
+    expect(screen.queryByRole("button", { name: "Reload PDF" })).toBeNull();
     open = [ask([single], "ask-2")];
     ring();
     expect(await screen.findByText("The agent asks about your marks — answer below")).toBeTruthy();
@@ -384,6 +431,27 @@ describe("question pins", () => {
     expect(container.querySelectorAll(".file-viewer-pdf-search-hit.current").length).toBe(2);
     fireEvent.click(pin);
     expect(onPick).toHaveBeenCalledWith(pins[0]);
+  });
+
+  it("a pin's question turns the card to its page", () => {
+    const questions = {
+      asks: [ask([single, multi])],
+      answering: null,
+      failure: null,
+      dismissFailure: vi.fn(),
+      answer: vi.fn(),
+      dismiss: vi.fn(),
+      focus: null,
+      show: vi.fn(),
+    };
+    const { rerender } = render(<PdfMarkupQuestions questions={questions} pinned={new Set()} />);
+    expect(screen.getByText(single.question)).toBeTruthy();
+    rerender(
+      <PdfMarkupQuestions questions={{ ...questions, focus: { askId: "ask-1", index: 1, on: "card", nonce: 1 } }} pinned={new Set()} />,
+    );
+    expect(screen.getByText(multi.question)).toBeTruthy();
+    expect(screen.queryByText(single.question)).toBeNull();
+    expect(screen.getByText("2 / 2")).toBeTruthy();
   });
 });
 

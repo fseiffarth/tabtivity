@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import {
-  answersOf, answersOnTap, NO_PICK, toggleOption, toggleOther, type MarkupQuestion, type QuestionPick,
+  answersOf, NO_PICK, toggleOption, toggleOther, type MarkupQuestion, type QuestionPick,
 } from "../../../src/lib/viewers/markupQuestionPicks";
 import { answerMarkupQuestions, ApiError, dismissMarkupQuestions, type PhoneMarkupAsk, type PhoneMarkupQuestion } from "../api";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
@@ -12,6 +12,10 @@ import { QuestionRows, type QuestionRow } from "./QuestionRows";
 const MAX_OTHER = 500;
 /** The Other… row's key among a question's option indices. */
 const OTHER = "other";
+/** How long a card that just opened for a new ask takes no taps: the reader
+ * may be mid-stroke where it lands, and a pen or finger already on its way
+ * down must not pick or send for them. */
+export const ARRIVAL_GUARD_MS = 1_200;
 
 /** Why the desktop did not take an answer, in the reader's words. */
 const REASONS: Record<string, TranslationKey> = {
@@ -39,10 +43,13 @@ export type QuestionFocus = { askId: string; index: number; nonce: number };
  * The agent's markup questions (`markup_ask`, `docs/markup_questions_mcp_plan.md`
  * P3), docked above the markup palette: a collapsible card, "The agent asks
  * · n", that opens by itself when a new ask arrives. Its rows are the Focus
- * list's (`QuestionRows`), so the two read alike. One single-select question
- * answers on the tap; otherwise rows are picked (ticked for multiSelect) and
- * **Send answers** sends. **Other…** takes typed words; **Answer in chat
- * instead** closes the ask. The desktop builds the prompt and queues it into
+ * list's (`QuestionRows`), so the two read alike. Rows are picked (ticked for
+ * multiSelect) and only **Send answers** sends — never a single tap, even for
+ * one single-select question: the card opens under a pen that is busy
+ * marking, and a stroke landing on a row must not answer. For the same reason
+ * it takes no taps for `ARRIVAL_GUARD_MS` after a new ask opened it. **Other…** takes typed words; **Answer in chat
+ * instead** closes the ask. An ask of several questions shows one at a time,
+ * paged with ‹ › (the Focus list's stepped tab row); a pin turns to its page. The desktop builds the prompt and queues it into
  * the tab — the phone sends only the picks — and a failed delivery leaves the
  * card open (the desktop reopened the ask).
  */
@@ -67,9 +74,13 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
   const t = useT();
   const [open, setOpen] = useState(true);
   const [picks, setPicks] = useState<Record<string, QuestionPick[]>>({});
+  /** The question on show in each ask: one at a time, paged with ‹ ›. */
+  const [shown, setShown] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const seen = useRef(new Set<string>());
+  /** When a new ask last opened the card (`ARRIVAL_GUARD_MS`). */
+  const arrivedAt = useRef(0);
   const rowsAt = useRef(new Map<string, HTMLDivElement>());
   const [flash, setFlash] = useState<string | null>(null);
   const onBusyRef = useRef(onBusy);
@@ -77,16 +88,18 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
   useEffect(() => { onBusyRef.current?.(busy !== null); }, [busy]);
   useEffect(() => () => onBusyRef.current?.(false), []);
 
-  // A new ask opens the card, however the reader left it.
-  useEffect(() => {
+  // A new ask opens the card, however the reader left it. Before paint: the
+  // guard must stand before a tap can land on the new rows.
+  useLayoutEffect(() => {
     const fresh = asks.filter((ask) => !seen.current.has(ask.id));
     for (const ask of fresh) seen.current.add(ask.id);
-    if (fresh.length) { setOpen(true); setNote(null); }
+    if (fresh.length) { setOpen(true); setNote(null); arrivedAt.current = Date.now(); }
   }, [asks]);
 
   useEffect(() => {
     if (!focus) return;
     setOpen(true);
+    setShown((was) => ({ ...was, [focus.askId]: focus.index }));
     const key = `${focus.askId}/${focus.index}`;
     setFlash(key);
     const timer = window.setTimeout(() => setFlash(null), 1600);
@@ -97,6 +110,7 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
 
   const count = asks.reduce((sum, ask) => sum + ask.questions.length, 0);
   if (!count) return null;
+  const settling = () => Date.now() - arrivedAt.current < ARRIVAL_GUARD_MS;
 
   const reason = (error: unknown) => {
     const code = error instanceof ApiError ? error.code : "";
@@ -110,7 +124,7 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
 
   const send = async (ask: PhoneMarkupAsk, chosen: QuestionPick[]) => {
     const answers = answersOf(ask.questions.map(pickQuestion), chosen);
-    if (!answers || busy) return;
+    if (!answers || busy || settling()) return;
     setBusy(ask.id);
     setNote(null);
     try {
@@ -127,7 +141,7 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
   };
 
   const dismiss = async (ask: PhoneMarkupAsk) => {
-    if (busy) return;
+    if (busy || settling()) return;
     setBusy(ask.id);
     setNote(null);
     try {
@@ -154,16 +168,21 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
       {asks.map((ask) => {
         const questions = ask.questions.map(pickQuestion);
         const chosen = picks[ask.id] ?? questions.map(() => NO_PICK);
-        const onTap = answersOnTap(questions);
         const ready = answersOf(questions, chosen) !== null;
         const sending = busy === ask.id;
-        const setPick = (index: number, pick: QuestionPick) => {
-          const next = chosen.map((was, i) => (i === index ? pick : was));
-          setPicks((was) => ({ ...was, [ask.id]: next }));
-          return next;
-        };
+        const setPick = (index: number, pick: QuestionPick) =>
+          setPicks((was) => ({ ...was, [ask.id]: chosen.map((other, i) => (i === index ? pick : other)) }));
+        const total = ask.questions.length;
+        const at = Math.min(shown[ask.id] ?? 0, total - 1);
+        const turn = (index: number) => setShown((was) => ({ ...was, [ask.id]: index }));
         return <div key={ask.id} className="markup-questions-ask">
+          {total > 1 && <div className="question-tabs stepped markup-questions-pager" role="toolbar" aria-label={t("terminal.reader.questionSteps")}>
+            <button className="question-step" aria-label={t("mobile.markup.questions.previous")} disabled={at === 0} onClick={() => turn(at - 1)}>‹</button>
+            <span aria-live="polite">{t("mobile.markup.questions.position", { index: at + 1, count: total })}</span>
+            <button className="question-step" aria-label={t("mobile.markup.questions.next")} disabled={at === total - 1} onClick={() => turn(at + 1)}>›</button>
+          </div>}
           {ask.questions.map((question, index) => {
+            if (index !== at) return null;
             const pick = chosen[index] ?? NO_PICK;
             const key = `${ask.id}/${index}`;
             const rows: QuestionRow[] = [
@@ -171,15 +190,16 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
                 key: oi,
                 label: option.label,
                 description: option.description,
-                ...(onTap ? {} : { checked: pick.options.includes(oi), box: question.multi_select }),
-                pending: sending && onTap && pick.options.includes(oi),
+                checked: pick.options.includes(oi),
+                box: question.multi_select,
               })),
               {
                 key: OTHER,
                 label: t("mobile.markup.questions.other"),
                 freeText: true,
                 ...(pick.other ? { description: pick.other } : {}),
-                ...(onTap ? {} : { checked: pick.other !== null && pick.other !== "", box: question.multi_select }),
+                checked: pick.other !== null && pick.other !== "",
+                box: question.multi_select,
               },
             ];
             return <div key={key} ref={(element) => { if (element) rowsAt.current.set(key, element); else rowsAt.current.delete(key); }}
@@ -198,25 +218,23 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
                 disabled={busy !== null || !online}
                 sendingLabel={t("mobile.markup.questions.sending")}
                 onPick={(row) => {
+                  if (settling()) return;
                   // A ticked Other… tapped again: untick it (`QuestionRows`).
                   if (row.key === OTHER) { setPick(index, toggleOther(questions[index], pick)); return; }
-                  const next = setPick(index, toggleOption(questions[index], pick, row.key as number));
-                  if (onTap) void send(ask, next);
+                  setPick(index, toggleOption(questions[index], pick, row.key as number));
                 }}
                 onType={(_row, text) => {
-                  const typed = { ...toggleOther(questions[index], { ...pick, other: null }), other: text.trim() };
-                  const next = setPick(index, typed);
-                  if (onTap) void send(ask, next);
+                  setPick(index, { ...toggleOther(questions[index], { ...pick, other: null }), other: text.trim() });
                 }}
-                typeLabel={onTap ? undefined : t("mobile.markup.questions.keep")}
+                typeLabel={t("mobile.markup.questions.keep")}
                 typeMax={MAX_OTHER}
               />
             </div>;
           })}
           <div className="markup-questions-actions">
-            {!onTap && <button className="markup-submit" disabled={!ready || busy !== null || !online} onClick={() => void send(ask, chosen)}>
+            <button className="markup-submit" disabled={!ready || busy !== null || !online} onClick={() => void send(ask, chosen)}>
               {sending ? t("mobile.markup.questions.sending") : t("mobile.markup.questions.sendAll")}
-            </button>}
+            </button>
             <button className="outbox-action" disabled={busy !== null || !online} onClick={() => void dismiss(ask)}
               title={t("mobile.markup.questions.inChatTitle")}>{t("mobile.markup.questions.inChat")}</button>
           </div>

@@ -39,6 +39,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
+import { ARRIVAL_GUARD_MS } from "../../../mobile-web/src/components/MarkupQuestionsCard";
 import type { MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
 import { acceptFrameMessage, acceptToFrame, MAX_FIND_QUOTE, MAX_FOUND_RECTS } from "../../../mobile-web/src/markup/frameProtocol";
 import { findQuote, type TextRun } from "../../../mobile-web/src/markup/findText";
@@ -176,6 +177,18 @@ describe("the pick model the phone shares with the desktop", () => {
 });
 
 describe("MarkupView · the agent's questions", () => {
+  /** The card takes no taps for `ARRIVAL_GUARD_MS` after an ask opened it:
+   * `settle` moves the clock past that. */
+  let skew = 0;
+  const settle = () => { skew += ARRIVAL_GUARD_MS; };
+  let clock: { mockRestore: () => void } | null = null;
+  beforeEach(() => {
+    skew = 0;
+    const real = Date.now.bind(Date);
+    clock = vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
+  });
+  afterEach(() => clock?.mockRestore());
+
   function showPicture() {
     const image = screen.getByAltText("plot.png") as HTMLImageElement;
     Object.defineProperty(image, "naturalWidth", { value: 800 });
@@ -183,13 +196,14 @@ describe("MarkupView · the agent's questions", () => {
     fireEvent.load(image);
   }
 
-  it("asks for this file's questions and answers one tap as picks, never prompt text", async () => {
+  it("asks for this file's questions, sends only on Send answers, as picks, never prompt text", async () => {
     let asks: unknown[] = [ONE];
     const calls = desktop(() => asks);
     const onSend = vi.fn((): MarkupSend => "sent");
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} onClose={() => {}} />);
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    settle();
     expect(within(card).getByText("The agent asks · 1")).toBeTruthy();
     expect(within(card).getByText("Recommended")).toBeTruthy();
     // A picture has no text to pin to: no chip, no pin.
@@ -197,8 +211,17 @@ describe("MarkupView · the agent's questions", () => {
     const asked = calls.find((call) => call.url.includes("/markup/questions"))!;
     expect(asked.url).toBe(`/api/v1/tabs/t1/markup/questions?source=${encodeURIComponent(`outbox:${PICTURE.name}`)}`);
 
-    asks = [];
+    // One tap only picks, even for a lone single-select question: the card
+    // opens under a pen that is busy marking.
+    const send = within(card).getByRole("button", { name: "Send answers" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
     fireEvent.click(within(card).getByRole("button", { name: /The paragraph/ }));
+    expect(within(card).getByRole("button", { name: /The paragraph/ }).getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(posted(calls, "/markup/answer")).toEqual([]);
+    asks = [];
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
     await waitFor(() => expect(posted(calls, "/markup/answer")).toEqual([{ ask_id: ASK, answers: [{ options: [1] }] }]));
     await waitFor(() => expect(screen.queryByRole("region", { name: "The agent's questions about your marks" })).toBeNull());
     // The chat gets nothing from the phone: the desktop queued the answer.
@@ -206,18 +229,26 @@ describe("MarkupView · the agent's questions", () => {
     expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
   });
 
-  it("picks several answers, takes a typed Other…, and sends them together", async () => {
+  it("pages through the questions with ‹ ›, picks several answers, takes a typed Other…, and sends them together", async () => {
     const calls = desktop(() => [TWO]);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    settle();
     const send = within(card).getByRole("button", { name: "Send answers" }) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
+    // One question at a time.
+    expect(within(card).getByText("1 / 2")).toBeTruthy();
+    expect(within(card).queryByText("Keep the caption?")).toBeNull();
+    expect((within(card).getByRole("button", { name: "Previous question" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(card).getByRole("button", { name: /colour/ }));
     fireEvent.click(within(card).getByRole("button", { name: "color" }));
     expect(within(card).getAllByRole("button", { pressed: true })).toHaveLength(2);
-    const others = within(card).getAllByRole("button", { name: /Other…/ });
-    fireEvent.click(others[1]);
+    fireEvent.click(within(card).getByRole("button", { name: "Next question" }));
+    expect(within(card).getByText("2 / 2")).toBeTruthy();
+    expect(within(card).queryByText("Which spelling?")).toBeNull();
+    expect((within(card).getByRole("button", { name: "Next question" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(card).getByRole("button", { name: /Other…/ }));
     fireEvent.change(within(card).getByRole("textbox"), { target: { value: "  only in the appendix " } });
     fireEvent.click(within(card).getByRole("button", { name: "OK" }));
     expect(send.disabled).toBe(false);
@@ -232,6 +263,7 @@ describe("MarkupView · the agent's questions", () => {
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    settle();
     fireEvent.click(within(card).getByRole("button", { name: /colour/ }));
     fireEvent.click(within(card).getAllByRole("button", { name: /Other…/ })[0]);
     fireEvent.change(within(card).getByRole("textbox"), { target: { value: "both" } });
@@ -247,7 +279,11 @@ describe("MarkupView · the agent's questions", () => {
     fireEvent.click(other());
     expect(within(card).getByRole("textbox")).toBeTruthy();
     fireEvent.click(other());
+    fireEvent.click(within(card).getByRole("button", { name: "Next question" }));
     fireEvent.click(within(card).getByRole("button", { name: /Yes/ }));
+    // Back again: the first page kept its pick.
+    fireEvent.click(within(card).getByRole("button", { name: "Previous question" }));
+    expect(within(card).getByRole("button", { name: /colour/ }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(within(card).getByRole("button", { name: "Send answers" }));
     await waitFor(() => expect(posted(calls, "/markup/answer")).toEqual([{ ask_id: ASK, answers: [{ options: [0] }, { options: [0] }] }]));
   });
@@ -257,7 +293,9 @@ describe("MarkupView · the agent's questions", () => {
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    settle();
     fireEvent.click(within(card).getByRole("button", { name: /colour/ }));
+    fireEvent.click(within(card).getByRole("button", { name: "Next question" }));
     fireEvent.click(within(card).getByRole("button", { name: /Yes/ }));
     fireEvent.click(within(card).getByRole("button", { name: "Send answers" }));
     expect(await within(card).findByRole("alert")).toBeTruthy();
@@ -268,12 +306,30 @@ describe("MarkupView · the agent's questions", () => {
     await waitFor(() => expect(screen.queryByRole("region", { name: "The agent's questions about your marks" })).toBeNull());
   });
 
+  it("takes no tap in the moment after a new ask opened it", async () => {
+    const calls = desktop(() => [ONE]);
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    // A stroke already on its way lands on the fresh card: nothing happens.
+    fireEvent.click(within(card).getByRole("button", { name: /The paragraph/ }));
+    expect(within(card).getByRole("button", { name: /The paragraph/ }).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(within(card).getByRole("button", { name: "Answer in chat instead" }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(posted(calls, "/markup/answer")).toEqual([]);
+    expect(posted(calls, "/markup/dismiss")).toEqual([]);
+    settle();
+    fireEvent.click(within(card).getByRole("button", { name: /The paragraph/ }));
+    expect(within(card).getByRole("button", { name: /The paragraph/ }).getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("folds away and opens again when a new ask arrives", async () => {
     let asks: unknown[] = [ONE];
     desktop(() => asks);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    settle();
     fireEvent.click(within(card).getByRole("button", { name: /The agent asks · 1/ }));
     expect(within(card).queryByText("Move the figure or the paragraph?")).toBeNull();
     asks = [{ ...ONE, id: "ask-fedcba9876543210" }];
@@ -306,6 +362,7 @@ describe("MarkupView · the agent's questions", () => {
     say({ type: "ready" });
     say({ type: "meta", pages: [{ w: 600, h: 800 }] });
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
+    settle();
     // In the margin until the frame answers.
     const pin = await screen.findByRole("button", { name: "Question 1 — show it in the card" });
     expect(pin.style.left).toBe("6px");

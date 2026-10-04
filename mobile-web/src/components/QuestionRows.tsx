@@ -81,7 +81,12 @@ export function QuestionRows({ rows, disabled, sendingLabel, onPick, onType, typ
         {row.pending && <span className="sheet-pending" role="status">{sendingLabel}</span>}
       </button>
       {row.freeText && typing === row.key && !disabled && <form className="question-type" onSubmit={(event) => { event.preventDefault(); send(); }}>
-        <input autoFocus value={typed} maxLength={typeMax} placeholder={t("mobile.question.typePlaceholder")} aria-label={t("mobile.question.typePlaceholder")} enterKeyHint="send" onChange={(event) => setTyped(event.target.value)} />
+        {/* A few lines tall and wrapping, so a Pencil's handwriting (iPad
+            Scribble) has room to write; still one answer — Enter sends it and
+            a line break becomes a space, as the CLI's own field would take it. */}
+        <textarea autoFocus rows={4} value={typed} maxLength={typeMax} placeholder={t("mobile.question.typePlaceholder")} aria-label={t("mobile.question.typePlaceholder")} enterKeyHint="send"
+          onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }}
+          onChange={(event) => setTyped(event.target.value.replace(/\r?\n/gu, " "))} />
         <button className="primary" disabled={!typed.trim()}>{typeLabel ?? t("mobile.question.typeSend")}</button>
         {typeNote}
       </form>}

@@ -20,7 +20,7 @@ import type { MarkupAnswer, MarkupQuestion } from "./markupQuestionPicks";
 export const MARKUP_MCP_CHANGED = "markup-mcp-changed";
 
 export {
-  answersOf, answersOnTap, NO_PICK, splitRecommended, toggleOption, toggleOther,
+  answersOf, NO_PICK, splitRecommended, toggleOption, toggleOther,
   type MarkupAnswer, type MarkupChoice, type MarkupQuestion, type QuestionPick,
 } from "./markupQuestionPicks";
 /** An open ask as `markup_mcp_list` gives it (`services::markup_mcp::AskView`). */

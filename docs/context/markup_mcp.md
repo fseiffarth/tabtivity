@@ -134,7 +134,7 @@ the app. QA group-h 31bt.
    card appears under the bar with `?n` pins at the quoted words. Pin → card
    scrolls to and flashes its question; **Show on page N** → the page
    scrolls to the pin and lights the quote.
-2. Tap an option: the answer arrives as the next prompt (mid-turn: queued),
+2. Pick an option and **Send answers**: the answer arrives as the next prompt (mid-turn: queued),
    the card disappears on the desktop and the phone, the round pill follows
    the turn.
 3. Ask twice: the first card is replaced. Answer from a stale card (phone
@@ -143,7 +143,12 @@ the app. QA group-h 31bt.
    **Answer in chat instead** closes the card everywhere.
 5. Phone: the same PDF from the tab's outbox in `MarkupView` — the card on
    top of the palette ("The agent asks · n"), pins from the sealed frame,
-   one tap answers, folding and reopening on a new ask. In reader mode too.
+   a tap only picks and **Send answers** sends (never one tap, even for one
+   single-select question; the fresh card ignores taps for 1.2 s — it opens
+   under a pen mid-stroke), folding and reopening on a new ask. Several
+   questions show one at a time, paged with ‹ n / m ›; a pin turns the card
+   to its question and picks survive paging. In reader mode too. The
+   desktop card follows the same rules.
 6. Phone Focus: the banner "The agent asks about <file>" with **Open** for an
    outbox file, and for a project file while the file browser is on (opens
    it in the files viewer, Mark up shows the card); without Open otherwise.

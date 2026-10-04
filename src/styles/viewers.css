@@ -4547,6 +4547,21 @@
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+/* The card's head line, and on its right the ‹ n / m › pager of an ask with
+   several questions (one shown at a time). */
+.file-viewer-pdf-markup-question-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.file-viewer-pdf-markup-question-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
 /* A picked row: the answered card's chosen row (`.terminal-reader-question.asked`). */
 .file-viewer-pdf-markup-questions .terminal-reader-option.chosen {
   border-color: var(--accent);

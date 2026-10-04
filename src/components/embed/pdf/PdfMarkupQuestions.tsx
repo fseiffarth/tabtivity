@@ -6,13 +6,17 @@
  * The card is the reader's question card (`TerminalReaderView`'s
  * `LiveQuestion`: `terminal-reader-question` / `terminal-reader-option`), which
  * is the phone's `QuestionList` look on the desktop — label, description, the
- * `(Recommended)` tag. One single-select question answers on a click; anything
- * else picks rows (checkboxes for multiSelect) and sends with **Send answers**.
+ * `(Recommended)` tag. A click picks a row (checkboxes for multiSelect) and
+ * only **Send answers** sends — never a single click, even for one
+ * single-select question: the card turns up while the reader is marking, and
+ * a stroke ending on a row must not answer. For the same reason a new card
+ * takes no clicks for its first `ARRIVAL_GUARD_MS`.
  * Every question offers **Other…**; **Answer in chat instead** dismisses.
+ * An ask of several questions shows one at a time, paged with ‹ ›.
  *
  * A pin (`?1`…) sits at the words the question quotes, found in the page's
  * text runs (`pageText.ts`, the extraction search and links use), else in the
- * page's top margin. A pin scrolls the card to its question; a question's
+ * page's top margin. A pin turns the card to its question; a question's
  * chip scrolls the page to its pin.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -37,6 +41,8 @@ import type { MarkupQuestions, QuestionFocus } from "./usePdfMarkup";
 
 /** The longest an **Other…** answer may be (`markup_mcp::MAX_OTHER_CHARS`). */
 const MAX_OTHER = 500;
+/** How long a newly shown ask takes no clicks (the phone card's rule). */
+export const ARRIVAL_GUARD_MS = 1_200;
 
 /** Where a pin's key in the card's `pinned` set comes from. */
 export const pinKey = (askId: string, index: number) => `${askId}:${index}`;
@@ -74,154 +80,172 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
   const t = useT();
   const [picks, setPicks] = useState<QuestionPick[]>(() => ask.questions.map(() => NO_PICK));
   const [flash, setFlash] = useState<number | null>(null);
+  /** The question on show: one at a time, paged with ‹ ›. */
+  const [shown, setShown] = useState(0);
+  const count = ask.questions.length;
+  const qi = Math.min(shown, count - 1);
   const cardRef = useRef<HTMLDivElement>(null);
   const busy = questions.answering !== null;
   const sending = questions.answering === ask.id;
-  /** One single-select question answers on the click. */
-  const direct = ask.questions.length === 1 && !ask.questions[0].multiSelect;
+  const [arrivedAt] = useState(() => Date.now());
+  const settling = () => Date.now() - arrivedAt < ARRIVAL_GUARD_MS;
   const answers = answersOf(ask.questions, picks);
 
-  // A pin was clicked: bring its question into the card's view.
+  // A pin was clicked: turn the card to its question and bring it into view.
   const focus = questions.focus;
   useEffect(() => {
     if (!focus || focus.on !== "card" || focus.askId !== ask.id) return;
+    setShown(focus.index);
     const card = cardRef.current;
     const box = card?.parentElement;
-    const row = card?.querySelector<HTMLElement>(`[data-question="${focus.index}"]`);
-    // The box is positioned: a row's offsetTop is measured from it.
-    if (box && row) box.scrollTop = Math.max(0, row.offsetTop - 6);
+    // The box is positioned: the card's offsetTop is measured from it.
+    if (box && card) box.scrollTop = Math.max(0, card.offsetTop - 6);
     setFlash(focus.index);
     const timer = window.setTimeout(() => setFlash(null), 1_200);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.nonce]);
 
-  const setPick = (index: number, next: QuestionPick) =>
-    setPicks((now) => now.map((pick, i) => (i === index ? next : pick)));
-  const send = (next: QuestionPick[]) => {
-    const ready = answersOf(ask.questions, next);
-    if (ready) void questions.answer(ask, ready);
+  const setPick = (index: number, next: QuestionPick) => {
+    if (!settling()) setPicks((now) => now.map((pick, i) => (i === index ? next : pick)));
   };
+  const send = () => {
+    if (answers && !settling()) void questions.answer(ask, answers);
+  };
+  const question = ask.questions[qi];
+  const pick = picks[qi] ?? NO_PICK;
+  const hasPin = pinned.has(pinKey(ask.id, qi));
 
   return (
     <div ref={cardRef} className="terminal-reader-question" role="group" aria-label={t("pdfMarkup.questions.title")}>
-      <small className="terminal-reader-question-head">
-        {ask.fileName ? t("pdfMarkup.questions.headFile", { file: ask.fileName }) : t("pdfMarkup.questions.head")}{" "}
-        <UntestedTag id="desktop.markup.questions" />
-      </small>
-      {ask.questions.map((question, qi) => {
-        const pick = picks[qi] ?? NO_PICK;
-        const hasPin = pinned.has(pinKey(ask.id, qi));
-        return (
-          <div
-            key={qi}
-            data-question={qi}
-            className={`file-viewer-pdf-markup-question${flash === qi ? " is-focus" : ""}`}
-          >
-            {(question.header || hasPin) && (
-              <div className="terminal-reader-question-tabs">
-                {hasPin && (
-                  <button
-                    type="button"
-                    className="file-viewer-pdf-question-pin is-inline"
-                    title={t("pdfMarkup.questions.showOnPage", { page: question.page ?? 0 })}
-                    aria-label={t("pdfMarkup.questions.showOnPage", { page: question.page ?? 0 })}
-                    onClick={() => questions.show(ask.id, qi, "page")}
-                  >
-                    ?{qi + 1}
-                  </button>
-                )}
-                {question.header && <span>{question.header}</span>}
-              </div>
-            )}
-            <p className="terminal-reader-question-ask">{question.question}</p>
-            <div className="terminal-reader-options" role="group" aria-label={question.question}>
-              {question.options.map((option, oi) => {
-                const chosen = pick.options.includes(oi);
-                const { label, recommended } = splitRecommended(option.label);
-                return (
-                  <button
-                    key={oi}
-                    type="button"
-                    className={`terminal-reader-option${chosen ? " chosen" : ""}`}
-                    aria-pressed={chosen}
-                    disabled={busy}
-                    onClick={() => {
-                      const next = toggleOption(question, pick, oi);
-                      if (direct) send([next]);
-                      else setPick(qi, next);
-                    }}
-                  >
-                    <span className="terminal-reader-option-number">
-                      {question.multiSelect ? (chosen ? "☑" : "☐") : chosen ? "✓" : oi + 1}
-                    </span>
-                    <span className="terminal-reader-option-label">
-                      <span>
-                        {label}
-                        {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
-                      </span>
-                      {option.description && <small>{option.description}</small>}
-                    </span>
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                className={`terminal-reader-option${pick.other !== null ? " chosen" : ""}`}
-                aria-pressed={pick.other !== null}
-                disabled={busy}
-                onClick={() => setPick(qi, toggleOther(question, pick))}
-              >
-                <span className="terminal-reader-option-number">{pick.other !== null ? "✓" : "…"}</span>
-                <span className="terminal-reader-option-label">
-                  <span>{t("pdfMarkup.questions.other")}</span>
-                </span>
-              </button>
-              {pick.other !== null && (
-                <form
-                  className="file-viewer-pdf-markup-question-other"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (direct) send([pick]);
-                  }}
-                >
-                  <input
-                    autoFocus
-                    type="text"
-                    value={pick.other}
-                    maxLength={MAX_OTHER}
-                    disabled={busy}
-                    placeholder={t("pdfMarkup.questions.otherPlaceholder")}
-                    aria-label={t("pdfMarkup.questions.otherPlaceholder")}
-                    onChange={(event) => setPick(qi, { ...pick, other: event.target.value })}
-                  />
-                  {direct && (
-                    <button
-                      type="submit"
-                      className="file-viewer-zoom-btn file-viewer-zoom-text active"
-                      disabled={busy || !pick.other.trim()}
-                    >
-                      {t("pdfMarkup.questions.send")}
-                    </button>
-                  )}
-                </form>
-              )}
-            </div>
-            {question.multiSelect && <small className="terminal-reader-question-more">{t("pdfMarkup.questions.pickAny")}</small>}
+      <div className="file-viewer-pdf-markup-question-head">
+        <small className="terminal-reader-question-head">
+          {ask.fileName ? t("pdfMarkup.questions.headFile", { file: ask.fileName }) : t("pdfMarkup.questions.head")}{" "}
+          <UntestedTag id="desktop.markup.questions" />
+        </small>
+        {count > 1 && (
+          <div className="file-viewer-pdf-markup-question-pager" role="toolbar" aria-label={t("terminal.reader.questionSteps")}>
+            <button
+              type="button"
+              className="file-viewer-zoom-btn"
+              disabled={qi === 0}
+              title={t("pdfMarkup.questions.previous")}
+              aria-label={t("pdfMarkup.questions.previous")}
+              onClick={() => setShown(qi - 1)}
+            >
+              ‹
+            </button>
+            <span aria-live="polite">{t("pdfMarkup.questions.position", { index: qi + 1, count })}</span>
+            <button
+              type="button"
+              className="file-viewer-zoom-btn"
+              disabled={qi === count - 1}
+              title={t("pdfMarkup.questions.next")}
+              aria-label={t("pdfMarkup.questions.next")}
+              onClick={() => setShown(qi + 1)}
+            >
+              ›
+            </button>
           </div>
-        );
-      })}
-      <div className="file-viewer-pdf-markup-question-actions">
-        {!direct && (
-          <button
-            type="button"
-            className="file-viewer-zoom-btn file-viewer-zoom-text active"
-            disabled={busy || answers === null}
-            onClick={() => send(picks)}
-          >
-            {t("pdfMarkup.questions.sendAll")}
-          </button>
         )}
+      </div>
+      {question && (
+        <div
+          key={qi}
+          data-question={qi}
+          className={`file-viewer-pdf-markup-question${flash === qi ? " is-focus" : ""}`}
+        >
+          {(question.header || hasPin) && (
+            <div className="terminal-reader-question-tabs">
+              {hasPin && (
+                <button
+                  type="button"
+                  className="file-viewer-pdf-question-pin is-inline"
+                  title={t("pdfMarkup.questions.showOnPage", { page: question.page ?? 0 })}
+                  aria-label={t("pdfMarkup.questions.showOnPage", { page: question.page ?? 0 })}
+                  onClick={() => questions.show(ask.id, qi, "page")}
+                >
+                  ?{qi + 1}
+                </button>
+              )}
+              {question.header && <span>{question.header}</span>}
+            </div>
+          )}
+          <p className="terminal-reader-question-ask">{question.question}</p>
+          <div className="terminal-reader-options" role="group" aria-label={question.question}>
+            {question.options.map((option, oi) => {
+              const chosen = pick.options.includes(oi);
+              const { label, recommended } = splitRecommended(option.label);
+              return (
+                <button
+                  key={oi}
+                  type="button"
+                  className={`terminal-reader-option${chosen ? " chosen" : ""}`}
+                  aria-pressed={chosen}
+                  disabled={busy}
+                  onClick={() => setPick(qi, toggleOption(question, pick, oi))}
+                >
+                  <span className="terminal-reader-option-number">
+                    {question.multiSelect ? (chosen ? "☑" : "☐") : chosen ? "✓" : oi + 1}
+                  </span>
+                  <span className="terminal-reader-option-label">
+                    <span>
+                      {label}
+                      {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+                    </span>
+                    {option.description && <small>{option.description}</small>}
+                  </span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className={`terminal-reader-option${pick.other !== null ? " chosen" : ""}`}
+              aria-pressed={pick.other !== null}
+              disabled={busy}
+              onClick={() => setPick(qi, toggleOther(question, pick))}
+            >
+              <span className="terminal-reader-option-number">{pick.other !== null ? "✓" : "…"}</span>
+              <span className="terminal-reader-option-label">
+                <span>{t("pdfMarkup.questions.other")}</span>
+              </span>
+            </button>
+            {pick.other !== null && (
+              <form
+                className="file-viewer-pdf-markup-question-other"
+                onSubmit={(event) => {
+                  // Enter is typed on purpose: it sends, as Send answers
+                  // does — or, with questions still open, turns the page.
+                  event.preventDefault();
+                  if (answers === null && qi < count - 1) setShown(qi + 1);
+                  else send();
+                }}
+              >
+                <input
+                  autoFocus
+                  type="text"
+                  value={pick.other}
+                  maxLength={MAX_OTHER}
+                  disabled={busy}
+                  placeholder={t("pdfMarkup.questions.otherPlaceholder")}
+                  aria-label={t("pdfMarkup.questions.otherPlaceholder")}
+                  onChange={(event) => setPick(qi, { ...pick, other: event.target.value })}
+                />
+              </form>
+            )}
+          </div>
+          {question.multiSelect && <small className="terminal-reader-question-more">{t("pdfMarkup.questions.pickAny")}</small>}
+        </div>
+      )}
+      <div className="file-viewer-pdf-markup-question-actions">
+        <button
+          type="button"
+          className="file-viewer-zoom-btn file-viewer-zoom-text active"
+          disabled={busy || answers === null}
+          onClick={send}
+        >
+          {t("pdfMarkup.questions.sendAll")}
+        </button>
         <button
           type="button"
           className="file-viewer-zoom-btn file-viewer-zoom-text"

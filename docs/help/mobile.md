@@ -121,9 +121,12 @@ chat. The questions show in the markup view of that tab's PDF:
 - Each question gets a numbered pin (`?1`, `?2`…) on the page, at the words
   it is about. Tap the pin to find the question, or **Show on page N** to
   find the place.
+- Several questions show one at a time: **‹** and **›** turn between them
+  (`2 / 4` says where you are), and a pin turns to its question.
 
-Tap an option to answer. With several questions, or one that takes more
-than one option, pick and then tap **Send answers**. **Other…** lets you type
+Tap an option to pick it, then tap **Send answers** — a tap alone never
+answers, so a pen stroke that lands on the card can't. **Send answers** waits
+until every question has a pick. **Other…** lets you type
 your own answer (tap it again to clear it). **Answer in chat instead** closes the questions so you can
 reply in the tab. Your answer is typed into the tab as your next message (it
 waits in the queue if the agent is still busy), and the card goes away on
