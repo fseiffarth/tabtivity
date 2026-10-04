@@ -145,9 +145,13 @@ export function dockedRootTab(app: SteeringApp): TabEntry | null {
 }
 
 /**
- * Forget docked tabs that left root — closed in the console, or exited. An
- * ABSENT root array is not "gone": before root is restored this session there
- * is no array at all, and the docked tab is simply not loaded yet.
+ * Forget docked tabs that left root — closed in the console's strip, or
+ * closed by another client (`adoptSyncOutcome`). A tab whose process EXITED
+ * stays in root (its pane prints `[process exited]`), so it stays docked too.
+ * An ABSENT root array is not "gone": before root is restored this session
+ * there is no array at all, and nothing is decided until there is one. (A
+ * dock can only point at a tab of the current hydration: `addTabToRoot`
+ * hydrates before it adds, and a restore mints every key afresh.)
  */
 function dropDeparted(rootTabs: readonly TabEntry[] | undefined) {
   if (!rootTabs) return;

@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve({})) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import {
   DEFAULT_OVERLAY_AGENT_WIDTH,
   MAX_OVERLAY_AGENT_WIDTH,
@@ -222,17 +222,48 @@ describe("root tab removal", () => {
     setRoot(undefined);
     expect(docks().calendar).toEqual({ key: "t1", open: true });
 
-    // Root restored with the tab: still docked.
-    setRoot([rootTab("t1")]);
-    expect(docks().calendar).toEqual({ key: "t1", open: true });
+    // The next root array decides; one without the key clears it.
+    setRoot([rootTab("t2")]);
+    expect(docks().calendar).toEqual(EMPTY);
   });
 
-  it("leaves the docks alone when an unrelated scope changes", () => {
+  it("keeps the dock across a root array that still holds the key; an empty one clears it", () => {
     useOverlayAgentStore.getState().dock("todo", "t1");
+
+    setRoot([rootTab("t2"), { ...rootTab("t1"), label: "renamed" }]);
+    expect(docks().todo).toEqual({ key: "t1", open: true });
+
+    // A hydrated, empty root is a real "gone" (every tab closed).
+    setRoot([]);
+    expect(docks().todo).toEqual(EMPTY);
+  });
+
+  it("only looks at root: an unrelated scope's change decides nothing", () => {
+    // A key root does not hold: any look at root would clear it.
+    useOverlayAgentStore.getState().dock("todo", "ghost");
     const before = docks();
     useTabsStore.setState({
       tabsByScope: { ...useTabsStore.getState().tabsByScope, p1: [rootTab("x")] },
     });
     expect(docks()).toBe(before);
+
+    setRoot([rootTab("t1")]);
+    expect(docks().todo).toEqual(EMPTY);
+  });
+
+  it("follows the tabs store's own add and remove", () => {
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
+    const tabs = useTabsStore.getState();
+    const { key: a } = tabs.addTabToScope(ROOT_SCOPE, { label: "a", cmd: "claude", args: [], env: {}, cwd: "/r", kind: "agent" });
+    const { key: b } = tabs.addTabToScope(ROOT_SCOPE, { label: "b", cmd: "claude", args: [], env: {}, cwd: "/r", kind: "agent" });
+    useOverlayAgentStore.getState().dock("mail", a);
+    useOverlayAgentStore.getState().dock("calendar", b);
+
+    useTabsStore.getState().renameTabInScope(ROOT_SCOPE, a, "renamed");
+    expect(docks().mail).toEqual({ key: a, open: true });
+
+    useTabsStore.getState().removeTabInScope(ROOT_SCOPE, a);
+    expect(docks().mail).toEqual(EMPTY);
+    expect(docks().calendar).toEqual({ key: b, open: true });
   });
 });
