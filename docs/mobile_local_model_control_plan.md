@@ -276,14 +276,32 @@ Order of checks:
 
 The answer is the fresh list, in the GET shape (like `ScheduleMutate` →
 `Schedules`), with status **202** for `load`/`start` and **200** for `unload`.
-Desktop refusals (the code only, never the message):
+Desktop refusals (the code only, never the message; `local_models::refusal`):
 - `model_not_installed` → 404;
 - `model_not_local` → 400;
 - `model_loading` (unload while a load is in flight) → 409;
 - `ollama_not_running` (load/unload while not `running`) → 409;
 - `start_unavailable` (Start when `can_start` is false) → 409;
 - `local_models_disabled` → 403;
-- `desktop_unavailable` → 503.
+- `desktop_unavailable` (no window, a wedged one, a dropped connection, a
+  deadline missed, or an answer of another kind) → 503;
+- `unreachable` (Ollama on the desktop failed the window's call, e.g. an
+  unload that errored) → 502;
+- `unknown_request` (a window older than this feature) → 400;
+- `applied_response_too_large` / `response_too_large` (the bridge's own) →
+  400, as on every list-answering route, so `reloadIfApplied` works;
+- any other code (the bridge's `desktop_error` for a thrown handler, or one
+  this feature does not define) → **502 `desktop_error`**: codes are
+  allow-listed here, not forwarded verbatim as the sibling routes do.
+
+The sidecar's own refusals: 401 `authentication_required`, 403
+`invalid_origin`, 403 `local_models_disabled`, 400 `unsupported_action` /
+`invalid_request` (also for a body that is not JSON), 413 for a body over
+1 KiB. The GET answers the same desktop codes (in practice
+`local_models_disabled`, `desktop_unavailable`, `unknown_request`,
+`desktop_error`).
+
+Every error body is `{ "error": "<code>" }`; a success body is the list.
 
 A failed Start is not an HTTP error: it shows up as `start_failed` on a later
 list.
