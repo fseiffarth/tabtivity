@@ -323,6 +323,23 @@ fn status_with(readable: bool, saved: impl Fn(Provider) -> bool, enabled: &[Stri
     ApiKeyStatus { readable, providers, clis }
 }
 
+/// The CLIs that start on a stored key now: switched on, with a key saved for
+/// one of their providers. Reads the keychain only for providers of a
+/// switched-on CLI, so with nothing switched on it never touches it.
+pub fn ready_clis() -> Vec<&'static str> {
+    ready_clis_with(&enabled_clis(), has_key)
+}
+
+fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'static str> {
+    let mut known: HashMap<Provider, bool> = HashMap::new();
+    CLI_KEYS
+        .iter()
+        .filter(|(id, _)| enabled.iter().any(|c| c == id))
+        .filter(|(_, keys)| keys.iter().any(|(p, _)| *known.entry(*p).or_insert_with(|| has(*p))))
+        .map(|(id, _)| *id)
+        .collect()
+}
+
 pub fn status() -> ApiKeyStatus {
     status_with(
         crate::services::remote_credentials::store_readable(),
@@ -481,6 +498,25 @@ mod tests {
         assert!(!s.clis.iter().any(|c| c.id == "codex"));
         let json = serde_json::to_value(&s).unwrap();
         assert!(json.get("readable").is_some() && json["clis"][0].get("ready").is_some());
+    }
+
+    #[test]
+    fn ready_clis_ask_the_keychain_only_for_switched_on_clis() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let has = |p: Provider| {
+            asked.borrow_mut().push(p);
+            p == Provider::Anthropic
+        };
+        assert!(ready_clis_with(&[], has).is_empty());
+        assert!(asked.borrow().is_empty(), "nothing switched on, nothing read");
+        let ready = ready_clis_with(&on(&["claude", "vibe", "opencode"]), has);
+        assert_eq!(ready, vec!["claude", "opencode"]);
+        // Each provider read at most once.
+        let mut seen = asked.borrow().clone();
+        let before = seen.len();
+        seen.sort_by_key(|p| p.id());
+        seen.dedup();
+        assert_eq!(seen.len(), before);
     }
 
     #[test]

@@ -1958,10 +1958,11 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
     tauri::async_runtime::spawn_blocking(|| {
         let mut logins = crate::services::agent_auth::status();
         // Which CLIs start on a stored API key: read here, not in
-        // `agent_auth::status_in`, whose tests stay keyring-free.
-        let keys = crate::services::agent_api_keys::status();
+        // `agent_auth::status_in`, whose tests stay keyring-free. With no CLI
+        // switched on this reads no keychain entry at all.
+        let ready = crate::services::agent_api_keys::ready_clis();
         for login in &mut logins {
-            login.api_key = keys.clis.iter().any(|c| c.id == login.id && c.ready);
+            login.api_key = ready.contains(&login.id.as_str());
         }
         logins
     })
