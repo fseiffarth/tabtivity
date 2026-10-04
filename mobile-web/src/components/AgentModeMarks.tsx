@@ -28,6 +28,25 @@ export function SubagentCount({ tab }: { tab: Pick<TabRow, "agent_subagents"> })
   </>;
 }
 
+/** The linked worktree the tab's agent works in — "⎇ fix-login", its branch
+ *  beside it where that is named differently. Nothing for the project
+ *  folder's own checkout, which is where a tab runs unless it says. */
+export function WorktreeMark({ tab }: { tab: Pick<TabRow, "worktree"> }) {
+  const t = useT();
+  const worktree = tab.worktree;
+  if (!worktree) return null;
+  const branch = worktree.branch && worktree.branch !== worktree.label ? worktree.branch : undefined;
+  const title = worktree.branch
+    ? t("mobile.project.worktreeTitle", { label: worktree.label, branch: worktree.branch })
+    : t("mobile.project.worktreeDetachedTitle", { label: worktree.label });
+  return <>
+    <small className="agent-worktree" title={title}>
+      <span aria-hidden="true">⎇</span> {worktree.label}{branch && <span className="agent-worktree-branch"> · {branch}</span>}
+    </small>
+    {isUntested("mobile.project.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </>;
+}
+
 /** The card class that tints a tab's border for the mode it is in — plan
  *  first, as the rarer and the one that changes nothing. */
 export function agentModeClass(tab: Pick<TabRow, "agent_plan" | "agent_goal">): string {

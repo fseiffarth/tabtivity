@@ -28,7 +28,8 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The linked worktree an agent tab runs in — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree }
+export interface TabWorktree { label: string; branch?: string }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
  * Mark up starts where no agent tab is open; an older desktop flags none. */
 export interface AgentRow { id: string; label: string; modes: ("plan" | "auto")[]; default?: boolean }
@@ -57,6 +58,38 @@ export async function getLaunchOptions(projectId: string, signal?: AbortSignal):
     return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
+    throw reason;
+  }
+}
+/** The project folder's checkout: its branch, or the short sha it is detached
+ * at, and that branch's upstream as of the last fetch. */
+export interface GitHead { branch?: string; short?: string; upstream?: string; ahead: number; behind: number }
+/** One worktree of the project's repo. `id` is the ＋ sheet's id for the same
+ * worktree ("" when none can be minted); `label` is its folder's leaf name, ""
+ * for the current one (the project folder), which the phone names by the
+ * project. `git` means something only when `checked`. */
+export interface GitWorktreeView { id: string; label: string; branch?: string; short?: string; main: boolean; current: boolean; locked: boolean; missing: boolean; git?: GitDot; checked: boolean; tabs: number }
+/** A local branch; `worktree` labels the other worktree that has it checked out. */
+export interface GitBranchView { name: string; current: boolean; upstream?: string; ahead: number; behind: number; worktree?: string }
+/** `GET /api/v1/projects/{id}/git`. Capped lists; each `*_total` is the full count. */
+export interface GitOverview {
+  repo: boolean;
+  head?: GitHead;
+  worktrees: GitWorktreeView[];
+  worktrees_total: number;
+  branches: GitBranchView[];
+  branches_total: number;
+  remote_branches: string[];
+  remote_total: number;
+}
+
+/** The project's git overview, read by the phone host itself (window open or
+ * not). A host older than the route answers a bodiless 404 — `{ outdated: true }`. */
+export async function getGitOverview(projectId: string, signal?: AbortSignal): Promise<GitOverview | { outdated: true }> {
+  try {
+    return await api<GitOverview>(`/api/v1/projects/${encodeURIComponent(projectId)}/git`, { signal });
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && reason.code === "request_failed") return { outdated: true };
     throw reason;
   }
 }

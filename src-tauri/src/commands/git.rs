@@ -2323,7 +2323,7 @@ pub async fn git_branches(
     .await
 }
 
-fn git_branches_blocking(project_dir: String) -> Result<Vec<GitBranch>, String> {
+pub(crate) fn git_branches_blocking(project_dir: String) -> Result<Vec<GitBranch>, String> {
     git_branches_blocking_selected(project_dir, None)
 }
 
@@ -3041,7 +3041,7 @@ pub async fn git_worktree_list(
     run_off_thread(move || git_worktree_list_blocking(project_dir, site, host_id)).await
 }
 
-fn git_worktree_list_blocking(
+pub(crate) fn git_worktree_list_blocking(
     project_dir: String,
     site: Option<String>,
     host_id: Option<String>,

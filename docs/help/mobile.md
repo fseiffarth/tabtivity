@@ -153,6 +153,25 @@ read-only: nothing can be changed, moved or deleted from there.
 - Files up to 24 MiB open; a longer text file shows its first 24 MiB.
 - Switching it off closes the drawer within seconds, without restarting the host.
 
+## Git on the phone
+
+Tap a project's name on the phone and choose **⎇ Git** to see its git state,
+read-only — nothing is checked out, switched or created from there:
+
+- The branch the project folder has checked out (or the commit it is
+  detached at), its upstream, and how far it is ahead (↑) or behind (↓) as of
+  the last fetch, with the same coloured dot as the project list.
+- **Worktrees**, when the repo has more than the project folder: the project
+  folder first, then each linked worktree with its branch, whether it has
+  uncommitted or unpushed work, and how many of the project's tabs run in it.
+- **Branches**: the local ones (● marks the checked-out one; "in …" names the
+  worktree that has a branch checked out), and, folded away, the remote
+  branches no local branch already tracks.
+
+It works with the desktop closed, refreshes when you come back to the app or
+tap **↻ Refresh**, and covers projects only, not boxes or the root console.
+The ＋ sheet's **Agents start in** row lists the same worktrees.
+
 ## Notifications on the phone
 
 On the phone, open **This phone → Notifications** (or **Calendar → Reminders**)

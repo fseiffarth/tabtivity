@@ -3769,6 +3769,37 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31bz — The phone's ⎇ Git overview, and the ＋ sheet's worktree row**
+  (2026-10-04; untested id `mobile.project.gitOverview`;
+  `docs/mobile_git_overview_plan.md`). Needs the frozen dev build (the
+  sidecar serves the new route). In a git project with one linked worktree
+  (desktop Git panel → Worktrees → add) and an agent tab running in it: on the
+  phone tap the project's name → **⎇ Git**. The head line shows the project
+  folder's branch, `↑n ↓n` against its upstream (or "no upstream") and its
+  dot; **Worktrees (2)** lists the project folder first (tinted, "Project
+  folder · Main"), then the linked one with its branch, dot and "1 tab";
+  make the linked one dirty, tap **↻ Refresh** after 5 s — its dot turns red.
+  **Branches** puts ● on the checked-out one and "in <worktree>" on the
+  linked one's branch; **Remote branches** (folded) leaves out `origin/x`
+  where a local `x` exists. Detach the project folder (`git checkout
+  --detach`) → "Detached at <sha>". A folder outside git → "Not a git
+  repository"; a box's name menu has no Git entry. Close the desktop window:
+  the sheet still answers. Then tap **＋** in the same project with the window
+  open: **Agents start in** now lists the project folder and the linked
+  worktree (it never listed any before), and starting an agent there opens it
+  in that worktree. Also check the alert strip on the phone shows the
+  desktop's alerts again (its row ids were refused the same way).
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member

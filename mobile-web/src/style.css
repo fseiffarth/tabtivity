@@ -211,6 +211,8 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 /* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
    lower-case words rather than a tag — it is a count, not a mode. */
 .agent-subagent-count { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 7px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 14%, transparent); color:#a99cff; font-size:.7rem; font-weight:700; line-height:1; white-space:nowrap; }
+.agent-worktree { display:inline-block; flex:0 1 auto; min-width:0; max-width:100%; padding:3px 7px; border:1px solid #3e5a4f; border-radius:6px; background:#22332d; color:#9fd8bf; font-size:.7rem; font-weight:600; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.agent-worktree-branch { color:#7fae99; font-weight:500; }
 .card.in-plan,.project-screen .tab-card.in-plan { border-color:#7b6ee0; }
 .card.in-goal,.project-screen .tab-card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.tab-card.in-plan.has-tab-color,.card.in-goal.has-tab-color,.tab-card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
@@ -899,11 +901,23 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .subagent-index-toggle svg.expanded { transform:rotate(180deg); }
 .subagent-index-list { display:grid; gap:4px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
-.subagent-index-list button { display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
+.subagent-index-list button, .git-rows > li { display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
 .subagent-index-list button:disabled { opacity:.6; }
-.subagent-index-list small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
-.subagent-index-list span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
+.subagent-index-list small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
+.subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
+.git-sheet { max-height:92dvh; }
+.git-body { display:grid; gap:6px; overflow:auto; }
+.git-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
+.git-head strong { padding:3px 9px; border-radius:999px; background:#1c2336; color:#8fb6ff; font-size:.8rem; overflow-wrap:anywhere; }
+.git-section { margin:6px 0 0; padding:0 6px; color:#9da3b6; font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.git-rows { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
+.git-rows > li.current { border-color:#8fb6ff; background:#1c2336; }
+.git-rows > li.git-more > span { color:#9da3b6; text-align:center; }
+.git-rows .git-quiet { color:#9da3b6; font-style:normal; }
+.git-rows .git-mark { margin-left:6px; }
+.git-remote > summary { cursor:pointer; }
+.git-remote > .git-rows { padding-top:6px; }
 .readable-empty button { margin-top:6px; }
 /* What the screen is drawing right now, under the stored session: shown only
    while it holds a choice the session is waiting on. */

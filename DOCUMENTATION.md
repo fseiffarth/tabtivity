@@ -413,6 +413,16 @@ accepts only a typed shell or cataloged resumable-agent request; it does not
 accept paths, commands, argv, or tmux names. The protocol lives in
 `src-tauri/src/services/mobile_control/`.
 
+**Git on the phone.** A project's name menu on the phone has **⎇ Git**, a
+read-only sheet the sidecar answers itself, window open or not
+(`GET /api/v1/projects/{id}/git`, `mobile_control/git_overview.rs`): the project
+folder's branch or detached sha with upstream and ahead/behind, the repo's
+worktrees (only when a linked one exists; project folder first, each with its
+change dot and how many of the project's tabs run in it), local branches and the
+remote ones no local branch tracks — capped, with `+N more`. Worktrees cross as
+the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
+reason or full sha is sent. Boxes and the root console have no Git entry.
+
 **Mark up a PDF or picture for the agent.** In an agent tab's viewer (the
 files drawer, the 🖼 gallery or a picture/PDF bubble in the chat) a PDF or a
 picture carries **Mark up**: write on the pages with a pen (an Apple Pencil

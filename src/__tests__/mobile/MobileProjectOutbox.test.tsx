@@ -193,8 +193,11 @@ describe("Mobile project — the files the agent sent", () => {
 
     await screen.findByRole("button", { name: "Open Claude" });
     expect(screen.queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
-    // Nor a dropdown on the name, with nothing to put in it.
-    expect(screen.queryByRole("button", { name: "Alpha" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Alpha" })).toBeTruthy();
+    // Nor a 🖼 entry in the name's dropdown, which a project now always has
+    // for its ⎇ Git overview.
+    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    const menu = screen.getByRole("menu", { name: "Project menu" });
+    expect(within(menu).queryByRole("menuitem", { name: /^Files from the agent/ })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: /^Git/ })).toBeTruthy();
   });
 });

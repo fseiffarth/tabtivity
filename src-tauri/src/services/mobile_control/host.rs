@@ -29,6 +29,7 @@ use super::{
     config::{verify_tailscale_serve, HostConfig},
     discovery::{shells_open, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
+    git_overview,
     headless,
     inbox,
     markup,
@@ -89,6 +90,11 @@ struct HostState {
     /// The phone prompts the owner holds with no window, which the
     /// scheduler types into the CLI's queue at once (`scheduler::PhoneHolds`).
     holds: Arc<scheduler::PhoneHolds>,
+    /// The phone's git overviews, per project, for `git_overview::TTL`.
+    git_overview: Arc<Mutex<git_overview::Cache>>,
+    /// Each project's worktrees as its tab cards name them, for
+    /// `git_overview::SPOT_TTL`.
+    worktree_spots: Arc<Mutex<git_overview::SpotCache>>,
 }
 
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
@@ -1028,6 +1034,11 @@ async fn project(
             tab.prompts = prompts.remove(&resolved.tmux_name).unwrap_or_default();
         }
     }
+    if project.public.kind == ScopeKind::Project {
+        for (tab, worktree) in tabs.iter_mut().zip(project_tab_worktrees(&state, project).await) {
+            tab.worktree = worktree;
+        }
+    }
     (
         StatusCode::OK,
         Json(
@@ -1344,6 +1355,91 @@ async fn reopen_tab(
         };
     }
     answer_created(&state, &project_id, response).await
+}
+
+/// The linked worktree each of the project's tabs runs in, in tab order, for
+/// its card. Only agent tabs are named, and git is asked only when one of them
+/// runs outside the project folder — a tab there is in its own checkout by
+/// definition — so a project without worktrees never spawns git on the
+/// screen's poll. The list is one hardened `git worktree list`, cached per
+/// project for `git_overview::SPOT_TTL`.
+async fn project_tab_worktrees(state: &HostState, project: &super::discovery::ResolvedProject) -> Vec<Option<git_overview::TabWorktree>> {
+    let cwds: Vec<&str> = project
+        .tabs
+        .iter()
+        .map(|tab| if tab.public.kind == "agent" { tab.cwd.as_str() } else { "" })
+        .collect();
+    let elsewhere = |cwd: &&str| !cwd.is_empty() && std::path::Path::new(cwd) != project.root;
+    if !cwds.iter().any(elsewhere) {
+        return vec![None; cwds.len()];
+    }
+    let cached = state
+        .worktree_spots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&project.raw_id, Instant::now());
+    let spots = match cached {
+        Some(spots) => spots,
+        None => {
+            let root = project.root.clone();
+            let spots = tokio::task::spawn_blocking(move || git_overview::worktree_spots(&root))
+                .await
+                .unwrap_or_default();
+            state
+                .worktree_spots
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .set(&project.raw_id, spots.clone(), Instant::now());
+            spots
+        }
+    };
+    let elsewhere_cwds: Vec<&str> = cwds.iter().map(|cwd| if elsewhere(cwd) { *cwd } else { "" }).collect();
+    git_overview::tab_worktrees(&spots, &elsewhere_cwds)
+}
+
+/// `GET /api/v1/projects/{project_id}/git` — the project's worktrees, branches
+/// and remote branches for the phone's Git sheet (`git_overview`). Answered
+/// here, window open or not: every fact is a hardened local git read. A box or
+/// the root console is `not_a_project`. Read-only; cached per project for
+/// `git_overview::TTL`.
+async fn project_git(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    let Ok(catalog_snapshot) = catalog(&state) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some(project) = catalog_snapshot.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    if project.public.kind != ScopeKind::Project {
+        return api_error(StatusCode::NOT_FOUND, "not_a_project");
+    }
+    let raw_id = project.raw_id.clone();
+    if let Some(cached) = state
+        .git_overview
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&raw_id, Instant::now())
+    {
+        return (StatusCode::OK, Json(json!(cached)));
+    }
+    let root = project.root.clone();
+    let key = host_key(&state);
+    let tab_cwds: Vec<String> = project.tabs.iter().map(|tab| tab.cwd.clone()).collect();
+    let Ok(overview) = tokio::task::spawn_blocking(move || git_overview::probe(&root, &key, &tab_cwds)).await else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "git_failed");
+    };
+    state
+        .git_overview
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set(&raw_id, overview.clone(), Instant::now());
+    (StatusCode::OK, Json(json!(overview)))
 }
 
 /// `GET /api/v1/projects/{project_id}/launch-options` — what the ＋ sheet can
@@ -4900,6 +4996,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/projects/{project_id}/launch-options",
             get(launch_options),
         )
+        .route("/api/v1/projects/{project_id}/git", get(project_git))
         .route(
             "/api/v1/projects/{project_id}/prompts",
             get(prompts).post(prompt_create),
@@ -5008,6 +5105,8 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
         runner: Arc::new(scheduler::TmuxRunner::new(&state_dir, None)),
         holds: Arc::default(),
+        git_overview: Arc::default(),
+        worktree_spots: Arc::default(),
     };
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     // A Serve verification failure must be a real service failure. A clean
@@ -5194,6 +5293,8 @@ mod tests {
                     readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
                     runner,
                     holds: Arc::default(),
+                    git_overview: Arc::default(),
+                    worktree_spots: Arc::default(),
                 },
             }
         }
@@ -5601,6 +5702,47 @@ mod tests {
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} answered: {body}");
             assert_eq!(json(&body)["error"], "authentication_required", "{uri}");
         }
+    }
+
+    /// The Git sheet's route: a project's overview, from the cache inside its
+    /// TTL; a box is `not_a_project`; nothing raw crosses.
+    #[tokio::test]
+    async fn the_git_overview_answers_projects_only_and_from_its_cache() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(61)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+
+        // Not a repo: the fixture's folder is a plain directory.
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/git"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["repo"], false);
+        assert!(!body.contains(RAW_PROJECT) && !body.contains(&*host.root.to_string_lossy()), "{body}");
+        let now = Instant::now();
+        assert!(host.state.git_overview.lock().unwrap().get(RAW_PROJECT, now).is_some(), "cached");
+
+        // A second call inside the TTL is the cache's answer, not a new probe.
+        let seeded = git_overview::GitOverview { repo: true, branches_total: 42, ..Default::default() };
+        host.state.git_overview.lock().unwrap().set(RAW_PROJECT, seeded, Instant::now());
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/git"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["branches_total"], 42);
+
+        let (status, _, body) = host.send(get_as("/api/v1/projects/nope/git", &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json(&body)["error"], "project_not_found");
+        let (status, _, _) = host
+            .send(Request::builder().uri(format!("/api/v1/projects/{project_id}/git")).body(Body::empty()).expect("request"))
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let host = Fixture::with_box();
+        let cookie = host.pair_device(&signing_key(62)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let box_id = json(&projects_body)["projects"][0]["id"].as_str().expect("box id").to_string();
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}/git"), &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body)["error"], "not_a_project");
     }
 
     #[tokio::test]

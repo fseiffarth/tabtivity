@@ -11,6 +11,7 @@ pub mod auth;
 pub mod config;
 pub mod discovery;
 pub mod files;
+pub mod git_overview;
 pub mod headless;
 pub mod headless_board;
 pub mod host;

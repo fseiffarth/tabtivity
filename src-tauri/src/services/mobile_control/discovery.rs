@@ -249,6 +249,10 @@ pub struct PublicTab {
     /// flag crosses; never the login command.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sign_in: bool,
+    /// The linked worktree an agent tab runs in (`git_overview::tab_worktrees`),
+    /// filled by the project route; absent for the project folder's checkout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<super::git_overview::TabWorktree>,
 }
 
 #[derive(Debug, Clone)]
@@ -458,7 +462,16 @@ pub(super) fn key_id(key: &[u8], domain: &str, parts: &[&str]) -> String {
 fn valid_opaque_control_domain(domain: &str) -> bool {
     matches!(
         domain,
-        "agent" | "request" | "task" | "mail" | "calendar" | "event" | "project" | "subtask"
+        "agent"
+            | "request"
+            | "task"
+            | "mail"
+            | "calendar"
+            | "event"
+            | "project"
+            | "subtask"
+            | "worktree"
+            | "alert"
     )
 }
 
@@ -985,6 +998,7 @@ fn resolve_scope(
                 .filter(|id| TAB_COLORS.contains(id))
                 .map(str::to_string),
             sign_in: agent && tab.sign_in,
+            worktree: None,
         };
         tabs.push(ResolvedTab {
             public,
@@ -1096,10 +1110,43 @@ mod tests {
     fn mobile_protocol_domains_are_accepted_but_arbitrary_ones_are_not() {
         for domain in [
             "agent", "request", "task", "mail", "calendar", "event", "project", "subtask",
+            "worktree", "alert",
         ] {
             assert!(valid_opaque_control_domain(domain), "{domain}");
         }
         assert!(!valid_opaque_control_domain("filesystem_path"));
+    }
+
+    /// Every literal domain the desktop bridge mints an opaque id under must be
+    /// on the allow list. The bridge swallows the command's error in places
+    /// (the ＋ sheet's worktrees, the alert strip), and vitest mocks `invoke`, so
+    /// a missing domain otherwise fails silently in production only.
+    #[test]
+    fn every_domain_the_bridge_mints_is_allowed() {
+        let source = include_str!("../../../../src/components/mobile/MobileBridgeHost.tsx");
+        let mut seen = Vec::new();
+        // `invoke("mobile_opaque_id", { domain: "<x>", … })`
+        for (at, _) in source.match_indices("\"mobile_opaque_id\"") {
+            let rest = source[at + "\"mobile_opaque_id\"".len()..]
+                .trim_start_matches(|c: char| c == ',' || c == '{' || c.is_whitespace());
+            if let Some(after) = rest.strip_prefix("domain:") {
+                if let Some(literal) = after.trim_start().strip_prefix('"') {
+                    let domain = &literal[..literal.find('"').expect("closed literal")];
+                    seen.push(domain.to_string());
+                }
+            }
+        }
+        // `opaqueId("<x>", …)`, the bridge's own wrapper
+        for (at, _) in source.match_indices("opaqueId(\"") {
+            let literal = &source[at + "opaqueId(\"".len()..];
+            seen.push(literal[..literal.find('"').expect("closed literal")].to_string());
+        }
+        for domain in ["worktree", "alert", "request", "task", "agent"] {
+            assert!(seen.iter().any(|d| d == domain), "scan found no {domain:?} call: {seen:?}");
+        }
+        for domain in &seen {
+            assert!(valid_opaque_control_domain(domain), "the bridge mints {domain:?} ids");
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
 import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, deleteOutboxFile, listOutbox, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
+import { GitSheet } from "./GitSheet";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, writeChoice } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -13,7 +14,7 @@ import { PromptsSheet } from "./PromptsSheet";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { AgentStatusMark } from "../components/AgentStatusPill";
-import { AgentModeMarks, SubagentCount, agentModeClass } from "../components/AgentModeMarks";
+import { AgentModeMarks, SubagentCount, WorktreeMark, agentModeClass } from "../components/AgentModeMarks";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles } from "../components/ProjectFiles";
@@ -163,9 +164,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const [filesOpen, setFilesOpen] = useState(false);
   /** The dropdown under the project's name (the gallery, the file drawer). */
   const [projectMenu, setProjectMenu] = useState(false);
+  /** The read-only git overview (`GitSheet`), for a project scope only: a box
+   * or the root console has no repo of its own. */
+  const [gitOpen, setGitOpen] = useState(false);
   const screenRef = useRef<HTMLElement | null>(null);
   const filesOffered = !!detail?.files;
-  const projectMenuOffered = outbox.length > 0 || filesOffered;
+  const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
+  const projectMenuOffered = outbox.length > 0 || filesOffered || gitOffered;
   useEffect(() => {
     const host = screenRef.current;
     if (!filesOffered || filesOpen || !host) return;
@@ -465,9 +470,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           role="menuitem"
           onClick={() => { setProjectMenu(false); setFilesOpen(true); }}
         ><span aria-hidden="true" className="project-menu-icon">📁</span><span><strong>{t("mobile.project.files")}</strong></span></button>}
+        {gitOffered && <button
+          role="menuitem"
+          onClick={() => { setProjectMenu(false); setGitOpen(true); }}
+        ><span aria-hidden="true" className="project-menu-icon">⎇</span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
         {isUntested("mobile.project.nameMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </div>
     </div>}
+    {gitOpen && detail && <GitSheet projectId={id} label={detail.project.label} onClose={() => setGitOpen(false)} />}
     {/* Only once the host has answered: `!detail?.desktop_available` was also
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
@@ -511,6 +521,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {tab.agent_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             <AgentModeMarks tab={tab} />
             <SubagentCount tab={tab} />
+            {/* Which worktree the agent works in, when it is not the project folder. */}
+            <WorktreeMark tab={tab} />
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}
