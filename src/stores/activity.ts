@@ -767,8 +767,8 @@ function sameCountMaps(
  *  a tally of what the PROJECT is doing, not of what still needs a glance, and a
  *  project whose bars emptied out the moment it was selected could not answer the
  *  one question the strip exists for — "is anything still running in there?" —
- *  for the project you are actually in. (The tab bar still hides the viewed tab's
- *  own glow: there, the tab IS the thing you're looking at.) A looked-at tab that
+ *  for the project you are actually in. (The tab bar shows the viewed tab's
+ *  working ring too, but not its `done`.) A looked-at tab that
  *  went quiet can still hold no `done` flag, so what a selected project shows is
  *  its working tabs and its unanswered prompts — see `attentionFor`.
  *  Scopes whose counts are unchanged keep their previous object identity, so a

@@ -798,16 +798,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   //  - interrupted (`--status-interrupted`, solid): you cut the agent's
   //    turn off; it holds until the next turn starts. Like finished, it is
   //    left off the viewed tab, whose screen already says "interrupted".
-  // Working wins. Working and finished are about output you HAVEN'T seen, so
-  // they never show on the viewed tab — its screen says it better. A pending
-  // decision is the exception: it's about an agent that is BLOCKED, and it
-  // stays blocked whether or not you're looking at it. The lamp holds until
-  // the prompt is answered, so a tab left on screen mid-prompt while you work
-  // elsewhere in the window still says so.
+  // Working wins, and shows on the viewed tab too: it says the tab is still
+  // RUNNING, which a screen that has paused scrolling (an agent thinking, a
+  // long build) doesn't always show. Finished is about output you HAVEN'T
+  // seen, so it never shows on the viewed tab — its screen says it better. A
+  // pending decision is the exception: it's about an agent that is BLOCKED,
+  // and it stays blocked whether or not you're looking at it. The lamp holds
+  // until the prompt is answered, so a tab left on screen mid-prompt while you
+  // work elsewhere in the window still says so.
   function tabStateClass(tab: TabEntry): string {
     const isActive = tab.key === activeKey;
     const ptyId = `${scope}:${tab.key}`;
-    const working = isPtyTabKind(tab.kind) && !isActive && !!busyByTab[ptyId];
+    const working = isPtyTabKind(tab.kind) && !!busyByTab[ptyId];
     const rawAttn =
       tab.kind === "agent" || tab.kind === "local_agent"
         ? attentionByTab[ptyId] ?? null

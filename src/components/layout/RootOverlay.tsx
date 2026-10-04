@@ -1011,7 +1011,7 @@ function GroupStrip({
         const ptyId = `${ROOT_SCOPE}:${tab.key}`;
         const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
         // The strip's own status rules (TabBar / the popout strip).
-        const working = isPtyTabKind(tab.kind) && !isActive && !!busyByTab[ptyId];
+        const working = isPtyTabKind(tab.kind) && !!busyByTab[ptyId];
         const rawAttn = isAgent ? (attentionByTab[ptyId] ?? null) : null;
         const attn = !isActive || rawAttn === "decision" ? rawAttn : null;
         const stateClass = working
