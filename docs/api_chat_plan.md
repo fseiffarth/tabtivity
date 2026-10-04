@@ -552,3 +552,82 @@ Vibe and OpenCode are not installed here: their rows are from docs.
   `MobileSignInTab.test.tsx`, where the sign-in list's test already lives.
 - `AgentApiKeysRows` is exported for its test; `AgentLoginsRows` re-reads on
   every key or switch change (`refreshKey`).
+
+# Part C — hardening: no key in the agent, a spending limit (2026-10-04)
+
+Status: scheduled. Fixes the two open risks Part A left: (1) the common
+variable names (`ANTHROPIC_API_KEY`, …) sit in the global `update-environment`
+of the user's own default tmux server; (2) the agent can read the real key,
+and a project's own CLI config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`,
+an `opencode.json` `baseURL`, Gemini's project `.env`) can send it to another
+host — with no ceiling on what it spends.
+
+## Decisions
+
+1. **The real key never enters an agent process.** A loopback proxy in
+   Tabtivity holds the keys. Each keyed agent spawn gets a **per-spawn proxy
+   token** (random, revocable, bound to provider + scope + tab, like the MCP
+   lanes' per-spawn tokens in `services::root_mcp`) plus the CLI's base-URL
+   variable pointing at the proxy. A leaked token is worthless off this
+   machine, dies with the tab, and is capped by the budget. A project config
+   that redirects the CLI elsewhere sends only that token.
+2. **Only proxyable CLIs keep a key.** A CLI is in the table only if an
+   environment variable (never a project-writable config) points it at the
+   proxy. A CLI that can't be pointed at the proxy loses its row rather than
+   getting the raw key back. Expected: Claude (`ANTHROPIC_BASE_URL`, verify
+   that `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` with a proxy URL still
+   raises or avoids the custom-key dialog); Gemini (`GOOGLE_GEMINI_BASE_URL`,
+   verify); Vibe and OpenCode only if the docs show an env base-URL — else out.
+   A project config that overrides the base URL wins in the CLI; that's
+   acceptable because only the proxy token leaks.
+3. **The proxy forwards only to the provider's own API host** (fixed per
+   provider: `api.anthropic.com`, `generativelanguage.googleapis.com`,
+   `api.mistral.ai`, `api.openai.com`), HTTPS, a path allowlist per provider
+   (e.g. Anthropic `/v1/messages`, `/v1/messages/count_tokens`, `/v1/models`),
+   request body size bound, streaming (SSE) passed through unbuffered. It
+   strips the incoming auth header and adds the real one. Never logs keys,
+   tokens or bodies.
+4. **Spending limit, enforced locally, required.** Saving a key requires a
+   monthly limit in USD (default proposed in the UI, e.g. 20). The proxy reads
+   each response's usage (Anthropic `message_start`/`message_delta` usage incl.
+   cache read/write; Gemini `usageMetadata`; Mistral/OpenAI `usage`) and
+   prices it from a per-model table in code (`services::api_prices`); an
+   unknown model is priced at that provider's most expensive known rate and
+   flagged. Ledger `<state_dir>/agent-api-usage.json` (no secrets; month,
+   provider, spent, per-model tokens), written atomically, round-trips. Once
+   spent ≥ limit, new requests are refused in the provider's own error shape
+   (HTTP 429 / provider error JSON, message "<app> monthly API budget for
+   <provider> reached — raise it in Manage CLIs") so the CLI shows a readable
+   error. A request already streaming finishes; the limit can overshoot by one
+   turn — say so in the UI. Also recommend a provider-side limit in the help.
+5. **Tabtivity-named variables in tmux (risk 1).** Whatever the spawn must
+   carry secretly (now: the proxy token) travels under app-named variables
+   (`app_env!("AGENT_KEY_…")`) — the only names added to `SECRET_ENV` — and is
+   mapped to the CLI's own names immediately before exec of the agent,
+   *inside* the fence, by Tabtivity's own binary (an exec-shim mode like
+   `--fence-scope`, but always used, not only when Landlock is available), then
+   removed from the environment. Part A's additions of `ANTHROPIC_API_KEY` etc.
+   to `SECRET_ENV` are reverted. Non-secret values (base URL) may ride as
+   ordinary env. Host-session and Windows spawns need the same mapping — the
+   implementer picks the mechanism there (no `/proc` argv exposure, no disk).
+
+## Steps (one implementer subagent each, a reviewer subagent after each)
+
+- **C1 — app-named variables + exec-time mapping.** Revert the common names
+  from `SECRET_ENV`; add the mapping shim and its unit tests; cover fenced
+  (Linux, with and without the Landlock helper), macOS sandbox-exec, Host
+  session, Windows, and the `agent_bin` shim. Still injects the raw key (C2
+  replaces it) so C1 is shippable alone.
+- **C2 — the proxy.** New AppHandle-free `services::api_proxy`: loopback
+  listener (or a route on the existing MCP listener if its bounds fit
+  streaming — implementer decides and says why), per-spawn tokens with
+  revocation at tab end, host/path allowlists, SSE passthrough, auth swap.
+  Injection switches from raw key to token + base URL; drop CLIs not
+  proxyable (decision 2) from the table, untested pills and docs. A0-style
+  verification for Claude against the proxy with a fake key and a local stub
+  upstream (no real network). Started with the app, stopped in
+  `RunEvent::Exit` teardown.
+- **C3 — spending limit.** `services::api_prices`, usage parsing per provider
+  (unit tests on canned SSE/JSON), ledger, refusal, Manage CLIs UI (limit
+  field required on save, spent/limit per provider, month reset, raise limit),
+  `agent_logins`/phone show "budget reached" where relevant. Docs + QA boxes.
