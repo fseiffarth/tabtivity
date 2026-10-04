@@ -279,7 +279,11 @@ pub struct MobileLocalAgent {
 /// opaque agent id). `signed_in` is `None` where Tabtivity cannot tell (a CLI
 /// whose login it does not keep); `account` is the account the shared login
 /// names, when it names one; `alternate` names the CLI's other way in
-/// (`"console"`, `"browser"`) when it has one.
+/// (`"console"`, `"browser"`) when it has one. `api_key` says the CLI starts
+/// on a provider API key the desktop keeps (`agent_api_keys`) — a flag only:
+/// no key and no provider name ever crosses. `api_budget_reached` says that
+/// key's monthly budget is spent (or unset), so a new tab would be refused —
+/// a flag only, no amount.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MobileSignInOption {
     pub agent_id: String,
@@ -289,6 +293,10 @@ pub struct MobileSignInOption {
     pub account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_budget_reached: Option<bool>,
 }
 
 /// Phone-editable schedule fields. Receipts and prefix commands are desktop-owned
@@ -2768,5 +2776,33 @@ mod tests {
         let value = serde_json::to_value(&request).expect("serialize");
         assert_eq!(value, json!({"type": "launch_options", "request_id": "r", "project_id": "p"}));
         assert_eq!(request.request_id(), "r");
+    }
+
+    #[test]
+    fn a_sign_in_row_carries_the_api_key_flag_and_nothing_more() {
+        let response: DesktopResponse = serde_json::from_value(json!({
+            "status": "launch_options",
+            "sign_in": [
+                {"agent_id": "a1", "signed_in": true, "api_key": true},
+                {"agent_id": "a2", "signed_in": false},
+                {"agent_id": "a3", "signed_in": true, "api_key": true, "api_budget_reached": true}
+            ]
+        }))
+        .expect("launch options");
+        let DesktopResponse::LaunchOptions { sign_in, .. } = response else {
+            panic!("launch options");
+        };
+        assert_eq!(sign_in[0].api_key, Some(true));
+        assert_eq!(sign_in[1].api_key, None);
+        assert_eq!(sign_in[0].api_budget_reached, None);
+        assert_eq!(sign_in[2].api_budget_reached, Some(true));
+        assert_eq!(
+            serde_json::to_value(&sign_in).expect("serialize"),
+            json!([
+                {"agent_id": "a1", "signed_in": true, "api_key": true},
+                {"agent_id": "a2", "signed_in": false},
+                {"agent_id": "a3", "signed_in": true, "api_key": true, "api_budget_reached": true}
+            ])
+        );
     }
 }

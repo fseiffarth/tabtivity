@@ -1145,6 +1145,9 @@ pub fn run() {
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(_app.handle().clone());
+            // The provider API proxy (`services::api_proxy`): loopback, holds
+            // the stored API keys so a keyed agent tab gets only a token.
+            services::api_proxy::start();
             // A SIGTERM/SIGINT (the dev launcher's Ctrl+C, a `kill`, a session
             // logout) used to end the process with none of the teardown the
             // window's × runs: PTY subtrees, local tmux sessions, the Mobile
@@ -2074,6 +2077,9 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::agent_api_keys_status,
+            commands::agents::agent_api_key_set,
+            commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,
             commands::agents::agent_global_import,
             commands::agents::agent_global_set_codex_auto_review,
@@ -2244,6 +2250,10 @@ pub fn run() {
                 // workers briefly, and drop every per-tab calendar copy so
                 // nothing of the endpoint outlives the quit.
                 commands::root_mcp::stop_for_exit();
+                // The API proxy: revoke every token, stop accepting, drain the
+                // streams in flight briefly. Before the PTY teardown below, so
+                // its tab-gone hooks find nothing left to sweep.
+                services::api_proxy::stop_for_exit();
                 // Abort every terminal's process subtree so no inner process (a
                 // dev server, a build, a training run) outlives Tabtivity. Runs
                 // before the container teardown below, since a containerized

@@ -104,6 +104,25 @@ describe("Mobile bridge — launch options", () => {
     ]);
   });
 
+  it("counts a CLI on a stored API key as signed in, and sends only the flag", async () => {
+    const answer = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) =>
+      command === "agent_logins"
+        ? Promise.resolve([
+            { id: "claude", signed_in: true, account: "me@example.com", importable: false, blocked: null, shared: true, api_key: true },
+            { id: "gemini", signed_in: false, account: null, importable: false, blocked: null, shared: true, api_key: true, api_budget_reached: true },
+          ])
+        : answer(command, args as Parameters<typeof invoke>[1]));
+    const response = await ask({ type: "launch_options", request_id: "l3", project_id: paper.id });
+    expect(response.sign_in).toEqual([
+      { agent_id: "agent-6", signed_in: true, account: "me@example.com", alternate: "console", api_key: true },
+      // Out of budget: the flag crosses, never an amount.
+      { agent_id: "agent-6", signed_in: true, api_key: true, api_budget_reached: true },
+    ]);
+    // No provider name crosses.
+    expect(JSON.stringify(response.sign_in)).not.toMatch(/anthropic|gemini_api|google/i);
+  });
+
   it("refuses a project the phone may not reach", async () => {
     const response = await ask({ type: "launch_options", request_id: "l2", project_id: "p-other" });
     expect(response).toMatchObject({ status: "error", code: "project_ineligible" });

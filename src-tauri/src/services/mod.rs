@@ -42,11 +42,21 @@ pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub mod fence_scope;
+// `--agent-exec`: an agent's secrets mapped from their app-named carriers to
+// the CLI's own variable names, just before the agent runs (no common name on
+// the user's tmux server).
+pub mod agent_exec;
 // The Claude credential mirror: one Tabtivity-owned inode mounted into every
 // fenced/contained tab in place of `~/.claude/.credentials.json`, kept in step
 // with the host file by in-place writes — a file bind mount pins an inode, and
 // Claude rotates that file by rename.
 pub mod agent_auth;
+// Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
+pub mod agent_api_keys;
+pub mod api_proxy;
+pub mod api_meter;
+pub mod api_prices;
+pub mod api_usage;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;

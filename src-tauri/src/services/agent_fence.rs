@@ -1099,24 +1099,41 @@ pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
 const SECCOMP_LAUNCHER: &str = "f=$1; shift; exec \"$0\" \"$@\" 9<\"$f\"";
 
 /// `(cmd, args)` that run bwrap with `argv` under [`keyring_seccomp_filter`],
-/// through `scope_helper` (`services::fence_scope`, `--fence-scope`) when
-/// there is one; the helper execs bwrap with descriptor 9 still open.
+/// through `step` — Tabtivity's binary and its mode, [`launcher_step`] — when
+/// there is one; the step execs bwrap with descriptor 9 still open.
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn seccomp_launcher(
     bwrap: &str,
-    scope_helper: Option<&str>,
+    step: Option<(&str, &str)>,
     filter: &Path,
     argv: Vec<String>,
 ) -> (String, Vec<String>) {
     let filter = filter.to_string_lossy().into_owned();
     let mut args = vec!["-c".to_string(), SECCOMP_LAUNCHER.to_string()];
-    match scope_helper {
-        Some(helper) => args.extend([helper.to_string(), filter, "--fence-scope".into(), bwrap.to_string()]),
+    match step {
+        Some((helper, mode)) => args.extend([helper.to_string(), filter, mode.to_string(), bwrap.to_string()]),
         None => args.extend([bwrap.to_string(), filter]),
     }
     args.extend(["--seccomp".to_string(), "9".to_string()]);
     args.extend(argv);
     ("/bin/sh".to_string(), args)
+}
+
+/// The step in front of bwrap, as `(binary, mode)`: `--fence-scope` where this
+/// kernel and bwrap take the Landlock scope (it maps carriers too), else
+/// `--agent-exec` when the spawn carries a secret for `agent_exec` to map,
+/// else none. `scope_helper` is `fence_scope::helper_for`'s answer.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn launcher_step(
+    scope_helper: Option<String>,
+    carries: bool,
+    running_binary: impl FnOnce() -> String,
+) -> Option<(String, &'static str)> {
+    match scope_helper {
+        Some(helper) => Some((helper, "--fence-scope")),
+        None if carries => Some((running_binary(), crate::services::agent_exec::MODE_FLAG)),
+        None => None,
+    }
 }
 
 /// Write the filter where the launcher reads it: in the state dir, which the
@@ -1263,9 +1280,11 @@ pub fn wrap_pty_options_bwrap(
         return Err(fence_unavailable_message());
     }
     let bwrap = crate::paths::system_executable("bwrap").ok_or_else(fence_unavailable_message)?;
-    // Before `opts.cmd` becomes bwrap below.
+    // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let mounts = agent_state_mounts(scope_id, &opts.env);
     let support_mounts = mounts.clone();
     let mut extra_ro = configured_read_only_paths();
@@ -1305,8 +1324,6 @@ pub fn wrap_pty_options_bwrap(
     // Last: overlapping roots and allowlists must not reopen private stores.
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
     let filter = write_keyring_filter()?;
-    let scope = crate::services::fence_scope::helper_for(&bwrap);
-    (opts.cmd, opts.args) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, args);
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Keep the CLI's login in its file: the keyring is not reachable here.
@@ -1317,6 +1334,26 @@ pub fn wrap_pty_options_bwrap(
     if copilot {
         crate::services::copilot_auth::inject_env(&mut opts.env);
     }
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier.
+    // The step in front of bwrap maps it to the CLI's variable (`agent_exec`);
+    // bwrap keeps the environment and the launcher `exec`s, so it reaches the
+    // CLI. Hence the launcher last: the step is needed whenever the
+    // environment carries something.
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    let step = launcher_step(
+        crate::services::fence_scope::helper_for(&bwrap),
+        crate::services::agent_exec::has_carriers(&opts.env),
+        crate::services::fence_scope::running_binary,
+    );
+    (opts.cmd, opts.args) = seccomp_launcher(
+        &bwrap.to_string_lossy(),
+        step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
+        &filter,
+        args,
+    );
     Ok(())
 }
 
@@ -1533,6 +1570,9 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
+    // Before `opts.args` becomes sandbox-exec's below.
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let inputs = sandbox_exec_inputs(opts, roots, scope_id, scope_home);
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1562,6 +1602,15 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
+    // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
+    // sandbox-exec passes the environment through. The step runs outside the
+    // Seatbelt profile, which need not grant Tabtivity's binary.
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
 
@@ -1741,7 +1790,8 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
-    let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, argv);
+    let step = scope.as_deref().map(|helper| (helper, "--fence-scope"));
+    let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), step, &filter, argv);
     let mut command = crate::paths::command_no_window(cmd);
     command.args(argv);
     command.env(crate::app_env!("AGENT_FENCE"), "1");
@@ -1760,6 +1810,9 @@ pub fn on_tab_gone(tab_id: &str) {
         .remove(tab_id)
         .is_some();
     untrack_host_agent_tab(tab_id);
+    // Its API proxy tokens go with it (those of a tmux-held agent once the
+    // session is gone too).
+    crate::services::api_proxy::on_tab_gone(tab_id);
     // A tab's end is when a login it made lands in its home: carry it to the
     // other scopes now rather than at the keeper's next tick. Off-thread —
     // this runs on the PTY's teardown path.
@@ -2070,16 +2123,40 @@ mod tests {
             std::fs::read_to_string(dir.path().join("args")).unwrap(),
             "--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n"
         );
-        // With the scope helper, it runs first and is handed bwrap and fd 9.
-        std::fs::remove_file(dir.path().join("fd9")).unwrap();
-        let (cmd, args) = seccomp_launcher("/usr/bin/bwrap", Some(&fake.to_string_lossy()), &filter, argv);
-        let status = std::process::Command::new(cmd).args(args).env("OUT", dir.path()).status().unwrap();
-        assert!(status.success());
-        assert_eq!(std::fs::read(dir.path().join("fd9")).unwrap(), b"program bytes");
+        // With a step, it runs first and is handed its mode, bwrap and fd 9.
+        for mode in ["--fence-scope", crate::services::agent_exec::MODE_FLAG] {
+            std::fs::remove_file(dir.path().join("fd9")).unwrap();
+            let fake = fake.to_string_lossy();
+            let (cmd, args) = seccomp_launcher("/usr/bin/bwrap", Some((&fake, mode)), &filter, argv.clone());
+            let status = std::process::Command::new(cmd).args(args).env("OUT", dir.path()).status().unwrap();
+            assert!(status.success());
+            assert_eq!(std::fs::read(dir.path().join("fd9")).unwrap(), b"program bytes");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("args")).unwrap(),
+                format!("{mode}\n/usr/bin/bwrap\n--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n")
+            );
+        }
+    }
+
+    #[test]
+    fn a_carried_secret_gets_the_exec_step_even_without_the_scope() {
+        let bin = || "/opt/app/bin".to_string();
+        // The scope's helper maps carriers too, so it is the one step.
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("args")).unwrap(),
-            "--fence-scope\n/usr/bin/bwrap\n--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n"
+            launcher_step(Some("/proc/1/exe".into()), true, bin),
+            Some(("/proc/1/exe".to_string(), "--fence-scope"))
         );
+        assert_eq!(
+            launcher_step(Some("/proc/1/exe".into()), false, bin),
+            Some(("/proc/1/exe".to_string(), "--fence-scope"))
+        );
+        // No Landlock scope here: a carried secret still gets mapped.
+        assert_eq!(
+            launcher_step(None, true, bin),
+            Some(("/opt/app/bin".to_string(), crate::services::agent_exec::MODE_FLAG))
+        );
+        // Nothing to map, nothing in front of bwrap (as before).
+        assert_eq!(launcher_step(None, false, || unreachable!()), None);
     }
 
     #[test]

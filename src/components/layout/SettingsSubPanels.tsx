@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsAdvanced, SettingsCard, SettingsHeader, SettingsList, SettingsSection, ToggleRow } from "./settingsUi";
 import { formatBytes as fmtBytes } from "../../lib/formatBytes";
 import { UntestedTag } from "../common/UntestedTag";
+import { PasswordInput } from "../common/PasswordInput";
+import type { UntestedId } from "../../lib/untested";
+import { unlockKeyring } from "../../lib/keyring";
 import { diffDefaultApps, patchDefaultApps } from "../../lib/defaultApps";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -714,11 +717,18 @@ interface AgentLogin {
    *  names a command where a credential belongs. */
   blocked: { account: string | null; stored: string | null; command: string | null } | null;
   shared: boolean;
+  /** Switched on for a stored provider API key, and one is saved
+   *  (`services::agent_api_keys`). */
+  api_key?: boolean;
+  /** That key's monthly budget is spent, or no limit is set: its keyed tabs
+   *  are refused (`services::api_usage`). */
+  api_budget_reached?: boolean;
 }
 
 /** The shared agent logins: one row per CLI whose login Tabtivity can share,
- *  with the one-click import from this computer and a way out. */
-function AgentLoginsRows() {
+ *  with the one-click import from this computer and a way out. `refreshKey`
+ *  re-reads them when the API keys below change. */
+export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
   const t = useT();
   const [logins, setLogins] = useState<AgentLogin[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -728,7 +738,7 @@ function AgentLoginsRows() {
       .then(setLogins)
       .catch(() => setLogins(null));
   };
-  useEffect(refresh, []);
+  useEffect(refresh, [refreshKey]);
   const labels = useMemo(() => new Map(AGENT_ITEMS.map((a) => [a.cmd, a.label])), []);
   const registry = useMemo(
     () => new Map(AGENT_ITEMS.map((a) => [loginIdForCmd(a.cmd), a.label])),
@@ -754,11 +764,15 @@ function AgentLoginsRows() {
       <p className="settings-help">{t("settings.agentLoginsHelp")}</p>
       {rows.map((l) => {
         const label = registry.get(l.id) ?? labels.get(l.id) ?? l.id;
-        const state = l.signed_in
+        const login = l.signed_in
           ? l.account
             ? t("settings.agentLoginSignedInAs", { account: l.account })
             : t("settings.agentLoginSignedIn")
           : t("settings.agentLoginNotSignedIn");
+        const keyLabel = l.api_budget_reached
+          ? t("settings.agentLoginApiBudgetReached")
+          : t("settings.agentLoginUsesApiKey");
+        const state = !l.api_key ? login : l.signed_in ? `${login} · ${keyLabel}` : keyLabel;
         return (
           <div key={l.id} className="settings-toggle-card-row">
             <span>
@@ -798,6 +812,292 @@ function AgentLoginsRows() {
           </div>
         );
       })}
+      {error && <p className="settings-help">{error}</p>}
+    </>
+  );
+}
+
+/** `agent_api_keys_status` (`services::agent_api_keys`). Never a key. */
+interface AgentApiKeyStatus {
+  /** The keyring can be read now; while locked every `saved` reads false. */
+  readable: boolean;
+  providers: {
+    id: string;
+    saved: boolean;
+    /** The monthly limit (`agent_api_limits`) as the backend reads it. */
+    limitUsd?: number | null;
+    /** Spent this month by the price table — an estimate. */
+    spentUsd?: number;
+    /** `open`, `reached`, or `noLimit` (refused until a limit is set). */
+    budget?: "open" | "reached" | "noLimit";
+    /** Models priced at the provider's highest rate (not in the table). */
+    unknownModels?: string[];
+  }[];
+  clis: { id: string; enabled: boolean; providers: string[]; ready: boolean }[];
+  /** UTC month counted (`YYYY-MM`) and the day the count restarts. */
+  month?: string;
+  resetsOn?: string;
+  /** This month's count restarted: the ledger file could not be read. */
+  ledgerRestarted?: string | null;
+  /** When the price table was read off the vendors' pages. */
+  pricesDate?: string;
+}
+
+/** The monthly limit a new key's row proposes, in US dollars. */
+export const DEFAULT_API_LIMIT_USD = 20;
+/** The backend's `api_usage::MAX_LIMIT`. */
+const MAX_API_LIMIT_USD = 1_000_000;
+
+/** A typed limit as dollars, or `null` when it is not a usable one. */
+function parseApiLimit(text: string): number | null {
+  const n = Number(text.trim());
+  return text.trim() !== "" && Number.isFinite(n) && n > 0 && n <= MAX_API_LIMIT_USD ? n : null;
+}
+
+const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/** Provider names as their vendors spell them. */
+const API_KEY_PROVIDERS: Record<string, string> = {
+  anthropic: "Anthropic",
+  gemini: "Google Gemini",
+};
+
+/** The CLIs that can take a stored key through the API proxy (the backend's
+ *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
+ *  with its own pill — literal ids, which is what `scripts/untested.mjs` reads. */
+const API_KEY_CLIS: { cli: string; untested: UntestedId }[] = [
+  { cli: "claude", untested: "settings.agentApiKeys.claude" },
+  { cli: "gemini", untested: "settings.agentApiKeys.gemini" },
+];
+
+/** Provider API keys for the agent CLIs: one key per provider, kept in the OS
+ *  keyring only — typed here, saved, never read back — and a switch per CLI
+ *  that should start on it (`agent_api_key_clis`, off by default). A keyed tab
+ *  gets a proxy token, never the key (`services::api_proxy`). */
+export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
+  const t = useT();
+  const { settings, updateSettings } = useSettingsStore();
+  const [status, setStatus] = useState<AgentApiKeyStatus | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [limitDrafts, setLimitDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const refresh = () => {
+    invoke<AgentApiKeyStatus>("agent_api_keys_status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  };
+  useEffect(refresh, []);
+  const labels = useMemo(() => new Map(AGENT_ITEMS.map((a) => [a.cmd, a.label])), []);
+  if (!status) return null;
+  const saved = new Set(status.providers.filter((p) => p.saved).map((p) => p.id));
+  const enabled = settings?.agent_api_key_clis ?? [];
+  const limits = settings?.agent_api_limits ?? {};
+  // A new key's row proposes the default; a saved key's shows its limit.
+  const limitDraft = (id: string, current?: number | null) =>
+    limitDrafts[id] ?? String(current ?? limits[id] ?? DEFAULT_API_LIMIT_USD);
+  const writeLimit = (id: string, limit: number) =>
+    updateSettings({ agent_api_limits: { ...limits, [id]: limit } });
+  const act = (id: string, call: () => Promise<unknown>) => {
+    setError(null);
+    setBusy(id);
+    call()
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => {
+        setBusy(null);
+        refresh();
+        onChange?.();
+      });
+  };
+  const save = (id: string) => {
+    const key = (drafts[id] ?? "").trim();
+    // A key is only saved with a monthly limit: the limit goes first, so the
+    // backend (which refuses a key without one) finds it.
+    const limit = parseApiLimit(limitDraft(id));
+    if (!key || limit === null) return;
+    // Out of the page at once, saved or not: the key is never kept around.
+    setDrafts((d) => ({ ...d, [id]: "" }));
+    act(id, async () => {
+      await writeLimit(id, limit);
+      await invoke("agent_api_key_set", { provider: id, key });
+    });
+  };
+  const setLimit = (id: string) => {
+    const limit = parseApiLimit(limitDraft(id));
+    if (limit === null) return;
+    act(id, async () => {
+      await writeLimit(id, limit);
+      setLimitDrafts((d) => {
+        const next = { ...d };
+        delete next[id];
+        return next;
+      });
+    });
+  };
+  const setCliEnabled = (cli: string, on: boolean) => {
+    const next = on ? [...enabled.filter((c) => c !== cli), cli] : enabled.filter((c) => c !== cli);
+    act(cli, () => updateSettings({ agent_api_key_clis: next }));
+  };
+  return (
+    <>
+      <div className="settings-subheader">
+        {t("settings.agentApiKeys")} <UntestedTag id="settings.agentApiKeys" />
+      </div>
+      <p className="settings-help">{t("settings.agentApiKeysHelp")}</p>
+      <p className="settings-help">{t("settings.agentApiKeysWarning")}</p>
+      <p className="settings-help">
+        {t("settings.agentApiLimitHelp", { date: status.resetsOn ?? "", priced: status.pricesDate ?? "" })}{" "}
+        <UntestedTag id="settings.agentApiKeys.limit" />
+      </p>
+      {status.ledgerRestarted && (
+        <p className="settings-help pill-fence-live-note">
+          {t("settings.agentApiLedgerRestarted", { date: status.ledgerRestarted })}
+        </p>
+      )}
+      {status.providers.map((p) => {
+        const name = API_KEY_PROVIDERS[p.id] ?? p.id;
+        const draft = drafts[p.id] ?? "";
+        const limitText = limitDraft(p.id, p.limitUsd);
+        const limitOk = parseApiLimit(limitText) !== null;
+        const spent = usd(p.spentUsd ?? 0);
+        const budget = !p.saved
+          ? null
+          : p.budget === "noLimit" || p.limitUsd == null
+            ? t("settings.agentApiNoLimit")
+            : p.budget === "reached"
+              ? t("settings.agentApiBudgetReached", { spent, limit: usd(p.limitUsd), date: status.resetsOn ?? "" })
+              : t("settings.agentApiSpent", { spent, limit: usd(p.limitUsd) });
+        const state = !status.readable
+          ? t("settings.agentApiKeyLocked")
+          : p.saved
+            ? `${t("settings.agentApiKeySaved")} · ${budget}`
+            : t("settings.agentApiKeyNotSaved");
+        const limitInput = (
+          <input
+            type="number"
+            min={0.01}
+            step="any"
+            value={limitText}
+            aria-label={t("settings.agentApiLimitLabel", { provider: name })}
+            title={t("settings.agentApiLimitLabel", { provider: name })}
+            disabled={busy === p.id}
+            onChange={(e) => {
+              const value = e.target.value;
+              setLimitDrafts((d) => ({ ...d, [p.id]: value }));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (p.saved ? setLimit : save)(p.id);
+            }}
+          />
+        );
+        const blocked = p.saved && (p.budget === "reached" || p.budget === "noLimit");
+        return (
+          <Fragment key={p.id}>
+            <div className="settings-toggle-card-row">
+              <span>
+                {name}
+                <span className={blocked ? "settings-help pill-fence-live-note" : "settings-help"}> · {state}</span>
+              </span>
+              <span>
+                {status.readable && p.saved && (
+                  <>
+                    {limitInput}
+                    <button
+                      type="button"
+                      className="ollama-action-btn"
+                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitUsd}
+                      onClick={() => setLimit(p.id)}
+                    >
+                      {t("settings.agentApiLimitSet")}
+                    </button>
+                  </>
+                )}
+                {status.readable && !p.saved && (
+                  <>
+                    <PasswordInput
+                      value={draft}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder={t("settings.agentApiKeyPlaceholder", { provider: name })}
+                      aria-label={t("settings.agentApiKeyPlaceholder", { provider: name })}
+                      disabled={busy === p.id}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setDrafts((d) => ({ ...d, [p.id]: value }));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") save(p.id);
+                      }}
+                    />
+                    {limitInput}
+                    <button
+                      type="button"
+                      className="ollama-action-btn"
+                      disabled={busy === p.id || !draft.trim() || !limitOk}
+                      onClick={() => save(p.id)}
+                    >
+                      {t("settings.agentApiKeySave")}
+                    </button>
+                  </>
+                )}
+                {status.readable && p.saved && (
+                  <button
+                    type="button"
+                    className="ollama-action-btn"
+                    disabled={busy === p.id}
+                    onClick={() => act(p.id, () => invoke("agent_api_key_clear", { provider: p.id }))}
+                  >
+                    {t("settings.agentApiKeyRemove")}
+                  </button>
+                )}
+              </span>
+            </div>
+            {p.saved && (p.unknownModels?.length ?? 0) > 0 && (
+              <p className="settings-help">
+                {t("settings.agentApiUnknownModels", { provider: name, models: (p.unknownModels ?? []).join(", ") })}
+              </p>
+            )}
+          </Fragment>
+        );
+      })}
+      {!status.readable && (
+        <div className="settings-toggle-card-row">
+          <span />
+          <button
+            type="button"
+            className="ollama-action-btn"
+            disabled={busy === "unlock"}
+            onClick={() => act("unlock", unlockKeyring)}
+          >
+            {t("settings.agentApiKeyUnlock")}
+          </button>
+        </div>
+      )}
+      {API_KEY_CLIS.map(({ cli, untested }) => {
+        const row = status.clis.find((c) => c.id === cli);
+        if (!row) return null;
+        const on = enabled.includes(cli);
+        const hasKey = row.providers.some((p) => saved.has(p));
+        return (
+          <ToggleRow
+            key={cli}
+            label={
+              <>
+                {t("settings.agentApiKeyUse", {
+                  cli: labels.get(cli) ?? cli,
+                  providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                })}{" "}
+                <UntestedTag id={untested} />
+              </>
+            }
+            checked={on}
+            // Off without a key; a switch left on can always be turned off.
+            disabled={busy === cli || (!on && !hasKey)}
+            onChange={(e) => setCliEnabled(cli, e.target.checked)}
+          />
+        );
+      })}
+      <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
       {error && <p className="settings-help">{error}</p>}
     </>
   );
@@ -963,6 +1263,8 @@ function CopilotFenceAuthRow() {
 function AgentFenceCard() {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();
+  // Bumped by the API keys rows, so the logins re-read their "uses API key".
+  const [apiKeysVersion, setApiKeysVersion] = useState(0);
   const stored = settings?.agent_fence_paths;
   const effective = stored ?? [...AGENT_FENCE_DEFAULT_PATHS];
   const [paths, setPaths] = useState(effective.join("\n"));
@@ -1006,7 +1308,8 @@ function AgentFenceCard() {
           <p className="settings-help">{t("settings.agentFencePlatformAcceptedHelp")}</p>
         </>
       )}
-      <AgentLoginsRows />
+      <AgentLoginsRows refreshKey={apiKeysVersion} />
+      <AgentApiKeysRows onChange={() => setApiKeysVersion((v) => v + 1)} />
       <AgentGlobalRow />
       <CopilotFenceAuthRow />
       <label className="settings-toggle-card-row">

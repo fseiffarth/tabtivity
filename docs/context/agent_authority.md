@@ -366,6 +366,107 @@ keyring entry and hands it to each fenced Copilot as `COPILOT_GITHUB_TOKEN`
 keeper moves a `/login` token out of the file within seconds). A harvested
 token replaces a stored one only once GitHub rejects the stored one.
 
+Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Parts
+A and C) take the same keychain route: one key per provider under
+`remote_credentials`' service (account `agent-key:<provider>`), never in a
+file — and since C2 never in an agent process either. `services::api_proxy`,
+a loopback listener of its own (started in `setup`, stopped in the
+`RunEvent::Exit` teardown), holds the keys, cached in memory and re-read after
+a save or remove. A keyed spawn gets a **proxy token** — 32 random bytes,
+memory only, bound to provider + scope + tab — as the CLI's credential
+variable (`ANTHROPIC_AUTH_TOKEN` for Claude, which takes it without its
+custom-key dialog; `GEMINI_API_KEY`), and the CLI's base-URL variable
+(`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) set plain to
+`http://127.0.0.1:<port>/<provider>`. Only CLIs an environment variable can
+point at the proxy keep a row (Claude, Gemini; Codex, Vibe and OpenCode are
+out). The proxy refuses a browser request (`Origin`) or another `Host`,
+needs a live token of the route's provider (`x-api-key`, `Authorization:
+Bearer`, `x-goog-api-key` or `key=`, one value), forwards only the provider's
+allowlisted paths (`/v1/messages`, `count_tokens`, `/v1/models`; Gemini's
+`models/<m>:generateContent` family) and query parameters (`beta`, `alt`,
+model-list paging — never `key` or a method override) to its one fixed HTTPS
+host with the incoming credentials, hop-by-hop and method-override headers
+and `accept-encoding` stripped and the real key added in the provider's
+header, never follows a redirect, bounds the body (32 MiB, 256 MiB held over
+all sockets), drops a socket idle for 60 s between requests (64 at most),
+streams the answer through chunk by chunk, answers its own refusals in the
+provider's error shape (`x-should-retry: false`), and logs nothing. A token
+dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`);
+one bound to a local tmux session lives while that session does (a project
+switch or reload kills only the client) — revoked when Tabtivity kills the
+session, following a rename, and swept once a minute otherwise — a respawn of
+the tab gets the same token back, and every token goes at quit — a clean quit
+also ends Tabtivity's tmux sessions; after a crash a re-attached agent holds a
+dead token, refused by the restarted proxy on the port it remembers
+(`<state_dir>/api-proxy-port`), so its requests do not reach whatever else
+took the port. Injection happens inside both fence wraps and in
+`launch_prep`'s Host-session and fence-less-platform arms, only while the
+proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
+shell tab, its own process) gets nothing and stays on its login. Only CLIs
+listed in `agent_api_key_clis` get a token; never a remote, container or
+local-model spawn, nor a subcommand (a sign-in tab); a credential or base URL
+the user set wins. On Linux and macOS the token travels under an app-named
+carrier (`<APP>_AGENT_SECRET_<VAR>`, `agent_api_keys::CARRIERS`), and only the
+carriers are in `tmux_local::SECRET_ENV`: on no tmux argv or launcher script,
+and the `update-environment` slots that stay on the user's default tmux server
+name no variable of theirs. Tabtivity's own binary maps a carrier to the CLI's
+variable and removes every carrier just before the agent runs
+(`services::agent_exec`, `--agent-exec`; `--fence-scope` maps the same way):
+the fence's first step in front of bwrap or `sandbox-exec`, in front of the
+CLI for a Host session; Windows (no tmux) sets the CLI's name directly. That
+step runs outside the fence, so a carrier sets only a CLI credential variable
+(`agent_exec::targets`) — never `LD_PRELOAD`, `PATH` or `BASH_ENV` — and
+every other mode of the binary drops any carrier it inherited at start. On
+tmux < 3.2 every carrier is dropped rather than put on the argv, and the proxy
+base URL beside it too. The unfenced login shell a fenced pane leaves behind
+starts with `env -u` over every `SECRET_ENV` name; the Host session's (the
+user's own shell) drops the carriers only. A keyed local Claude tab skips
+`--remote-control`, which a gateway credential or base URL refuses. Gemini
+still needs its own `/auth` pick. **What is left:** a project's own CLI
+config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`, Gemini's `.env`) can
+still point the CLI at another host — which then receives only the token,
+worthless off this machine and dead with the tab; and the agent can spend
+through its token while the tab lives — up to the monthly limit (C3).
+
+**Spending limit** (`services::api_usage`, `api_meter`, `api_prices`; plan
+C3). A key is saved only beside a monthly USD limit
+(`Settings::agent_api_limits`; `agent_api_key_set` refuses without one). The
+proxy meters every billed request (Anthropic `POST /v1/messages`; Gemini
+`generateContent`, `streamGenerateContent`, embeddings — counting and model
+reads are free and never refused) in its `usage_tap`/`usage_end` seam: a
+streaming JSON scanner with bounded state reads only the usage object of the
+top-level answer (Anthropic `usage` at the root or under `message`, Gemini
+`usageMetadata` at the root of each response) — a `usage` key inside a tool
+call's arguments or the text is never read, so an agent cannot make the model
+print a cheaper usage; counts are cumulative, so each field keeps its maximum;
+what was reported is charged when a stream fails or the client leaves, plus
+an estimate for what was not (an Anthropic answer without its
+`message_delta`, a Gemini stream that did not end cleanly, a request the
+client left before its answer began — the handler's `Pending` guard —, an
+unreadable usage object): output by elapsed time at
+`ANTHROPIC_TOKENS_PER_SEC`/`GEMINI_TOKENS_PER_SEC`, capped by the request's
+`max_tokens` (Anthropic) or the provider's output cap, unreported input as
+body bytes / 3 up to a context window, the request's fast/US flags — so an
+agent cannot read an answer and hang up before its count to spend for free.
+An answer naming two models (server-side fallback) is priced at the dearer.
+The
+model comes from the answer (Gemini: `modelVersion`, else the request path);
+one the table does not know is priced at the provider's highest current rate
+and flagged. The ledger (`agent-api-usage.json`, no secrets, UTC month) is
+in-process memory written atomically (throttled, and in `stop_for_exit`); a
+clock that goes back keeps the later month; a corrupt file is moved aside and
+the restart is shown, never silent. Enforcement sits after the key check and
+before the body is read: spent ≥ limit, or no limit set (a key saved before
+limits existed), answers 429 in the provider's shape (`rate_limit_error` /
+`RESOURCE_EXHAUSTED`, `x-should-retry: false`) naming the app's budget and
+Manage CLIs. Answers in flight finish: the overshoot is bounded by the turns
+running at the moment the limit is crossed, stated in the UI. The limit is
+read from `settings.json` per request (re-parsed when its mtime or size
+changes, and at least every 10 s), so raising it takes effect at once; the
+verdict is taken again after the body is read. Not metered: Gemini Search
+grounding fees, spend outside Tabtivity — the help recommends a provider-side
+limit too.
+
 Composition is explicit:
 
 - A project container is already the stronger boundary, so the fence is skipped.

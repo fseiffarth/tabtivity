@@ -1969,9 +1969,61 @@ pub async fn claude_folder_trusted(
 /// (`services::agent_auth`). Never a token.
 #[tauri::command]
 pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
-    tauri::async_runtime::spawn_blocking(crate::services::agent_auth::status)
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut logins = crate::services::agent_auth::status();
+        // Which CLIs start on a stored API key: read here, not in
+        // `agent_auth::status_in`, whose tests stay keyring-free. With no CLI
+        // switched on this reads no keychain entry at all.
+        let ready = crate::services::agent_api_keys::ready_clis();
+        // Of those, the ones whose provider is out of budget this month (or
+        // has no limit): their keyed tabs are refused.
+        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&ready);
+        for login in &mut logins {
+            login.api_key = ready.contains(&login.id.as_str());
+            login.api_budget_reached = blocked.contains(&login.id.as_str());
+        }
+        logins
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The provider API keys and the CLIs switched on for them
+/// (`services::agent_api_keys`), for Manage CLIs. Never a key.
+#[tauri::command]
+pub async fn agent_api_keys_status() -> Result<crate::services::agent_api_keys::ApiKeyStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::services::agent_api_keys::status)
         .await
-        .unwrap_or_default()
+        .map_err(|e| e.to_string())
+}
+
+fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::Provider, String> {
+    crate::services::agent_api_keys::Provider::from_id(provider)
+        .ok_or_else(|| format!("unknown API key provider: {provider}"))
+}
+
+/// Save `provider`'s API key in the OS keychain. A locked or missing keyring
+/// refuses (its own message); there is no other place a key is kept. A key is
+/// only saved beside a monthly spending limit (`Settings::agent_api_limits`,
+/// written first by Manage CLIs): refused without one.
+#[tauri::command]
+pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
+    let provider = api_key_provider(&provider)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::agent_api_keys::require_limit(provider)?;
+        crate::services::agent_api_keys::set_key(provider, Some(key.trim()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Remove `provider`'s API key from the OS keychain.
+#[tauri::command]
+pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
+    let provider = api_key_provider(&provider)?;
+    tauri::async_runtime::spawn_blocking(move || crate::services::agent_api_keys::set_key(provider, None))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Copy this computer's login files for `id` into Tabtivity's store — the one

@@ -457,6 +457,14 @@ export interface Settings {
    *  uninstalling the CLI. Round-trips through the backend settings `extra`
    *  catch-all — no Rust field needed. Unset/empty = nothing hidden. */
   disabled_agents?: string[];
+  /** Agent CLI registry ids that get their provider's stored API key at spawn
+   *  (backend `services::agent_api_keys`), set by Manage CLIs → API keys.
+   *  Opt-in: unset or empty hands no key to any CLI. Never a key itself. */
+  agent_api_key_clis?: string[];
+  /** Monthly spending limit in US dollars per provider id (`anthropic`,
+   *  `gemini`) for the stored API keys (backend `services::api_usage`),
+   *  enforced by the API proxy. Saving a key requires one. */
+  agent_api_limits?: Record<string, number>;
   /** The order of the Agents group's rows, which is the order Ctrl+1–9 number
    *  them: row keys (a built-in's command, `"claude"`; a custom agent's
    *  `"custom:<id>"`). Set by Manage CLIs' ↑/↓. Unset = the default agent

@@ -2520,3 +2520,95 @@ unchanged; the new agents are additive.
     tab: the Reader follows the new conversation and "Undo clear" is offered.
     - [ ] ✅ Works on Windows
     - [ ] ❌ Doesn't work on Windows
+
+- [~] **API keys for agent CLIs** (2026-10-04; ✅ code-complete, automated
+  tests passing — `agent_api_keys` / `api_proxy` / `tmux_local` /
+  `launch_prep` cargo tests, `AgentApiKeys.test.tsx`, `MobileLaunchOptions`,
+  `MobileSignInTab`; Claude 2.1.288 checked against the proxy and a stub
+  provider (`api_proxy::tests::claude_cli_talks_to_the_proxy`, ignored); ❌
+  never live-verified — pills `settings.agentApiKeys`,
+  `settings.agentApiKeys.claude`, `.gemini`, `.limit`, `mobile.signIn.apiKey`,
+  `mobile.signIn.apiBudgetReached`; C3's spending limit: `api_prices` /
+  `api_meter` / `api_usage` cargo tests, budget cases in
+  `AgentApiKeys.test.tsx` and the phone tests). Plan:
+  `docs/api_chat_plan.md` Parts A and C. Settings → Agent sandbox → API keys
+  keeps one key per provider (Anthropic, Gemini) in the OS keyring; a keyed
+  tab of a CLI switched on there gets a per-tab token for Tabtivity's loopback
+  API proxy (`services::api_proxy`), never the key. Mistral Vibe and OpenCode
+  were dropped in C2 (no env variable points them at the proxy). Backend
+  changed: run `npm run backend:stale` and use a rebuilt binary; the phone also
+  needs `npm run mobile:bundle`.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — a fenced Claude tab runs on the key through the
+    proxy. Save an Anthropic key (a spend-limited one), switch on Claude, open
+    a NEW local Claude tab: no "Detected a custom API key" question; `/status`
+    shows `Anthropic base URL: http://127.0.0.1:<port>/anthropic` and the
+    `ANTHROPIC_AUTH_TOKEN` credential, no Remote Control failure notice; a
+    prompt is answered and streams in as it is written. In the tab (`!`):
+    `env | grep -c <first 12 chars of the key>` is 0 and `env | grep -c
+    AGENT_SECRET` is 0. `ps -eo args | grep -c <first 12 chars of the key>`
+    finds only the grep, and `<state_dir>/tmux-launch/` holds neither key nor
+    token. `tmux show-options -g update-environment` lists the two
+    `<APP>_AGENT_SECRET_*` carriers at 8636–8637. Close the tab, then `curl -s
+    -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <the old token>"
+    -X POST http://127.0.0.1:<port>/anthropic/v1/messages` answers 401.
+    Switch projects away and back (tmux tab re-attached): the agent still
+    answers. Remove the key: the open tab's next prompt says Tabtivity has no
+    key saved. Repeat in a root-console Host session; typing `claude` into a
+    shell tab gets no key (its own login). Switch Claude off → a new tab is
+    back on the subscription. Restart: the key is still saved. Lock the
+    keyring: Save refuses with the locked message, the rows say "keyring
+    locked", Unlock works.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Gemini on a key: save a Gemini key, switch on
+    Gemini, open a new Gemini tab, pick "Use Gemini API key" in `/auth`: it
+    answers without a Google login, through the proxy (`!env | grep
+    GOOGLE_GEMINI_BASE_URL` shows `http://127.0.0.1:<port>/gemini`; the
+    key's first chars are in no `env`).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — the monthly spending limit (C3). Remove the
+    Anthropic key, then paste it again: the limit field shows 20 and Save is
+    greyed out while it is empty or 0; save with 1. Ask a keyed Claude tab a
+    short question: within seconds of the answer the row reads "$0.0x of $1.00
+    spent this month" (reopen Manage CLIs to refresh) and, ~5 s later,
+    `<state_dir>/agent-api-usage.json` holds the month, the spend and the
+    model's tokens (no key, no token). Compare with the provider console's
+    usage for that request — the same order of magnitude (the table is an
+    estimate). Set the limit to 0.01 (Set limit): the next prompt is refused
+    at once with "… monthly API budget for Anthropic reached — raise it in
+    Manage CLIs …", without retries; the row says "budget reached … until
+    <next month's 1st>" and the shared-logins row "API budget reached" (on the
+    phone: ＋ → Sign in to an agent shows "API budget reached"). Start a long
+    answer, lower the limit below the spend while it streams: it finishes,
+    the next one is refused. Raise the limit: the next prompt works with no
+    restart. `/context` or a token count still works at the limit. Quit and
+    restart: the spend is still there. Write garbage into
+    `agent-api-usage.json` with Tabtivity closed, start it: the API keys
+    section says the record could not be read and restarted, and
+    `agent-api-usage.corrupt.json` holds the garbage. Repeat the limit part
+    with Gemini (its error reads RESOURCE_EXHAUSTED with the budget text).
+    Cancel a long answer with Esc after ~10 s: the row still grows (an
+    estimate by time — a cancelled turn costs a little more here than on the
+    provider's bill, never nothing).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

@@ -938,6 +938,55 @@ What survives a relaunch is the agent's own answer: the backend re-applies the
 mode Claude's Stop hook recorded onto the `--resume` line. Args are never
 persisted as the source of truth — they are rebuilt from layout state.
 
+**API keys** (`services/agent_api_keys.rs`, `services/api_proxy.rs`,
+`docs/api_chat_plan.md` Parts A and C). Next to the shared logins, Manage CLIs
+keeps one provider API key per provider (Anthropic, Gemini) in the OS keychain
+— never in a file — and the key never enters an agent process: a loopback proxy
+inside Tabtivity (`api_proxy`, its own listener, started with the app and
+stopped at quit) holds it. A keyed spawn of a CLI the user switched on
+(`agent_api_key_clis`) gets a random per-tab token, bound to provider, scope and
+tab and revoked when the tab ends, as the CLI's credential variable
+(`ANTHROPIC_AUTH_TOKEN`, `GEMINI_API_KEY`), plus the CLI's base-URL variable
+(`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) pointing at the proxy. The
+proxy forwards only to the provider's fixed HTTPS host, only the API paths the
+CLI needs, with a bounded body, never following a redirect, the response
+streamed through as it arrives, swapping the token for the real key; it logs
+nothing. Only CLIs an environment variable can point at the proxy keep a row:
+Claude and Gemini (Codex, Mistral Vibe and OpenCode are left out). Local session
+tabs only (no remote, container, local-model or sign-in tab, and not a CLI typed
+into a shell tab — the shim process runs no proxy); a variable the user set
+wins. On Linux and macOS the token travels under an app-named carrier variable —
+a tmux secret (no argv, no launcher script) that names nothing of the user's on
+their own tmux server — and Tabtivity's binary (`--agent-exec`,
+`services/agent_exec.rs`) turns it into the CLI's variable just before the
+agent runs (Part C, C1). Claude takes the bearer token without its custom-key
+dialog; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude tab
+runs without Remote Control. A project's CLI config can still point the CLI at
+another host, which then receives only the token — worthless off this machine.
+
+**Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
+`services/api_prices.rs`, Part C, C3). Saving a key requires a monthly limit in
+US dollars per provider (`Settings::agent_api_limits`). The proxy reads each
+billed answer's usage as it relays it — Anthropic's `message_start` /
+`message_delta` usage (cache writes and reads, web searches, fast mode and
+US-only inference included) or a plain message's; Gemini's cumulative
+`usageMetadata` from SSE, JSON-array or plain answers — with a bounded streaming
+scanner that keeps nothing else, prices it from a dated per-model table (an
+unknown model at the provider's highest rate, flagged), and adds it to
+`<state_dir>/agent-api-usage.json` (UTC month, spend per provider, tokens per
+model; written atomically every few seconds and at quit; a corrupt file is set
+aside and the restart shown). An answer that ends before its final count — the
+client hangs up mid-stream or before the answer begins, the stream breaks, a
+usage object cannot be read — is charged an estimate on top of what it
+reported (output by elapsed time at a rate above the provider's fastest
+model, up to the request's `max_tokens`; unreported input as body bytes / 3),
+so hanging up early is never free. Once spent ≥ limit, or for a key without a limit,
+billed requests are refused before they reach the provider (HTTP 429 in the
+provider's error shape, `x-should-retry: false`); answers already streaming
+finish. Manage CLIs shows spent/limit, the reset date, unknown models and
+"budget reached"; the shared-logins row and the phone's sign-in list say
+"API budget reached". The help recommends a provider-side limit as well.
+
 ### Remote, Sync, and Multi-Host
 
 Remote projects are **mount-free**: no sshfs, no FUSE. Tabs run on the host over
