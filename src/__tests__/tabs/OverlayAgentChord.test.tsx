@@ -196,6 +196,56 @@ describe("Ctrl+1–9 inside an app overlay", () => {
   });
 });
 
+describe("steering's agent numbers under an app overlay", () => {
+  let events: ReturnType<typeof listen> | null = null;
+
+  beforeEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    onePane();
+    openOverlays();
+    setSettings(ALL_ON);
+    useRootOverlayStore.setState({ open: false });
+    useKeyboardSteeringStore.getState().exit();
+    // jsdom has no layout; steering only sees a layer with a box.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 10, height: 5, x: 0, y: 0, top: 0, left: 0, right: 10, bottom: 5, toJSON: () => ({}),
+    });
+  });
+
+  afterEach(() => {
+    events?.off();
+    events = null;
+    useKeyboardSteeringStore.getState().exit();
+    vi.restoreAllMocks();
+  });
+
+  // The bare 1–9 belong to the tabs levels. An overlay on top pulls steering
+  // into its region before the key is read (`syncLayer`), where they mean
+  // nothing — so they never open an agent hidden under the overlay.
+  it("opens no hidden workspace agent", () => {
+    openOverlays("calendar");
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop app-overlay-backdrop calendar-overlay-backdrop";
+    backdrop.appendChild(frame("calendar").parentElement!);
+    document.body.appendChild(backdrop);
+    render(<Harness />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    events = listen({ overlay: true, newTab: true });
+    press({ key: "1", code: "Digit1" });
+    expect(events.newTab).toEqual([]);
+    expect(useKeyboardSteeringStore.getState()).toMatchObject({ level: "region", region: "calendar" });
+  });
+
+  it("still opens one with no overlay up", () => {
+    render(<Harness />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    events = listen({ overlay: true, newTab: true });
+    press({ key: "1", code: "Digit1" });
+    expect(events.newTab.map((d) => d.request)).toEqual([{ kind: "agent", slot: 0 }]);
+  });
+});
+
 describe("requestOverlayAgent", () => {
   it("is true only when a listener cancelled it", () => {
     expect(requestOverlayAgent("todo", 0)).toBe(false);
