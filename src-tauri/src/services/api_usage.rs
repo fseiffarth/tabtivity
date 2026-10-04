@@ -10,9 +10,12 @@
 //! (`api_proxy::stop_for_exit`). Tolerant on the way in:
 //!
 //! - a missing file is an empty month;
-//! - a file that does not parse is moved aside (`agent-api-usage.corrupt.json`)
-//!   and the month restarts from zero **with a note** ([`Ledger::restarted`])
-//!   that Manage CLIs shows — never silently;
+//! - a file that does not parse, or cannot be read, is moved aside
+//!   (`agent-api-usage.corrupt.json`, so the next write does not destroy its
+//!   counts) and the month restarts from zero **with a note**
+//!   ([`Ledger::restarted`]) that Manage CLIs shows — never silently. Only
+//!   Tabtivity writes the file: a fenced agent sees an empty state dir (Linux)
+//!   or cannot write it (macOS);
 //! - a ledger whose month lies ahead of the clock (the clock went back) keeps
 //!   counting into that month instead of being reset.
 //!
@@ -157,12 +160,13 @@ impl Ledger {
             name = OTHER_MODELS.to_string();
         }
         let m = usage.models.entry(name).or_default();
-        m.input += charge.input;
-        m.output += charge.output;
-        m.cache_write += charge.cache_write;
-        m.cache_read += charge.cache_read;
-        m.web_searches += charge.web_searches;
-        m.requests += 1;
+        // Saturating: a ledger file's counts are read back as they were.
+        m.input = m.input.saturating_add(charge.input);
+        m.output = m.output.saturating_add(charge.output);
+        m.cache_write = m.cache_write.saturating_add(charge.cache_write);
+        m.cache_read = m.cache_read.saturating_add(charge.cache_read);
+        m.web_searches = m.web_searches.saturating_add(charge.web_searches);
+        m.requests = m.requests.saturating_add(1);
         m.usd += charge.usd.max(0.0);
         m.unknown |= !charge.known;
     }
@@ -236,6 +240,9 @@ pub struct Book {
     /// Held across snapshot and write, so an older snapshot never lands
     /// after a newer one.
     writing: Mutex<()>,
+    /// The exit flush ran: a charge that lands after it (an answer cut off
+    /// by the quit) is written at once, not by a thread the exit outruns.
+    closing: std::sync::atomic::AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -248,6 +255,7 @@ impl Book {
             path,
             state: Mutex::new(BookState { ledger: Ledger::default(), loaded: false, dirty: false, flush_scheduled: false }),
             writing: Mutex::new(()),
+            closing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -285,6 +293,10 @@ impl Book {
             s.dirty = true;
             !std::mem::replace(&mut s.flush_scheduled, true)
         });
+        if self.closing.load(std::sync::atomic::Ordering::Acquire) {
+            self.flush();
+            return;
+        }
         if schedule && self.path.is_some() {
             let book = Arc::clone(self);
             let spawned = std::thread::Builder::new().name("api-usage-flush".into()).spawn(move || {
@@ -327,9 +339,9 @@ fn load(path: &Path, now: DateTime<Utc>) -> (Ledger, bool) {
             Ok(ledger) => (ledger, false),
             Err(_) => (restarted(path, now, true), true),
         },
-        // Unreadable (permissions, I/O): counted from zero in memory, said so;
-        // the file is left where it is until a write replaces it.
-        Err(_) => (restarted(path, now, false), true),
+        // Unreadable (permissions, I/O): counted from zero, said so, and kept
+        // aside like a corrupt one, so the next write does not replace it.
+        Err(_) => (restarted(path, now, true), true),
     }
 }
 
@@ -358,9 +370,11 @@ pub fn book() -> Arc<Book> {
     BOOK.get_or_init(|| Arc::new(Book::new(Some(ledger_path())))).clone()
 }
 
-/// The exit teardown's write.
+/// The exit teardown's write; later charges are written as they land.
 pub fn flush_for_exit() {
-    book().flush();
+    let book = book();
+    book.closing.store(true, std::sync::atomic::Ordering::Release);
+    book.flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -378,20 +392,28 @@ pub fn limits_in(settings: &crate::schema::Settings) -> BTreeMap<String, f64> {
 }
 
 type Stamp = Option<(SystemTime, u64)>;
+/// The file's stamp, when it was read, and its limits.
+type CachedLimits = (Stamp, std::time::Instant, BTreeMap<String, f64>);
 
-/// `provider`'s monthly limit from `settings.json`, re-read only when the
-/// file's modification time or size changed (the proxy asks per request).
+/// A cached read of the limits is trusted this long even when the file's
+/// stamp did not change (a write within the stamp's resolution keeping the
+/// size is then seen within this time).
+const LIMITS_FRESH: Duration = Duration::from_secs(10);
+
+/// `provider`'s monthly limit from `settings.json`, re-read when the file's
+/// modification time or size changed, or [`LIMITS_FRESH`] after the last
+/// read (the proxy asks per request).
 pub fn limit_for(provider: Provider) -> Option<f64> {
-    static CACHE: Mutex<Option<(Stamp, BTreeMap<String, f64>)>> = Mutex::new(None);
+    static CACHE: Mutex<Option<CachedLimits>> = Mutex::new(None);
     let path = crate::storage::state_dir().join("settings.json");
     let stamp: Stamp = std::fs::metadata(&path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
     let mut cache = lock(&CACHE);
-    let fresh = matches!(&*cache, Some((s, _)) if stamp.is_some() && *s == stamp);
+    let fresh = matches!(&*cache, Some((s, read, _)) if stamp.is_some() && *s == stamp && read.elapsed() < LIMITS_FRESH);
     if !fresh {
         let settings: crate::schema::Settings = crate::storage::read_json(&path).unwrap_or_default();
-        *cache = Some((stamp, limits_in(&settings)));
+        *cache = Some((stamp, std::time::Instant::now(), limits_in(&settings)));
     }
-    cache.as_ref().and_then(|(_, l)| l.get(provider.id()).copied())
+    cache.as_ref().and_then(|(_, _, l)| l.get(provider.id()).copied())
 }
 
 /// What the proxy may do with `provider`'s next billed request now.
@@ -543,6 +565,29 @@ mod tests {
         // A missing file is just an empty month, no note.
         let fresh = Book::new(Some(dir.path().join("none.json")));
         assert_eq!(fresh.snapshot(now).restarted, None);
+    }
+
+    #[test]
+    fn after_the_exit_flush_a_charge_is_written_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-api-usage.json");
+        let book = Arc::new(Book::new(Some(path.clone())));
+        let now = at(2026, 10, 4);
+        book.closing.store(true, std::sync::atomic::Ordering::Release);
+        book.record(Provider::Anthropic, &charge("claude-opus-5-5", 2.0, true), now);
+        let on_disk: Ledger = crate::storage::read_json(&path).unwrap();
+        assert!((on_disk.spent(Provider::Anthropic) - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn counts_read_back_near_the_top_saturate_instead_of_wrapping() {
+        let mut ledger = Ledger::default();
+        let mut big = charge("m", 1.0, true);
+        big.input = u64::MAX - 1;
+        ledger.add(Provider::Anthropic, &big);
+        ledger.add(Provider::Anthropic, &big);
+        assert_eq!(ledger.providers["anthropic"].models["m"].input, u64::MAX);
+        assert!((ledger.spent(Provider::Anthropic) - 2.0).abs() < 1e-9);
     }
 
     #[test]

@@ -876,7 +876,12 @@ scanner that keeps nothing else, prices it from a dated per-model table (an
 unknown model at the provider's highest rate, flagged), and adds it to
 `<state_dir>/agent-api-usage.json` (UTC month, spend per provider, tokens per
 model; written atomically every few seconds and at quit; a corrupt file is set
-aside and the restart shown). Once spent ≥ limit, or for a key without a limit,
+aside and the restart shown). An answer that ends before its final count — the
+client hangs up mid-stream or before the answer begins, the stream breaks, a
+usage object cannot be read — is charged an estimate on top of what it
+reported (output by elapsed time at a rate above the provider's fastest
+model, up to the request's `max_tokens`; unreported input as body bytes / 3),
+so hanging up early is never free. Once spent ≥ limit, or for a key without a limit,
 billed requests are refused before they reach the provider (HTTP 429 in the
 provider's error shape, `x-should-retry: false`); answers already streaming
 finish. Manage CLIs shows spent/limit, the reset date, unknown models and

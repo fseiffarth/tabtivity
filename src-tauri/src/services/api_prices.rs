@@ -301,6 +301,20 @@ fn gemini_fallback(month: &str) -> GeminiRates {
     }
 }
 
+/// The output rate `model` is priced at (USD per million tokens; an unknown
+/// model at the fallback), to tell the dearer of two models apart.
+pub fn output_rate(provider: Provider, model: &str) -> f64 {
+    match provider {
+        Provider::Anthropic => anthropic_rates(model).0.output,
+        // No month: the scheduled raises double a whole entry, so they do
+        // not change which of two models is dearer by much.
+        Provider::Gemini => {
+            let r = gemini_rates(model, "").0;
+            r.long.map_or(r.output, |l| l.1.max(r.output))
+        }
+    }
+}
+
 /// One answer's Anthropic usage, as reported (`usage` of `message_start`,
 /// `message_delta` or a non-streaming message; counts are cumulative).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -352,12 +366,13 @@ const PER_TOKEN: f64 = 1.0 / 1_000_000.0;
 /// The cost of an Anthropic answer from `model`.
 pub fn price_anthropic(model: &str, u: &AnthropicUsage) -> Charge {
     let (r, known) = anthropic_rates(model);
-    let cache_write = u.cache_creation_input_tokens.max(u.cache_5m.unwrap_or(0) + u.cache_1h.unwrap_or(0));
+    // Saturating throughout: the counts come off the wire.
+    let cache_write = u.cache_creation_input_tokens.max(u.cache_5m.unwrap_or(0).saturating_add(u.cache_1h.unwrap_or(0)));
     // Without a TTL breakdown every write counts as a 1-hour write (the dearer
     // one); with one, a remainder it does not explain does too.
     let w5 = u.cache_5m.unwrap_or(0).min(cache_write);
     let w1h = cache_write - w5;
-    let total_in = u.input_tokens + cache_write + u.cache_read_input_tokens;
+    let total_in = u.input_tokens.saturating_add(cache_write).saturating_add(u.cache_read_input_tokens);
     let (in_mult, out_mult) = if r.long_context_premium && total_in > LONG_CONTEXT { (2.0, 1.5) } else { (1.0, 1.0) };
     let tokens = u.input_tokens as f64 * r.input * in_mult
         + w5 as f64 * r.cache_write_5m * in_mult
@@ -393,9 +408,9 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
     let cached = u.cached_content_token_count.min(u.prompt_token_count);
     let uncached = u.prompt_token_count - cached;
     let audio = u.audio_prompt_tokens.min(uncached);
-    let text = uncached - audio + u.tool_use_prompt_token_count;
+    let text = (uncached - audio).saturating_add(u.tool_use_prompt_token_count);
     let audio_rate = r.audio_input.unwrap_or(input_rate).max(input_rate);
-    let output = u.candidates_token_count + u.thoughts_token_count;
+    let output = u.candidates_token_count.saturating_add(u.thoughts_token_count);
     let usd = (text as f64 * input_rate
         + audio as f64 * audio_rate
         + cached as f64 * cache_rate
@@ -404,7 +419,7 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
     Charge {
         model: model.to_string(),
         known,
-        input: text + audio,
+        input: text.saturating_add(audio),
         output,
         cache_write: 0,
         cache_read: cached,

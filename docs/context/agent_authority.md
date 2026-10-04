@@ -435,7 +435,17 @@ top-level answer (Anthropic `usage` at the root or under `message`, Gemini
 `usageMetadata` at the root of each response) — a `usage` key inside a tool
 call's arguments or the text is never read, so an agent cannot make the model
 print a cheaper usage; counts are cumulative, so each field keeps its maximum;
-what was reported is charged when a stream fails or the client leaves. The
+what was reported is charged when a stream fails or the client leaves, plus
+an estimate for what was not (an Anthropic answer without its
+`message_delta`, a Gemini stream that did not end cleanly, a request the
+client left before its answer began — the handler's `Pending` guard —, an
+unreadable usage object): output by elapsed time at
+`ANTHROPIC_TOKENS_PER_SEC`/`GEMINI_TOKENS_PER_SEC`, capped by the request's
+`max_tokens` (Anthropic) or the provider's output cap, unreported input as
+body bytes / 3 up to a context window, the request's fast/US flags — so an
+agent cannot read an answer and hang up before its count to spend for free.
+An answer naming two models (server-side fallback) is priced at the dearer.
+The
 model comes from the answer (Gemini: `modelVersion`, else the request path);
 one the table does not know is priced at the provider's highest current rate
 and flagged. The ledger (`agent-api-usage.json`, no secrets, UTC month) is
@@ -447,8 +457,9 @@ limits existed), answers 429 in the provider's shape (`rate_limit_error` /
 `RESOURCE_EXHAUSTED`, `x-should-retry: false`) naming the app's budget and
 Manage CLIs. Answers in flight finish: the overshoot is bounded by the turns
 running at the moment the limit is crossed, stated in the UI. The limit is
-read from `settings.json` per request (re-parsed only when its mtime or size
-changes), so raising it takes effect at once. Not metered: Gemini Search
+read from `settings.json` per request (re-parsed when its mtime or size
+changes, and at least every 10 s), so raising it takes effect at once; the
+verdict is taken again after the body is read. Not metered: Gemini Search
 grounding fees, spend outside Tabtivity — the help recommends a provider-side
 limit too.
 

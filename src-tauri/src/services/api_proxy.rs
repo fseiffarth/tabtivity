@@ -431,6 +431,15 @@ impl Budget {
         };
         super::api_usage::Verdict::of(self.book.spent(provider, chrono::Utc::now()), limit)
     }
+
+    /// Why a billed request for `provider` is refused now, if it is.
+    fn refusal(&self, provider: Provider) -> Option<Refusal> {
+        match self.verdict(provider) {
+            super::api_usage::Verdict::Open => None,
+            super::api_usage::Verdict::NoLimit => Some(Refusal::NoBudget),
+            super::api_usage::Verdict::Reached { .. } => Some(Refusal::BudgetReached),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -471,8 +480,8 @@ fn client(https_only: bool) -> Result<reqwest::Client, String> {
         .redirect(reqwest::redirect::Policy::none())
         .https_only(https_only)
         // The body passes through as the provider sent it; the request asks
-        // for no encoding (`accept-encoding` is not forwarded), so C3 reads
-        // usage from plain bytes.
+        // for `accept-encoding: identity` (the client's own is not
+        // forwarded), so C3 reads usage from plain bytes.
         .no_gzip()
         .no_brotli()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -1071,10 +1080,8 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let mut meter = super::api_meter::billing(provider, parts.method.as_str(), rest)
         .map(|billing| super::api_meter::Meter::new(provider, billing));
     if meter.is_some() {
-        match state.budget.verdict(provider) {
-            super::api_usage::Verdict::Open => {}
-            super::api_usage::Verdict::NoLimit => return refuse(Some(provider), Refusal::NoBudget),
-            super::api_usage::Verdict::Reached { .. } => return refuse(Some(provider), Refusal::BudgetReached),
+        if let Some(refusal) = state.budget.refusal(provider) {
+            return refuse(Some(provider), refusal);
         }
     }
     let read = read_body(body, state.max_body, &state.buffered, state.max_buffered);
@@ -1084,18 +1091,50 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         Ok(Ok(read)) => read,
     };
     if let Some(meter) = meter.as_mut() {
-        meter.request_body(body.len());
+        meter.request(&body);
+        // Once more: answers that ended while the body was read may have
+        // reached the limit.
+        if let Some(refusal) = state.budget.refusal(provider) {
+            return refuse(Some(provider), refusal);
+        }
     }
     let url = format!("{}{}{}", state.upstream.base(provider), rest, forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
+    // Plain bytes, said outright: a request with no `accept-encoding` lets a
+    // server pick any coding, and the meter reads usage from plain bytes (a
+    // compressed answer would still be charged — as an estimate).
+    headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+    // From here a billed request is charged however it ends — also when the
+    // client leaves before the answer begins (this future is dropped then).
+    let mut metered = Pending(meter.map(|meter| Metered { meter, book: state.budget.book.clone(), started: Instant::now() }));
     let upstream = state.client.request(parts.method, url).headers(headers).body(body).send().await;
     // The body has been sent (or never will be): its bytes leave the budget.
     drop(held);
-    let Ok(upstream) = upstream else {
-        return refuse(Some(provider), Refusal::Upstream);
+    let upstream = match upstream {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            // No connection: nothing reached the provider. Any later failure
+            // may follow a request the provider took, so it is charged.
+            if e.is_connect() {
+                metered.0 = None;
+            }
+            return refuse(Some(provider), Refusal::Upstream);
+        }
     };
-    relay(upstream, Tap::new(grant, busy, meter.map(|m| (m, state.budget.book.clone()))))
+    relay(upstream, Tap::new(grant, busy, metered.0.take()))
+}
+
+/// A billed request between its send and its answer: charged an estimate if
+/// dropped here (`api_meter`'s estimate for an answer that never began).
+struct Pending(Option<Metered>);
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        if let Some(metered) = self.0.take() {
+            metered.settle(false);
+        }
+    }
 }
 
 /// Request body bytes counted against [`ProxyState::buffered`] until dropped.
@@ -1153,8 +1192,25 @@ enum StreamEnd {
     Aborted,
 }
 
-/// A billed answer's meter and the ledger it is charged to.
-type Metered = (super::api_meter::Meter, Arc<super::api_usage::Book>);
+/// A billed answer's meter, the ledger it is charged to, and when its
+/// request was sent.
+struct Metered {
+    meter: super::api_meter::Meter,
+    book: Arc<super::api_usage::Book>,
+    started: Instant,
+}
+
+impl Metered {
+    /// Charge what the answer reported — and, unless it ended `complete`
+    /// with its final count, the estimate on top (`api_meter`).
+    fn settle(self, complete: bool) {
+        let now = chrono::Utc::now();
+        let end = super::api_meter::End { complete, elapsed: self.started.elapsed() };
+        if let Some(charge) = self.meter.charge(&super::api_usage::month_of(now), end) {
+            self.book.record(self.meter.provider(), &charge, now);
+        }
+    }
+}
 
 /// One relayed answer's tap: every chunk to [`usage_tap`], and exactly one
 /// [`usage_end`] — on a clean end, a failed read, or (on drop) an abort.
@@ -1172,14 +1228,14 @@ impl Tap {
 
     /// The answer's status and content type, before its body.
     fn answer(&mut self, status: StatusCode, headers: &HeaderMap) {
-        if let Some((meter, _)) = self.metered.as_mut() {
+        if let Some(Metered { meter, .. }) = self.metered.as_mut() {
             let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok());
             meter.answer(status.as_u16(), content_type);
         }
     }
 
     fn chunk(&mut self, bytes: &Bytes) {
-        usage_tap(&self.grant, self.metered.as_mut().map(|(m, _)| m), bytes);
+        usage_tap(&self.grant, self.metered.as_mut().map(|m| &mut m.meter), bytes);
     }
 
     fn end(&mut self, how: StreamEnd) {
@@ -1228,7 +1284,7 @@ fn relay(upstream: reqwest::Response, tap: Tap) -> Response {
 
 /// The spending limit's seam (C3): every response chunk of a granted request
 /// that reached the provider, in order, as the provider sent it (no content
-/// encoding — `accept-encoding` is not forwarded and the client decompresses
+/// encoding — `accept-encoding: identity` is asked and the client decompresses
 /// nothing), error answers included. A billed request's meter reads
 /// Anthropic's `message_start` / `message_delta` usage and Gemini's
 /// `usageMetadata` out of them (`api_meter`), keeping nothing else.
@@ -1242,15 +1298,13 @@ fn usage_tap(_grant: &Grant, meter: Option<&mut super::api_meter::Meter>, chunk:
 
 /// The answer ended — cleanly, by a failed read, or by the client going away.
 /// Exactly once per answer [`usage_tap`] saw. What the provider reported so
-/// far is charged in every case: an aborted stream may already be billed.
-fn usage_end(grant: &Grant, metered: Option<Metered>, _how: StreamEnd) {
+/// far is charged in every case, and an answer that ended before its final
+/// count an estimate on top: an aborted stream is billed by the provider.
+fn usage_end(_grant: &Grant, metered: Option<Metered>, how: StreamEnd) {
     #[cfg(test)]
-    tests::record_tap(grant, Some(_how));
-    if let Some((meter, book)) = metered {
-        let now = chrono::Utc::now();
-        if let Some(charge) = meter.charge(&super::api_usage::month_of(now)) {
-            book.record(grant.provider, &charge, now);
-        }
+    tests::record_tap(_grant, Some(how));
+    if let Some(metered) = metered {
+        metered.settle(how == StreamEnd::Complete);
     }
 }
 
@@ -1667,7 +1721,7 @@ mod tests {
             assert_eq!(uri, "/v1/messages?beta=true");
             assert_eq!(headers["x-api-key"], FAKE_KEY);
             assert!(headers.get("authorization").is_none());
-            assert!(headers.get("accept-encoding").is_none());
+            assert_eq!(headers["accept-encoding"], "identity", "the client's gzip is not forwarded");
             assert_eq!(headers["anthropic-version"], "2023-06-01");
             assert_eq!(headers["anthropic-beta"], "claude-code-20250219");
             assert_eq!(body, br#"{"model":"claude-test","stream":true}"#);
@@ -2071,5 +2125,76 @@ mod tests {
         assert!(json["error"]["message"].as_str().unwrap().contains("no monthly API budget"));
         assert_eq!(seen.hits.load(Ordering::SeqCst), 1);
         on_tab_gone("e2e:nolimit");
+    }
+
+    /// The ledger's models of `provider` once a charge landed.
+    async fn charged(book: &super::super::api_usage::Book, provider: Provider) -> std::collections::BTreeMap<String, super::super::api_usage::ModelUsage> {
+        for _ in 0..100 {
+            let ledger = book.snapshot(chrono::Utc::now());
+            if let Some(u) = ledger.providers.get(provider.id()).filter(|u| !u.models.is_empty()) {
+                return u.models.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Default::default()
+    }
+
+    #[tokio::test]
+    async fn a_client_that_hangs_up_before_the_final_count_is_charged_an_estimate() {
+        let seen = Arc::new(Seen::default());
+        // The stub sends `message_start` and holds the rest back.
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let upstream = stub_upstream(seen.clone(), release).await;
+        let budget = test_budget(Some(20.0));
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:hangup", None)).unwrap();
+        let mut response = plain_client()
+            .post(format!("{}/v1/messages", base_url_on(port, Provider::Anthropic)))
+            .header("x-api-key", token)
+            .body(r#"{"model":"claude-opus-5-5","max_tokens":64000,"stream":true}"#)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.chunk().await.unwrap().is_some());
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        drop(response);
+        let models = charged(&book, Provider::Anthropic).await;
+        let m = &models["claude-stub"];
+        assert_eq!(m.input, 5, "message_start's input as reported");
+        assert!(m.output >= super::super::api_meter::ANTHROPIC_TOKENS_PER_SEC, "output by time, not message_start's 1: {}", m.output);
+        on_tab_gone("e2e:hangup");
+    }
+
+    #[tokio::test]
+    async fn a_client_that_leaves_before_the_answer_begins_is_charged_an_estimate() {
+        // An upstream that takes the request and never answers (a long
+        // non-streaming turn).
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().fallback(|req: Request| async move {
+            let _ = axum::body::to_bytes(req.into_body(), usize::MAX).await;
+            std::future::pending::<Response>().await
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let budget = test_budget(Some(20.0));
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(format!("http://{addr}"), Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:left", None)).unwrap();
+        let body = format!(r#"{{"model":"claude-opus-5-5","max_tokens":100,"messages":[{{"role":"user","content":"{}"}}]}}"#, "x".repeat(3000));
+        let sent = plain_client()
+            .post(format!("{}/v1/messages", base_url_on(port, Provider::Anthropic)))
+            .header("x-api-key", token)
+            .body(body.clone())
+            .timeout(Duration::from_millis(1500))
+            .send()
+            .await;
+        assert!(sent.is_err(), "no answer ever came");
+        let models = charged(&book, Provider::Anthropic).await;
+        let m = &models["claude-opus-5-5"];
+        assert_eq!(m.input, (body.len() as u64).div_ceil(3));
+        assert_eq!(m.output, 100, "time-bounded, capped at the request's max_tokens");
+        assert!(!m.unknown);
+        on_tab_gone("e2e:left");
     }
 }

@@ -22,6 +22,21 @@
 //! keeps the largest value seen: nothing is counted twice. What was reported
 //! before a stream broke off (or the client left) is charged.
 //!
+//! **An answer that never reported its final count** — the client left or
+//! the stream broke before Anthropic's `message_delta` (or before Gemini's
+//! stream ended), the client left before the answer even began, or a usage
+//! object could not be read — is charged an **estimate** on top of what was
+//! reported, never nothing: the provider bills what it generated whether or
+//! not it was relayed (thinking that is not shown included), and an agent
+//! holding a token could otherwise read an answer and hang up before its
+//! count to spend for free. Output is bounded by time — [`End::elapsed`] at
+//! a rate above the provider's fastest current model
+//! ([`ANTHROPIC_TOKENS_PER_SEC`], [`GEMINI_TOKENS_PER_SEC`]) — and by the
+//! request's own `max_tokens` (Anthropic) or the provider's output cap;
+//! input not yet reported is the request body's bytes / 3 (more tokens than
+//! any tokenizer yields), up to a context window. An overcount on purpose:
+//! a turn the user cancels costs a little more here than it did.
+//!
 //! Memory is bounded per answer: a nesting stack of [`MAX_DEPTH`] frames, a
 //! [`MAX_STRING`]-byte window on the current string, and a [`MAX_CAPTURE`]
 //! copy of the one usage object being read. In SSE mode a line break resets
@@ -38,6 +53,21 @@ const MAX_DEPTH: usize = 64;
 const MAX_CAPTURE: usize = 16 * 1024;
 /// Bytes of a string kept to recognise a key or a model id.
 const MAX_STRING: usize = 128;
+
+/// Output tokens per second of an answer that did not report its final
+/// count, above any current model of the provider (fast mode included).
+pub const ANTHROPIC_TOKENS_PER_SEC: u64 = 300;
+pub const GEMINI_TOKENS_PER_SEC: u64 = 600;
+/// Output an Anthropic request may produce when its body names no readable
+/// `max_tokens` (the largest any current model takes).
+const ANTHROPIC_MAX_OUTPUT: u64 = 128_000;
+/// Output plus thinking a Gemini request may produce (65,536 output tokens
+/// and a 32,768-token thinking budget). The request's own settings are not
+/// trusted here: Gemini also reads them under their snake_case names.
+const GEMINI_MAX_OUTPUT: u64 = 65_536 + 32_768;
+/// Input a request can hold at most (the providers' context windows).
+const ANTHROPIC_MAX_INPUT: u64 = 1_000_000;
+const GEMINI_MAX_INPUT: u64 = 2_000_000;
 
 /// Keys the scanner cares about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,10 +102,14 @@ struct Frame {
 /// What the scanner found.
 #[derive(Debug, PartialEq)]
 enum Found {
-    /// A usage object's raw bytes.
-    Usage(Vec<u8>),
+    /// A usage object's raw bytes, and whether it sits at the answer's root
+    /// (Anthropic: a `message_delta` or a whole message — the final count).
+    Usage(Vec<u8>, bool),
     /// A model id.
     Model(String),
+    /// A usage object that could not be read whole (larger than
+    /// [`MAX_CAPTURE`], or cut by an SSE line break): the count is not known.
+    Lost,
 }
 
 #[derive(Debug, Default)]
@@ -99,8 +133,9 @@ struct Scanner {
     last_key: Option<Key>,
     /// The key whose value starts next.
     pending: Option<Key>,
-    /// The usage object being copied, and the depth it was opened at.
-    capture: Option<(Vec<u8>, usize)>,
+    /// The usage object being copied, the depth it was opened at, and
+    /// whether that is the answer's root.
+    capture: Option<(Vec<u8>, usize, bool)>,
 }
 
 impl Scanner {
@@ -144,13 +179,17 @@ impl Scanner {
     fn feed(&mut self, provider: Provider, sse: bool, bytes: &[u8], found: &mut Vec<Found>) {
         for &b in bytes {
             if sse && (b == b'\n' || b == b'\r') {
+                if self.capture.is_some() {
+                    found.push(Found::Lost);
+                }
                 self.reset();
                 continue;
             }
-            if let Some((buf, _)) = self.capture.as_mut() {
+            if let Some((buf, _, _)) = self.capture.as_mut() {
                 buf.push(b);
                 if buf.len() > MAX_CAPTURE {
                     self.capture = None;
+                    found.push(Found::Lost);
                 }
             }
             self.step(provider, b, found);
@@ -215,7 +254,8 @@ impl Scanner {
                     && matches!(key, Key::Usage | Key::UsageMetadata)
                     && self.wanted(provider, key)
                 {
-                    self.capture = Some((vec![b'{'], self.stack.len()));
+                    let root = self.below_root().is_some_and(<[Frame]>::is_empty);
+                    self.capture = Some((vec![b'{'], self.stack.len(), root));
                 }
                 if self.stack.len() < MAX_DEPTH {
                     self.stack.push(Frame { object, key });
@@ -234,9 +274,9 @@ impl Scanner {
                 self.pending = None;
                 self.last_key = None;
                 self.expect_key = false;
-                if self.deeper == 0 && self.capture.as_ref().is_some_and(|(_, depth)| *depth == self.stack.len()) {
-                    if let Some((buf, _)) = self.capture.take() {
-                        found.push(Found::Usage(buf));
+                if self.deeper == 0 && self.capture.as_ref().is_some_and(|(_, depth, _)| *depth == self.stack.len()) {
+                    if let Some((buf, _, root)) = self.capture.take() {
+                        found.push(Found::Usage(buf, root));
                     }
                 }
                 if self.stack.is_empty() && self.deeper == 0 {
@@ -274,7 +314,8 @@ pub enum Billing {
     /// An embedding request: Gemini reports no usage for it, so its input is
     /// estimated from the request body (`body_bytes / 3` tokens — more tokens
     /// than any text tokenizer yields, so an overcount) unless usage arrives.
-    Embedding { model: Option<String>, body_bytes: usize },
+    /// No output.
+    Embedding { model: Option<String> },
 }
 
 /// Whether a request on `path` (below the provider prefix) is billed, and how.
@@ -292,11 +333,45 @@ pub fn billing(provider: Provider, method: &str, path: &str) -> Option<Billing> 
             let model = Some(model.to_string()).filter(|m| !m.is_empty());
             match verb {
                 "generateContent" | "streamGenerateContent" => Some(Billing::Usage { model }),
-                "embedContent" | "batchEmbedContents" => Some(Billing::Embedding { model, body_bytes: 0 }),
+                "embedContent" | "batchEmbedContents" => Some(Billing::Embedding { model }),
                 _ => None,
             }
         }
     }
+}
+
+/// How an answer ended, for [`Meter::charge`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct End {
+    /// The provider's body ended cleanly (not a broken read, not a client
+    /// that left, not an answer that never began).
+    pub complete: bool,
+    /// From the request's send to the end.
+    pub elapsed: std::time::Duration,
+}
+
+/// What the request body says about the most the answer can cost.
+#[derive(Debug, Clone, Default)]
+struct RequestFacts {
+    body_bytes: usize,
+    /// Anthropic `max_tokens`.
+    max_output: Option<u64>,
+    /// Anthropic `model`: priced when the answer names none.
+    model: Option<String>,
+    /// Anthropic `speed: "fast"` / `inference_geo: "us"`.
+    fast: bool,
+    us_only: bool,
+}
+
+/// The few fields of an Anthropic request body the estimate reads. A body
+/// that does not parse (or repeats a field) leaves them all unset — the
+/// dearer reading.
+#[derive(serde::Deserialize)]
+struct AnthropicRequest {
+    max_tokens: Option<u64>,
+    model: Option<String>,
+    speed: Option<String>,
+    inference_geo: Option<String>,
 }
 
 /// One relayed answer's meter.
@@ -310,8 +385,16 @@ pub struct Meter {
     anthropic: AnthropicUsage,
     gemini: GeminiUsage,
     saw_usage: bool,
-    /// Only a 2xx answer is charged an estimate.
+    /// Anthropic: a usage object at the answer's root arrived (the final
+    /// count of a `message_delta` or a whole message).
+    final_usage: bool,
+    /// A usage object could not be read: the reported count is incomplete.
+    lost: bool,
+    /// The answer's status arrived.
+    answered: bool,
+    /// The answer's status is 2xx (an error answer costs nothing).
     success: bool,
+    request: RequestFacts,
 }
 
 impl Meter {
@@ -325,21 +408,37 @@ impl Meter {
             anthropic: AnthropicUsage::default(),
             gemini: GeminiUsage::default(),
             saw_usage: false,
+            final_usage: false,
+            lost: false,
+            answered: false,
             success: true,
+            request: RequestFacts::default(),
         }
+    }
+
+    pub fn provider(&self) -> Provider {
+        self.provider
     }
 
     /// The answer's status and content type, before its first chunk:
     /// `text/event-stream` is read line by line.
     pub fn answer(&mut self, status: u16, content_type: Option<&str>) {
+        self.answered = true;
         self.success = (200..300).contains(&status);
         self.sse = content_type.is_some_and(|ct| ct.trim_start().to_ascii_lowercase().starts_with("text/event-stream"));
     }
 
-    /// The request body's size, for an embedding estimate.
-    pub fn request_body(&mut self, bytes: usize) {
-        if let Billing::Embedding { body_bytes, .. } = &mut self.billing {
-            *body_bytes = bytes;
+    /// The request body, read for what bounds an estimate: its size, and
+    /// (Anthropic) `max_tokens`, `model`, `speed`, `inference_geo`.
+    pub fn request(&mut self, body: &[u8]) {
+        self.request = RequestFacts { body_bytes: body.len(), ..RequestFacts::default() };
+        if self.provider == Provider::Anthropic {
+            if let Ok(r) = serde_json::from_slice::<AnthropicRequest>(body) {
+                self.request.max_output = r.max_tokens;
+                self.request.model = r.model.filter(|m| !m.is_empty() && m.len() <= MAX_STRING);
+                self.request.fast = r.speed.as_deref() == Some("fast");
+                self.request.us_only = r.inference_geo.as_deref() == Some("us");
+            }
         }
     }
 
@@ -348,12 +447,25 @@ impl Meter {
         self.scanner.feed(self.provider, self.sse, chunk, &mut found);
         for f in found {
             match f {
-                Found::Model(m) => self.model = Some(m),
-                Found::Usage(bytes) => {
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        self.merge(&v);
+                // One answer naming two models (a server-side fallback):
+                // the dearer one prices it.
+                Found::Model(m) => {
+                    let dearer = match self.model.as_deref() {
+                        Some(old) => super::api_prices::output_rate(self.provider, &m) > super::api_prices::output_rate(self.provider, old),
+                        None => true,
+                    };
+                    if dearer {
+                        self.model = Some(m);
                     }
                 }
+                Found::Usage(bytes, root) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(v) => {
+                        self.merge(&v);
+                        self.final_usage |= root;
+                    }
+                    Err(_) => self.lost = true,
+                },
+                Found::Lost => self.lost = true,
             }
         }
     }
@@ -415,30 +527,61 @@ impl Meter {
     }
 
     /// What the answer cost, priced in UTC month `month`; `None` when it
-    /// reported nothing (an error, a refusal before any usage).
-    pub fn charge(&self, month: &str) -> Option<Charge> {
-        let hint = match &self.billing {
-            Billing::Usage { model } | Billing::Embedding { model, .. } => model.as_deref(),
+    /// cost nothing (an error answer, or nothing reported or estimated). An
+    /// answer whose final count did not arrive is charged the estimate in
+    /// the module docs on top of what it reported.
+    pub fn charge(&self, month: &str, end: End) -> Option<Charge> {
+        if self.answered && !self.success {
+            return None;
+        }
+        let path_model = match &self.billing {
+            Billing::Usage { model } | Billing::Embedding { model } => model.as_deref(),
         };
-        let model = self.model.as_deref().or(hint).unwrap_or("(unknown)");
+        let model = self.model.as_deref().or(path_model).or(self.request.model.as_deref()).unwrap_or("(unknown)");
+        // Anthropic's final count is `message_delta`'s (or a whole
+        // message's), however the body ended after it; Gemini's is the last
+        // chunk's, known only from a clean end.
+        let settled = !self.lost
+            && match self.provider {
+                Provider::Anthropic => self.final_usage,
+                Provider::Gemini => self.saw_usage && end.complete,
+            };
+        let (max_input, max_output, per_sec) = match self.provider {
+            Provider::Anthropic => {
+                (ANTHROPIC_MAX_INPUT, self.request.max_output.unwrap_or(ANTHROPIC_MAX_OUTPUT), ANTHROPIC_TOKENS_PER_SEC)
+            }
+            Provider::Gemini => (GEMINI_MAX_INPUT, GEMINI_MAX_OUTPUT, GEMINI_TOKENS_PER_SEC),
+        };
+        let input_estimate = (self.request.body_bytes as u64).div_ceil(3).min(max_input);
+        let output_estimate = match self.billing {
+            Billing::Embedding { .. } => 0,
+            Billing::Usage { .. } => ((end.elapsed.as_secs_f64() * per_sec as f64).ceil() as u64).min(max_output),
+        };
         let charge = match self.provider {
             Provider::Anthropic => {
-                if !self.saw_usage {
-                    return None;
+                let mut u = self.anthropic.clone();
+                if !settled {
+                    if u.input_tokens == 0 && u.cache_creation_input_tokens == 0 && u.cache_read_input_tokens == 0 {
+                        u.input_tokens = input_estimate;
+                    }
+                    u.output_tokens = u.output_tokens.max(output_estimate);
+                    u.fast |= self.request.fast;
+                    u.us_only |= self.request.us_only;
                 }
-                super::api_prices::price_anthropic(model, &self.anthropic)
+                super::api_prices::price_anthropic(model, &u)
             }
             Provider::Gemini => {
-                let mut usage = self.gemini.clone();
-                if let Billing::Embedding { body_bytes, .. } = self.billing {
-                    if self.success && usage.prompt_token_count == 0 {
-                        usage.prompt_token_count = (body_bytes as u64).div_ceil(3);
+                let mut u = self.gemini.clone();
+                if !settled {
+                    if u.prompt_token_count == 0 {
+                        u.prompt_token_count = input_estimate;
+                    }
+                    let reported = u.candidates_token_count.saturating_add(u.thoughts_token_count);
+                    if output_estimate > reported {
+                        u.candidates_token_count = output_estimate - u.thoughts_token_count.min(output_estimate);
                     }
                 }
-                if !self.saw_usage && usage.prompt_token_count == 0 {
-                    return None;
-                }
-                super::api_prices::price_gemini(model, &usage, month)
+                super::api_prices::price_gemini(model, &u, month)
             }
         };
         let nothing = charge.usd <= 0.0 && charge.input == 0 && charge.output == 0 && charge.cache_read == 0;
@@ -449,8 +592,16 @@ impl Meter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     const MONTH: &str = "2026-10";
+    /// A clean end.
+    const DONE: End = End { complete: true, elapsed: Duration::ZERO };
+
+    /// An end that was not clean, `secs` after the send.
+    fn cut(secs: u64) -> End {
+        End { complete: false, elapsed: Duration::from_secs(secs) }
+    }
 
     fn metered(provider: Provider, billing: Billing, content_type: &str, chunks: &[&[u8]]) -> Meter {
         let mut m = Meter::new(provider, billing);
@@ -465,12 +616,12 @@ mod tests {
     fn every_split(provider: Provider, billing: Billing, content_type: &str, body: &[u8], expect: &Charge) {
         for i in 0..=body.len() {
             let m = metered(provider, billing.clone(), content_type, &[&body[..i], &body[i..]]);
-            assert_eq!(m.charge(MONTH).as_ref(), Some(expect), "split at {i}");
+            assert_eq!(m.charge(MONTH, DONE).as_ref(), Some(expect), "split at {i}");
         }
         for i in (0..body.len()).step_by(7) {
             for j in (i..body.len()).step_by(11) {
                 let m = metered(provider, billing.clone(), content_type, &[&body[..i], &body[i..j], &body[j..]]);
-                assert_eq!(m.charge(MONTH).as_ref(), Some(expect), "split at {i}/{j}");
+                assert_eq!(m.charge(MONTH, DONE).as_ref(), Some(expect), "split at {i}/{j}");
             }
         }
         // Byte by byte.
@@ -479,7 +630,7 @@ mod tests {
         for b in body {
             m.feed(std::slice::from_ref(b));
         }
-        assert_eq!(m.charge(MONTH).as_ref(), Some(expect), "byte by byte");
+        assert_eq!(m.charge(MONTH, DONE).as_ref(), Some(expect), "byte by byte");
     }
 
     const ANTHROPIC_SSE: &str = concat!(
@@ -541,15 +692,19 @@ mod tests {
 
     #[test]
     fn an_answer_that_broke_off_is_charged_what_it_reported() {
-        let cut = ANTHROPIC_SSE.find("event: message_delta").unwrap();
-        let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "text/event-stream", &[&ANTHROPIC_SSE.as_bytes()[..cut]]);
-        let c = m.charge(MONTH).unwrap();
+        let at = ANTHROPIC_SSE.find("event: message_delta").unwrap();
+        let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "text/event-stream", &[&ANTHROPIC_SSE.as_bytes()[..at]]);
+        let c = m.charge(MONTH, cut(0)).unwrap();
         assert_eq!((c.input, c.output, c.cache_read), (1000, 1, 3000));
+        // Even a body that ended "cleanly" without its final count is not
+        // settled by `message_start`'s placeholder output.
+        let c = m.charge(MONTH, End { complete: true, elapsed: Duration::from_secs(10) }).unwrap();
+        assert_eq!((c.input, c.output), (1000, 3000));
         // An error answer reports nothing.
         let mut m = Meter::new(Provider::Anthropic, Billing::Usage { model: None });
         m.answer(429, Some("application/json"));
         m.feed(br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#);
-        assert_eq!(m.charge(MONTH), None);
+        assert_eq!(m.charge(MONTH, DONE), None);
     }
 
     const GEMINI_SSE: &str = concat!(
@@ -592,14 +747,14 @@ mod tests {
         every_split(Provider::Gemini, Billing::Usage { model: None }, "application/json; charset=UTF-8", array.as_bytes(), &expect);
         // `generateContent`: one object.
         let m = metered(Provider::Gemini, Billing::Usage { model: None }, "application/json", &[events[1].as_bytes()]);
-        assert_eq!(m.charge(MONTH), Some(expect));
+        assert_eq!(m.charge(MONTH, DONE), Some(expect));
     }
 
     #[test]
     fn gemini_model_comes_from_the_answer_else_the_path() {
         let body = br#"{"usageMetadata":{"promptTokenCount":1000000}}"#;
         let m = metered(Provider::Gemini, Billing::Usage { model: Some("gemini-2.5-flash".into()) }, "application/json", &[body]);
-        let c = m.charge(MONTH).unwrap();
+        let c = m.charge(MONTH, DONE).unwrap();
         assert_eq!(c.model, "gemini-2.5-flash");
         assert!((c.usd - 0.30).abs() < 1e-9);
     }
@@ -624,17 +779,17 @@ mod tests {
     #[test]
     fn an_embedding_is_estimated_from_its_body_unless_usage_arrives() {
         let mut m = Meter::new(Provider::Gemini, billing(Provider::Gemini, "POST", "/v1/models/gemini-embedding-2:embedContent").unwrap());
-        m.request_body(3_000_000);
+        m.request(&vec![b' '; 3_000_000]);
         m.answer(200, Some("application/json"));
         m.feed(br#"{"embedding":{"values":[0.1,0.2]}}"#);
-        let c = m.charge(MONTH).unwrap();
+        let c = m.charge(MONTH, DONE).unwrap();
         assert_eq!(c.input, 1_000_000);
         assert!((c.usd - 0.20).abs() < 1e-9);
         // A refused embedding costs nothing.
         let mut m = Meter::new(Provider::Gemini, billing(Provider::Gemini, "POST", "/v1/models/x:embedContent").unwrap());
-        m.request_body(3_000_000);
+        m.request(&vec![b' '; 3_000_000]);
         m.answer(400, Some("application/json"));
-        assert_eq!(m.charge(MONTH), None);
+        assert_eq!(m.charge(MONTH, DONE), None);
     }
 
     #[test]
@@ -653,7 +808,7 @@ mod tests {
         assert!(m.scanner.string.len() <= MAX_STRING);
         assert!(m.scanner.stack.len() <= MAX_DEPTH);
         m.feed(br#","usageMetadata":{"promptTokenCount":1000000,"candidatesTokenCount":0},"modelVersion":"gemini-2.5-flash"}"#);
-        let c = m.charge(MONTH).unwrap();
+        let c = m.charge(MONTH, DONE).unwrap();
         assert!((c.usd - 0.30).abs() < 1e-9);
         let mut m = Meter::new(Provider::Anthropic, Billing::Usage { model: None });
         m.answer(200, Some("application/json"));
@@ -661,7 +816,7 @@ mod tests {
         m.feed(&vec![b'x'; MAX_CAPTURE * 2]);
         m.feed(b"\",\"input_tokens\":5}}");
         assert!(m.scanner.capture.is_none());
-        assert_eq!(m.charge(MONTH), None, "an oversized usage object is not read");
+        assert_eq!(m.charge(MONTH, DONE), None, "an oversized usage object is not read");
     }
 
     #[test]
@@ -671,10 +826,182 @@ mod tests {
             "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1000000}}\n\n",
         );
         let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "text/event-stream", &[body.as_bytes()]);
-        let c = m.charge(MONTH).unwrap();
+        let c = m.charge(MONTH, DONE).unwrap();
         assert_eq!((c.input, c.output), (0, 1_000_000));
         // The model never arrived: priced (and flagged) as unknown.
         assert!(!c.known);
         assert!((c.usd - 50.0).abs() < 1e-9);
+    }
+
+    // ---- adversarial answers and early ends (C3 review) -------------------
+
+    fn anthropic_meter(request: &str) -> Meter {
+        let mut m = Meter::new(Provider::Anthropic, Billing::Usage { model: None });
+        m.request(request.as_bytes());
+        m
+    }
+
+    #[test]
+    fn hanging_up_before_the_final_count_is_charged_by_time_up_to_max_tokens() {
+        let start = ANTHROPIC_SSE.find("event: content_block_start").unwrap();
+        let mut m = anthropic_meter(r#"{"model":"claude-opus-5-5","max_tokens":8000,"stream":true}"#);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(&ANTHROPIC_SSE.as_bytes()[..start]);
+        // 10 s at the bound: 3,000 output tokens, more than reported.
+        let c = m.charge(MONTH, cut(10)).unwrap();
+        assert_eq!((c.input, c.output), (1000, 10 * ANTHROPIC_TOKENS_PER_SEC));
+        // Never past the request's own `max_tokens`.
+        assert_eq!(m.charge(MONTH, cut(3600)).unwrap().output, 8000);
+        // The same stream through to `message_delta` costs what it says.
+        let mut m = anthropic_meter(r#"{"model":"claude-opus-5-5","max_tokens":8000}"#);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(ANTHROPIC_SSE.as_bytes());
+        assert_eq!(m.charge(MONTH, cut(3600)).unwrap().output, 500, "a final count is not estimated over");
+    }
+
+    #[test]
+    fn a_request_the_client_left_before_its_answer_began_is_charged() {
+        // No status ever arrived (a non-streaming turn, or the wait for the
+        // first byte): input from the body, output by time, priced as the
+        // request's model in its requested speed.
+        let body = format!(r#"{{"model":"claude-haiku-4-5","max_tokens":64000,"speed":"fast","messages":[{{"role":"user","content":"{}"}}]}}"#, "x".repeat(2_000_000));
+        let m = anthropic_meter(&body);
+        let c = m.charge(MONTH, cut(20)).unwrap();
+        assert_eq!(c.model, "claude-haiku-4-5");
+        assert_eq!(c.input, (body.len() as u64).div_ceil(3));
+        assert_eq!(c.output, 20 * ANTHROPIC_TOKENS_PER_SEC);
+        let plain = super::super::api_prices::price_anthropic(
+            "claude-haiku-4-5",
+            &AnthropicUsage { input_tokens: c.input, output_tokens: c.output, ..Default::default() },
+        );
+        assert!((c.usd - plain.usd * 2.0).abs() < 1e-9, "fast mode from the request");
+        // A body too large for any context window is capped at one.
+        let m = anthropic_meter(&"x".repeat(30_000_000));
+        assert_eq!(m.charge(MONTH, cut(0)).unwrap().input, ANTHROPIC_MAX_INPUT);
+        // An answer that never began and a body that names no model: the
+        // highest rate.
+        assert!(!m.charge(MONTH, cut(0)).unwrap().known);
+    }
+
+    #[test]
+    fn a_body_that_repeats_max_tokens_gets_the_largest_cap() {
+        let m = anthropic_meter(r#"{"max_tokens":10,"max_tokens":128000,"model":"claude-opus-5-5"}"#);
+        assert_eq!(m.request.max_output, None);
+        assert_eq!(m.charge(MONTH, cut(3600)).unwrap().output, ANTHROPIC_MAX_OUTPUT);
+        // Nor does a float, a string or a negative number lower it.
+        for body in [r#"{"max_tokens":10.0}"#, r#"{"max_tokens":"10"}"#, r#"{"max_tokens":-1}"#, "not json"] {
+            assert_eq!(anthropic_meter(body).request.max_output, None, "{body}");
+        }
+    }
+
+    #[test]
+    fn an_error_answer_costs_nothing_however_it_ends() {
+        let mut m = anthropic_meter(r#"{"max_tokens":64000}"#);
+        m.answer(400, Some("application/json"));
+        m.feed(br#"{"type":"error","error":{"type":"invalid_request_error","message":"no"}}"#);
+        assert_eq!(m.charge(MONTH, cut(60)), None);
+    }
+
+    #[test]
+    fn an_unreadable_usage_object_leaves_the_answer_unsettled() {
+        // Too large to capture, on a body that ended cleanly: estimated, not
+        // free and not trusted.
+        let mut m = anthropic_meter(r#"{"max_tokens":100000}"#);
+        m.answer(200, Some("application/json"));
+        m.feed(b"{\"model\":\"claude-opus-5-5\",\"usage\":{\"pad\":\"");
+        m.feed(&vec![b'x'; MAX_CAPTURE * 2]);
+        m.feed(b"\",\"input_tokens\":5,\"output_tokens\":7}}");
+        let c = m.charge(MONTH, End { complete: true, elapsed: Duration::from_secs(4) }).unwrap();
+        assert_eq!(c.output, 4 * ANTHROPIC_TOKENS_PER_SEC);
+        // A usage object an SSE line break cuts in two.
+        let mut m = anthropic_meter(r#"{"max_tokens":100000}"#);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":\n2}}\n\n");
+        assert!(m.lost);
+        assert_eq!(m.charge(MONTH, End { complete: true, elapsed: Duration::from_secs(1) }).unwrap().output, ANTHROPIC_TOKENS_PER_SEC);
+    }
+
+    #[test]
+    fn model_text_cannot_forge_sse_framing_or_usage() {
+        // The model writes a fake end of event and a fake final count (with a
+        // huge number, so reading it at all would show) into its text; JSON
+        // escapes the line breaks, so the scanner never leaves the string.
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":",
+            "\"\\\\\\\"}\\n\\nevent: message_delta\\ndata: {\\\"type\\\":\\\"message_delta\\\",\\\"usage\\\":{\\\"output_tokens\\\":99999999}}\\n\\n\\\\\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":20}}\n\n",
+        );
+        let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "text/event-stream", &[body.as_bytes()]);
+        let c = m.charge(MONTH, DONE).unwrap();
+        assert_eq!((c.input, c.output), (10, 20));
+        assert!(c.known);
+    }
+
+    #[test]
+    fn deep_tool_input_and_repeated_keys_do_not_hide_the_root_usage() {
+        // Non-streaming: tool input is real JSON the model shapes, nested far
+        // past the tracked depth, with `usage` and `model` keys at every level.
+        let mut body = String::from("{\"model\":\"claude-opus-5-5\",\"content\":[{\"type\":\"tool_use\",\"input\":");
+        for _ in 0..(MAX_DEPTH * 3) {
+            body.push_str("{\"usage\":{\"output_tokens\":0},\"model\":\"claude-haiku-4-5\",\"k\":[");
+        }
+        for _ in 0..(MAX_DEPTH * 3) {
+            body.push_str("]}");
+        }
+        body.push_str("}],\"usage\":{\"input_tokens\":3,\"output_tokens\":4},\"usage\":{\"input_tokens\":2,\"output_tokens\":9}}");
+        let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "application/json", &[body.as_bytes()]);
+        let c = m.charge(MONTH, DONE).unwrap();
+        assert_eq!(c.model, "claude-opus-5-5");
+        // Repeated root keys: each field's largest value.
+        assert_eq!((c.input, c.output), (3, 9));
+    }
+
+    #[test]
+    fn two_models_in_one_answer_price_it_at_the_dearer() {
+        // A server-side fallback: the answer starts on one model, ends on another.
+        let body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-fable-5-1\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"message_delta\",\"model\":\"claude-opus-4-8\",\"usage\":{\"output_tokens\":1000000}}\n\n",
+        );
+        let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "text/event-stream", &[body.as_bytes()]);
+        let c = m.charge(MONTH, DONE).unwrap();
+        assert_eq!(c.model, "claude-fable-5-1");
+        assert!((c.usd - 60.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gemini_hung_up_on_during_silent_thinking_is_charged() {
+        // `alt=sse`, nothing arrived yet (thinking streams no chunk).
+        let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: Some("gemini-2.5-pro".into()) });
+        m.request(&[b' '; 30_000]);
+        m.answer(200, Some("text/event-stream"));
+        let c = m.charge(MONTH, cut(30)).unwrap();
+        assert_eq!((c.input, c.output), (10_000, 30 * GEMINI_TOKENS_PER_SEC));
+        assert!(c.known);
+        // A stream cut after chunks: what they reported, the output at least
+        // the time bound, thinking counted within it.
+        let first = GEMINI_SSE.find("\r\n\r\n").unwrap();
+        let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: None });
+        m.answer(200, Some("text/event-stream"));
+        m.feed(&GEMINI_SSE.as_bytes()[..first + 4]);
+        let c = m.charge(MONTH, cut(1)).unwrap();
+        assert_eq!((c.input, c.output), (300_000, GEMINI_TOKENS_PER_SEC));
+        assert_eq!(m.charge(MONTH, cut(3600)).unwrap().output, GEMINI_MAX_OUTPUT);
+    }
+
+    #[test]
+    fn escaped_or_overlong_model_ids_are_not_taken() {
+        let long = "m".repeat(MAX_STRING + 1);
+        for model in ["claude-haiku-4-\\u0035", long.as_str()] {
+            let body = format!(r#"{{"model":"{model}","usage":{{"input_tokens":1000000}}}}"#);
+            let m = metered(Provider::Anthropic, Billing::Usage { model: None }, "application/json", &[body.as_bytes()]);
+            let c = m.charge(MONTH, DONE).unwrap();
+            assert!(!c.known, "{model}");
+            assert!((c.usd - 10.0).abs() < 1e-9, "{model}");
+        }
     }
 }

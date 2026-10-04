@@ -118,7 +118,10 @@ a build without limits shows "no monthly limit" and is refused until you set
 one. The cost is an **estimate**: the price table inside Tabtivity is dated
 (Manage CLIs shows the date), and a model it does not know — a newer one — is
 counted at that provider's most expensive rate and listed under the provider.
-Not counted: Gemini's Google Search grounding fees and anything spent outside
+A turn that ends before the provider reports its final count — you cancel it,
+or the connection drops — is counted generously (by how long it ran, up to its
+output cap), since the provider bills what it generated: a cancelled turn costs
+a little more here than on the provider's bill. Not counted: Gemini's Google Search grounding fees and anything spent outside
 Tabtivity with the same key. So also **set a spending limit with the provider**
 (Anthropic Console → Limits, Google AI Studio / Cloud billing budgets): it is
 the one that holds whatever happens on this computer. The record is kept in

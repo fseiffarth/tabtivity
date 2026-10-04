@@ -975,8 +975,8 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
         const limitInput = (
           <input
             type="number"
-            min={1}
-            step={1}
+            min={0.01}
+            step="any"
             value={limitText}
             aria-label={t("settings.agentApiLimitLabel", { provider: name })}
             title={t("settings.agentApiLimitLabel", { provider: name })}

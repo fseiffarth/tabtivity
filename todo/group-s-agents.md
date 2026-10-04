@@ -2601,6 +2601,9 @@ unchanged; the new agents are additive.
     section says the record could not be read and restarted, and
     `agent-api-usage.corrupt.json` holds the garbage. Repeat the limit part
     with Gemini (its error reads RESOURCE_EXHAUSTED with the budget text).
+    Cancel a long answer with Esc after ~10 s: the row still grows (an
+    estimate by time — a cancelled turn costs a little more here than on the
+    provider's bill, never nothing).
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
