@@ -43,7 +43,7 @@ stores stay at the top. No `index.ts` barrels.
 |------|---------|
 | `AppShell.tsx` | Top-level layout: header, center, side-panel wiring. |
 | `HeaderBar.tsx` | The top bar: project strip leftmost (its `BoxScopeChip` logo opens the bar and drags the window, ▾ hover = dropdown; empty bar drags too, via `lib/window/startWindowDrag`); right = global apps (✉ 🗓 ☑), global menus (🧠 ⚙), `header/StatusCluster`, clock, window controls. |
-| `CenterPanel.tsx` | Tab/subwindow tiling host; keeps all panes mounted across scope switches. |
+| `CenterPanel.tsx` | Tab/subwindow tiling host; keeps all panes mounted across scope switches. Root panes stand down while the root console is open, and per key while a docked overlay agent column draws it (`overlayAgent` `shownKeys`). |
 | `DetachedCenterPanel.tsx` | Center-panel variant inside a detached OS window. Title-strip double-click = fit-to-this-screen (`snap_detached_window`); double-click counted from `pointerdown` because the WM grab eats `dblclick`. |
 | `DetachedApp.tsx` | Root component of a popped-out subwindow (#42). Holds the stray-fullscreen guard (a fullscreen popout can't be moved); the user's own F11 / button fullscreen is exempt. |
 | `DetachedCloseChoice.tsx` | What the WM ✕ on a popout asks: dock tabs back, close them, or cancel. Portaled dialog → sets an explicit color. |
@@ -273,7 +273,7 @@ stores stay at the top. No `index.ts` barrels.
 | `caldav.ts` | CalDAV accounts + sync, a second store beside `calendar.ts`. Sync merges via `caldav_apply` (never a replace); failures visible per collection. |
 | `calendar.ts` | Global calendars/events/tasks (one `calendar.json`); the only owner of task persistence (`moveTasks` = one write per drag, `setColumns`). |
 | `calendar/clipboard.ts` | The calendar clipboard (one copied entry, a snapshot). Module-level, so a copy pastes in another calendar tab and outlives the navigation. |
-| `calendar/arrivals.ts` | "Flying in": id → expiry of event/task rows a root agent just wrote (`RootOverlayHost` marks new ids from `root-mcp-changed`, never updates, `local` moves or deletes); calendar chips and `TodoCard` add `arrived` (`cal-arrive` keyframe). One sweep timer, live marks only. |
+| `calendar/arrivals.ts` | "Flying in": id → expiry of event/task rows a root agent just wrote (`RootOverlayHost` marks new ids from `root-mcp-changed` once the store has loaded; never updates, `local` moves, deletes or a delete+upsert move); calendar chips and `TodoCard` add `arrived` (`cal-arrive` keyframe). One sweep timer, live marks only. |
 | `overlayAgent.ts` | Docked agent of the mail/calendar/to-do overlays (`docs/overlay_agent_plan.md`): per `SteeringApp` the docked root tab's `{ key, open }` (session-only, no policy), `shownKeys` the columns display (`CenterPanel` steps aside), per-machine column width; forgets a dock whose tab left a hydrated root. |
 | `todo.ts` | To-do board session state only (overlay flag, filters — never persisted, drag, optimistic overlay, mail cache, `collapsedSteps`, `focusTaskId`). |
 | `browser.ts` | In-app browser store (#61). Nothing reaches the network on its own (`load`/`openLive` only, both clicks), actions tolerate a rejected invoke, downloads refused by default. |

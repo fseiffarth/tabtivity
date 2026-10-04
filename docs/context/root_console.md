@@ -118,6 +118,79 @@ With no project open, `CenterPanel` still shows the root scope. While the
 overlay is up, the panel's copies of the root panes stand down: two visible
 views of one PTY would take turns resizing it.
 
+## Docked in the app overlays
+
+The root agents are the only ones holding the calendar, board and mail tools,
+and the console that holds them floats over the very calendar they write to.
+Typing "a meeting on Friday at 14:00" and watching it land needs the agent and
+the app in one view. Ctrl+1–9 inside the mail, calendar or to-do overlay (or
+the ✦ in its title bar) therefore dock a root agent in a column on the overlay's
+right (`OverlayAgentColumn`, `useOverlayAgent`, `stores/overlayAgent`). A
+column, not the console beside the overlay: one frame moves, fills and closes as
+one, where two floating windows would each need their own placement, and the
+◫ file column already set the pattern (the resize edge is its handle).
+
+The tab still lives in root. It is added through `addTabToRoot`, the
+hydrate-first door `openTabInRootConsole` now wraps, minus the `show`. Its PTY
+is owned by `CenterPanel`'s keep-alive layer like every root tab's, and the
+column's pane is attach-only. Closing the overlay or hiding the column ends
+nothing, the tab sits in the console's strip, and `pty_spawn` hands it the MCP
+token as it would any root agent: no backend change. The numbers are the
+console's own `+` menu's (`useAddTabMenuData(ROOT_SCOPE)` →
+`agentShortcutSlots`), so only Root-chip agents are offered. A default agent
+without the chip turns Ctrl+1 into a hint naming the switch rather than a key
+silently passed on.
+
+**One visible view per PTY**, as with the console over `CenterPanel`:
+
+- Console open → the column shows "Shown in the root console" instead of the
+  pane. A chord answered by an overlay closes the console, so it shows.
+- The tab in a popped-out root subwindow → "Shown in a popout window". That
+  webview's stores are out of reach, so any tab in a detached root group
+  counts, and ↗ is dropped: the console draws only the in-window layout.
+- While the column does draw the pane, its key is in `shownKeys` and
+  `CenterPanel`'s root copy steps aside, beside the existing
+  `!(rootConsoleOpen && scopeKey === ROOT_SCOPE)` rule. With no project open,
+  that copy would otherwise be on screen too.
+
+**Escape belongs to the agent.** Each overlay closes on a window-level Escape;
+that handler ignores events from inside `.overlay-agent-column`, the console's
+`regionRef` rule. Without it Claude's cancel key would close the app.
+
+**Reuse.** One docked agent per overlay, session-only. Ctrl+N on a closed column
+re-shows the docked tab when it came from the same `+` menu row and its program
+still runs; anything else mints a new root tab, and the one it replaces keeps
+running in the console. The row, not the command, is the identity: a custom
+agent may run the built-in's binary with its own arguments. An exited agent's
+tab stays in root (it prints `[process exited]`), so the dock store keeps it;
+an exit watcher on the terminal bus, armed per docked key at dock time, keeps
+the reuse rule from putting that corpse back. A `terminal-ready` revives it.
+
+**Chord routing.** `frontAppOverlay` picks the overlay: one counts while its
+store has it open and its settings gate is on; the one holding focus wins, else
+the topmost by `AppShell` mount order (board, calendar, mail). `useKeyboard`
+then dispatches a cancelable `OVERLAY_AGENT_EVENT` (`requestOverlayAgent`), the
+`requestNewTab` pattern. An unanswered request passes the key on, never into a
+workspace tab hidden under the overlay. Shell and monitor chords are unchanged.
+
+**Arrivals.** A row an agent's write adds flies into the calendar views and the
+board (`stores/calendar/arrivals`, 1.8 s, opacity and transform only, off under
+`prefers-reduced-motion`). `RootOverlayHost`'s `root-mcp-changed` listener marks
+it, reading the store before the merge:
+
+- Only ids the store never held: an update must not replay an entrance.
+- Not `local` changes: those are board-only rank moves.
+- Not before the calendar store has loaded: an empty store makes every update
+  look new.
+- Not a delete followed by an upsert of the same id: that is a move to
+  another calendar.
+
+Under the default review level the write lands on the user's ✓ in the overlay's
+own Approvals pill, so the entrance plays on approval, in the same window. Mail
+drafts get no entrance: an agent draft always lands unfiled in the approvals
+list and reaches "Drafted by agents" only through that ✓, so the user's own
+click is the arrival.
+
 ## The extra rights
 
 A root agent is asked for things that are not any project's business: "add a

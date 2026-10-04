@@ -1,7 +1,7 @@
 ---
 id: mail-calendar
 title: Mail, calendar, to-do board and browser
-keywords: [mail, email, imap, smtp, address book, contacts, vcard, ldif, thunderbird import, autocomplete, calendar, caldav, ics, event, reminder, todo, board, browser, web]
+keywords: [mail, email, imap, smtp, address book, contacts, vcard, ldif, thunderbird import, autocomplete, calendar, caldav, ics, event, reminder, todo, board, browser, web, agent column, docked agent, approvals]
 ---
 
 These surfaces are machine-wide, not per project. They open as overlays over
@@ -66,3 +66,36 @@ Settings → System → Experimental, then use `+` → Browser.
 
 Agents in the root console with the **MCP** chip on get Tabtivity's root tools
 (calendar, board, project list). See `tabs-and-panels`.
+
+## An agent beside the mail, calendar or board
+
+In the mail, calendar or to-do window, the ✦ button in the title bar (hover
+shows its chord) or **Ctrl+1** docks your default agent in a column on the
+right of that window; **Ctrl+2 … Ctrl+9** dock the root console's other
+agents, numbered as its `+` menu numbers them. You type a request beside the
+app and watch the result land in it.
+
+- **It is a root-console agent.** The tab lives in the root console and shows
+  there as an ordinary tab. It gets the calendar, board and project tools only
+  if the agent wears the **MCP** chip in the Models & agents menu (the ⚿ badge
+  in the column's header says whether the tools are on). Mail tools come only
+  with **Agents get Tabtivity's mail tools** in Settings → Agents → Root
+  console and MCPs, and a cloud agent can then only write drafts, never read.
+- **Only Root-chip agents.** If your default agent has no **Root** chip,
+  Ctrl+1 shows "Allow <agent> in the root console: Models & agents → Root
+  chip" in the column instead. Any other number with no agent behind it is
+  left to the app.
+- **Hiding keeps the conversation.** × (or a double-click on the column's
+  left edge) hides the column; ✦ or the same number brings the same agent
+  back. Closing the window ends nothing. Another number docks a new tab; the
+  previous one keeps running in the root console. Drag the left edge to
+  resize.
+- **↗** moves the agent to the root console. While the console is open the
+  column shows "Shown in the root console"; close the console and it is back.
+- **Escape** typed in the agent goes to the agent (Claude's cancel key), not to
+  the window. Click in the app first to close the window with Escape.
+- **Approvals.** By default an agent's writes wait in the window's
+  **✓ Approvals** pill, which lists that window's own proposals (mail drafts
+  in the mail window). A new event or card flies into the view when it
+  lands — on your ✓, or at once when review is set lower. Edits to existing
+  rows don't animate.
