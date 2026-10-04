@@ -49,6 +49,7 @@ pub mod agent_exec;
 pub mod agent_auth;
 // Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
 pub mod agent_api_keys;
+pub mod api_proxy;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;

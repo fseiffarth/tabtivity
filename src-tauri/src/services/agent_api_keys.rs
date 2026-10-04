@@ -1,36 +1,46 @@
-//! Provider API keys for agent CLIs (`docs/api_chat_plan.md`, Part A).
+//! Provider API keys for agent CLIs (`docs/api_chat_plan.md`, Parts A and C).
 //!
 //! A user who pays per token rather than by subscription gives Tabtivity a
 //! provider key once (Manage CLIs → API keys). It lives in the OS keychain
 //! under `remote_credentials`' service, account `agent-key:<provider>`, and
 //! nowhere else: not in `settings.json`, a session dir, a launcher script, an
-//! argv, a log, or the phone API. At spawn it is handed to the CLIs the user
-//! switched on (`Settings::agent_api_key_clis`), as the environment variable
-//! each CLI already reads ([`CLI_KEYS`]). On Linux and macOS the spawn carries
-//! it under an app-named carrier ([`CARRIERS`], the only names in
-//! `tmux_local::SECRET_ENV`), which `services::agent_exec` turns into the
-//! CLI's variable just before the agent runs (Part C, C1); on Windows (no
-//! tmux, no fence) it goes in under the CLI's own name.
+//! argv, a log, the phone API — or an agent process (Part C, C2).
 //!
-//! Rules (decisions 3–7 of the plan):
+//! A keyed spawn of a CLI the user switched on (`Settings::agent_api_key_clis`)
+//! gets a **proxy token** and the CLI's **base-URL variable** instead
+//! ([`CLI_ROUTES`]): `services::api_proxy`, a loopback listener inside
+//! Tabtivity, swaps the token for the real key and forwards only to the
+//! provider's own API host. On Linux and macOS the token travels under an
+//! app-named carrier ([`CARRIERS`], the only names in
+//! `tmux_local::SECRET_ENV`), which `services::agent_exec` turns into the CLI's
+//! variable just before the agent runs (C1); on Windows (no tmux, no fence) it
+//! goes in under the CLI's own name. The base URL is not a secret and rides as
+//! a plain variable.
 //!
-//! - **Off per CLI by default.** Claude prefers `ANTHROPIC_API_KEY` over its
-//!   subscription login once approved, so a stored key reaching every CLI
-//!   would silently move the user's billing.
-//! - **A value the user set wins** — the variable or any alias of it, in the
-//!   spawn's environment or Tabtivity's own ([`Provider::aliases`]).
+//! Rules:
+//!
+//! - **Only proxyable CLIs.** A CLI is in [`CLI_ROUTES`] only if an environment
+//!   variable points it at the proxy (decision 2 of Part C): Claude
+//!   (`ANTHROPIC_BASE_URL`) and Gemini (`GOOGLE_GEMINI_BASE_URL`). Mistral
+//!   Vibe documents no such variable; OpenCode's only one is a whole inline
+//!   config (`OPENCODE_CONFIG_CONTENT`, which Tabtivity already fills with its
+//!   Ollama model list). Neither gets a key.
+//! - **Off per CLI by default.** A key reaching a CLI moves its billing.
+//! - **A value the user set wins** — the CLI's credential or base-URL
+//!   variable, or another name for the same provider's credential, in the
+//!   spawn's environment or Tabtivity's own ([`Route::user_names`]).
 //! - **Local sessions only.** Remote and container spawns never reach the
 //!   injection points; local-model tabs ([`is_local_model`]) and CLI
-//!   subcommands (sign-in tabs, `claude auth login`) are skipped here.
-//! - **The CLI's own prompts stay the CLI's.** Claude asks once per agent home
-//!   whether to use a detected key (default *No*); Gemini needs "Use Gemini API
-//!   key" picked in its `/auth`. Nothing here answers or pre-writes those.
-//! - **The key is the agent's to read.** Anything the agent runs can print its
-//!   environment, and a project's CLI config can point the CLI at another
-//!   host. That is stated in the settings help, not solved.
+//!   subcommands (sign-in tabs, `claude auth login`) are skipped here. So is a
+//!   CLI typed into a shell tab: the `--agent-shim` process runs no proxy.
+//! - **The CLI's own prompts stay the CLI's.** Claude takes
+//!   `ANTHROPIC_AUTH_TOKEN` without its "Detected a custom API key" dialog
+//!   (verified, 2.1.288); Gemini needs "Use Gemini API key" picked in its
+//!   `/auth`. Nothing here answers or pre-writes those.
 //!
 //! Every spawn-time read goes through [`inject_env`], which reads the settings
-//! first and the keychain only for a CLI the user switched on.
+//! first and the keychain (through `api_proxy`'s cache) only for a CLI the
+//! user switched on.
 
 use std::collections::HashMap;
 
@@ -41,25 +51,16 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
     Anthropic,
-    OpenAi,
     Gemini,
-    Mistral,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 4] = [
-        Provider::Anthropic,
-        Provider::OpenAi,
-        Provider::Gemini,
-        Provider::Mistral,
-    ];
+    pub const ALL: [Provider; 2] = [Provider::Anthropic, Provider::Gemini];
 
     pub fn id(self) -> &'static str {
         match self {
             Provider::Anthropic => "anthropic",
-            Provider::OpenAi => "openai",
             Provider::Gemini => "gemini",
-            Provider::Mistral => "mistral",
         }
     }
 
@@ -72,43 +73,46 @@ impl Provider {
         format!("agent-key:{}", self.id())
     }
 
-    /// Other variables that already choose this provider's credential: set by
+    /// Every variable that already carries this provider's credential: set by
     /// the user, any of them means nothing is injected for this provider.
-    pub fn aliases(self) -> &'static [&'static str] {
+    pub fn credential_names(self) -> &'static [&'static str] {
         match self {
-            Provider::Anthropic => &["ANTHROPIC_AUTH_TOKEN"],
-            Provider::OpenAi => &[],
-            Provider::Gemini => &["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
-            Provider::Mistral => &[],
+            Provider::Anthropic => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            Provider::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
         }
     }
 }
 
-pub const ANTHROPIC_ENV: &str = "ANTHROPIC_API_KEY";
-pub const OPENAI_ENV: &str = "OPENAI_API_KEY";
-pub const GEMINI_ENV: &str = "GEMINI_API_KEY";
-pub const MISTRAL_ENV: &str = "MISTRAL_API_KEY";
+/// Claude's bearer credential: sent as `Authorization: Bearer`, used at once,
+/// no approval dialog (`ANTHROPIC_API_KEY` raises one, default *No*, even
+/// against a custom base URL — both checked with 2.1.288).
+pub const ANTHROPIC_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
+pub const ANTHROPIC_BASE_ENV: &str = "ANTHROPIC_BASE_URL";
+/// Gemini CLI's key variable; `@google/genai` sends it as `x-goog-api-key`.
+pub const GEMINI_TOKEN_ENV: &str = "GEMINI_API_KEY";
+/// geminicli.com configuration reference: "Overrides the default base URL for
+/// Gemini API requests (when using `gemini-api-key` authentication)".
+pub const GEMINI_BASE_ENV: &str = "GOOGLE_GEMINI_BASE_URL";
 
-/// Every variable a CLI ends up with: [`inject_env`] sets it directly on
-/// Windows, `agent_exec` from its carrier elsewhere. Never in
-/// `tmux_local::SECRET_ENV` — those slots stay set on the user's own tmux
-/// server, where a common name would cost their own sessions the variable.
-pub const ENV_VARS: &[&str] = &[ANTHROPIC_ENV, OPENAI_ENV, GEMINI_ENV, MISTRAL_ENV];
+/// Every variable a token ends up in: [`inject_env`] sets it directly on
+/// Windows, `agent_exec` from its carrier elsewhere (these are
+/// `agent_exec::targets`). Never in `tmux_local::SECRET_ENV` — those slots
+/// stay set on the user's own tmux server, where a common name would cost
+/// their own sessions the variable.
+pub const ENV_VARS: &[&str] = &[ANTHROPIC_TOKEN_ENV, GEMINI_TOKEN_ENV];
 
 // The carriers of [`ENV_VARS`], index for index: `agent_exec::CARRIER_PREFIX`
 // and the variable's name (a test holds them to it). `SECRET` in the name
 // keeps `brand::Pair::export_both` from twinning one under the old prefix.
-pub const ANTHROPIC_CARRIER: &str = crate::app_env!("AGENT_SECRET_ANTHROPIC_API_KEY");
-pub const OPENAI_CARRIER: &str = crate::app_env!("AGENT_SECRET_OPENAI_API_KEY");
+pub const ANTHROPIC_CARRIER: &str = crate::app_env!("AGENT_SECRET_ANTHROPIC_AUTH_TOKEN");
 pub const GEMINI_CARRIER: &str = crate::app_env!("AGENT_SECRET_GEMINI_API_KEY");
-pub const MISTRAL_CARRIER: &str = crate::app_env!("AGENT_SECRET_MISTRAL_API_KEY");
 
-/// Every variable [`inject_env`] can set on Linux and macOS.
+/// Every variable [`inject_env`] can set a secret under on Linux and macOS.
 /// `tmux_local::SECRET_ENV` lists the same consts (a test holds the two
 /// together), so none rides a tmux argv.
-pub const CARRIERS: &[&str] = &[ANTHROPIC_CARRIER, OPENAI_CARRIER, GEMINI_CARRIER, MISTRAL_CARRIER];
+pub const CARRIERS: &[&str] = &[ANTHROPIC_CARRIER, GEMINI_CARRIER];
 
-/// Whether a key travels under its carrier: everywhere but Windows.
+/// Whether a token travels under its carrier: everywhere but Windows.
 const CARRY: bool = cfg!(unix);
 
 /// The carrier of `var`, one of [`ENV_VARS`].
@@ -120,23 +124,50 @@ fn carrier_of(var: &str) -> &'static str {
         .expect("every injected variable has a carrier")
 }
 
-/// Which variable each CLI (by registry id) reads for which provider. Codex is
-/// absent on purpose: its interactive TUI documents only `codex login
-/// --with-api-key` (`CODEX_API_KEY` is for `exec`), so it is not guessed.
-const CLI_KEYS: &[(&str, &[(Provider, &str)])] = &[
-    ("claude", &[(Provider::Anthropic, ANTHROPIC_ENV)]),
-    ("gemini", &[(Provider::Gemini, GEMINI_ENV)]),
-    ("vibe", &[(Provider::Mistral, MISTRAL_ENV)]),
+/// How one CLI reaches one provider through the proxy.
+#[derive(Debug, Clone, Copy)]
+pub struct Route {
+    pub provider: Provider,
+    /// The variable the CLI sends as its credential: the proxy token goes here.
+    pub token_var: &'static str,
+    /// The variable that points the CLI at another API base URL: the proxy's.
+    pub base_var: &'static str,
+}
+
+impl Route {
+    /// The names that, set by the user, mean this route is theirs: the
+    /// provider's credentials and the CLI's base URL.
+    fn user_names(&self) -> impl Iterator<Item = &'static str> {
+        self.provider.credential_names().iter().copied().chain(std::iter::once(self.base_var))
+    }
+}
+
+/// The CLIs (by registry id) that take a key through the proxy. Codex is
+/// absent (its TUI documents only `codex login --with-api-key`), and so are
+/// Mistral Vibe and OpenCode (no environment variable points them at the
+/// proxy; see the module docs).
+const CLI_ROUTES: &[(&str, &[Route])] = &[
     (
-        "opencode",
-        &[
-            (Provider::Anthropic, ANTHROPIC_ENV),
-            (Provider::OpenAi, OPENAI_ENV),
-            (Provider::Gemini, GEMINI_ENV),
-            (Provider::Mistral, MISTRAL_ENV),
-        ],
+        "claude",
+        &[Route { provider: Provider::Anthropic, token_var: ANTHROPIC_TOKEN_ENV, base_var: ANTHROPIC_BASE_ENV }],
+    ),
+    (
+        "gemini",
+        &[Route { provider: Provider::Gemini, token_var: GEMINI_TOKEN_ENV, base_var: GEMINI_BASE_ENV }],
     ),
 ];
+
+/// The base-URL variable that rides beside token carrier `carrier`, and the
+/// provider it points at — for a spawn that has to drop the token again
+/// (tmux < 3.2) and must not leave the CLI pointed at a proxy it holds no
+/// token for.
+pub fn base_of_carrier(carrier: &str) -> Option<(&'static str, Provider)> {
+    CLI_ROUTES
+        .iter()
+        .flat_map(|(_, routes)| routes.iter())
+        .find(|r| carrier_of(r.token_var) == carrier)
+        .map(|r| (r.base_var, r.provider))
+}
 
 /// Longest key accepted; every provider's is far shorter.
 const MAX_KEY_BYTES: usize = 512;
@@ -149,12 +180,12 @@ pub fn cli_of(cmd: &str) -> Option<&'static str> {
     crate::commands::agents::agent_id_for_bin(bin)
 }
 
-/// The `(provider, variable)` pairs of CLI `id`; empty for one not in the table.
-fn keys_of(id: &str) -> &'static [(Provider, &'static str)] {
-    CLI_KEYS
+/// The routes of CLI `id`; empty for one not in the table.
+fn routes_of(id: &str) -> &'static [Route] {
+    CLI_ROUTES
         .iter()
         .find(|(cli, _)| *cli == id)
-        .map(|(_, keys)| *keys)
+        .map(|(_, routes)| *routes)
         .unwrap_or(&[])
 }
 
@@ -185,7 +216,11 @@ pub fn set_key(provider: Provider, key: Option<&str>) -> Result<(), String> {
             return Err("not a usable API key (empty, too long, or contains spaces)".into());
         }
     }
-    crate::services::remote_credentials::set(&provider.account(), key)
+    let saved = crate::services::remote_credentials::set(&provider.account(), key);
+    // Saved or not, the proxy reads the keychain again at its next use: a
+    // removed key stops running keyed tabs at their next request.
+    crate::services::api_proxy::forget_key(provider);
+    saved
 }
 
 /// Whether a key is stored for `provider`. Reads "no" while the keyring is
@@ -213,7 +248,7 @@ pub fn enabled_clis() -> Vec<String> {
 /// keychain.
 pub fn applies_to(cmd: &str, settings: &crate::schema::Settings) -> bool {
     cli_of(cmd).is_some_and(|id| {
-        !keys_of(id).is_empty()
+        !routes_of(id).is_empty()
             && settings
                 .agent_api_key_clis
                 .as_deref()
@@ -221,30 +256,41 @@ pub fn applies_to(cmd: &str, settings: &crate::schema::Settings) -> bool {
     })
 }
 
-/// Whether a local session of `cmd` would start on a stored key: switched on
-/// and one of its providers has a key. Reads the keychain only when switched on.
+/// Whether a local session of `cmd` would start on the proxy: switched on, the
+/// proxy running in this process, and one of its providers keyed. Reads the
+/// keychain (once, then `api_proxy`'s cache) only when switched on.
 pub fn keyed(cmd: &str, settings: &crate::schema::Settings) -> bool {
     applies_to(cmd, settings)
-        && cli_of(cmd).is_some_and(|id| keys_of(id).iter().any(|(p, _)| has_key(*p)))
+        && crate::services::api_proxy::running()
+        && cli_of(cmd).is_some_and(|id| {
+            routes_of(id).iter().any(|r| crate::services::api_proxy::key_for(r.provider).is_some())
+        })
 }
 
-/// Whether the variable or one of its provider's aliases is set, non-empty,
-/// in the spawn's environment or (`ambient`) Tabtivity's own.
-fn user_set(
-    provider: Provider,
-    var: &str,
-    env: &HashMap<String, String>,
-    ambient: &impl Fn(&str) -> bool,
-) -> bool {
-    std::iter::once(var)
-        .chain(provider.aliases().iter().copied())
+/// Whether one of the route's user names is set, non-empty, in the spawn's
+/// environment or (`ambient`) Tabtivity's own.
+fn user_set(route: &Route, env: &HashMap<String, String>, ambient: &impl Fn(&str) -> bool) -> bool {
+    route
+        .user_names()
         .any(|k| env.get(k).is_some_and(|v| !v.is_empty()) || ambient(k))
 }
 
+/// Where a spawn's grants are bound (`api_proxy::Grant`).
+#[derive(Debug, Clone, Copy)]
+pub struct Binding<'a> {
+    /// The PTY id.
+    pub tab: &'a str,
+    /// The agent home's scope.
+    pub scope: &'a str,
+    /// The local tmux session the agent will run in, if any.
+    pub tmux: Option<&'a str>,
+}
+
 /// The pure core of [`inject_env`]. Nothing for a local-model tab, a CLI
-/// subcommand, or a CLI not in `enabled`; otherwise each of the CLI's
-/// variables the user did not set gets `get(provider)` when that has a key —
-/// under its carrier with `carry`, else under its own name. Returns the
+/// subcommand, or a CLI not in `enabled`; otherwise each of the CLI's routes
+/// the user did not set gets `grant(provider)` — a proxy token and base URL —
+/// when that has one: the token under its carrier with `carry`, else under
+/// the CLI's own name, the base URL under the CLI's variable. Returns the
 /// names it set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inject_env_with(
@@ -255,7 +301,7 @@ pub(crate) fn inject_env_with(
     env: &mut HashMap<String, String>,
     carry: bool,
     ambient: impl Fn(&str) -> bool,
-    mut get: impl FnMut(Provider) -> Option<String>,
+    mut grant: impl FnMut(Provider) -> Option<(String, String)>,
 ) -> Vec<&'static str> {
     if local_model || subcommand {
         return Vec::new();
@@ -267,34 +313,42 @@ pub(crate) fn inject_env_with(
         return Vec::new();
     }
     let mut set = Vec::new();
-    for &(provider, var) in keys_of(id) {
-        if user_set(provider, var, env, &ambient) {
+    for route in routes_of(id) {
+        if user_set(route, env, &ambient) {
             continue;
         }
-        if let Some(key) = get(provider).filter(|k| key_shape_ok(k)) {
-            let name = if carry { carrier_of(var) } else { var };
-            env.insert(name.to_string(), key);
+        if let Some((token, base)) = grant(route.provider) {
+            let name = if carry { carrier_of(route.token_var) } else { route.token_var };
+            env.insert(name.to_string(), token);
+            env.insert(route.base_var.to_string(), base);
             set.push(name);
+            set.push(route.base_var);
         }
     }
     set
 }
 
-/// Give a local agent session of `cmd` its stored keys. `subcommand` is
-/// `agent_fence::runs_subcommand` of the CLI's own argv, taken before a fence
-/// rewrites it. Settings first, so a spawn of a CLI nobody switched on never
-/// touches the keyring.
+/// Point a local agent session of `cmd` at the proxy for its keyed providers.
+/// `subcommand` is `agent_fence::runs_subcommand` of the CLI's own argv, taken
+/// before a fence rewrites it. Settings first, so a spawn of a CLI nobody
+/// switched on never touches the keyring; nothing at all where the proxy is
+/// not running (the `--agent-shim` process).
 pub fn inject_env(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
+    binding: Binding<'_>,
     env: &mut HashMap<String, String>,
 ) -> Vec<&'static str> {
-    if local_model || subcommand || cli_of(cmd).is_none_or(|id| keys_of(id).is_empty()) {
+    if local_model
+        || subcommand
+        || !crate::services::api_proxy::running()
+        || cli_of(cmd).is_none_or(|id| routes_of(id).is_empty())
+    {
         return Vec::new();
     }
     // Nothing is logged: in the `--agent-shim` process stderr is the user's
-    // own terminal.
+    // own terminal, and a token is a secret too.
     inject_env_with(
         cmd,
         subcommand,
@@ -303,7 +357,7 @@ pub fn inject_env(
         env,
         CARRY,
         |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()),
-        get_key,
+        |provider| crate::services::api_proxy::issue(provider, binding.scope, binding.tab, binding.tmux),
     )
 }
 
@@ -344,15 +398,15 @@ fn status_with(readable: bool, saved: impl Fn(Provider) -> bool, enabled: &[Stri
         .map(|p| ProviderStatus { id: p.id(), saved: saved(p) })
         .collect();
     let is_saved = |p: Provider| providers.iter().any(|s| s.id == p.id() && s.saved);
-    let clis = CLI_KEYS
+    let clis = CLI_ROUTES
         .iter()
-        .map(|&(id, keys)| {
+        .map(|&(id, routes)| {
             let enabled = enabled.iter().any(|c| c == id);
             CliStatus {
                 id,
                 enabled,
-                providers: keys.iter().map(|(p, _)| p.id()).collect(),
-                ready: enabled && keys.iter().any(|(p, _)| is_saved(*p)),
+                providers: routes.iter().map(|r| r.provider.id()).collect(),
+                ready: enabled && routes.iter().any(|r| is_saved(r.provider)),
             }
         })
         .collect();
@@ -368,10 +422,10 @@ pub fn ready_clis() -> Vec<&'static str> {
 
 fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'static str> {
     let mut known: HashMap<Provider, bool> = HashMap::new();
-    CLI_KEYS
+    CLI_ROUTES
         .iter()
         .filter(|(id, _)| enabled.iter().any(|c| c == id))
-        .filter(|(_, keys)| keys.iter().any(|(p, _)| *known.entry(*p).or_insert_with(|| has(*p))))
+        .filter(|(_, routes)| routes.iter().any(|r| *known.entry(r.provider).or_insert_with(|| has(r.provider))))
         .map(|(id, _)| *id)
         .collect()
 }
@@ -388,85 +442,89 @@ pub fn status() -> ApiKeyStatus {
 mod tests {
     use super::*;
 
-    // Fake test keys, never a real-looking provider shape.
-    const FAKE_ANTHROPIC: &str = "sk-test-anthropic-fake";
-    const FAKE_GEMINI: &str = "test-gemini-fake";
+    // Fake test tokens, never a real-looking provider shape.
+    const FAKE_TOKEN: &str = "test-proxy-token-fake";
+    const BASE: &str = "http://127.0.0.1:9/";
 
     fn on(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|s| s.to_string()).collect()
     }
 
-    fn fake(p: Provider) -> Option<String> {
-        match p {
-            Provider::Anthropic => Some(FAKE_ANTHROPIC.into()),
-            Provider::Gemini => Some(FAKE_GEMINI.into()),
-            _ => None,
-        }
+    /// The proxy's answer for a keyed provider: Anthropic and Gemini both.
+    fn proxied(p: Provider) -> Option<(String, String)> {
+        Some((format!("{FAKE_TOKEN}-{}", p.id()), format!("{BASE}{}", p.id())))
     }
 
     fn inject(cmd: &str, enabled: &[&str], env: &mut HashMap<String, String>) -> Vec<&'static str> {
-        inject_env_with(cmd, false, false, &on(enabled), env, false, |_| false, fake)
+        inject_env_with(cmd, false, false, &on(enabled), env, false, |_| false, proxied)
     }
 
     #[test]
-    fn only_a_switched_on_cli_gets_its_key() {
+    fn only_a_switched_on_cli_gets_a_token_and_the_proxy_url() {
         let mut env = HashMap::new();
         assert!(inject("claude", &[], &mut env).is_empty());
         assert!(inject("claude", &["gemini"], &mut env).is_empty());
         assert!(env.is_empty());
-        assert_eq!(inject("claude", &["claude"], &mut env), vec![ANTHROPIC_ENV]);
-        assert_eq!(env[ANTHROPIC_ENV], FAKE_ANTHROPIC);
+        assert_eq!(inject("claude", &["claude"], &mut env), vec![ANTHROPIC_TOKEN_ENV, ANTHROPIC_BASE_ENV]);
+        assert_eq!(env[ANTHROPIC_TOKEN_ENV], "test-proxy-token-fake-anthropic");
+        assert_eq!(env[ANTHROPIC_BASE_ENV], "http://127.0.0.1:9/anthropic");
+        // Never the CLI's API-key name: that one raises Claude's dialog.
+        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+        let mut env = HashMap::new();
+        assert_eq!(inject("gemini", &["gemini"], &mut env), vec![GEMINI_TOKEN_ENV, GEMINI_BASE_ENV]);
+        assert_eq!(env[GEMINI_BASE_ENV], "http://127.0.0.1:9/gemini");
     }
 
     #[test]
-    fn a_value_the_user_set_wins_and_so_does_each_alias() {
-        for var in [ANTHROPIC_ENV, "ANTHROPIC_AUTH_TOKEN"] {
+    fn a_value_the_user_set_wins_credential_or_base_url() {
+        for var in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"] {
             let mut env = HashMap::from([(var.to_string(), "mine".to_string())]);
             assert!(inject("claude", &["claude"], &mut env).is_empty(), "{var}");
-            assert_eq!(env.get(ANTHROPIC_ENV).map(String::as_str), (var == ANTHROPIC_ENV).then_some("mine"));
+            assert_eq!(env.len(), 1, "{var}");
         }
-        for var in [GEMINI_ENV, "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"] {
+        for var in [GEMINI_TOKEN_ENV, "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", GEMINI_BASE_ENV] {
             let mut env = HashMap::from([(var.to_string(), "mine".to_string())]);
             assert!(inject("gemini", &["gemini"], &mut env).is_empty(), "{var}");
         }
         // Tabtivity's own environment counts too.
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, false, |k| k == ANTHROPIC_ENV, fake);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, false, |k| k == ANTHROPIC_BASE_ENV, proxied);
         assert!(set.is_empty() && env.is_empty());
         // An empty value is not a choice.
-        let mut env = HashMap::from([(ANTHROPIC_ENV.to_string(), String::new())]);
-        assert_eq!(inject("claude", &["claude"], &mut env), vec![ANTHROPIC_ENV]);
+        let mut env = HashMap::from([(ANTHROPIC_TOKEN_ENV.to_string(), String::new())]);
+        assert_eq!(inject("claude", &["claude"], &mut env), vec![ANTHROPIC_TOKEN_ENV, ANTHROPIC_BASE_ENV]);
     }
 
     #[test]
-    fn no_stored_key_sets_nothing_and_opencode_takes_every_provider_it_has() {
+    fn no_grant_sets_nothing() {
         let mut env = HashMap::new();
-        assert!(inject("vibe", &["vibe"], &mut env).is_empty());
-        assert!(env.is_empty());
-        let set = inject("opencode", &["opencode"], &mut env);
-        assert_eq!(set, vec![ANTHROPIC_ENV, GEMINI_ENV]);
-        assert!(!env.contains_key(OPENAI_ENV) && !env.contains_key(MISTRAL_ENV));
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, |_| None);
+        assert!(set.is_empty() && env.is_empty());
     }
 
     #[test]
     fn paths_and_exe_suffixes_name_the_same_cli() {
         for cmd in ["/usr/local/bin/claude", "claude.exe", r"C:\bin\claude.exe"] {
             let mut env = HashMap::new();
-            assert_eq!(inject(cmd, &["claude"], &mut env), vec![ANTHROPIC_ENV], "{cmd}");
+            assert_eq!(inject(cmd, &["claude"], &mut env), vec![ANTHROPIC_TOKEN_ENV, ANTHROPIC_BASE_ENV], "{cmd}");
         }
         assert_eq!(cli_of("ollama"), None);
         let mut env = HashMap::new();
-        assert!(inject("ollama", &["claude", "opencode"], &mut env).is_empty());
-        // Codex is not in the table, switched on or not.
-        assert!(inject("codex", &["codex"], &mut env).is_empty());
+        assert!(inject("ollama", &["claude", "gemini"], &mut env).is_empty());
+        // Not in the table, switched on or not: no variable points them at
+        // the proxy.
+        for cli in ["codex", "vibe", "opencode"] {
+            assert!(inject(cli, &[cli], &mut env).is_empty(), "{cli}");
+        }
+        assert!(env.is_empty());
     }
 
     #[test]
     fn local_model_tabs_and_subcommands_get_nothing() {
         let mut env = HashMap::new();
-        let all = on(&["claude", "opencode", "vibe"]);
-        assert!(inject_env_with("opencode", false, true, &all, &mut env, true, |_| false, fake).is_empty());
-        assert!(inject_env_with("claude", true, false, &all, &mut env, true, |_| false, fake).is_empty());
+        let all = on(&["claude", "gemini"]);
+        assert!(inject_env_with("claude", false, true, &all, &mut env, true, |_| false, proxied).is_empty());
+        assert!(inject_env_with("claude", true, false, &all, &mut env, true, |_| false, proxied).is_empty());
         assert!(env.is_empty());
         let args = vec!["auth".to_string(), "login".to_string()];
         assert!(crate::services::agent_fence::runs_subcommand(&args));
@@ -491,14 +549,11 @@ mod tests {
 
     #[test]
     fn key_shape() {
-        assert!(key_shape_ok(FAKE_ANTHROPIC));
+        assert!(key_shape_ok("sk-test-anthropic-fake"));
         assert!(!key_shape_ok(""));
         assert!(!key_shape_ok("sk-test fake"));
         assert!(!key_shape_ok("sk-test-fake\n"));
         assert!(!key_shape_ok(&"x".repeat(MAX_KEY_BYTES + 1)));
-        let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, |_| Some("bad key".into()));
-        assert!(set.is_empty() && env.is_empty());
     }
 
     #[test]
@@ -511,42 +566,50 @@ mod tests {
             // The common name stays off the user's tmux server.
             assert!(!crate::services::tmux_local::SECRET_ENV.contains(var), "{var}");
         }
-        for (_, keys) in CLI_KEYS {
-            for (_, var) in *keys {
-                assert!(ENV_VARS.contains(var), "{var}");
+        for (_, routes) in CLI_ROUTES {
+            for route in *routes {
+                assert!(ENV_VARS.contains(&route.token_var), "{}", route.token_var);
+                // The base URL is no secret and is no carrier target either.
+                assert!(!ENV_VARS.contains(&route.base_var));
             }
         }
     }
 
     #[test]
-    fn a_carried_key_goes_in_under_its_carrier_and_maps_back() {
+    fn a_carried_token_goes_in_under_its_carrier_and_maps_back() {
         let mut env = HashMap::new();
-        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), &mut env, true, |_| false, fake);
-        assert_eq!(set, vec![ANTHROPIC_CARRIER, GEMINI_CARRIER]);
-        assert!(!env.contains_key(ANTHROPIC_ENV) && !env.contains_key(GEMINI_ENV));
-        assert_eq!(env[ANTHROPIC_CARRIER], FAKE_ANTHROPIC);
-        // `agent_exec` turns it back into the CLI's own variables.
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, proxied);
+        assert_eq!(set, vec![ANTHROPIC_CARRIER, ANTHROPIC_BASE_ENV]);
+        assert!(!env.contains_key(ANTHROPIC_TOKEN_ENV));
+        assert_eq!(env[ANTHROPIC_CARRIER], "test-proxy-token-fake-anthropic");
+        // The base URL rides plain.
+        assert_eq!(env[ANTHROPIC_BASE_ENV], "http://127.0.0.1:9/anthropic");
+        // `agent_exec` turns the carrier back into the CLI's own variable.
         let m = crate::services::agent_exec::mapping(
             env.iter().map(|(k, v)| (std::ffi::OsStr::new(k), std::ffi::OsStr::new(v))),
         );
-        let mut set: Vec<(String, String)> = m
+        let set: Vec<(String, String)> = m
             .set
             .into_iter()
             .map(|(k, v)| (k.into_string().unwrap(), v.into_string().unwrap()))
             .collect();
-        set.sort();
-        assert_eq!(
-            set,
-            vec![
-                (ANTHROPIC_ENV.to_string(), FAKE_ANTHROPIC.to_string()),
-                (GEMINI_ENV.to_string(), FAKE_GEMINI.to_string()),
-            ]
-        );
-        assert_eq!(m.remove.len(), 2);
+        assert_eq!(set, vec![(ANTHROPIC_TOKEN_ENV.to_string(), "test-proxy-token-fake-anthropic".to_string())]);
+        assert_eq!(m.remove.len(), 1);
         // A value the user set under the CLI's name still wins over a carrier.
-        let mut env = HashMap::from([(ANTHROPIC_ENV.to_string(), "mine".to_string())]);
-        assert!(inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, fake).is_empty());
+        let mut env = HashMap::from([("ANTHROPIC_API_KEY".to_string(), "mine".to_string())]);
+        assert!(inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, proxied).is_empty());
         assert!(!env.contains_key(ANTHROPIC_CARRIER));
+    }
+
+    #[test]
+    fn without_a_running_proxy_nothing_is_injected() {
+        // The test binary never starts the listener, as the `--agent-shim`
+        // process never does.
+        assert!(!crate::services::api_proxy::running());
+        let mut env = HashMap::new();
+        let binding = Binding { tab: "t", scope: "s", tmux: None };
+        assert!(inject_env("claude", false, false, binding, &mut env).is_empty());
+        assert!(env.is_empty());
     }
 
     #[test]
@@ -556,18 +619,22 @@ mod tests {
             assert_eq!(p.account(), format!("agent-key:{}", p.id()));
         }
         assert_eq!(Provider::from_id("copilot"), None);
+        assert_eq!(Provider::from_id("openai"), None);
+        assert_eq!(Provider::from_id("mistral"), None);
     }
 
     #[test]
     fn status_is_ready_only_for_a_switched_on_cli_with_a_key() {
-        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "vibe"]));
+        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]));
         let cli = |id: &str| s.clis.iter().find(|c| c.id == id).unwrap().clone();
         assert!(cli("claude").ready);
-        assert!(!cli("vibe").ready, "on, but no Mistral key");
-        assert!(!cli("opencode").ready, "has a key, but off");
-        assert_eq!(cli("opencode").providers, vec!["anthropic", "openai", "gemini", "mistral"]);
+        assert!(!cli("gemini").ready, "on, but no Gemini key");
+        assert_eq!(cli("claude").providers, vec!["anthropic"]);
         assert!(s.providers.iter().any(|p| p.id == "anthropic" && p.saved));
-        assert!(!s.clis.iter().any(|c| c.id == "codex"));
+        for gone in ["codex", "vibe", "opencode"] {
+            assert!(!s.clis.iter().any(|c| c.id == gone), "{gone}");
+        }
+        assert_eq!(s.providers.len(), 2);
         let json = serde_json::to_value(&s).unwrap();
         assert!(json.get("readable").is_some() && json["clis"][0].get("ready").is_some());
     }
@@ -581,8 +648,8 @@ mod tests {
         };
         assert!(ready_clis_with(&[], has).is_empty());
         assert!(asked.borrow().is_empty(), "nothing switched on, nothing read");
-        let ready = ready_clis_with(&on(&["claude", "vibe", "opencode"]), has);
-        assert_eq!(ready, vec!["claude", "opencode"]);
+        let ready = ready_clis_with(&on(&["claude", "gemini", "vibe"]), has);
+        assert_eq!(ready, vec!["claude"]);
         // Each provider read at most once.
         let mut seen = asked.borrow().clone();
         let before = seen.len();
@@ -595,10 +662,11 @@ mod tests {
     fn applies_to_reads_only_the_settings() {
         let mut settings = crate::schema::Settings::default();
         assert!(!applies_to("claude", &settings));
-        settings.agent_api_key_clis = Some(on(&["claude", "codex"]));
+        settings.agent_api_key_clis = Some(on(&["claude", "codex", "vibe"]));
         assert!(applies_to("claude", &settings));
         assert!(applies_to("/opt/bin/claude", &settings));
         assert!(!applies_to("codex", &settings), "not in the table");
+        assert!(!applies_to("vibe", &settings), "dropped: no proxy route");
         assert!(!applies_to("gemini", &settings));
     }
 }

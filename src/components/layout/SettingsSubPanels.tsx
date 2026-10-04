@@ -826,23 +826,21 @@ interface AgentApiKeyStatus {
 /** Provider names as their vendors spell them. */
 const API_KEY_PROVIDERS: Record<string, string> = {
   anthropic: "Anthropic",
-  openai: "OpenAI",
   gemini: "Google Gemini",
-  mistral: "Mistral",
 };
 
-/** The CLIs that can take a stored key (the backend's `CLI_KEYS`), each with
- *  its own pill — literal ids, which is what `scripts/untested.mjs` reads. */
+/** The CLIs that can take a stored key through the API proxy (the backend's
+ *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
+ *  with its own pill — literal ids, which is what `scripts/untested.mjs` reads. */
 const API_KEY_CLIS: { cli: string; untested: UntestedId }[] = [
   { cli: "claude", untested: "settings.agentApiKeys.claude" },
   { cli: "gemini", untested: "settings.agentApiKeys.gemini" },
-  { cli: "vibe", untested: "settings.agentApiKeys.vibe" },
-  { cli: "opencode", untested: "settings.agentApiKeys.opencode" },
 ];
 
 /** Provider API keys for the agent CLIs: one key per provider, kept in the OS
  *  keyring only — typed here, saved, never read back — and a switch per CLI
- *  that should start on it (`agent_api_key_clis`, off by default). */
+ *  that should start on it (`agent_api_key_clis`, off by default). A keyed tab
+ *  gets a proxy token, never the key (`services::api_proxy`). */
 export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();

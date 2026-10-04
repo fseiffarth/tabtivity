@@ -34,12 +34,10 @@ const FAKE_KEY = "sk-test-fake-key";
 function status(saved: string[], readable = true) {
   return {
     readable,
-    providers: ["anthropic", "openai", "gemini", "mistral"].map((id) => ({ id, saved: saved.includes(id) })),
+    providers: ["anthropic", "gemini"].map((id) => ({ id, saved: saved.includes(id) })),
     clis: [
       { id: "claude", enabled: false, providers: ["anthropic"], ready: false },
       { id: "gemini", enabled: false, providers: ["gemini"], ready: false },
-      { id: "vibe", enabled: false, providers: ["mistral"], ready: false },
-      { id: "opencode", enabled: false, providers: ["anthropic", "openai", "gemini", "mistral"], ready: false },
     ],
   };
 }
@@ -102,16 +100,16 @@ describe("API keys for agent CLIs", () => {
     render(<AgentApiKeysRows />);
     await screen.findByText(/^Use API key for Claude/);
     expect(toggle("Claude").disabled).toBe(true);
-    // OpenCode takes any of the four.
-    expect(screen.getByText(/^Use API key for OpenCode \(Anthropic, OpenAI, Google Gemini, Mistral\)/)).toBeTruthy();
+    expect(screen.getByText(/^Use API key for Claude \(Anthropic\)/)).toBeTruthy();
+    // Only CLIs the proxy can serve have a switch: Vibe and OpenCode do not.
+    expect(screen.queryByText(/^Use API key for (Mistral|OpenCode)/)).toBeNull();
 
     cleanup();
     saved = ["anthropic"];
     render(<AgentApiKeysRows />);
     await screen.findByText(/^Use API key for Claude/);
     expect(toggle("Claude").disabled).toBe(false);
-    expect(toggle("OpenCode").disabled).toBe(false);
-    expect(toggle("Mistral").disabled).toBe(true);
+    expect(toggle("Google Gemini").disabled).toBe(true);
     fireEvent.click(toggle("Claude"));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ agent_api_key_clis: ["claude"] }));
     expect(toggle("Claude").checked).toBe(true);
@@ -130,7 +128,7 @@ describe("API keys for agent CLIs", () => {
   it("says the keyring is locked and offers the unlock instead of a key field", async () => {
     readable = false;
     render(<AgentApiKeysRows />);
-    expect((await screen.findAllByText(/keyring locked/)).length).toBe(4);
+    expect((await screen.findAllByText(/keyring locked/)).length).toBe(2);
     expect(screen.queryByText(/not saved/)).toBeNull();
     expect(screen.queryByLabelText("Paste the Anthropic API key")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Unlock keyring" }));

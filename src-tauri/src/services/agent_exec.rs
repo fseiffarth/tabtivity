@@ -7,7 +7,7 @@
 //! `update-environment` slots (`tmux_local::SECRET_ENV`, #864). Those slots
 //! stay set on the server for its life, so every name listed there is taken
 //! from the client — or dropped — for every later session the user opens on it,
-//! their own terminals included. Common names (`ANTHROPIC_API_KEY`) cannot go
+//! their own terminals included. Common names (`ANTHROPIC_AUTH_TOKEN`) cannot go
 //! there. So a spawn carries such a secret under an app-named *carrier*
 //! (`<PREFIX><NAME>`, [`CARRIER_PREFIX`]) — the only names `SECRET_ENV`
 //! gains — and this step, run by Tabtivity's own binary, sets `<NAME>` from it
@@ -52,16 +52,15 @@ pub struct Mapping {
     pub set: Vec<(OsString, OsString)>,
 }
 
-/// The variables a carrier may set: the CLIs' key variables
-/// (`agent_api_keys::ENV_VARS`), nothing else. The step runs *outside* the
+/// The variables a carrier may set: the CLIs' credential variables that carry
+/// an API proxy token (`agent_api_keys::ENV_VARS`), nothing else. The step runs *outside* the
 /// fence, in front of bwrap or `sandbox-exec` (and of an unfenced Host
 /// session's CLI), so a carrier able to name any variable would be an
 /// environment-injection lever there: `LD_PRELOAD`, `PATH`, `BASH_ENV` or
 /// `NODE_OPTIONS` reach the unfenced launcher itself. A fixed list costs
 /// nothing: the step is always the running binary (`fence_scope::
 /// running_binary`, `/proc/<pid>/exe` once replaced), the same build that
-/// injected the carrier. A name a later build adds (C2's proxy token) is added
-/// here with it.
+/// injected the carrier. A name a later build adds is added here with it.
 pub fn targets() -> &'static [&'static str] {
     crate::services::agent_api_keys::ENV_VARS
 }
@@ -196,10 +195,10 @@ mod tests {
 
     #[test]
     fn a_carrier_becomes_its_variable_and_is_removed() {
-        let carrier = carrier_name("ANTHROPIC_API_KEY");
+        let carrier = carrier_name("ANTHROPIC_AUTH_TOKEN");
         let m = map(&[(&carrier, "sk-test-fake"), ("PATH", "/bin"), ("ANTHROPIC_MODEL", "opus")]);
         assert_eq!(m.remove, vec![OsString::from(&carrier)]);
-        assert_eq!(m.set, vec![(OsString::from("ANTHROPIC_API_KEY"), OsString::from("sk-test-fake"))]);
+        assert_eq!(m.set, vec![(OsString::from("ANTHROPIC_AUTH_TOKEN"), OsString::from("sk-test-fake"))]);
     }
 
     #[test]
@@ -222,6 +221,8 @@ mod tests {
             carrier_name("NODE_OPTIONS"),
             carrier_name("HOME"),
             carrier_name("ANTHROPIC_BASE_URL"),
+            // The raw key's name: since the proxy (C2) no carrier sets it.
+            carrier_name("ANTHROPIC_API_KEY"),
             carrier_name("anthropic_api_key"),
         ];
         let mut pairs: Vec<(&str, &str)> = vec![(empty.as_str(), "")];
@@ -242,7 +243,7 @@ mod tests {
     fn a_non_utf8_carrier_is_removed_too() {
         use std::os::unix::ffi::OsStringExt;
         let mut name = CARRIER_PREFIX.as_bytes().to_vec();
-        name.extend_from_slice(b"ANTHROPIC_API_KEY\xff");
+        name.extend_from_slice(b"ANTHROPIC_AUTH_TOKEN\xff");
         let key = OsString::from_vec(name);
         let value = OsString::from("fake");
         let m = mapping([(key.as_os_str(), value.as_os_str())]);
@@ -255,7 +256,7 @@ mod tests {
         assert_eq!(map(&[("PATH", "/bin"), (crate::app_env!("TAB_UID"), "u")]), Mapping::default());
         let env = HashMap::from([("PATH".to_string(), "/bin".to_string())]);
         assert!(!has_carriers(&env));
-        let env = HashMap::from([(carrier_name("MISTRAL_API_KEY"), "fake".to_string())]);
+        let env = HashMap::from([(carrier_name("GEMINI_API_KEY"), "fake".to_string())]);
         assert!(has_carriers(&env));
     }
 
@@ -264,7 +265,7 @@ mod tests {
     /// `SECRET_ENV` and would ride the tmux argv.
     #[test]
     fn carriers_get_no_legacy_twin() {
-        let mut env = HashMap::from([(carrier_name("ANTHROPIC_API_KEY"), "sk-test-fake".to_string())]);
+        let mut env = HashMap::from([(carrier_name("ANTHROPIC_AUTH_TOKEN"), "sk-test-fake".to_string())]);
         crate::brand::PAIR.export_both(&mut env);
         assert_eq!(env.len(), 1, "{:?}", env.keys());
     }
@@ -275,7 +276,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_execd_program_sees_the_variable_and_no_carrier() {
-        let carrier = carrier_name("ANTHROPIC_API_KEY");
+        let carrier = carrier_name("ANTHROPIC_AUTH_TOKEN");
         let evil = carrier_name("BASH_ENV");
         let vars: Vec<(OsString, OsString)> = [
             (carrier.as_str(), "sk-test-fake"),
@@ -289,11 +290,11 @@ mod tests {
         cmd.args([
             "-c",
             &format!(
-                "printf '%s|%s|%s|%s|%s' \"${{ANTHROPIC_API_KEY-unset}}\" \"${{{carrier}-gone}}\" \
+                "printf '%s|%s|%s|%s|%s' \"${{ANTHROPIC_AUTH_TOKEN-unset}}\" \"${{{carrier}-gone}}\" \
                  \"${{{evil}-gone}}\" \"${{BASH_ENV-unset}}\" \"$KEEP\""
             ),
         ]);
-        cmd.env_remove("ANTHROPIC_API_KEY").env_remove("BASH_ENV");
+        cmd.env_remove("ANTHROPIC_AUTH_TOKEN").env_remove("BASH_ENV");
         for (k, v) in &vars {
             cmd.env(k, v);
         }
@@ -312,7 +313,7 @@ mod tests {
         .unwrap();
         wrap(&mut opts).unwrap();
         assert_eq!(opts.cmd, "/usr/bin/sandbox-exec");
-        opts.env.insert(carrier_name("ANTHROPIC_API_KEY"), "sk-test-fake".into());
+        opts.env.insert(carrier_name("ANTHROPIC_AUTH_TOKEN"), "sk-test-fake".into());
         wrap(&mut opts).unwrap();
         assert_eq!(opts.cmd, helper().unwrap());
         assert_eq!(opts.args, vec![MODE_FLAG, "/usr/bin/sandbox-exec", "-f", "/p.sb", "/bin/claude"]);

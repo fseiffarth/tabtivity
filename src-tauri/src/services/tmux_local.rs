@@ -419,18 +419,16 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::copilot_auth::TOKEN_ENV,
     // Appended, not inserted: each key keeps its `update-environment` slot.
     crate::services::root_mcp::MARKUP_TOKEN_ENV,
-    // Provider API keys, slots 8636–8639, under their app-named carriers
-    // (`agent_api_keys::CARRIERS`), never the CLIs' own names: like every slot
-    // here they stay set on the user's default tmux server, where a later
-    // session takes each listed variable from its client or drops it — so a
-    // common name (`ANTHROPIC_API_KEY`) would cost the user's own sessions
-    // theirs. `agent_exec` maps a carrier to the CLI's name just before the
-    // agent runs. (The same slots held the common names in Part A builds;
-    // these entries replace them.)
+    // API proxy tokens (`api_proxy`), slots 8636–8637, under their app-named
+    // carriers (`agent_api_keys::CARRIERS`), never the CLIs' own names: like
+    // every slot here they stay set on the user's default tmux server, where
+    // a later session takes each listed variable from its client or drops it
+    // — so a common name (`ANTHROPIC_AUTH_TOKEN`) would cost the user's own
+    // sessions theirs. `agent_exec` maps a carrier to the CLI's name just
+    // before the agent runs. (Builds of this branch before the proxy carried
+    // raw keys in slots 8636–8639; none of them shipped.)
     crate::services::agent_api_keys::ANTHROPIC_CARRIER,
-    crate::services::agent_api_keys::OPENAI_CARRIER,
     crate::services::agent_api_keys::GEMINI_CARRIER,
-    crate::services::agent_api_keys::MISTRAL_CARRIER,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1054,16 +1052,14 @@ mod tests {
         }
     }
 
-    /// The key carriers hold slots 8636–8639, the ones a Part A build gave the
-    /// CLIs' own names, so the next tab overwrites those entries on a server
-    /// such a build touched instead of leaving them beside new ones.
+    /// The token carriers hold the slots after the MCP tokens, 8636 on.
     #[test]
-    fn key_carriers_hold_the_part_a_key_slots() {
+    fn key_carriers_hold_the_slots_after_the_mcp_tokens() {
         for (i, carrier) in crate::services::agent_api_keys::CARRIERS.iter().enumerate() {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, 8636 + i, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 10);
+        assert_eq!(SECRET_ENV.len(), 8);
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }

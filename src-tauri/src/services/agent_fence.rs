@@ -1334,12 +1334,15 @@ pub fn wrap_pty_options_bwrap(
     if copilot {
         crate::services::copilot_auth::inject_env(&mut opts.env);
     }
-    // A provider API key, for a CLI the user switched on (`agent_api_keys`),
-    // under its app-named carrier. The step in front of bwrap maps it to the
-    // CLI's variable (`agent_exec`); bwrap keeps the environment and the
-    // launcher `exec`s, so it reaches the CLI. Hence the launcher last: the
-    // step is needed whenever the environment carries something.
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, &mut opts.env);
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier.
+    // The step in front of bwrap maps it to the CLI's variable (`agent_exec`);
+    // bwrap keeps the environment and the launcher `exec`s, so it reaches the
+    // CLI. Hence the launcher last: the step is needed whenever the
+    // environment carries something.
+    let (tab, tmux) = (opts.id.clone(), opts.tmux_session.clone());
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
     let step = launcher_step(
         crate::services::fence_scope::helper_for(&bwrap),
         crate::services::agent_exec::has_carriers(&opts.env),
@@ -1599,12 +1602,14 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
-    // A provider API key, for a CLI the user switched on (`agent_api_keys`),
-    // under its app-named carrier; `agent_exec` in front of sandbox-exec maps
-    // it to the CLI's variable, and sandbox-exec passes the environment
-    // through. The step runs outside the Seatbelt profile, which need not
-    // grant Tabtivity's binary.
-    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, &mut opts.env);
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
+    // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
+    // sandbox-exec passes the environment through. The step runs outside the
+    // Seatbelt profile, which need not grant Tabtivity's binary.
+    let (tab, tmux) = (opts.id.clone(), opts.tmux_session.clone());
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
@@ -1804,6 +1809,9 @@ pub fn on_tab_gone(tab_id: &str) {
         .remove(tab_id)
         .is_some();
     untrack_host_agent_tab(tab_id);
+    // Its API proxy tokens go with it (those of a tmux-held agent once the
+    // session is gone too).
+    crate::services::api_proxy::on_tab_gone(tab_id);
     // A tab's end is when a login it made lands in its home: carry it to the
     // other scopes now rather than at the keeper's next tick. Off-thread —
     // this runs on the PTY's teardown path.
