@@ -14,7 +14,7 @@ import { PromptsSheet } from "./PromptsSheet";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { AgentStatusMark } from "../components/AgentStatusPill";
-import { AgentModeMarks, SubagentCount, WorktreeMark, agentModeClass } from "../components/AgentModeMarks";
+import { AgentModeMarks, SubagentCount, TurnDuration, WorktreeMark, agentModeClass } from "../components/AgentModeMarks";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles } from "../components/ProjectFiles";
@@ -523,6 +523,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             <SubagentCount tab={tab} />
             {/* Which worktree the agent works in, when it is not the project folder. */}
             <WorktreeMark tab={tab} />
+            {/* How long the current turn has run, or the last one took. */}
+            {tab.kind === "agent" && <TurnDuration tab={tab} />}
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}

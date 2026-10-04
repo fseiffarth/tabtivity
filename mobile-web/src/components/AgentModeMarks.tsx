@@ -28,6 +28,46 @@ export function SubagentCount({ tab }: { tab: Pick<TabRow, "agent_subagents"> })
   </>;
 }
 
+/** How long the tab has been at work on its current turn, or was on its last
+ *  one: `running` while the turn is not over (working, or paused on a
+ *  question). Every number is the desktop's own clock — for a working tab
+ *  `working_at` is the desktop's "now" — so the phone's clock never enters it.
+ *  Nothing where the end is unknown: an interrupted turn fires no finish. */
+export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at">): { ms: number; running: boolean } | undefined {
+  const start = tab.turn_started_at;
+  if (start === undefined) return undefined;
+  const running = tab.agent_status === "working" || tab.agent_status === "question";
+  const end = tab.agent_status === "working"
+    ? tab.working_at
+    : [tab.done_at, tab.working_at].find((at) => at !== undefined && at >= start);
+  if (end === undefined || end < start) return undefined;
+  return { ms: end - start, running };
+}
+
+/** "42s", "4m", "1h 12m" — a turn's length, as the card says it. */
+export function formatTurnDuration(ms: number, t: ReturnType<typeof useT>): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return t("mobile.project.durationSecs", { count: seconds });
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return t("mobile.project.durationMins", { count: minutes });
+  return t("mobile.project.durationHours", { hours: Math.floor(minutes / 60), mins: minutes % 60 });
+}
+
+/** The tab's turn length on its card: "4m so far" while the turn is going,
+ *  "took 12m" once it is over. Nothing where the desktop gave no reading. */
+export function TurnDuration({ tab }: { tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at"> }) {
+  const t = useT();
+  const turn = turnDuration(tab);
+  if (!turn) return null;
+  const duration = formatTurnDuration(turn.ms, t);
+  return <>
+    <small className={`agent-turn-time${turn.running ? " running" : ""}`} title={t(turn.running ? "mobile.project.turnRunningTitle" : "mobile.project.turnTookTitle", { duration })}>
+      {t(turn.running ? "mobile.project.turnRunning" : "mobile.project.turnTook", { duration })}
+    </small>
+    {isUntested("mobile.project.turnDuration") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </>;
+}
+
 /** The linked worktree the tab's agent works in — "⎇ fix-login", its branch
  *  beside it where that is named differently. Nothing for the project
  *  folder's own checkout, which is where a tab runs unless it says. */

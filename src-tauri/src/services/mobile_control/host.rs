@@ -882,6 +882,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
             tab.agent_subagents = status.subagents;
             tab.working_at = status.working_at;
             tab.done_at = status.done_at;
+            tab.turn_started_at = status.turn_started_at;
             tab.viewer_busy = state.terminal_registry.is_busy(&resolved.tmux_name);
             tab.prompts = prompts.remove(&resolved.tmux_name).unwrap_or_default();
             rows.push(ActivityRow {
@@ -1018,6 +1019,7 @@ async fn project(
                 tab.agent_subagents = status.subagents;
                 tab.working_at = status.working_at;
                 tab.done_at = status.done_at;
+                tab.turn_started_at = status.turn_started_at;
             } else if let Some(timing) = timings.remove(&resolved.tmux_name) {
                 // A read turn has no status, but it still sorts by when it ran
                 // and still names its model.
@@ -1027,6 +1029,7 @@ async fn project(
                 tab.agent_subagents = timing.subagents;
                 tab.working_at = timing.working_at;
                 tab.done_at = timing.done_at;
+                tab.turn_started_at = timing.turn_started_at;
             }
             tab.schedules = schedules.remove(&resolved.tmux_name);
             // Published whether or not the tab has a status: a quiet session's

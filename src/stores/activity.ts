@@ -139,6 +139,18 @@ const busySinceMarkByPty: Record<string, boolean> = {};
 /// "after the user looked". Counting them brought a turn the user had already
 /// read back as unread a few seconds after every look away.
 const workAtByPty: Record<string, number> = {};
+/// When the tab's current — or, once it is over, its last — turn began (ms
+/// epoch): a hooked agent's prompt (`noteAgentTurn`), or for one with no hooks
+/// the onset of the burst that first read as work after its last finished turn.
+/// A tool call inside a turn, or an approval it waited on, does not restart it.
+/// Read by the phone bridge (`agentTurnStartedAt`), which shows how long a tab
+/// has been — or was — at work on it.
+const turnStartByPty: Record<string, number> = {};
+
+/** When the tab's current or last turn began, if this session saw one begin. */
+export function agentTurnStartedAt(ptyId: string): number | undefined {
+  return turnStartByPty[ptyId];
+}
 
 /// Memo for the decision-prompt test, keyed by PTY id and validated against the
 /// tail it was computed from. `attentionFor` asks the question of every agent tab
@@ -176,6 +188,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   readAtByPty,
   busySinceMarkByPty,
   workAtByPty,
+  turnStartByPty,
 ];
 
 /// Braille pattern cells (U+2800–U+28FF), which an agent TUI paints as
@@ -264,6 +277,16 @@ export function noteAgentTurn(ptyId: string, state: AgentTurnState, job = false)
   if (isDetachedWindow()) return;
   if (!splitPtyId(ptyId)) return;
   const at = Date.now();
+  // `working` also comes after every tool call and ends an approval wait; only
+  // one that follows a finished, interrupted or never-started turn opens a new
+  // one. The previous verdict is the raw hook history (`deliveryTurns`, which
+  // answering a prompt does not retire), read before it is overwritten and
+  // before the interrupted mark is cleared below.
+  if (state === "working") {
+    const prev = deliveryTurns[ptyId]?.state;
+    const resumes = (prev === "working" || prev === "decision") && interruptedByPty[ptyId] === undefined;
+    if (!resumes || turnStartByPty[ptyId] === undefined) turnStartByPty[ptyId] = at;
+  }
   deliveryTurns[ptyId] = { state, at, job, startedAt: state === "working" ? at : deliveryTurns[ptyId]?.startedAt };
   // A new turn (or prompt) ends the interrupted mark, and so does the session
   // ending. A `done` does not: after an interrupt Claude's only hook is the
@@ -1079,6 +1102,9 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
             nextDone[ptyId] = turn.at;
           }
         } else if (tabBusy) {
+          // The first busy tick since the last finished turn starts a new one,
+          // dated from the burst that made it read as work.
+          if (!busySinceMarkByPty[ptyId]) turnStartByPty[ptyId] = onset ?? now;
           busySinceMarkByPty[ptyId] = true;
         } else if (ts !== undefined && inputByPty[ptyId] !== undefined) {
           // Was the burst that just ended work? Either a tick saw it busy, or

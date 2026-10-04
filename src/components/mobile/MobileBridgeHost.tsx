@@ -14,7 +14,7 @@ import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootO
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
 import { useSettingsStore } from "../../stores/settings";
 import { calendarColor, useCalendarStore, visibleCalendarIds } from "../../stores/calendar/calendar";
-import { agentTabState, lastTabReadAt, noteUserInput, useActivityStore } from "../../stores/activity";
+import { agentTabState, agentTurnStartedAt, lastTabReadAt, noteUserInput, useActivityStore } from "../../stores/activity";
 import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
@@ -90,10 +90,10 @@ interface AgentInfo { id: string; bin: string; installed: boolean }
  * starts from a screen with no agent tab; sent only on that one row. */
 interface CatalogAgent { id: string; label: string; modes: string[]; default?: boolean }
 /** `subagents`: how many the session has at work, sent only when some are. */
-interface AgentTabStatus { tmux_session: string; status: "working" | "question" | "interrupted" | "done"; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number; subagents?: number }
+interface AgentTabStatus { tmux_session: string; status: "working" | "question" | "interrupted" | "done"; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number; turn_started_at?: number; subagents?: number }
 /** The same readings for an agent tab with no status: a finished turn stays
  * sorted among the finished ones on the phone after it has been read. */
-interface AgentTabTiming { tmux_session: string; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number; subagents?: number }
+interface AgentTabTiming { tmux_session: string; model?: string; plan?: boolean; goal?: boolean; working_at?: number; done_at?: number; turn_started_at?: number; subagents?: number }
 interface AgentTabPrompt { text: string; at?: string }
 /** `upcoming` carries the soonest scheduled messages, `at` desktop-local
  * `YYYY-MM-DDTHH:MM` like `next`. */
@@ -591,6 +591,8 @@ function projectAgentStatuses(projectId: string): AgentTabStatus[] {
     if (workingAt !== undefined) row.working_at = workingAt;
     const doneAt = activity.lastDoneByTab[ptyId];
     if (doneAt !== undefined) row.done_at = doneAt;
+    const turnStartedAt = agentTurnStartedAt(ptyId);
+    if (turnStartedAt !== undefined) row.turn_started_at = turnStartedAt;
     return [row];
   });
 }
@@ -616,7 +618,9 @@ function projectAgentTimings(projectId: string): AgentTabTiming[] {
     if (workingAt !== undefined) row.working_at = workingAt;
     const doneAt = activity.lastDoneByTab[ptyId];
     if (doneAt !== undefined) row.done_at = doneAt;
-    return row.model === undefined && !row.plan && !row.goal && !row.subagents && row.working_at === undefined && row.done_at === undefined ? [] : [row];
+    const turnStartedAt = agentTurnStartedAt(ptyId);
+    if (turnStartedAt !== undefined) row.turn_started_at = turnStartedAt;
+    return row.model === undefined && !row.plan && !row.goal && !row.subagents && row.working_at === undefined && row.done_at === undefined && row.turn_started_at === undefined ? [] : [row];
   });
 }
 

@@ -465,6 +465,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                     goal: false,
                     working_at: ms(at),
                     done_at: None,
+                    turn_started_at: None,
                     subagents,
                 });
             }
@@ -478,6 +479,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                     goal: false,
                     working_at: None,
                     done_at: ms(at),
+                    turn_started_at: None,
                     subagents,
                 });
             }
@@ -489,6 +491,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                 goal: false,
                 working_at: None,
                 done_at: ms(at),
+                turn_started_at: None,
                 subagents,
             }),
             _ => {
@@ -500,6 +503,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                         goal: false,
                         working_at: None,
                         done_at: None,
+                        turn_started_at: None,
                         subagents,
                     });
                 }
@@ -1599,6 +1603,7 @@ mod tests {
                 agent_subagents: 0,
                 working_at: None,
                 done_at: None,
+                turn_started_at: None,
                 schedules: None,
                 prompts: Vec::new(),
                 available: false,

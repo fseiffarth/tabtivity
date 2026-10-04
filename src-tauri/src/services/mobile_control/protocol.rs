@@ -1352,6 +1352,11 @@ pub struct AgentTabStatus {
     pub working_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    /// Desktop wall clock (ms) of when the tab's current — or, once over, its
+    /// last — turn began: the prompt that started it, not a tool call within
+    /// it. Session-only; absent until the desktop has seen a turn begin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<u64>,
     /// How many subagents the tab's session has at work right now, as its
     /// transcript says (`AgentTranscript::running_agents`); zero when none
     /// or when its CLI does not record it.
@@ -1384,6 +1389,8 @@ pub struct AgentTabTiming {
     pub working_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<u64>,
     /// The quiet tab's subagents still at work, as `AgentTabStatus::subagents`:
     /// a background one runs on after the turn is over.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -1850,6 +1857,7 @@ mod tests {
                 goal: false,
                 working_at: Some(1_700_000_000_000),
                 done_at: None,
+                turn_started_at: None,
                 subagents: 2,
             }],
             schedules: vec![AgentTabSchedules {
@@ -1876,6 +1884,7 @@ mod tests {
                 goal: true,
                 working_at: None,
                 done_at: Some(1_700_000_100_000),
+                turn_started_at: None,
                 subagents: 0,
             }],
             closed: vec![ClosedAgentTab {

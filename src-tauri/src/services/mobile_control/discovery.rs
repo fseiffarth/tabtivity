@@ -223,6 +223,10 @@ pub struct PublicTab {
     pub working_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    /// Desktop wall clock (ms) of when the tab's current or last turn began —
+    /// with `working_at`/`done_at`, how long it has been or was at work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<u64>,
     /// How many prompts this agent tab has scheduled, and when the first fires.
     /// Absent for a shell tab and while the desktop is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -987,6 +991,7 @@ fn resolve_scope(
             agent_subagents: 0,
             working_at: None,
             done_at: None,
+            turn_started_at: None,
             schedules: None,
             prompts: Vec::new(),
             available: live_row.is_some(),
