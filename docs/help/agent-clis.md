@@ -96,12 +96,35 @@ local-model tabs never get a key, nor does a CLI you type into a shell tab, and
 a key or base URL you exported yourself wins. Switching a CLI on or off reaches
 new tabs only; removing a key stops running tabs at their next request. A tab
 that outlives a Tabtivity crash in tmux loses its token — restart the CLI in it.
-Use a spend-limited key anyway: while a tab is open its agent can spend through
-its token. If a tab reports an invalid key, fix or remove it there — signing in
+If a tab reports an invalid key, fix or remove it there — signing in
 again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
 are not offered: no environment variable points them at Tabtivity's proxy (use
 `codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
 instead; their login files are shared like any other).
+
+**Monthly spending limit.** Every key needs a monthly limit in US dollars
+(20 is proposed); Save stays greyed out without one. Tabtivity reads what each
+answer used from the provider's own usage report, prices it, and shows per
+provider how much of the limit this month has spent and when the count starts
+again (the first day of the next month, UTC). Once the limit is reached, new
+requests are refused — Claude shows "Tabtivity monthly API budget for Anthropic
+reached", Gemini a "resource exhausted" error with the same text — until the
+next month or until you raise the limit with **Set limit** (it takes effect at
+once, no restart). Turns already running at that moment finish, so a month can
+go over by what those turns cost; several tabs working at once make that
+larger. Token counting and model lists are never refused. The shared-logins row
+(and the phone's sign-in list) then says **API budget reached**. A key saved by
+a build without limits shows "no monthly limit" and is refused until you set
+one. The cost is an **estimate**: the price table inside Tabtivity is dated
+(Manage CLIs shows the date), and a model it does not know — a newer one — is
+counted at that provider's most expensive rate and listed under the provider.
+Not counted: Gemini's Google Search grounding fees and anything spent outside
+Tabtivity with the same key. So also **set a spending limit with the provider**
+(Anthropic Console → Limits, Google AI Studio / Cloud billing budgets): it is
+the one that holds whatever happens on this computer. The record is kept in
+`agent-api-usage.json` in Tabtivity's state folder (no key in it); if it ever
+cannot be read it is set aside, this month's count restarts from zero and the
+API keys section says so.
 
 ## Open an agent tab
 

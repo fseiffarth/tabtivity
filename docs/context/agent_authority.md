@@ -422,8 +422,35 @@ still needs its own `/auth` pick. **What is left:** a project's own CLI
 config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`, Gemini's `.env`) can
 still point the CLI at another host — which then receives only the token,
 worthless off this machine and dead with the tab; and the agent can spend
-through its token while the tab lives (C3's spending limit; the proxy's
-`usage_tap` is the seam where it will read each response's usage).
+through its token while the tab lives — up to the monthly limit (C3).
+
+**Spending limit** (`services::api_usage`, `api_meter`, `api_prices`; plan
+C3). A key is saved only beside a monthly USD limit
+(`Settings::agent_api_limits`; `agent_api_key_set` refuses without one). The
+proxy meters every billed request (Anthropic `POST /v1/messages`; Gemini
+`generateContent`, `streamGenerateContent`, embeddings — counting and model
+reads are free and never refused) in its `usage_tap`/`usage_end` seam: a
+streaming JSON scanner with bounded state reads only the usage object of the
+top-level answer (Anthropic `usage` at the root or under `message`, Gemini
+`usageMetadata` at the root of each response) — a `usage` key inside a tool
+call's arguments or the text is never read, so an agent cannot make the model
+print a cheaper usage; counts are cumulative, so each field keeps its maximum;
+what was reported is charged when a stream fails or the client leaves. The
+model comes from the answer (Gemini: `modelVersion`, else the request path);
+one the table does not know is priced at the provider's highest current rate
+and flagged. The ledger (`agent-api-usage.json`, no secrets, UTC month) is
+in-process memory written atomically (throttled, and in `stop_for_exit`); a
+clock that goes back keeps the later month; a corrupt file is moved aside and
+the restart is shown, never silent. Enforcement sits after the key check and
+before the body is read: spent ≥ limit, or no limit set (a key saved before
+limits existed), answers 429 in the provider's shape (`rate_limit_error` /
+`RESOURCE_EXHAUSTED`, `x-should-retry: false`) naming the app's budget and
+Manage CLIs. Answers in flight finish: the overshoot is bounded by the turns
+running at the moment the limit is crossed, stated in the UI. The limit is
+read from `settings.json` per request (re-parsed only when its mtime or size
+changes), so raising it takes effect at once. Not metered: Gemini Search
+grounding fees, spend outside Tabtivity — the help recommends a provider-side
+limit too.
 
 Composition is explicit:
 

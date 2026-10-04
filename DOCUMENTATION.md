@@ -865,6 +865,24 @@ dialog; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude tab
 runs without Remote Control. A project's CLI config can still point the CLI at
 another host, which then receives only the token — worthless off this machine.
 
+**Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
+`services/api_prices.rs`, Part C, C3). Saving a key requires a monthly limit in
+US dollars per provider (`Settings::agent_api_limits`). The proxy reads each
+billed answer's usage as it relays it — Anthropic's `message_start` /
+`message_delta` usage (cache writes and reads, web searches, fast mode and
+US-only inference included) or a plain message's; Gemini's cumulative
+`usageMetadata` from SSE, JSON-array or plain answers — with a bounded streaming
+scanner that keeps nothing else, prices it from a dated per-model table (an
+unknown model at the provider's highest rate, flagged), and adds it to
+`<state_dir>/agent-api-usage.json` (UTC month, spend per provider, tokens per
+model; written atomically every few seconds and at quit; a corrupt file is set
+aside and the restart shown). Once spent ≥ limit, or for a key without a limit,
+billed requests are refused before they reach the provider (HTTP 429 in the
+provider's error shape, `x-should-retry: false`); answers already streaming
+finish. Manage CLIs shows spent/limit, the reset date, unknown models and
+"budget reached"; the shared-logins row and the phone's sign-in list say
+"API budget reached". The help recommends a provider-side limit as well.
+
 ### Remote, Sync, and Multi-Host
 
 Remote projects are **mount-free**: no sshfs, no FUSE. Tabs run on the host over

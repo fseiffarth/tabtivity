@@ -2527,7 +2527,10 @@ unchanged; the new agents are additive.
   `MobileSignInTab`; Claude 2.1.288 checked against the proxy and a stub
   provider (`api_proxy::tests::claude_cli_talks_to_the_proxy`, ignored); ❌
   never live-verified — pills `settings.agentApiKeys`,
-  `settings.agentApiKeys.claude`, `.gemini`, `mobile.signIn.apiKey`). Plan:
+  `settings.agentApiKeys.claude`, `.gemini`, `.limit`, `mobile.signIn.apiKey`,
+  `mobile.signIn.apiBudgetReached`; C3's spending limit: `api_prices` /
+  `api_meter` / `api_usage` cargo tests, budget cases in
+  `AgentApiKeys.test.tsx` and the phone tests). Plan:
   `docs/api_chat_plan.md` Parts A and C. Settings → Agent sandbox → API keys
   keeps one key per provider (Anthropic, Gemini) in the OS keyring; a keyed
   tab of a CLI switched on there gets a per-tab token for Tabtivity's loopback
@@ -2569,6 +2572,35 @@ unchanged; the new agents are additive.
     answers without a Google login, through the proxy (`!env | grep
     GOOGLE_GEMINI_BASE_URL` shows `http://127.0.0.1:<port>/gemini`; the
     key's first chars are in no `env`).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — the monthly spending limit (C3). Remove the
+    Anthropic key, then paste it again: the limit field shows 20 and Save is
+    greyed out while it is empty or 0; save with 1. Ask a keyed Claude tab a
+    short question: within seconds of the answer the row reads "$0.0x of $1.00
+    spent this month" (reopen Manage CLIs to refresh) and, ~5 s later,
+    `<state_dir>/agent-api-usage.json` holds the month, the spend and the
+    model's tokens (no key, no token). Compare with the provider console's
+    usage for that request — the same order of magnitude (the table is an
+    estimate). Set the limit to 0.01 (Set limit): the next prompt is refused
+    at once with "… monthly API budget for Anthropic reached — raise it in
+    Manage CLIs …", without retries; the row says "budget reached … until
+    <next month's 1st>" and the shared-logins row "API budget reached" (on the
+    phone: ＋ → Sign in to an agent shows "API budget reached"). Start a long
+    answer, lower the limit below the spend while it streams: it finishes,
+    the next one is refused. Raise the limit: the next prompt works with no
+    restart. `/context` or a token count still works at the limit. Quit and
+    restart: the spend is still there. Write garbage into
+    `agent-api-usage.json` with Tabtivity closed, start it: the API keys
+    section says the record could not be read and restarted, and
+    `agent-api-usage.corrupt.json` holds the garbage. Repeat the limit part
+    with Gemini (its error reads RESOURCE_EXHAUSTED with the budget text).
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

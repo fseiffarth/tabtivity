@@ -556,7 +556,8 @@ Vibe and OpenCode are not installed here: their rows are from docs.
 # Part C — hardening: no key in the agent, a spending limit (2026-10-04)
 
 Status: C1 and C2 built and reviewed 2026-10-04 (see "C1/C2 implementation
-notes" and "C1/C2 review notes" at the end; never live-verified); C3 scheduled. Fixes the two open risks Part A left: (1) the common
+notes" and "C1/C2 review notes" at the end; never live-verified); C3 built
+2026-10-04 (see "C3 implementation notes"; never live-verified). Fixes the two open risks Part A left: (1) the common
 variable names (`ANTHROPIC_API_KEY`, …) sit in the global `update-environment`
 of the user's own default tmux server; (2) the agent can read the real key,
 and a project's own CLI config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`,
@@ -1021,3 +1022,121 @@ Not fixed, with reason:
   the idle bound — a loopback service cannot prevent that; the bounds keep
   the app's memory and sockets safe, not the proxy's availability against
   a determined local attacker.
+
+## C3 implementation notes (2026-10-04)
+
+Never live-verified. What was built:
+
+- **`services::api_prices`** (pure). Per-model USD/MTok tables read off the
+  vendors' pages on **2026-10-04** (`PRICES_DATE`, shown in Manage CLIs):
+  platform.claude.com/docs/en/about-claude/pricing (input, 5-minute and 1-hour
+  cache writes, cache reads, output for every listed Claude model incl. the
+  retired ones; fast mode 2× — Opus 5.5 $8/$40 over $4/$20, Opus 5/4.8
+  $10/$50 over $5/$25; `inference_geo: "us"` 1.1×; web search $10/1,000) and
+  ai.google.dev/gemini-api/docs/pricing ("Last updated 2026-10-01": paid
+  Standard tier; Pro tiers past 200K prompt tokens, audio input rates, cache
+  reads, the 3.6–3.8 Flash promotional rates that double from 2027-01, image
+  /TTS/embedding models). Ids matched after `normalize` (case, `models/`,
+  `anthropic.`, `@…`, `[1m]`, Bedrock `-v1:0`, `-latest`, `-YYYYMMDD`; Gemini
+  `-001`, `-preview-MM-YYYY`, `-exp-MMDD` stems) — exact matches only, no
+  prefix guessing. Unknown model → per token kind the maximum over the
+  provider's current chat models (Anthropic $10/$50, cache read $1; Gemini
+  $4/$18, cache $0.40 — retired and media models excluded), flagged.
+- **`services::api_meter`** (pure). `billing()` names the paid routes:
+  Anthropic `POST /v1/messages`; Gemini `generateContent`,
+  `streamGenerateContent`, `embedContent`, `batchEmbedContents`. Counting and
+  model reads are neither metered nor refused. A streaming JSON scanner
+  follows strings, escapes and nesting through any chunk boundary and keeps
+  only the usage object of the top-level answer — Anthropic `usage` at the
+  root (non-streaming message, `message_delta`) or under `message`
+  (`message_start`), Gemini `usageMetadata` at the root of each response (an
+  SSE event, an element of the JSON array a plain `streamGenerateContent`
+  sends, or one JSON answer) — and the model beside it. A `usage` inside tool
+  input or answer text is not read (an agent cannot make the model print a
+  cheaper usage). Each field keeps its maximum (both APIs report running
+  totals), so a stream is never counted twice. Bounds: 64 frames, a 128-byte
+  string window, a 16 KiB usage capture; an SSE line break resets the
+  scanner. `accept-encoding` is not forwarded and the client asks for no
+  decompression (C2), so the bytes are plain — checked.
+- **`services::api_usage`.** `Ledger` (`<state_dir>/agent-api-usage.json`:
+  `version`, `month` UTC `YYYY-MM`, per provider `spent_usd` and per model
+  input/output/cache write/cache read/web searches/requests/usd/unknown,
+  `previous` month's totals, `restarted`); model names sanitized, 80 chars,
+  32 per provider then `(other)`. `Book`: in memory, loaded on first use,
+  written with `storage::write_json_atomic` at most 5 s after a change (one
+  writer thread per burst) and in `api_proxy::stop_for_exit` after the drain.
+  Missing file → empty month; unparseable → moved to
+  `agent-api-usage.corrupt.json`, count restarted with `restarted` set and
+  shown; unreadable → same note, file left in place; a month ahead of the
+  clock is kept (clock went back), a later month rolls over. `limit_for` reads
+  `Settings::agent_api_limits` (provider id → USD, `Option`, serde default,
+  round-trips) and re-parses only when `settings.json`'s mtime/size changes.
+  `Verdict`: `open` / `reached` (spent ≥ limit) / `noLimit`.
+- **Enforcement** in `api_proxy::handle`, after the token, path and key checks
+  and before the body is read: a billed request whose provider is `reached` or
+  `noLimit` gets 429 with `x-should-retry: false` in the provider's shape
+  (Anthropic `rate_limit_error`; Gemini `RESOURCE_EXHAUSTED`), message
+  "<app> monthly API budget for <provider> reached — raise it in Manage CLIs →
+  API keys, or wait for next month" / "<app> has no monthly API budget set
+  for <provider> …" (`app_name!`). The seam: `Tap` carries the meter and the
+  book; `usage_tap` feeds it, `usage_end` prices and records whatever was
+  reported for Complete, Failed and Aborted alike.
+- **Commands.** `agent_api_key_set` refuses without a valid limit in settings
+  (`agent_api_keys::require_limit`); the UI writes the limit first.
+  `agent_api_keys_status` adds per provider `limitUsd`, `spentUsd`, `budget`,
+  `unknownModels`, and `month`, `resetsOn`, `ledgerRestarted`, `pricesDate`.
+  `agent_logins` sets `api_budget_reached` for a keyed CLI whose every
+  provider is not `open`; the phone bridge passes it as a flag
+  (`MobileSignInOption::api_budget_reached`).
+- **UI.** Manage CLIs → API keys: a limit field (20 proposed) beside the key
+  field — Save disabled without a valid one; a saved key's row reads "saved ·
+  $x of $y spent this month" / "budget reached ($x of $y) — new requests are
+  refused until <date> or a higher limit" / "no monthly limit — requests are
+  refused until you set one", with its limit field and **Set limit**; models
+  priced at the fallback rate are listed under the row; a help line gives the
+  reset date, the overshoot by concurrent turns, the table's date and the
+  provider-side limit advice; a restarted ledger is said. Shared-logins row and
+  the phone's sign-in list: "API budget reached" in place of "Uses an API
+  key". Pills `settings.agentApiKeys.limit`, `mobile.signIn.apiBudgetReached`.
+
+**Deviations, and why.**
+
+- **Overshoot is "the turns in flight", not "one turn".** Decision 4 said one
+  turn; several keyed tabs can each be mid-answer when the limit is crossed,
+  and every one finishes. The UI and help say so.
+- **Embeddings are estimated** (`body bytes / 3` tokens at the model's input
+  rate) unless the answer carries usage: Gemini's embed answers report none,
+  and leaving them unmetered would be a free route around the limit for a
+  token holder.
+- **Cache writes without a TTL breakdown count as 1-hour writes**, and a
+  remainder the breakdown does not explain too — the dearer reading.
+- **Sonnet 4 / 4.5 long-context premium** (2× input, 1.5× output past 200K)
+  is from the earlier pricing page; the 2026-10-04 page lists standard 1M
+  pricing for 4.6 and later only. Kept as the conservative reading.
+- **Image models** are priced at their image-output rate for every output
+  token (no split of text and image tokens): an overcount.
+- **`AgentLoginsRows` is exported** for its test, as `AgentApiKeysRows` is.
+
+**Not metered (stated in the help):** Gemini Search grounding fees (absent
+from `usageMetadata`), Anthropic code-execution hours, refusal-fallback
+repricing, spend outside Tabtivity. Output generated after a client abort and
+never reported is not seen. Gemini CLI's own retry policy on 429 is its own
+(it may retry a few times; each retry is refused before the provider).
+
+**Untestable here.** A real provider and real prices (no real key, no network
+by design — the price table was read from the vendor pages, the usage shapes
+are the documented ones); Gemini CLI (not installed); a live tab. Covered by
+unit tests: price lookup and normalization, every token kind, fast/US
+multipliers, long-context tiers, scheduled Gemini raises, unknown-model
+fallback; the scanner over every two-way split, sampled three-way splits and
+byte-by-byte for Anthropic SSE and JSON, Gemini SSE, pretty JSON arrays and
+single answers, decoy `usage` keys in tool input and text, cumulative
+counts, broken-off streams, error answers, oversized and deeply nested
+answers; ledger round-trip, older/newer files, model-name bounds, rollover
+(and clock going back, year boundary, missing month), throttled and explicit
+flush, a corrupt file moved aside; end to end through the proxy: a streamed
+answer charged (unknown model flagged), count_tokens free, refusal at the
+limit in both providers' shapes before the provider sees anything, refusal
+without a limit; the status JSON; UI vitest for the required limit, the
+written-limit-first order, spent/limit, budget reached, reset date, unknown
+models, Set limit, no-limit, the logins row and the phone's label.
