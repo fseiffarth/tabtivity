@@ -24,18 +24,36 @@
 //! **Its own listener**, not a route on the MCP listener (`commands::root_mcp`):
 //! that one is shaped for one small JSON-RPC message per socket — 30 s socket
 //! lifetime, `Connection: close`, a 1 MiB-class body bound, JSON-only — and a
-//! model turn streams for minutes with request bodies of several MiB.
+//! model turn streams for minutes with request bodies of several MiB. It runs
+//! in the app's own process, so its bounds protect the app: 64 sockets, a
+//! socket with no request in flight dropped after [`IDLE_WAIT`], an unread
+//! answer after [`WRITE_STALL`], [`MAX_BODY`] per request and
+//! [`MAX_BUFFERED`] held over all of them.
 //!
 //! **Lifetime.** A token is revoked when its tab ends ([`on_tab_gone`], from
 //! `agent_fence::on_tab_gone`, which every tab teardown reaches). A tab running
 //! in a local tmux session outlives its PTY (a project switch or window reload
 //! kills only the tmux client), so its grant is bound to the session and
-//! revoked once that session is gone ([`sweep_tmux`]). A respawn of the same
-//! tab gets the same token back ([`issue`]), which is what keeps a re-attached
-//! agent working. Everything is revoked and the listener stopped in the
-//! `RunEvent::Exit` teardown ([`stop_for_exit`]); a clean quit also ends
-//! Tabtivity's tmux sessions, so no agent outlives its proxy then. After a
-//! crash a re-attached keyed agent holds a dead token: restart the CLI.
+//! revoked once that session is gone: killed by Tabtivity
+//! ([`on_tmux_session_gone`]), or found gone by [`sweep_tmux`] (after a tab's
+//! PTY ends, and once a minute while such a grant is held). A rename moves
+//! the binding ([`on_tmux_renamed`]). A respawn of the same tab gets the same
+//! token back ([`issue`]), which is what keeps a re-attached agent working.
+//! Everything is revoked and the listener stopped in the `RunEvent::Exit`
+//! teardown ([`stop_for_exit`]); a clean quit also ends Tabtivity's tmux
+//! sessions, so no agent outlives its proxy then. After a crash a re-attached
+//! keyed agent holds a dead token: restart the CLI. The listener binds the
+//! port of the last run again when it can, so such an agent's requests (and
+//! its conversation) reach this proxy's refusal, not whatever else on the
+//! machine took the port.
+//!
+//! **Who can use a token.** Any local process that holds one — loopback is
+//! open to every user of the machine, so the token alone is the credential:
+//! 256 random bits, only in the tab's environment (readable by its own user
+//! alone) and the carrier on the user's own tmux server, never on an argv or
+//! disk. Tokens are looked up in a `HashMap` keyed by the token: SipHash with
+//! a random per-process key, so a lookup's timing says nothing an attacker
+//! can steer toward a live token.
 //!
 //! **Never logged:** keys, tokens, bodies, query strings. Nothing here logs a
 //! request at all.
@@ -47,7 +65,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -71,10 +89,17 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upstream silence bound per read. Claude aborts a stream after five quiet
 /// minutes itself; the provider's SSE pings keep a live one under this.
 const READ_IDLE: Duration = Duration::from_secs(600);
+/// Request bodies held in memory at once, over every socket: 64 sockets of
+/// [`MAX_BODY`] each would be 2 GiB in the app's own process.
+const MAX_BUFFERED: usize = 256 * 1024 * 1024;
 /// Sockets open at once.
 const SOCKETS: usize = 64;
-/// How long an accepted socket may stay silent before it is dropped.
-const IDLE_OPEN: Duration = Duration::from_secs(10);
+/// How long a socket with no request in flight may take to deliver the next
+/// request's head (after the accept, or after the last answer ended) before it
+/// is dropped: an idle keep-alive or a trickled head does not hold a slot.
+const IDLE_WAIT: Duration = Duration::from_secs(60);
+/// How long the client may leave an answer's bytes unread.
+const WRITE_STALL: Duration = READ_IDLE;
 /// A keychain read that found nothing is retried after this, not per request.
 const MISSING_KEY_RETRY: Duration = Duration::from_secs(15);
 
@@ -102,8 +127,16 @@ pub struct Grant {
     pub tmux: Option<String>,
 }
 
-fn grants() -> &'static Mutex<HashMap<String, Grant>> {
-    static GRANTS: OnceLock<Mutex<HashMap<String, Grant>>> = OnceLock::new();
+/// A grant and when it was first issued: a tmux-bound one is spared by the
+/// sweep for [`SWEEP_GRACE`] after that, since the session it names is only
+/// created once the spawn that carries its token starts.
+struct Held {
+    grant: Grant,
+    since: Instant,
+}
+
+fn grants() -> &'static Mutex<HashMap<String, Held>> {
+    static GRANTS: OnceLock<Mutex<HashMap<String, Held>>> = OnceLock::new();
     GRANTS.get_or_init(Default::default)
 }
 
@@ -122,18 +155,21 @@ fn mint() -> Option<String> {
 /// without system randomness.
 fn issue_grant(grant: Grant) -> Option<String> {
     let mut map = lock(grants());
-    if let Some((token, _)) = map.iter().find(|(_, g)| **g == grant) {
+    if let Some((token, _)) = map.iter().find(|(_, h)| h.grant == grant) {
         return Some(token.clone());
     }
     let token = mint()?;
-    map.insert(token.clone(), grant);
+    map.insert(token.clone(), Held { grant, since: Instant::now() });
     Some(token)
 }
 
 /// A proxy token and the base URL for a keyed spawn, or `None` when the proxy
 /// is not running in this process (the `--agent-shim` process never runs it,
 /// so a CLI typed into a shell tab stays on its own login) or the provider has
-/// no key saved. Reads the keychain only on a cold cache.
+/// no key saved. Reads the keychain only on a cold cache. `tmux` is the local
+/// session the agent will run in — [`tmux_binding`] of the tab's session name,
+/// so a tab whose session name no tmux will ever create is not kept past its
+/// PTY.
 pub fn issue(provider: Provider, scope: &str, tab: &str, tmux: Option<&str>) -> Option<(String, String)> {
     let base = base_url(provider)?;
     key_for(provider)?;
@@ -146,8 +182,19 @@ pub fn issue(provider: Provider, scope: &str, tab: &str, tmux: Option<&str>) -> 
     Some((token, base))
 }
 
+/// The tmux session a spawn's grant is bound to: the tab's `tmux_session`,
+/// but only where a local tmux runs it (`tmux_local::wrap_pty_options_local`
+/// is a no-op without one — Windows, no tmux installed). A grant bound to a
+/// session that never exists would outlive its tab: the sweep cannot tell
+/// "no tmux" from "tmux failed this once" and leaves such grants alone.
+pub fn tmux_binding(session: Option<&str>) -> Option<String> {
+    session
+        .filter(|_| crate::services::tmux_local::tmux_available())
+        .map(str::to_string)
+}
+
 fn lookup(token: &str) -> Option<Grant> {
-    lock(grants()).get(token).cloned()
+    lock(grants()).get(token).map(|h| h.grant.clone())
 }
 
 /// Whether a proxy token is live. For the spawn path's tests and diagnostics;
@@ -162,28 +209,60 @@ pub fn token_live(token: &str) -> bool {
 /// teardown path.
 pub fn on_tab_gone(tab: &str) {
     let mut tmux_bound = false;
-    lock(grants()).retain(|_, g| {
-        if g.tab != tab {
+    lock(grants()).retain(|_, h| {
+        if h.grant.tab != tab {
             return true;
         }
-        tmux_bound |= g.tmux.is_some();
-        g.tmux.is_some()
+        tmux_bound |= h.grant.tmux.is_some();
+        h.grant.tmux.is_some()
     });
     if tmux_bound && !STOPPING.load(Ordering::Acquire) {
         std::thread::spawn(sweep_tmux);
     }
 }
 
+/// A local tmux session was killed on purpose (`local_tmux_kill`: a tab's
+/// explicit close, the Sessions view): its grants go now, not at the next
+/// sweep.
+pub fn on_tmux_session_gone(session: &str) {
+    lock(grants()).retain(|_, h| h.grant.tmux.as_deref() != Some(session));
+}
+
+/// A local tmux session was renamed (`local_tmux_rename`): its agent keeps
+/// running, so its grants follow the new name rather than being swept as gone.
+pub fn on_tmux_renamed(old: &str, new: &str) {
+    for held in lock(grants()).values_mut() {
+        if held.grant.tmux.as_deref() == Some(old) {
+            held.grant.tmux = Some(new.to_string());
+        }
+    }
+}
+
 /// Revoke every grant whose tmux session no longer exists. A `tmux` that
 /// cannot be run at all leaves the grants alone (a later sweep or the quit
 /// revokes them); one that answers "no server" means every session is gone.
+/// Runs after a tmux-bound tab's PTY ends and once a minute while any
+/// tmux-bound grant is held (a session can also end with no PTY attached — a
+/// phone-started one, a `tmux kill-session` typed elsewhere).
 pub fn sweep_tmux() {
+    if !lock(grants()).values().any(|h| h.grant.tmux.is_some()) {
+        return;
+    }
     let Some(live) = live_tmux_sessions() else { return };
-    retain_live(&mut lock(grants()), &live);
+    retain_live(&mut lock(grants()), &live, Instant::now());
 }
 
-fn retain_live(map: &mut HashMap<String, Grant>, live: &HashSet<String>) {
-    map.retain(|_, g| g.tmux.as_ref().is_none_or(|s| live.contains(s)));
+/// How long a fresh tmux-bound grant is spared by the sweep: its session is
+/// created only when the spawn's tmux client starts.
+const SWEEP_GRACE: Duration = Duration::from_secs(60);
+/// How often held tmux-bound grants are checked against the live sessions.
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+
+fn retain_live(map: &mut HashMap<String, Held>, live: &HashSet<String>, now: Instant) {
+    map.retain(|_, h| {
+        h.grant.tmux.as_ref().is_none_or(|s| live.contains(s))
+            || now.saturating_duration_since(h.since) < SWEEP_GRACE
+    });
 }
 
 fn live_tmux_sessions() -> Option<HashSet<String>> {
@@ -329,6 +408,26 @@ struct ProxyState {
     keys: KeySource,
     client: reqwest::Client,
     max_body: usize,
+    /// Request body bytes held right now, over every socket.
+    buffered: Arc<AtomicUsize>,
+    max_buffered: usize,
+    /// [`IDLE_WAIT`]; shorter in tests.
+    idle_wait: Duration,
+}
+
+impl ProxyState {
+    fn new(port: u16, upstream: Upstream, keys: KeySource, client: reqwest::Client) -> Self {
+        ProxyState {
+            port,
+            upstream,
+            keys,
+            client,
+            max_body: MAX_BODY,
+            buffered: Arc::new(AtomicUsize::new(0)),
+            max_buffered: MAX_BUFFERED,
+            idle_wait: IDLE_WAIT,
+        }
+    }
 }
 
 fn client(https_only: bool) -> Result<reqwest::Client, String> {
@@ -348,40 +447,77 @@ fn client(https_only: bool) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("API proxy: {e}"))
 }
 
+/// Where the port of the last run is remembered (not a secret): binding it
+/// again keeps a tmux-held agent that outlived a crash talking to this proxy
+/// (which refuses its dead token with a readable error) rather than to
+/// whatever else on the machine may have taken the port meanwhile — its
+/// requests carry the conversation.
+fn port_file() -> std::path::PathBuf {
+    crate::storage::state_dir().join("api-proxy-port")
+}
+
+/// A loopback listener on the remembered port, else on any free one.
+fn bind_listener(preferred: Option<u16>) -> std::io::Result<std::net::TcpListener> {
+    let listener = preferred
+        .filter(|p| *p != 0)
+        .and_then(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok())
+        .map_or_else(|| std::net::TcpListener::bind(("127.0.0.1", 0)), Ok)?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
 /// Bind the listener and serve until [`stop_for_exit`]. Called once from
 /// `setup`; a failure leaves keyed CLIs on their own logins (no token, no base
-/// URL is handed out while [`running`] is false) — the safe direction.
+/// URL is handed out while [`running`] is false) — the safe direction. The
+/// bind happens here, synchronously, so the first restored tab already finds
+/// the proxy running.
 pub fn start() {
-    let handle = tauri::async_runtime::spawn(async {
-        let client = match client(true) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[api-proxy] {e}");
-                return;
-            }
-        };
-        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+    let client = match client(true) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[api-proxy] {e}");
+            return;
+        }
+    };
+    let preferred = std::fs::read_to_string(port_file()).ok().and_then(|s| s.trim().parse::<u16>().ok());
+    let listener = match bind_listener(preferred) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[api-proxy] bind failed: {e}");
+            return;
+        }
+    };
+    let Ok(addr) = listener.local_addr() else { return };
+    let port = addr.port();
+    if preferred != Some(port) {
+        let _ = std::fs::write(port_file(), port.to_string());
+    }
+    PORT.store(port, Ordering::Release);
+    let handle = tauri::async_runtime::spawn(async move {
+        let listener = match tokio::net::TcpListener::from_std(listener) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[api-proxy] bind failed: {e}");
+                eprintln!("[api-proxy] listener: {e}");
+                PORT.store(0, Ordering::Release);
                 return;
             }
         };
-        let Ok(addr) = listener.local_addr() else { return };
-        let state = ProxyState {
-            port: addr.port(),
-            upstream: Upstream::Provider,
-            keys: KeySource::Keychain,
-            client,
-            max_body: MAX_BODY,
-        };
-        PORT.store(addr.port(), Ordering::Release);
+        let state = ProxyState::new(port, Upstream::Provider, KeySource::Keychain, client);
         if let Err(e) = serve(listener, state, async { SHUTDOWN.notified().await }).await {
             eprintln!("[api-proxy] server stopped: {e}");
         }
         PORT.store(0, Ordering::Release);
     });
     *lock(&SERVER) = Some(handle);
+    // Grants bound to a tmux session that ended with no PTY attached.
+    tauri::async_runtime::spawn(async {
+        while !STOPPING.load(Ordering::Acquire) {
+            tokio::time::sleep(SWEEP_EVERY).await;
+            if !STOPPING.load(Ordering::Acquire) {
+                let _ = tauri::async_runtime::spawn_blocking(sweep_tmux).await;
+            }
+        }
+    });
 }
 
 /// `RunEvent::Exit`: hand out nothing more, revoke every token, stop accepting
@@ -404,23 +540,74 @@ async fn serve(
     state: ProxyState,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    let idle_wait = state.idle_wait;
     let router = Router::new().fallback(handle).with_state(state);
-    let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
-    axum::serve(listener, router).with_graceful_shutdown(shutdown).await
+    let listener = BoundedListener {
+        tcp: listener,
+        slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)),
+        idle_wait,
+    };
+    axum::serve(listener, router.into_make_service_with_connect_info::<Conn>())
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
-/// Caps open sockets and drops one that stays silent after accept; no total
-/// lifetime (a model turn streams for minutes).
+/// Caps open sockets and bounds how long one may hold its slot doing nothing:
+/// between requests (the next request's head must arrive within
+/// [`IDLE_WAIT`] of the last answer's end, or of the accept) and while the
+/// client does not read an answer ([`WRITE_STALL`]). No total lifetime and no
+/// bound while a request is in flight — a model turn streams for minutes; the
+/// body wait and the upstream read bound cover that.
 struct BoundedListener {
     tcp: tokio::net::TcpListener,
     slots: Arc<tokio::sync::Semaphore>,
+    idle_wait: Duration,
+}
+
+/// One connection's state, shared between its socket and the requests on it.
+struct ConnState {
+    /// Requests on this connection whose answer has not ended.
+    busy: AtomicUsize,
+    /// When `busy` last dropped to zero (or the accept).
+    idle_since: Mutex<tokio::time::Instant>,
+    idle_wait: Duration,
+}
+
+/// The handler's view of its connection (`ConnectInfo`).
+#[derive(Clone)]
+struct Conn(Arc<ConnState>);
+
+impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, BoundedListener>> for Conn {
+    fn connect_info(stream: axum::serve::IncomingStream<'_, BoundedListener>) -> Self {
+        Conn(stream.io().conn.clone())
+    }
+}
+
+/// Marks a request in flight on its connection until dropped — held by the
+/// answer's body stream, so a streaming turn is never cut by the idle bound.
+struct Busy(Arc<ConnState>);
+
+impl Busy {
+    fn new(conn: &Arc<ConnState>) -> Self {
+        conn.busy.fetch_add(1, Ordering::AcqRel);
+        Busy(conn.clone())
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        if self.0.busy.fetch_sub(1, Ordering::AcqRel) == 1 {
+            *lock(&self.0.idle_since) = tokio::time::Instant::now();
+        }
+    }
 }
 
 struct BoundedStream {
     tcp: tokio::net::TcpStream,
     _slot: tokio::sync::OwnedSemaphorePermit,
+    conn: Arc<ConnState>,
     idle: Pin<Box<tokio::time::Sleep>>,
-    seen_bytes: bool,
+    stall: Option<Pin<Box<tokio::time::Sleep>>>,
 }
 
 impl axum::serve::Listener for BoundedListener {
@@ -431,8 +618,14 @@ impl axum::serve::Listener for BoundedListener {
             let slot = self.slots.clone().acquire_owned().await.expect("listener semaphore stays open");
             match self.tcp.accept().await {
                 Ok((tcp, addr)) => {
-                    let idle = Box::pin(tokio::time::sleep(IDLE_OPEN));
-                    return (BoundedStream { tcp, _slot: slot, idle, seen_bytes: false }, addr);
+                    let now = tokio::time::Instant::now();
+                    let conn = Arc::new(ConnState {
+                        busy: AtomicUsize::new(0),
+                        idle_since: Mutex::new(now),
+                        idle_wait: self.idle_wait,
+                    });
+                    let idle = Box::pin(tokio::time::sleep_until(now + self.idle_wait));
+                    return (BoundedStream { tcp, _slot: slot, conn, idle, stall: None }, addr);
                 }
                 Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
             }
@@ -445,24 +638,42 @@ impl axum::serve::Listener for BoundedListener {
 
 impl AsyncRead for BoundedStream {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
-        if !self.seen_bytes && self.idle.as_mut().poll(cx).is_ready() {
+        if self.conn.busy.load(Ordering::Acquire) == 0 {
+            let deadline = *lock(&self.conn.idle_since) + self.conn.idle_wait;
+            if self.idle.deadline() != deadline {
+                self.idle.as_mut().reset(deadline);
+            }
+            if self.idle.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(std::io::ErrorKind::TimedOut.into()));
+            }
+        }
+        Pin::new(&mut self.tcp).poll_read(cx, buf)
+    }
+}
+
+impl BoundedStream {
+    /// A write the client has not taken for [`WRITE_STALL`] ends the socket.
+    fn stalled<T>(&mut self, cx: &mut Context<'_>, polled: Poll<std::io::Result<T>>) -> Poll<std::io::Result<T>> {
+        if polled.is_ready() {
+            self.stall = None;
+            return polled;
+        }
+        let stall = self.stall.get_or_insert_with(|| Box::pin(tokio::time::sleep(WRITE_STALL)));
+        if stall.as_mut().poll(cx).is_ready() {
             return Poll::Ready(Err(std::io::ErrorKind::TimedOut.into()));
         }
-        let before = buf.filled().len();
-        let polled = Pin::new(&mut self.tcp).poll_read(cx, buf);
-        if buf.filled().len() > before {
-            self.seen_bytes = true;
-        }
-        polled
+        Poll::Pending
     }
 }
 
 impl AsyncWrite for BoundedStream {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.tcp).poll_write(cx, buf)
+        let polled = Pin::new(&mut self.tcp).poll_write(cx, buf);
+        self.stalled(cx, polled)
     }
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.tcp).poll_flush(cx)
+        let polled = Pin::new(&mut self.tcp).poll_flush(cx);
+        self.stalled(cx, polled)
     }
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.tcp).poll_shutdown(cx)
@@ -489,6 +700,8 @@ enum Refusal {
     NoKey,
     /// The provider's host could not be reached.
     Upstream,
+    /// Too many request bodies held at once ([`MAX_BUFFERED`]).
+    Busy,
 }
 
 impl Refusal {
@@ -501,6 +714,7 @@ impl Refusal {
             Refusal::BodyTimeout => StatusCode::REQUEST_TIMEOUT,
             Refusal::BadBody => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
+            Refusal::Busy => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -520,12 +734,14 @@ impl Refusal {
                 " has no API key saved for this provider (or the keyring is locked): add one in Manage CLIs → API keys"
             ),
             Refusal::Upstream => concat!(crate::app_name!(), " API proxy: the provider's API could not be reached"),
+            Refusal::Busy => concat!(crate::app_name!(), " API proxy: too many large requests at once; try again"),
         }
     }
 
-    /// Whether the CLI should try again: only for a transport failure.
+    /// Whether the CLI should try again: only for a transport failure or a
+    /// momentary memory bound.
     fn retryable(self) -> bool {
-        matches!(self, Refusal::Upstream)
+        matches!(self, Refusal::Upstream | Refusal::Busy)
     }
 }
 
@@ -541,7 +757,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::NotFound => "NOT_FOUND",
                 Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
-                Refusal::Upstream => "UNAVAILABLE",
+                Refusal::Upstream | Refusal::Busy => "UNAVAILABLE",
             } }
         }),
         // Anthropic's shape; also for a path naming no provider.
@@ -553,7 +769,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::NotFound => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
                 Refusal::BodyTimeout | Refusal::BadBody => "invalid_request_error",
-                Refusal::Upstream => "api_error",
+                Refusal::Upstream | Refusal::Busy => "api_error",
             }, "message": message }
         }),
     };
@@ -654,13 +870,25 @@ fn presented_token(headers: &HeaderMap, query: Option<&str>) -> Option<String> {
     (!first.is_empty() && found.iter().all(|v| *v == first)).then_some(first)
 }
 
-/// The query string without its `key` parameter (the token, for a client
-/// that sends it there).
-fn forwarded_query(query: Option<&str>) -> String {
+/// The query parameters forwarded, by exact (unencoded) name: what the
+/// provider's CLIs send — Claude's `?beta=true` and model-list paging, Gemini's
+/// `alt=sse` and model-list paging. Everything else stays here: the token's
+/// `key` (in any spelling — `%6Bey` is `key` to the provider), and anything
+/// that would change what the request does there (Google's `$httpMethod`,
+/// `access_token`, `$callback`).
+fn query_allowed(provider: Provider, name: &str) -> bool {
+    match provider {
+        Provider::Anthropic => matches!(name, "beta" | "limit" | "after_id" | "before_id"),
+        Provider::Gemini => matches!(name, "alt" | "pageSize" | "pageToken"),
+    }
+}
+
+/// The query string to forward: only [`query_allowed`] parameters, in order.
+fn forwarded_query(provider: Provider, query: Option<&str>) -> String {
     let kept: Vec<&str> = query
         .unwrap_or("")
         .split('&')
-        .filter(|p| !p.is_empty() && *p != "key" && !p.starts_with("key="))
+        .filter(|p| query_allowed(provider, p.split_once('=').map_or(p, |(name, _)| name)))
         .collect();
     if kept.is_empty() {
         String::new()
@@ -697,6 +925,11 @@ const DROP_REQUEST: &[&str] = &[
     "x-forwarded-host",
     "x-forwarded-proto",
     "x-real-ip",
+    // Google honours these in place of the method, which would step around
+    // the per-path method allowlist.
+    "x-http-method-override",
+    "x-http-method",
+    "x-method-override",
 ];
 
 /// Response headers never passed back: hop-by-hop ones and cookies.
@@ -740,6 +973,12 @@ fn host_ok(headers: &HeaderMap, port: u16) -> bool {
 
 async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
+    // The request is in flight on its socket until its answer ends (the
+    // relayed body holds this), so the idle bound never cuts a stream.
+    let busy = parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<Conn>>()
+        .map(|c| Busy::new(&c.0 .0));
     let Some((provider, rest)) = split_route(parts.uri.path()) else {
         return refuse(None, Refusal::NotFound);
     };
@@ -759,60 +998,133 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let Some(key) = state.keys.key(provider).await else {
         return refuse(Some(provider), Refusal::NoKey);
     };
-    let Ok(key_value) = HeaderValue::from_str(&key) else {
+    let Ok(mut key_value) = HeaderValue::from_str(&key) else {
         return refuse(Some(provider), Refusal::NoKey);
     };
-    let body = match tokio::time::timeout(BODY_WAIT, read_body(body, state.max_body)).await {
+    key_value.set_sensitive(true);
+    let read = read_body(body, state.max_body, &state.buffered, state.max_buffered);
+    let (body, held) = match tokio::time::timeout(BODY_WAIT, read).await {
         Err(_) => return refuse(Some(provider), Refusal::BodyTimeout),
         Ok(Err(refusal)) => return refuse(Some(provider), refusal),
-        Ok(Ok(bytes)) => bytes,
+        Ok(Ok(read)) => read,
     };
-    let url = format!("{}{}{}", state.upstream.base(provider), rest, forwarded_query(query));
+    let url = format!("{}{}{}", state.upstream.base(provider), rest, forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
     let upstream = state.client.request(parts.method, url).headers(headers).body(body).send().await;
+    // The body has been sent (or never will be): its bytes leave the budget.
+    drop(held);
     let Ok(upstream) = upstream else {
         return refuse(Some(provider), Refusal::Upstream);
     };
-    relay(upstream, Arc::new(grant))
+    relay(upstream, Tap::new(grant, busy))
+}
+
+/// Request body bytes counted against [`ProxyState::buffered`] until dropped.
+struct HeldBody(Arc<AtomicUsize>, usize);
+
+impl HeldBody {
+    fn add(&mut self, n: usize, max: usize) -> bool {
+        let before = self.0.fetch_add(n, Ordering::AcqRel);
+        self.1 += n;
+        before + n <= max
+    }
+}
+
+impl Drop for HeldBody {
+    fn drop(&mut self) {
+        self.0.fetch_sub(self.1, Ordering::AcqRel);
+    }
 }
 
 /// The request body, refused past `max` bytes (counted as it arrives, so a
-/// body without a length is bounded too).
-async fn read_body(body: Body, max: usize) -> Result<Bytes, Refusal> {
+/// body without a length is bounded too) or once every socket's bodies
+/// together would pass `max_buffered`.
+async fn read_body(
+    body: Body,
+    max: usize,
+    buffered: &Arc<AtomicUsize>,
+    max_buffered: usize,
+) -> Result<(Bytes, HeldBody), Refusal> {
     use futures_util::StreamExt;
     let mut stream = body.into_data_stream();
     let mut out = Vec::new();
+    let mut held = HeldBody(buffered.clone(), 0);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| Refusal::BadBody)?;
         if out.len() + chunk.len() > max {
             return Err(Refusal::TooLarge);
         }
+        if !held.add(chunk.len(), max_buffered) {
+            return Err(Refusal::Busy);
+        }
         out.extend_from_slice(&chunk);
     }
-    Ok(Bytes::from(out))
+    Ok((Bytes::from(out), held))
+}
+
+/// How a relayed answer ended, for C3's ledger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamEnd {
+    /// The provider's body ended cleanly.
+    Complete,
+    /// Reading from the provider failed mid-body (reset, idle bound).
+    Failed,
+    /// The client went away before the end (or the app is quitting): what the
+    /// provider sent so far may already be billed.
+    Aborted,
+}
+
+/// One relayed answer's tap: every chunk to [`usage_tap`], and exactly one
+/// [`usage_end`] — on a clean end, a failed read, or (on drop) an abort.
+struct Tap {
+    grant: Grant,
+    ended: bool,
+    _busy: Option<Busy>,
+}
+
+impl Tap {
+    fn new(grant: Grant, busy: Option<Busy>) -> Self {
+        Tap { grant, ended: false, _busy: busy }
+    }
+
+    fn chunk(&self, bytes: &Bytes) {
+        usage_tap(&self.grant, bytes);
+    }
+
+    fn end(&mut self, how: StreamEnd) {
+        if !std::mem::replace(&mut self.ended, true) {
+            usage_end(&self.grant, how);
+        }
+    }
+}
+
+impl Drop for Tap {
+    fn drop(&mut self) {
+        self.end(StreamEnd::Aborted);
+    }
 }
 
 /// The provider's answer, passed back as it arrives: status, headers (less
 /// hop-by-hop ones), and the body chunk by chunk — never collected first, or a
 /// streaming CLI stalls.
-fn relay(upstream: reqwest::Response, grant: Arc<Grant>) -> Response {
+fn relay(upstream: reqwest::Response, tap: Tap) -> Response {
     let status = upstream.status();
     let headers = copy_headers(upstream.headers(), DROP_RESPONSE);
-    let stream = futures_util::stream::unfold(Some(upstream), move |state| {
-        let grant = grant.clone();
-        async move {
-            let mut upstream = state?;
-            match upstream.chunk().await {
-                Ok(Some(bytes)) => {
-                    usage_tap(&grant, &bytes);
-                    Some((Ok::<Bytes, reqwest::Error>(bytes), Some(upstream)))
-                }
-                Ok(None) => {
-                    usage_end(&grant);
-                    None
-                }
-                Err(e) => Some((Err(e), None)),
+    let stream = futures_util::stream::unfold(Some((upstream, tap)), |state| async move {
+        let (mut upstream, mut tap) = state?;
+        match upstream.chunk().await {
+            Ok(Some(bytes)) => {
+                tap.chunk(&bytes);
+                Some((Ok::<Bytes, reqwest::Error>(bytes), Some((upstream, tap))))
+            }
+            Ok(None) => {
+                tap.end(StreamEnd::Complete);
+                None
+            }
+            Err(e) => {
+                tap.end(StreamEnd::Failed);
+                Some((Err(e), None))
             }
         }
     });
@@ -822,14 +1134,23 @@ fn relay(upstream: reqwest::Response, grant: Arc<Grant>) -> Response {
     response
 }
 
-/// C3's seam (the spending limit): every response chunk of a granted request,
-/// in order, as the provider sent it (no content encoding — none is asked
-/// for). Anthropic's `message_start` / `message_delta` usage and Gemini's
-/// `usageMetadata` arrive here. Nothing reads them yet.
-fn usage_tap(_grant: &Grant, _chunk: &Bytes) {}
+/// C3's seam (the spending limit): every response chunk of a granted request
+/// that reached the provider, in order, as the provider sent it (no content
+/// encoding — none is asked for), error answers included. Anthropic's
+/// `message_start` / `message_delta` usage and Gemini's `usageMetadata` arrive
+/// here. Nothing reads them yet.
+fn usage_tap(_grant: &Grant, _chunk: &Bytes) {
+    #[cfg(test)]
+    tests::record_tap(_grant, None);
+}
 
-/// The response ended cleanly (C3: settle the turn's cost).
-fn usage_end(_grant: &Grant) {}
+/// The answer ended — cleanly, by a failed read, or by the client going away
+/// (C3: settle the turn's cost with what was seen). Exactly once per answer
+/// [`usage_tap`] saw.
+fn usage_end(_grant: &Grant, _how: StreamEnd) {
+    #[cfg(test)]
+    tests::record_tap(_grant, Some(_how));
+}
 
 #[cfg(test)]
 mod tests {
@@ -918,12 +1239,23 @@ mod tests {
     }
 
     #[test]
-    fn the_key_parameter_never_travels_on() {
-        assert_eq!(forwarded_query(Some("alt=sse&key=abc")), "?alt=sse");
-        assert_eq!(forwarded_query(Some("key=abc")), "");
-        assert_eq!(forwarded_query(Some("beta=true")), "?beta=true");
-        assert_eq!(forwarded_query(None), "");
-        assert_eq!(forwarded_query(Some("monkey=1&key")), "?monkey=1");
+    fn only_the_query_parameters_a_cli_sends_travel_on() {
+        use Provider::*;
+        assert_eq!(forwarded_query(Gemini, Some("alt=sse&key=abc")), "?alt=sse");
+        assert_eq!(forwarded_query(Gemini, Some("key=abc")), "");
+        assert_eq!(forwarded_query(Anthropic, Some("beta=true")), "?beta=true");
+        assert_eq!(forwarded_query(Anthropic, None), "");
+        assert_eq!(forwarded_query(Anthropic, Some("limit=100&after_id=m")), "?limit=100&after_id=m");
+        assert_eq!(forwarded_query(Gemini, Some("pageSize=5&pageToken=x")), "?pageSize=5&pageToken=x");
+        // The token in any spelling the provider would decode as `key`, a
+        // method override, another credential, a JSONP callback: dropped.
+        for q in ["%6Bey=abc", "Key=abc", "key", "$httpMethod=DELETE", "access_token=x", "$callback=f", "monkey=1"] {
+            assert_eq!(forwarded_query(Gemini, Some(q)), "", "{q}");
+            assert_eq!(forwarded_query(Anthropic, Some(q)), "", "{q}");
+        }
+        // One provider's parameters are not the other's.
+        assert_eq!(forwarded_query(Anthropic, Some("alt=sse")), "");
+        assert_eq!(forwarded_query(Gemini, Some("beta=true")), "");
     }
 
     #[test]
@@ -941,6 +1273,14 @@ mod tests {
             ("anthropic-beta", "a,b"),
             ("x-claude-code-session-id", "s"),
             ("content-type", "application/json"),
+            ("proxy-authorization", "Basic t"),
+            ("x-http-method-override", "DELETE"),
+            ("x-http-method", "DELETE"),
+            ("x-method-override", "DELETE"),
+            ("origin", "https://example.org"),
+            ("te", "trailers"),
+            ("transfer-encoding", "chunked"),
+            ("content-length", "1"),
         ] {
             m.append(axum::http::HeaderName::from_static(k), HeaderValue::from_static(v));
         }
@@ -969,24 +1309,51 @@ mod tests {
 
     #[test]
     fn a_tmux_bound_grant_lives_as_long_as_its_session() {
+        let start = Instant::now();
+        let held = |g: Grant| Held { grant: g, since: start };
         let mut map = HashMap::from([
-            ("t1".to_string(), grant(Provider::Anthropic, "p1:tmux", Some("app-p1--a"))),
-            ("t2".to_string(), grant(Provider::Anthropic, "p1:plain", None)),
+            ("t1".to_string(), held(grant(Provider::Anthropic, "p1:tmux", Some("app-p1--a")))),
+            ("t2".to_string(), held(grant(Provider::Anthropic, "p1:plain", None))),
         ]);
-        retain_live(&mut map, &HashSet::from(["app-p1--a".to_string()]));
+        let later = start + SWEEP_GRACE;
+        retain_live(&mut map, &HashSet::from(["app-p1--a".to_string()]), later);
         assert_eq!(map.len(), 2);
-        retain_live(&mut map, &HashSet::new());
+        // A fresh grant outlives a sweep that runs before its session exists.
+        retain_live(&mut map, &HashSet::new(), start + Duration::from_secs(1));
+        assert_eq!(map.len(), 2, "within the grace");
+        retain_live(&mut map, &HashSet::new(), later);
         assert!(map.contains_key("t2") && !map.contains_key("t1"));
+    }
+
+    #[test]
+    fn a_killed_session_takes_its_grants_and_a_renamed_one_keeps_them() {
+        let killed = issue_grant(grant(Provider::Anthropic, "p1:killed", Some("c2-sess-killed"))).unwrap();
+        let renamed = issue_grant(grant(Provider::Anthropic, "p1:renamed", Some("c2-sess-old"))).unwrap();
+        let other = issue_grant(grant(Provider::Anthropic, "p1:other", Some("c2-sess-other"))).unwrap();
+        on_tmux_session_gone("c2-sess-killed");
+        assert!(!token_live(&killed));
+        on_tmux_renamed("c2-sess-old", "c2-sess-new");
+        assert_eq!(lookup(&renamed).unwrap().tmux.as_deref(), Some("c2-sess-new"));
+        assert_eq!(lookup(&other).unwrap().tmux.as_deref(), Some("c2-sess-other"));
+        // A respawn of the renamed tab binds the new name and gets its token.
+        assert_eq!(issue_grant(grant(Provider::Anthropic, "p1:renamed", Some("c2-sess-new"))).unwrap(), renamed);
+        lock(grants()).retain(|t, _| *t != renamed && *t != other);
+    }
+
+    #[test]
+    fn no_session_name_no_tmux_binding() {
+        assert_eq!(tmux_binding(None), None);
+        let bound = tmux_binding(Some("c2-sess"));
+        assert_eq!(bound.is_some(), crate::services::tmux_local::tmux_available());
     }
 
     #[test]
     fn a_closed_tmux_tab_keeps_its_grant_for_the_sweep() {
         let token = issue_grant(grant(Provider::Gemini, "p1:kept", Some("not-a-real-session-c2"))).unwrap();
         // The PTY went, the session may not have: the grant stays until a
-        // sweep finds the session gone (the spawned sweep may already have).
-        STOPPING.store(true, Ordering::Release);
+        // sweep finds the session gone — not within the grace a fresh grant
+        // has, so the sweep this spawns leaves it.
         on_tab_gone("p1:kept");
-        STOPPING.store(false, Ordering::Release);
         assert!(token_live(&token));
         lock(grants()).remove(&token);
     }
@@ -1083,10 +1450,14 @@ mod tests {
                     async move {
                         match step {
                             0 => Some((Ok::<Bytes, std::io::Error>(Bytes::from_static(SSE_FIRST.as_bytes())), 1)),
-                            1 => {
-                                release.acquire().await.unwrap().forget();
-                                Some((Ok(Bytes::from_static(SSE_REST.as_bytes())), 2))
-                            }
+                            // A closed `release` breaks the stream off mid-body.
+                            1 => match release.acquire().await {
+                                Ok(permit) => {
+                                    permit.forget();
+                                    Some((Ok(Bytes::from_static(SSE_REST.as_bytes())), 2))
+                                }
+                                Err(_) => Some((Err(std::io::Error::other("stub broke off")), 2)),
+                            },
                             _ => None,
                         }
                     }
@@ -1102,17 +1473,52 @@ mod tests {
     }
 
     async fn proxy(upstream: String, key: Option<&'static str>, max_body: usize) -> u16 {
+        proxy_with(upstream, key, |s| s.max_body = max_body).await.0
+    }
+
+    /// A proxy on a free port, its state adjusted by `tune`; the port and the
+    /// body budget's counter.
+    async fn proxy_with(
+        upstream: String,
+        key: Option<&'static str>,
+        tune: impl FnOnce(&mut ProxyState),
+    ) -> (u16, Arc<AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let state = ProxyState {
-            port,
-            upstream: Upstream::Test(upstream),
-            keys: KeySource::Fixed(key),
-            client: client(false).unwrap(),
-            max_body,
-        };
+        let mut state = ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), client(false).unwrap());
+        tune(&mut state);
+        let buffered = state.buffered.clone();
         tokio::spawn(serve(listener, state, std::future::pending()));
-        port
+        (port, buffered)
+    }
+
+    /// What [`usage_tap`] / [`usage_end`] saw, per tab: `None` a chunk,
+    /// `Some(end)` an end.
+    type TapLog = Mutex<Vec<(String, Option<StreamEnd>)>>;
+
+    fn taps() -> &'static TapLog {
+        static TAPS: OnceLock<TapLog> = OnceLock::new();
+        TAPS.get_or_init(Default::default)
+    }
+
+    pub(super) fn record_tap(grant: &Grant, end: Option<StreamEnd>) {
+        lock(taps()).push((grant.tab.clone(), end));
+    }
+
+    fn taps_of(tab: &str) -> Vec<Option<StreamEnd>> {
+        lock(taps()).iter().filter(|(t, _)| t == tab).map(|(_, e)| *e).collect()
+    }
+
+    /// Waits up to 5 s for `tab`'s answer to end; its tap record.
+    async fn ended(tab: &str) -> Vec<Option<StreamEnd>> {
+        for _ in 0..100 {
+            let seen = taps_of(tab);
+            if seen.iter().any(Option::is_some) {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        taps_of(tab)
     }
 
     fn plain_client() -> reqwest::Client {
@@ -1151,20 +1557,26 @@ mod tests {
         }
         assert_eq!(rest, SSE_REST.as_bytes());
 
-        let requests = lock(&seen.requests);
-        let (method, uri, headers, body) = &requests[0];
-        assert_eq!(method, "POST");
-        assert_eq!(uri, "/v1/messages?beta=true");
-        assert_eq!(headers["x-api-key"], FAKE_KEY);
-        assert!(headers.get("authorization").is_none());
-        assert!(headers.get("accept-encoding").is_none());
-        assert_eq!(headers["anthropic-version"], "2023-06-01");
-        assert_eq!(headers["anthropic-beta"], "claude-code-20250219");
-        assert_eq!(body, br#"{"model":"claude-test","stream":true}"#);
-        for (_, value) in headers.iter() {
-            assert!(!value.to_str().unwrap_or("").contains(&token), "the token never travels on");
+        {
+            let requests = lock(&seen.requests);
+            let (method, uri, headers, body) = &requests[0];
+            assert_eq!(method, "POST");
+            assert_eq!(uri, "/v1/messages?beta=true");
+            assert_eq!(headers["x-api-key"], FAKE_KEY);
+            assert!(headers.get("authorization").is_none());
+            assert!(headers.get("accept-encoding").is_none());
+            assert_eq!(headers["anthropic-version"], "2023-06-01");
+            assert_eq!(headers["anthropic-beta"], "claude-code-20250219");
+            assert_eq!(body, br#"{"model":"claude-test","stream":true}"#);
+            for (_, value) in headers.iter() {
+                assert!(!value.to_str().unwrap_or("").contains(&token), "the token never travels on");
+            }
         }
-        drop(requests);
+        // C3's seam saw every chunk and exactly one clean end.
+        let tapped = ended("e2e:stream").await;
+        assert_eq!(tapped.last(), Some(&Some(StreamEnd::Complete)));
+        assert_eq!(tapped.iter().filter(|e| e.is_some()).count(), 1, "{tapped:?}");
+        assert!(tapped.len() >= 3, "{tapped:?}");
         on_tab_gone("e2e:stream");
     }
 
@@ -1257,6 +1669,144 @@ mod tests {
         assert_eq!(headers["x-goog-api-key"], FAKE_KEY);
         drop(requests);
         on_tab_gone("e2e:gemini");
+    }
+
+    async fn stream_request(port: u16, tab: &str) -> (reqwest::Response, String) {
+        let token = issue_grant(grant(Provider::Anthropic, tab, None)).unwrap();
+        let response = plain_client()
+            .post(format!("{}/v1/messages", base_url_on(port, Provider::Anthropic)))
+            .header("authorization", format!("Bearer {token}"))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        (response, token)
+    }
+
+    #[tokio::test]
+    async fn an_answer_the_client_drops_or_the_provider_breaks_off_still_ends_once() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let upstream = stub_upstream(seen.clone(), release.clone()).await;
+        let port = proxy(upstream, Some(FAKE_KEY), MAX_BODY).await;
+
+        // The client reads the first event and goes away.
+        let (mut response, _) = stream_request(port, "e2e:aborted").await;
+        assert!(response.chunk().await.unwrap().is_some());
+        drop(response);
+        assert_eq!(ended("e2e:aborted").await, vec![None, Some(StreamEnd::Aborted)]);
+
+        // The provider breaks the stream off after the first event.
+        let (mut response, _) = stream_request(port, "e2e:failed").await;
+        assert!(response.chunk().await.unwrap().is_some());
+        release.close();
+        while let Ok(Some(_)) = response.chunk().await {}
+        assert_eq!(ended("e2e:failed").await, vec![None, Some(StreamEnd::Failed)]);
+        on_tab_gone("e2e:aborted");
+        on_tab_gone("e2e:failed");
+    }
+
+    #[tokio::test]
+    async fn request_bodies_held_at_once_are_bounded() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(1024));
+        let upstream = stub_upstream(seen.clone(), release).await;
+        let (port, buffered) = proxy_with(upstream, Some(FAKE_KEY), |s| {
+            s.max_body = 4096;
+            s.max_buffered = 1000;
+        })
+        .await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:budget", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let c = plain_client();
+        let r = c.post(&url).header("x-api-key", token.clone()).body(vec![b'x'; 2000]).send().await.unwrap();
+        assert_eq!(r.status(), 503);
+        assert_eq!(r.headers()["x-should-retry"], "true");
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(buffered.load(Ordering::SeqCst), 0, "a refused body leaves the budget");
+        let r = c.post(&url).header("x-api-key", token).body(vec![b'x'; 500]).send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let _ = r.bytes().await.unwrap();
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(buffered.load(Ordering::SeqCst), 0, "a forwarded body leaves the budget");
+        on_tab_gone("e2e:budget");
+    }
+
+    /// Reads from `tcp` until EOF or an error; whether that came within `wait`.
+    async fn closes_within(tcp: &mut tokio::net::TcpStream, wait: Duration) -> bool {
+        use tokio::io::AsyncReadExt;
+        let mut buf = [0u8; 4096];
+        tokio::time::timeout(wait, async {
+            loop {
+                match tcp.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn idle_sockets_are_dropped_but_a_stream_in_flight_is_not() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let upstream = stub_upstream(seen.clone(), release.clone()).await;
+        let idle = Duration::from_millis(300);
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.idle_wait = idle).await;
+
+        // A socket that never sends a request.
+        let mut silent = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(closes_within(&mut silent, Duration::from_secs(5)).await);
+
+        // A head trickled byte by byte does not reset the bound.
+        let mut trickle = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let started = Instant::now();
+        for b in b"GET /anthropic/v1/models HTTP/1.1\r\n" {
+            if trickle.write_all(&[*b]).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        assert!(closes_within(&mut trickle, Duration::from_secs(5)).await);
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        // A kept-alive socket after its answer.
+        let mut kept = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        kept.write_all(format!("GET /anthropic/v1/models HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut head = vec![0u8; 4096];
+        let n = kept.read(&mut head).await.unwrap();
+        assert!(String::from_utf8_lossy(&head[..n]).starts_with("HTTP/1.1 401"));
+        assert!(closes_within(&mut kept, Duration::from_secs(5)).await);
+
+        // A stream quiet for longer than the bound runs to its end.
+        let (mut response, _) = stream_request(port, "e2e:idle").await;
+        assert!(response.chunk().await.unwrap().is_some());
+        tokio::time::sleep(idle * 3).await;
+        release.add_permits(1);
+        let mut rest = Vec::new();
+        while let Some(chunk) = response.chunk().await.unwrap() {
+            rest.extend_from_slice(&chunk);
+        }
+        assert_eq!(rest, SSE_REST.as_bytes());
+        on_tab_gone("e2e:idle");
+    }
+
+    #[test]
+    fn the_remembered_port_is_bound_again_when_free() {
+        let free = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        let again = bind_listener(Some(port)).unwrap();
+        assert_eq!(again.local_addr().unwrap().port(), port);
+        // Taken meanwhile: any free port instead.
+        let other = bind_listener(Some(port)).unwrap();
+        assert_ne!(other.local_addr().unwrap().port(), port);
+        assert_ne!(bind_listener(None).unwrap().local_addr().unwrap().port(), 0);
     }
 
     /// A0-style check of the real Claude CLI against this proxy and a stub

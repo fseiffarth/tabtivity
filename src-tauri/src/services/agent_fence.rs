@@ -1340,7 +1340,7 @@ pub fn wrap_pty_options_bwrap(
     // bwrap keeps the environment and the launcher `exec`s, so it reaches the
     // CLI. Hence the launcher last: the step is needed whenever the
     // environment carries something.
-    let (tab, tmux) = (opts.id.clone(), opts.tmux_session.clone());
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
     crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
     let step = launcher_step(
@@ -1607,7 +1607,7 @@ pub fn wrap_pty_options_sandbox_exec(
     // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
     // sandbox-exec passes the environment through. The step runs outside the
     // Seatbelt profile, which need not grant Tabtivity's binary.
-    let (tab, tmux) = (opts.id.clone(), opts.tmux_session.clone());
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
     crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
     crate::services::agent_exec::wrap(opts)?;

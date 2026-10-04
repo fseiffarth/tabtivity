@@ -555,8 +555,8 @@ Vibe and OpenCode are not installed here: their rows are from docs.
 
 # Part C — hardening: no key in the agent, a spending limit (2026-10-04)
 
-Status: C1 and C2 built 2026-10-04 (see "C1 implementation notes" and "C2
-implementation notes" at the end; never live-verified); C3 scheduled. Fixes the two open risks Part A left: (1) the common
+Status: C1 and C2 built and reviewed 2026-10-04 (see "C1/C2 implementation
+notes" and "C1/C2 review notes" at the end; never live-verified); C3 scheduled. Fixes the two open risks Part A left: (1) the common
 variable names (`ANTHROPIC_API_KEY`, …) sit in the global `update-environment`
 of the user's own default tmux server; (2) the agent can read the real key,
 and a project's own CLI config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`,
@@ -900,3 +900,124 @@ before the upstream finishes, 401/403/404/413 before the upstream sees
 anything, revocation, no-key refusal, Gemini query token dropped), and the
 injection core (routes, user-wins incl. base URL, carriers, no proxy → no
 injection).
+
+## C2 review notes (2026-10-04)
+
+Reviewed 0919499a/e8f664ab. Fixed:
+
+- **Query smuggling.** Every query parameter but `key` was forwarded, so
+  `%6Bey=` (which Google decodes as `key`), `$httpMethod=DELETE`,
+  `access_token=` or `$callback=` reached the provider. Now a per-provider
+  allowlist by exact name (`forwarded_query`, `query_allowed`): Anthropic
+  `beta`, `limit`, `after_id`, `before_id`; Gemini `alt`, `pageSize`,
+  `pageToken`. The method-override headers (`x-http-method-override`,
+  `x-http-method`, `x-method-override`, which Google honours) are stripped
+  too — both stepped around the per-path method allowlist. The real key's
+  header value is marked sensitive.
+- **Sockets held forever.** The only socket bound was a 10 s wait for the
+  first byte: after it a trickled head, or an idle keep-alive after any
+  answer (a 401 included — no token needed), held one of the 64 slots for
+  good, so any local process could stall every keyed tab. Now a socket with
+  no request in flight must deliver the next request head within 60 s of the
+  accept or of the last answer's end (`IDLE_WAIT`; trickling does not reset
+  it), and an answer the client leaves unread for 10 min ends the socket
+  (`WRITE_STALL`). A request in flight is never cut: the handler marks its
+  connection busy (`ConnectInfo<Conn>`) until the relayed body ends.
+- **Memory.** 64 sockets × 32 MiB bodies could hold 2 GiB in the app's own
+  process. Bodies held at once are now capped at 256 MiB over all sockets
+  (`MAX_BUFFERED`; refused with a retryable 503 in the provider's shape),
+  counted until the upstream send returns.
+- **Grants that outlived their tab, or died too early.**
+  - A tab with a `tmux_session` on a machine without tmux (the wrap is then a
+    no-op) got a tmux-bound grant that no sweep could ever revoke (`tmux`
+    not runnable → grants left alone). The binding is now `tmux_binding`:
+    the session only where tmux runs.
+  - An explicit close kills the session (`local_tmux_kill`) after `pty_kill`,
+    whose sweep had already found it alive — the grant stayed until some
+    other tmux tab ended. The kill now revokes that session's grants
+    (`on_tmux_session_gone`), and a sweep runs once a minute while any
+    tmux-bound grant is held (a phone-started session or one ended outside
+    Tabtivity ends with no PTY to trigger one).
+  - A rename (`local_tmux_rename`) left the grant on the old name, so the
+    next sweep cut the still-running agent off. It now follows the rename
+    (`on_tmux_renamed`).
+  - A sweep racing a spawn (grant issued, session not yet created) revoked
+    the new grant. A tmux-bound grant is now spared for 60 s after issue
+    (`SWEEP_GRACE`). This also removed the test that flipped the global
+    `STOPPING` flag to dodge that race.
+- **The port after a crash.** A re-attached agent keeps its old base URL; on
+  a fresh port its requests — the conversation — went to whatever local
+  process (any user's) took the old one. The listener now binds the port of
+  the last run again when free (`<state_dir>/api-proxy-port`, not a secret),
+  so such an agent meets this proxy's 401. The bind is now synchronous in
+  `start`, so tabs restored right after setup no longer race an async bind
+  and silently start without the proxy.
+- **C3 seam.** `usage_end` ran only on a clean end; an upstream read error
+  or a client that went away (the common abort) never reached it. A `Tap`
+  guard now calls `usage_end(grant, StreamEnd::{Complete, Failed, Aborted})`
+  exactly once per relayed answer, error statuses included.
+- Tests: the query allowlist (encoded `key`, `$httpMethod`, cross-provider
+  names), the dropped header set (method overrides, `proxy-authorization`,
+  `te`, `transfer-encoding`, `content-length`, `origin`), the sweep grace,
+  kill/rename, `tmux_binding`, the seam's end on abort and on a broken
+  upstream (and once on a clean end), the body budget (503, counter back to
+  zero), idle/trickle/keep-alive sockets dropped while a quiet stream
+  survives, the remembered port.
+
+Checked, no change:
+
+- **Token comparison.** A `HashMap` lookup keyed by the token: SipHash with
+  a random per-process key, so lookup timing cannot be steered toward a live
+  token; then an equality on a 64-hex-char value only when hashes collide.
+  Not constant-time in the strict sense, not exploitable. Documented in the
+  module.
+- **Other local users.** Loopback reaches every uid, and the token alone is
+  the credential. Acceptable: 256 bits, only in the agent's environment
+  (`/proc/<pid>/environ` is owner-only) and as a carrier on the user's own
+  tmux server (socket dir 0700), on no argv, file or log; worthless off the
+  machine, dead with its tab.
+- Token carriers: one value across `x-api-key`, `Authorization: Bearer`,
+  `x-goog-api-key`, `key=`; a repeated header refuses; a token of another
+  provider refuses on the route; refusals come before the path check and the
+  body read, so no unauthenticated request is read past its head.
+- Revocation reaches every tab end: `pty_kill`, `pty_kill_scope` (project
+  close/delete), `kill_all` (quit), `teardown_taken`, the reader's natural
+  exit (`current_spawn_ended`), all through `agent_fence::on_tab_gone`; quit
+  revokes everything first. "Same token on respawn" binds provider + scope +
+  tab + session, so no other tab or scope can obtain it.
+- Forwarding: path segments are plain (`..`, `.`, empty, `%` refused); an
+  absolute-form request URI changes nothing (fixed upstream, `Host` must be
+  `127.0.0.1:<port>`, HTTP/2 included — a request without one is
+  refused); the upstream URL is the fixed HTTPS host + checked path; the
+  real key only ever in `x-api-key` / `x-goog-api-key`, never a URL;
+  redirects off; `content-length` / `transfer-encoding` never forwarded (the
+  body is fully read, reqwest sets its own length); `set-cookie` and
+  hop-by-hop response headers dropped (the rest — `request-id`, rate-limit
+  headers, `retry-after` — the CLI needs).
+- Lifecycle: started in `setup` beside the MCP listener, stopped in
+  `RunEvent::Exit` right after it and before the PTY teardown; no panic path
+  on the request side (`lock` survives poisoning; the semaphore never
+  closes).
+- Injection: `CLI_ROUTES` holds only Claude and Gemini; Claude gets
+  `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`, Gemini `GEMINI_API_KEY` +
+  `GOOGLE_GEMINI_BASE_URL`; a user-set credential or base URL wins; Windows
+  sets the CLI's names; Remote Control is skipped only when `keyed`. No raw
+  key reaches any agent environment: `get_key` is read only by
+  `api_proxy::key_for` and `has_key`/`status`; the `--agent-shim` process
+  never runs the proxy, so `inject_env` gives it nothing.
+- Logging: only bind/serve errors (no request data); `launch_prep`'s
+  tmux < 3.2 line names variables, never values.
+
+Not fixed, with reason:
+
+- A late `pty_kill` of a tab's previous spawn revokes by tab id, so it would
+  also revoke a respawn that reused the token, if the frontend respawned
+  before that kill returned. The other per-tab state `on_tab_gone` clears
+  has the same rule; not seen in the spawn order, not changed here.
+- After a crash the remembered port can only be rebound if nothing took it
+  while Tabtivity was down; then re-attached agents talk to that process —
+  as before this fix, only in that narrower window.
+- A local process can still occupy all 64 slots by reconnecting faster than
+  the idle bound — a loopback service cannot prevent that; the bounds keep
+  the app's memory and sockets safe, not the proxy's availability against
+  a determined local attacker.

@@ -41,7 +41,7 @@ fn settings_agent_remote_control() -> bool {
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
     let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
-    let (tab, tmux) = (opts.id.clone(), opts.tmux_session.clone());
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
     crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, binding, &mut opts.env);
     #[cfg(unix)]

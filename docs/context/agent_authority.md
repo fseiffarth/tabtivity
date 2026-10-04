@@ -379,17 +379,23 @@ out). The proxy refuses a browser request (`Origin`) or another `Host`,
 needs a live token of the route's provider (`x-api-key`, `Authorization:
 Bearer`, `x-goog-api-key` or `key=`, one value), forwards only the provider's
 allowlisted paths (`/v1/messages`, `count_tokens`, `/v1/models`; Gemini's
-`models/<m>:generateContent` family) to its one fixed HTTPS host with the
-incoming credentials, hop-by-hop headers and `accept-encoding` stripped and
-the real key added in the provider's header, never follows a redirect,
-bounds the body (32 MiB), streams the answer through chunk by chunk, answers
-its own refusals in the provider's error shape (`x-should-retry: false`), and
-logs nothing. A token dies with its tab (`agent_fence::on_tab_gone` →
-`api_proxy::on_tab_gone`); one bound to a local tmux session lives while that
-session does (a project switch or reload kills only the client), a respawn
-of the tab gets the same token back, and every token goes at quit — a clean
-quit also ends Tabtivity's tmux sessions; after a crash a re-attached agent
-holds a dead token. Injection happens inside both fence wraps and in
+`models/<m>:generateContent` family) and query parameters (`beta`, `alt`,
+model-list paging — never `key` or a method override) to its one fixed HTTPS
+host with the incoming credentials, hop-by-hop and method-override headers
+and `accept-encoding` stripped and the real key added in the provider's
+header, never follows a redirect, bounds the body (32 MiB, 256 MiB held over
+all sockets), drops a socket idle for 60 s between requests (64 at most),
+streams the answer through chunk by chunk, answers its own refusals in the
+provider's error shape (`x-should-retry: false`), and logs nothing. A token
+dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`);
+one bound to a local tmux session lives while that session does (a project
+switch or reload kills only the client) — revoked when Tabtivity kills the
+session, following a rename, and swept once a minute otherwise — a respawn of
+the tab gets the same token back, and every token goes at quit — a clean quit
+also ends Tabtivity's tmux sessions; after a crash a re-attached agent holds a
+dead token, refused by the restarted proxy on the port it remembers
+(`<state_dir>/api-proxy-port`), so its requests do not reach whatever else
+took the port. Injection happens inside both fence wraps and in
 `launch_prep`'s Host-session and fence-less-platform arms, only while the
 proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
 shell tab, its own process) gets nothing and stays on its login. Only CLIs
