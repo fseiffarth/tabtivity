@@ -894,7 +894,10 @@ interface ProjectsStore {
   /** Opt a remote project in/out of persistent (tmux) sessions (TODO #85). Default
    *  ON, so this only records an opt-out; re-enabling clears the field. */
   setProjectPersistSessions: (id: string, enabled: boolean) => Promise<void>;
-  setProjectMobileAccess: (id: string, enabled: boolean) => Promise<void>;
+  /** Switch a project's Mobile access. `devices` is the per-phone list: `null`
+   *  reaches every paired phone, a list only those. A caller re-enabling or
+   *  refreshing must pass the project's current list — `null` widens it. */
+  setProjectMobileAccess: (id: string, enabled: boolean, devices: string[] | null) => Promise<void>;
   /** Set (or clear, on blank) the display name for a remote project's PRIMARY
    *  machine — the counterpart of a worker's `label` (`patch_compute_host`).
    *  Distinct from the project name: this labels the host, shown wherever a
@@ -1716,12 +1719,12 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     }));
   },
 
-  setProjectMobileAccess: async (id, enabled) => {
+  setProjectMobileAccess: async (id, enabled, devices) => {
     // The backend answers what it stored: the switch, and the per-phone list
     // (`null` = every phone) after dropping phones no longer paired.
     const result = await invoke<{ enabled: boolean; devices: string[] | null }>(
       "set_project_mobile_access",
-      { projectId: id, enabled },
+      { projectId: id, enabled, devices: enabled ? devices : null },
     );
     patchProject(id, (project) => ({
       ...project,

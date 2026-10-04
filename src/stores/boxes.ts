@@ -83,8 +83,11 @@ interface BoxesStore {
   setBoxMembers: (boxId: string, memberIds: string[]) => Promise<void>;
   /** Switch the box's Tabtivity Mobile reach (#31aa) — the box twin of
    *  `projects.setProjectMobileAccess`. Enabling resolves the box folder on
-   *  the backend, so the returned record carries `folder` too. */
-  setBoxMobileAccess: (boxId: string, enabled: boolean) => Promise<void>;
+   *  the backend, so the returned record carries `folder` too. `devices` is
+   *  the per-phone list: `null` reaches every paired phone, a list only those.
+   *  Callers re-enabling or refreshing must pass the box's current list —
+   *  `null` widens it to every phone. */
+  setBoxMobileAccess: (boxId: string, enabled: boolean, devices: string[] | null) => Promise<void>;
   /** Set the box's colour (`#rrggbb`), or `undefined` to go back to the colour
    *  hashed from its id. */
   setBoxColor: (boxId: string, color: string | undefined) => Promise<void>;
@@ -261,8 +264,12 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
-  setBoxMobileAccess: async (boxId, enabled) => {
-    const updated = await invoke<ProjectBox>("set_box_mobile_access", { boxId, enabled });
+  setBoxMobileAccess: async (boxId, enabled, devices) => {
+    const updated = await invoke<ProjectBox>("set_box_mobile_access", {
+      boxId,
+      enabled,
+      devices: enabled ? devices : null,
+    });
     set((state) => ({
       boxes: state.boxes.map((b) => (b.id === boxId ? updated : b)),
     }));

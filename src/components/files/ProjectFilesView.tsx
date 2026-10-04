@@ -83,7 +83,9 @@ import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
-import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 
 /** How long the pointer must rest on a session row before its stats card opens
@@ -504,12 +506,27 @@ export function ProjectFilesView({
 
   const mobileAccessOn = project?.[MOBILE_ACCESS_KEY] ?? false;
 
-  const toggleMobileAccess = (enabled: boolean) => {
-    if (!projectId) return;
+  // The phone button opens the per-phone picker rather than toggling: which
+  // paired phones reach the project is part of the same decision. The picker
+  // writes each choice itself (All → every phone, ticks → that list, Turn off).
+  const [mobilePicker, setMobilePicker] = useState<{ x: number; y: number } | null>(null);
+  const mobileDevices = project?.[MOBILE_DEVICES_KEY];
+  // Paired phones only matter here for a list's count in the button's title:
+  // read them while that button shows one, and again when the picker closes.
+  const { phones: pairedPhones } = usePairedPhones(
+    `${mobilePicker !== null}:${JSON.stringify(mobileDevices ?? null)}`,
+    active && mobileHostConnected && mobileEligible && mobileAccessOn && mobileDevices !== undefined,
+  );
+  const mobileReach = phoneReach(mobileAccessOn, mobileDevices, pairedPhones);
+  const applyMobileAccess = (enabled: boolean, devices: string[] | null) => {
+    if (!projectId) return Promise.resolve();
     setMobileAccessBusy(true);
     setMobileAccessError(null);
-    void setProjectMobileAccess(projectId, enabled)
-      .catch((reason) => setMobileAccessError(String(reason)))
+    return setProjectMobileAccess(projectId, enabled, devices)
+      .catch((reason) => {
+        setMobileAccessError(String(reason));
+        throw reason;
+      })
       .finally(() => setMobileAccessBusy(false));
   };
 
@@ -1512,16 +1529,35 @@ export function ProjectFilesView({
             className={`side-panel-mobile-btn${mobileAccessOn ? " on" : ""}`}
             disabled={mobileAccessBusy}
             aria-pressed={mobileAccessOn}
+            aria-haspopup="menu"
             aria-label={t("projectFilesView.mobileAccessAria", { name: project?.name ?? "" })}
             title={
-              mobileAccessOn
-                ? t("projectFilesView.mobileAccessOnTitle")
-                : t("projectFilesView.mobileAccessOffTitle")
+              mobileReach.kind === "all"
+                ? t("projectFilesView.mobileAccessAllTitle")
+                : mobileReach.kind === "some"
+                  ? t("projectFilesView.mobileAccessSomeTitle", { phones: phoneReachLabel(mobileReach, t) })
+                  : mobileReach.kind === "none"
+                    ? t("projectFilesView.mobileAccessNoneTitle")
+                    : t("projectFilesView.mobileAccessOffTitle")
             }
-            onClick={() => toggleMobileAccess(!mobileAccessOn)}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMobilePicker({ x: r.left, y: r.bottom + 2 });
+            }}
           >
             <MobileAccessIcon on={mobileAccessOn} />
           </button>
+        )}
+        {mobilePicker && mobileHostConnected && mobileEligible && (
+          <MobileAccessPicker
+            x={mobilePicker.x}
+            y={mobilePicker.y}
+            kind="project"
+            enabled={mobileAccessOn}
+            devices={mobileDevices}
+            onApply={applyMobileAccess}
+            onClose={() => setMobilePicker(null)}
+          />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
         {sshTagMenu && projectId && (

@@ -361,6 +361,7 @@ export const UNTESTED = {
   "mobile.sheet.prompts": { area: "mobile", what: "Prompts sheet · collected prompts" },
   "mobile.sheet.status": { area: "mobile", what: "Status sheet · agent state and usage" },
   "mobile.boxAccess": { area: "mobile", what: "MobileSettings · Box access" },
+  "mobile.phonePicker": { area: "mobile", what: "Per-phone Mobile access picker · the side panel's phone button and the \"All phones ▾\" buttons of Settings → Mobile (projects and boxes): All phones / Only these phones checklist / Turn off; a phone left off neither lists nor opens the project or box and gets no agent push for it" },
   "mobile.signIn": { area: "mobile", what: "Terminal · Agent sign-in from the phone: notice + sheet for the CLI's login link (device code, paste-back code, localhost address relayed by the desktop), Status sheet Sign in button", tested: "2026-10-01" },
   "mobile.pair.singleScreen": { area: "mobile", what: "First phone connection · pairing code and local PIN are entered together; one tap pairs, sets the lock and opens the workspace" },
   "mobile.signIn.tab": { area: "mobile", what: "Project ＋ → Sign in to an agent (each CLI's login state, Sign in / other way in) and an agent tab's \"needs you to sign in\" notice: a sign-in tab running the CLI's own login command (Claude auth login, Codex login --device-auth, Copilot login --device-code, Cursor login, …), a step-by-step sheet with copy-and-open, one-tap Paste, Signed in ✓ and Start again", tested: "2026-10-01" },

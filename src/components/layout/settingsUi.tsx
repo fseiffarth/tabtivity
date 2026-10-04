@@ -183,13 +183,28 @@ export function ToggleRow({
   onChange,
   disabled,
   title,
+  aside,
 }: {
   label: ReactNode;
   checked: boolean;
   onChange: ChangeEventHandler<HTMLInputElement>;
   disabled?: boolean;
   title?: string;
+  /** A control of the row's own before the switch (a compact `settings-btn
+   *  sm`). The row is then a `<div>` whose label points at the switch, so the
+   *  control is neither part of the switch's name nor a click on the label. */
+  aside?: ReactNode;
 }) {
+  const id = useId();
+  if (aside) {
+    return (
+      <div className="settings-card-row">
+        <label className="settings-card-label" htmlFor={id}>{label}</label>
+        {aside}
+        <Toggle id={id} checked={checked} onChange={onChange} disabled={disabled} title={title} />
+      </div>
+    );
+  }
   return (
     <label className="settings-card-row">
       <span>{label}</span>

@@ -10,7 +10,9 @@ import { IS_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
-import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
+import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -46,7 +48,7 @@ interface ServeVerification {
   verified: boolean;
   error?: string;
 }
-interface Device { id: string; name: string; created_at: number; last_seen_at?: number }
+type Device = PairedPhone;
 type AdminResponse =
   | { status: "pairing_code"; code: string; expires_at: number }
   | { status: "devices"; devices: Device[] }
@@ -154,6 +156,13 @@ export function MobileSettings() {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
   const [serveStatus, setServeStatus] = useState<ServeStatus | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
+  // The paired phones off the device file (host up or down), for the access
+  // rows' "N phones" counts; re-read whenever the list below is refreshed
+  // (a revoke or Forget all changes what a list still reaches).
+  const { phones: pairedPhones } = usePairedPhones(devices);
+  const [phonePicker, setPhonePicker] = useState<
+    { kind: "project" | "box"; id: string; x: number; y: number } | null
+  >(null);
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -322,6 +331,33 @@ export function MobileSettings() {
   // Same one-click shape as every other install-via-command flow: the command
   // runs in a root terminal tab, watched in the root console floating over
   // Settings — never a scope switch away from the panel.
+  /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
+   *  a row whose access is on: opens the per-phone picker for it. */
+  const phoneScopeButton = (
+    kind: "project" | "box",
+    id: string,
+    name: string,
+    enabled: boolean,
+    list: unknown,
+  ) => {
+    if (!enabled) return undefined;
+    const reach = phoneReach(true, list, pairedPhones);
+    return (
+      <button
+        type="button"
+        className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
+        aria-haspopup="menu"
+        title={t("mobile.phones.buttonTitle", { name })}
+        onClick={(event) => {
+          const r = event.currentTarget.getBoundingClientRect();
+          setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 });
+        }}
+      >
+        {phoneReachLabel(reach, t)} ▾
+      </button>
+    );
+  };
+
   const setUpInTerminal = () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
     if (!window.confirm(tr("mobile.setUpConfirm", { command }))) return;
@@ -689,8 +725,10 @@ export function MobileSettings() {
             checked={project[MOBILE_ACCESS_KEY] ?? false}
             onChange={(event) => {
               setError(null);
-              void setProjectMobileAccess(project.id, event.target.checked).catch((reason) => setError(String(reason)));
+              // One click on = every phone; narrowing is the ▾ button's job.
+              void setProjectMobileAccess(project.id, event.target.checked, null).catch((reason) => setError(String(reason)));
             }}
+            aside={phoneScopeButton("project", project.id, project.name, project[MOBILE_ACCESS_KEY] ?? false, project[MOBILE_DEVICES_KEY])}
           />
         ))}
         {eligible.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
@@ -708,13 +746,34 @@ export function MobileSettings() {
               checked={box[MOBILE_ACCESS_KEY] ?? false}
               onChange={(event) => {
                 setError(null);
-                void setBoxMobileAccess(box.id, event.target.checked).catch((reason) => setError(String(reason)));
+                void setBoxMobileAccess(box.id, event.target.checked, null).catch((reason) => setError(String(reason)));
               }}
+              aside={phoneScopeButton("box", box.id, box.name, box[MOBILE_ACCESS_KEY] ?? false, box[MOBILE_DEVICES_KEY])}
             />
           ))}
           {matchingBoxes.length === 0 && <p className="settings-help">{t("mobile.noBoxesMatch", { query: projectSearch.trim() })}</p>}
         </div>
       </>}
+
+      {phonePicker && (() => {
+        const target = phonePicker.kind === "project"
+          ? projects.find((p) => p.id === phonePicker.id)
+          : boxes.find((b) => b.id === phonePicker.id);
+        if (!target) return null;
+        return (
+          <MobileAccessPicker
+            x={phonePicker.x}
+            y={phonePicker.y}
+            kind={phonePicker.kind}
+            enabled={target[MOBILE_ACCESS_KEY] ?? false}
+            devices={target[MOBILE_DEVICES_KEY]}
+            onApply={(enabled, list) => phonePicker.kind === "project"
+              ? setProjectMobileAccess(phonePicker.id, enabled, list)
+              : setBoxMobileAccess(phonePicker.id, enabled, list)}
+            onClose={() => setPhonePicker(null)}
+          />
+        );
+      })()}
 
       {devices.length > 0 && <div className="settings-subheader">{t("mobile.pairedDevices")}</div>}
       {devices.length > 0 && (

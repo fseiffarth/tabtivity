@@ -114,6 +114,13 @@ button.settings-btn.danger,
   color: var(--danger);
 }
 
+/* A caution, not a destruction: the label turns amber and nothing else (a
+   Mobile access row whose phone list no longer reaches any paired phone). */
+.settings-btn.warning,
+button.settings-btn.warning {
+  color: var(--warning);
+}
+
 .settings-btn.danger:hover:not(:disabled),
 button.settings-btn.danger:hover:not(:disabled),
 .settings-link-row button.danger:hover:not(:disabled),
