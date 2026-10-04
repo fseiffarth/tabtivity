@@ -1,7 +1,7 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, files, browse, project files, read-only, mark up, markup, annotate, pdf, markup_ask, questions about marks, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, files, browse, project files, read-only, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
 ---
 
 Tabtivity Mobile is a small companion web app for your phone. It shows the
@@ -199,6 +199,12 @@ none, so there any left→right swipe opens the files). Walk the folders and
 open a file —
 pictures and text full screen, PDFs in the browser, with Save and Share. It is
 read-only: nothing can be changed, moved or deleted from there.
+
+The box under the drawer's head finds a file or folder anywhere in the
+project by name: type part of it (several words must all be in the name, in
+any case). Each result names its folder; tap a file to open it — the drawer
+then stands in that file's folder — or a folder to walk into it. In a git
+project, what git ignores (`target/`, `node_modules/`, …) is not searched.
 
 As in the desktop's file tree, the project root's standard files (README,
 AGENTS.md, .gitignore, …) fold into a **scaffold** row and what git ignores

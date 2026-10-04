@@ -46,6 +46,14 @@ function hostWith(files: boolean, tickets = true) {
     if (url === "/api/v1/projects/p1/files") return new Response(JSON.stringify(ROOT), { status: 200 });
     if (url === "/api/v1/projects/p1/files?dir=tok-src") return new Response(JSON.stringify(SRC), { status: 200 });
     if (url === "/api/v1/projects/p1/files/raw?f=tok-notes") return new Response("# Hello\n", { status: 200 });
+    if (url === "/api/v1/projects/p1/files/raw?f=tok-main") return new Response("fn main() {}\n", { status: 200 });
+    if (url === "/api/v1/projects/p1/files/search?q=main") return new Response(JSON.stringify({
+      hits: [{ ...SRC.entries[0], trail: [{ token: "tok-src", name: "src" }] }], truncated: false,
+    }), { status: 200 });
+    if (url === "/api/v1/projects/p1/files/search?q=src") return new Response(JSON.stringify({
+      hits: [{ ...ROOT.entries[1], trail: [] }], truncated: false,
+    }), { status: 200 });
+    if (url.startsWith("/api/v1/projects/p1/files/search")) return new Response(JSON.stringify({ hits: [], truncated: false }), { status: 200 });
     if (url.startsWith("/api/v1/projects/p1/files")) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
     return new Response(JSON.stringify({
       project: { id: "p1", label: "Alpha", status: "active" },
@@ -99,6 +107,53 @@ describe("Mobile project — read-only file browser", () => {
     swipe(await screen.findByRole("heading", { name: "Alpha" }), 100, 300);
     expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
     expect(fetch.mock.calls.some(([url]) => String(url).includes("/files"))).toBe(false);
+  });
+
+  it("finds files and folders by name and moves the drawer to a hit's folder", async () => {
+    const fetch = hostWith(true);
+    vi.stubGlobal("fetch", fetch);
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const heading = await screen.findByRole("heading", { name: "Alpha" });
+    await waitFor(() => {
+      swipe(heading, 100, 300);
+      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+    });
+    const sheet = screen.getByRole("dialog", { name: "Files" });
+    await within(sheet).findByRole("button", { name: "Open the folder src" });
+    const box = within(sheet).getByRole("searchbox", { name: "Search the project's files" });
+
+    // A hit names its folder; the trail steps aside while searching.
+    fireEvent.change(box, { target: { value: "  main " } });
+    const hit = await within(sheet).findByRole("button", { name: "Open main.rs" });
+    expect(hit.querySelector(".files-hit-place")?.textContent).toBe("src");
+    expect(within(sheet).queryByRole("navigation", { name: "Folders" })).toBeNull();
+    expect(fetch).toHaveBeenCalledWith("/api/v1/projects/p1/files/search?q=main", expect.anything());
+
+    // A file hit opens in the viewer; closed, the results are still there and
+    // the drawer stands in the file's folder.
+    fireEvent.click(hit);
+    const viewer = await screen.findByRole("dialog", { name: "main.rs" });
+    await within(viewer).findByText("fn main() {}");
+    fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
+    await within(screen.getByRole("dialog", { name: "Files" })).findByRole("button", { name: "Open main.rs" });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "" } });
+    const trail = await screen.findByRole("navigation", { name: "Folders" });
+    expect(within(trail).getAllByRole("button").map((crumb) => crumb.textContent)).toEqual(["Alpha", "src"]);
+
+    // A folder hit at the root is walked into, and the search ends there.
+    fireEvent.click(within(trail).getByRole("button", { name: "Alpha" }));
+    await screen.findByRole("button", { name: "Open notes.md" });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "src" } });
+    const folder = await screen.findByRole("button", { name: "Open the folder src" });
+    expect(folder.querySelector(".files-hit-place")?.textContent).toBe("Project folder");
+    fireEvent.click(folder);
+    await screen.findByRole("button", { name: "Open main.rs" });
+    expect((screen.getByRole("searchbox", { name: "Search the project's files" }) as HTMLInputElement).value).toBe("");
+    expect(within(screen.getByRole("navigation", { name: "Folders" })).getAllByRole("button").map((crumb) => crumb.textContent)).toEqual(["Alpha", "src"]);
+
+    // Nothing named so: one line says it.
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "zzz" } });
+    await screen.findByText("No file or folder has that in its name.");
   });
 
   it("walks folders by token, back along the trail, and opens files by token", async () => {

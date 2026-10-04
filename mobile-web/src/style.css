@@ -1178,6 +1178,9 @@ span.files-close { background:transparent; }
 .files-close svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 @keyframes files-drawer-in { from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion:reduce) { .project-files { animation:none; } }
+/* The search box under the head, and a hit's folder above its times. */
+.files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
+.files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
 .files-trail { display:flex; flex-wrap:wrap; gap:5px; padding:0 4px; }
 .files-trail button { max-width:100%; padding:5px 10px; overflow:hidden; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
 .files-trail button:disabled { color:#d8e2f5; opacity:1; }

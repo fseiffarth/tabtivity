@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, type OutboxFile, type ProjectFileEntry, type ProjectFileListing, type TabRow, type ViewerScope } from "../api";
+import { ApiError, listProjectFiles, searchProjectFiles, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type TabRow, type ViewerScope } from "../api";
 import { openFileTab, readFilesPlace, rememberFilesPlace } from "../filesPlace";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { sizeLabel } from "../terminal/fileLabels";
@@ -74,14 +74,19 @@ function rowMeta(entry: ProjectFileEntry, t: ReturnType<typeof useT>, lang: Lang
   ].filter(Boolean).join(" · ");
 }
 
-/** The message for a listing the sidecar refused. */
-function failureKey(reason: unknown): TranslationKey {
+/** The message for a listing (or a search) the sidecar refused. */
+function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.error"): TranslationKey {
   if (reason instanceof ApiError) {
     if (reason.code === "files_off") return "mobile.files.off";
     if (reason.code === "file_not_found") return "mobile.files.gone";
   }
-  return "mobile.files.error";
+  return fallback;
 }
+
+/** How long typing rests before the search goes out. */
+const SEARCH_DEBOUNCE_MS = 250;
+/** The sidecar's bound on a query (`files::MAX_QUERY`, bytes). */
+const MAX_QUERY = 80;
 
 /**
  * The project's own tree, read-only (`files.rs`, #31bo): folders to walk into
@@ -103,6 +108,12 @@ function failureKey(reason: unknown): TranslationKey {
  * again in the folder it was put away in — after a viewed file, a closed
  * drawer or a reloaded app alike. A remembered folder that no longer lists
  * steps back to the nearest one that does.
+ *
+ * The search box finds a file or folder anywhere in the project by name
+ * (`files/search`; what git ignores is not searched). Each hit carries the
+ * sealed folders above it, so opening one moves the drawer there: a folder is
+ * walked into, a file opens with the drawer standing in its folder — and the
+ * results are still there when the viewer closes.
  *
  * A drawer from the left edge: the project screen opens it on a left→right
  * swipe, and a right→left swipe over it (or a tap beside it) puts it away.
@@ -132,6 +143,10 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
   // Both fold shut by default, and stay as set while the drawer is walked.
   const [scaffoldOpen, setScaffoldOpen] = useState(false);
   const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<ProjectFileSearch | null>(null);
+  const [searchFailure, setSearchFailure] = useState<TranslationKey | null>(null);
+  const searching = query.trim() !== "";
   const scope = useMemo<ViewerScope>(() => ({ files: projectId }), [projectId]);
   const sharing = useOutboxShare(scope);
   const here = trail[trail.length - 1];
@@ -161,6 +176,29 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
   }, [projectId, here.token]);
 
   useEffect(() => {
+    // The last results stay up while the next search is out, so typing does
+    // not blank the list letter by letter.
+    const words = query.trim();
+    if (!words) {
+      setFound(null);
+      setSearchFailure(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void searchProjectFiles(projectId, words, controller.signal).then(
+        (next) => {
+          if (controller.signal.aborted) return;
+          setFound(next);
+          setSearchFailure(null);
+        },
+        (reason) => { if (!controller.signal.aborted) setSearchFailure(failureKey(reason, "mobile.files.searchError")); },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [projectId, query]);
+
+  useEffect(() => {
     rememberFilesPlace(projectId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
   }, [projectId, trail]);
 
@@ -178,11 +216,12 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (fileOpen) setFileOpen(null);
+      else if (searching) setQuery("");
       else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fileOpen, onClose]);
+  }, [fileOpen, searching, onClose]);
 
   useEffect(() => {
     // Remounted with the drawer after a file was viewed, hence `fileOpen`.
@@ -200,9 +239,11 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
     return entry ? asViewerFile(entry) : null;
   }, [projectId, here.token]);
 
-  const open = (entry: ProjectFileEntry) => {
+  /** Opens a row of the folder at `at` (the trail as it stands, or as a
+   * search hit's sets it). */
+  const open = (entry: ProjectFileEntry, at: Crumb[] = trail) => {
     if (entry.kind === "dir") {
-      setTrail((current) => [...current, { token: entry.token, name: entry.name }]);
+      setTrail([...at, { token: entry.token, name: entry.name }]);
       return;
     }
     // A PDF too: the browser's own PDF viewer has no Save or Share, so the
@@ -210,9 +251,17 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
     // It also becomes a card among the project screen's tabs.
     if (entry.kind === "application/pdf") {
       const { token, name, kind, size, modified } = entry;
-      openFileTab(projectId, { token, name, kind, size, modified, folder: here.token, place: trail.slice(1).map((crumb) => crumb.name).join("/") });
+      openFileTab(projectId, { token, name, kind, size, modified, folder: at[at.length - 1].token, place: at.slice(1).map((crumb) => crumb.name).join("/") });
     }
+    setTrail(at);
     setFileOpen(asViewerFile(entry));
+  };
+
+  /** A search hit: the drawer moves to its folder (Mark up's Reload and the
+   * picture steps read that folder), a folder hit ends the search there. */
+  const openHit = (hit: ProjectFileHit) => {
+    if (hit.kind === "dir") setQuery("");
+    open(hit, [trail[0], ...hit.trail]);
   };
 
   if (fileOpen) {
@@ -221,15 +270,17 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
     return <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} onStep={setFileOpen} onClose={() => setFileOpen(null)}
       markup={markup && { ...markup, projectId, place, refresh }} newTab={showTab && { projectId, place, refresh, show: showTab }} />;
   }
-  /** One file or folder: its tile, name and times, and ↗ Share for a file. */
-  function row(entry: ProjectFileEntry, folded = false) {
+  /** One file or folder: its tile, name and times, and ↗ Share for a file.
+   * A search hit names its folder above the times. */
+  function row(entry: ProjectFileEntry, folded = false, hit?: ProjectFileHit) {
     const file = entry.kind === "dir" ? null : asViewerFile(entry);
     const ready = sharing.ready === entry.name;
     return <li key={entry.token} className={folded ? "files-folded" : undefined}>
-      <button onClick={() => open(entry)} aria-label={entry.kind === "dir" ? t("mobile.files.openFolder", { name: entry.name }) : t("mobile.files.openFile", { name: entry.name })}>
+      <button onClick={() => hit ? openHit(hit) : open(entry)} aria-label={entry.kind === "dir" ? t("mobile.files.openFolder", { name: entry.name }) : t("mobile.files.openFile", { name: entry.name })}>
         <FileGlyph kind={entry.kind} />
         <span>
           <strong>{entry.name}</strong>
+          {hit && <small className="files-hit-place">{hit.trail.length ? hit.trail.map((crumb) => crumb.name).join("/") : t("mobile.files.atRoot")}</small>}
           <small>{rowMeta(entry, t, lang)}</small>
         </span>
         {entry.kind === "dir" && <svg className="files-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>}
@@ -263,18 +314,30 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
     <section ref={drawer} className="option-sheet project-files" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")} onClick={(event) => event.stopPropagation()}>
       <header>
         <button className="files-close" onClick={onClose} aria-label={t("mobile.files.close")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>
-        <h2>{t("mobile.files.title")} {(isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
+        <h2>{t("mobile.files.title")} {(isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember") || isUntested("mobile.files.search")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
         <span className="files-close" aria-hidden="true" />
       </header>
-      <nav className="files-trail" aria-label={t("mobile.files.trail")}>
+      <input className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
+        placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
+        onChange={(event) => setQuery(event.target.value)} />
+      {!searching && <nav className="files-trail" aria-label={t("mobile.files.trail")}>
         {trail.map((crumb, index) => {
           const last = index === trail.length - 1;
           return <button key={`${index}:${crumb.token ?? ""}`} aria-current={last ? "location" : undefined} disabled={last}
             onClick={() => setTrail((current) => current.slice(0, index + 1))}>{crumb.name}</button>;
         })}
-      </nav>
+      </nav>}
       <p className="sheet-note">{t("mobile.files.readOnly")}</p>
-      {failure
+      {searching ? searchFailure
+        ? <p className="sheet-note error" role="alert">{t(searchFailure)}</p>
+        : !found
+          ? <p className="sheet-note">{t("mobile.files.searching")}</p>
+          : found.hits.length === 0
+            ? <p className="sheet-note">{t("mobile.files.noHits")}</p>
+            : <ul className="option-list files-list" aria-label={t("mobile.files.search")}>
+              {found.hits.map((hit) => row(hit, false, hit))}
+            </ul>
+      : failure
         ? <p className="sheet-note error" role="alert">{t(failure)}</p>
         : !listing
           ? <p className="sheet-note">{t("mobile.files.loading")}</p>
@@ -285,7 +348,9 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
               {sections.scaffold.length > 0 && section("scaffold", scaffoldOpen, setScaffoldOpen, sections.scaffold)}
               {sections.ignored.length > 0 && section("ignored", ignoredOpen, setIgnoredOpen, sections.ignored)}
             </ul>}
-      {listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
+      {searching
+        ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
+        : listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
     </section>
   </div>;
 }

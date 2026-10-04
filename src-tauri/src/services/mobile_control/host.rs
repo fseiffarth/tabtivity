@@ -5265,6 +5265,39 @@ async fn project_files_list(
     }
 }
 
+/// `GET /api/v1/projects/{project_id}/files/search?q=<words>` — the project's
+/// files and folders whose names hold every word, each with the sealed trail
+/// of folders above it (`files::search`). Read-only, like the listing; no
+/// path appears in the answer, only the leaf names the drawer would show.
+async fn project_files_search(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let q = query.get("q").cloned().unwrap_or_default();
+    if q.len() > files::MAX_QUERY {
+        return api_error(StatusCode::BAD_REQUEST, "query_too_long");
+    }
+    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    // A git listing or a walk of the whole tree: off the executor.
+    let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
+        .await
+        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    match found {
+        Ok(found) => (StatusCode::OK, Json(json!(found))),
+        Err(error) => files_error(error),
+    }
+}
+
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
 /// inert text), for the same viewer. Read-only: there is no write route.
@@ -5526,6 +5559,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
+        .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
         .route(
             "/api/v1/projects/{project_id}/outbox",
             get(project_outbox_list),
@@ -8881,6 +8915,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_file_search_answers_sealed_rows_and_trails_while_the_drawer_is_on() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(36)).await.0;
+        let (_, _, body) = host
+            .send(get_as("/api/v1/projects?view=search&q=aurora", &cookie))
+            .await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+        let base = format!("/api/v1/projects/{project_id}/files");
+        std::fs::create_dir_all(host.root.join("src/deep")).unwrap();
+        std::fs::write(host.root.join("src/deep/notes.txt"), "deep").unwrap();
+        std::fs::write(host.root.join(".env.notes"), "HIDDEN=1").unwrap();
+
+        let (status, _, body) = host.send(get_as(&format!("{base}/search?q=notes"), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("files_off")), "{body}");
+
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (status, _, body) = host.send(get_as(&format!("{base}/search?q=NOTES"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let found = json(&body);
+        let hits = found["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "the hidden .env file is not searched: {body}");
+        assert_eq!(hits[0]["name"], "notes.txt");
+        let trail: Vec<&str> = hits[0]["trail"].as_array().unwrap().iter().map(|crumb| crumb["name"].as_str().unwrap()).collect();
+        assert_eq!(trail, ["src", "deep"]);
+        assert!(!body.contains("src/") && !body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+
+        // The hit's token opens the file, its last crumb lists its folder.
+        let token = hits[0]["token"].as_str().unwrap();
+        let (status, _, bytes) = host.send(get_as(&format!("{base}/raw?f={token}"), &cookie)).await;
+        assert_eq!((status, bytes.as_str()), (StatusCode::OK, "deep"));
+        let deep = hits[0]["trail"][1]["token"].as_str().unwrap();
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={deep}"), &cookie)).await;
+        assert_eq!(json(&body)["entries"][0]["name"], "notes.txt");
+
+        let (status, _, body) = host.send(get_as(&format!("{base}/search?q={}", "x".repeat(files::MAX_QUERY + 1)), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::BAD_REQUEST, json!("query_too_long")));
+        let (_, _, body) = host.send(get_as(&format!("{base}/search"), &cookie)).await;
+        assert_eq!(json(&body)["hits"], json!([]));
+        let (status, _, _) = host.send(get_as(&format!("{base}/search?q=notes"), "not-a-session")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
         let host = Fixture::bare();
         let request = Request::builder()
@@ -9952,6 +10033,7 @@ mod tests {
                 }))),
                 ("GET", format!("/api/v1/projects/{project}/files"), None),
                 ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
+                ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
                 ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),
                 ("POST", format!("/api/v1/tabs/{tab}/schedules"), Some(schedule.clone())),
                 ("POST", format!("/api/v1/projects/{project}/prompts/p-1/send"), Some(json!({ "tab_id": tab }))),

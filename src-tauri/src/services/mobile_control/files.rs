@@ -484,6 +484,200 @@ pub fn exists(root: &Path, rel: &str) -> bool {
     ProjectDir::open(root, parent).ok().and_then(|dir| dir.open_file(name)).is_some()
 }
 
+/// The most hits one search answers; `truncated` says there were more.
+pub const MAX_HITS: usize = 200;
+/// The longest query a search takes, in bytes — the project list's bound.
+pub const MAX_QUERY: usize = 80;
+/// How many paths a search weighs before it stops and says `truncated`: a
+/// walk of a tree git does not list has to end somewhere.
+const MAX_SCANNED: usize = 50_000;
+/// How much of `git ls-files` a search reads.
+const MAX_LISTING_BYTES: u64 = 16 * 1024 * 1024;
+
+/// One folder on a hit's way down from the project root, as the drawer's
+/// trail holds it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Crumb {
+    pub token: String,
+    pub name: String,
+}
+
+/// A file or folder whose name matched: its row as its folder's listing would
+/// give it, and the folders above it, so the drawer can stand where it is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Hit {
+    #[serde(flatten)]
+    pub entry: Entry,
+    /// From the root's first folder down to the hit's own; empty at the root.
+    pub trail: Vec<Crumb>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Found {
+    pub hits: Vec<Hit>,
+    pub truncated: bool,
+}
+
+/// How well a leaf matches the query's words, lower is better, or `None`
+/// when some word is not in it: the whole name (or the name before its
+/// extension), then a name starting with the first word, then anywhere.
+fn rank(name: &str, words: &[String]) -> Option<u8> {
+    let lower = name.to_lowercase();
+    if !words.iter().all(|word| lower.contains(word.as_str())) {
+        return None;
+    }
+    let whole = words.join(" ");
+    let stem = lower.rsplit_once('.').map_or(lower.as_str(), |(stem, _)| stem);
+    Some(if lower == whole || stem == whole {
+        0
+    } else if lower.starts_with(words[0].as_str()) {
+        1
+    } else {
+        2
+    })
+}
+
+/// What git lists under the root — tracked files and untracked ones it does
+/// not ignore — as project-relative paths, or `None` when the root is not in
+/// a repo, git fails, or lists nothing. The `bool` is whether the listing
+/// was cut at [`MAX_LISTING_BYTES`].
+fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
+    use std::process::Stdio;
+    let mut git = crate::commands::git::hardened_git_command_in(
+        root,
+        &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .ok()?;
+    let mut out = Vec::new();
+    let read = git.stdout.take()?.take(MAX_LISTING_BYTES).read_to_end(&mut out);
+    let cut = out.len() as u64 >= MAX_LISTING_BYTES;
+    if cut {
+        let _ = git.kill();
+    }
+    let status = git.wait().ok()?;
+    if read.is_err() || (!cut && !status.success()) {
+        return None;
+    }
+    let mut paths: Vec<String> = out
+        .split(|&byte| byte == 0)
+        .filter_map(|path| std::str::from_utf8(path).ok())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect();
+    // A cut listing ends mid-path.
+    if cut {
+        paths.pop();
+    }
+    (!paths.is_empty()).then_some((paths, cut))
+}
+
+/// Every folder and file below the root, breadth first, the way the drawer
+/// would list them (no links, no hidden names), until [`MAX_SCANNED`]. The
+/// `bool` is whether it stopped there.
+fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> {
+    let mut found = Vec::new();
+    let mut folders = std::collections::VecDeque::from([String::new()]);
+    while let Some(rel) = folders.pop_front() {
+        // Gone or swapped for a link since its parent was read: left out.
+        let Ok(dir) = ProjectDir::open(root, &rel) else { continue };
+        for (name, is_dir) in dir.entries()? {
+            if !valid_segment(&name) {
+                continue;
+            }
+            if found.len() >= MAX_SCANNED {
+                return Ok((found, true));
+            }
+            let path = child(&rel, &name);
+            if is_dir {
+                folders.push_back(path.clone());
+            }
+            found.push((path, is_dir));
+        }
+    }
+    Ok((found, false))
+}
+
+/// A folder of the project as its parent's listing would row it.
+fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
+    if rel.is_empty() || !valid_rel(rel) {
+        return None;
+    }
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let meta = ProjectDir::open(root, parent).ok()?.child_dir_meta(name)?;
+    let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
+    let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
+    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
+}
+
+/// The project's files and folders whose names hold every word of `query`
+/// (any case), best match first, then the shallower, then by path. In a git
+/// repo the names come from git — what it ignores (`target/`,
+/// `node_modules/`) is not searched — and anywhere else from a bounded walk.
+/// Each hit is proven again as [`entry`] proves a file, so a path git names
+/// through a link, or one that is hidden, is never answered.
+pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
+    canonical_root(root)?;
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Ok(Found { hits: Vec::new(), truncated: false });
+    }
+    let (candidates, mut truncated) = match git_paths(root) {
+        Some((paths, cut)) => {
+            let mut seen = HashSet::new();
+            let mut candidates = Vec::new();
+            for path in paths {
+                if !valid_rel(&path) {
+                    continue;
+                }
+                // The folders on the way are candidates too, each once.
+                let mut end = 0;
+                while let Some(slash) = path[end..].find('/') {
+                    end += slash;
+                    if seen.insert(path[..end].to_string()) {
+                        candidates.push((path[..end].to_string(), true));
+                    }
+                    end += 1;
+                }
+                candidates.push((path, false));
+            }
+            (candidates, cut)
+        }
+        None => walked_paths(root)?,
+    };
+    let mut matched: Vec<(u8, usize, String, bool)> = candidates
+        .into_iter()
+        .filter_map(|(rel, is_dir)| {
+            let leaf = rel.rsplit('/').next().unwrap_or(&rel);
+            let score = rank(leaf, &words)?;
+            Some((score, rel.matches('/').count(), rel, is_dir))
+        })
+        .collect();
+    matched.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then_with(|| a.2.to_lowercase().cmp(&b.2.to_lowercase())));
+    let mut hits = Vec::new();
+    for (_, _, rel, is_dir) in matched {
+        if hits.len() == MAX_HITS {
+            truncated = true;
+            break;
+        }
+        let proven = if is_dir { dir_entry(root, &rel, host_key, raw_id) } else { entry(root, &rel, host_key, raw_id) };
+        let Some(entry) = proven else { continue };
+        let mut trail = Vec::new();
+        let mut end = 0;
+        while let Some(slash) = rel[end..].find('/') {
+            let start = end;
+            end += slash;
+            trail.push(Crumb { token: seal(host_key, raw_id, &rel[..end]), name: rel[start..end].to_string() });
+            end += 1;
+        }
+        hits.push(Hit { entry, trail });
+    }
+    Ok(Found { hits, truncated })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,6 +988,87 @@ mod tests {
         });
         assert_eq!(read(dir.path(), "src/main.rs"), Err(FilesError::NotFound));
         assert_eq!(list(dir.path(), "src", KEY, "p1"), Err(FilesError::NotFound));
+    }
+
+    fn hit_paths(found: &Found) -> Vec<String> {
+        found.hits.iter().map(|hit| rel_of(&hit.entry, "p1")).collect()
+    }
+
+    #[test]
+    fn a_search_outside_a_repo_walks_and_ranks_the_closest_names_first() {
+        let dir = tree();
+        fs::write(dir.path().join("src/deep/main_notes.md"), "x").unwrap();
+        let found = search(dir.path(), "MAIN", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&found), ["src/main.rs", "src/deep/main_notes.md"], "the stem match first");
+        assert!(!found.truncated);
+        let main = &found.hits[0];
+        assert_eq!((main.entry.name.as_str(), main.entry.kind), ("main.rs", "text/plain; charset=utf-8"));
+        let trail: Vec<(&str, String)> = main.trail.iter().map(|crumb| (crumb.name.as_str(), unseal(KEY, "p1", &crumb.token).unwrap())).collect();
+        assert_eq!(trail, [("src", "src".to_string())]);
+        let deep = search(dir.path(), "notes deep", KEY, "p1").unwrap();
+        assert!(deep.hits.is_empty(), "every word must be in the name itself");
+        let folder = search(dir.path(), "dee", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&folder), ["src/deep"]);
+        assert_eq!(folder.hits[0].entry.kind, "dir");
+        assert_eq!(folder.hits[0].trail.iter().map(|crumb| crumb.name.as_str()).collect::<Vec<_>>(), ["src"]);
+        for hidden in ["env", "outbox", "config"] {
+            assert!(search(dir.path(), hidden, KEY, "p1").unwrap().hits.is_empty(), "{hidden}");
+        }
+        assert!(search(dir.path(), "  ", KEY, "p1").unwrap().hits.is_empty());
+        assert_eq!(search(&dir.path().join("gone"), "x", KEY, "p1"), Err(FilesError::Unavailable));
+    }
+
+    #[test]
+    fn a_search_in_a_repo_skips_what_git_ignores_and_finds_untracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        fs::create_dir_all(root.join("target/report")).unwrap();
+        fs::create_dir_all(root.join("docs/report")).unwrap();
+        fs::write(root.join("target/report/report.txt"), "x").unwrap();
+        fs::write(root.join("docs/report/report.txt"), "x").unwrap();
+        fs::write(root.join("report.md"), "x").unwrap();
+        git(&["add", "report.md"]);
+        let found = search(root, "report", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&found), ["report.md", "docs/report", "docs/report/report.txt"], "target/ is ignored");
+        // A project folder below the repo's top searches only itself.
+        let docs = search(&root.join("docs"), "report", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&docs), ["report", "report/report.txt"]);
+    }
+
+    #[test]
+    fn a_search_answers_at_most_max_hits_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..(MAX_HITS + 2) {
+            fs::write(dir.path().join(format!("hit{i:04}.txt")), "x").unwrap();
+        }
+        let found = search(dir.path(), "hit", KEY, "p1").unwrap();
+        assert_eq!(found.hits.len(), MAX_HITS);
+        assert!(found.truncated);
+        assert_eq!(found.hits[0].entry.name, "hit0000.txt");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_search_never_answers_through_a_link() {
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), "private").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("away")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), dir.path().join("secret-link.txt")).unwrap();
+        assert!(search(dir.path(), "secret", KEY, "p1").unwrap().hits.is_empty());
+        assert!(search(dir.path(), "away", KEY, "p1").unwrap().hits.is_empty());
+        // Nor when git names the link: it tracks a link as a path of its own.
+        let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(dir.path()).output().unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        assert!(search(dir.path(), "secret", KEY, "p1").unwrap().hits.is_empty());
+        assert!(search(dir.path(), "away", KEY, "p1").unwrap().hits.is_empty());
     }
 
     #[test]

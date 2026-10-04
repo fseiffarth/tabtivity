@@ -1033,6 +1033,20 @@ export async function listProjectFiles(projectId: string, dir: string | undefine
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
 }
 
+/** A file or folder whose name matched a search: its row, and the sealed
+ * folders from the project root down to its own (empty at the root) — the
+ * drawer's trail to stand in when it is opened. */
+export interface ProjectFileHit extends ProjectFileEntry { trail: { token: string; name: string }[] }
+export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean }
+
+/** `GET /api/v1/projects/{id}/files/search?q=<words>` — the project's files
+ * and folders whose names hold every word, any case, the closest first. In a
+ * git repo what git ignores is not searched. Behind the same switch as the
+ * listing. */
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+}
+
 /** Mark up's Reload for a project file opened by its sealed row rather than
  * from the drawer (the Focus banner's question, an outbox copy's origin):
  * its folder (`folder`, the row's token; none at the root) listed again, for

@@ -3468,6 +3468,26 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Search by name (2026-10-04, untested id `mobile.files.search`;
+    needs the rebuilt backend — new sidecar route `files/search`, host test
+    `the_file_search_answers_sealed_rows_…`, `files.rs` `a_search_…` tests).
+    Type part of a name in the box under the drawer's head: matching files
+    and folders from anywhere in the project list with their folder above
+    the times (`Project folder` at the root); several words must all be in
+    the name; nothing git ignores (`target/`, `node_modules/`) and no `.env`
+    shows. Tap a file → it opens; close it → the results are still there, and
+    clearing the box shows the drawer standing in that file's folder. Tap a
+    folder → the drawer walks into it and the box empties. Escape (keyboard)
+    clears the box before it closes the drawer. A big project answers in
+    about a second.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bp — The phone's host updates itself at launch** (2026-09-28;
   ✅ code-complete, unit test `a_launch_updates_a_host_that_is_behind_…`;
