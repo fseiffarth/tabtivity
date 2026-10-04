@@ -267,7 +267,8 @@ function whenRootHydrated(run: () => void): void {
  *
  * Root is restored first on its first use this session (`whenRootHydrated`).
  * `onOpened` runs synchronously when root is already hydrated, after the
- * restore otherwise.
+ * restore otherwise. In a popout the add is forwarded to the main window, so
+ * the tab `onOpened` gets is a placeholder whose key names no real tab.
  */
 export function addTabToRoot(
   spec: Omit<TabEntry, "key">,

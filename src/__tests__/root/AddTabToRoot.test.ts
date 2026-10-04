@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { allGroups, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { setDetachedWindowContext, type ForwardedEdit } from "../../stores/detachedContext";
 import { addTabToRoot, openTabInRootConsole, useRootOverlayStore } from "../../stores/rootOverlay";
 
 const rootTabs = () => useTabsStore.getState().tabsByScope.root ?? [];
@@ -30,6 +31,7 @@ function unhydratedRootWithSavedShell() {
 }
 
 beforeEach(() => {
+  setDetachedWindowContext(null);
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockResolvedValue({});
   useTabsStore.setState({
@@ -74,6 +76,28 @@ describe("addTabToRoot", () => {
     expect(rootTabs().map((tab) => tab.label)).toEqual(["Saved shell", "Agent"]);
     expect(opened.mock.calls[0][0].key).toBe(rootTabs()[1].key);
     expect(useRootOverlayStore.getState().open).toBe(false);
+  });
+
+  it("in a popout, forwards the add at once without restoring root itself", () => {
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
+    const edits: ForwardedEdit[] = [];
+    setDetachedWindowContext({
+      scope: "p1",
+      groupId: "g-1",
+      label: "detached-p1-g-1",
+      targetGroupId: () => "g-1",
+      pushEdit: (edit) => edits.push(edit),
+      closeTab: () => {},
+    });
+    const opened = vi.fn<(tab: TabEntry) => void>();
+
+    addTabToRoot(spec, opened);
+
+    // The main window owns root's tabs and its hydration: nothing is read here.
+    expect(invoke).not.toHaveBeenCalled();
+    expect(edits).toEqual([{ kind: "addToScope", scope: "root", tab: spec }]);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(rootTabs()).toHaveLength(0);
   });
 });
 
