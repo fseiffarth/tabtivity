@@ -25,6 +25,13 @@ export function holdPhonePrompt(scheduleId: string): void {
   }, 0));
 }
 
+/** A pane has just come to take keystrokes: sweep again for any phone prompt
+ * that waited on it, rather than at the scheduler's next tick. */
+export function wakePhoneHolds(): void {
+  if (holds.size === 0) return;
+  for (const listener of listeners) listener();
+}
+
 /** A phone prompt: it may go in while the agent works. */
 export function phoneHoldDue(scheduleId: string): boolean {
   return holds.has(scheduleId);

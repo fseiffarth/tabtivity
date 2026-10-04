@@ -32,6 +32,7 @@ import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseD
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
+import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
@@ -741,6 +742,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // A detached view attaches to the same PTY but must never become a second
     // delivery owner. Readiness waits for terminal-ready plus real TUI output and
     // a short settle cushion, matching the initial-input gate below.
+    let settledOnce = false;
     const armScheduledReady = () => {
       if (!scheduleTargetId || attachOnly || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
@@ -749,7 +751,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // before the activity store's sustained-output debounce calls an agent
       // "working": scheduling must still wait until the TUI itself is quiet.
       scheduledSettleTimer.current = setTimeout(() => {
-        if (!cancelled) scheduledReady.current = true;
+        if (cancelled) return;
+        scheduledReady.current = true;
+        if (!settledOnce) {
+          settledOnce = true;
+          wakePhoneHolds();
+        }
       }, SCHEDULED_SETTLE_MS);
     };
     /**
@@ -777,11 +784,23 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       const last = lastPtyOutputAt(id);
       return last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
     };
+    /**
+     * Whether a phone prompt may be typed while the agent works
+     * (`queueableWhileBusy`): the CLI has drawn and gone quiet once. Not the
+     * bare terminal-ready event — a brand-new tab is ready before its CLI has
+     * started, and what is typed into a CLI still starting is lost (the phone
+     * markup's new-tab Submit held its prompt into exactly that window). Once
+     * settled it stays so: a working agent redraws without pause.
+     */
+    const scheduledInputStarted = () => {
+      if (!settledOnce && scheduledInputReady()) settledOnce = true;
+      return settledOnce;
+    };
     const unregisterScheduled = scheduleTargetId && !attachOnly
       ? registerScheduledAgentInput(scheduleTargetId, {
           ptyId: id,
           ready: scheduledInputReady,
-          started: () => scheduledReady.current || terminalReadySeen.current,
+          started: scheduledInputStarted,
           bracketedPaste: () => term.modes.bracketedPasteMode === true,
           // The family decides whether the markers are used at all: a prompt
           // pasted into Claude Code arrives as `<pasted_content>` rather than
