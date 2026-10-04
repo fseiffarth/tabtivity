@@ -167,7 +167,9 @@ export function LocalModelsSheet({ onClose, onChange }: {
       } else if (code === "local_models_disabled") {
         show(null, code);
       } else {
-        if (model) setRowError({ model, key: rowErrorKey(code) });
+        // A refused Start says so under its button, as a refused Load does
+        // under its row.
+        setRowError({ model, key: rowErrorKey(code) });
         // The list may have moved under the phone (stopped, uninstalled).
         void load();
       }
@@ -199,6 +201,7 @@ export function LocalModelsSheet({ onClose, onChange }: {
           {list.can_start && <button className="primary local-models-start" disabled={!!pending[""]} onClick={() => void act("start")}>
             {t("mobile.localModels.start")}{isUntested("mobile.localModels.start") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </button>}
+          {rowError?.model === "" && <p className="sheet-note error" role="alert">{t(rowError.key)}</p>}
         </>;
       case "not_installed":
         return <p className="sheet-note">{t("mobile.localModels.notInstalled")}</p>;

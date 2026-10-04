@@ -250,6 +250,19 @@ describe("local models — the sheet", () => {
     expect(screen.queryByRole("button", { name: /Start Ollama/ })).toBeNull();
   });
 
+  it("says when the desktop refused a Start, under its button", async () => {
+    serve(
+      () => json(listOf([IDLE], { server: "stopped", can_start: true })),
+      () => json({ error: "desktop_error" }, 502),
+    );
+    render(<LocalModelsSheet onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Start Ollama/ }));
+    expect((await screen.findByRole("alert")).textContent).toBe("That didn't work. Check Ollama on the desktop.");
+    expect(posts()).toEqual([{ action: "start" }]);
+    await waitFor(() => expect(gets()).toBe(2));
+    expect(screen.getByRole("button", { name: /Start Ollama/ })).toBeTruthy();
+  });
+
   it("offers no Start when the desktop cannot start Ollama without asking", async () => {
     serve(() => json(listOf([], { server: "unreachable" })));
     render(<LocalModelsSheet onClose={() => {}} />);
