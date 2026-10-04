@@ -50,19 +50,21 @@ fn inject_api_keys(opts: &mut PtyOptions) -> Result<(), String> {
 /// An API key never rides a tmux argv. tmux older than 3.2 has no
 /// `new-session -e`, so a tmux-wrapped tab's secrets would be on the
 /// world-readable client argv (#864); a long-lived provider key is not
-/// accepted there. Drop every key carrier the fence added (those not in
-/// `before`) — the CLI falls back to its own login. The `agent_exec` step
-/// may still be in front of the command; with nothing to map it only execs.
-/// Names only in the log.
+/// accepted there. Drop every key carrier — the CLI falls back to its own
+/// login. Every one: a carrier is only ever Tabtivity's injection (a CLI's
+/// own name is the user's, and is not touched here), so one the tab brought
+/// itself would have no business riding the argv either. The `agent_exec`
+/// step may still be in front of the command; with nothing to map it only
+/// execs. Names only in the log.
 #[cfg(unix)]
-fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions, before: &[&'static str]) {
+fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) {
     if opts.tmux_session.is_none()
         || !crate::services::tmux_local::tmux_available()
         || crate::services::tmux_local::tmux_supports_session_env()
     {
         return;
     }
-    let dropped = drop_added_api_keys(&mut opts.env, before);
+    let dropped = drop_carriers(&mut opts.env);
     if !dropped.is_empty() {
         eprintln!(
             "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
@@ -72,17 +74,19 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions, before: &[&'static str]) {
     }
 }
 
-/// Remove the provider key carriers `env` has and `before` did not.
+/// Remove every `agent_exec` carrier from `env`; returns their names, sorted.
 #[cfg(any(unix, test))]
-fn drop_added_api_keys(
-    env: &mut std::collections::HashMap<String, String>,
-    before: &[&'static str],
-) -> Vec<&'static str> {
-    crate::services::agent_api_keys::CARRIERS
-        .iter()
-        .copied()
-        .filter(|k| !before.contains(k) && env.remove(*k).is_some())
-        .collect()
+fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<String> {
+    let mut dropped: Vec<String> = env
+        .keys()
+        .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
+        .cloned()
+        .collect();
+    dropped.sort();
+    for k in &dropped {
+        env.remove(k);
+    }
+    dropped
 }
 
 /// Whether this `claude` spawn runs here, as a session, on the user's stored
@@ -703,14 +707,6 @@ pub async fn prepare(
     // paths the fence argv bound when fenced, everything when the agent runs
     // unfenced (it already reads everything).
     let mut root_projects = crate::services::root_mcp::ProjectsGrant::All;
-    // The key carriers the tab brought itself, so the tmux < 3.2 rule below
-    // drops only what the fence added.
-    #[cfg(unix)]
-    let keys_before: Vec<&'static str> = crate::services::agent_api_keys::CARRIERS
-        .iter()
-        .copied()
-        .filter(|k| opts.env.contains_key(*k))
-        .collect();
     if let Some(roots) = fence_roots.as_deref() {
         let decision = crate::services::agent_fence::decide(
             &opts,
@@ -801,7 +797,7 @@ pub async fn prepare(
     crate::brand::PAIR.export_both(&mut opts.env);
     #[cfg(unix)]
     if opts.tmux_session.is_some() && opts.cmd != "ssh" && opts.cmd != "docker" {
-        drop_api_keys_for_old_tmux(&mut opts, &keys_before);
+        drop_api_keys_for_old_tmux(&mut opts);
         crate::services::tmux_local::wrap_pty_options_local(&mut opts);
     }
 
@@ -835,21 +831,27 @@ mod tests {
     // ── vm_spawn_refusal: the VM tier's no-local-fallback guard ────────────
 
     #[test]
-    fn old_tmux_drops_only_the_keys_the_fence_added() {
+    fn old_tmux_drops_every_carrier_and_only_carriers() {
         use crate::services::agent_api_keys::{
             ANTHROPIC_CARRIER, ANTHROPIC_ENV, GEMINI_CARRIER, OPENAI_CARRIER,
         };
+        let odd = crate::services::agent_exec::carrier_name("SOMETHING_ELSE");
         let mut env: HashMap<String, String> = HashMap::from([
             (ANTHROPIC_CARRIER.to_string(), "sk-test-added-fake".to_string()),
-            (GEMINI_CARRIER.to_string(), "users-own-test-value".to_string()),
+            // A carrier the tab brought itself goes too: it would ride the argv.
+            (GEMINI_CARRIER.to_string(), "sk-test-brought-fake".to_string()),
+            (odd.clone(), "sk-test-odd-fake".to_string()),
             // The CLI's own name is the user's, never dropped here.
             (ANTHROPIC_ENV.to_string(), "users-own-test-value".to_string()),
             ("PATH".to_string(), "/bin".to_string()),
         ]);
-        let dropped = drop_added_api_keys(&mut env, &[GEMINI_CARRIER]);
-        assert_eq!(dropped, vec![ANTHROPIC_CARRIER]);
-        assert!(!env.contains_key(ANTHROPIC_CARRIER) && !env.contains_key(OPENAI_CARRIER));
-        assert!(env.contains_key(GEMINI_CARRIER) && env.contains_key(ANTHROPIC_ENV) && env.contains_key("PATH"));
+        let dropped = drop_carriers(&mut env);
+        let mut want = vec![ANTHROPIC_CARRIER.to_string(), GEMINI_CARRIER.to_string(), odd];
+        want.sort();
+        assert_eq!(dropped, want);
+        assert!(!env.contains_key(OPENAI_CARRIER));
+        assert!(!crate::services::agent_exec::has_carriers(&env));
+        assert!(env.contains_key(ANTHROPIC_ENV) && env.contains_key("PATH"));
     }
 
     #[test]

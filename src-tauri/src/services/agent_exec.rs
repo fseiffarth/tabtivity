@@ -52,29 +52,43 @@ pub struct Mapping {
     pub set: Vec<(OsString, OsString)>,
 }
 
-/// A name a carrier may set: a plain variable name, and none of the app's own
-/// (a carrier never re-enters the mapping or overrides a marker).
-fn valid_target(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !name.starts_with(crate::brand::ENV_PREFIX)
+/// The variables a carrier may set: the CLIs' key variables
+/// (`agent_api_keys::ENV_VARS`), nothing else. The step runs *outside* the
+/// fence, in front of bwrap or `sandbox-exec` (and of an unfenced Host
+/// session's CLI), so a carrier able to name any variable would be an
+/// environment-injection lever there: `LD_PRELOAD`, `PATH`, `BASH_ENV` or
+/// `NODE_OPTIONS` reach the unfenced launcher itself. A fixed list costs
+/// nothing: the step is always the running binary (`fence_scope::
+/// running_binary`, `/proc/<pid>/exe` once replaced), the same build that
+/// injected the carrier. A name a later build adds (C2's proxy token) is added
+/// here with it.
+pub fn targets() -> &'static [&'static str] {
+    crate::services::agent_api_keys::ENV_VARS
+}
+
+/// Whether `key` is a carrier, by bytes: a name that is not UTF-8 still
+/// starts with the prefix and is still removed.
+fn is_carrier(key: &OsStr) -> bool {
+    key.as_encoded_bytes().starts_with(CARRIER_PREFIX.as_bytes())
 }
 
 /// The mapping of an environment. Pure. Every carrier is removed; a carrier
-/// with a valid name and a non-empty value sets its variable, over a value
-/// already there — the spawn decided at injection that the user had not set
-/// one (`agent_api_keys`), and a value here can only be the tmux server's own
-/// global copy, which is not the user's choice for this tab.
+/// of one of [`targets`] with a non-empty value sets its variable, over a
+/// value already there — the spawn decided at injection that the user had
+/// not set one (`agent_api_keys`), and a value here can only be the tmux
+/// server's own global copy, which is not the user's choice for this tab.
 pub fn mapping<'a>(vars: impl IntoIterator<Item = (&'a OsStr, &'a OsStr)>) -> Mapping {
     let mut out = Mapping::default();
     for (key, value) in vars {
-        let Some(name) = key.to_str().and_then(|k| k.strip_prefix(CARRIER_PREFIX)) else {
+        if !is_carrier(key) {
             continue;
-        };
+        }
         out.remove.push(key.to_owned());
-        if valid_target(name) && !value.is_empty() {
-            out.set.push((OsString::from(name), value.to_owned()));
+        let target = key.to_str().and_then(|k| k.strip_prefix(CARRIER_PREFIX));
+        if let Some(name) = target.filter(|n| targets().contains(n)) {
+            if !value.is_empty() {
+                out.set.push((OsString::from(name), value.to_owned()));
+            }
         }
     }
     out
@@ -85,12 +99,34 @@ pub fn mapping<'a>(vars: impl IntoIterator<Item = (&'a OsStr, &'a OsStr)>) -> Ma
 #[cfg(unix)]
 pub fn apply(cmd: &mut std::process::Command) {
     let vars: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+    apply_from(cmd, &vars);
+}
+
+/// [`apply`] over `vars` instead of this process's environment.
+#[cfg(unix)]
+fn apply_from(cmd: &mut std::process::Command, vars: &[(OsString, OsString)]) {
     let m = mapping(vars.iter().map(|(k, v)| (k.as_os_str(), v.as_os_str())));
     for key in &m.remove {
         cmd.env_remove(key);
     }
     for (key, value) in &m.set {
         cmd.env(key, value);
+    }
+}
+
+/// Remove every carrier from this process's own environment. `main` calls it
+/// first in every mode but the two steps that read them (`--agent-exec`,
+/// `--fence-scope`): a Tabtivity (or an `--agent-shim`) started from a shell
+/// that still holds one must not hand it to every child it spawns — those
+/// inherit the process environment, and only a spawn whose `opts.env` holds
+/// a carrier gets the step that removes it. Single-threaded at that point.
+pub fn forget_inherited_carriers() {
+    let carriers: Vec<OsString> = std::env::vars_os()
+        .map(|(k, _)| k)
+        .filter(|k| is_carrier(k))
+        .collect();
+    for key in carriers {
+        std::env::remove_var(key);
     }
 }
 
@@ -167,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_odd_carriers_are_removed_and_set_nothing() {
+    fn empty_odd_or_unlisted_carriers_are_removed_and_set_nothing() {
         let empty = carrier_name("GEMINI_API_KEY");
         let bad = [
             carrier_name(""),
@@ -176,12 +212,42 @@ mod tests {
             carrier_name("A=B"),
             carrier_name(&format!("{}AGENT_FENCE", crate::brand::ENV_PREFIX)),
             carrier_name(&carrier_name("X")),
+            // The step runs outside the fence: a carrier must not be able to
+            // name a variable that steers the launcher, the loader or a shell.
+            carrier_name("LD_PRELOAD"),
+            carrier_name("LD_LIBRARY_PATH"),
+            carrier_name("PATH"),
+            carrier_name("BASH_ENV"),
+            carrier_name("ENV"),
+            carrier_name("NODE_OPTIONS"),
+            carrier_name("HOME"),
+            carrier_name("ANTHROPIC_BASE_URL"),
+            carrier_name("anthropic_api_key"),
         ];
         let mut pairs: Vec<(&str, &str)> = vec![(empty.as_str(), "")];
         pairs.extend(bad.iter().map(|k| (k.as_str(), "fake")));
         let m = map(&pairs);
         assert_eq!(m.remove.len(), pairs.len());
         assert!(m.set.is_empty(), "{:?}", m.set);
+        // Every key variable a spawn can carry is a target.
+        for var in crate::services::agent_api_keys::ENV_VARS {
+            let carrier = carrier_name(var);
+            assert_eq!(map(&[(&carrier, "fake")]).set, vec![(OsString::from(*var), OsString::from("fake"))]);
+        }
+    }
+
+    /// A carrier name that is not UTF-8 is still a carrier, and still removed.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_carrier_is_removed_too() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut name = CARRIER_PREFIX.as_bytes().to_vec();
+        name.extend_from_slice(b"ANTHROPIC_API_KEY\xff");
+        let key = OsString::from_vec(name);
+        let value = OsString::from("fake");
+        let m = mapping([(key.as_os_str(), value.as_os_str())]);
+        assert_eq!(m.remove, vec![key]);
+        assert!(m.set.is_empty());
     }
 
     #[test]
@@ -203,25 +269,37 @@ mod tests {
         assert_eq!(env.len(), 1, "{:?}", env.keys());
     }
 
-    /// The mapping really reaches an exec'd program: the variable is set and
-    /// no carrier is left.
+    /// The step's own code path (`apply`, over a given environment) really
+    /// reaches an exec'd program: the variable is set, no carrier is left, an
+    /// unlisted carrier sets nothing, and the rest is inherited untouched.
     #[cfg(unix)]
     #[test]
     fn an_execd_program_sees_the_variable_and_no_carrier() {
         let carrier = carrier_name("ANTHROPIC_API_KEY");
-        let m = map(&[(&carrier, "sk-test-fake")]);
+        let evil = carrier_name("BASH_ENV");
+        let vars: Vec<(OsString, OsString)> = [
+            (carrier.as_str(), "sk-test-fake"),
+            (evil.as_str(), "/tmp/not-a-real-file"),
+            ("KEEP", "kept"),
+        ]
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect();
         let mut cmd = std::process::Command::new("sh");
-        cmd.args(["-c", &format!("printf '%s|%s' \"${{ANTHROPIC_API_KEY-unset}}\" \"${{{carrier}-gone}}\"")])
-            .env(&carrier, "sk-test-fake")
-            .env_remove("ANTHROPIC_API_KEY");
-        for key in &m.remove {
-            cmd.env_remove(key);
-        }
-        for (k, v) in &m.set {
+        cmd.args([
+            "-c",
+            &format!(
+                "printf '%s|%s|%s|%s|%s' \"${{ANTHROPIC_API_KEY-unset}}\" \"${{{carrier}-gone}}\" \
+                 \"${{{evil}-gone}}\" \"${{BASH_ENV-unset}}\" \"$KEEP\""
+            ),
+        ]);
+        cmd.env_remove("ANTHROPIC_API_KEY").env_remove("BASH_ENV");
+        for (k, v) in &vars {
             cmd.env(k, v);
         }
+        apply_from(&mut cmd, &vars);
         let out = cmd.output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "sk-test-fake|gone");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "sk-test-fake|gone|gone|unset|kept");
     }
 
     #[cfg(unix)]

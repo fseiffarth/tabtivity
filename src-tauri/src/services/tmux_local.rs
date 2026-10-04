@@ -331,10 +331,20 @@ const FENCE_INPUT_DRAIN: &str = "s=$(stty -g 2>/dev/null); stty raw -echo min 0 
 /// left in the tab is **unfenced** — it must not inherit the agent's MCP
 /// tokens, Copilot token or provider API keys (their carriers: the pane's
 /// `sh` never ran `agent_exec`, so it holds no CLI-named key). (`env -u` is in
-/// GNU and BSD `env`.)
-fn trailing_shell(fenced: bool) -> String {
+/// GNU and BSD `env`.) After an unfenced command whose environment `carries`
+/// a key (the root console's Host session, `agent_exec` in front of its CLI)
+/// the shell is the user's own and keeps everything but the carriers: a key
+/// handed to that one agent is not handed on to whatever the user runs next.
+fn trailing_shell(fenced: bool, carries: bool) -> String {
     if !fenced {
-        return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
+        if !carries {
+            return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
+        }
+        let unset: String = crate::services::agent_api_keys::CARRIERS
+            .iter()
+            .map(|k| format!("-u {k} "))
+            .collect();
+        return format!("exec env {unset}\"${{SHELL:-/bin/bash}}\" -l");
     }
     let unset: String = SECRET_ENV.iter().map(|k| format!("-u {k} ")).collect();
     format!("{FENCE_INPUT_DRAIN}exec env {unset}\"${{SHELL:-/bin/bash}}\" -l")
@@ -508,7 +518,10 @@ fn local_tmux_args_for(
     if let Some(line) = line {
         // One positional arg = the command line tmux runs via `sh -c`. Keeping a
         // login shell after it is what makes a finished run reattachable.
-        args.push(format!("{line}; {}", trailing_shell(fenced)));
+        args.push(format!(
+            "{line}; {}",
+            trailing_shell(fenced, crate::services::agent_exec::has_carriers(env))
+        ));
     }
     // Session options as trailing tmux commands (standalone ';' tokens split argv).
     for tok in [
@@ -957,7 +970,7 @@ mod tests {
     fn the_unfenced_shell_after_a_fenced_command_inherits_no_secret() {
         // The pane's `sh` holds the session environment — tokens and API keys
         // included — and the login shell it execs after the agent is unfenced.
-        let tail = trailing_shell(true);
+        let tail = trailing_shell(true, false);
         assert!(tail.starts_with(FENCE_INPUT_DRAIN), "{tail}");
         assert!(tail.ends_with("\"${SHELL:-/bin/bash}\" -l"), "{tail}");
         for key in SECRET_ENV {
@@ -969,7 +982,9 @@ mod tests {
         let launched = local_tmux_args_for(concat!(crate::app_slug!(), "-x"), Some("'/l.sh'"), &env, true, true);
         assert!(launched.iter().any(|a| a == &format!("'/l.sh'; {tail}")), "{launched:?}");
         // An unfenced command's shell is the user's own, unchanged.
-        assert_eq!(trailing_shell(false), "exec \"${SHELL:-/bin/bash}\" -l");
+        assert_eq!(trailing_shell(false, false), "exec \"${SHELL:-/bin/bash}\" -l");
+        // A fenced tail is the same whether or not the tab carries a key.
+        assert_eq!(trailing_shell(true, true), tail);
         // `sh` really runs it: the secret is gone, the rest is kept.
         #[cfg(unix)]
         {
@@ -985,6 +1000,72 @@ mod tests {
                 .output()
                 .unwrap();
             assert_eq!(String::from_utf8_lossy(&out.stdout), "unset|kept");
+        }
+    }
+
+    /// The root console's Host session: unfenced, `agent_exec` in front of its
+    /// CLI. The key's carrier is off every argv, and the user's own shell
+    /// left in the tab after the agent does not keep it.
+    #[test]
+    fn a_host_sessions_shell_keeps_no_key_carrier() {
+        use crate::services::agent_api_keys::{ANTHROPIC_CARRIER, CARRIERS};
+        let env = env_of(&[
+            (crate::app_env!("HOST_SESSION"), "1"),
+            (ANTHROPIC_CARRIER, "sk-test-host-s3cret"),
+        ]);
+        let args = [
+            crate::services::agent_exec::MODE_FLAG.to_string(),
+            "claude".to_string(),
+        ];
+        for session_env in [true, false] {
+            let argv = local_tmux_args_with(
+                concat!(crate::app_slug!(), "-x"),
+                "/proc/1/exe",
+                &args,
+                &env,
+                session_env,
+            );
+            // On < 3.2 `launch_prep` drops the carriers before this wrap.
+            if session_env {
+                assert!(!argv.iter().any(|a| a.contains("s3cret")), "{argv:?}");
+            }
+            let line = argv.iter().find(|a| a.contains("--agent-exec")).unwrap();
+            let tail = trailing_shell(false, true);
+            assert!(line.ends_with(&tail), "{line}");
+            for carrier in CARRIERS {
+                assert!(tail.contains(&format!("-u {carrier} ")), "{tail}");
+            }
+            // No drain and no other secret dropped: it is the user's shell.
+            assert!(!tail.contains("stty"));
+            assert!(!tail.contains(crate::services::root_mcp::TOKEN_ENV));
+        }
+        // `sh` really runs it: the carrier is gone, the rest is kept.
+        #[cfg(unix)]
+        {
+            let tail = trailing_shell(false, true).replace("\"${SHELL:-/bin/bash}\" -l", "sh -c 'printf \"%s|%s\" \"${C-unset}\" \"$KEEP\"'");
+            let probe = tail.replace("${C-unset}", &format!("${{{ANTHROPIC_CARRIER}-unset}}"));
+            let out = std::process::Command::new("sh")
+                .args(["-c", &probe])
+                .env(ANTHROPIC_CARRIER, "sk-test-fake")
+                .env("KEEP", "kept")
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "unset|kept");
+        }
+    }
+
+    /// The key carriers hold slots 8636–8639, the ones a Part A build gave the
+    /// CLIs' own names, so the next tab overwrites those entries on a server
+    /// such a build touched instead of leaving them beside new ones.
+    #[test]
+    fn key_carriers_hold_the_part_a_key_slots() {
+        for (i, carrier) in crate::services::agent_api_keys::CARRIERS.iter().enumerate() {
+            let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
+            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, 8636 + i, "{carrier}");
+        }
+        assert_eq!(SECRET_ENV.len(), 10);
+        for var in crate::services::agent_api_keys::ENV_VARS {
+            assert!(!SECRET_ENV.contains(var), "{var}");
         }
     }
 
@@ -1030,7 +1111,7 @@ mod tests {
         let dash_s = launched.iter().position(|a| a == "-s").unwrap();
         assert_eq!(
             launched[dash_s + 2],
-            format!("'/state/tmux-launch/{SLUG}-x.sh'; {}", trailing_shell(true))
+            format!("'/state/tmux-launch/{SLUG}-x.sh'; {}", trailing_shell(true, false))
         );
         // The env still rides `-e`; only the command moved.
         assert!(launched.iter().any(|a| a == concat!(crate::app_upper!(), "_TAB_UID=tab-uid-1")));
@@ -1300,7 +1381,7 @@ mod tests {
         assert_eq!(args[name + 1], session);
         let line = &args[name + 2];
         assert!(line.starts_with("'claude' '--session-id' 'u1'; "), "{line}");
-        assert!(line.ends_with(&trailing_shell(true)), "{line}");
+        assert!(line.ends_with(&trailing_shell(true, false)), "{line}");
         assert!(!args.iter().any(|a| a.contains("tmux")), "nested tmux: {args:?}");
         // Wrapping the prepared launch again is the bug this guards against.
         let twice = local_tmux_argv(session, &opts, true);

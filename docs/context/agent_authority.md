@@ -381,11 +381,14 @@ no variable of theirs. Tabtivity's own binary maps a carrier to the CLI's
 variable and removes every carrier just before the agent runs
 (`services::agent_exec`, `--agent-exec`; `--fence-scope` maps the same way):
 the fence's first step in front of bwrap or `sandbox-exec`, in front of the
-CLI for a Host session; Windows (no tmux) sets the CLI's name directly. On
-tmux < 3.2 the key is dropped rather than put on the argv. The unfenced
+CLI for a Host session; Windows (no tmux) sets the CLI's name directly. That
+step runs outside the fence, so a carrier sets only a CLI key variable
+(`agent_exec::targets`) — never `LD_PRELOAD`, `PATH` or `BASH_ENV` — and
+every other mode of the binary drops any carrier it inherited at start. On
+tmux < 3.2 every carrier is dropped rather than put on the argv. The unfenced
 login shell a fenced pane leaves behind starts with `env -u` over every
 `SECRET_ENV` name — before this it inherited the MCP and Copilot tokens as
-well. A keyed local Claude tab skips `--remote-control`, which API-key auth
+well; the Host session's (the user's own shell) drops the carriers only. A keyed local Claude tab skips `--remote-control`, which API-key auth
 refuses. The CLIs' own approval steps stay theirs (Claude asks once per agent
 home, default No; Gemini needs its `/auth` pick). **Stated, not solved:** the
 agent can read its key, and a project's own CLI config (`ANTHROPIC_BASE_URL`

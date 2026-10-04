@@ -649,8 +649,8 @@ Never live-verified. What was built:
   <prog> [args…]` (`main.rs`, Unix): every variable named
   `<APP>_AGENT_SECRET_<NAME>` is removed and `<NAME>` set from it (a plain
   variable name, never an app-named one, a non-empty value), then `exec`.
-  Generic over the prefix rather than a fixed list, so a binary on disk newer
-  than the running app (a rebuild, an update) maps whatever the app carried.
+  (Since the review: only the CLIs' key variables, `agent_exec::targets` —
+  see "C1 review notes".)
   `fence_scope::run` (`--fence-scope`) applies the same mapping, so a host
   with the Landlock scope still runs one step in front of bwrap, not two.
   The binary is `fence_scope::running_binary` (`/proc/<pid>/exe` once
@@ -708,3 +708,58 @@ in `SECRET_ENV` and off `-e`/the launcher script, `env -u` of a carrier, the
 `sh -c` launcher with each mode in front of a probe (bwrap itself cannot nest
 in the sandbox this was built in) — the probe saw `ANTHROPIC_API_KEY`, no
 carrier, and the filter on descriptor 9.
+
+## C1 review notes (2026-10-04)
+
+Reviewed 030dcd59/d2b164f3. Fixed:
+
+- **Any plain name → only the key variables.** The step runs *outside* the
+  fence (in front of bwrap / `sandbox-exec`, or a Host session's CLI), so a
+  carrier able to name any variable could set `LD_PRELOAD`, `PATH`,
+  `BASH_ENV` or `NODE_OPTIONS` for the unfenced launcher. No project route to
+  a carrier was found (a tab env adopted from a project folder is stripped;
+  only `inject_env` and the frontend write `opts.env`), but the list costs
+  nothing: `agent_exec::targets()` = `agent_api_keys::ENV_VARS`, extended by
+  whatever C2 carries. The "newer binary on disk" reason for a prefix rule
+  did not hold on Linux — the step is always the running binary
+  (`/proc/<pid>/exe` once replaced); on macOS an updated binary drops a name
+  it does not list, which fails safe (no key, the CLI's own login). Every
+  carrier is still removed; a non-UTF-8 carrier name is now removed too.
+- **Inherited carriers.** Every child inherits Tabtivity's own environment and
+  only a spawn whose `opts.env` carries something gets the step, so a
+  Tabtivity (or `--agent-shim`) started from a shell holding a carrier would
+  have passed it unmapped to every tab. `main` now drops inherited carriers
+  in every mode but `--agent-exec` / `--fence-scope`, before any thread.
+- **Host session trailing shell** now starts with `env -u` over the carriers
+  (only when the tab carries one; MCP tokens unchanged there): the key handed
+  to the Host agent is not handed on to what the user runs next.
+- **tmux < 3.2** drops *every* carrier, not only those the fence added — a
+  carrier is only ever Tabtivity's injection, and one the tab brought would
+  have ridden the world-readable argv (`keys_before` removed).
+- Tests: the exec test runs the step's own `apply` path (was a copy of it)
+  with an unlisted carrier beside the key; dangerous targets; non-UTF-8;
+  the Host session's argv and tail; carriers in slots 8636–8639 exactly;
+  the < 3.2 drop.
+
+Checked, no change: no value on any argv, launcher script, file or log
+(names only); `export_both` skips `…SECRET…`; fd 9 survives the extra step
+(Rust's `exec` closes nothing it did not open) and Landlock is still entered
+before the mapping and bwrap; spawns without a key get no step; an exec
+failure exits 127 with the path only and nothing runs unfenced; the shim
+waits for its child, so its `/proc/<pid>/exe` stays valid; mobile headless
+spawns go through the same `prepare`; Windows has no carrier; macOS
+(`sandbox-exec` keeps `AGENT_FENCE`, so `is_fence` still holds) read, not
+compiled.
+
+Not fixed, with reason:
+
+- **Part A global environment.** A tmux server started by a Part A build's
+  keyed tab holds `ANTHROPIC_API_KEY` (etc.) in its *global* environment; the
+  Part A slots cleared it for every session, the C1 carriers in those slots
+  no longer do, so it would reach every later session on that server. Part A
+  never left this branch (not on `develop`, no dev build ran it), so no
+  migration code; if one did run, `tmux kill-server` (or `tmux
+  set-environment -g -u ANTHROPIC_API_KEY`) once.
+- A tmux session's own environment keeps the carriers (as it keeps the MCP
+  tokens), so a pane the user adds to a Tabtivity session by hand would
+  inherit them — the existing `SECRET_ENV` class, out of C1's scope.

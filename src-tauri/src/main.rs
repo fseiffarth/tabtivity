@@ -5,6 +5,15 @@ fn main() {
     // Before anything looks a name up: where a lookup that only finds the old
     // name is counted (`<state>/legacy-hits.json`).
     app_lib::services::brand_migration::hits::install();
+    // An agent secret's carrier is read only by the two launch steps below;
+    // every other mode drops any it inherited before a thread or a child
+    // exists (`services::agent_exec`), so none rides into a spawn unmapped.
+    let launch_step = std::env::args_os().nth(1).is_some_and(|mode| {
+        mode == app_lib::services::agent_exec::MODE_FLAG || mode == "--fence-scope"
+    });
+    if !launch_step {
+        app_lib::services::agent_exec::forget_inherited_carriers();
+    }
     // `tabtivity --agent-shim <cli> [args…]`: the shell-tab shim
     // (`services::agent_shim`) — builds the calling tab's fence and execs it.
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--agent-shim")) {
@@ -25,7 +34,7 @@ fn main() {
     // `tabtivity --agent-exec <program> [args…]`: an agent launch's last step
     // (`services::agent_exec`) — carriers become the CLI's variables, then exec.
     #[cfg(unix)]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--agent-exec")) {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::agent_exec::MODE_FLAG)) {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(app_lib::services::agent_exec::run(&args));
     }
