@@ -28,6 +28,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use super::outbox::{self, OutboxError, OutboxFile};
+
 /// Project-relative directory the phone's files land in.
 pub const INBOX_DIR: &str = crate::brand::INBOX_DIR;
 /// State-dir-relative directory of the global inbox (no project).
@@ -225,6 +227,56 @@ fn store_at(
         }
     }
     Err(InboxError::Io("no free name in the inbox".into()))
+}
+
+/// The longest project-inbox leaf the read side admits: a stamp, an
+/// `MAX_NAME`-character name of up to four UTF-8 bytes each, a `-N` suffix.
+const MAX_STORED_NAME: usize = 16 + MAX_NAME * 4 + 8;
+/// How many leaves one [`describe`] call looks at — a chat's worth.
+pub const MAX_DESCRIBED: usize = 64;
+
+/// Whether `name` is a leaf [`store`] could have written: [`safe_name`]'s
+/// alphabet (letters of any script, digits, `.`, `-`, `_`), never a dot first,
+/// no separator, bounded. Nothing else in the inbox is read back to the phone.
+pub fn valid_stored_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_STORED_NAME
+        && !name.starts_with('.')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+/// The project-inbox files among `names` (leaves the phone read out of its own
+/// `@` references), described as the outbox describes its own — kind by the
+/// bytes, size, mtime, the name it was sent as — in the order asked. A leaf
+/// that is not a servable file is left out: the phone then shows it gone.
+pub fn describe(root: &Path, names: &[&str]) -> Result<Vec<OutboxFile>, OutboxError> {
+    let Some(dir) = outbox::drop_dir(root, INBOX_DIR)? else {
+        return Ok(Vec::new());
+    };
+    Ok(names
+        .iter()
+        .take(MAX_DESCRIBED)
+        .filter_map(|name| {
+            let (_file, meta, kind) = outbox::probe_as(&dir, name, valid_stored_name)?;
+            Some(OutboxFile {
+                name: (*name).to_string(),
+                original: outbox::sent_name(name).to_string(),
+                kind,
+                size: meta.len(),
+                modified: meta.modified().map(outbox::unix_secs).unwrap_or(0),
+                from_tab: false,
+            })
+        })
+        .collect())
+}
+
+/// One project-inbox file's bytes and media type, by its leaf — the phone's
+/// preview of what it sent. Read exactly as the outbox serves its own.
+pub fn read(root: &Path, name: &str) -> Result<(Vec<u8>, &'static str), OutboxError> {
+    let Some(dir) = outbox::drop_dir(root, INBOX_DIR)? else {
+        return Err(OutboxError::NotFound);
+    };
+    outbox::read_probed(&dir, name, valid_stored_name)
 }
 
 /// One file waiting in the global inbox, as the desktop lists it.
@@ -430,5 +482,44 @@ mod tests {
         assert_eq!(global_file(dir.path(), "link.txt"), None);
         assert_eq!(remove_global(dir.path(), "link.txt"), Ok(false));
         assert!(target.is_file());
+    }
+
+    #[test]
+    fn a_stored_file_reads_back_by_its_leaf_and_nothing_else_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let photo = store_at(root, INBOX_DIR, "Größe Foto.png", png, at(T0)).unwrap();
+        let note = store_at(root, INBOX_DIR, "note.txt", b"hello", at(T0 + 1)).unwrap();
+        fs::write(root.join(INBOX_DIR).join(".hidden.png"), png).unwrap();
+        let files = describe(root, &[&note.name, "missing.png", ".hidden.png", "../x", &photo.name]).unwrap();
+        let named: Vec<_> = files.iter().map(|f| (f.name.as_str(), f.kind, f.original.as_str())).collect();
+        assert_eq!(named, vec![
+            (note.name.as_str(), "text/plain; charset=utf-8", "note.txt"),
+            (photo.name.as_str(), "image/png", "Größe_Foto.png"),
+        ]);
+        assert_eq!(read(root, &photo.name).unwrap(), (png.to_vec(), "image/png"));
+        assert_eq!(read(root, ".hidden.png"), Err(OutboxError::NotFound));
+        assert_eq!(read(root, "../note.txt"), Err(OutboxError::NotFound));
+    }
+
+    #[test]
+    fn a_project_without_an_inbox_describes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(describe(dir.path(), &["a.png"]), Ok(Vec::new()));
+        assert_eq!(read(dir.path(), "a.png"), Err(OutboxError::NotFound));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_in_the_inbox_is_not_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        let inbox = dir.path().join(INBOX_DIR);
+        fs::create_dir_all(&inbox).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), inbox.join("link.txt")).unwrap();
+        assert_eq!(describe(dir.path(), &["link.txt"]), Ok(Vec::new()));
+        assert_eq!(read(dir.path(), "link.txt"), Err(OutboxError::NotFound));
     }
 }

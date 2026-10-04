@@ -4202,6 +4202,16 @@ async fn outbox_bytes(root: PathBuf, name: String, download: bool) -> Response<B
     let read = tokio::task::spawn_blocking(move || outbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    file_response(read, &filename, download)
+}
+
+/// A drop-box read as the phone gets it: typed by the bytes, inline unless it
+/// is bytes the phone cannot show or a download was asked for.
+fn file_response(
+    read: Result<(Vec<u8>, &'static str), outbox::OutboxError>,
+    filename: &str,
+    download: bool,
+) -> Response<Body> {
     match read {
         Ok((bytes, kind)) => Response::builder()
             .status(StatusCode::OK)
@@ -4214,6 +4224,66 @@ async fn outbox_bytes(root: PathBuf, name: String, download: bool) -> Response<B
             }),
         Err(error) => outbox_error(error).into_response(),
     }
+}
+
+/// `GET /api/v1/tabs/{tab_id}/inbox?names=a,b` — what the phone sent into this
+/// tab's project inbox, described for the chat's previews: the leaves are the
+/// ones its own `@` references name (the composer's, the chat's), each typed
+/// by its bytes (`inbox::describe`). Leaves the inbox does not hold are left
+/// out. No listing of the whole inbox: the phone asks only for what it wrote.
+async fn inbox_described(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    let root = match outbox_root(&state, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
+    let names = query.get("names").cloned().unwrap_or_default();
+    let described = tokio::task::spawn_blocking(move || {
+        let names: Vec<&str> = names.split(',').filter(|name| !name.is_empty()).collect();
+        inbox::describe(&root, &names)
+    })
+    .await
+    .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    match described {
+        Ok(files) => (StatusCode::OK, Json(json!({ "files": files }))),
+        Err(error) => outbox_error(error),
+    }
+}
+
+/// `GET /api/v1/tabs/{tab_id}/inbox/{name}` — the bytes of one file the phone
+/// sent into this tab's project inbox, for its picture in the chat and the
+/// composer. Served exactly as an outbox file is (`outbox_bytes`): typed by
+/// its header, a symlink or an unlisted name is `file_not_found`.
+async fn inbox_file(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path((tab_id, name)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response<Body> {
+    if let Err(error) = authenticate_or_ticket(&headers, &state, &uri) {
+        return error.into_response();
+    }
+    let root = match outbox_root(&state, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    if !inbox::valid_stored_name(&name) {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
+    }
+    let download = query.get("download").is_some_and(|v| v == "1");
+    let filename = outbox::sent_name(&name).to_string();
+    let read = tokio::task::spawn_blocking(move || inbox::read(&root, &name))
+        .await
+        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    file_response(read, &filename, download)
 }
 
 /// `POST /api/v1/tabs/{tab_id}/markup` — the markup view's **Submit**
@@ -4816,8 +4886,9 @@ fn router(state: HostState) -> Router {
         // the control-message limit below (the inner layer wins).
         .route(
             "/api/v1/tabs/{tab_id}/inbox",
-            post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),
+            get(inbox_described).merge(post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
         )
+        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file))
         .route(
             "/api/v1/projects/{project_id}/inbox",
             post(project_inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),
@@ -7622,6 +7693,49 @@ mod tests {
         let (status, _, _) = host
             .send(get_as(&format!("{list}/plot.png"), "not-a-session"))
             .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_inbox_reads_back_what_the_phone_sent_by_leaf_only() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(34)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let base = format!("/api/v1/tabs/{tab_id}/inbox");
+
+        let (status, _, body) = host.send(get_as(&format!("{base}?names=a.png"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["files"], serde_json::json!([]));
+
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-body".to_vec();
+        let photo = inbox::store(&host.root, "photo.png", &png).unwrap();
+        let note = inbox::store(&host.root, "note.txt", b"hello").unwrap();
+        let (status, _, body) = host
+            .send(get_as(&format!("{base}?names={},gone.png,..%2Fx,{}", photo.name, note.name), &cookie))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let files = json(&body)["files"].clone();
+        let kinds: Vec<_> = files.as_array().unwrap().iter().map(|f| (f["name"].as_str().unwrap().to_string(), f["kind"].as_str().unwrap().to_string(), f["original"].as_str().unwrap().to_string())).collect();
+        assert_eq!(kinds, vec![
+            (photo.name.clone(), "image/png".to_string(), "photo.png".to_string()),
+            (note.name.clone(), "text/plain; charset=utf-8".to_string(), "note.txt".to_string()),
+        ]);
+        assert!(!body.contains(host.root.to_str().unwrap()));
+
+        let (status, headers, body) = host.send(get_as(&format!("{base}/{}", photo.name), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "image/png");
+        assert_eq!(headers.get(header::CONTENT_DISPOSITION).unwrap(), "inline");
+        assert!(body.ends_with("IHDR-body"), "{body:?}");
+
+        for refused in ["..%2F..%2Fproject.json", "gone.png", ".hidden.png"] {
+            let (status, _, body) = host.send(get_as(&format!("{base}/{refused}"), &cookie)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{refused} answered: {body}");
+            assert_eq!(json(&body)["error"], "file_not_found");
+        }
+        let (status, _, _) = host.send(get_as("/api/v1/tabs/not-a-tab/inbox?names=a.png", &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _, _) = host.send(get_as(&format!("{base}/{}", photo.name), "not-a-session")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 

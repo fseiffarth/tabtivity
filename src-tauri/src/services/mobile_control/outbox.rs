@@ -116,10 +116,16 @@ pub fn classify(head: &[u8]) -> &'static str {
 /// The outbox directory, proven to sit below the project root — or `None`
 /// when there is no outbox yet, which is the ordinary case and not an error.
 fn outbox_dir(root: &Path) -> Result<Option<std::path::PathBuf>, OutboxError> {
+    drop_dir(root, OUTBOX_DIR)
+}
+
+/// A project drop box (`rel` below `root`: the outbox, or the phone's inbox),
+/// proven to sit below the project root — `None` when it does not exist yet.
+pub(super) fn drop_dir(root: &Path, rel: &str) -> Result<Option<std::path::PathBuf>, OutboxError> {
     if !root.is_dir() {
         return Err(OutboxError::Unavailable);
     }
-    let dir = root.join(OUTBOX_DIR);
+    let dir = root.join(rel);
     if fs::symlink_metadata(&dir).is_err() {
         return Ok(None);
     }
@@ -135,7 +141,12 @@ fn outbox_dir(root: &Path) -> Result<Option<std::path::PathBuf>, OutboxError> {
 /// outbox and classifies its media type — or `None` for anything the phone must
 /// not be handed.
 fn probe(dir: &Path, name: &str) -> Option<(fs::File, fs::Metadata, &'static str)> {
-    if !valid_name(name) {
+    probe_as(dir, name, valid_name)
+}
+
+/// [`probe`] for a drop box whose leaves `valid` admits.
+pub(super) fn probe_as(dir: &Path, name: &str, valid: fn(&str) -> bool) -> Option<(fs::File, fs::Metadata, &'static str)> {
+    if !valid(name) {
         return None;
     }
     let (file, meta, kind) = open_sniffed(&dir.join(name))?;
@@ -286,7 +297,12 @@ pub fn read(root: &Path, name: &str) -> Result<(Vec<u8>, &'static str), OutboxEr
     let Some(dir) = outbox_dir(root)? else {
         return Err(OutboxError::NotFound);
     };
-    let Some((mut file, meta, _kind)) = probe(&dir, name) else {
+    read_probed(&dir, name, valid_name)
+}
+
+/// One leaf's bytes out of a proven drop box `dir`, re-proved by `valid`.
+pub(super) fn read_probed(dir: &Path, name: &str, valid: fn(&str) -> bool) -> Result<(Vec<u8>, &'static str), OutboxError> {
+    let Some((mut file, meta, _kind)) = probe_as(dir, name, valid) else {
         return Err(OutboxError::NotFound);
     };
     let mut bytes = Vec::with_capacity(meta.len() as usize);
