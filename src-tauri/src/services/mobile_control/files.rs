@@ -14,6 +14,7 @@
 //! typed by its bytes (`outbox::classify`), opened without following a link.
 
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Seek},
     path::{Path, PathBuf},
@@ -90,6 +91,10 @@ pub struct Entry {
     /// Unix seconds of the birth time; left out where the filesystem keeps none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created: Option<u64>,
+    /// Git ignores it — the desktop tree's collapsed "gitignored" section.
+    /// Left out when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -342,6 +347,55 @@ fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
 }
 
+/// Which of a folder's kept names git ignores, by one hardened `git
+/// check-ignore` over all of them — what puts a row in the phone's collapsed
+/// "gitignored" section, as on the desktop tree. A tracked file is never
+/// ignored (check-ignore reads the index), and a folder counts only when it is
+/// ignored itself, not when something inside it is. No repo, no git, or any
+/// other failure is no names: a display hint, never a gate.
+fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    if found.is_empty() {
+        return HashSet::new();
+    }
+    let mut input = Vec::new();
+    for (_, name) in found {
+        // `./` first, so a leaf like `:(top)x` is a name, not pathspec magic
+        // (which check-ignore refuses outright, failing the whole folder).
+        input.extend_from_slice(b"./");
+        input.extend_from_slice(child(rel, name).as_bytes());
+        input.push(0);
+    }
+    let Ok(mut git) = crate::commands::git::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return HashSet::new();
+    };
+    // Fed from a thread: git answers while it reads, so a full pipe either
+    // way would stall both ends.
+    let feeder = git.stdin.take().map(|mut stdin| std::thread::spawn(move || stdin.write_all(&input)));
+    let out = git.wait_with_output();
+    if let Some(feeder) = feeder {
+        let _ = feeder.join();
+    }
+    // Exit 0: some are ignored; 1: none; 128: not a repo, or git refused.
+    let Ok(out) = out.map_err(drop).and_then(|out| if out.status.success() { Ok(out) } else { Err(()) }) else {
+        return HashSet::new();
+    };
+    let prefix = if rel.is_empty() { "./".to_string() } else { format!("./{rel}/") };
+    out.stdout
+        .split(|&byte| byte == 0)
+        .filter_map(|path| std::str::from_utf8(path).ok())
+        .filter_map(|path| path.trim_end_matches('/').strip_prefix(prefix.as_str()))
+        .filter(|name| !name.is_empty() && !name.contains('/'))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// One folder of the project, folders first, then by name. Links, sockets and
 /// the like are not listed; neither are hidden names or names the browser
 /// could not resolve again. Only the kept entries are opened to sniff a type.
@@ -358,6 +412,7 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
     });
     let truncated = found.len() > MAX_ENTRIES;
     found.truncate(MAX_ENTRIES);
+    let ignored = ignored_names(root, rel, &found);
     let mut entries = Vec::with_capacity(found.len());
     for (is_dir, name) in found {
         // Swapped for a link or removed since the listing: not listed.
@@ -371,7 +426,8 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
         };
         let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
         let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name)), name, kind, size, modified, created });
+        let ignored = ignored.contains(&name);
+        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name)), name, kind, size, modified, created, ignored });
     }
     Ok(Listing { entries, truncated })
 }
@@ -390,7 +446,7 @@ pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     let (_file, meta, kind) = outbox::sniff_opened(file, meta)?;
     let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
     let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind, size: meta.len(), modified, created })
+    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
 }
 
 /// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
@@ -529,6 +585,44 @@ mod tests {
         assert_eq!(list(dir.path(), "README.md", KEY, "p1"), Err(FilesError::NotFound));
         assert_eq!(list(dir.path(), ".git", KEY, "p1"), Err(FilesError::NotFound));
         assert_eq!(list(&dir.path().join("gone"), "", KEY, "p1"), Err(FilesError::Unavailable));
+    }
+
+    #[test]
+    fn rows_git_ignores_are_marked_and_tracked_ones_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("run.log"), "x").unwrap();
+        fs::write(root.join("kept.log"), "x").unwrap();
+        fs::write(root.join(":(top)odd.log"), "x").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("src/trace.log"), "x").unwrap();
+        git(&["add", "-f", "kept.log"]);
+        let ignored = |listing: &Listing| -> Vec<String> {
+            listing.entries.iter().filter(|e| e.ignored).map(|e| e.name.clone()).collect()
+        };
+        let top = list(root, "", KEY, "p1").unwrap();
+        assert_eq!(ignored(&top), ["target", ":(top)odd.log", "run.log"], "a tracked match is not ignored");
+        // `src` holds an ignored file but is not ignored itself.
+        assert!(!top.entries.iter().find(|e| e.name == "src").unwrap().ignored);
+        assert_eq!(ignored(&list(root, "src", KEY, "p1").unwrap()), ["trace.log"]);
+        let json = serde_json::to_value(top.entries.iter().find(|e| e.name == "target").unwrap()).unwrap();
+        assert_eq!(json["ignored"], true);
+        let plain = top.entries.iter().find(|e| e.name == "src").unwrap();
+        assert!(serde_json::to_value(plain).unwrap().get("ignored").is_none(), "false is left out");
+    }
+
+    #[test]
+    fn outside_a_repo_nothing_is_ignored() {
+        let dir = tree();
+        assert!(list(dir.path(), "", KEY, "p1").unwrap().entries.iter().all(|e| !e.ignored));
     }
 
     #[test]

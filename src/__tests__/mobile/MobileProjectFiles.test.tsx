@@ -8,18 +8,27 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Project } from "../../../mobile-web/src/screens/Project";
+import { storageKey } from "../../../src/lib/brand";
 
 const ROOT = {
   entries: [
+    { token: "tok-build", name: "build", kind: "dir", size: 0, modified: 1_770_000_000, ignored: true },
     { token: "tok-src", name: "src", kind: "dir", size: 0, modified: 1_770_000_000 },
-    { token: "tok-readme", name: "README.md", kind: "text/plain; charset=utf-8", size: 8, modified: 1_770_000_000, created: 1_760_000_000 },
+    { token: "tok-agents", name: "AGENTS.md", kind: "text/plain; charset=utf-8", size: 20, modified: 1_770_000_000 },
+    { token: "tok-notes", name: "notes.md", kind: "text/plain; charset=utf-8", size: 8, modified: 1_770_000_000, created: 1_760_000_000 },
     { token: "tok-plot", name: "plot.png", kind: "image/png", size: 48_000, modified: 1_770_000_000 },
     { token: "tok-paper", name: "paper.pdf", kind: "application/pdf", size: 90_000, modified: 1_770_000_000 },
+    { token: "tok-readme", name: "README.md", kind: "text/plain; charset=utf-8", size: 8, modified: 1_770_000_000 },
+    { token: "tok-log", name: "run.log", kind: "text/plain; charset=utf-8", size: 3, modified: 1_770_000_000, ignored: true },
   ],
   truncated: false,
 };
 const SRC = {
-  entries: [{ token: "tok-main", name: "main.rs", kind: "text/plain; charset=utf-8", size: 13, modified: 1_770_000_000 }],
+  entries: [
+    { token: "tok-main", name: "main.rs", kind: "text/plain; charset=utf-8", size: 13, modified: 1_770_000_000 },
+    // Only the project root has a scaffold: a README deeper down is a file.
+    { token: "tok-sub-readme", name: "README.md", kind: "text/plain; charset=utf-8", size: 4, modified: 1_770_000_000 },
+  ],
   truncated: false,
 };
 
@@ -36,7 +45,7 @@ function hostWith(files: boolean, tickets = true) {
     if (url === "/api/v1/projects/p1/outbox") return new Response(JSON.stringify({ files: [] }), { status: 200 });
     if (url === "/api/v1/projects/p1/files") return new Response(JSON.stringify(ROOT), { status: 200 });
     if (url === "/api/v1/projects/p1/files?dir=tok-src") return new Response(JSON.stringify(SRC), { status: 200 });
-    if (url === "/api/v1/projects/p1/files/raw?f=tok-readme") return new Response("# Hello\n", { status: 200 });
+    if (url === "/api/v1/projects/p1/files/raw?f=tok-notes") return new Response("# Hello\n", { status: 200 });
     if (url.startsWith("/api/v1/projects/p1/files")) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
     return new Response(JSON.stringify({
       project: { id: "p1", label: "Alpha", status: "active" },
@@ -105,10 +114,14 @@ describe("Mobile project — read-only file browser", () => {
     const sheet = screen.getByRole("dialog", { name: "Files" });
     expect(sheet.textContent).toContain("Read-only");
     await within(sheet).findByRole("button", { name: "Open the folder src" });
+    // Each row's tile names its kind; the scaffold and the gitignored fold
+    // shut below the rest, as on the desktop's tree.
     expect(Array.from(sheet.querySelectorAll(".option-list strong")).map((row) => row.textContent))
-      .toEqual(["📁 src", "📄 README.md", "🖼 plot.png", "📄 paper.pdf"]);
+      .toEqual(["src", "notes.md", "plot.png", "paper.pdf"]);
+    expect(Array.from(sheet.querySelectorAll(".files-icon")).map((tile) => tile.className.replace("files-icon files-icon-", "")))
+      .toEqual(["dir", "text", "image", "pdf"]);
     // Each row says when it was last edited, and created where the desktop's
-    // filesystem keeps a birth time (README here, not the folder).
+    // filesystem keeps a birth time (notes.md here, not the folder).
     const meta = Array.from(sheet.querySelectorAll(".option-list small")).map((row) => row.textContent ?? "");
     expect(meta[0]).toContain("Edited ");
     expect(meta[0]).not.toContain("Created");
@@ -120,7 +133,7 @@ describe("Mobile project — read-only file browser", () => {
     const trail = within(sheet).getByRole("navigation", { name: "Folders" });
     expect(within(trail).getAllByRole("button").map((crumb) => crumb.textContent)).toEqual(["Alpha", "src"]);
     fireEvent.click(within(trail).getByRole("button", { name: "Alpha" }));
-    await within(sheet).findByRole("button", { name: "Open README.md" });
+    await within(sheet).findByRole("button", { name: "Open notes.md" });
 
     // A PDF opens in the app's own page view, with Save and Share — never in
     // the phone's PDF viewer, from which the installed app is not got back to.
@@ -141,9 +154,43 @@ describe("Mobile project — read-only file browser", () => {
 
     // Closing the viewer comes back to the same folder; a text reads inline.
     fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Open README.md" }));
-    const text = screen.getByRole("dialog", { name: "README.md" });
+    fireEvent.click(await screen.findByRole("button", { name: "Open notes.md" }));
+    const text = screen.getByRole("dialog", { name: "notes.md" });
     await waitFor(() => expect(text.querySelector("pre")?.textContent).toBe("# Hello\n"));
+  });
+
+  it("folds the root's scaffold and what git ignores into collapsed sections", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const heading = await screen.findByRole("heading", { name: "Alpha" });
+    await waitFor(() => {
+      swipe(heading, 100, 300);
+      expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+    });
+    const sheet = screen.getByRole("dialog", { name: "Files" });
+    const scaffold = await within(sheet).findByRole("button", { name: "scaffold (2)" });
+    const ignored = within(sheet).getByRole("button", { name: "gitignored (2)" });
+    expect([scaffold.getAttribute("aria-expanded"), ignored.getAttribute("aria-expanded")]).toEqual(["false", "false"]);
+    expect(within(sheet).queryByRole("button", { name: "Open README.md" })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: "Open the folder build" })).toBeNull();
+
+    fireEvent.click(scaffold);
+    expect(scaffold.getAttribute("aria-expanded")).toBe("true");
+    expect(within(sheet).getByRole("button", { name: "Open AGENTS.md" })).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Open README.md" })).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: "Open run.log" })).toBeNull();
+
+    fireEvent.click(ignored);
+    expect(within(sheet).getByRole("button", { name: "Open run.log" }).closest("li")?.className).toBe("files-folded");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Open the folder build" }));
+    await waitFor(() => expect(within(sheet).queryByRole("button", { name: "scaffold (2)" })).toBeNull());
+
+    // Below the root a README is an ordinary row.
+    fireEvent.click(within(within(sheet).getByRole("navigation", { name: "Folders" })).getByRole("button", { name: "Alpha" }));
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Open the folder src" }));
+    await within(sheet).findByRole("button", { name: "Open main.rs" });
+    expect(within(sheet).getByRole("button", { name: "Open README.md" })).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: /^scaffold/ })).toBeNull();
   });
 
   it("shares a file straight from its row, without opening it", async () => {
@@ -165,7 +212,7 @@ describe("Mobile project — read-only file browser", () => {
       await within(sheet).findByRole("button", { name: "Share plot.png" });
       // Every file gets one; a folder has nothing to share.
       expect(within(sheet).getAllByRole("button", { name: /^Share / }).map((button) => button.getAttribute("aria-label")))
-        .toEqual(["Share README.md", "Share plot.png", "Share paper.pdf"]);
+        .toEqual(["Share notes.md", "Share plot.png", "Share paper.pdf"]);
 
       fireEvent.click(within(sheet).getByRole("button", { name: "Share plot.png" }));
       await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
@@ -185,7 +232,7 @@ describe("Mobile project — read-only file browser", () => {
     const host = hostWith(true, false);
     // A text past what the app reads in itself, so the whole file goes out.
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => String(input) === "/api/v1/projects/p1/files"
-      ? new Response(JSON.stringify({ ...ROOT, entries: ROOT.entries.map((entry) => entry.name === "README.md" ? { ...entry, size: 9_000_000 } : entry) }), { status: 200 })
+      ? new Response(JSON.stringify({ ...ROOT, entries: ROOT.entries.map((entry) => entry.name === "notes.md" ? { ...entry, size: 9_000_000 } : entry) }), { status: 200 })
       : host(input, init)));
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
@@ -196,8 +243,8 @@ describe("Mobile project — read-only file browser", () => {
       expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
     });
     const sheet = screen.getByRole("dialog", { name: "Files" });
-    fireEvent.click(await within(sheet).findByRole("button", { name: "Open README.md" }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "README.md" })).getByRole("button", { name: "Open the whole file" }));
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Open notes.md" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Open the whole file" }));
     await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining("Reconnect")));
     expect(open).not.toHaveBeenCalled();
   });
@@ -233,5 +280,75 @@ describe("Mobile project — read-only file browser", () => {
     await within(drawer).findByRole("button", { name: "Open the folder src" });
     swipe(drawer, 300, 100);
     expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+  });
+
+  /** The drawer, opened from the name's dropdown. */
+  async function openDrawer() {
+    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: "Project files" }));
+    return screen.getByRole("dialog", { name: "Files" });
+  }
+  const crumbs = (sheet: HTMLElement) =>
+    within(within(sheet).getByRole("navigation", { name: "Folders" })).getAllByRole("button").map((crumb) => crumb.textContent);
+
+  it("opens again in the folder it was put away in, across a reload too", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    let sheet = await openDrawer();
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Open the folder src" }));
+    await within(sheet).findByRole("button", { name: "Open main.rs" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Close the files" }));
+    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+
+    sheet = await openDrawer();
+    expect(crumbs(sheet)).toEqual(["Alpha", "src"]);
+    await within(sheet).findByRole("button", { name: "Open main.rs" });
+
+    // The app reloaded: the folder is still where the drawer opens.
+    first.unmount();
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    sheet = await openDrawer();
+    expect(crumbs(sheet)).toEqual(["Alpha", "src"]);
+    await within(sheet).findByRole("button", { name: "Open main.rs" });
+
+    // Back at the root, the root is remembered.
+    fireEvent.click(within(within(sheet).getByRole("navigation", { name: "Folders" })).getByRole("button", { name: "Alpha" }));
+    await within(sheet).findByRole("button", { name: "Open notes.md" });
+    expect(localStorage.getItem(storageKey("mobile.filesPlace"))).toBeNull();
+  });
+
+  it("steps back from a remembered folder that is gone", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    localStorage.setItem(storageKey("mobile.filesPlace"), JSON.stringify([["p1", [{ token: "tok-src", name: "src" }, { token: "tok-gone", name: "old" }]]]));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openDrawer();
+    await within(sheet).findByRole("button", { name: "Open main.rs" });
+    expect(crumbs(sheet)).toEqual(["Alpha", "src"]);
+    expect(within(sheet).queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a PDF opened from the drawer as a card among the tabs", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openDrawer();
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Open paper.pdf" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "paper.pdf" })).getByRole("button", { name: "Close" }));
+    // Closing the PDF comes back to the drawer, in its folder; a text opened
+    // there makes no card.
+    fireEvent.click(await within(screen.getByRole("dialog", { name: "Files" })).findByRole("button", { name: "Open notes.md" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Close" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Files" })).getByRole("button", { name: "Close the files" }));
+
+    const card = screen.getByRole("button", { name: "Open paper.pdf" }).closest(".file-tab-card") as HTMLElement;
+    expect(card.textContent).toContain("Project folder");
+    expect(screen.queryByRole("button", { name: "Open notes.md" })).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: "Open paper.pdf" }));
+    const pdf = screen.getByRole("dialog", { name: "paper.pdf" });
+    expect(within(pdf).getByRole("link", { name: "Save" }).getAttribute("href"))
+      .toBe("/api/v1/projects/p1/files/raw?f=tok-paper&download=1");
+    fireEvent.click(within(pdf).getByRole("button", { name: "Close" }));
+
+    fireEvent.click(within(card).getByRole("button", { name: "Forget paper.pdf on this phone" }));
+    expect(screen.queryByRole("button", { name: "Open paper.pdf" })).toBeNull();
   });
 });

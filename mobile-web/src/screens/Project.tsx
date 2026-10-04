@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
-import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, deleteOutboxFile, listOutbox, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
 import { GitSheet } from "./GitSheet";
+import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type TabSchedules } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, writeChoice } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -18,7 +18,8 @@ import { AgentStatusMark } from "../components/AgentStatusPill";
 import { AgentModeMarks, SubagentCount, TurnDuration, WorktreeMark, agentModeClass } from "../components/AgentModeMarks";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
-import { ProjectFiles } from "../components/ProjectFiles";
+import { FileGlyph, ProjectFiles, asViewerFile } from "../components/ProjectFiles";
+import { closeFileTab, onFileTabs, readFileTabs, refreshFileTab, type FileTab } from "../filesPlace";
 import { tabColorCss } from "../tabColors";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { GripHint } from "./Home";
@@ -164,6 +165,26 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * slides in from the left, there when the desktop's "Project files on the
    * phone" switch is on (`detail.files`); the name's dropdown opens it too. */
   const [filesOpen, setFilesOpen] = useState(false);
+  /** The PDFs this phone opened from the drawer (`filesPlace.ts`), a card
+   * each after the tabs while the drawer is offered, and the one open now. */
+  const [fileTabs, setFileTabs] = useState<FileTab[]>(() => readFileTabs(id));
+  const [fileTabOpen, setFileTabOpen] = useState<FileTab | null>(null);
+  useEffect(() => {
+    setFileTabs(readFileTabs(id));
+    setFileTabOpen(null);
+    return onFileTabs(() => setFileTabs(readFileTabs(id)));
+  }, [id]);
+  /** Mark up's Reload on a card's PDF: its folder listed again for the file's
+   * fresh token, size and time, which the card keeps too. */
+  const refreshFileTabRow = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
+    const tab = fileTabOpen;
+    if (!tab) return null;
+    const fresh = await listProjectFiles(id, tab.folder);
+    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    if (!entry) return null;
+    refreshFileTab(id, { ...tab, token: entry.token, kind: entry.kind, size: entry.size, modified: entry.modified });
+    return asViewerFile(entry);
+  }, [id, fileTabOpen]);
   /** The dropdown under the project's name (the gallery, the file drawer). */
   const [projectMenu, setProjectMenu] = useState(false);
   /** The read-only git overview (`GitSheet`), for a project scope only: a box
@@ -181,6 +202,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     return installFocusSwipe(host, { onSwipeRight: () => setFilesOpen(true), onSwipeLeft: () => {} }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: true });
   }, [filesOffered, filesOpen]);
   const outboxScope = useMemo(() => ({ project: id }), [id]);
+  const filesScope = useMemo(() => ({ files: id }), [id]);
   /** The pictures among them, which the full-screen viewer steps through. */
   const outboxPictures = useMemo(() => outbox.filter((file) => file.kind.startsWith("image/")), [outbox]);
   /** The tab whose colour is being picked (#264), of any kind the phone lists —
@@ -565,6 +587,22 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           ✓ done — set on the card's left border, where it reads down the list
           at a glance without spending a row's width on a worded pill. */}
       {tab.agent_status && <AgentStatusMark status={tab.agent_status} />}
+    </div>)}
+    {/* The PDFs opened from the file drawer, after the sessions: the phone's
+        own cards, so the desktop opens nothing and ✕ only forgets one. The
+        drawer's switch gates them, as it gates the files they read. */}
+    {filesOffered && fileTabs.map((file) => <div className="tab-card file-tab-card" key={`${file.place}/${file.name}`}>
+      <div className="tab-card-head">
+        <FileGlyph kind={file.kind} />
+        <div className="card tab-card-main">
+          <span>
+            <span className="tab-card-title"><strong>{file.name}</strong>{isUntested("mobile.files.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+            <small className="file-tab-place">{file.place || t("mobile.project.fileTab.root")}</small>
+          </span>
+        </div>
+        <button className="tab-card-icon tab-card-close" onClick={() => closeFileTab(id, file)} aria-label={t("mobile.project.fileTab.close", { name: file.name })} title={t("mobile.project.fileTab.close", { name: file.name })}><span aria-hidden="true">✕</span></button>
+      </div>
+      <button className="tab-card-open" onClick={() => setFileTabOpen(file)} aria-label={t("mobile.project.fileTab.open", { name: file.name })} />
     </div>)}</section>
     {/* Agent tabs closed on either surface, newest first: a tap reopens one
         on the desktop, resuming its conversation, and its card comes back. */}
@@ -619,6 +657,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onClose={() => setGalleryOpen(false)} />}
     {filesOpen && detail?.files && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setFilesOpen(false)}
       showTab={markupNewTab?.show} />}
+    {fileTabOpen && filesOffered && <OutboxViewer key={`${id}/files/${fileTabOpen.place}/${fileTabOpen.name}`} scope={filesScope} file={asViewerFile(fileTabOpen)} onClose={() => setFileTabOpen(null)}
+      newTab={markupNewTab && { ...markupNewTab, place: fileTabOpen.place, refresh: refreshFileTabRow }} />}
     {fileOpen && <OutboxViewer key={`${id}/${fileOpen.name}`} scope={outboxScope} file={fileOpen} pictures={outboxPictures} onStep={setFileOpen} onClose={() => setFileOpen(null)}
       newTab={markupNewTab} />}
   </main>;

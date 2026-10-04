@@ -1010,7 +1010,7 @@ export async function openOutside(url: string): Promise<void> {
  * phone can only hand back, `kind` is `"dir"` or the media type the file's
  * first bytes announce, `modified` and `created` are unix seconds — `created`
  * missing where the desktop's filesystem keeps no birth time. */
-export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number }
+export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number; ignored?: boolean }
 export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the

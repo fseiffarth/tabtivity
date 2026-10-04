@@ -150,6 +150,11 @@ open a file —
 pictures and text full screen, PDFs in the browser, with Save and Share. It is
 read-only: nothing can be changed, moved or deleted from there.
 
+As in the desktop's file tree, the project root's standard files (README,
+AGENTS.md, .gitignore, …) fold into a **scaffold** row and what git ignores
+folds into a **gitignored** row below the rest of each folder; both start
+collapsed — tap one to open it.
+
 - It covers the projects switched on for Mobile, not boxes or the root
   console.
 - `.git`, `.tabtivity` and `.env…` are left out, symbolic links are not shown or

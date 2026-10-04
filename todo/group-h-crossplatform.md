@@ -3451,6 +3451,23 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Sections + row look (2026-10-04, untested id `mobile.files.sections`;
+    needs the rebuilt backend — `ignored` comes from the sidecar's
+    `git check-ignore`). At the project root README/AGENTS.md/.gitignore sit
+    in a collapsed `scaffold (n)` row below the rest; in any folder of a git
+    project, ignored entries (`target/`, `node_modules/`, `*.log`) sit in a
+    collapsed `gitignored (n)` row, dimmed when opened; a tracked file matching
+    an ignore pattern stays in the main list; a README below the root is an
+    ordinary row. Each row has a tinted tile (folder blue, picture green, PDF
+    red, text grey) and short times (clock today, day this year).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bp — The phone's host updates itself at launch** (2026-09-28;
   ✅ code-complete, unit test `a_launch_updates_a_host_that_is_behind_…`;

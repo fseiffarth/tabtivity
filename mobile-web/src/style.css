@@ -1177,6 +1177,30 @@ span.files-close { background:transparent; }
 .files-list li > button:first-child { flex:1; width:auto; min-width:0; }
 .option-list .files-share { flex:0 0 auto; width:auto; gap:4px; padding:0 14px; color:#8fb8ff; font-size:.85rem; }
 .files-share-error { flex-basis:100%; margin:0; padding:0 14px 4px; color:#f2b8b5; font-size:.75rem; }
+/* A row's kind tile, tinted per kind, and a tighter row than a menu's: the
+   drawer lists a whole folder. Only a folder carries the chevron. */
+.files-list li > button:first-child { gap:11px; padding:9px 12px 9px 9px; }
+.option-list button > span.files-icon { display:grid; flex:0 0 auto; place-items:center; width:34px; height:34px; border-radius:9px; background:#252a3a; color:#aab2c5; }
+.files-icon svg { width:19px; height:19px; stroke-width:1.8; }
+.option-list button > span.files-icon-dir { background:#1d2a44; color:#8fb8ff; }
+.option-list button > span.files-icon-image { background:#1d3329; color:#8ad1a6; }
+.option-list button > span.files-icon-pdf { background:#3a2226; color:#f28b82; }
+.option-list button > span.files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.files-list strong { font-size:.94rem; }
+/* A PDF opened from the drawer, as a card after the tabs: the row's kind tile
+   where a tab card has its colour dot, and the folder under the name. */
+.file-tab-card .tab-card-head > .files-icon { display:grid; flex:0 0 auto; place-items:center; align-self:center; width:34px; height:34px; margin:0 4px 0 12px; border-radius:9px; background:#3a2226; color:#f28b82; }
+.file-tab-card .files-icon svg { fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; }
+.file-tab-card .tab-card-main > span { display:grid; gap:2px; min-width:0; }
+.file-tab-card .tab-card-title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-tab-place { overflow:hidden; color:#8b93aa; font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-list small { font-size:.76rem; }
+.option-list .files-chevron { width:17px; height:17px; color:#6f7790; }
+/* A folded section's head: the desktop tree's divider, not a card. */
+.option-list .files-section button { gap:6px; margin-top:6px; padding:8px 10px; border-top:1px solid #2b3040; border-radius:0; background:transparent; color:#98a0b4; font-size:.8rem; }
+.option-list .files-section svg { width:15px; height:15px; transition:transform .12s ease-out; }
+.option-list .files-section button[aria-expanded="true"] svg { transform:rotate(90deg); }
+.files-list li.files-folded > button:first-child strong { color:#aeb4c4; font-weight:500; }
 /* Select text (`MessageMenu`): the message again, as plain text the phone's
    own selection handles and callout work on — the bubble's hold is the menu,
    so it cannot be selected in place. */
