@@ -14,6 +14,8 @@ export interface PairedPhone {
   created_at: number;
   last_seen_at?: number | null;
   online?: boolean;
+  /** Phone sections the desktop keeps this phone out of (absent = none). */
+  hidden_sections?: string[];
 }
 
 type AdminDevicesAnswer = { status: "devices"; devices: PairedPhone[] } | { status: string };

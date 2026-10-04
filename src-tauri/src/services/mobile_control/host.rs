@@ -294,6 +294,53 @@ fn authenticate(
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))
 }
 
+/// `authenticate`, then refuse a phone the desktop keeps out of `section`
+/// (`auth::HIDEABLE_SECTIONS`): every route of that section answers the same
+/// 403, whatever it would have read or written.
+fn section_guard(
+    headers: &HeaderMap,
+    state: &HostState,
+    section: &str,
+) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
+    let phone = authenticate(headers, state)?;
+    if state
+        .auth
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .hides(phone.device_id(), section)
+    {
+        return Err(api_error(StatusCode::FORBIDDEN, "section_hidden"));
+    }
+    Ok(phone)
+}
+
+/// The section an alert row belongs to: a card is the board's, an event the
+/// calendar's, a mail the mail's.
+fn alert_section(kind: &str) -> Option<&'static str> {
+    match kind {
+        "task" => Some("todo"),
+        "event" => Some("calendar"),
+        "mail" => Some("mail"),
+        _ => None,
+    }
+}
+
+/// Drop the alert rows of the sections this phone is kept out of.
+fn open_alerts(hidden: &[String], mut alerts: super::protocol::MobileAlertsSnapshot) -> super::protocol::MobileAlertsSnapshot {
+    alerts
+        .items
+        .retain(|item| alert_section(&item.kind).is_none_or(|section| !hidden.iter().any(|h| h == section)));
+    alerts
+}
+
+fn hidden_sections(state: &HostState, phone: &Phone) -> Vec<String> {
+    state
+        .auth
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .hidden_sections(phone.device_id())
+}
+
 /// What an open ticket is bound to: the path and the query without its own
 /// `ticket` pair, in the order the phone wrote them.
 fn ticket_target(uri: &Uri) -> String {
@@ -719,9 +766,10 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
 }
 
 async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     // A live probe, not a file check: the socket file outlives a desktop exit
     // (and every crash), and on Windows the nominal path is never a file.
     let desktop_available =
@@ -744,7 +792,7 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone) }),
         ),
     )
 }
@@ -1508,7 +1556,7 @@ async fn activate_project(
 /// written off `calendar.json` (`headless`, `headless_board`), marked
 /// `desktop_available: false`.
 async fn todo(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "todo") {
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -1542,13 +1590,15 @@ async fn todo(State(state): State<HostState>, headers: HeaderMap) -> impl IntoRe
 /// the desktop owns the alert setting, source gates, recurrence expansion, and
 /// muted rows. The wire snapshot is deliberately display-only.
 async fn alerts(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
         Ok(DesktopResponse::Alerts { alerts }) => {
+            let alerts = open_alerts(&hidden_sections(&state, &phone), alerts);
             (StatusCode::OK, Json(json!({ "alerts": alerts })))
         }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
@@ -1574,9 +1624,10 @@ async fn alerts_resolve(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1587,6 +1638,24 @@ async fn alerts_resolve(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    // The handle is opaque, so a phone kept out of a section has its row's
+    // kind looked up first: a ✓ on a row it was never shown is refused.
+    let hidden = hidden_sections(&state, &phone);
+    if !hidden.is_empty() {
+        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
+            Ok(DesktopResponse::Alerts { alerts }) => {
+                if !open_alerts(&hidden, alerts)
+                    .items
+                    .iter()
+                    .any(|item| item.alert_id.as_deref() == Some(request.alert_id.as_str()))
+                {
+                    return api_error(StatusCode::FORBIDDEN, "section_hidden");
+                }
+            }
+            _ => return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        }
+    }
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     match admin::desktop_call(
         &desktop_socket,
@@ -1598,6 +1667,7 @@ async fn alerts_resolve(
     .await
     {
         Ok(DesktopResponse::Alerts { alerts }) => {
+            let alerts = open_alerts(&hidden, alerts);
             (StatusCode::OK, Json(json!({ "alerts": alerts })))
         }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
@@ -1737,7 +1807,7 @@ async fn calendar(
     headers: HeaderMap,
     Query(query): Query<CalendarQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "calendar") {
         return error;
     }
     let Some(month) = query.month.filter(|value| valid_calendar_month(value)) else {
@@ -1822,7 +1892,7 @@ async fn calendar_mutate(
     Query(query): Query<CalendarQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "calendar") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -1892,7 +1962,7 @@ async fn todo_mutate(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "todo") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -2028,7 +2098,7 @@ fn mail_response(
 /// desktop already owns the unlocked/encrypted MailState. The sidecar receives
 /// only the bounded, read-only snapshot defined in `protocol`.
 async fn mail_overview(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -2048,7 +2118,7 @@ async fn mail_folder(
     Path(folder_id): Path<String>,
     Query(query): Query<MailQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     let offset = query.offset.unwrap_or(0);
@@ -2076,7 +2146,7 @@ async fn mail_message(
     Path((folder_id, message_id)): Path<(String, String)>,
     Query(query): Query<MailQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     let offset = query.offset.unwrap_or(0);
@@ -2110,7 +2180,7 @@ async fn mail_mark(
     Path((folder_id, message_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -2145,7 +2215,7 @@ async fn mail_reply(
     Path((folder_id, message_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -8529,6 +8599,74 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "answered: {body}");
         assert_eq!(json(&body)["desktop_available"], true, "{body}");
         drop(listener);
+    }
+
+    /// A phone kept out of a section gets 403 on every route of it, reads and
+    /// writes alike, and learns which from its status; another phone is not.
+    #[tokio::test]
+    async fn a_phone_kept_out_of_a_section_is_refused_its_routes() {
+        let host = Fixture::with_project();
+        let (kept_out, device) = host.pair_device(&signing_key(93)).await;
+        let (other, _) = host.pair_device(&signing_key(94)).await;
+        host.state
+            .auth
+            .lock()
+            .unwrap()
+            .set_hidden_sections(&device, &["mail".into(), "todo".into()])
+            .expect("hide");
+
+        let (_, _, body) = host.send(get_as("/api/v1/status", &kept_out)).await;
+        assert_eq!(json(&body)["hidden_sections"], serde_json::json!(["todo", "mail"]));
+        let (_, _, body) = host.send(get_as("/api/v1/status", &other)).await;
+        assert_eq!(json(&body)["hidden_sections"], serde_json::json!([]));
+
+        for (method, uri) in [
+            ("GET", "/api/v1/todo"),
+            ("POST", "/api/v1/todo"),
+            ("GET", "/api/v1/mail"),
+            ("GET", "/api/v1/mail/folders/anything"),
+            ("GET", "/api/v1/mail/folders/anything/messages/anything"),
+            ("POST", "/api/v1/mail/folders/anything/messages/anything/mark"),
+            ("POST", "/api/v1/mail/folders/anything/messages/anything/reply"),
+        ] {
+            let (status, _, body) = host.send(request_as(method, uri, &kept_out, Some(serde_json::json!({})))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
+            assert_eq!(json(&body)["error"], "section_hidden", "{method} {uri}");
+            let (status, _, _) = host.send(request_as(method, uri, &other, Some(serde_json::json!({})))).await;
+            assert_ne!(status, StatusCode::FORBIDDEN, "{method} {uri} for the other phone");
+        }
+        // The calendar was left open to it.
+        let (status, _, _) = host.send(get_as("/api/v1/calendar?month=2026-10", &kept_out)).await;
+        assert_ne!(status, StatusCode::FORBIDDEN);
+
+        // Opening the section again lets it straight back in.
+        host.state.auth.lock().unwrap().set_hidden_sections(&device, &[]).expect("open");
+        let (status, _, _) = host.send(get_as("/api/v1/mail", &kept_out)).await;
+        assert_ne!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn alert_rows_of_a_hidden_section_are_dropped() {
+        use crate::services::mobile_control::protocol::{MobileAlertItem, MobileAlertsSnapshot};
+        let row = |kind: &str| MobileAlertItem {
+            kind: kind.into(),
+            severity: "soon".into(),
+            title: kind.into(),
+            detail: String::new(),
+            at: None,
+            all_day: false,
+            minutes_away: None,
+            days_away: None,
+            task_id: None,
+            alert_id: Some(kind.into()),
+        };
+        let snapshot = MobileAlertsSnapshot {
+            enabled: true,
+            items: vec![row("mail"), row("event"), row("task"), row("later_kind")],
+        };
+        let kept = open_alerts(&["calendar".into(), "todo".into()], snapshot);
+        let kinds: Vec<&str> = kept.items.iter().map(|i| i.kind.as_str()).collect();
+        assert_eq!(kinds, ["mail", "later_kind"]);
     }
 
     #[tokio::test]

@@ -182,6 +182,14 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },
         },
+        Ok(AdminRequest::SetHiddenSections { device_id, sections }) => match auth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_hidden_sections(&device_id, &sections)
+        {
+            Ok(()) => AdminResponse::Ok,
+            Err(message) => AdminResponse::Error { message },
+        },
         Ok(AdminRequest::ForgetAll) => match auth.lock().unwrap_or_else(PoisonError::into_inner).forget_all() {
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },

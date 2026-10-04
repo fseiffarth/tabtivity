@@ -236,6 +236,26 @@ and **Update** in the header's Mobile menu (or **Settings → Mobile → Update
 mobile host**) does it by hand; either appears only while the server is behind.
 **Reconnect** in that menu restarts the server if it stopped.
 
+## One phone at a time
+
+Under **Settings → Mobile → Paired devices** each phone has its own controls
+(the Mobile host must be running):
+
+- **To-do / Calendar / Mail** — press one off to keep that phone out of the
+  section. Its tab disappears from the phone, the computer refuses the
+  section's requests from that phone, its alert rows leave the phone's Home
+  strip, and a phone without Calendar gets no reminder notifications. The
+  other phones are not affected.
+- **Projects on this phone** — the projects and boxes that phone can open.
+  **Disconnect** takes the phone off one. A project open to *all phones*
+  then stays open to the other phones paired now (a phone paired later is
+  not added); disconnecting the last phone turns the project's Mobile access
+  off. **Add project** opens one more for that phone; a project that was off
+  opens for that phone alone.
+
+A phone that is paired again counts as a new phone and starts with every
+section shown.
+
 ## If a phone goes missing
 
 The header's Mobile button shows the host status. **Revoke** drops one device;

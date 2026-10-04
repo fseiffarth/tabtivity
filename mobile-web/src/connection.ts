@@ -185,6 +185,7 @@ const FAILURE_TEXT: Record<string, string> = {
   timeout: "Your desktop didn't answer in time.",
   offline: "The connection dropped.",
   project_not_found: "This project is no longer shared with the phone.",
+  section_hidden: "The desktop has turned this section off for this phone.",
   project_ineligible: "This project is no longer shared with the phone.",
   tab_not_found: "That tab is no longer available.",
   shells_off: "Shells are switched off for the phone in the desktop's Mobile settings.",

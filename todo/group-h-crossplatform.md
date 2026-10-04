@@ -3800,6 +3800,30 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cd — Per paired phone: hide To-do / Calendar / Mail, and its own
+  project list** (2026-10-04; untested ids `mobile.deviceSections`,
+  `mobile.deviceProjects`). Settings → Mobile → Paired devices, under a phone:
+  press **Mail** off — that phone's tab bar loses Mail within 30 s (or on
+  return to the app), a mail alert row leaves its Home strip, and an old
+  bookmark/notification into Mail answers "The desktop has turned this section
+  off for this phone."; another paired phone still has Mail. Turn **Calendar**
+  off: that phone gets no reminder push, the other does. Under **Projects on
+  this phone**: **Disconnect** an All-phones project — it leaves this phone's
+  list and the other phone keeps it (the project's ▾ button now reads
+  "1 phone"); Disconnect the only phone of a project — its access turns off.
+  **Add project ▾** — an off project opens for this phone alone; a project
+  limited to the other phone gains this one.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] **31cc — To-do board project names per phone** (2026-10-04; follow-up
   of 31cb, out of its scope). The phone's to-do board lists every registry
   project's name in its project picker and on card tags, Mobile switch or

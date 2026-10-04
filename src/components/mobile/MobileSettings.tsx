@@ -13,6 +13,7 @@ import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
+import { PairedDeviceAccess } from "./PairedDeviceAccess";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -489,6 +490,7 @@ export function MobileSettings() {
   };
 
   const eligible = projects.filter((project) => !project.remote && !project.sandbox?.enabled && !project.vm?.enabled);
+  const eligibleIds = new Set(eligible.map((project) => project.id));
   const normalizedProjectSearch = projectSearch.trim().toLocaleLowerCase();
   const matchingEligible = normalizedProjectSearch
     ? eligible.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
@@ -780,13 +782,21 @@ export function MobileSettings() {
       {devices.length > 0 && (
         <SettingsList boxed>
           {devices.map((device) => (
-            <div key={device.id} className="settings-row">
-              <span className="settings-list-label">{device.name}</span>
-              <button
-                type="button"
-                className="settings-btn sm danger"
-                onClick={() => void invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } }).then(refresh)}
-              >{t("mobile.revoke")}</button>
+            <div key={device.id} className="mobile-device">
+              <div className="settings-row">
+                <span className="settings-list-label">{device.name}</span>
+                <button
+                  type="button"
+                  className="settings-btn sm danger"
+                  onClick={() => void invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } }).then(refresh)}
+                >{t("mobile.revoke")}</button>
+              </div>
+              <PairedDeviceAccess
+                device={device}
+                pairedIds={(pairedPhones ?? devices).map((phone) => phone.id)}
+                eligibleProjectIds={eligibleIds}
+                onChanged={() => void refresh()}
+              />
             </div>
           ))}
         </SettingsList>

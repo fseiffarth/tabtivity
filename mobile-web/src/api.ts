@@ -260,8 +260,10 @@ export interface MobileMailHeader { id: string; subject: string; sender: { name?
 export interface MobileMailAttachment { filename: string; mime: string; size: number }
 
 /** The host reads these display preferences from desktop settings on each
- * probe: the untested pills, and the desktop's theme for a phone that follows it. */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string }> {
+ * probe: the untested pills, the desktop's theme for a phone that follows it,
+ * and the sections the desktop keeps this phone out of (absent from an older
+ * host: none). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[] }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */

@@ -4041,3 +4041,34 @@ label.settings-toggle-card-row {
   padding: 6px 9px;
   resize: vertical;
 }
+
+/* Settings → Mobile → Paired devices: one phone's own access under its row —
+   its section buttons (the `project-ending-toggle` grid) and the projects that
+   reach it. Indented under the name so the rows read as belonging to it. */
+/* `.settings-list.boxed` pads each `.mobile-device` and draws the rule
+   between them. */
+.mobile-device-access {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 2px 12px;
+}
+
+.mobile-device-access-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.settings-list.project-ending-list.mobile-device-sections {
+  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  max-width: 360px;
+}
+
+.mobile-device-access .settings-row.mobile-device-project {
+  padding: 2px 0;
+}
+
+.mobile-device-add {
+  align-self: flex-start;
+}

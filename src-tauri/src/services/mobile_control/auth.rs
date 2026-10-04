@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 
 use super::{
     protocol::AdminDevice,
-    push::{Delivery, Notice, PushPrefs, PushStore},
+    push::{Delivery, Notice, NoticeKind, PushPrefs, PushStore},
     store,
 };
 
@@ -51,6 +51,11 @@ pub const SESSION_MAX: u64 = 12 * 60 * 60;
 /// dead by the time anybody reads it there.
 pub const OPEN_TICKET_TTL: u64 = 5 * 60;
 const MAX_OPEN_TICKETS: usize = 64;
+
+/// The phone sections a paired device can be kept out of, in the order the
+/// desktop lists them. Each is a whole route family on the sidecar
+/// (`host::section_guard`) and the alert rows of its kind.
+pub const HIDEABLE_SECTIONS: [&str; 3] = ["todo", "calendar", "mail"];
 
 fn now() -> u64 {
     SystemTime::now()
@@ -87,6 +92,11 @@ pub struct Device {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<u64>,
+    /// [`HIDEABLE_SECTIONS`] this phone is kept out of. Plain strings, not an
+    /// enum: a name a newer build wrote must not fail the whole file (and with
+    /// it every phone's sign-in) here; an unknown one simply matches no route.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +139,7 @@ pub fn read_paired_devices(control_dir: &Path) -> Result<Vec<AdminDevice>, Strin
             created_at: d.created_at,
             last_seen_at: d.last_seen_at,
             online: false,
+            hidden_sections: d.hidden_sections,
         })
         .collect())
 }
@@ -383,6 +394,7 @@ impl AuthStore {
             public_key: public_key.into(),
             created_at: now(),
             last_seen_at: None,
+            hidden_sections: Vec::new(),
         });
         self.save_devices()?;
         self.audit("paired", Some(&id));
@@ -546,8 +558,51 @@ impl AuthStore {
                 created_at: d.created_at,
                 last_seen_at: d.last_seen_at,
                 online: self.sessions.values().any(|s| s.device_id == d.id && s.expires_at >= t),
+                hidden_sections: d.hidden_sections.clone(),
             })
             .collect()
+    }
+
+    /// Whether `device_id` is kept out of `section`. An unknown device hides
+    /// nothing here — it never got past `authenticate` to ask.
+    pub fn hides(&self, device_id: &str, section: &str) -> bool {
+        self.devices
+            .devices
+            .iter()
+            .any(|d| d.id == device_id && d.hidden_sections.iter().any(|s| s == section))
+    }
+
+    /// The sections `device_id` is kept out of, for its own status probe.
+    pub fn hidden_sections(&self, device_id: &str) -> Vec<String> {
+        self.devices
+            .devices
+            .iter()
+            .find(|d| d.id == device_id)
+            .map(|d| d.hidden_sections.clone())
+            .unwrap_or_default()
+    }
+
+    /// Keep one paired phone out of these sections (and only these): the
+    /// desktop's per-device switches. Names outside [`HIDEABLE_SECTIONS`] are
+    /// refused; the stored list is in that canonical order, without repeats.
+    pub fn set_hidden_sections(&mut self, device_id: &str, sections: &[String]) -> Result<(), String> {
+        if let Some(bad) = sections.iter().find(|s| !HIDEABLE_SECTIONS.contains(&s.as_str())) {
+            return Err(format!("unknown section {bad:?}"));
+        }
+        let device = self
+            .devices
+            .devices
+            .iter_mut()
+            .find(|d| d.id == device_id)
+            .ok_or("unknown device")?;
+        device.hidden_sections = HIDEABLE_SECTIONS
+            .iter()
+            .filter(|known| sections.iter().any(|s| s == *known))
+            .map(|s| (*s).to_string())
+            .collect();
+        self.save_devices()?;
+        self.audit("sections_changed", Some(device_id));
+        Ok(())
     }
 
     pub fn revoke(&mut self, device_id: &str) -> Result<(), String> {
@@ -623,6 +678,8 @@ impl AuthStore {
             .devices
             .devices
             .iter()
+            // A phone kept out of the Calendar gets no reminder either.
+            .filter(|d| notice.kind != NoticeKind::Calendar || !d.hidden_sections.iter().any(|s| s == "calendar"))
             .map(|d| d.id.clone())
             .filter(|id| allowed.is_none_or(|allowed| allowed.contains(id)))
             .collect();
@@ -893,7 +950,7 @@ mod tests {
         let id = |c: char| c.to_string().repeat(27);
         let paired: Vec<AdminDevice> = ['a', 'b']
             .into_iter()
-            .map(|c| AdminDevice { id: id(c), name: c.into(), created_at: 1, last_seen_at: None, online: false })
+            .map(|c| AdminDevice { id: id(c), name: c.into(), created_at: 1, last_seen_at: None, online: false, hidden_sections: vec![] })
             .collect();
         assert_eq!(scope_device_list(&[id('b'), id('a'), id('b')], &paired).unwrap(), vec![id('b'), id('a')]);
         // An unpaired id is dropped; nothing left is refused.
@@ -912,6 +969,68 @@ mod tests {
         let (_dir, mut auth) = store();
         let (device, _) = paired_login(&mut auth);
         assert!(valid_device_id(&device), "{device}");
+    }
+
+    #[test]
+    fn hidden_sections_are_validated_stored_in_order_and_survive_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        assert!(auth.set_hidden_sections(&device, &["projects".into()]).is_err());
+        assert!(auth.set_hidden_sections("nobody", &["mail".into()]).is_err());
+        auth.set_hidden_sections(&device, &["mail".into(), "todo".into(), "mail".into()]).unwrap();
+        assert_eq!(auth.hidden_sections(&device), ["todo", "mail"]);
+        assert!(auth.hides(&device, "mail") && !auth.hides(&device, "calendar"));
+        assert_eq!(auth.devices()[0].hidden_sections, ["todo", "mail"]);
+
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        assert!(reopened.hides(&device, "todo"));
+        assert_eq!(read_paired_devices(&control).unwrap()[0].hidden_sections, ["todo", "mail"]);
+    }
+
+    #[test]
+    fn a_phone_kept_out_of_the_calendar_gets_no_reminder() {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let (_dir, mut auth) = store();
+        let (kept_out, _) = paired_login(&mut auth);
+        let (other, _) = paired_login(&mut auth);
+        let secret = Base64UrlUnpadded::encode_string(&[7u8; 16]);
+        for (device, endpoint) in [(&kept_out, "https://fcm.googleapis.com/a"), (&other, "https://fcm.googleapis.com/b")] {
+            let key = p256::SecretKey::random(&mut OsRng).public_key();
+            let key = Base64UrlUnpadded::encode_string(key.to_encoded_point(false).as_bytes());
+            let prefs = PushPrefs { details: true, calendar: true, agents: super::super::push::AgentNotices::Off };
+            auth.push_subscribe(device, endpoint, &key, &secret, prefs).unwrap();
+        }
+        auth.set_hidden_sections(&kept_out, &["calendar".into()]).unwrap();
+        let notice = Notice {
+            kind: NoticeKind::Calendar,
+            status: None,
+            title: "Dentist".into(),
+            body: "09:00".into(),
+            tag: "raw".into(),
+            target: None,
+        };
+        let out = auth.push_deliveries(&notice, None).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].endpoint, "https://fcm.googleapis.com/b");
+    }
+
+    /// A section name a newer build wrote matches no route here, and must not
+    /// fail the device file (and every phone's sign-in) with it.
+    #[test]
+    fn an_unknown_hidden_section_in_the_file_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        drop(auth);
+        let path = control.join("devices.json");
+        let mut file: serde_json::Value = store::read_json(&path).unwrap();
+        file["devices"][0]["hidden_sections"] = serde_json::json!(["notes", "mail"]);
+        store::write_json_atomic(&path, &file, 0o600).unwrap();
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        assert!(reopened.hides(&device, "mail"));
     }
 
     #[test]
