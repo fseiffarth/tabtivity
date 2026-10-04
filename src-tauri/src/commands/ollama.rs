@@ -976,7 +976,11 @@ fn installed_match(tags_body: &str, wanted: &str) -> Result<String, &'static str
     let tags = serde_json::from_str::<serde_json::Value>(tags_body)
         .map_err(|_| "model_not_installed")?;
     let entries = tags["models"].as_array().ok_or("model_not_installed")?;
-    let latest = (!wanted.contains(':')).then(|| format!("{wanted}:latest"));
+    // Untagged means no `:` in the last path segment — a registry's port
+    // (`reg:5000/ns/m`) is not a tag, and a digest ref (`m@sha256:…`) is never
+    // given one.
+    let leaf = wanted.rsplit('/').next().unwrap_or(wanted);
+    let latest = (!leaf.contains(':')).then(|| format!("{wanted}:latest"));
     let found = entries.iter().find(|m| {
         m["name"]
             .as_str()
@@ -5976,6 +5980,7 @@ mod phone_control_tests {
         {"name":"llama3:latest","model":"llama3:latest","size":1},
         {"name":"qwen3.5:9b","model":"qwen3.5:9b","size":2},
         {"name":"hf.co/u/m:q4","size":3},
+        {"name":"reg.example:5000/ns/m:latest","size":5},
         {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443","size":4}
     ]}"#;
 
@@ -5986,6 +5991,12 @@ mod phone_control_tests {
         // An untagged name means `:latest`, and the listed spelling comes back.
         assert_eq!(installed_match(TAGS_BODY, "llama3"), Ok("llama3:latest".into()));
         assert_eq!(installed_match(TAGS_BODY, "llama3:latest"), Ok("llama3:latest".into()));
+        // A registry port is not a tag.
+        assert_eq!(
+            installed_match(TAGS_BODY, "reg.example:5000/ns/m"),
+            Ok("reg.example:5000/ns/m:latest".into())
+        );
+        assert_eq!(installed_match(TAGS_BODY, "hf.co/u/m"), Err("model_not_installed"));
         // No prefix match, in either direction.
         assert_eq!(installed_match(TAGS_BODY, "qwen3"), Err("model_not_installed"));
         assert_eq!(installed_match(TAGS_BODY, "qwen3.5"), Err("model_not_installed"));
