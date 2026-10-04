@@ -82,6 +82,7 @@ import {
   type ScheduledAgentPrompt,
 } from "../../lib/agents/agentSchedule";
 import { BRAND, MOBILE_ACCESS_KEY, MOBILE_HOST_KEY, NAMES, envName } from "../../lib/brand";
+import { localModelMutate, localModelsList, type LocalModelAction, type MobileLocalModelList } from "../../lib/mobileLocalModels";
 
 const MOBILE_DESKTOP_EVENT = NAMES.mobileDesktopEvent;
 
@@ -279,7 +280,9 @@ type DesktopRequest =
   | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
   | { type: "markup_answer"; request_id: string; project_id: string; tmux_session: string; ask_id: string; answers: MobileMarkupAnswer[] }
   | { type: "markup_dismiss"; request_id: string; project_id: string; tmux_session: string; ask_id: string }
-  | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] };
+  | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] }
+  | { type: "local_models"; request_id: string }
+  | { type: "local_model_mutate"; request_id: string; action: LocalModelAction };
 type DesktopResponse =
 | { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot }
   | { status: "activity"; statuses: AgentTabStatus[]; prompts: AgentTabPrompts[] }
@@ -304,6 +307,7 @@ type DesktopResponse =
   | { status: "desktop_images"; images: DesktopImage[] }
   | { status: "attached"; attachment: InboxAttachment }
   | { status: "markup_questions"; asks: MobileMarkupAsk[] }
+  | ({ status: "local_models" } & MobileLocalModelList)
   | { status: "error"; code: string; message: string };
 
 /** One agent tab closed in the scope, as the phone's "Recently closed" row
@@ -2458,6 +2462,9 @@ async function handleRequest(
     case "markup_answer": return answerMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id, request.answers);
     case "markup_dismiss": return dismissMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id);
     case "refresh": return refreshSlices(request.project_id, request.slices);
+    // Both check the host-wide switch first (`lib/mobileLocalModels`).
+    case "local_models": return localModelsList();
+    case "local_model_mutate": return localModelMutate(request.action);
     // A sidecar newer than this window can ask for a kind it does not know.
     // Answered at once and by name: `undefined` failed to deserialize in
     // `mobile_desktop_respond`, and the phone sat out the whole desktop
@@ -2475,8 +2482,8 @@ function unknownRequest(_request: never): DesktopResponse {
  * The sidecar starts each request's deadline as it emits it, so a slow mail
  * reply (60 s budget) ahead of a tab create on one shared chain made the phone
  * read "desktop unavailable" for the create and then watch the tab appear
- * anyway. Tabs, the board and calendar, mail, and schedules/prompts each keep
- * their own order; nothing in one waits on another. */
+ * anyway. Tabs, the board and calendar, mail, schedules/prompts and local
+ * models each keep their own order; nothing in one waits on another. */
 const mutationQueues = new Map<string, Promise<unknown>>();
 
 /** Which queue a request waits in, or `null` for a read. The sidecar's
@@ -2490,6 +2497,8 @@ export function mutationDomain(type: DesktopRequest["type"]): string | null {
     case "mail_mark": case "mail_reply": return "mail";
     // A markup answer queues its prompt as a phone hold does.
     case "schedule_mutate": case "prompt_mutate": case "hold_prompt": case "edit_held_prompt": case "markup_answer": case "markup_dismiss": return "schedules";
+    // Phone loads, unloads and starts run one at a time, in arrival order.
+    case "local_model_mutate": return "local_models";
     default: return null;
   }
 }

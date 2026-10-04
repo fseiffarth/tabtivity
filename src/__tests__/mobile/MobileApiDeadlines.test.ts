@@ -17,7 +17,10 @@ import {
   MAIL_REPLY_TIMEOUT,
   SIGN_IN_CALLBACK_TIMEOUT,
   TAB_CREATE_TIMEOUT,
+  LOCAL_MODELS_TIMEOUT,
   finishSignIn,
+  getLocalModels,
+  localModelAction,
   openSignInTab,
   reopenTab,
 } from "../../../mobile-web/src/api";
@@ -87,6 +90,23 @@ describe(`${BRAND.display} Mobile request deadlines`, () => {
     expect(responseTimeout("MailMark")).toBe(responseTimeout("MailMessage"));
     expect(MAIL_MESSAGE_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + responseTimeout("MailMessage"));
     expect(MAIL_REPLY_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + responseTimeout("MailReply"));
+  });
+
+  it("waits longer for the local-models routes than the sidecar waits for the window", () => {
+    // Neither request has an arm of its own: both ride the default.
+    expect(PROTOCOL).not.toMatch(/Self::LocalModel(s|Mutate) \{ \.\. \}[^=]*=> \d+,/);
+    expect(LOCAL_MODELS_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + responseTimeout());
+  });
+
+  it.each([
+    ["reading the local models", () => getLocalModels()],
+    ["loading a local model", () => localModelAction("load", "llama3")],
+  ])("gives %s the local-models deadline", async (_name, call) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ server: "running", can_start: false, start_failed: false, models: [] }), { status: 200 })));
+    const armed = vi.spyOn(AbortSignal, "timeout");
+    await call();
+    expect(armed.mock.calls).toEqual([[LOCAL_MODELS_TIMEOUT]]);
+    armed.mockRestore();
   });
 
   it("waits longer for a sign-in callback than the sidecar waits for the CLI", () => {

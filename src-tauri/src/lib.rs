@@ -2050,6 +2050,8 @@ pub fn run() {
             commands::ollama::list_local_drivers,
             commands::ollama::prepare_local_launch,
             commands::ollama::ensure_ollama_running,
+            commands::ollama::ensure_ollama_running_unattended,
+            commands::ollama::ollama_server_kind,
             // Ollama model management
             commands::ollama::ollama_is_installed,
             commands::ollama::install_ollama,
@@ -2096,6 +2098,7 @@ pub fn run() {
             commands::ollama::list_ollama_models_detailed,
             commands::ollama::stop_ollama_model,
             commands::ollama::load_ollama_model,
+            commands::ollama::load_installed_ollama_model,
             commands::ollama::list_pending_ollama_pulls,
             commands::ollama::clear_pending_ollama_pull,
             commands::ollama::list_orphan_partial_blobs,

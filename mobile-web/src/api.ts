@@ -1246,3 +1246,107 @@ export async function uploadToDesktop(file: Blob, name: string): Promise<Desktop
   if (!body?.file?.name) throw new ApiError(status, "malformed_response");
   return body.file;
 }
+
+/** The desktop's Ollama server as `GET /api/v1/local-models` reports it. */
+export type LocalModelServer = "running" | "starting" | "stopped" | "unreachable" | "not_installed";
+export type LocalModelState = "idle" | "loading" | "loaded" | "failed";
+
+/** One installed Ollama model on the desktop. The residency fields
+ * (`loaded_size`, `vram`, `pinned`, `expires_in`) come only while `loaded`;
+ * an absent one is unknown, never zero. */
+export interface LocalModelRow {
+  name: string;
+  size: number;
+  parameter_size: string | null;
+  quantization: string | null;
+  state: LocalModelState;
+  loaded_size?: number;
+  vram?: number;
+  pinned?: boolean;
+  expires_in?: number | null;
+  /** The model the phone's ＋ "Local model" group drives. */
+  for_tabs: boolean;
+  /** An Ollama cloud model: listed, never loaded or unloaded. */
+  remote: boolean;
+}
+export interface LocalModelList {
+  server: LocalModelServer;
+  can_start: boolean;
+  start_failed: boolean;
+  models: LocalModelRow[];
+}
+export type LocalModelAction = "load" | "unload" | "start";
+
+const LOCAL_MODEL_SERVERS: readonly string[] = ["running", "starting", "stopped", "unreachable", "not_installed"];
+const LOCAL_MODEL_STATES: readonly string[] = ["idle", "loading", "loaded", "failed"];
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+const shortText = (value: unknown): string | null =>
+  typeof value === "string" && value.trim() ? value.trim() : null;
+
+/** The list as the phone draws it, or null for a body that is not one — an
+ * older sidecar's catch-all answer must hide the feature, not draw an empty
+ * list. Unknown states read as `idle` / `unreachable`, as the sidecar forces. */
+export function normalizeLocalModels(body: unknown): LocalModelList | null {
+  if (!body || typeof body !== "object") return null;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.server !== "string" || !Array.isArray(raw.models)) return null;
+  const models: LocalModelRow[] = [];
+  for (const entry of raw.models) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.name !== "string" || !row.name) continue;
+    const state = (LOCAL_MODEL_STATES.includes(row.state as string) ? row.state : "idle") as LocalModelState;
+    const model: LocalModelRow = {
+      name: row.name,
+      size: finiteNumber(row.size) ?? 0,
+      parameter_size: shortText(row.parameter_size),
+      quantization: shortText(row.quantization),
+      state,
+      for_tabs: row.for_tabs === true,
+      remote: row.remote === true,
+    };
+    if (state === "loaded") {
+      model.loaded_size = finiteNumber(row.loaded_size);
+      model.vram = finiteNumber(row.vram);
+      model.pinned = row.pinned === true;
+      model.expires_in = finiteNumber(row.expires_in) ?? null;
+    }
+    models.push(model);
+  }
+  const server = (LOCAL_MODEL_SERVERS.includes(raw.server) ? raw.server : "unreachable") as LocalModelServer;
+  return { server, can_start: raw.can_start === true && server === "stopped", start_failed: raw.start_failed === true, models };
+}
+
+/** The local-models routes wait on the window, which may first ask Ollama
+ * about every model (`/api/show`): 2 s connect + the default 10 s
+ * `response_timeout`, so the phone holds out past the sidecar's own answer
+ * (`MobileApiDeadlines.test.ts`) and reads its `503` rather than guessing. */
+export const LOCAL_MODELS_TIMEOUT = 15_000;
+
+async function localModelsBody(write: Promise<unknown>): Promise<LocalModelList> {
+  const list = normalizeLocalModels(await write);
+  if (!list) throw new ApiError(200, "malformed_response");
+  return list;
+}
+
+/** `GET /api/v1/local-models` — the Ollama models installed on the desktop.
+ * `403 local_models_disabled` with the desktop's switch off, `404` from a
+ * sidecar older than the feature, `503 desktop_unavailable` with no window. */
+export function getLocalModels(signal?: AbortSignal): Promise<LocalModelList> {
+  return localModelsBody(api("/api/v1/local-models", { signal }, LOCAL_MODELS_TIMEOUT));
+}
+
+/** `POST /api/v1/local-models` — load or unload one model, or start Ollama.
+ * There is no download, update or delete: the sidecar refuses any other
+ * action. Answers the fresh list; a load or start then runs on in the
+ * desktop window, followed by polling. A write the window made whose list
+ * could not be relayed reads the list again (`reloadIfApplied`). */
+export function localModelAction(action: LocalModelAction, model?: string): Promise<LocalModelList> {
+  const body = action === "start" ? { action } : { action, model };
+  return reloadIfApplied(
+    localModelsBody(api("/api/v1/local-models", { method: "POST", body: JSON.stringify(body) }, LOCAL_MODELS_TIMEOUT)),
+    () => getLocalModels(),
+  );
+}

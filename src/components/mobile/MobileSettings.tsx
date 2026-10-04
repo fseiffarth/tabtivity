@@ -261,15 +261,15 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs" | "local_models", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
         [MOBILE_HOST_KEY]: {
           ...(stored ?? { enabled: false }),
-          // `mail_read` defaults on, so only its "off" is stored; the writes
-          // default off, so only their "on" is.
-          [gate]: gate === "mail_read" ? (on ? undefined : false) : on || undefined,
+          // `mail_read` and `local_models` default on, so only their "off" is
+          // stored; the rest default off, so only their "on" is.
+          [gate]: gate === "mail_read" || gate === "local_models" ? (on ? undefined : false) : on || undefined,
         },
       });
     } catch (reason) {
@@ -307,6 +307,7 @@ export function MobileSettings() {
           project_files: stored?.project_files,
           stay_after_quit: stored?.stay_after_quit,
           shell_tabs: stored?.shell_tabs,
+          local_models: stored?.local_models,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -388,6 +389,7 @@ export function MobileSettings() {
           project_files: stored?.project_files,
           stay_after_quit: stored?.stay_after_quit,
           shell_tabs: stored?.shell_tabs,
+          local_models: stored?.local_models,
         },
       });
     } catch (reason) {
@@ -439,6 +441,7 @@ export function MobileSettings() {
           project_files: stored?.project_files,
           stay_after_quit: stored?.stay_after_quit,
           shell_tabs: stored?.shell_tabs,
+          local_models: stored?.local_models,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -674,6 +677,13 @@ export function MobileSettings() {
         onChange={(event) => void setMailGate("shell_tabs", !event.target.checked)}
       />
       <p className="settings-help">{t("mobile.noShellsHelp")}</p>
+      <ToggleRow
+        label={<>{t("mobile.localModelsGate")} <UntestedTag id="mobile.localModelsGate" /></>}
+        checked={stored?.local_models !== false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("local_models", event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.localModelsGateHelp")}</p>
       {eligible.length > 0 && <input
         className="mobile-project-access-search"
         value={projectSearch}

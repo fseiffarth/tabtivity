@@ -3893,6 +3893,51 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31by — Local models from the phone** (2026-10-04;
+  ✅ code-complete, automated tests passing — `ollama` / `local_models` /
+  `protocol` / `host` Rust tests, `MobileLocalModels.test.tsx`,
+  `MobileLocalModelsGate.test.tsx`, `MobileLocalModelsSheet.test.tsx`,
+  `MobileMutationList.test.ts`, `MobileApiDeadlines.test.ts`; ⚠️ not
+  verified on a phone). Plan
+  `docs/mobile_local_model_control_plan.md`. Home → **Local models** lists
+  the desktop's installed Ollama models (size, parameters/quantization,
+  idle / loading / loaded / failed, GPU · N % GPU · CPU, stays loaded /
+  unloads in N min, the model new local-model tabs use) with **Load**
+  (Ollama picks the device, `keep_alive -1`), **Unload** (no confirmation)
+  and **Start Ollama** (`systemctl --no-ask-password`, else an owned
+  `ollama serve` that quit stops). Everything goes through the desktop
+  window (`lib/mobileLocalModels.ts`); no window → 503 and "open the app",
+  no headless fallback. Pull/delete/anything else → 400
+  `unsupported_action` before the desktop is asked. Desktop switch Settings
+  → Mobile → **Local models from the phone** (under Project access, unset =
+  on) → 403 and the Home row is left out. Untested ids
+  `mobile.localModelsGate`, `mobile.localModels`, `mobile.localModels.start`.
+  Needs the backend restarted and the Mobile host updated (both Rust
+  halves: `commands::ollama` + the bridge in the window, the routes in the
+  sidecar); the PWA is rebuilt (`npm run mobile:bundle`).
+  - [ ] 🖐️ Manual phone QA — Home → Local models lists every installed
+    model with its size; Load one → "Loading into memory…" then "On the
+    GPU · Stays loaded until unloaded", and the desktop's Models & agents
+    menu shows the load while it runs; a load that outlasts the phone's
+    15 s wait is not shown as failed — the list is read again and keeps
+    refreshing fast; Unload → idle on both; with Ollama stopped, Start
+    Ollama starts it without a password dialog on the desktop, and quitting
+    the app stops a server it had to start itself; Settings → Mobile →
+    Local models from the phone off → the row disappears (and comes back
+    when switched on); with the desktop window closed the row and the sheet
+    say to open the app (against a desktop build older than this they say
+    the same, since it drops the request unread); nothing on the phone offers download,
+    update or delete; loading a single model with none resident re-points
+    the desktop's roles (expected).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member

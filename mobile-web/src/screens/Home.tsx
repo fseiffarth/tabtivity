@@ -15,6 +15,7 @@ import { ThemeRow, ThemeSheet } from "../components/ThemePicker";
 import { LanguageRow, LanguageSheet } from "../components/LanguagePicker";
 import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
+import { LocalModelsSection } from "./LocalModelsSheet";
 import { GitMark } from "../components/GitMark";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -337,6 +338,7 @@ export function Home({ open, openTab, todo, mail }: {
       {alerts && <AlertRows alerts={alerts} onAlerts={setAlerts} todo={todo} mail={mail} />}
     </>}
     <SendToDesktop />
+    <LocalModelsSection />
     {/* What this phone does, as against what the desktop is doing — kept to the
         end of the page, under whichever list the reader came for. */}
     <section className="phone-settings" aria-labelledby="phone-settings-heading">

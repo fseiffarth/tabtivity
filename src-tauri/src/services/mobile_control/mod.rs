@@ -17,6 +17,7 @@ pub mod headless_board;
 pub mod host;
 pub mod inbox;
 pub mod live_pwa;
+pub mod local_models;
 pub mod markup;
 pub mod markup_pdf;
 pub mod outbox;

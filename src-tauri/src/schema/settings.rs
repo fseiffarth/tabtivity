@@ -77,6 +77,13 @@ pub struct AppMobileHostSettings {
     /// bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_tabs: Option<bool>,
+    /// May a paired phone list the desktop's Ollama models and load/unload them
+    /// (never download or delete)? Unset is **on**; `false` closes the routes.
+    /// Read by the sidecar per request
+    /// (`mobile_control::local_models::local_models_open`) and repeated by the
+    /// desktop bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_models: Option<bool>,
 }
 
 /// Cloud completion authority lives in Tabtivity's settings, never project.json.
@@ -1488,6 +1495,30 @@ mod default_rule_tests {
         assert_eq!(host.port, Some(8443));
         assert_eq!(host.mail_reply, Some(true));
         assert!(host.mail_actions.is_none(), "reply and actions are independent");
+    }
+
+    /// The phone's local-model switch: unset stays unset (which means on), and
+    /// an explicit `false` survives a read → write.
+    #[test]
+    fn mobile_host_local_models_switch_round_trips() {
+        let key = crate::brand::MOBILE_HOST_KEY;
+        let s: Settings = serde_json::from_str(&format!(r#"{{"{key}":{{"enabled":true}}}}"#)).unwrap();
+        assert!(s.app_mobile_host.as_ref().unwrap().local_models.is_none());
+        let back = serde_json::to_value(&s).unwrap();
+        // Pin the object first: on a wrong key `back[key]` is `Null`, whose
+        // `.get` is `None` too, and the absence check would pass vacuously.
+        assert_eq!(back[key]["enabled"], serde_json::json!(true));
+        assert!(back[key].get("local_models").is_none(), "absent stays absent");
+
+        let s: Settings = serde_json::from_str(&format!(
+            r#"{{"{key}":{{"enabled":true,"local_models":false}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(s.app_mobile_host.as_ref().unwrap().local_models, Some(false));
+        let written = serde_json::to_value(&s).unwrap();
+        assert_eq!(written[key]["local_models"], serde_json::json!(false), "written as false");
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.app_mobile_host.unwrap().local_models, Some(false));
     }
 
     /// `global_apps` entries keep foreign keys through `extra`, and a settings
