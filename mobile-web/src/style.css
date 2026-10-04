@@ -1345,6 +1345,20 @@ span.files-close { background:transparent; }
 .inbox-upload strong { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
 .inbox-upload span { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
 .inbox-upload button { flex:0 0 auto; padding:4px 9px; border:0; border-radius:7px; background:rgba(255,255,255,.09); color:inherit; font-size:.8rem; }
+/* Files going with the next message, as thumbnails above the composer. */
+.composer-attachments { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 7px 0; }
+.composer-thumb { position:relative; flex:0 0 auto; width:56px; height:56px; overflow:hidden; border-radius:10px; background:#211d35; color:#dcd6ff; }
+.composer-thumb img { display:block; width:100%; height:100%; object-fit:cover; }
+.composer-thumb.sending img,.composer-thumb.sending .composer-thumb-file { opacity:.45; }
+.composer-thumb-file { display:grid; grid-template-rows:1fr auto; place-items:center; height:100%; padding:4px; }
+.composer-thumb-file b { font-size:.8rem; font-weight:700; }
+.composer-thumb-file small { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.6rem; }
+.composer-thumb-progress { position:absolute; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; animation:composer-thumb-spin .9s linear infinite; }
+@keyframes composer-thumb-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .composer-thumb-progress { animation:none; } }
+.composer-thumb button { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; background:rgba(8,10,16,.65); color:#fff; font-size:.65rem; line-height:1; }
+.composer-attachments-note { flex:1 1 120px; min-width:0; color:#a69fd4; font-size:.72rem; }
+.composer-attachments-note em { font-style:normal; opacity:.8; }
 /* What the agent sent this tab, as a sheet of its own: the button beside the
    tab name opens it, in both views — the files never sit in the chat. */
 .terminal-gallery { flex:0 0 auto; display:flex; align-items:center; gap:4px; padding:4px 8px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#d8e2f5; font-size:.82rem; line-height:1; }
@@ -1405,6 +1419,20 @@ span.files-close { background:transparent; }
 .outbox-post-meta { justify-self:end; padding:0 8px 2px; color:#95a6c8; font-size:.68rem; }
 .outbox-post-meta em { font-style:normal; opacity:.8; }
 .outbox-post.pictures-only .outbox-post-meta { position:absolute; right:10px; bottom:8px; padding:1px 7px; border-radius:9px; background:rgba(8,10,16,.55); color:#f1f3fa; pointer-events:none; }
+/* What the reader sent from the phone, inside the prompt's own bubble: the
+   picture is the bubble, its words a caption under it (InboxAlbum). */
+.readable-turn.user.with-files { width:min(78%,300px); padding:3px; }
+.readable-turn.user.with-files > .transcript-md { padding:5px 9px 0; }
+.readable-turn.user.with-files > .transcript-time,.readable-turn.user.with-files > .transcript-cut,.readable-turn.user.with-files > .transcript-send-state { padding:0 9px 3px; margin-right:0; }
+.inbox-album { display:grid; gap:3px; }
+.readable-turn.user .outbox-post-album { border-radius:13px 13px 2px 13px; background:#17142c; }
+.readable-turn.user .inbox-album:not(:last-child) .outbox-post-album { border-radius:13px; }
+.outbox-post-picture.pending { background:#241f44; }
+.readable-turn.user .outbox-post-file { background:#221d42; color:#e9e4ff; }
+.readable-turn.user .outbox-post-file > span { background:#352e66; color:#d6cffd; }
+.readable-turn.user .outbox-post-file small { color:#a69fd4; }
+.outbox-post-file.gone { opacity:.7; }
+.inbox-album-untested { justify-self:end; padding:0 6px; color:#a69fd4; font-size:.68rem; }
 .outbox-entry-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; min-width:0; }
 .outbox-details,.outbox-save { border:0; background:transparent; color:#8fb8ff; font-size:.7rem; padding:5px 0; text-decoration:none; }
 .outbox-save { display:inline-flex; align-items:center; gap:3px; }

@@ -3743,6 +3743,29 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31bx — Files sent from the phone show as pictures, in the composer
+  and in the chat** (2026-10-04; untested ids `mobile.composer.thumbnails`,
+  `mobile.chat.inboxPreviews`). Attach a photo, a PDF and a desktop
+  screenshot in a Focus agent tab: each shows as a thumbnail above the
+  composer (dimmed with a spinner while it travels, ✕ once landed), never as
+  `@…` text in the input; leave the screen and come back — the draft returns
+  with the thumbnails. Send: the prompt's bubble shows the photo(s) as a
+  picture/album with your words as the caption and the PDF as a card, no
+  `@.tabtivity/inbox/…` text; tap opens them full screen. An older prompt with
+  `@.eldrun/inbox/…` shows its picture too; a file deleted from the inbox
+  shows "No longer in the project inbox". Agent → phone files keep showing
+  as picture bubbles on the left (31bj).
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member

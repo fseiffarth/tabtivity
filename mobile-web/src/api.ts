@@ -918,12 +918,30 @@ export function outboxFileUrl(scope: OutboxScope, name: string, download = false
 }
 
 /** Where the full-screen viewer reads a file from: one project's outbox (by
- * its tab or the project), or — `files` — the project's own tree through the
- * read-only file browser, where a file is fetched by its sealed `ref`. */
-export type ViewerScope = OutboxScope | { files: string };
+ * its tab or the project), `files` — the project's own tree through the
+ * read-only file browser, where a file is fetched by its sealed `ref` — or
+ * `inbox`, what the phone sent into a tab's project inbox (by the tab). */
+export type ViewerScope = OutboxScope | { files: string } | { inbox: string };
+
+/** The URL a file the phone sent into a tab's project inbox loads from (its
+ * leaf, out of the phone's own `@` reference) — same origin, so an `<img>`
+ * rides the session cookie as an outbox picture does. */
+export function inboxFileUrl(tabId: string, name: string, download = false): string {
+  return `/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
+}
+
+/** `GET …/inbox?names=` — the files among `names` (inbox leaves) the tab's
+ * project inbox holds, typed by their bytes on the desktop, in the order
+ * asked; a leaf that is gone is simply missing from the answer. */
+export async function describeInbox(tabId: string, names: readonly string[], signal?: AbortSignal): Promise<OutboxFile[]> {
+  const query = new URLSearchParams({ names: names.join(",") });
+  const { files } = await api<{ files?: OutboxFile[] }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/inbox?${query}`, { signal });
+  return Array.isArray(files) ? files : [];
+}
 
 /** The URL one file loads from, for whichever door `scope` names. */
 export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = false): string {
+  if ("inbox" in scope) return inboxFileUrl(scope.inbox, file.name, download);
   if ("files" in scope) {
     return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}`;
   }

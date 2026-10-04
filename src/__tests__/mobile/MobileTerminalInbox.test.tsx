@@ -69,12 +69,13 @@ function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-/** The outbox poll, the stored-session read, the usage read and the markup
- * questions poll the screen runs on mount answer empty here and stay out of
- * the counted calls — these tests are about the inbox. */
+/** The outbox poll, the stored-session read, the usage read, the markup
+ * questions poll and the inbox previews' description the screen runs answer
+ * empty here and stay out of the counted calls — these tests are about the
+ * inbox drop. */
 function routeOutbox(inner: (url: string, init?: RequestInit) => Promise<Response>) {
-  return (url: string, init?: RequestInit) => url.endsWith("/outbox")
-    ? Promise.resolve(jsonResponse(200, { images: [] }))
+  return (url: string, init?: RequestInit) => url.endsWith("/outbox") || url.includes("/inbox?names=")
+    ? Promise.resolve(jsonResponse(200, { images: [], files: [] }))
     : url.includes("/transcript")
       ? Promise.resolve(jsonResponse(200, { transcript: { available: false, reason: "no_session", entries: [], truncated: false } }))
       : url.endsWith("/status") || url.includes("/markup/questions")
@@ -85,8 +86,10 @@ function routeOutbox(inner: (url: string, init?: RequestInit) => Promise<Respons
 const fileInput = () => screen.getByTestId("inbox-file-input") as HTMLInputElement;
 const composer = () => screen.getByLabelText("Message agent") as HTMLTextAreaElement;
 
-/** The landed files waiting beside the composer, by their row text. */
-const landed = () => Array.from(document.querySelectorAll(".inbox-upload.landed")).map((row) => row.textContent ?? "");
+/** The landed files waiting beside the composer, by their thumbnail's name. */
+const landed = () => Array.from(document.querySelectorAll(".composer-thumb:not(.sending)")).map((thumb) => thumb.getAttribute("title") ?? "");
+/** The files still on their way, likewise. */
+const sending = () => Array.from(document.querySelectorAll(".composer-thumb.sending")).map((thumb) => thumb.getAttribute("title") ?? "");
 /** The prompt the phone reported as sent — the words that went out. */
 const reportedPrompt = (fetchMock: ReturnType<typeof vi.fn>) => {
   const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/prompt"));
@@ -181,7 +184,7 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     fireEvent.change(composer(), { target: { value: "look at this" } });
 
     pick([new File(["abc"], "IMG_0042.jpg", { type: "image/jpeg" })]);
-    expect(screen.getByRole("status").textContent).toContain("IMG_0042.jpg");
+    expect(sending()).toEqual(["IMG_0042.jpg"]);
     await settle(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -193,7 +196,7 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     expect(init.body).toBeInstanceOf(File);
 
     // Delivered: the draft is left alone — the reader may still be typing —
-    // and the file waits in a row of its own.
+    // and the file waits as a thumbnail beside it, never as `@` text in it.
     expect(composer().value).toBe("look at this");
     expect(landed()).toHaveLength(1);
     expect(landed()[0]).toContain("IMG_0042.jpg");
@@ -240,7 +243,7 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     expect(reportedPrompt(fetchMock)).toBe("half a sent");
   });
 
-  it("keeps a landed file's reference in the saved draft when the screen goes away", async () => {
+  it("keeps a landed file with the saved draft and brings it back as a thumbnail, not as @ text", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, {
       attachment: { name: "20261002-090000-a.png", reference: `${NAMES.inboxDir}/20261002-090000-a.png`, size: 3 },
     }));
@@ -254,7 +257,11 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
 
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
-    expect(composer().value).toBe(`see @${NAMES.inboxDir}/20261002-090000-a.png `);
+    expect(composer().value).toBe("see ");
+    expect(landed()).toEqual(["a.png"]);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle(0);
+    expect(reportedPrompt(fetchMock)).toBe(`see @${NAMES.inboxDir}/20261002-090000-a.png `);
   });
 
   it("reports a refused or oversized file and keeps the draft untouched", async () => {
@@ -309,7 +316,8 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
 
     fireEvent.click(screen.getByRole("button", { name: /Screenshot_2026-09-03\.png/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    // A pending row names the file while the desktop copies it.
+    // A pending thumbnail names the file while the desktop copies it.
+    expect(sending()).toEqual(["Screenshot_2026-09-03.png"]);
     expect(screen.getByRole("status").textContent).toContain("Copying from the desktop");
     await settle(0);
 

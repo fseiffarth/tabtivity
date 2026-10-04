@@ -1,3 +1,4 @@
+import { NAMES } from "../../../src/lib/brand";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
@@ -10,6 +11,7 @@ import { OutboxViewer, type MarkupNewTab, type MarkupSend, type MarkupTarget } f
 import type { AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
+import { ComposerThumb, InboxAlbum, leafName } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -26,6 +28,7 @@ import {
   getAgentStatus,
   getSchedules,
   getTranscript,
+  inboxFileUrl,
   listDesktopImages,
   listOutbox,
   MAX_INBOX_FILE,
@@ -111,6 +114,7 @@ import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../termina
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, arrivedPending, pendingPrompt, reworded, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { outboxPosts, type OutboxPost as ChatPost } from "../terminal/outboxPosts";
+import { inboxLeaves, useInboxFiles, withoutInboxReferences } from "../terminal/inboxRefs";
 import { afterClear, clearMark, type ClearMark } from "../terminal/clearedSession";
 import { onHeldPatched, patchHeld, readHeld, stillHeld, writeHeld } from "../terminal/heldPrompts";
 import { ageLabel, sizeLabel } from "../terminal/fileLabels";
@@ -331,6 +335,26 @@ interface InboxUpload {
   /** The desktop's project-relative reference, once the file has landed. */
   reference?: string;
   failure?: string;
+  /** The phone's own copy of a picture (an object URL), shown while it
+   * travels and after; the inbox's copy stands in for the others. */
+  preview?: string;
+}
+
+/** The inbox leaf a landed file's reference names. */
+const leafOfReference = (reference: string) => reference.slice(reference.lastIndexOf("/") + 1);
+
+/** A stored draft as the composer shows it: the inbox references it carried
+ * (`withAttachments` folded them in when the screen went away) lifted back
+ * out as landed files beside the draft, not as `@` text in it. */
+function liftedDraft(stored: string): { text: string; uploads: InboxUpload[] } {
+  const leaves = inboxLeaves(stored);
+  if (leaves.length === 0) return { text: stored, uploads: [] };
+  const lifted = withoutInboxReferences(stored);
+  return {
+    text: lifted && /\s$/u.test(stored) ? `${lifted} ` : lifted,
+    // Negative ids: never one `uploadSeq` hands out.
+    uploads: leaves.map((leaf, index) => ({ id: -1 - index, name: leafName(leaf), source: "phone", reference: `${NAMES.inboxDir}/${leaf}` })),
+  };
 }
 
 /** Whether a file is still on its way — Send waits for it. */
@@ -458,6 +482,28 @@ const PromptText = memo(function PromptText({ text, links }: { text: string; lin
   return <div className="transcript-md" {...links} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
+/** Where a prompt bubble's inbox files come from and go to. */
+interface ChatInbox {
+  tabId: string;
+  files: ReadonlyMap<string, OutboxFile | null>;
+  onOpen: (file: OutboxFile) => void;
+  onSettle?: () => void;
+}
+
+/** A prompt's words, with the files it sent from the phone drawn above them
+ * as pictures — a messenger's picture with its caption — and their `@`
+ * references left out of the words. Both follow from the text alone, so a
+ * shown bubble keeps its shape. */
+function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers; inbox?: ChatInbox }) {
+  const leaves = useMemo(() => inbox ? inboxLeaves(text) : [], [inbox, text]);
+  if (!inbox || leaves.length === 0) return <PromptText text={text} links={links} />;
+  const words = withoutInboxReferences(text);
+  return <>
+    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} />
+    {words && <PromptText text={words} links={links} />}
+  </>;
+}
+
 /** A subagent the agent spawned, in its place in the chat: what it was sent
  * to do under its kind, when it started, a tap away from its own
  * conversation. Not a bubble — the agent did not say it — but a card on the
@@ -499,7 +545,7 @@ function SubagentCard({ turn, label, untested, time, onOpen }: {
  * `part` draws only the settled chat or only the prompts the desktop still
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", onOpenAgent, onResend, onEdit, posts, renderPost }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", onOpenAgent, onResend, onEdit, posts, renderPost, inbox }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -517,6 +563,9 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   /** The agent's files to draw after each record, by its index. */
   posts?: ReadonlyMap<number, readonly ChatPost[]>;
   renderPost?: (post: ChatPost) => ReactNode;
+  /** The files a prompt sent into the project inbox, shown in its bubble as
+   * pictures in place of their `@` references (`InboxAlbum`). */
+  inbox?: ChatInbox;
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
@@ -543,8 +592,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       : turn.command
       ? <CommandDivider command={turn.command} label={promptLabel} press={hold(turn.key, () => turn.text)} />
       : turn.kind === "prompt"
-      ? <div className="readable-turn user" role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...hold(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
-          <PromptText text={turn.text} links={links} />
+      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...hold(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
+          <PromptBody text={turn.text} links={links} inbox={inbox} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
           {/* The link never acknowledged this prompt's frames: it stays where
@@ -809,7 +858,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
    * leaving for the tab list unmounts this screen and the phone cold-starts the
    * PWA whenever it likes, and a message half-typed on the way to the desk was
    * gone by the time the reader came back to finish it. */
-  const [draft, setDraft] = useState(() => readDraft(tab.id));
+  const [draft, setDraft] = useState(() => liftedDraft(readDraft(tab.id)).text);
   /** The draft as it stands, for the two writers below — neither of them may
    * re-subscribe per keystroke. */
   const draftRef = useRef(draft);
@@ -1000,8 +1049,18 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const [desktopSheet, setDesktopSheet] = useState(false);
   const [desktopImages, setDesktopImages] = useState<DesktopImage[] | null>(null);
   const [desktopFailure, setDesktopFailure] = useState("");
-  const [uploads, setUploads] = useState<InboxUpload[]>([]);
+  const [uploads, setUploads] = useState<InboxUpload[]>(() => liftedDraft(readDraft(tab.id)).uploads);
   uploadsRef.current = uploads;
+  // A picture's own copy is let go once its file leaves the composer.
+  const previewUrls = useRef(new Set<string>());
+  useEffect(() => {
+    const live = new Set(uploads.flatMap((upload) => upload.preview ? [upload.preview] : []));
+    for (const url of previewUrls.current) if (!live.has(url)) URL.revokeObjectURL?.(url);
+    previewUrls.current = live;
+  }, [uploads]);
+  useEffect(() => () => {
+    for (const url of previewUrls.current) URL.revokeObjectURL?.(url);
+  }, []);
   const uploading = uploads.some(uploadInFlight);
   const attached = uploads.some((upload) => upload.reference !== undefined && !upload.failure);
   /** The pictures the agent left in the project's `.tabtivity/outbox/` for this
@@ -1019,6 +1078,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const [gallery, setGallery] = useState(false);
   /** The picture open full-screen. */
   const [outboxOpen, setOutboxOpen] = useState<OutboxFile | null>(null);
+  /** A file the reader sent, opened from its prompt's bubble. */
+  const [inboxOpen, setInboxOpen] = useState<OutboxFile | null>(null);
   /** The stored session behind an agent tab (`getTranscript`): `null` until
    * the first read answers. Focus reads from it whenever it is available and
    * the reader has not switched the view to the screen. */
@@ -1162,7 +1223,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     viewChosen.current = readTerminalView(viewAgentOf(tab)) !== null;
     // The draft is the tab's, not the screen's: this tab's own half-typed
     // message, which is nothing at all for most of them (`drafts.ts`).
-    setDraft(readDraft(tab.id));
+    const lifted = liftedDraft(readDraft(tab.id));
+    setDraft(lifted.text);
     setTranscript(null);
     // What the desktop still holds for this tab is still the reader's.
     const held = readHeld(tab.id);
@@ -1198,7 +1260,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     setLimits({});
     setAddSheet(false);
     setDesktopSheet(false);
-    setUploads([]);
+    setUploads(lifted.uploads);
     uploadRun.current += 1;
     setSwitching("");
     setSwitchFailed("");
@@ -2046,6 +2108,13 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   /** The files the agent sent while this conversation ran, as its messages. */
   // The gallery holds every file of the project; the chat only what this tab sent.
   const chatPosts = useMemo(() => outboxPosts(sessionEntries, outbox.filter((file) => file.from_tab)), [sessionEntries, outbox]);
+  /** What the phone sent into the inbox, as the chat's prompts and the
+   * composer name it — described once by the desktop for their previews. */
+  const inboxNamed = useMemo(() => [...new Set([
+    ...sessionEntries.flatMap((entry) => entry.kind === "prompt" ? inboxLeaves(entry.text) : []),
+    ...uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [leafOfReference(upload.reference)]),
+  ])], [sessionEntries, uploads]);
+  const inboxFiles = useInboxFiles(tab.id, inboxNamed);
   /** The open subagent's conversation, once read. */
   const subToken = openStep?.token;
   const subTranscript = subRead && subRead.token === subToken ? subRead.transcript : null;
@@ -2180,6 +2249,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     setOutbox([]);
     setGallery(false);
     setOutboxOpen(null);
+    setInboxOpen(null);
     let stopped = false;
     let inflight: AbortController | undefined;
     const poll = () => {
@@ -2244,16 +2314,17 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     return () => window.clearInterval(timer);
   }, [tab.kind]);
   useEffect(() => {
-    if (!outboxOpen && !gallery) return;
+    if (!outboxOpen && !gallery && !inboxOpen) return;
     // The viewer opens from the gallery, so Escape closes the top one first.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (outboxOpen) setOutboxOpen(null);
+      else if (inboxOpen) setInboxOpen(null);
       else setGallery(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [outboxOpen, gallery]);
+  }, [outboxOpen, gallery, inboxOpen]);
   /** A picture, a text or a PDF opens full-screen here; in an agent tab the
    * viewer also carries **Mark up**. */
   const openOutbox = useCallback((file: OutboxFile) => setOutboxOpen(file), []);
@@ -2265,6 +2336,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     if (atBottomRef.current && stream && typeof stream.scrollTo === "function") stream.scrollTo({ top: stream.scrollHeight });
   }, []);
   const renderPost = useCallback((post: ChatPost) => <OutboxPost scope={outboxScope} post={post} onOpen={openOutbox} onSettle={settlePost} />, [outboxScope, openOutbox, settlePost]);
+  const chatInbox = useMemo<ChatInbox>(() => ({ tabId: tab.id, files: inboxFiles, onOpen: setInboxOpen, onSettle: settlePost }), [tab.id, inboxFiles, settlePost]);
+  const inboxScope = useMemo(() => ({ inbox: tab.id }), [tab.id]);
   /** Removes one of the files the agent sent, from the tile's own confirm — the
    * same removal the project screen's shelf does, through this tab's scope. The
    * row goes now rather than at the next poll, and the sheet closes with the
@@ -3259,7 +3332,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     setSwitching("");
     setSwitchFailed(value);
   };
-  const sheetUp = modelSheet || modeSheet || statusSheet || desktopSheet || gallery || outboxOpen !== null;
+  const sheetUp = modelSheet || modeSheet || statusSheet || desktopSheet || gallery || outboxOpen !== null || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
   }, [sheetUp]);
@@ -3287,7 +3360,9 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
         setUploads((current) => [...current, { id, name, source: "phone", failure: UPLOAD_FAILURES.file_too_large }]);
         continue;
       }
-      setUploads((current) => [...current, { id, name, source: "phone" }]);
+      // Only the formats an `<img>` shows everywhere — the inbox serves the same.
+      const preview = /^image\/(png|jpeg|gif|webp)$/u.test(file.type) && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+      setUploads((current) => [...current, { id, name, source: "phone", preview }]);
       void uploadToInbox(tab.id, file, name).then(
         (attachment) => {
           if (uploadRun.current !== run) return;
@@ -3889,7 +3964,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
                 : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span></div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.onScreen") && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -3914,7 +3989,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
                   </div>}
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
-                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} />}
+                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox} />}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>Waiting for output</strong><span>The exact terminal is running behind this view.</span></div>
@@ -3968,11 +4043,24 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       </div>}
       {clearRefused && liveBusy && <div className="voice-feedback" role="status">{t("mobile.composer.clearBusy")}{isUntested("mobile.composer.clearBusy") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
       {lastSent && !sessionShown && <div className="last-sent"><span>Sent</span><p>{lastSent}</p></div>}
-      {uploads.map((upload) => upload.failure
-        ? <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{upload.failure}</span><button onClick={() => dismissUpload(upload.id)} aria-label={`Dismiss ${upload.name}`}>✕</button></div>
-        : upload.reference !== undefined
-          ? <div key={upload.id} className="inbox-upload landed" role="status"><strong>{upload.name}</strong><span>{t("mobile.inbox.attached")}{isUntested("mobile.composer.attachHeld") && <> · <em>{t("mobile.focus.untested")}</em></>}</span><button onPointerDown={(event) => event.preventDefault()} onClick={() => dismissUpload(upload.id)} aria-label={t("mobile.inbox.detach", { name: upload.name })} title={t("mobile.inbox.detach", { name: upload.name })}>✕</button></div>
-          : <div key={upload.id} className="inbox-upload" role="status"><strong>{upload.name}</strong><span>{upload.source === "desktop" ? "Copying from the desktop…" : "Sending to the project inbox…"} {t("mobile.inbox.sendWaits")}</span></div>)}
+      {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{upload.failure}</span><button onClick={() => dismissUpload(upload.id)} aria-label={`Dismiss ${upload.name}`}>✕</button></div>)}
+      {/* What goes with the next message, as pictures beside the draft —
+          never as `@` text in it (`withAttachments` adds the references on
+          Send). */}
+      {uploads.some((upload) => !upload.failure) && <div className="composer-attachments" role="group" aria-label={t("mobile.inbox.attached")}>
+        {uploads.map((upload) => {
+          if (upload.failure) return null;
+          const leaf = upload.reference === undefined ? undefined : leafOfReference(upload.reference);
+          const known = leaf === undefined ? undefined : inboxFiles.get(leaf);
+          const picture = upload.preview ?? (known && known.kind.startsWith("image/") ? inboxFileUrl(tab.id, known.name) : undefined);
+          return <ComposerThumb key={upload.id} name={upload.name} picture={picture} kind={known?.kind} sending={leaf === undefined}
+            onRemove={leaf === undefined ? undefined : () => dismissUpload(upload.id)} removeLabel={t("mobile.inbox.detach", { name: upload.name })} />;
+        })}
+        <small className="composer-attachments-note" role="status">
+          {t(!uploading ? "mobile.inbox.attached" : uploads.some((upload) => uploadInFlight(upload) && upload.source === "desktop") ? "mobile.inbox.copyingNote" : "mobile.inbox.sendingNote")}
+          {(isUntested("mobile.composer.attachHeld") || isUntested("mobile.composer.thumbnails")) && <> · <em>{t("mobile.focus.untested")}</em></>}
+        </small>
+      </div>}
       {signIn && !signInSheet && signIn.url !== hiddenSignIn && <div className="sign-in-notice" role="status">
         <span>{t("mobile.signIn.banner", { agent: agentLabel })}</span>
         <button className="primary" onClick={() => setSignInSheet(true)} aria-haspopup="dialog">{t("mobile.signIn.open")}</button>
@@ -4185,6 +4273,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     {gallery && !outboxOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onClose={() => setGallery(false)} />}
     {outboxOpen && <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupTarget}
       newTab={markupNewTab} />}
+    {/* What the reader sent is only looked at: no Mark up, no stepping. */}
+    {inboxOpen && !outboxOpen && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
     {filesOpen && project && filesLabel !== null && <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles}
       markup={markupTarget && { tabId: markupTarget.tabId, onSend: markupTarget.onSend, agent: markupTarget.agent }} showTab={markupNewTab?.show} />}
 
