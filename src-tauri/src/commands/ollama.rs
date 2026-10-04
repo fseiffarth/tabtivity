@@ -32,6 +32,20 @@ pub struct OllamaModelInfo {
     /// on a re-pull), and it is the *same* value the registry answers for
     /// `<name>:<tag>`, which is what makes an update check one HEAD request.
     pub digest: String,
+    /// Bytes the model holds while resident (`/api/ps` `size`, which is not
+    /// the disk size: it includes the KV cache). `0` unless `running`.
+    pub loaded_size: u64,
+    /// `/api/ps` `expires_at`, verbatim. `None` unless `running`.
+    pub expires_at: Option<String>,
+    /// Resident with no expiry in sight — the `keep_alive: -1` loads, which
+    /// Ollama reports as an `expires_at` centuries away. See [`keep_alive_of`].
+    pub pinned: bool,
+    /// Whole seconds until Ollama unloads it; `None` when pinned, idle, or the
+    /// expiry is unreadable or already past.
+    pub expires_in_secs: Option<u64>,
+    /// An Ollama cloud model (its `/api/tags` entry names a `remote_host` /
+    /// `remote_model`): listed, but there is nothing on this machine to load.
+    pub remote: bool,
 }
 
 /// An entry in the built-in catalog of installable models.
@@ -842,47 +856,137 @@ pub async fn list_ollama_models_detailed() -> Result<Vec<OllamaModelInfo>, Strin
     let tags: serde_json::Value =
         serde_json::from_str(&tags_body).map_err(|e| format!("tags json: {e}"))?;
 
-    // Build name→size_vram map for running models; ignore /api/ps errors.
-    let running: std::collections::HashMap<String, u64> = ollama_http("GET", "/api/ps", None)
-        .ok()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["models"].as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|m| {
-            let name = m["name"].as_str()?.to_owned();
-            let vram = m["size_vram"].as_u64().unwrap_or(0);
-            Some((name, vram))
-        })
-        .collect();
+    // What is resident, keyed by name; an /api/ps error reads as "nothing".
+    let running = ollama_http("GET", "/api/ps", None)
+        .map(|b| ps_entries(&b))
+        .unwrap_or_default();
 
     let models = tags["models"]
         .as_array()
         .ok_or("no models field in /api/tags")?;
 
+    let now = chrono::Utc::now();
     Ok(models
         .iter()
         .map(|m| {
             let name = m["name"].as_str().unwrap_or("").to_owned();
             let size = m["size"].as_u64().unwrap_or(0);
             let details = &m["details"];
-            let size_vram = running.get(&name).copied().unwrap_or(0);
+            let ps = running.get(&name);
             let digest = m["digest"].as_str().unwrap_or("").to_owned();
             // One `/api/show` per model on a cold cache, none afterwards.
             let capabilities = model_capabilities(&name, &digest);
+            let expires_at = ps.and_then(|p| p.expires_at.clone());
+            let (pinned, expires_in_secs) = match ps {
+                Some(_) => keep_alive_of(expires_at.as_deref(), now),
+                None => (false, None),
+            };
             OllamaModelInfo {
                 size,
                 parameter_size: details["parameter_size"].as_str().map(String::from),
                 quantization: details["quantization_level"].as_str().map(String::from),
                 family: details["family"].as_str().map(String::from),
-                running: running.contains_key(&name),
-                size_vram,
+                running: ps.is_some(),
+                size_vram: ps.map_or(0, |p| p.vram),
                 capabilities,
                 digest,
+                loaded_size: ps.map_or(0, |p| p.size),
+                expires_at,
+                pinned,
+                expires_in_secs,
+                remote: is_remote_entry(m),
                 name,
             }
         })
         .collect())
+}
+
+/// One resident model as `/api/ps` reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PsEntry {
+    /// `size_vram`: the bytes of it on the GPU.
+    vram: u64,
+    /// `size`: the bytes it holds in memory overall.
+    size: u64,
+    /// `expires_at`, verbatim (RFC 3339).
+    expires_at: Option<String>,
+}
+
+/// The resident models in an `/api/ps` body, keyed by name. A body that is not
+/// one reads as "nothing resident". Pure + tested.
+fn ps_entries(ps_body: &str) -> std::collections::HashMap<String, PsEntry> {
+    serde_json::from_str::<serde_json::Value>(ps_body)
+        .ok()
+        .and_then(|v| v["models"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            let name = m["name"].as_str()?.to_owned();
+            Some((
+                name,
+                PsEntry {
+                    vram: m["size_vram"].as_u64().unwrap_or(0),
+                    size: m["size"].as_u64().unwrap_or(0),
+                    expires_at: m["expires_at"].as_str().map(String::from),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// An expiry further out than this is "stays loaded": Ollama has no "never" in
+/// `/api/ps` and reports a `keep_alive: -1` load as expiring centuries away.
+const PINNED_AFTER_SECS: i64 = 365 * 24 * 60 * 60;
+
+/// `(pinned, seconds left)` for a resident model's `expires_at`. More than a
+/// year away is pinned; a past or unreadable expiry is `(false, None)` — say
+/// nothing rather than a wrong countdown. Pure + tested.
+fn keep_alive_of(
+    expires_at: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (bool, Option<u64>) {
+    let Some(at) = expires_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) else {
+        return (false, None);
+    };
+    let secs = (at.with_timezone(&chrono::Utc) - now).num_seconds();
+    if secs > PINNED_AFTER_SECS {
+        (true, None)
+    } else if secs > 0 {
+        (false, Some(secs as u64))
+    } else {
+        (false, None)
+    }
+}
+
+/// Whether an `/api/tags` entry is an Ollama cloud model: one that names the
+/// remote it runs on. Nothing about it is on this machine to load. Pure + tested.
+fn is_remote_entry(entry: &serde_json::Value) -> bool {
+    ["remote_host", "remote_model"]
+        .iter()
+        .any(|k| entry[*k].as_str().is_some_and(|s| !s.trim().is_empty()))
+}
+
+/// The installed model `wanted` names, as `/api/tags` lists it: an exact match,
+/// or `wanted:latest` for an untagged name — never a prefix (`qwen3` is not
+/// `qwen3.5:9b`). `Err("model_not_installed")` when nothing matches (an
+/// unreadable body included: fail closed), `Err("model_not_local")` for a cloud
+/// entry. Returning the *listed* spelling matters: it is the key the load's
+/// progress events carry. Pure + tested.
+fn installed_match(tags_body: &str, wanted: &str) -> Result<String, &'static str> {
+    let tags = serde_json::from_str::<serde_json::Value>(tags_body)
+        .map_err(|_| "model_not_installed")?;
+    let entries = tags["models"].as_array().ok_or("model_not_installed")?;
+    let latest = (!wanted.contains(':')).then(|| format!("{wanted}:latest"));
+    let found = entries.iter().find(|m| {
+        m["name"]
+            .as_str()
+            .is_some_and(|n| n == wanted || latest.as_deref() == Some(n))
+    });
+    match found {
+        None => Err("model_not_installed"),
+        Some(m) if is_remote_entry(m) => Err("model_not_local"),
+        Some(m) => Ok(m["name"].as_str().unwrap_or(wanted).to_owned()),
+    }
 }
 
 /// Unload a model from memory without deleting it (sets keep_alive=0).
@@ -1300,6 +1404,14 @@ pub async fn load_ollama_model(
     model: String,
     device: Option<LoadDevice>,
 ) -> Result<(), String> {
+    run_load(&app, &model, device.unwrap_or_default())
+}
+
+/// The load itself, shared by [`load_ollama_model`] and
+/// [`load_installed_ollama_model`]: `ollama-load-progress` `loading`, the
+/// blocking warm-up with `keep_alive: -1`, then `success`/`error` — all keyed by
+/// `model` exactly as given.
+fn run_load(app: &tauri::AppHandle, model: &str, device: LoadDevice) -> Result<(), String> {
     use tauri::Emitter;
 
     let _ = app.emit(
@@ -1307,7 +1419,7 @@ pub async fn load_ollama_model(
         serde_json::json!({ "model": model, "status": "loading" }),
     );
     let mut payload = serde_json::json!({"model": model, "keep_alive": -1});
-    if let Some(n) = device.unwrap_or_default().num_gpu() {
+    if let Some(n) = device.num_gpu() {
         payload["options"] = serde_json::json!({ "num_gpu": n });
     }
     let body = payload.to_string();
@@ -1321,6 +1433,88 @@ pub async fn load_ollama_model(
     );
     result?;
     Ok(())
+}
+
+/// Models a phone-started load ([`load_installed_ollama_model`]) is warming
+/// right now. A second request for one of them starts nothing, which bounds the
+/// blocking threads a phone can hold open (each may sit in a 600 s read) at one
+/// per installed model.
+fn phone_loads() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// A claim on one [`phone_loads`] entry, released on drop — so a load that
+/// errors or panics can never leave its model stuck as "already loading".
+struct PhoneLoadClaim(String);
+
+impl PhoneLoadClaim {
+    /// Claim `model`, or `None` when a phone load of it is already running.
+    fn claim(model: &str) -> Option<Self> {
+        let mut set = phone_loads()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        set.insert(model.to_owned())
+            .then(|| PhoneLoadClaim(model.to_owned()))
+    }
+}
+
+impl Drop for PhoneLoadClaim {
+    fn drop(&mut self) {
+        phone_loads()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// Load an **installed** model into memory (Ollama picks the device, kept
+/// resident with `keep_alive: -1`) without waiting for it: the answer comes as
+/// soon as the request checks out, and the load runs on a detached thread,
+/// reporting through the same `ollama-load-progress` events as
+/// [`load_ollama_model`]. Made for the phone, whose bridge deadline is seconds
+/// while a load can take minutes.
+///
+/// The name must be one `/api/tags` lists (see [`installed_match`]) — that is the
+/// no-download guarantee: whatever Ollama might do with an unknown name, this
+/// never sends one. Refusals are bare codes: `ollama_not_running`,
+/// `model_not_installed`, `model_not_local`. A model a phone load is already
+/// warming is not loaded twice. Returns the name as listed (`llama3` →
+/// `llama3:latest`), the key the progress events use.
+///
+/// Exit does not wait for the load thread; an owned server torn down at exit
+/// makes its read fail.
+#[tauri::command]
+pub async fn load_installed_ollama_model(
+    app: tauri::AppHandle,
+    model: String,
+) -> Result<String, String> {
+    validate_model_name(&model)?;
+    let wanted = model.trim().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let tags = ollama_http("GET", "/api/tags", None).map_err(|e| {
+            if e == "not_running" {
+                "ollama_not_running".to_owned()
+            } else {
+                e
+            }
+        })?;
+        let listed = installed_match(&tags, &wanted).map_err(str::to_owned)?;
+        if let Some(claim) = PhoneLoadClaim::claim(&listed) {
+            let name = listed.clone();
+            std::thread::Builder::new()
+                .name("ollama-phone-load".into())
+                .spawn(move || {
+                    let _claim = claim;
+                    let _ = run_load(&app, &name, LoadDevice::Auto);
+                })
+                .map_err(|e| format!("could not start the load: {e}"))?;
+        }
+        Ok(listed)
+    })
+    .await
+    .map_err(|e| format!("load task failed: {e}"))?
 }
 
 /// Pull (download or update) a model from the Ollama registry, streaming
@@ -2758,6 +2952,39 @@ fn systemd_ollama_active() -> bool {
 /// is torn down again at exit — see [`shutdown_owned_server`].
 #[tauri::command]
 pub async fn ensure_ollama_running() -> Result<(), String> {
+    ensure_running(true)
+}
+
+/// [`ensure_ollama_running`] for a start nobody is sitting at the desktop for
+/// (the phone): the systemd step runs `systemctl --no-ask-password start`, so it
+/// fails rather than popping a polkit dialog, and the owned `ollama serve`
+/// fallback — torn down at exit like any other — takes over. Runs off the async
+/// runtime: it can block for 16 s or more.
+#[tauri::command]
+pub async fn ensure_ollama_running_unattended() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| ensure_running(false))
+        .await
+        .map_err(|e| format!("start task failed: {e}"))?
+}
+
+/// The `systemctl` arguments that start the Ollama unit. Without
+/// `ask_password`, `--no-ask-password` makes a start that needs authorization
+/// fail instead of prompting. Pure + tested.
+#[cfg(target_os = "linux")]
+fn systemctl_start_args(ask_password: bool) -> &'static [&'static str] {
+    if ask_password {
+        &["start", "ollama"]
+    } else {
+        &["--no-ask-password", "start", "ollama"]
+    }
+}
+
+/// The core of [`ensure_ollama_running`] / [`ensure_ollama_running_unattended`].
+/// `ask_password` only matters to the Linux systemd step.
+fn ensure_running(ask_password: bool) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = ask_password;
+
     // Resolve first, so a misconfigured `ollama_host` reports *that* instead of
     // "started but did not become reachable" eight seconds later.
     let addr = ollama_addr()?;
@@ -2785,7 +3012,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
     if addr == DEFAULT_OLLAMA_ADDR {
         let was_active = systemd_ollama_active();
         let service_started = std::process::Command::new("systemctl")
-            .args(["start", "ollama"])
+            .args(systemctl_start_args(ask_password))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -2867,6 +3094,24 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
 /// checks — including a bracketed IPv6 literal.
 fn addr_is_loopback(addr: &str) -> bool {
     split_host_port(addr).is_some_and(|(host, _)| host_is_loopback(host))
+}
+
+/// `"local"` or `"remote"` for an already-resolved address. Pure + tested.
+fn server_kind(addr: &str) -> &'static str {
+    if addr_is_loopback(addr) {
+        "local"
+    } else {
+        "remote"
+    }
+}
+
+/// Whether the configured Ollama server is on this machine (`"local"`) or
+/// another (`"remote"`); a bad `ollama_host` is the `Err`. Lets the phone
+/// bridge tell a stopped local server (startable) from one it can do nothing
+/// about, without re-implementing [`resolve_ollama_addr`].
+#[tauri::command]
+pub async fn ollama_server_kind() -> Result<&'static str, String> {
+    Ok(server_kind(&ollama_addr()?))
 }
 
 fn wait_for_ollama(deadline: Instant) -> bool {
@@ -5662,5 +5907,137 @@ mod tests {
             .as_array()?
             .iter()
             .find_map(|m| Some(m["name"].as_str()?.to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod phone_control_tests {
+    use super::*;
+
+    /// The body shape the live server (0.34.4) answers, trimmed.
+    const PS_BODY: &str = r#"{"models":[{"name":"nemotron-3.5-lightning:30b","model":"nemotron-3.5-lightning:30b","size":26783818710,"digest":"e7a6","details":{"parameter_size":"32.9B","quantization_level":"Q4_K_M"},"expires_at":"2319-01-14T10:20:46.070730299+01:00","size_vram":26783818710,"context_length":262144},{"name":"qwen3:8b","size":7100000000,"size_vram":0}]}"#;
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn ps_entries_reads_name_size_vram_and_expiry() {
+        let ps = ps_entries(PS_BODY);
+        assert_eq!(ps.len(), 2);
+        assert_eq!(
+            ps["nemotron-3.5-lightning:30b"],
+            PsEntry {
+                vram: 26_783_818_710,
+                size: 26_783_818_710,
+                expires_at: Some("2319-01-14T10:20:46.070730299+01:00".into()),
+            }
+        );
+        assert_eq!(
+            ps["qwen3:8b"],
+            PsEntry { vram: 0, size: 7_100_000_000, expires_at: None }
+        );
+        assert!(ps_entries("garbage").is_empty());
+        assert!(ps_entries(r#"{"models":[]}"#).is_empty());
+    }
+
+    #[test]
+    fn keep_alive_tells_pinned_from_a_countdown() {
+        let now = at("2026-10-04T12:00:00Z");
+        // `keep_alive: -1`, as the live server reports it.
+        assert_eq!(
+            keep_alive_of(Some("2319-01-14T10:20:46.070730299+01:00"), now),
+            (true, None)
+        );
+        assert_eq!(keep_alive_of(Some("2026-10-04T12:04:00Z"), now), (false, Some(240)));
+        assert_eq!(
+            keep_alive_of(Some("2026-10-04T14:04:00+02:00"), now),
+            (false, Some(240)),
+            "the offset is honoured"
+        );
+        assert_eq!(keep_alive_of(Some("2026-10-04T11:59:00Z"), now), (false, None));
+        assert_eq!(keep_alive_of(None, now), (false, None));
+        assert_eq!(keep_alive_of(Some("soon"), now), (false, None));
+    }
+
+    const TAGS_BODY: &str = r#"{"models":[
+        {"name":"llama3:latest","model":"llama3:latest","size":1},
+        {"name":"qwen3.5:9b","model":"qwen3.5:9b","size":2},
+        {"name":"hf.co/u/m:q4","size":3},
+        {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443","size":4}
+    ]}"#;
+
+    #[test]
+    fn installed_match_is_exact_or_latest_never_a_prefix() {
+        assert_eq!(installed_match(TAGS_BODY, "qwen3.5:9b"), Ok("qwen3.5:9b".into()));
+        assert_eq!(installed_match(TAGS_BODY, "hf.co/u/m:q4"), Ok("hf.co/u/m:q4".into()));
+        // An untagged name means `:latest`, and the listed spelling comes back.
+        assert_eq!(installed_match(TAGS_BODY, "llama3"), Ok("llama3:latest".into()));
+        assert_eq!(installed_match(TAGS_BODY, "llama3:latest"), Ok("llama3:latest".into()));
+        // No prefix match, in either direction.
+        assert_eq!(installed_match(TAGS_BODY, "qwen3"), Err("model_not_installed"));
+        assert_eq!(installed_match(TAGS_BODY, "qwen3.5"), Err("model_not_installed"));
+        assert_eq!(installed_match(TAGS_BODY, "llama3:8b"), Err("model_not_installed"));
+        assert_eq!(installed_match(TAGS_BODY, "mistral"), Err("model_not_installed"));
+        // A cloud model is listed but has nothing here to load.
+        assert_eq!(installed_match(TAGS_BODY, "gpt-oss:120b-cloud"), Err("model_not_local"));
+        // An unreadable list fails closed.
+        assert_eq!(installed_match("garbage", "llama3"), Err("model_not_installed"));
+        assert_eq!(installed_match("{}", "llama3"), Err("model_not_installed"));
+    }
+
+    #[test]
+    fn remote_entries_name_a_remote() {
+        assert!(is_remote_entry(&serde_json::json!({"name":"a","remote_host":"https://x"})));
+        assert!(is_remote_entry(&serde_json::json!({"name":"a","remote_model":"b"})));
+        assert!(!is_remote_entry(&serde_json::json!({"name":"a"})));
+        assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":""})));
+        assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":null})));
+    }
+
+    #[test]
+    fn server_kind_judges_the_resolved_literal() {
+        for local in ["127.0.0.1:11434", "localhost:11434", "[::1]:11434", "127.0.0.1:11500"] {
+            assert_eq!(server_kind(local), "local", "{local}");
+        }
+        for remote in ["192.0.2.7:11434", "gpu-box:11434", "[2001:db8::1]:11434"] {
+            assert_eq!(server_kind(remote), "remote", "{remote}");
+        }
+        // What the resolver hands over for the default and for bind-all.
+        assert_eq!(server_kind(&resolve_ollama_addr(None, false).unwrap()), "local");
+        assert_eq!(server_kind(&resolve_ollama_addr(Some("0.0.0.0:11434"), false).unwrap()), "local");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unattended_start_never_asks_for_a_password() {
+        assert!(systemctl_start_args(false).contains(&"--no-ask-password"));
+        assert!(!systemctl_start_args(true).contains(&"--no-ask-password"));
+        for ask in [false, true] {
+            assert!(systemctl_start_args(ask).ends_with(&["start", "ollama"]));
+        }
+    }
+
+    #[test]
+    fn a_phone_load_claim_dedupes_and_releases_on_drop() {
+        let model = "phone-claim-test:1b";
+        let first = PhoneLoadClaim::claim(model).expect("a free model can be claimed");
+        assert!(PhoneLoadClaim::claim(model).is_none(), "a running load is not started twice");
+        let other = PhoneLoadClaim::claim("phone-claim-test:2b");
+        assert!(other.is_some(), "claims are per model");
+        drop(first);
+        assert!(
+            PhoneLoadClaim::claim(model).is_some(),
+            "the entry goes with the claim, whatever ended the load"
+        );
+
+        // A panicking load thread releases it too.
+        let claim = PhoneLoadClaim::claim(model).unwrap();
+        let _ = std::thread::spawn(move || {
+            let _claim = claim;
+            panic!("load blew up");
+        })
+        .join();
+        assert!(PhoneLoadClaim::claim(model).is_some());
     }
 }
