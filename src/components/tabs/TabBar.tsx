@@ -1664,24 +1664,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         >
           <AddTabMenuList
             groups={[
-              // Closed agent tabs first: bringing one back is the likelier
-              // reason to reach for "+" right after a close than a new one.
-              ...(closedAgentTabs.length > 0
-                ? [{
-                    label: t("newTabMenu.groupRecentlyClosed"),
-                    entries: closedAgentTabs.slice(0, 3).map((closed, i) => ({
-                      key: `reopen:${closed.id}`,
-                      label: closed.tab.label,
-                      dot: "↺",
-                      color: TAB_ACCENT[closed.tab.kind],
-                      shortcut: i === 0 ? ("reopenClosedTab" as const) : undefined,
-                      onPick: () => {
-                        setMenuPos(null);
-                        reopenClosedAgentTab(scope, closed.id);
-                      },
-                    })),
-                  }]
-                : []),
               {
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
@@ -1895,6 +1877,24 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   },
                 }],
               },
+              // Last, so the fixed "new tab" entries keep their positions; the
+              // group only exists while something was closed.
+              ...(closedAgentTabs.length > 0
+                ? [{
+                    label: t("newTabMenu.groupRecentlyClosed"),
+                    entries: closedAgentTabs.slice(0, 3).map((closed, i) => ({
+                      key: `reopen:${closed.id}`,
+                      label: closed.tab.label,
+                      dot: "↺",
+                      color: TAB_ACCENT[closed.tab.kind],
+                      shortcut: i === 0 ? ("reopenClosedTab" as const) : undefined,
+                      onPick: () => {
+                        setMenuPos(null);
+                        reopenClosedAgentTab(scope, closed.id);
+                      },
+                    })),
+                  }]
+                : []),
             ]}
           />
         </ContextMenuPortal>
