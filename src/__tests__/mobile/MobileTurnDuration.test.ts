@@ -68,12 +68,12 @@ describe("agentTurnStartedAt", () => {
 
 describe("turnDuration", () => {
   it("measures a running turn up to the desktop's now", () => {
-    expect(turnDuration({ agent_status: "working", turn_started_at: 1_000, working_at: 241_000 })).toEqual({ ms: 240_000, running: true });
+    expect(turnDuration({ agent_status: "working", turn_started_at: 1_000, working_at: 241_000 })).toEqual({ ms: 240_000, running: true, end: 241_000 });
   });
 
   it("measures a finished turn up to its finish", () => {
-    expect(turnDuration({ agent_status: "done", turn_started_at: 1_000, working_at: 60_000, done_at: 61_000 })).toEqual({ ms: 60_000, running: false });
-    expect(turnDuration({ turn_started_at: 1_000, done_at: 721_000 })).toEqual({ ms: 720_000, running: false });
+    expect(turnDuration({ agent_status: "done", turn_started_at: 1_000, working_at: 60_000, done_at: 61_000 })).toEqual({ ms: 60_000, running: false, end: 61_000 });
+    expect(turnDuration({ turn_started_at: 1_000, done_at: 721_000 })).toEqual({ ms: 720_000, running: false, end: 721_000 });
   });
 
   it("says nothing when the turn's end is unknown", () => {

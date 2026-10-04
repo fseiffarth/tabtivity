@@ -1087,10 +1087,11 @@ fn parse_entries<'a>(
 /// Claude's background subagents (`Agent` calls whose result is only the
 /// launch, `async_launched`), replayed in record order: launched, each is at
 /// work until a task notification says it stopped. Notifications name the
-/// call (`<tool-use-id>`) or only the agent (`<task-id>`, on a later stop);
-/// one that "may be interim" stopped with background work of its own still
-/// running, and works on. A `SendMessage` to a stopped one resumes it, until
-/// its next notification. A notification is recorded more than once (queued,
+/// call (`<tool-use-id>`) or only the agent (`<task-id>`, on a later stop —
+/// or with the id of the `SendMessage` that resumed it); one that "may be
+/// interim" stopped with background work of its own still running, and works
+/// on until its hand-back message brings the final report. A `SendMessage` to
+/// a stopped one resumes it, until its next notification. A notification is recorded more than once (queued,
 /// delivered, absorbed): each counts once, where it is first read, so a copy
 /// delivered after a resume does not end it again.
 #[derive(Default)]
@@ -1119,12 +1120,45 @@ impl BackgroundAgents {
             if !self.seen.insert(note.text.to_string()) || !note.ends || note.interim {
                 continue;
             }
-            let call = note.call.or_else(|| self.calls.get(note.task.as_deref()?).cloned());
+            // A resumed agent's notifications name the `SendMessage` call
+            // that resumed it, not its spawn: those end it by its task id.
+            let call = note
+                .call
+                .filter(|call| self.at_work.contains_key(call))
+                .or_else(|| self.calls.get(note.task.as_deref()?).cloned());
             if let Some(at_work) = call.and_then(|call| self.at_work.get_mut(&call)) {
                 *at_work = false;
             }
         }
+        // Its final report, handed back as a message, ends an agent that only
+        // stopped "interim" — no later notification comes for it.
+        for (agent, text) in claude_handbacks(line) {
+            if !self.seen.insert(text.to_string()) {
+                continue;
+            }
+            if let Some(at_work) = self.calls.get(&agent).and_then(|call| self.at_work.get_mut(call)) {
+                *at_work = false;
+            }
+        }
     }
+}
+
+/// The subagent hand-backs in a raw Claude record — `<agent-message
+/// from="<agent id>">` carrying `[Subagent hand-back]`, a subagent's final
+/// report — queued or delivered: the agent id, and the whole message.
+fn claude_handbacks(line: &str) -> Vec<(String, &str)> {
+    line.split("<agent-message from=")
+        .skip(1)
+        .filter_map(|message| {
+            let text = message.split("</agent-message>").next()?;
+            if !text.contains("[Subagent hand-back]") {
+                return None;
+            }
+            let id = text.trim_start_matches(['\\', '"']);
+            let id = &id[..id.find(['\\', '"'])?];
+            Some((id.to_string(), text))
+        })
+        .collect()
 }
 
 /// The spawn call a Claude `user` record says went to the background
@@ -1972,10 +2006,20 @@ mod tests {
         // agent, ends it.
         assert_eq!(state(&[spawn, launched, &interim]), (true, false));
         assert_eq!(state(&[spawn, launched, &interim, &done]), (false, true));
-        // A message resumes it until it stops again.
+        // A message resumes it until it stops again — a stop that names the
+        // message's call, not the spawn.
         assert_eq!(state(&[spawn, launched, &done, message]), (true, false));
-        let again = note("<usage>2</usage>\\n");
+        let again = note("<tool-use-id>toolu_M</tool-use-id>\\n<usage>2</usage>\\n");
         assert_eq!(state(&[spawn, launched, &done, message, &again]), (false, true));
+        // Its hand-back, queued then delivered, ends an interim stop; a copy
+        // delivered after a resume does not end it again.
+        let handback = "{\"type\":\"queue-operation\",\"operation\":\"enqueue\",\"content\":\"<agent-message from=\\\"a1\\\">\\n[Subagent hand-back] The text below is the final report.\\n</agent-message>\"}\n";
+        let delivered = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message:\\n<agent-message from=\\\"a1\\\">\\n[Subagent hand-back] The text below is the final report.\\n</agent-message>\"}}\n";
+        assert_eq!(state(&[spawn, launched, &interim, handback]), (false, true));
+        assert_eq!(state(&[spawn, launched, &interim, handback, message, delivered]), (true, false));
+        // A message from it that is not its report leaves it at work.
+        let chat = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<agent-message from=\\\"a1\\\">\\nstill going\\n</agent-message>\"}}\n";
+        assert_eq!(state(&[spawn, launched, &interim, chat]), (true, false));
     }
 
     #[test]

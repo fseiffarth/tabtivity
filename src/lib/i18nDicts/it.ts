@@ -4899,6 +4899,7 @@ export const dict: Dict = {
   "mobile.project.subagentsOpen": "Mostra i subagenti di {label}",
   "mobile.project.turnRunning": "da {duration}",
   "mobile.project.turnTook": "ha richiesto {duration}",
+  "mobile.project.turnFinished": "finito {ago}",
   "mobile.project.turnRunningTitle": "Lavora all'attività corrente da {duration}",
   "mobile.project.turnTookTitle": "L'ultima attività ha richiesto {duration}",
   "mobile.project.durationSecs": "{count} s",

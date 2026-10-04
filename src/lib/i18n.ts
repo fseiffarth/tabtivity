@@ -112,6 +112,7 @@ export const enSource = {
   "mobile.project.subagentsOpen": "Show the subagents of {label}",
   "mobile.project.turnRunning": "{duration} so far",
   "mobile.project.turnTook": "took {duration}",
+  "mobile.project.turnFinished": "finished {ago}",
   "mobile.project.turnRunningTitle": "Working on the current task for {duration}",
   "mobile.project.turnTookTitle": "The last task took {duration}",
   "mobile.project.durationSecs": "{count}s",

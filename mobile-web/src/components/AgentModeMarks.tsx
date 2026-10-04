@@ -1,6 +1,7 @@
 import type { TabRow } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { ageLabel } from "../terminal/fileLabels";
 
 /** The desktop tab strip's PLAN and GOAL pills (`TabAgentModeMarks`): the
  *  session's own status line reads plan mode, or a `/goal` is running. The
@@ -37,8 +38,9 @@ export function SubagentCount({ tab, onOpen }: { tab: Pick<TabRow, "agent_subage
  *  one: `running` while the turn is not over (working, or paused on a
  *  question). Every number is the desktop's own clock — for a working tab
  *  `working_at` is the desktop's "now" — so the phone's clock never enters it.
- *  Nothing where the end is unknown: an interrupted turn fires no finish. */
-export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at">): { ms: number; running: boolean } | undefined {
+ *  Nothing where the end is unknown: an interrupted turn fires no finish.
+ *  `end` is when the turn stopped, or the desktop's now while it runs. */
+export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at">): { ms: number; running: boolean; end: number } | undefined {
   const start = tab.turn_started_at;
   if (start === undefined) return undefined;
   const running = tab.agent_status === "working" || tab.agent_status === "question";
@@ -46,7 +48,7 @@ export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at
     ? tab.working_at
     : [tab.done_at, tab.working_at].find((at) => at !== undefined && at >= start);
   if (end === undefined || end < start) return undefined;
-  return { ms: end - start, running };
+  return { ms: end - start, running, end };
 }
 
 /** "42s", "4m", "1h 12m" — a turn's length, as the card says it. */
@@ -59,16 +61,22 @@ export function formatTurnDuration(ms: number, t: ReturnType<typeof useT>): stri
 }
 
 /** The tab's turn length on its card: "4m so far" while the turn is going,
- *  "took 12m" once it is over. Nothing where the desktop gave no reading. */
-export function TurnDuration({ tab }: { tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at"> }) {
+ *  "took 12m · finished 3 h ago" once it is over. Nothing where the desktop
+ *  gave no reading. The age is the phone's clock against the desktop's
+ *  stamp — a rough one, as on the Activity list, which says it on its own
+ *  line and so passes `finished={false}`. */
+export function TurnDuration({ tab, finished = true }: { tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at">; finished?: boolean }) {
   const t = useT();
   const turn = turnDuration(tab);
   if (!turn) return null;
   const duration = formatTurnDuration(turn.ms, t);
+  const ago = !turn.running && finished ? ageLabel(Math.max(0, (Date.now() - turn.end) / 1000)) : undefined;
   return <>
     <small className={`agent-turn-time${turn.running ? " running" : ""}`} title={t(turn.running ? "mobile.project.turnRunningTitle" : "mobile.project.turnTookTitle", { duration })}>
       {t(turn.running ? "mobile.project.turnRunning" : "mobile.project.turnTook", { duration })}
+      {ago && ` · ${t("mobile.project.turnFinished", { ago })}`}
     </small>
+    {ago && isUntested("mobile.project.turnFinishedAgo") && <span className="untested">{t("mobile.newTab.untested")}</span>}
     {isUntested("mobile.project.turnDuration") && <span className="untested">{t("mobile.newTab.untested")}</span>}
   </>;
 }
