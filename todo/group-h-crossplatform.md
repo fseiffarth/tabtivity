@@ -3801,8 +3801,8 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     the app stops a server it had to start itself; Settings → Mobile →
     Local models from the phone off → the row disappears (and comes back
     when switched on); with the desktop window closed the row and the sheet
-    say to open the app; against a desktop build older than this the row
-    says to update the desktop app; nothing on the phone offers download,
+    say to open the app (against a desktop build older than this they say
+    the same, since it drops the request unread); nothing on the phone offers download,
     update or delete; loading a single model with none resident re-points
     the desktop's roles (expected).
     - [ ] ✅ Works on Linux (X11)

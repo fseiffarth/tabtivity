@@ -288,7 +288,9 @@ Desktop refusals (the code only, never the message; `local_models::refusal`):
   deadline missed, or an answer of another kind) → 503;
 - `unreachable` (Ollama on the desktop failed the window's call, e.g. an
   unload that errored) → 502;
-- `unknown_request` (a window older than this feature) → 400;
+- `unknown_request` (a window whose backend knows the request but whose page
+  does not) → 400. A desktop build older than this feature cannot parse the
+  request and drops the connection, which arrives as `desktop_unavailable`;
 - `applied_response_too_large` / `response_too_large` (the bridge's own) →
   400, as on every list-answering route, so `reloadIfApplied` works;
 - any other code (the bridge's `desktop_error` for a thrown handler, or one
@@ -735,9 +737,12 @@ it. The phone part needs `npm run mobile:bundle`. Never start or stop the app.
   Ollama's documented tags shape. It has not been seen on this machine.
 - **Two Rust halves**: the desktop's `commands::ollama` and the sidecar's
   routes. A sidecar older than this answers 404 for `/api/v1/local-models`;
-  Home then hides the section. A desktop window older than this answers
-  `unknown_request` (400); the Home row and the sheet say to update the
-  desktop app (`mobile.localModels.needsUpdate`).
+  Home then hides the section. A desktop build older than this cannot parse
+  the request and drops the connection (`handle_desktop_stream`), so the
+  sidecar answers 503 `desktop_unavailable` and the phone says to open the
+  app. Only a window whose backend knows the request but whose page does not
+  answers `unknown_request` (400); the Home row and the sheet then say to
+  update the desktop app (`mobile.localModels.needsUpdate`).
 - **Merge interaction** with `docs/mobile_device_scoped_access_plan.md`: the
   router lines and the `mutation_guard` call site (§4.3). No catalog use here.
 - **Energy Saver** suppresses only the launch-time autoload. A phone load is

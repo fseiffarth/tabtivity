@@ -177,9 +177,10 @@ marked.
 
 The desktop window must be open: with Tabtivity closed, the sheet says to open
 the app. A Load that takes longer than the phone waits is not reported as
-failed — the list is read again and shows whether it started. If the phone
-says to update Tabtivity on the desktop, the window is older than this
-feature. It is on by default; switch it off in Settings → Mobile → **Local
+failed — the list is read again and shows whether it started. If it says to
+open the app while Tabtivity is open on the desktop, or says to update
+Tabtivity there, the desktop's Tabtivity is older than this feature: update and
+restart it. It is on by default; switch it off in Settings → Mobile → **Local
 models from the phone** (under **Project access**), and the row disappears.
 
 ## Notifications on the phone

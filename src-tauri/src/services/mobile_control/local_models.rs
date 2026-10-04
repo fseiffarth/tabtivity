@@ -175,7 +175,9 @@ pub fn refusal(code: &str) -> (StatusCode, &'static str) {
         "start_unavailable" => (StatusCode::CONFLICT, "start_unavailable"),
         // Ollama on the desktop did not answer the window.
         "unreachable" => (StatusCode::BAD_GATEWAY, "unreachable"),
-        // A window older than this feature.
+        // A window whose page lacks the request. (A build older than this
+        // feature cannot parse it and drops the connection instead, which
+        // `local_models_response` answers as `desktop_unavailable`.)
         "unknown_request" => (StatusCode::BAD_REQUEST, "unknown_request"),
         // The bridge's own, as every list-answering route forwards them: a
         // write the window made whose fresh list could not be relayed must

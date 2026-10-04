@@ -26,7 +26,9 @@ function unconfirmed(reason: unknown): boolean {
 function failureKey(code: string): TranslationKey {
   if (code === "desktop_unavailable") return "mobile.localModels.needsWindow";
   if (code === "local_models_disabled") return "mobile.localModels.disabled";
-  // A desktop window older than the feature: reachable, but it needs updating.
+  // A window whose backend knows the request but whose page does not. (A
+  // desktop build older than the feature cannot parse the request at all and
+  // reads as `desktop_unavailable`.)
   if (code === "unknown_request") return "mobile.localModels.needsUpdate";
   return "mobile.localModels.failed";
 }
@@ -269,8 +271,9 @@ export function LocalModelsSheet({ onClose, onChange }: {
  * from one read of the list. It is left out entirely when the desktop's switch
  * is off (`403 local_models_disabled`), when the sidecar predates the feature
  * (`404`, or an answer that is not a list), and when Ollama is not installed
- * on the desktop. With no window open it says to open the app; with a window
- * older than the feature (`unknown_request`), to update the desktop app.
+ * on the desktop. With no window open — or a desktop build too old to parse
+ * the request, which drops it — it says to open the app; with a window whose
+ * page lacks the request (`unknown_request`), to update the desktop app.
  */
 export function LocalModelsSection() {
   const t = useT();

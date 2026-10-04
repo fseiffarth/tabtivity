@@ -407,7 +407,7 @@ describe("local models — the Home row", () => {
     expect(screen.getByRole("heading", { name: "Local models" })).toBeTruthy();
   });
 
-  it("says to update the desktop app when its window predates the feature", async () => {
+  it("says to update the desktop app when the window does not know the request", async () => {
     serve(() => json({ error: "unknown_request" }, 400));
     render(<LocalModelsSection />);
     const button = await screen.findByRole("button", { name: /Ollama models on the desktop/ });

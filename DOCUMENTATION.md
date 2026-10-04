@@ -475,9 +475,11 @@ desktop-only: the sidecar refuses any other action with 400
 `unsupported_action` before the desktop is asked, and the load command loads
 only a name `/api/tags` lists. **Settings → Mobile → Local models from the
 phone** (under Project access; unset = on) switches it off — both routes then
-answer 403 `local_models_disabled` and the Home row disappears. A desktop window
-older than the feature answers `unknown_request`, and the phone says to update
-the desktop app.
+answer 403 `local_models_disabled` and the Home row disappears. A desktop build
+older than the feature cannot parse the request and drops the connection, which
+the sidecar cannot tell from no window: 503 `desktop_unavailable`, "open the
+app". Only a window whose backend knows the request but whose page does not
+answers `unknown_request`; the phone then says to update the desktop app.
 
 ### Workspace Apps
 
