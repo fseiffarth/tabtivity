@@ -22,6 +22,10 @@ import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
 // A respawn of the same PTY (`terminal-ready`) makes it live again.
 const exitedKeys = new Set<string>();
 const exitWatches = new Map<string, () => void>();
+// The + menu row (`AgentShortcutSlot.key`: a built-in's cmd, or `custom:<id>`)
+// each docked tab was opened from. The reuse rule compares rows, not commands:
+// a custom agent may run the same binary as a built-in with its own args.
+const dockedRows = new Map<string, string>();
 
 function watchDockedExit(key: string) {
   if (exitWatches.has(key)) return;
@@ -44,6 +48,7 @@ function pruneExitWatches() {
     off();
     exitWatches.delete(key);
     exitedKeys.delete(key);
+    dockedRows.delete(key);
   }
 }
 
@@ -56,6 +61,7 @@ export function __resetOverlayAgentExitWatchForTests(): void {
   for (const off of exitWatches.values()) off();
   exitWatches.clear();
   exitedKeys.clear();
+  dockedRows.clear();
 }
 
 /** What an overlay needs from {@link useOverlayAgent}. */
@@ -96,7 +102,10 @@ export interface OverlayAgentHandle {
  *   no agent behind it passes on.
  *
  * The agent probes run only while `live` (the mail overlay stays mounted when
- * hidden). A chord that beats the first probe is held and run when it lands.
+ * hidden). A chord that beats the first probe is held and run when it lands —
+ * one at a time, dropped if the overlay goes first. Its key is swallowed even
+ * if its number then turns out empty: the answer has to be given while the
+ * event is dispatched.
  */
 export function useOverlayAgent(app: SteeringApp, live: boolean): OverlayAgentHandle {
   const t = useT();
@@ -121,14 +130,14 @@ export function useOverlayAgent(app: SteeringApp, live: boolean): OverlayAgentHa
       setPendingSlot(slot);
       return true;
     }
-    const item = agentShortcutSlots({
+    const row = agentShortcutSlots({
       installedBuiltins: enabledAgents,
       installedCmds: installedCustom,
       customAgents,
       defaultAgentBin,
       agentOrder,
-    })[slot]?.item;
-    if (!item) {
+    })[slot];
+    if (!row) {
       if (slot !== 0) return false;
       setHintAgent(
         AGENT_ITEMS.find((a) => a.cmd === defaultAgentBin)?.label ??
@@ -144,14 +153,15 @@ export function useOverlayAgent(app: SteeringApp, live: boolean): OverlayAgentHa
     if (
       !store.docks[app].open &&
       docked &&
-      docked.cmd === item.cmd &&
+      dockedRows.get(docked.key) === row.key &&
       !dockedTabExited(docked.key)
     ) {
       store.reopen(app);
       return true;
     }
-    addTabToRoot(buildStaticTabSpec(item, rootDir, "", t), (opened) => {
+    addTabToRoot(buildStaticTabSpec(row.item, rootDir, "", t), (opened) => {
       useOverlayAgentStore.getState().dock(app, opened.key);
+      dockedRows.set(opened.key, row.key);
       watchDockedExit(opened.key);
       pruneExitWatches();
     });

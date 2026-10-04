@@ -14,7 +14,9 @@ import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 interface Props {
   /** The overlay this column docks in. */
   app: SteeringApp;
-  /** The docked root tab (`useOverlayAgent().tab`); `null` shows only the hint. */
+  /** The docked root tab (`useOverlayAgent().tab`); `null` shows only the hint.
+   *  Drawn only while `app`'s column is open: Ctrl+1's hint can show the
+   *  column with a docked tab that was hidden, and that tab stays hidden. */
   tab: TabEntry | null;
   /** `useOverlayAgent().hint`. */
   hint: string | null;
@@ -47,7 +49,7 @@ interface Props {
  */
 export function OverlayAgentColumn({
   app,
-  tab,
+  tab: dockedTab,
   hint,
   maxWidth,
   focusRequest = 0,
@@ -57,6 +59,8 @@ export function OverlayAgentColumn({
   const rights = useRootMcpRights();
   const rootDir = useProjectsStore((s) => s.rootDir) ?? "";
   const consoleOpen = useRootOverlayStore((s) => s.open);
+  const open = useOverlayAgentStore((s) => s.docks[app].open);
+  const tab = open ? dockedTab : null;
   const storedWidth = useOverlayAgentStore((s) => s.width);
   // Live width during a resize drag; null when idle (render the stored one).
   const [liveWidth, setLiveWidth] = useState<number | null>(null);

@@ -155,6 +155,15 @@ describe("OverlayAgentColumn", () => {
     expect(screen.queryByTitle("Open in the root console")).toBeNull();
   });
 
+  it("leaves a hidden docked tab hidden when the hint shows the column", async () => {
+    act(() => useOverlayAgentStore.getState().hide("calendar"));
+    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint="Allow Claude in the root console" />);
+
+    expect(screen.getByText("Allow Claude in the root console")).toBeTruthy();
+    expect(screen.queryByTestId("pane")).toBeNull();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
+  });
+
   it("draws min(stored width, maxWidth) and never saves the cap", async () => {
     useOverlayAgentStore.setState({ width: 700 });
     const { rerender } = await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
@@ -162,6 +171,19 @@ describe("OverlayAgentColumn", () => {
 
     rerender(<OverlayAgentColumn app="calendar" tab={tab} hint={null} maxWidth={500} />);
     expect(column().style.width).toBe("500px");
+    expect(useOverlayAgentStore.getState().width).toBe(700);
+  });
+
+  it("a drag held at the cap saves nothing", async () => {
+    useOverlayAgentStore.setState({ width: 700 });
+    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} maxWidth={500} />);
+    const handle = document.querySelector(".overlay-agent-column .subwindow-files-resize")!;
+
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 1000 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 900 });
+    expect(column().style.width).toBe("500px");
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 900 });
+
     expect(useOverlayAgentStore.getState().width).toBe(700);
   });
 

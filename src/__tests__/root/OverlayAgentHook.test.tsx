@@ -17,12 +17,13 @@ const backend = vi.hoisted(() => ({
   snapshot: null as unknown,
 }));
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((cmd: string) => {
+  invoke: vi.fn((cmd: string, args?: { bins?: string[] }) => {
     switch (cmd) {
       case "list_agents":
         return Promise.resolve(backend.agents);
-      case "list_local_drivers":
       case "probe_binaries":
+        return Promise.resolve(args?.bins ?? []);
+      case "list_local_drivers":
         return Promise.resolve([]);
       case "workspace_snapshot":
         return Promise.resolve(backend.snapshot);
@@ -151,6 +152,19 @@ describe("useOverlayAgent", () => {
     expect(rootTabs().map((tab) => tab.cmd)).toEqual(["claude"]);
   });
 
+  it("drops a held chord when the overlay goes away before the probe lands", async () => {
+    const { rerender } = renderHook(({ on }) => useOverlayAgent("todo", on), {
+      initialProps: { on: true },
+    });
+
+    expect(chord("todo", 0)).toBe(true);
+    rerender({ on: false });
+    await act(async () => {});
+
+    expect(rootTabs()).toHaveLength(0);
+    expect(docks().todo).toEqual({ key: null, open: false });
+  });
+
   it("restores an unhydrated root before docking the new tab in it", async () => {
     useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
     backend.snapshot = { tabLayout: [{ label: "Saved shell", cmd: "", cwd: "/r", kind: "shell" }] };
@@ -190,6 +204,23 @@ describe("useOverlayAgent", () => {
     expect(docks().calendar.key).not.toBe(first);
     expect(docks().calendar.key).toBe(rootTabs()[1].key);
     expect(docks().calendar.open).toBe(true);
+  });
+
+  it("mints a new tab for a custom agent that runs the docked built-in's binary", async () => {
+    settings({
+      root_agents: ["claude", "codex"],
+      custom_agents: [{ id: "opus", label: "Claude Opus", cmd: "claude", args: ["--model", "opus"] }],
+    });
+    await mount("calendar");
+    chord("calendar", 0);
+    const first = docks().calendar.key;
+    act(() => useOverlayAgentStore.getState().hide("calendar"));
+
+    expect(chord("calendar", 2)).toBe(true);
+
+    expect(rootTabs().map((tab) => tab.label)).toEqual(["Claude", "Claude Opus"]);
+    expect(docks().calendar.key).not.toBe(first);
+    expect(rootTabs()[1].args).toEqual(expect.arrayContaining(["--model", "opus"]));
   });
 
   it("mints a new tab when the docked agent's program has exited, and reuses a respawned one", async () => {
