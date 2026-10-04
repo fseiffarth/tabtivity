@@ -167,6 +167,11 @@ describe("Mobile settings — box access rows", () => {
     // folder it resolved — and the store takes that record as it is.
     await waitFor(() => expect(useBoxesStore.getState().boxes[0]).toMatchObject({ [MOBILE_ACCESS_KEY]: true, folder: "/boxes/paper" }));
     expect((screen.getByRole("checkbox", { name: "Paper" }) as HTMLInputElement).checked).toBe(true);
+    // The row grew its "All phones ▾" button without remounting the switch,
+    // so keyboard focus stays on the switch that was just toggled.
+    await screen.findByRole("button", { name: "All phones ▾" });
+    expect(screen.getByRole("checkbox", { name: "Paper" })).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
   });
 });
 

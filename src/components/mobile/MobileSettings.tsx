@@ -340,7 +340,8 @@ export function MobileSettings() {
     enabled: boolean,
     list: unknown,
   ) => {
-    if (!enabled) return undefined;
+    // `null`, not `undefined`: the row keeps its shape while off (ToggleRow).
+    if (!enabled) return null;
     const reach = phoneReach(true, list, pairedPhones);
     return (
       <button

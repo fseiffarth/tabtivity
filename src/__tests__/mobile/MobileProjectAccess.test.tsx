@@ -177,6 +177,36 @@ describe("Mobile project access in the file viewer", () => {
     expect(screen.getByRole("menuitemradio", { name: "All phones" })).toHaveProperty("disabled", false);
   });
 
+  it("offers no write that drops a stored list while the paired phones cannot be read", async () => {
+    const user = userEvent.setup();
+    withAccess([PIXEL]);
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "mobile_paired_devices" || command === "mobile_admin") return Promise.reject("unreadable");
+      if (command === "set_project_mobile_access") return Promise.resolve({ enabled: true, devices: null });
+      return backend(command);
+    });
+    render(<SidePanel open />);
+
+    await user.click(await phoneButton(true));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("mobile_paired_devices"));
+    const only = screen.getByRole("menuitemradio", { name: "Only these phones" });
+    expect(only.getAttribute("aria-checked")).toBe("true");
+    expect(only).toHaveProperty("disabled", true);
+    expect(screen.queryAllByRole("menuitemcheckbox")).toHaveLength(0);
+    // Clicking the selected mode again writes nothing either.
+    await user.click(only);
+    expect(invokeMock).not.toHaveBeenCalledWith("set_project_mobile_access", expect.anything());
+    // Only an explicit All phones widens it.
+    await user.click(screen.getByRole("menuitemradio", { name: "All phones" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("set_project_mobile_access", {
+        projectId: project.id,
+        enabled: true,
+        devices: null,
+      });
+    });
+  });
+
   it("turns access off from the picker", async () => {
     const user = userEvent.setup();
     withAccess([PIXEL]);

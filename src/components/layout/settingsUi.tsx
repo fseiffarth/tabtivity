@@ -192,11 +192,14 @@ export function ToggleRow({
   title?: string;
   /** A control of the row's own before the switch (a compact `settings-btn
    *  sm`). The row is then a `<div>` whose label points at the switch, so the
-   *  control is neither part of the switch's name nor a click on the label. */
+   *  control is neither part of the switch's name nor a click on the label.
+   *  A row whose control comes and goes passes `null` while it is gone: the
+   *  row keeps its shape, so toggling never remounts the switch (and drops
+   *  its keyboard focus). */
   aside?: ReactNode;
 }) {
   const id = useId();
-  if (aside) {
+  if (aside !== undefined) {
     return (
       <div className="settings-card-row">
         <label className="settings-card-label" htmlFor={id}>{label}</label>
