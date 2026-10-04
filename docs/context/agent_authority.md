@@ -362,38 +362,62 @@ keyring entry and hands it to each fenced Copilot as `COPILOT_GITHUB_TOKEN`
 keeper moves a `/login` token out of the file within seconds). A harvested
 token replaces a stored one only once GitHub rejects the stored one.
 
-Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Part A)
-take the same keychain route: one key per provider under
+Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Parts
+A and C) take the same keychain route: one key per provider under
 `remote_credentials`' service (account `agent-key:<provider>`), never in a
-file. At spawn they are set as the variable each CLI reads
-(`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, and all four for
-OpenCode; Codex has none) — inside both fence wraps, so a CLI typed into a
-shell tab gets them through the shim too, and in `launch_prep`'s Host-session
-and fence-less-platform arms. Only CLIs listed in `agent_api_key_clis` get
-one; never a remote, container or local-model spawn, nor a subcommand (a
-sign-in tab); a value the user set (or an alias such as
-`ANTHROPIC_AUTH_TOKEN`) wins. On Linux and macOS the spawn carries a key
-under an app-named carrier (`<APP>_AGENT_SECRET_<VAR>`,
-`agent_api_keys::CARRIERS`), and only the carriers are in
-`tmux_local::SECRET_ENV`: on no tmux argv or launcher script, and the
-`update-environment` slots that stay on the user's default tmux server name
-no variable of theirs. Tabtivity's own binary maps a carrier to the CLI's
+file — and since C2 never in an agent process either. `services::api_proxy`,
+a loopback listener of its own (started in `setup`, stopped in the
+`RunEvent::Exit` teardown), holds the keys, cached in memory and re-read after
+a save or remove. A keyed spawn gets a **proxy token** — 32 random bytes,
+memory only, bound to provider + scope + tab — as the CLI's credential
+variable (`ANTHROPIC_AUTH_TOKEN` for Claude, which takes it without its
+custom-key dialog; `GEMINI_API_KEY`), and the CLI's base-URL variable
+(`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) set plain to
+`http://127.0.0.1:<port>/<provider>`. Only CLIs an environment variable can
+point at the proxy keep a row (Claude, Gemini; Codex, Vibe and OpenCode are
+out). The proxy refuses a browser request (`Origin`) or another `Host`,
+needs a live token of the route's provider (`x-api-key`, `Authorization:
+Bearer`, `x-goog-api-key` or `key=`, one value), forwards only the provider's
+allowlisted paths (`/v1/messages`, `count_tokens`, `/v1/models`; Gemini's
+`models/<m>:generateContent` family) to its one fixed HTTPS host with the
+incoming credentials, hop-by-hop headers and `accept-encoding` stripped and
+the real key added in the provider's header, never follows a redirect,
+bounds the body (32 MiB), streams the answer through chunk by chunk, answers
+its own refusals in the provider's error shape (`x-should-retry: false`), and
+logs nothing. A token dies with its tab (`agent_fence::on_tab_gone` →
+`api_proxy::on_tab_gone`); one bound to a local tmux session lives while that
+session does (a project switch or reload kills only the client), a respawn
+of the tab gets the same token back, and every token goes at quit — a clean
+quit also ends Tabtivity's tmux sessions; after a crash a re-attached agent
+holds a dead token. Injection happens inside both fence wraps and in
+`launch_prep`'s Host-session and fence-less-platform arms, only while the
+proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
+shell tab, its own process) gets nothing and stays on its login. Only CLIs
+listed in `agent_api_key_clis` get a token; never a remote, container or
+local-model spawn, nor a subcommand (a sign-in tab); a credential or base URL
+the user set wins. On Linux and macOS the token travels under an app-named
+carrier (`<APP>_AGENT_SECRET_<VAR>`, `agent_api_keys::CARRIERS`), and only the
+carriers are in `tmux_local::SECRET_ENV`: on no tmux argv or launcher script,
+and the `update-environment` slots that stay on the user's default tmux server
+name no variable of theirs. Tabtivity's own binary maps a carrier to the CLI's
 variable and removes every carrier just before the agent runs
 (`services::agent_exec`, `--agent-exec`; `--fence-scope` maps the same way):
 the fence's first step in front of bwrap or `sandbox-exec`, in front of the
 CLI for a Host session; Windows (no tmux) sets the CLI's name directly. That
-step runs outside the fence, so a carrier sets only a CLI key variable
+step runs outside the fence, so a carrier sets only a CLI credential variable
 (`agent_exec::targets`) — never `LD_PRELOAD`, `PATH` or `BASH_ENV` — and
 every other mode of the binary drops any carrier it inherited at start. On
-tmux < 3.2 every carrier is dropped rather than put on the argv. The unfenced
-login shell a fenced pane leaves behind starts with `env -u` over every
-`SECRET_ENV` name — before this it inherited the MCP and Copilot tokens as
-well; the Host session's (the user's own shell) drops the carriers only. A keyed local Claude tab skips `--remote-control`, which API-key auth
-refuses. The CLIs' own approval steps stay theirs (Claude asks once per agent
-home, default No; Gemini needs its `/auth` pick). **Stated, not solved:** the
-agent can read its key, and a project's own CLI config (`ANTHROPIC_BASE_URL`
-in `.claude/settings.json`, an OpenCode `baseURL`, Gemini's `.env`) can send
-it to another host without a tool call — hence the spend-limited-key advice.
+tmux < 3.2 every carrier is dropped rather than put on the argv, and the proxy
+base URL beside it too. The unfenced login shell a fenced pane leaves behind
+starts with `env -u` over every `SECRET_ENV` name; the Host session's (the
+user's own shell) drops the carriers only. A keyed local Claude tab skips
+`--remote-control`, which a gateway credential or base URL refuses. Gemini
+still needs its own `/auth` pick. **What is left:** a project's own CLI
+config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`, Gemini's `.env`) can
+still point the CLI at another host — which then receives only the token,
+worthless off this machine and dead with the tab; and the agent can spend
+through its token while the tab lives (C3's spending limit; the proxy's
+`usage_tap` is the seam where it will read each response's usage).
 
 Composition is explicit:
 

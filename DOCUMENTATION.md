@@ -839,23 +839,31 @@ What survives a relaunch is the agent's own answer: the backend re-applies the
 mode Claude's Stop hook recorded onto the `--resume` line. Args are never
 persisted as the source of truth — they are rebuilt from layout state.
 
-**API keys** (`services/agent_api_keys.rs`, `docs/api_chat_plan.md` Part A). Next
-to the shared logins, Manage CLIs keeps one provider API key per provider
-(Anthropic, OpenAI, Gemini, Mistral) in the OS keychain — never in a file — and
-hands it, at spawn, to the CLIs the user switched on (`agent_api_key_clis`) as
-the variable each reads: Claude, Gemini, Mistral Vibe and OpenCode; Codex
-documents no interactive env route and is left out. Local session tabs only (no
-remote, container, local-model or sign-in tab); a variable the user set wins.
-On Linux and macOS the key travels under an app-named carrier variable — a
-tmux secret (no argv, no launcher script) that names nothing of the user's on
+**API keys** (`services/agent_api_keys.rs`, `services/api_proxy.rs`,
+`docs/api_chat_plan.md` Parts A and C). Next to the shared logins, Manage CLIs
+keeps one provider API key per provider (Anthropic, Gemini) in the OS keychain
+— never in a file — and the key never enters an agent process: a loopback proxy
+inside Tabtivity (`api_proxy`, its own listener, started with the app and
+stopped at quit) holds it. A keyed spawn of a CLI the user switched on
+(`agent_api_key_clis`) gets a random per-tab token, bound to provider, scope and
+tab and revoked when the tab ends, as the CLI's credential variable
+(`ANTHROPIC_AUTH_TOKEN`, `GEMINI_API_KEY`), plus the CLI's base-URL variable
+(`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) pointing at the proxy. The
+proxy forwards only to the provider's fixed HTTPS host, only the API paths the
+CLI needs, with a bounded body, never following a redirect, the response
+streamed through as it arrives, swapping the token for the real key; it logs
+nothing. Only CLIs an environment variable can point at the proxy keep a row:
+Claude and Gemini (Codex, Mistral Vibe and OpenCode are left out). Local session
+tabs only (no remote, container, local-model or sign-in tab, and not a CLI typed
+into a shell tab — the shim process runs no proxy); a variable the user set
+wins. On Linux and macOS the token travels under an app-named carrier variable —
+a tmux secret (no argv, no launcher script) that names nothing of the user's on
 their own tmux server — and Tabtivity's binary (`--agent-exec`,
 `services/agent_exec.rs`) turns it into the CLI's variable just before the
-agent runs (Part C, C1). The CLIs' own prompts
-stay theirs: Claude asks once per project whether to use a detected key and
-defaults to No; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude
-tab runs without Remote Control. The agent can read its own key, and a
-project's CLI config can point the CLI at another host that then receives it —
-the settings text recommends a spend-limited key.
+agent runs (Part C, C1). Claude takes the bearer token without its custom-key
+dialog; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude tab
+runs without Remote Control. A project's CLI config can still point the CLI at
+another host, which then receives only the token — worthless off this machine.
 
 ### Remote, Sync, and Multi-Host
 

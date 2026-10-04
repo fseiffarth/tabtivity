@@ -2522,30 +2522,39 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
 
 - [~] **API keys for agent CLIs** (2026-10-04; ✅ code-complete, automated
-  tests passing — `agent_api_keys` / `tmux_local` / `launch_prep` cargo tests,
-  `AgentApiKeys.test.tsx`, `MobileLaunchOptions`, `MobileSignInTab`; ❌ never
-  live-verified — pills `settings.agentApiKeys`, `settings.agentApiKeys.claude`,
-  `.gemini`, `.vibe`, `.opencode`, `mobile.signIn.apiKey`). Plan:
-  `docs/api_chat_plan.md` Part A. Settings → Agent sandbox → API keys keeps one
-  key per provider in the OS keyring and hands it, at spawn, to the CLIs
-  switched on there (`services::agent_api_keys`). Backend changed: run
-  `npm run backend:stale` and use a rebuilt binary; the phone also needs
-  `npm run mobile:bundle`.
+  tests passing — `agent_api_keys` / `api_proxy` / `tmux_local` /
+  `launch_prep` cargo tests, `AgentApiKeys.test.tsx`, `MobileLaunchOptions`,
+  `MobileSignInTab`; Claude 2.1.288 checked against the proxy and a stub
+  provider (`api_proxy::tests::claude_cli_talks_to_the_proxy`, ignored); ❌
+  never live-verified — pills `settings.agentApiKeys`,
+  `settings.agentApiKeys.claude`, `.gemini`, `mobile.signIn.apiKey`). Plan:
+  `docs/api_chat_plan.md` Parts A and C. Settings → Agent sandbox → API keys
+  keeps one key per provider (Anthropic, Gemini) in the OS keyring; a keyed
+  tab of a CLI switched on there gets a per-tab token for Tabtivity's loopback
+  API proxy (`services::api_proxy`), never the key. Mistral Vibe and OpenCode
+  were dropped in C2 (no env variable points them at the proxy). Backend
+  changed: run `npm run backend:stale` and use a rebuilt binary; the phone also
+  needs `npm run mobile:bundle`.
   - [x] 🤖 Automated test
-  - [ ] 🖐️ Manual test — API key reaches a fenced Claude tab and the CLI runs
-    on it. Save an Anthropic key (a spend-limited one), switch on Claude, open
-    a NEW local Claude tab: Claude asks "Detected a custom API key" (default
-    No) → pick Yes → `/status` shows API-key auth and no Remote Control
-    failure notice. `ps -eo args | grep -c <first 12 chars of the key>` finds
-    only the grep, and `<state_dir>/tmux-launch/` holds no key. Exit Claude in
-    a tmux-persisted (phone-scope) tab: `env | grep -c API_KEY` in the shell
-    left behind is 0. C1: `tmux show-options -g update-environment` lists
-    the four `<APP>_AGENT_SECRET_*_API_KEY` carriers at 8636–8639 and no
-    `ANTHROPIC_API_KEY`; in the Claude tab `env | grep -c AGENT_SECRET` (via
-    `!`) is 0 and the key works — repeat in a root-console Host session and
-    by typing `claude` into a shell tab (the shim). Switch Claude off → a new
-    tab is back on the subscription. Restart: the key is still saved. Lock
-    the keyring: Save refuses with the locked message, the rows say "keyring
+  - [ ] 🖐️ Manual test — a fenced Claude tab runs on the key through the
+    proxy. Save an Anthropic key (a spend-limited one), switch on Claude, open
+    a NEW local Claude tab: no "Detected a custom API key" question; `/status`
+    shows `Anthropic base URL: http://127.0.0.1:<port>/anthropic` and the
+    `ANTHROPIC_AUTH_TOKEN` credential, no Remote Control failure notice; a
+    prompt is answered and streams in as it is written. In the tab (`!`):
+    `env | grep -c <first 12 chars of the key>` is 0 and `env | grep -c
+    AGENT_SECRET` is 0. `ps -eo args | grep -c <first 12 chars of the key>`
+    finds only the grep, and `<state_dir>/tmux-launch/` holds neither key nor
+    token. `tmux show-options -g update-environment` lists the two
+    `<APP>_AGENT_SECRET_*` carriers at 8636–8637. Close the tab, then `curl -s
+    -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <the old token>"
+    -X POST http://127.0.0.1:<port>/anthropic/v1/messages` answers 401.
+    Switch projects away and back (tmux tab re-attached): the agent still
+    answers. Remove the key: the open tab's next prompt says Tabtivity has no
+    key saved. Repeat in a root-console Host session; typing `claude` into a
+    shell tab gets no key (its own login). Switch Claude off → a new tab is
+    back on the subscription. Restart: the key is still saved. Lock the
+    keyring: Save refuses with the locked message, the rows say "keyring
     locked", Unlock works.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
@@ -2557,31 +2566,9 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on macOS
   - [ ] 🖐️ Manual test — Gemini on a key: save a Gemini key, switch on
     Gemini, open a new Gemini tab, pick "Use Gemini API key" in `/auth`: it
-    answers without a Google login.
-    - [ ] ✅ Works on Linux (X11)
-    - [ ] ❌ Doesn't work on Linux (X11)
-    - [ ] ✅ Works on Linux (Wayland)
-    - [ ] ❌ Doesn't work on Linux (Wayland)
-    - [ ] ✅ Works on Windows
-    - [ ] ❌ Doesn't work on Windows
-    - [ ] ✅ Works on macOS
-    - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual test — Mistral Vibe on a key: save a Mistral key, switch
-    on Mistral, open a new (cloud) Vibe tab with no `~/.vibe/.env` login: it
-    answers. Note which wins when both exist. A local-model Vibe tab gets no
-    key (`env` in it via `!env | grep -c MISTRAL` stays 0).
-    - [ ] ✅ Works on Linux (X11)
-    - [ ] ❌ Doesn't work on Linux (X11)
-    - [ ] ✅ Works on Linux (Wayland)
-    - [ ] ❌ Doesn't work on Linux (Wayland)
-    - [ ] ✅ Works on Windows
-    - [ ] ❌ Doesn't work on Windows
-    - [ ] ✅ Works on macOS
-    - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual test — OpenCode on a key: switch on OpenCode with an
-    Anthropic and/or OpenAI key saved, open a new OpenCode tab: those
-    providers' models work without `opencode auth login`. Note which wins
-    against its own `auth.json`.
+    answers without a Google login, through the proxy (`!env | grep
+    GOOGLE_GEMINI_BASE_URL` shows `http://127.0.0.1:<port>/gemini`; the
+    key's first chars are in no `env`).
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

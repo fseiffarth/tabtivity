@@ -173,16 +173,16 @@ and one reply out).
   them removed for a tab that has none, so no tab inherits the token of the
   tab that happened to start the tmux server. The same slots carry the other
   per-tab secrets (`tmux_local::SECRET_ENV`): the schedule, git, help and
-  markup MCP tokens, `COPILOT_GITHUB_TOKEN`, and from 8636 the provider API
-  keys under app-named carriers (`<APP>_AGENT_SECRET_ANTHROPIC_API_KEY`, …,
-  `agent_api_keys::CARRIERS`), never the CLIs' own names. Those slots stay
-  set on the user's default tmux server, so a later session there takes the
-  variables from its client or drops them — harmless for app-named ones,
-  which is why a key is not listed as `ANTHROPIC_API_KEY` (Part A did; the
-  carriers took over its slots). `services::agent_exec` (`--agent-exec`)
+  markup MCP tokens, `COPILOT_GITHUB_TOKEN`, and from 8636 the API proxy
+  tokens (`services::api_proxy`) under app-named carriers
+  (`<APP>_AGENT_SECRET_ANTHROPIC_AUTH_TOKEN`, …, `agent_api_keys::CARRIERS`),
+  never the CLIs' own names. Those slots stay set on the user's default tmux
+  server, so a later session there takes the variables from its client or
+  drops them — harmless for app-named ones, which is why a token is not
+  listed as `ANTHROPIC_AUTH_TOKEN`. `services::agent_exec` (`--agent-exec`)
   turns a carrier into the CLI's variable just before the agent runs. A
-  provider key is never sent through a tmux < 3.2 at all (`launch_prep`
-  drops it). After a fenced command the pane's trailing
+  proxy token is never sent through a tmux < 3.2 at all (`launch_prep`
+  drops it, and the proxy base URL beside it). After a fenced command the pane's trailing
   login shell — unfenced — starts with `env -u` over every one of them.
 - **Hidden from fenced project agents.** Bubblewrap gives each fenced agent its
   own pid namespace and `/proc`, so it cannot read the root agent's environment

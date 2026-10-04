@@ -83,20 +83,25 @@ everywhere. A CLI that keeps its login in the system keyring or a database
 case is described under the sandbox below.
 
 **API keys instead of a subscription.** If you pay per token, Settings → Agent
-sandbox → **API keys** keeps one key per provider (Anthropic, OpenAI, Google
-Gemini, Mistral) in your system keyring, and a switch per CLI (Claude, Gemini,
-Mistral, OpenCode) hands it to that CLI's new local tabs. Nothing is switched on
-by default — Claude prefers a key over your subscription once you approve it.
-Claude asks once per project whether to use the key and its default answer is
-**No**: pick Yes (change it later in `/config` → Use custom API key). Gemini
-uses the key only after you pick "Use Gemini API key" in its `/auth`, once per
+sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini) in
+your system keyring, and a switch per CLI (Claude, Gemini) lets that CLI's new
+local tabs use it. Nothing is switched on by default — a key moves that CLI's
+billing off your subscription. The agent never gets the key itself: Tabtivity
+holds it and gives each tab its own token, which works only through Tabtivity on
+this computer and ends with the tab; the CLI talks to the provider through
+Tabtivity. Claude uses it at once, without its "custom API key" question.
+Gemini uses it only after you pick "Use Gemini API key" in its `/auth`, once per
 project. Claude tabs on a key run without Remote Control. Remote, container and
-local-model tabs never get a key, and a key you exported yourself wins. Changes
-reach new tabs only. An agent can read its own key, and a project's own CLI
-config can send it to another server, so use a spend-limited key. If a tab
-reports an invalid key, fix or remove it there — signing in again does not help
-while the key is in use. Codex is not offered: use `codex login --with-api-key`
-in a Codex tab instead (its login file is shared like any other).
+local-model tabs never get a key, nor does a CLI you type into a shell tab, and
+a key or base URL you exported yourself wins. Switching a CLI on or off reaches
+new tabs only; removing a key stops running tabs at their next request. A tab
+that outlives a Tabtivity crash in tmux loses its token — restart the CLI in it.
+Use a spend-limited key anyway: while a tab is open its agent can spend through
+its token. If a tab reports an invalid key, fix or remove it there — signing in
+again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
+are not offered: no environment variable points them at Tabtivity's proxy (use
+`codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
+instead; their login files are shared like any other).
 
 ## Open an agent tab
 

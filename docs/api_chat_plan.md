@@ -106,7 +106,7 @@ that count as user-set (decision 5).
 | `vibe` | mistral | `MISTRAL_API_KEY` | — | env or `~/.vibe/.env`; which wins when both exist is unverified. **From docs** (not installed here). | yes, untested |
 | `opencode` | all four | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` | google: `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` | models.dev `env` lists (OpenCode's provider source); precedence against its own `auth.json` unverified. **From docs** (not installed here). | yes, untested |
 
-So the OpenAI key serves only OpenCode in v1. Others (Qwen's
+**Since C2 (Part C) only Claude and Gemini keep a row** — Vibe and OpenCode have no environment variable that points them at the proxy; see "C2 implementation notes". (Part A:) So the OpenAI key serves only OpenCode in v1. Others (Qwen's
 OpenAI-compatible triple, Crush, Goose, Pi, Droid's `FACTORY_API_KEY`, Amp's
 `AMP_API_KEY`) are later rows in the same table: no code beyond a table
 entry, plus their names in `SECRET_ENV` (A2). OpenCode's own `auth login`
@@ -555,8 +555,8 @@ Vibe and OpenCode are not installed here: their rows are from docs.
 
 # Part C — hardening: no key in the agent, a spending limit (2026-10-04)
 
-Status: C1 built 2026-10-04 (see "C1 implementation notes" at the end; never
-live-verified); C2, C3 scheduled. Fixes the two open risks Part A left: (1) the common
+Status: C1 and C2 built 2026-10-04 (see "C1 implementation notes" and "C2
+implementation notes" at the end; never live-verified); C3 scheduled. Fixes the two open risks Part A left: (1) the common
 variable names (`ANTHROPIC_API_KEY`, …) sit in the global `update-environment`
 of the user's own default tmux server; (2) the agent can read the real key,
 and a project's own CLI config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`,
@@ -763,3 +763,140 @@ Not fixed, with reason:
 - A tmux session's own environment keeps the carriers (as it keeps the MCP
   tokens), so a pane the user adds to a Tabtivity session by hand would
   inherit them — the existing `SECRET_ENV` class, out of C1's scope.
+
+## C2 implementation notes (2026-10-04)
+
+Never live-verified. What was built:
+
+- **`services::api_proxy`** (new, `AppHandle`-free, axum + reqwest — no new
+  dependency). Started in `setup` beside the MCP listener, stopped in the
+  `RunEvent::Exit` teardown right after it (revoke all, stop accepting, 2 s
+  drain), before the PTY teardown.
+- **Its own loopback listener, not a route on the MCP one.** The MCP listener
+  (`commands::root_mcp`) is built for one small JSON-RPC message per socket:
+  a 30 s socket lifetime, `Connection: close`, a JSON-only content type and a
+  small body bound. A model turn streams for minutes and Claude's request
+  bodies run to tens of KiB (72 KB for a bare `-p "say hi"`) up to MiBs with
+  images. The proxy's listener keeps a socket cap (64) and a 10 s
+  first-byte timeout, no total lifetime; the body bound is 32 MiB (the
+  Messages API's own), read with a 60 s bound.
+- **Tokens.** 32 random bytes, memory only, `Grant { provider, scope, tab,
+  tmux }`. Revoked from `agent_fence::on_tab_gone` (every tab teardown path
+  reaches it). A tmux-wrapped tab outlives its PTY — a project switch or a
+  window reload runs `pty_kill`, which kills only the tmux client — so a grant
+  bound to a tmux session is kept until a sweep (`tmux ls`, off the teardown
+  thread) finds the session gone, and a respawn of the same tab gets the same
+  token back (`issue` reuses a grant equal in provider, scope, tab and
+  session): that is what keeps a re-attached agent working. Every grant goes
+  at quit; a clean quit also kills Tabtivity's tmux sessions, so no agent
+  outlives its proxy then. After a crash, a re-attached keyed agent holds a
+  dead token (and a dead port) — restart the CLI; stated in the help.
+- **Forwarding.** `/<provider>/<path>` → `https://<fixed host><path>`:
+  `api.anthropic.com`, `generativelanguage.googleapis.com`. Checks in order:
+  `Origin` present or `Host` other than `127.0.0.1:<port>` → 403; a token in
+  `x-api-key`, `Authorization: Bearer`, `x-goog-api-key` or `key=` (every one
+  present must agree, none repeated) that is live and of the route's provider
+  → else 401; the path allowlist (Anthropic `POST /v1/messages`, `POST
+  /v1/messages/count_tokens`, `GET /v1/models[/<id>]`; Gemini `v1`/`v1beta`
+  `GET models[/<m>]`, `POST models/<m>:{generateContent,
+  streamGenerateContent, countTokens, embedContent, batchEmbedContents}`;
+  every segment `[A-Za-z0-9._:-]`, no `.`/`..`/empty/percent) → else 404; the
+  key (memory cache over the keychain, `spawn_blocking` on a cold read, a miss
+  remembered 15 s; `set_key` clears it, so a removed key stops running tabs
+  at their next request) → else 401 naming Manage CLIs; the bounded body.
+  Forwarded: every request header but the credentials, hop-by-hop ones,
+  `accept-encoding`, cookies, `origin`/`referer`/`x-forwarded-*` (so
+  `anthropic-version`, `anthropic-beta`, `x-claude-code-*` pass unchanged, as
+  Claude's gateway guide asks); the real key in `x-api-key` / `x-goog-api-key`;
+  the query minus `key`. The client: HTTPS only, no redirects, no automatic
+  decompression (the upstream answers unencoded, so C3 reads plain bytes),
+  30 s connect, 10 min per-read idle. The answer: status and headers (minus
+  hop-by-hop, `content-length`, `set-cookie`), body relayed chunk by chunk.
+  Refusals in the provider's error shape with `x-should-retry: false` (true
+  only for an unreachable upstream). Nothing is logged.
+- **C3 seam.** `usage_tap(grant, chunk)` sees every response chunk of a
+  granted request in order, `usage_end(grant)` a clean end; both empty. C3's
+  refusal goes beside the `NoKey` check in `handle`.
+- **Injection** (`agent_api_keys`): `CLI_ROUTES` replaces `CLI_KEYS` — per CLI
+  `(provider, token variable, base-URL variable)`. Claude: token in
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/anthropic`;
+  Gemini: token in `GEMINI_API_KEY`,
+  `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:<port>/gemini`. The token rides
+  the C1 carrier (`<APP>_AGENT_SECRET_ANTHROPIC_AUTH_TOKEN`,
+  `…_GEMINI_API_KEY`; `agent_exec::targets` = these two), the base URL plain.
+  Windows: both under the CLI's names (C1's rule). The user-wins check covers
+  every credential name of the provider (`ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`; `GEMINI_API_KEY`, `GOOGLE_API_KEY`,
+  `GOOGLE_GENERATIVE_AI_API_KEY`) and the CLI's base-URL variable. Nothing
+  is injected unless the proxy runs in the process and the provider has a key.
+- **Decision 2 — which CLIs kept a row** (vendor docs, 2026-10-04):
+  - *Claude* — kept. `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` is the
+    documented gateway setup (code.claude.com "Connect Claude Code to an LLM
+    gateway"; "With `ANTHROPIC_AUTH_TOKEN`, the variable takes precedence
+    immediately. With `ANTHROPIC_API_KEY`, you are prompted once").
+  - *Gemini* — kept. geminicli.com configuration reference:
+    `GOOGLE_GEMINI_BASE_URL` "Overrides the default base URL for Gemini API
+    requests (when using `gemini-api-key` authentication)". From docs; not
+    installed here.
+  - *Mistral Vibe* — dropped. Its docs list only `MISTRAL_API_KEY` and
+    `VIBE_HOME` as environment variables; the base URL lives in
+    `config.toml` (`[[providers]] api_base`), project-writable at
+    `./.vibe/config.toml`, and `VIBE_HOME` would swap the user's whole Vibe
+    home.
+  - *OpenCode* — dropped. No base-URL variable; the one env route is
+    `OPENCODE_CONFIG_CONTENT`, a whole inline config (it does outrank the
+    project's `opencode.json`), which Tabtivity already fills for local
+    OpenCode with its Ollama model list — merging both, plus four AI-SDK
+    base-URL conventions, unverifiable here (not installed). A later row if
+    someone verifies it.
+  - With them went the OpenAI and Mistral providers (no CLI left uses them),
+    the `vibe`/`opencode` switches and pills, and the matching docs; the
+    phone label ("Uses an API key") still fits.
+- **A0-style check, Claude 2.1.288** (scratch `HOME`, `env -i`/`env_clear`,
+  off the tab record, fake key, no network): against a stub upstream
+  directly, `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` → the TUI goes
+  theme → security notes → trust prompt → session ("API Usage Billing"), **no**
+  "Detected a custom API key" dialog, and answers; `ANTHROPIC_API_KEY` with
+  the same base URL still raises the dialog (default *No*) — hence
+  `ANTHROPIC_AUTH_TOKEN`. Requests seen: `HEAD /api/hello` (no credential;
+  the proxy answers 401, harmless per Claude's docs) and `POST
+  /v1/messages?beta=true` with `Authorization: Bearer <token>`. Through the
+  real proxy (`api_proxy::tests::claude_cli_talks_to_the_proxy`, `#[ignore]`,
+  `C2_PROBE_CLAUDE=<binary>`): `claude -p "say hi"` printed the stub's reply;
+  the stub saw `x-api-key` = the fake key and no `Authorization` (the token
+  never left the proxy).
+
+**Deviations, and why.**
+
+- **Tab, not spawn.** A token is per tab (and provider and scope), reused by
+  a respawn, rather than minted per spawn: a respawn of a tmux tab
+  re-attaches the agent that still holds the first token, so a fresh token
+  per spawn would have broken every keyed tmux tab at its first project
+  switch.
+- **The `agent_bin` shim gets no token.** It runs in its own process, where
+  no proxy runs; a token minted there would be valid nowhere. A CLI typed into
+  a shell tab stays on its own login (Part A gave it the raw key). Fail-safe;
+  an IPC to the app for a token would be the fix if wanted.
+- **Remote Control skip** (`local_claude_keyed`) now also requires the proxy
+  to be running (`agent_api_keys::keyed`); Claude refuses Remote Control with
+  a gateway credential or a non-Anthropic `ANTHROPIC_BASE_URL` either way.
+- **tmux < 3.2** drops the proxy base URL with the carrier (`drop_carriers`,
+  only a value that is a proxy URL): a CLI pointed at the proxy without its
+  token would send its own login there and be refused. A fix in code C1
+  touched, found while switching the injection.
+- **Cost note.** Claude's docs: with `ANTHROPIC_AUTH_TOKEN` (and no
+  `ANTHROPIC_API_KEY`), background tasks run on the main model rather than
+  Haiku. Accepted for the dialog-free start; C3's limit covers spend.
+
+**Untestable here.** Gemini through the proxy (not installed — path list and
+`x-goog-api-key` from `@google/genai`'s documented behaviour); a real
+provider (no real key, no network by design); a live tab (AGENTS.md); macOS
+(`cfg` code unchanged in shape, not compiled); Windows only `cargo check
+--all-targets`. Covered by unit tests: path allowlist, token slots, query and
+header stripping, provider error shapes, grant reuse/revocation and the tmux
+sweep's retain rule, the key generation guard, end to end against an
+in-process stub (key swap, token never forwarded, first SSE chunk arrives
+before the upstream finishes, 401/403/404/413 before the upstream sees
+anything, revocation, no-key refusal, Gemini query token dropped), and the
+injection core (routes, user-wins incl. base URL, carriers, no proxy → no
+injection).
