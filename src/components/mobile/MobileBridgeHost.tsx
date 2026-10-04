@@ -120,14 +120,14 @@ interface CreateRequest {
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
 interface MobileCloudLaunch { agent_id: string; action: string; task: boolean }
-interface MobileSignInOption { agent_id: string; signed_in?: boolean; account?: string; alternate?: string }
+interface MobileSignInOption { agent_id: string; signed_in?: boolean; account?: string; alternate?: string; api_key?: boolean }
 /** The ＋ sheet's local-model group: the model the desktop's "+" drives and
  * the agents it offers for it. `ready` is false until the model sits on the
  * GPU (`probeLocalModelPlacement`) — a start then loads it first. */
 interface MobileLocalAgent { id: string; label: string; caution: boolean }
 interface MobileLocalLaunch { model: string; ready: boolean; agents: MobileLocalAgent[] }
 /** One row of `agent_logins` (`services::agent_auth::LoginStatus`). */
-interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean }
+interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean }
 interface TodoColumn { id: string; name: string; position: number; done: boolean; archived: boolean; overdue?: boolean; due_today?: boolean; color?: string }
 interface TodoSubtask { id: string; title: string; done: boolean }
 interface TodoTaskInput {
@@ -1018,11 +1018,16 @@ async function signInOptions(): Promise<MobileSignInOption[]> {
     .map((choice) => {
       const login = byId.get(loginIdForCmd(choice.item.cmd));
       const alternate = signInLaunch(choice.item.cmd).alternate?.kind;
+      // A CLI on a desktop-stored API key needs no login: it counts as signed
+      // in, flagged so the phone can say why. Only the flag crosses — never
+      // the key or which provider it is for.
+      const keyed = !!login?.api_key;
       return {
         agent_id: choice.public.id,
-        ...(login?.shared ? { signed_in: login.signed_in } : {}),
+        ...(login?.shared || keyed ? { signed_in: !!login?.signed_in || keyed } : {}),
         ...(login?.shared && login.signed_in && login.account ? { account: login.account } : {}),
         ...(alternate ? { alternate } : {}),
+        ...(keyed ? { api_key: true } : {}),
       };
     });
 }

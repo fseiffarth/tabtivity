@@ -205,9 +205,11 @@ function SignInList({ agents, rows, busy, onPick, onBack }: {
       <span>
         <strong>{agent.label}</strong>
         {row.signed_in !== undefined && <small className={row.signed_in ? "signed-in" : "signed-out"}>
-          {row.signed_in
-            ? row.account ? t("mobile.signIn.signedInAs", { account: row.account }) : t("mobile.signIn.signedIn")
-            : t("mobile.signIn.signedOut")}
+          {row.api_key
+            ? <>{t("mobile.signIn.apiKey")}{isUntested("mobile.signIn.apiKey") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
+            : row.signed_in
+              ? row.account ? t("mobile.signIn.signedInAs", { account: row.account }) : t("mobile.signIn.signedIn")
+              : t("mobile.signIn.signedOut")}
         </small>}
       </span>
       <button className={row.signed_in ? "" : "primary"} disabled={busy} onClick={() => onPick(agent, "default")}>
