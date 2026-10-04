@@ -18,7 +18,10 @@ use super::protocol::{
     TerminalControl, TerminalEvent, MAX_COLS, MAX_INPUT_FRAME, MAX_OUTPUT_QUEUE, MAX_ROWS,
     MIN_COLS, MIN_ROWS,
 };
-use super::{auth::AuthStore, discovery::CatalogCache};
+use super::{
+    auth::AuthStore,
+    discovery::{Catalog, CatalogCache},
+};
 
 /// One tab's viewer, as the registry knows it.
 #[derive(Default)]
@@ -586,15 +589,18 @@ pub async fn attach(
                 // within 5 seconds instead of 1, for a fifth of the steady
                 // per-viewer fork rate.
                 if tick.is_multiple_of(5) {
-                    let (authorized, key) = {
+                    // The session's phone: a session never changes device, so
+                    // this is the phone the upgrade route checked, and the
+                    // per-phone list is re-read for it below.
+                    let (device, key) = {
                         let mut auth = auth.lock().unwrap_or_else(PoisonError::into_inner);
-                        (auth.authenticate(&token).is_some(), auth.host_key().to_vec())
+                        (auth.authenticate(&token), auth.host_key().to_vec())
                     };
                     // Two different facts, told apart on the wire: a session
                     // that ran out (a sidecar restart, the idle window) is the
                     // phone's to renew silently and come back; a tab the
                     // catalog no longer grants is not.
-                    if !authorized { break Err("session_expired".into()); }
+                    let Some(device) = device else { break Err("session_expired".into()); };
                     // Off the async workers: a load past the TTL forks `tmux ls`
                     // and waits on the catalog mutex behind whoever else does.
                     let loaded = {
@@ -604,15 +610,8 @@ pub async fn attach(
                         })
                         .await
                     };
-                    // A catalog that could not be read at all is not a
-                    // revocation: that close retries (`closing_retries`). A tmux
-                    // that merely could not be asked never gets this far — the
-                    // cache carries its last answer forward — so `false` here is
-                    // the catalog saying no.
-                    match loaded.ok().and_then(Result::ok).map(|catalog| catalog.grants(&tab_id, &tmux_name)) {
-                        Some(true) => {}
-                        Some(false) => break Err("access_revoked".into()),
-                        None => break Err("catalog_unavailable".into()),
+                    if let Err(reason) = recheck(loaded.ok().and_then(Result::ok), &device, &tab_id, &tmux_name) {
+                        break Err(reason.into());
                     }
                 }
                 tick = tick.wrapping_add(1);
@@ -697,6 +696,21 @@ pub async fn attach(
     result
 }
 
+/// The periodic re-check's verdict on one catalog load, for the phone paired
+/// as `device`: the tab is still granted to it, or the close reason. A catalog
+/// that could not be read at all is not a revocation: that close retries
+/// (`closing_retries`). A tmux that merely could not be asked never gets this
+/// far — the cache carries its last answer forward — so a tab the catalog no
+/// longer lists for this phone (its switch off, or a per-phone list narrowed
+/// past it) is the catalog saying no.
+fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
+    match loaded.map(|catalog| catalog.for_device(device).grants(tab_id, tmux_name)) {
+        Some(true) => Ok(()),
+        Some(false) => Err("access_revoked"),
+        None => Err("catalog_unavailable"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -714,6 +728,19 @@ mod tests {
         pin::Pin,
         task::{Context, Poll},
     };
+
+    /// Narrowing a scope's per-phone list past the phone holding the terminal
+    /// detaches it like switching access off does; the listed phone keeps it.
+    #[test]
+    fn narrowing_the_phone_list_detaches_an_open_terminal() {
+        use crate::services::mobile_control::discovery::{fixture_scope, Catalog};
+        let with = |devices: Option<Vec<String>>| Catalog { projects: vec![fixture_scope("t", "tmux-t", devices)] };
+        assert_eq!(super::recheck(Some(with(None)), "d1", "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d1".into()]))), "d1", "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(None, "d1", "t", "tmux-t"), Err("catalog_unavailable"));
+    }
 
     #[test]
     fn the_desktop_hears_the_first_keystroke_of_a_burst_and_not_the_rest() {

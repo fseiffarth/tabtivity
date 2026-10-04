@@ -570,6 +570,7 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
         folder: None,
         relations: vec![],
         app_mobile_access: false,
+        app_mobile_devices: None,
         extra: Default::default(),
     };
     boxes.push(new_box.clone());
@@ -677,8 +678,19 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
 /// locally, and the sidecar takes only those whose cwd is the box folder or a
 /// local member root. Enabling also resolves the box folder: the sidecar lists
 /// a box by that folder, and a box never opened on the desktop has none yet.
+/// `devices` narrows it to some paired phones, as for a project; omitted,
+/// every phone. Turning it off drops the list with the switch.
 #[tauri::command]
-pub fn set_box_mobile_access(box_id: String, enabled: bool) -> Result<ProjectBox, String> {
+pub fn set_box_mobile_access(
+    box_id: String,
+    enabled: bool,
+    devices: Option<Vec<String>>,
+) -> Result<ProjectBox, String> {
+    let devices = if enabled {
+        crate::commands::projects::mobile_scope_devices(devices)?
+    } else {
+        None
+    };
     if enabled {
         let settings: crate::schema::Settings =
             storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
@@ -696,6 +708,7 @@ pub fn set_box_mobile_access(box_id: String, enabled: bool) -> Result<ProjectBox
         .find(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.app_mobile_access = enabled;
+    target.app_mobile_devices = devices;
     let updated = target.clone();
     write_boxes(&boxes)?;
     Ok(updated)

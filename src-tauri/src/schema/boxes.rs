@@ -56,6 +56,13 @@ pub struct ProjectBox {
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
     #[serde(default, rename = "tabtivity_mobile_access", skip_serializing_if = "std::ops::Not::not")]
     pub app_mobile_access: bool,
+    /// Which paired phones the box reaches while `app_mobile_access` is on:
+    /// absent is every phone, a list only those device ids. Lenient on read
+    /// (malformed → no phone) so one bad value cannot fail `read_boxes` and
+    /// with it every box command; absent from disk while unset.
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
+    #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices", skip_serializing_if = "Option::is_none")]
+    pub app_mobile_devices: Option<Vec<String>>,
     /// Moved by every write that changed this box (headless owner plan, H1).
     /// `save_boxes` — the whole-list save — is refused for a box whose
     /// revision moved since the caller loaded it, so a second window or the
@@ -88,6 +95,22 @@ mod tests {
         assert!(b.app_mobile_access);
         let back = serde_json::to_value(&b).unwrap();
         assert_eq!(back[crate::brand::MOBILE_ACCESS_KEY], true);
+    }
+
+    /// The per-phone list: pinned to the brand constant, written only when
+    /// set, and a malformed value still reads (as no phone) instead of
+    /// failing the box — or the whole file.
+    #[test]
+    fn the_mobile_devices_key_is_the_brand_constant_and_malformed_still_reads() {
+        let key = crate::brand::MOBILE_DEVICES_KEY;
+        let b: ProjectBox = serde_json::from_str(&format!(r#"{{"id":"b","name":"B","{key}":["d1"]}}"#)).unwrap();
+        assert_eq!(b.app_mobile_devices, Some(vec!["d1".to_string()]));
+        assert_eq!(json(&b)[key], serde_json::json!(["d1"]));
+        let list: BoxesList =
+            serde_json::from_str(&format!(r#"[{{"id":"a","name":"A","{key}":"d1"}},{{"id":"b","name":"B"}}]"#)).unwrap();
+        assert_eq!(list[0].app_mobile_devices, Some(vec![]));
+        assert_eq!(list[1].app_mobile_devices, None);
+        assert!(json(&list[1]).get(key).is_none(), "absent stays absent");
     }
 
     fn json<T: Serialize>(value: &T) -> Value {

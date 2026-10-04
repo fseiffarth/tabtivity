@@ -52,7 +52,7 @@ import type { SavedPasswordState } from "../components/projects/useSavedCredenti
 import { IS_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore } from "../lib/i18n";
-import { MOBILE_ACCESS_KEY } from "../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
 
 function connectionsHeadless(): boolean {
   return useSettingsStore.getState().settings?.connections_headless ?? true;
@@ -1717,11 +1717,17 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   },
 
   setProjectMobileAccess: async (id, enabled) => {
-    const result = await invoke<boolean>("set_project_mobile_access", {
-      projectId: id,
-      enabled,
-    });
-    patchProject(id, (project) => ({ ...project, [MOBILE_ACCESS_KEY]: result || undefined }));
+    // The backend answers what it stored: the switch, and the per-phone list
+    // (`null` = every phone) after dropping phones no longer paired.
+    const result = await invoke<{ enabled: boolean; devices: string[] | null }>(
+      "set_project_mobile_access",
+      { projectId: id, enabled },
+    );
+    patchProject(id, (project) => ({
+      ...project,
+      [MOBILE_ACCESS_KEY]: result.enabled || undefined,
+      [MOBILE_DEVICES_KEY]: result.devices ?? undefined,
+    }));
   },
 
   setProjectRemoteLabel: async (id, label) => {

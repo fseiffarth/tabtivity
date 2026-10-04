@@ -27,7 +27,7 @@ describe("Mobile project access in the file viewer", () => {
   beforeEach(() => {
     invokeMock.mockImplementation((command: string) => {
       if (command === "mobile_host_status") return Promise.resolve({ running: true });
-      if (command === "set_project_mobile_access") return Promise.resolve(true);
+      if (command === "set_project_mobile_access") return Promise.resolve({ enabled: true, devices: null });
       if (command === "git_status") return Promise.resolve({ staged: 0, unstaged: 0, untracked: 0, has_remote: false, is_repo: false });
       if (command === "git_repo_root") return Promise.resolve(null);
       if (command === "project_scaffold_missing") return Promise.resolve(false);

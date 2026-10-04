@@ -2064,10 +2064,61 @@ pub fn set_project_persist_sessions(project_id: String, enabled: bool) -> Result
     Ok(enabled)
 }
 
+/// A scope's Mobile access as `set_project_mobile_access` stored it: the
+/// switch, and which paired phones it reaches (`None` = every phone, also
+/// those paired later).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MobileAccessState {
+    pub enabled: bool,
+    pub devices: Option<Vec<String>>,
+}
+
+/// The per-phone list a `set_*_mobile_access` call stores: `None` (every
+/// phone) as asked, or the asked list validated and cut to the phones paired
+/// right now (`auth::scope_device_list`) — refused when nothing is left.
+pub(crate) fn mobile_scope_devices(requested: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    use crate::services::mobile_control::auth;
+    let paired = auth::read_paired_devices(&storage::state_dir().join("mobile-control"))?;
+    auth::scope_device_list(&requested, &paired).map(Some)
+}
+
+/// Write a project entry's Mobile keys: on with its per-phone list (absent =
+/// every phone), or off with both keys gone — a list never outlives the
+/// switch. Every other key of the entry is left alone.
+fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Option<&[String]>) {
+    if !enabled {
+        project.extra.remove(crate::brand::MOBILE_ACCESS_KEY);
+        project.extra.remove(crate::brand::MOBILE_DEVICES_KEY);
+        return;
+    }
+    project
+        .extra
+        .insert(crate::brand::MOBILE_ACCESS_KEY.into(), Value::Bool(true));
+    match devices {
+        Some(devices) => {
+            project
+                .extra
+                .insert(crate::brand::MOBILE_DEVICES_KEY.into(), serde_json::json!(devices));
+        }
+        None => {
+            project.extra.remove(crate::brand::MOBILE_DEVICES_KEY);
+        }
+    }
+}
+
 /// Authoritative per-project opt-in for Tabtivity Mobile. This flag lives in the
 /// state-dir `projects.json`, never only in project-writable `project.json`.
+/// `devices` narrows it to some paired phones (see [`mobile_scope_devices`]);
+/// omitted, every phone.
 #[tauri::command]
-pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bool, String> {
+pub fn set_project_mobile_access(
+    project_id: String,
+    enabled: bool,
+    devices: Option<Vec<String>>,
+) -> Result<MobileAccessState, String> {
     let projects = get_projects()?;
     let project = projects
         .iter()
@@ -2097,6 +2148,7 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
             return Err("Mobile access requires tmux on this machine".into());
         }
     }
+    let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
         if enabled {
             if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
@@ -2113,15 +2165,11 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
             if runtime_enabled("sandbox") || runtime_enabled("vm") {
                 return Err("Mobile access is unavailable for container and VM projects".into());
             }
-            project
-                .extra
-                .insert(crate::brand::MOBILE_ACCESS_KEY.into(), Value::Bool(true));
-        } else {
-            project.extra.remove(crate::brand::MOBILE_ACCESS_KEY);
         }
+        apply_mobile_access(project, enabled, devices.as_deref());
         Ok(())
     })?;
-    Ok(enabled)
+    Ok(MobileAccessState { enabled, devices })
 }
 
 /// Set (or clear) the display name for a **remote** project's primary machine —
@@ -4956,6 +5004,43 @@ fn chrono_now() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The Mobile keys follow the switch: a list is written only with access
+    /// on, "every phone" removes it, off removes both — and every other key
+    /// of the entry, Python-era ones included, rides through untouched.
+    #[test]
+    fn mobile_access_writes_and_removes_both_keys_and_keeps_the_rest() {
+        let access = crate::brand::MOBILE_ACCESS_KEY;
+        let devices = crate::brand::MOBILE_DEVICES_KEY;
+        let raw = serde_json::json!({
+            "id": "p", "name": "P", "status": "active", "position": 3, "local_file": "/p/project.json",
+            "directory": "/p", "python_era_field": { "kept": [1, 2] },
+        });
+        let mut entry: super::ProjectEntry = serde_json::from_value(raw.clone()).unwrap();
+        let ids = vec!["a".repeat(27)];
+
+        super::apply_mobile_access(&mut entry, true, Some(&ids));
+        let on = serde_json::to_value(&entry).unwrap();
+        assert_eq!(on[access], true);
+        assert_eq!(on[devices], serde_json::json!(ids));
+        assert_eq!(on["python_era_field"], raw["python_era_field"]);
+
+        super::apply_mobile_access(&mut entry, true, None);
+        let all = serde_json::to_value(&entry).unwrap();
+        assert_eq!(all[access], true);
+        assert!(all.get(devices).is_none(), "every phone is the key's absence");
+
+        super::apply_mobile_access(&mut entry, true, Some(&ids));
+        super::apply_mobile_access(&mut entry, false, None);
+        assert_eq!(serde_json::to_value(&entry).unwrap(), raw, "off leaves the entry as it was");
+    }
+
+    /// An omitted list is every phone, and asks nothing of `devices.json`
+    /// (the asked-list checks are `auth::scope_device_list`'s tests).
+    #[test]
+    fn an_omitted_device_list_is_every_phone() {
+        assert_eq!(super::mobile_scope_devices(None), Ok(None));
+    }
+
     use super::*;
 
     /// A minted id is a real v4 UUID: `claude --session-id` rejects anything else.

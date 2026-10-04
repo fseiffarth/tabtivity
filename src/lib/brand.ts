@@ -134,6 +134,8 @@ export const LEGACY_MOBILE_HOST_KEY = `${LEGACY_BRAND.slug}_mobile_host` as cons
 /** Project / box key that opens it to the phone. A literal type, as above. */
 export const MOBILE_ACCESS_KEY = `${BRAND.slug}_mobile_access` as const;
 export const LEGACY_MOBILE_ACCESS_KEY = `${LEGACY_BRAND.slug}_mobile_access` as const;
+/** Project / box key listing the paired phones that may open it (absent: every phone). */
+export const MOBILE_DEVICES_KEY = `${BRAND.slug}_mobile_devices` as const;
 
 /** A dotted localStorage key: `storageKey("todo.collapsed")`. */
 export function storageKey(name: string): string {

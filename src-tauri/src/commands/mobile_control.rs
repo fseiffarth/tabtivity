@@ -12,6 +12,7 @@ use crate::{
     services::desktop_images::{self, DesktopImage, ImageFolder},
     services::mobile_control::{
         admin::{self, read_frame, write_frame},
+        auth,
         config::{
             detect_serve_settings_json, serve_status_json, verify_tailscale_serve,
             DetectedServeSettings, HostConfig,
@@ -19,7 +20,8 @@ use crate::{
         discovery::opaque_control_id,
         inbox,
         protocol::{
-            AdminRequest, AdminResponse, DesktopRequest, DesktopResponse, MobileInboxAttachment,
+            AdminDevice, AdminRequest, AdminResponse, DesktopRequest, DesktopResponse,
+            MobileInboxAttachment,
         },
     },
     storage,
@@ -232,6 +234,17 @@ pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// The paired phones, read off `mobile-control/devices.json` whether or not
+/// the host runs — what the per-phone Mobile access picker lists. Read-only;
+/// `online` is always false here (`mobile_admin` `devices` adds it while the
+/// host runs).
+#[tauri::command]
+pub async fn mobile_paired_devices() -> Result<Vec<AdminDevice>, String> {
+    tauri::async_runtime::spawn_blocking(|| auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

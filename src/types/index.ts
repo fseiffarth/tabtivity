@@ -3,7 +3,7 @@ import type { PyMainVerdict } from "../lib/terminal/pythonMainCache";
 import type { AgentCron } from "../lib/agents/agentCron";
 import type { CursorPack } from "../lib/theme/cursorPacks";
 import type { TranslationKey } from "../lib/i18n";
-import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../lib/brand";
 
 export interface GlobalAppEntry {
   exec: string;
@@ -1208,6 +1208,8 @@ export interface ProjectEntry {
   categories?: string[];
   /** Explicit trusted-state opt-in for phone/tablet terminal access. */
   [MOBILE_ACCESS_KEY]?: boolean;
+  /** The paired phones that access reaches (device ids); absent = every phone. */
+  [MOBILE_DEVICES_KEY]?: string[];
   [key: string]: unknown;
 }
 
@@ -1396,6 +1398,8 @@ export interface ProjectBox {
   /** Tabtivity Mobile reach (#31aa): the box's `box:<id>` scope is listed on a
    *  paired phone. Off/absent by default, like a project's switch. */
   [MOBILE_ACCESS_KEY]?: boolean;
+  /** The paired phones the box reaches (device ids); absent = every phone. */
+  [MOBILE_DEVICES_KEY]?: string[];
   /** User-picked colour (`#rrggbb`); absent = hashed from the id
    *  (`lib/theme/boxColor`). Rides the Rust struct's flattened `extra`. */
   color?: string;

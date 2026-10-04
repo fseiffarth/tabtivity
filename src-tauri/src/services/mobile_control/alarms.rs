@@ -80,7 +80,7 @@ pub async fn run(state_dir: PathBuf, auth: Arc<Mutex<AuthStore>>, mut shutdown: 
                 let dir = state_dir.clone();
                 let due = tokio::task::spawn_blocking(move || due_to_push(&dir, &now, secs)).await.unwrap_or_default();
                 for alarm in due {
-                    let deliveries = auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(&notice(&alarm));
+                    let deliveries = auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(&notice(&alarm), None);
                     match deliveries {
                         Ok(deliveries) if !deliveries.is_empty() => {
                             eprintln!("{}: reminder '{}' pushed to {} phone(s) with no window", crate::brand::MOBILE_HOST_BIN, alarm.key, deliveries.len());

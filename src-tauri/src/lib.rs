@@ -1393,6 +1393,7 @@ pub fn run() {
             commands::mobile_control::mobile_opaque_id,
             commands::mobile_control::mobile_prepare_phone_install_script,
             commands::mobile_control::mobile_admin,
+            commands::mobile_control::mobile_paired_devices,
             commands::mobile_control::mobile_host_status,
             commands::mobile_control::mobile_host_apply,
             commands::mobile_control::mobile_verify_tailscale_serve,
