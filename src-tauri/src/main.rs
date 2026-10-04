@@ -22,6 +22,13 @@ fn main() {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(app_lib::services::fence_scope::run(&args));
     }
+    // `tabtivity --agent-exec <program> [args…]`: an agent launch's last step
+    // (`services::agent_exec`) — carriers become the CLI's variables, then exec.
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--agent-exec")) {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        std::process::exit(app_lib::services::agent_exec::run(&args));
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--mobile-host")) {
         let state_dir = app_lib::storage::state_dir();
         let runtime = tokio::runtime::Builder::new_multi_thread()

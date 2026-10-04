@@ -6,7 +6,11 @@
 //! nowhere else: not in `settings.json`, a session dir, a launcher script, an
 //! argv, a log, or the phone API. At spawn it is handed to the CLIs the user
 //! switched on (`Settings::agent_api_key_clis`), as the environment variable
-//! each CLI already reads ([`CLI_KEYS`]).
+//! each CLI already reads ([`CLI_KEYS`]). On Linux and macOS the spawn carries
+//! it under an app-named carrier ([`CARRIERS`], the only names in
+//! `tmux_local::SECRET_ENV`), which `services::agent_exec` turns into the
+//! CLI's variable just before the agent runs (Part C, C1); on Windows (no
+//! tmux, no fence) it goes in under the CLI's own name.
 //!
 //! Rules (decisions 3–7 of the plan):
 //!
@@ -85,9 +89,36 @@ pub const OPENAI_ENV: &str = "OPENAI_API_KEY";
 pub const GEMINI_ENV: &str = "GEMINI_API_KEY";
 pub const MISTRAL_ENV: &str = "MISTRAL_API_KEY";
 
-/// Every variable [`inject_env`] can set. `tmux_local::SECRET_ENV` lists the
-/// same consts (a test holds the two together), so none rides a tmux argv.
+/// Every variable a CLI ends up with: [`inject_env`] sets it directly on
+/// Windows, `agent_exec` from its carrier elsewhere. Never in
+/// `tmux_local::SECRET_ENV` — those slots stay set on the user's own tmux
+/// server, where a common name would cost their own sessions the variable.
 pub const ENV_VARS: &[&str] = &[ANTHROPIC_ENV, OPENAI_ENV, GEMINI_ENV, MISTRAL_ENV];
+
+// The carriers of [`ENV_VARS`], index for index: `agent_exec::CARRIER_PREFIX`
+// and the variable's name (a test holds them to it). `SECRET` in the name
+// keeps `brand::Pair::export_both` from twinning one under the old prefix.
+pub const ANTHROPIC_CARRIER: &str = crate::app_env!("AGENT_SECRET_ANTHROPIC_API_KEY");
+pub const OPENAI_CARRIER: &str = crate::app_env!("AGENT_SECRET_OPENAI_API_KEY");
+pub const GEMINI_CARRIER: &str = crate::app_env!("AGENT_SECRET_GEMINI_API_KEY");
+pub const MISTRAL_CARRIER: &str = crate::app_env!("AGENT_SECRET_MISTRAL_API_KEY");
+
+/// Every variable [`inject_env`] can set on Linux and macOS.
+/// `tmux_local::SECRET_ENV` lists the same consts (a test holds the two
+/// together), so none rides a tmux argv.
+pub const CARRIERS: &[&str] = &[ANTHROPIC_CARRIER, OPENAI_CARRIER, GEMINI_CARRIER, MISTRAL_CARRIER];
+
+/// Whether a key travels under its carrier: everywhere but Windows.
+const CARRY: bool = cfg!(unix);
+
+/// The carrier of `var`, one of [`ENV_VARS`].
+fn carrier_of(var: &str) -> &'static str {
+    ENV_VARS
+        .iter()
+        .position(|v| *v == var)
+        .map(|i| CARRIERS[i])
+        .expect("every injected variable has a carrier")
+}
 
 /// Which variable each CLI (by registry id) reads for which provider. Codex is
 /// absent on purpose: its interactive TUI documents only `codex login
@@ -212,14 +243,17 @@ fn user_set(
 
 /// The pure core of [`inject_env`]. Nothing for a local-model tab, a CLI
 /// subcommand, or a CLI not in `enabled`; otherwise each of the CLI's
-/// variables the user did not set gets `get(provider)` when that has a key.
-/// Returns the variables it set.
+/// variables the user did not set gets `get(provider)` when that has a key —
+/// under its carrier with `carry`, else under its own name. Returns the
+/// names it set.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn inject_env_with(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
     enabled: &[String],
     env: &mut HashMap<String, String>,
+    carry: bool,
     ambient: impl Fn(&str) -> bool,
     mut get: impl FnMut(Provider) -> Option<String>,
 ) -> Vec<&'static str> {
@@ -238,8 +272,9 @@ pub(crate) fn inject_env_with(
             continue;
         }
         if let Some(key) = get(provider).filter(|k| key_shape_ok(k)) {
-            env.insert(var.to_string(), key);
-            set.push(var);
+            let name = if carry { carrier_of(var) } else { var };
+            env.insert(name.to_string(), key);
+            set.push(name);
         }
     }
     set
@@ -266,6 +301,7 @@ pub fn inject_env(
         local_model,
         &enabled_clis(),
         env,
+        CARRY,
         |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()),
         get_key,
     )
@@ -369,7 +405,7 @@ mod tests {
     }
 
     fn inject(cmd: &str, enabled: &[&str], env: &mut HashMap<String, String>) -> Vec<&'static str> {
-        inject_env_with(cmd, false, false, &on(enabled), env, |_| false, fake)
+        inject_env_with(cmd, false, false, &on(enabled), env, false, |_| false, fake)
     }
 
     #[test]
@@ -395,7 +431,7 @@ mod tests {
         }
         // Tabtivity's own environment counts too.
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, |k| k == ANTHROPIC_ENV, fake);
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, false, |k| k == ANTHROPIC_ENV, fake);
         assert!(set.is_empty() && env.is_empty());
         // An empty value is not a choice.
         let mut env = HashMap::from([(ANTHROPIC_ENV.to_string(), String::new())]);
@@ -429,8 +465,8 @@ mod tests {
     fn local_model_tabs_and_subcommands_get_nothing() {
         let mut env = HashMap::new();
         let all = on(&["claude", "opencode", "vibe"]);
-        assert!(inject_env_with("opencode", false, true, &all, &mut env, |_| false, fake).is_empty());
-        assert!(inject_env_with("claude", true, false, &all, &mut env, |_| false, fake).is_empty());
+        assert!(inject_env_with("opencode", false, true, &all, &mut env, true, |_| false, fake).is_empty());
+        assert!(inject_env_with("claude", true, false, &all, &mut env, true, |_| false, fake).is_empty());
         assert!(env.is_empty());
         let args = vec!["auth".to_string(), "login".to_string()];
         assert!(crate::services::agent_fence::runs_subcommand(&args));
@@ -461,20 +497,56 @@ mod tests {
         assert!(!key_shape_ok("sk-test-fake\n"));
         assert!(!key_shape_ok(&"x".repeat(MAX_KEY_BYTES + 1)));
         let mut env = HashMap::new();
-        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, |_| false, |_| Some("bad key".into()));
+        let set = inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, |_| Some("bad key".into()));
         assert!(set.is_empty() && env.is_empty());
     }
 
     #[test]
-    fn every_injected_variable_is_a_tmux_secret() {
-        for var in ENV_VARS {
-            assert!(crate::services::tmux_local::SECRET_ENV.contains(var), "{var}");
+    fn carriers_not_common_names_are_the_tmux_secrets() {
+        assert_eq!(CARRIERS.len(), ENV_VARS.len());
+        for (carrier, var) in CARRIERS.iter().zip(ENV_VARS) {
+            assert_eq!(*carrier, crate::services::agent_exec::carrier_name(var));
+            assert_eq!(carrier_of(var), *carrier);
+            assert!(crate::services::tmux_local::SECRET_ENV.contains(carrier), "{carrier}");
+            // The common name stays off the user's tmux server.
+            assert!(!crate::services::tmux_local::SECRET_ENV.contains(var), "{var}");
         }
         for (_, keys) in CLI_KEYS {
             for (_, var) in *keys {
                 assert!(ENV_VARS.contains(var), "{var}");
             }
         }
+    }
+
+    #[test]
+    fn a_carried_key_goes_in_under_its_carrier_and_maps_back() {
+        let mut env = HashMap::new();
+        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), &mut env, true, |_| false, fake);
+        assert_eq!(set, vec![ANTHROPIC_CARRIER, GEMINI_CARRIER]);
+        assert!(!env.contains_key(ANTHROPIC_ENV) && !env.contains_key(GEMINI_ENV));
+        assert_eq!(env[ANTHROPIC_CARRIER], FAKE_ANTHROPIC);
+        // `agent_exec` turns it back into the CLI's own variables.
+        let m = crate::services::agent_exec::mapping(
+            env.iter().map(|(k, v)| (std::ffi::OsStr::new(k), std::ffi::OsStr::new(v))),
+        );
+        let mut set: Vec<(String, String)> = m
+            .set
+            .into_iter()
+            .map(|(k, v)| (k.into_string().unwrap(), v.into_string().unwrap()))
+            .collect();
+        set.sort();
+        assert_eq!(
+            set,
+            vec![
+                (ANTHROPIC_ENV.to_string(), FAKE_ANTHROPIC.to_string()),
+                (GEMINI_ENV.to_string(), FAKE_GEMINI.to_string()),
+            ]
+        );
+        assert_eq!(m.remove.len(), 2);
+        // A value the user set under the CLI's name still wins over a carrier.
+        let mut env = HashMap::from([(ANTHROPIC_ENV.to_string(), "mine".to_string())]);
+        assert!(inject_env_with("claude", false, false, &on(&["claude"]), &mut env, true, |_| false, fake).is_empty());
+        assert!(!env.contains_key(ANTHROPIC_CARRIER));
     }
 
     #[test]

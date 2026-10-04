@@ -35,17 +35,25 @@ fn settings_agent_remote_control() -> bool {
 /// The stored provider API keys for an unfenced local agent (the Host session,
 /// a fence-less platform), where `opts.cmd` is still the CLI. A fenced spawn
 /// gets them inside `agent_fence`'s wrap, which the shell-tab shim calls too.
-fn inject_api_keys(opts: &mut PtyOptions) {
+/// On Linux and macOS a key goes in under its carrier, and `agent_exec` in
+/// front of the CLI maps it (the Host session is tmux-wrapped like any agent
+/// tab); on Windows under the CLI's own name.
+fn inject_api_keys(opts: &mut PtyOptions) -> Result<(), String> {
     let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
     let local_model = crate::services::agent_api_keys::is_local_model(opts);
     crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, &mut opts.env);
+    #[cfg(unix)]
+    crate::services::agent_exec::wrap(opts)?;
+    Ok(())
 }
 
 /// An API key never rides a tmux argv. tmux older than 3.2 has no
 /// `new-session -e`, so a tmux-wrapped tab's secrets would be on the
 /// world-readable client argv (#864); a long-lived provider key is not
-/// accepted there. Drop every key variable the fence added (those not in
-/// `before`) — the CLI falls back to its own login. Names only in the log.
+/// accepted there. Drop every key carrier the fence added (those not in
+/// `before`) — the CLI falls back to its own login. The `agent_exec` step
+/// may still be in front of the command; with nothing to map it only execs.
+/// Names only in the log.
 #[cfg(unix)]
 fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions, before: &[&'static str]) {
     if opts.tmux_session.is_none()
@@ -64,13 +72,13 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions, before: &[&'static str]) {
     }
 }
 
-/// Remove the provider key variables `env` has and `before` did not.
+/// Remove the provider key carriers `env` has and `before` did not.
 #[cfg(any(unix, test))]
 fn drop_added_api_keys(
     env: &mut std::collections::HashMap<String, String>,
     before: &[&'static str],
 ) -> Vec<&'static str> {
-    crate::services::agent_api_keys::ENV_VARS
+    crate::services::agent_api_keys::CARRIERS
         .iter()
         .copied()
         .filter(|k| !before.contains(k) && env.remove(*k).is_some())
@@ -695,10 +703,10 @@ pub async fn prepare(
     // paths the fence argv bound when fenced, everything when the agent runs
     // unfenced (it already reads everything).
     let mut root_projects = crate::services::root_mcp::ProjectsGrant::All;
-    // The key variables the tab brought itself, so the tmux < 3.2 rule below
+    // The key carriers the tab brought itself, so the tmux < 3.2 rule below
     // drops only what the fence added.
     #[cfg(unix)]
-    let keys_before: Vec<&'static str> = crate::services::agent_api_keys::ENV_VARS
+    let keys_before: Vec<&'static str> = crate::services::agent_api_keys::CARRIERS
         .iter()
         .copied()
         .filter(|k| opts.env.contains_key(*k))
@@ -750,8 +758,9 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
-                inject_api_keys(&mut opts);
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
+                // Last: it may put `agent_exec` in front of the CLI.
+                inject_api_keys(&mut opts)?;
             }
             // No fence on this platform (Windows): the same Tabtivity-owned home
             // and shared logins, by environment; the rights are the user's.
@@ -764,7 +773,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
-                inject_api_keys(&mut opts);
+                inject_api_keys(&mut opts)?;
             }
             // Fail closed on a fence-less platform too: the tab that asked
             // shows the acceptance prompt and retries once it is given.
@@ -827,16 +836,20 @@ mod tests {
 
     #[test]
     fn old_tmux_drops_only_the_keys_the_fence_added() {
-        use crate::services::agent_api_keys::{ANTHROPIC_ENV, GEMINI_ENV, OPENAI_ENV};
+        use crate::services::agent_api_keys::{
+            ANTHROPIC_CARRIER, ANTHROPIC_ENV, GEMINI_CARRIER, OPENAI_CARRIER,
+        };
         let mut env: HashMap<String, String> = HashMap::from([
-            (ANTHROPIC_ENV.to_string(), "sk-test-added-fake".to_string()),
-            (GEMINI_ENV.to_string(), "users-own-test-value".to_string()),
+            (ANTHROPIC_CARRIER.to_string(), "sk-test-added-fake".to_string()),
+            (GEMINI_CARRIER.to_string(), "users-own-test-value".to_string()),
+            // The CLI's own name is the user's, never dropped here.
+            (ANTHROPIC_ENV.to_string(), "users-own-test-value".to_string()),
             ("PATH".to_string(), "/bin".to_string()),
         ]);
-        let dropped = drop_added_api_keys(&mut env, &[GEMINI_ENV]);
-        assert_eq!(dropped, vec![ANTHROPIC_ENV]);
-        assert!(!env.contains_key(ANTHROPIC_ENV) && !env.contains_key(OPENAI_ENV));
-        assert!(env.contains_key(GEMINI_ENV) && env.contains_key("PATH"));
+        let dropped = drop_added_api_keys(&mut env, &[GEMINI_CARRIER]);
+        assert_eq!(dropped, vec![ANTHROPIC_CARRIER]);
+        assert!(!env.contains_key(ANTHROPIC_CARRIER) && !env.contains_key(OPENAI_CARRIER));
+        assert!(env.contains_key(GEMINI_CARRIER) && env.contains_key(ANTHROPIC_ENV) && env.contains_key("PATH"));
     }
 
     #[test]

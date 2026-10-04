@@ -18,7 +18,8 @@
 //! before bwrap: it enters the domain and execs bwrap. Best-effort per host:
 //! an older kernel, or a setuid bwrap (the domain needs `no_new_privs`, which
 //! would strip it), launches without the step as before. Where the step is
-//! used it fails closed.
+//! used it fails closed. It also maps `agent_exec`'s carriers, so a host
+//! with the scope runs one step in front of bwrap, not two.
 
 use std::path::{Path, PathBuf};
 
@@ -86,7 +87,13 @@ pub fn helper_for(bwrap: &Path) -> Option<String> {
     if abi() < SCOPE_ABI || is_setuid(bwrap) {
         return None;
     }
-    Some(helper_path(std::env::current_exe().ok(), std::process::id()))
+    Some(running_binary())
+}
+
+/// The running Tabtivity binary as a path another process can exec now — the
+/// helper here and `agent_exec`'s.
+pub fn running_binary() -> String {
+    helper_path(std::env::current_exe().ok(), std::process::id())
 }
 
 fn is_setuid(path: &Path) -> bool {
@@ -105,7 +112,9 @@ fn helper_path(exe: Option<PathBuf>, pid: u32) -> String {
     }
 }
 
-/// `tabtivity --fence-scope <prog> [args…]`: enter the domain, then exec `prog`.
+/// `tabtivity --fence-scope <prog> [args…]`: enter the domain, then exec `prog`
+/// with the environment `agent_exec` would give it (its carriers mapped), so
+/// a spawn needs one step in front of bwrap, not two.
 /// Returns only on failure, with the exit code.
 pub fn run(args: &[std::ffi::OsString]) -> i32 {
     use std::os::unix::process::CommandExt;
@@ -117,7 +126,10 @@ pub fn run(args: &[std::ffi::OsString]) -> i32 {
         eprintln!("Agent sandbox: abstract-socket scope: {e}");
         return 126;
     }
-    let e = std::process::Command::new(prog).args(rest).exec();
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(rest);
+    crate::services::agent_exec::apply(&mut cmd);
+    let e = cmd.exec();
     eprintln!("Agent sandbox: {}: {e}", Path::new(prog).display());
     127
 }

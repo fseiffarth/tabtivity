@@ -329,8 +329,9 @@ const FENCE_INPUT_DRAIN: &str = "s=$(stty -g 2>/dev/null); stty raw -echo min 0 
 /// drains the terminal ([`FENCE_INPUT_DRAIN`]) and drops every [`SECRET_ENV`]
 /// variable: the pane's `sh` holds the session environment, and the shell
 /// left in the tab is **unfenced** — it must not inherit the agent's MCP
-/// tokens, Copilot token or provider API keys. (`env -u` is in GNU and BSD
-/// `env`.)
+/// tokens, Copilot token or provider API keys (their carriers: the pane's
+/// `sh` never ran `agent_exec`, so it holds no CLI-named key). (`env -u` is in
+/// GNU and BSD `env`.)
 fn trailing_shell(fenced: bool) -> String {
     if !fenced {
         return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
@@ -408,13 +409,18 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::copilot_auth::TOKEN_ENV,
     // Appended, not inserted: each key keeps its `update-environment` slot.
     crate::services::root_mcp::MARKUP_TOKEN_ENV,
-    // Provider API keys (`agent_api_keys::ENV_VARS`), slots 8636–8639. Like
-    // every slot here they stay set on the user's default tmux server: a later
-    // session there takes these variables from its client or drops them.
-    crate::services::agent_api_keys::ANTHROPIC_ENV,
-    crate::services::agent_api_keys::OPENAI_ENV,
-    crate::services::agent_api_keys::GEMINI_ENV,
-    crate::services::agent_api_keys::MISTRAL_ENV,
+    // Provider API keys, slots 8636–8639, under their app-named carriers
+    // (`agent_api_keys::CARRIERS`), never the CLIs' own names: like every slot
+    // here they stay set on the user's default tmux server, where a later
+    // session takes each listed variable from its client or drops it — so a
+    // common name (`ANTHROPIC_API_KEY`) would cost the user's own sessions
+    // theirs. `agent_exec` maps a carrier to the CLI's name just before the
+    // agent runs. (The same slots held the common names in Part A builds;
+    // these entries replace them.)
+    crate::services::agent_api_keys::ANTHROPIC_CARRIER,
+    crate::services::agent_api_keys::OPENAI_CARRIER,
+    crate::services::agent_api_keys::GEMINI_CARRIER,
+    crate::services::agent_api_keys::MISTRAL_CARRIER,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -875,11 +881,12 @@ mod tests {
         let env = env_of(&[
             (crate::app_env!("TAB_UID"), "tab-uid-1"),
             ("ANTHROPIC_MODEL", "opus"),
-            // A provider API key is a secret (`SECRET_ENV`): never on `-e`.
-            // "sk-test" rather than a bare letter: `scripts/privacy-check.sh`
-            // clears an api_key whose value is built out of placeholder words, and
-            // reports every other one — a fixture must not need the override.
-            ("ANTHROPIC_API_KEY", "sk-test"),
+            // A provider API key's carrier is a secret (`SECRET_ENV`): never
+            // on `-e`. "sk-test" rather than a bare letter:
+            // `scripts/privacy-check.sh` clears an api_key whose value is
+            // built out of placeholder words, and reports every other one — a
+            // fixture must not need the override.
+            (crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test"),
             // tmux owns TERM per pane; a bad key would land unquoted in `export`.
             ("TERM", "xterm-256color"),
             ("not a key", "x"),
@@ -956,7 +963,7 @@ mod tests {
         for key in SECRET_ENV {
             assert!(tail.contains(&format!("-u {key} ")), "{key}: {tail}");
         }
-        assert!(tail.contains(&format!("-u {} ", crate::services::agent_api_keys::ANTHROPIC_ENV)));
+        assert!(tail.contains(&format!("-u {} ", crate::services::agent_api_keys::ANTHROPIC_CARRIER)));
         // Through the launcher form too.
         let env = env_of(&[]);
         let launched = local_tmux_args_for(concat!(crate::app_slug!(), "-x"), Some("'/l.sh'"), &env, true, true);
@@ -968,12 +975,12 @@ mod tests {
         {
             let probe = format!(
                 "exec env -u {} sh -c 'printf \"%s|%s\" \"${{{}-unset}}\" \"$KEEP\"'",
-                crate::services::agent_api_keys::ANTHROPIC_ENV,
-                crate::services::agent_api_keys::ANTHROPIC_ENV,
+                crate::services::agent_api_keys::ANTHROPIC_CARRIER,
+                crate::services::agent_api_keys::ANTHROPIC_CARRIER,
             );
             let out = std::process::Command::new("sh")
                 .args(["-c", &probe])
-                .env(crate::services::agent_api_keys::ANTHROPIC_ENV, "sk-test-fake")
+                .env(crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test-fake")
                 .env("KEEP", "kept")
                 .output()
                 .unwrap();
@@ -1043,11 +1050,12 @@ mod tests {
             (crate::services::root_mcp::HELP_TOKEN_ENV, "help-s3cret"),
             (crate::services::root_mcp::MARKUP_TOKEN_ENV, "markup-s3cret"),
             (crate::services::copilot_auth::TOKEN_ENV, "gho_copilot-s3cret"),
-            (crate::services::agent_api_keys::ANTHROPIC_ENV, "sk-test-anthropic-s3cret"),
+            (crate::services::agent_api_keys::ANTHROPIC_CARRIER, "sk-test-anthropic-s3cret"),
         ]);
         let leaks = |args: &[String]| args.iter().any(|a| a.contains("s3cret"));
-        // The API key is listed: it never rides `-e`, and the script skips it.
-        assert!(SECRET_ENV.contains(&crate::services::agent_api_keys::ANTHROPIC_ENV));
+        // The API key's carrier is listed: it never rides `-e`, and the
+        // script skips it.
+        assert!(SECRET_ENV.contains(&crate::services::agent_api_keys::ANTHROPIC_CARRIER));
         for session_env in [true, false] {
             let script = launcher_script("bwrap", &["--x".into()], &env, session_env);
             assert!(!script.contains("s3cret"), "{script}");
