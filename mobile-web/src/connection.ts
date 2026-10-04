@@ -159,6 +159,7 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   timeout: "mobile.failure.timeout",
   offline: "mobile.failure.offline",
   project_not_found: "mobile.failure.projectNotShared",
+  section_hidden: "mobile.failure.sectionHidden",
   project_ineligible: "mobile.failure.projectNotShared",
   tab_not_found: "mobile.failure.tabNotFound",
   shells_off: "mobile.failure.shellsOff",

@@ -70,6 +70,14 @@ The user still has to switch to the project and press something.
 
 ## What deliberately does not travel
 
+- **Phone access** (`MOBILE_ACCESS_KEY`, its per-phone list
+  `MOBILE_DEVICES_KEY`, and the access key's old-brand spelling). Mobile
+  access is consent given on one machine to the phones paired with it, and a
+  per-phone list names device ids that mean nothing elsewhere. Export strips
+  them from the manifest's entry and import drops them from the entry and the
+  rewritten `project.json` (`project_transfer::mobile_keys`) — before this,
+  import adopted the entry's extras wholesale, so a bundle exported with
+  Mobile on opened the project to every phone here without being asked.
 - **Passwords and access tokens.** They live in the OS keychain keyed by host
   (`services::remote_credentials`), never in a file Tabtivity writes. The remote
   spec travels; the secret is re-entered on the far side. The export dialog says

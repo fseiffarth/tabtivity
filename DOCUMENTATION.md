@@ -405,6 +405,28 @@ lamp for one signed in now, otherwise when it last connected — with
 **Disconnect** (click again to confirm): the device is unpaired, signed out
 within seconds, and needs a new pairing code to come back.
 
+A project's or box's Mobile access reaches **all phones** (phones paired later
+included) or **only these phones**, a checklist of the paired devices chosen
+from the side panel's phone button or the **All phones ▾** button beside its
+switch in Mobile settings (`tabtivity_mobile_devices`, beside
+`tabtivity_mobile_access`). The sidecar filters every phone request through
+it: a phone off the list neither lists nor opens the scope (it answers as an
+unknown id), an open terminal of it detaches within seconds of a narrowing,
+and its agent pushes go only to the listed phones. A re-paired phone is a new
+device and is on no old list; after Lock down a limited scope reaches no phone
+until re-picked ("No phones"). Design: `docs/context/mobile_access.md`.
+
+**Per-phone sections and projects.** In **Settings → Mobile → Paired
+devices**, each phone has **To-do / Calendar / Mail** buttons and its own list
+of the projects and boxes that reach it. A section pressed off is gone from
+that phone's tab bar and refused by the sidecar for that device (`403
+section_hidden`); its alert rows are dropped, and without Calendar the phone
+gets no reminder push. The choice lives on the device record in
+`mobile-control/devices.json`, so revoking or re-pairing starts fresh.
+**Disconnect** takes the phone off a project or box (one open to every phone
+becomes the other paired phones; the last phone turns access off); **Add
+project ▾** opens one for it (an off project opens for that phone alone).
+
 Only persistent local shells and resumable configured agents are discoverable.
 The sidecar derives opaque browser ids from trusted Tabtivity state and revalidates
 the project, tab, tmux session, device session, and canonical project directory

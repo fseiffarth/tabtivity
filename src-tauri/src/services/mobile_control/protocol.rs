@@ -1790,6 +1790,9 @@ pub enum AdminRequest {
     PairingCode,
     Devices,
     Revoke { device_id: String },
+    /// Keep one phone out of exactly these sections (`auth::HIDEABLE_SECTIONS`);
+    /// an empty list lets it into all of them again.
+    SetHiddenSections { device_id: String, sections: Vec<String> },
     ForgetAll,
     Shutdown,
     /// A calendar reminder for every subscribed phone (`push.rs`). Answered
@@ -1849,6 +1852,9 @@ pub struct AdminDevice {
     /// Defaulted, so a sidecar from before the field still answers.
     #[serde(default)]
     pub online: bool,
+    /// Phone sections (`auth::HIDEABLE_SECTIONS`) this device is kept out of.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

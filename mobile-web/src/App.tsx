@@ -93,6 +93,22 @@ function takeLaunchPlace(): LastPlace | null {
 }
 const launchPlace = takeLaunchPlace();
 
+/** The sections the desktop keeps this phone out of, as the status probe last
+ * said, so a cold open does not flash a tab the sidecar will refuse. The
+ * sidecar is what enforces it; this only keeps the bar honest. */
+const HIDDEN_SECTIONS_KEY = storageDashKey("hidden-sections");
+const HIDEABLE: readonly Tab[] = ["todo", "calendar", "mail"];
+function hideableSections(value: unknown): Tab[] {
+  return Array.isArray(value) ? HIDEABLE.filter((section) => value.includes(section)) : [];
+}
+function storedHiddenSections(): Tab[] {
+  try {
+    return hideableSections(JSON.parse(localStorage.getItem(HIDDEN_SECTIONS_KEY) ?? "[]"));
+  } catch {
+    return [];
+  }
+}
+
 // Keep the last known desktop preference through the lock and connection
 // screens, before the authenticated status probe can refresh it.
 try {
@@ -200,10 +216,10 @@ function ConnectTrace() {
   </pre>;
 }
 
-function TabBar({ active, open }: { active: Tab; open: (tab: Tab) => void }) {
+function TabBar({ active, open, hidden }: { active: Tab; open: (tab: Tab) => void; hidden: readonly Tab[] }) {
   const t = useT();
   return <nav className="mobile-tabbar" aria-label={t("mobile.tabs.sections")}>
-    {TABS.map((tab) => <button
+    {TABS.filter((tab) => !hidden.includes(tab.id)).map((tab) => <button
       key={tab.id}
       className={`mobile-tab${active === tab.id ? " active" : ""}`}
       aria-current={active === tab.id ? "page" : undefined}
@@ -218,6 +234,13 @@ export function App() {
   const [pairNeedsLock, setPairNeedsLock] = useState(false);
   const [, refreshTags] = useState(0);
   const [tab, setTab] = useState<Tab>("projects");
+  const [hiddenSections, setHiddenSections] = useState<Tab[]>(storedHiddenSections);
+  // A section the desktop just turned off for this phone is left at once, for
+  // the project list: a restored place, a notification or the tab the reader
+  // was on would otherwise sit on a screen that only answers refusals.
+  useEffect(() => {
+    if (hiddenSections.includes(tab)) setTab("projects");
+  }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
@@ -342,8 +365,11 @@ export function App() {
   useEffect(() => {
     if (auth !== "paired") return;
     const refresh = () => {
-      void getMobileStatus().then(({ show_untested_tags, color_scheme }) => {
+      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections }) => {
         noteDesktopTheme(color_scheme);
+        const hidden = hideableSections(hidden_sections);
+        setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
+        try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
         const visible = show_untested_tags === true;
         if (setUntestedTagsVisible(visible)) refreshTags((tick) => tick + 1);
         try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
@@ -562,6 +588,6 @@ export function App() {
               todo={openTodo}
               mail={() => setTab("mail")}
             />}
-    <TabBar active={tab} open={openSection} />
+    <TabBar active={tab} open={openSection} hidden={hiddenSections} />
   </div>;
 }

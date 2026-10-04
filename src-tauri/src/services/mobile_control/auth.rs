@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 
 use super::{
     protocol::AdminDevice,
-    push::{Delivery, Notice, PushPrefs, PushStore},
+    push::{Delivery, Notice, NoticeKind, PushPrefs, PushStore},
     store,
 };
 
@@ -51,6 +51,11 @@ pub const SESSION_MAX: u64 = 12 * 60 * 60;
 /// dead by the time anybody reads it there.
 pub const OPEN_TICKET_TTL: u64 = 5 * 60;
 const MAX_OPEN_TICKETS: usize = 64;
+
+/// The phone sections a paired device can be kept out of, in the order the
+/// desktop lists them. Each is a whole route family on the sidecar
+/// (`host::section_guard`) and the alert rows of its kind.
+pub const HIDEABLE_SECTIONS: [&str; 3] = ["todo", "calendar", "mail"];
 
 fn now() -> u64 {
     SystemTime::now()
@@ -87,6 +92,11 @@ pub struct Device {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<u64>,
+    /// [`HIDEABLE_SECTIONS`] this phone is kept out of. Plain strings, not an
+    /// enum: a name a newer build wrote must not fail the whole file (and with
+    /// it every phone's sign-in) here; an unknown one simply matches no route.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +112,72 @@ impl Default for DeviceFile {
             devices: vec![],
         }
     }
+}
+
+/// The phones paired with this host, as the desktop reads them for the
+/// per-phone Mobile picker — with or without the host running, so no
+/// `AuthStore` (and no `host.key`) is involved. Read exactly as
+/// [`AuthStore::open`] reads the file: private, same schema. No file is no
+/// phone, and nothing is written. Public keys stay behind; `online` is
+/// always false here (only the running host knows sessions).
+pub fn read_paired_devices(control_dir: &Path) -> Result<Vec<AdminDevice>, String> {
+    let path = control_dir.join("devices.json");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    store::ensure_private_file(&path)?;
+    let file: DeviceFile = store::read_json(&path)?;
+    if file.schema != DEVICE_SCHEMA {
+        return Err("devices.json has an unsupported schema".into());
+    }
+    Ok(file
+        .devices
+        .into_iter()
+        .map(|d| AdminDevice {
+            id: d.id,
+            name: d.name,
+            created_at: d.created_at,
+            last_seen_at: d.last_seen_at,
+            online: false,
+            hidden_sections: d.hidden_sections,
+        })
+        .collect())
+}
+
+/// Most phones one project's or box's per-phone list may name.
+pub const MAX_SCOPE_DEVICES: usize = 64;
+
+/// A device id as [`AuthStore::pair`] mints it: `random_id::<20>()`, 27
+/// characters of unpadded base64url.
+fn valid_device_id(id: &str) -> bool {
+    id.len() == 27 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The per-phone list a scope is given (`set_*_mobile_access`): validated,
+/// de-duplicated in order, and cut to the phones paired right now, so a stale
+/// id is dropped in this one place. A list that names nothing — asked empty,
+/// or empty once unpaired ids are gone — is refused: "only these phones" with
+/// no phone is "off", and the caller says so instead.
+pub fn scope_device_list(requested: &[String], paired: &[AdminDevice]) -> Result<Vec<String>, String> {
+    if requested.is_empty() {
+        return Err("Choose at least one phone, or turn Mobile access off".into());
+    }
+    if requested.len() > MAX_SCOPE_DEVICES {
+        return Err(format!("At most {MAX_SCOPE_DEVICES} phones can be chosen"));
+    }
+    if !requested.iter().all(|id| valid_device_id(id)) {
+        return Err("invalid device id".into());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for id in requested {
+        if !out.contains(id) && paired.iter().any(|d| &d.id == id) {
+            out.push(id.clone());
+        }
+    }
+    if out.is_empty() {
+        return Err("None of the chosen phones is paired any more".into());
+    }
+    Ok(out)
 }
 
 #[derive(Clone)]
@@ -318,6 +394,7 @@ impl AuthStore {
             public_key: public_key.into(),
             created_at: now(),
             last_seen_at: None,
+            hidden_sections: Vec::new(),
         });
         self.save_devices()?;
         self.audit("paired", Some(&id));
@@ -481,8 +558,51 @@ impl AuthStore {
                 created_at: d.created_at,
                 last_seen_at: d.last_seen_at,
                 online: self.sessions.values().any(|s| s.device_id == d.id && s.expires_at >= t),
+                hidden_sections: d.hidden_sections.clone(),
             })
             .collect()
+    }
+
+    /// Whether `device_id` is kept out of `section`. An unknown device hides
+    /// nothing here — it never got past `authenticate` to ask.
+    pub fn hides(&self, device_id: &str, section: &str) -> bool {
+        self.devices
+            .devices
+            .iter()
+            .any(|d| d.id == device_id && d.hidden_sections.iter().any(|s| s == section))
+    }
+
+    /// The sections `device_id` is kept out of, for its own status probe.
+    pub fn hidden_sections(&self, device_id: &str) -> Vec<String> {
+        self.devices
+            .devices
+            .iter()
+            .find(|d| d.id == device_id)
+            .map(|d| d.hidden_sections.clone())
+            .unwrap_or_default()
+    }
+
+    /// Keep one paired phone out of these sections (and only these): the
+    /// desktop's per-device switches. Names outside [`HIDEABLE_SECTIONS`] are
+    /// refused; the stored list is in that canonical order, without repeats.
+    pub fn set_hidden_sections(&mut self, device_id: &str, sections: &[String]) -> Result<(), String> {
+        if let Some(bad) = sections.iter().find(|s| !HIDEABLE_SECTIONS.contains(&s.as_str())) {
+            return Err(format!("unknown section {bad:?}"));
+        }
+        let device = self
+            .devices
+            .devices
+            .iter_mut()
+            .find(|d| d.id == device_id)
+            .ok_or("unknown device")?;
+        device.hidden_sections = HIDEABLE_SECTIONS
+            .iter()
+            .filter(|known| sections.iter().any(|s| s == *known))
+            .map(|s| (*s).to_string())
+            .collect();
+        self.save_devices()?;
+        self.audit("sections_changed", Some(device_id));
+        Ok(())
     }
 
     pub fn revoke(&mut self, device_id: &str) -> Result<(), String> {
@@ -547,12 +667,22 @@ impl AuthStore {
     }
 
     /// The encrypted posts for one notice, to every paired device that
-    /// subscribed. The desktop's tag carries raw desktop ids, so the phone
-    /// gets a keyed digest of it — stable, so a repeat replaces rather than
-    /// stacks, and meaningless off this host.
-    pub fn push_deliveries(&mut self, notice: &Notice) -> Result<Vec<Delivery>, String> {
+    /// subscribed — and, when `allowed` is a list (an agent notice for a
+    /// scope open only to some phones), only to those of them. The desktop's
+    /// tag carries raw desktop ids, so the phone gets a keyed digest of it —
+    /// stable, so a repeat replaces rather than stacks, and meaningless off
+    /// this host.
+    pub fn push_deliveries(&mut self, notice: &Notice, allowed: Option<&[String]>) -> Result<Vec<Delivery>, String> {
         let tag = Base64UrlUnpadded::encode_string(&self.keyed(b"push-tag", notice.tag.as_bytes())[..12]);
-        let paired: Vec<String> = self.devices.devices.iter().map(|d| d.id.clone()).collect();
+        let paired: Vec<String> = self
+            .devices
+            .devices
+            .iter()
+            // A phone kept out of the Calendar gets no reminder either.
+            .filter(|d| notice.kind != NoticeKind::Calendar || !d.hidden_sections.iter().any(|s| s == "calendar"))
+            .map(|d| d.id.clone())
+            .filter(|id| allowed.is_none_or(|allowed| allowed.contains(id)))
+            .collect();
         self.push.deliveries(notice, &tag, &paired)
     }
 
@@ -785,6 +915,122 @@ mod tests {
         auth.sessions.get_mut(&token).unwrap().expires_at = t - 1;
         assert!(auth.touch(&token).is_none());
         assert!(auth.authenticate(&token).is_none());
+    }
+
+    /// The desktop's picker reads the paired phones with no host running:
+    /// no file is no phone (and nothing is created), a file is read as the
+    /// store wrote it, without its keys, and a foreign schema is refused.
+    #[test]
+    fn paired_devices_read_without_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        assert!(read_paired_devices(&control).unwrap().is_empty());
+        assert!(!control.exists(), "reading must not create the control dir");
+
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _token) = paired_login(&mut auth);
+        let read = read_paired_devices(&control).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].id, device);
+        assert_eq!(read[0].name, "Phone");
+        assert!(!read[0].online, "only the running host knows sessions");
+        assert!(!serde_json::to_string(&read).unwrap().contains("public_key"));
+
+        store::write_json_atomic(
+            &control.join("devices.json"),
+            &serde_json::json!({ "schema": 99, "devices": [] }),
+            0o600,
+        )
+        .unwrap();
+        assert!(read_paired_devices(&control).is_err());
+    }
+
+    #[test]
+    fn a_scope_device_list_is_validated_deduplicated_and_cut_to_paired_phones() {
+        let id = |c: char| c.to_string().repeat(27);
+        let paired: Vec<AdminDevice> = ['a', 'b']
+            .into_iter()
+            .map(|c| AdminDevice { id: id(c), name: c.into(), created_at: 1, last_seen_at: None, online: false, hidden_sections: vec![] })
+            .collect();
+        assert_eq!(scope_device_list(&[id('b'), id('a'), id('b')], &paired).unwrap(), vec![id('b'), id('a')]);
+        // An unpaired id is dropped; nothing left is refused.
+        assert_eq!(scope_device_list(&[id('a'), id('z')], &paired).unwrap(), vec![id('a')]);
+        assert!(scope_device_list(&[id('z')], &paired).is_err());
+        assert!(scope_device_list(&[], &paired).is_err());
+        for bad in ["short", &format!("{}=", "a".repeat(26)), &"a".repeat(28)] {
+            assert!(scope_device_list(&[bad.to_string()], &paired).is_err(), "{bad}");
+        }
+        let many: Vec<String> = (0..=MAX_SCOPE_DEVICES).map(|_| id('a')).collect();
+        assert!(scope_device_list(&many, &paired).is_err());
+    }
+
+    #[test]
+    fn a_minted_device_id_passes_the_scope_list_check() {
+        let (_dir, mut auth) = store();
+        let (device, _) = paired_login(&mut auth);
+        assert!(valid_device_id(&device), "{device}");
+    }
+
+    #[test]
+    fn hidden_sections_are_validated_stored_in_order_and_survive_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        assert!(auth.set_hidden_sections(&device, &["projects".into()]).is_err());
+        assert!(auth.set_hidden_sections("nobody", &["mail".into()]).is_err());
+        auth.set_hidden_sections(&device, &["mail".into(), "todo".into(), "mail".into()]).unwrap();
+        assert_eq!(auth.hidden_sections(&device), ["todo", "mail"]);
+        assert!(auth.hides(&device, "mail") && !auth.hides(&device, "calendar"));
+        assert_eq!(auth.devices()[0].hidden_sections, ["todo", "mail"]);
+
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        assert!(reopened.hides(&device, "todo"));
+        assert_eq!(read_paired_devices(&control).unwrap()[0].hidden_sections, ["todo", "mail"]);
+    }
+
+    #[test]
+    fn a_phone_kept_out_of_the_calendar_gets_no_reminder() {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let (_dir, mut auth) = store();
+        let (kept_out, _) = paired_login(&mut auth);
+        let (other, _) = paired_login(&mut auth);
+        let secret = Base64UrlUnpadded::encode_string(&[7u8; 16]);
+        for (device, endpoint) in [(&kept_out, "https://fcm.googleapis.com/a"), (&other, "https://fcm.googleapis.com/b")] {
+            let key = p256::SecretKey::random(&mut OsRng).public_key();
+            let key = Base64UrlUnpadded::encode_string(key.to_encoded_point(false).as_bytes());
+            let prefs = PushPrefs { details: true, calendar: true, agents: super::super::push::AgentNotices::Off };
+            auth.push_subscribe(device, endpoint, &key, &secret, prefs).unwrap();
+        }
+        auth.set_hidden_sections(&kept_out, &["calendar".into()]).unwrap();
+        let notice = Notice {
+            kind: NoticeKind::Calendar,
+            status: None,
+            title: "Dentist".into(),
+            body: "09:00".into(),
+            tag: "raw".into(),
+            target: None,
+        };
+        let out = auth.push_deliveries(&notice, None).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].endpoint, "https://fcm.googleapis.com/b");
+    }
+
+    /// A section name a newer build wrote matches no route here, and must not
+    /// fail the device file (and every phone's sign-in) with it.
+    #[test]
+    fn an_unknown_hidden_section_in_the_file_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        drop(auth);
+        let path = control.join("devices.json");
+        let mut file: serde_json::Value = store::read_json(&path).unwrap();
+        file["devices"][0]["hidden_sections"] = serde_json::json!(["notes", "mail"]);
+        store::write_json_atomic(&path, &file, 0o600).unwrap();
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        assert!(reopened.hides(&device, "mail"));
     }
 
     #[test]

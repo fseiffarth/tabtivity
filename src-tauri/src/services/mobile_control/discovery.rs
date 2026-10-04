@@ -33,6 +33,12 @@ struct ProjectRecord {
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
     #[serde(default, rename = "tabtivity_mobile_access")]
     app_mobile_access: bool,
+    /// The paired phones that may open it; absent means every phone
+    /// (`brand::MOBILE_DEVICES_KEY`). Lenient: a malformed value closes this
+    /// scope alone instead of failing the whole file.
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
+    #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices")]
+    app_mobile_devices: Option<Vec<String>>,
 }
 
 /// The slice of `boxes.json` the catalog reads (#31aa). A box is listed as a
@@ -50,6 +56,12 @@ struct BoxRecord {
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
     #[serde(default, rename = "tabtivity_mobile_access")]
     app_mobile_access: bool,
+    /// The paired phones that may open it; absent means every phone
+    /// (`brand::MOBILE_DEVICES_KEY`). Lenient: a malformed value closes this
+    /// scope alone instead of failing the whole file.
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
+    #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices")]
+    app_mobile_devices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -299,6 +311,18 @@ pub struct ResolvedProject {
     /// per-member agent tab deliberately starts in that member's tree.
     pub roots: Vec<PathBuf>,
     pub tabs: Vec<ResolvedTab>,
+    /// The paired phones this scope is open to: `None` is every phone, a list
+    /// only those device ids (none when empty). Never crosses the browser API.
+    pub devices: Option<Vec<String>>,
+}
+
+impl ResolvedProject {
+    /// Whether the phone paired as `device_id` may see this scope at all.
+    pub fn reaches(&self, device_id: &str) -> bool {
+        self.devices
+            .as_ref()
+            .is_none_or(|devices| devices.iter().any(|id| id == device_id))
+    }
 }
 
 /// One scope to resolve, before its session file and tmux rows are read.
@@ -310,6 +334,8 @@ struct ScopeSource {
     /// Uncanonicalized; the first entry is the home and must exist, the rest
     /// are best-effort.
     roots: Vec<PathBuf>,
+    /// [`ResolvedProject::devices`].
+    devices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -823,6 +849,9 @@ impl Catalog {
                 status: "active".into(),
                 kind: ScopeKind::Root,
                 roots: vec![root.dir.clone()],
+                // Root has its own switch and gate; per-phone root is out of
+                // scope (docs/mobile_device_scoped_access_plan.md).
+                devices: None,
             });
         }
         for project in &projects {
@@ -844,6 +873,7 @@ impl Catalog {
                 status: project.status.clone(),
                 kind: ScopeKind::Project,
                 roots: vec![PathBuf::from(root_raw)],
+                devices: project.app_mobile_devices.clone(),
             });
         }
         for b in &boxes {
@@ -880,6 +910,9 @@ impl Catalog {
                 status: "active".into(),
                 kind: ScopeKind::Box,
                 roots,
+                // The box's own list; a member's list, like its switch, is
+                // not consulted.
+                devices: b.app_mobile_devices.clone(),
             });
         }
         let shells = shells_open(state_dir);
@@ -888,6 +921,15 @@ impl Catalog {
             .filter_map(|source| resolve_scope(state_dir, host_key, live, shells, source))
             .collect();
         Ok(Self { projects: resolved })
+    }
+
+    /// This snapshot as the phone paired as `device_id` sees it: every scope
+    /// whose per-phone list leaves that phone out is gone, so `project`, `tab`
+    /// and `grants` answer for it exactly as for an unknown id. The cache stays
+    /// one device-agnostic snapshot; each request filters its own copy.
+    pub fn for_device(mut self, device_id: &str) -> Self {
+        self.projects.retain(|project| project.reaches(device_id));
+        self
     }
 
     pub fn project(&self, id: &str) -> Option<&ResolvedProject> {
@@ -906,6 +948,60 @@ impl Catalog {
     pub fn grants(&self, tab_id: &str, tmux_name: &str) -> bool {
         self.tab(tab_id)
             .is_some_and(|(_, tab)| tab.public.available && tab.tmux_name == tmux_name)
+    }
+}
+
+/// One project scope holding one live agent tab, for tests elsewhere in the
+/// sidecar that need a catalog without a state dir or a tmux server.
+#[cfg(test)]
+pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<String>>) -> ResolvedProject {
+    let tab = PublicTab {
+        id: tab_id.into(),
+        label: "Agent".into(),
+        kind: "agent".into(),
+        agent_label: None,
+        agent_status: None,
+        agent_model: None,
+        agent_plan: false,
+        agent_goal: false,
+        agent_subagents: 0,
+        working_at: None,
+        done_at: None,
+        schedules: None,
+        prompts: Vec::new(),
+        available: true,
+        viewer_busy: false,
+        last_activity: None,
+        color: None,
+        sign_in: false,
+        turn_started_at: None,
+        worktree: None,
+    };
+    ResolvedProject {
+        public: PublicProject {
+            id: "p".into(),
+            label: "P".into(),
+            status: "active".into(),
+            kind: ScopeKind::Project,
+            live_sessions: 1,
+            last_activity: None,
+            pending_reviews: None,
+            git: None,
+        },
+        raw_id: "raw-p".into(),
+        root: PathBuf::from("/"),
+        roots: vec![PathBuf::from("/")],
+        tabs: vec![ResolvedTab {
+            public: tab,
+            tmux_name: tmux_name.into(),
+            session_id: None,
+            schedule_target_id: None,
+            cmd: "claude".into(),
+            cwd: "/".into(),
+            since: None,
+            local_model: false,
+        }],
+        devices,
     }
 }
 
@@ -1034,6 +1130,7 @@ fn resolve_scope(
         root,
         roots,
         tabs,
+        devices: source.devices,
     })
 }
 
@@ -1065,6 +1162,25 @@ mod tests {
         assert!(project.app_mobile_access);
         let b: super::BoxRecord = serde_json::from_str(&format!(r#"{{"id":"b","name":"B","{key}":true}}"#)).unwrap();
         assert!(b.app_mobile_access);
+    }
+
+    /// The per-phone list's serde key is a literal too, and it is read
+    /// leniently: absent is every phone, a list is those ids, anything else
+    /// is no phone — and never a parse error for the record.
+    #[test]
+    fn the_mobile_devices_key_is_the_brand_constant_and_read_leniently() {
+        let key = crate::brand::MOBILE_DEVICES_KEY;
+        let project = |value: &str| -> super::ProjectRecord {
+            let extra = if value.is_empty() { String::new() } else { format!(r#","{key}":{value}"#) };
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"P","status":"active"{extra}}}"#)).unwrap()
+        };
+        assert_eq!(project("").app_mobile_devices, None);
+        assert_eq!(project(r#"["d1","d2"]"#).app_mobile_devices, Some(vec!["d1".to_string(), "d2".to_string()]));
+        for malformed in ["[]", "null", r#""d1""#, r#"["d1",2]"#, "{}"] {
+            assert_eq!(project(malformed).app_mobile_devices, Some(vec![]), "{malformed}");
+        }
+        let b: super::BoxRecord = serde_json::from_str(&format!(r#"{{"id":"b","name":"B","{key}":7}}"#)).unwrap();
+        assert_eq!(b.app_mobile_devices, Some(vec![]));
     }
 
     /// The phone's access is read under the current key only. A key an older
@@ -1692,6 +1808,69 @@ mod tests {
         let labels: Vec<&str> = b.tabs.iter().map(|t| t.public.label.as_str()).collect();
         assert_eq!(labels, vec!["Box shell", "Lib shell"]);
         assert!(!b.public.id.contains("b1"), "the opaque id must not carry the box id");
+    }
+
+    /// The per-phone list, end to end through a load: absent reaches every
+    /// phone, a list only its ids, an empty or malformed one none — and a
+    /// malformed value costs that scope alone, never the rest of the file. A
+    /// list on a scope whose switch is off opens nothing.
+    #[test]
+    fn a_scope_with_a_device_list_reaches_only_those_phones() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let devices = crate::brand::MOBILE_DEVICES_KEY;
+        let access = crate::brand::MOBILE_ACCESS_KEY;
+        let folder = state.join("boxes").join("paper");
+        fs::create_dir_all(&folder).expect("box folder");
+        let mut projects = Vec::new();
+        for id in ["p-all", "p-one", "p-empty", "p-bad", "p-off"] {
+            let root = state.join(id);
+            fs::create_dir_all(&root).expect("root");
+            let mut record = serde_json::json!({
+                "id": id, "name": id, "status": "active",
+                "directory": root.to_string_lossy(), access: id != "p-off",
+            });
+            match id {
+                "p-one" | "p-off" => record[devices] = serde_json::json!(["d1"]),
+                "p-empty" => record[devices] = serde_json::json!([]),
+                "p-bad" => record[devices] = serde_json::json!("d1"),
+                _ => {}
+            }
+            projects.push(record);
+        }
+        fs::write(state.join("projects.json"), serde_json::to_vec(&projects).expect("projects"))
+            .expect("write projects");
+        fs::write(
+            state.join("boxes.json"),
+            serde_json::to_vec(&serde_json::json!([
+                { "id": "b-all", "name": "All", "folder": folder.to_string_lossy(), access: true },
+                { "id": "b-two", "name": "Two", "folder": folder.to_string_lossy(), access: true,
+                  devices: ["d2"] },
+                { "id": "b-bad", "name": "Bad", "folder": folder.to_string_lossy(), access: true,
+                  devices: [1] },
+            ]))
+            .expect("boxes"),
+        )
+        .expect("write boxes");
+
+        let catalog = Catalog::load(state, &[7; 32]).expect("a malformed list must not fail the load");
+        let ids = |catalog: &Catalog| {
+            let mut ids: Vec<String> = catalog.projects.iter().map(|p| p.raw_id.clone()).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(
+            ids(&catalog),
+            ["box:b-all", "box:b-bad", "box:b-two", "p-all", "p-bad", "p-empty", "p-one"],
+            "the unfiltered snapshot lists every opted-in scope"
+        );
+        assert_eq!(ids(&catalog.clone().for_device("d1")), ["box:b-all", "p-all", "p-one"]);
+        assert_eq!(ids(&catalog.clone().for_device("d2")), ["box:b-all", "box:b-two", "p-all"]);
+        assert_eq!(ids(&catalog.clone().for_device("d3")), ["box:b-all", "p-all"]);
+        // A filtered-out scope answers like an unknown one.
+        let one = catalog.projects.iter().find(|p| p.raw_id == "p-one").expect("p-one").public.id.clone();
+        assert!(catalog.clone().for_device("d1").project(&one).is_some());
+        assert!(catalog.for_device("d2").project(&one).is_none());
     }
 
     #[test]

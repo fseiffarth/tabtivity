@@ -33,8 +33,9 @@ pub struct AdminContext {
 /// Encrypt `notice` for every subscribed phone and send it off the admin
 /// plane: a slow push service must not hold the desktop's call, and nothing it
 /// answers changes the reply.
-fn queue_notice(auth: &Arc<Mutex<AuthStore>>, notice: &Notice) -> AdminResponse {
-    let deliveries = match auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(notice) {
+/// `allowed` narrows it to the phones an agent notice's scope is open to.
+fn queue_notice(auth: &Arc<Mutex<AuthStore>>, notice: &Notice, allowed: Option<&[String]>) -> AdminResponse {
+    let deliveries = match auth.lock().unwrap_or_else(PoisonError::into_inner).push_deliveries(notice, allowed) {
         Ok(deliveries) => deliveries,
         Err(message) => return AdminResponse::Error { message },
     };
@@ -181,6 +182,14 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },
         },
+        Ok(AdminRequest::SetHiddenSections { device_id, sections }) => match auth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_hidden_sections(&device_id, &sections)
+        {
+            Ok(()) => AdminResponse::Ok,
+            Err(message) => AdminResponse::Error { message },
+        },
         Ok(AdminRequest::ForgetAll) => match auth.lock().unwrap_or_else(PoisonError::into_inner).forget_all() {
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },
@@ -197,6 +206,7 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
         Ok(AdminRequest::Notify { kind, title, body, tag }) => queue_notice(
             auth,
             &Notice { kind, status: None, title, body, tag, target: None },
+            None,
         ),
         Ok(AdminRequest::AgentTurn { tmux_session, status, prompt }) => {
             // Resolved before the auth lock is taken: the lookup reads the
@@ -206,7 +216,11 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
                 // A tab no phone can reach, or one a phone is looking at.
                 None => AdminResponse::Ok,
                 Some(tab) if tab.attached => AdminResponse::Ok,
-                Some(tab) => queue_notice(auth, &tab.notice(&tmux_session, status, prompt.as_deref())),
+                Some(tab) => queue_notice(
+                    auth,
+                    &tab.notice(&tmux_session, status, prompt.as_deref()),
+                    tab.devices.as_deref(),
+                ),
             }
         }
         Err(message) => AdminResponse::Error { message },
@@ -790,6 +804,7 @@ mod frame_tests {
                     tab_id: "t".into(),
                     tab_label: "Claude".into(),
                     attached: true,
+                    devices: None,
                 })
             })),
         };

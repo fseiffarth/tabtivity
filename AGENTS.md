@@ -64,7 +64,7 @@ tool is unavailable, say so — never skip silently.
 - Design rationale, one file per subsystem in `docs/context/` — open only the
   one you're touching: agent_authority, agent_schedule_mcp, agent_sessions,
   brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
-  markup_mcp, multi_host_remote, openvpn, project_boxes, project_transfer,
+  markup_mcp, mobile_access, multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
   tmux_sessions, usage_stats, vm_projects.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.

@@ -83,8 +83,11 @@ interface BoxesStore {
   setBoxMembers: (boxId: string, memberIds: string[]) => Promise<void>;
   /** Switch the box's Tabtivity Mobile reach (#31aa) — the box twin of
    *  `projects.setProjectMobileAccess`. Enabling resolves the box folder on
-   *  the backend, so the returned record carries `folder` too. */
-  setBoxMobileAccess: (boxId: string, enabled: boolean) => Promise<void>;
+   *  the backend, so the returned record carries `folder` too. `devices` is
+   *  the per-phone list: `null` reaches every paired phone, a list only those.
+   *  Callers re-enabling or refreshing must pass the box's current list —
+   *  `null` widens it to every phone. */
+  setBoxMobileAccess: (boxId: string, enabled: boolean, devices: string[] | null) => Promise<void>;
   /** Set the box's colour (`#rrggbb`), or `undefined` to go back to the colour
    *  hashed from its id. */
   setBoxColor: (boxId: string, color: string | undefined) => Promise<void>;
@@ -157,6 +160,34 @@ async function refreshDocsFor(boxes: ProjectBox[], boxIds: string[]): Promise<vo
   }
 }
 
+/**
+ * The whole-list save, adopting the revisions the backend stamped: a box this
+ * save changed moves on a revision in the file, and a store still holding the
+ * old number would have its next save refused as stale (`BOXES_STALE`) — the
+ * second box edit of a window session never landed. Only `rev` is taken back,
+ * so an edit made while the save was in flight is not overwritten.
+ */
+async function saveBoxes(boxes: ProjectBox[]): Promise<void> {
+  const written = await invoke<ProjectBox[] | null | undefined>("save_boxes", { boxes });
+  adoptRevisions(written);
+}
+
+function adoptRevisions(written: ProjectBox[] | null | undefined): void {
+  // A backend from before answers nothing; there is nothing to adopt.
+  if (!Array.isArray(written)) return;
+  const revs = new Map(written.map((b) => [b.id, b.rev]));
+  useBoxesStore.setState((state) => {
+    let changed = false;
+    const boxes = state.boxes.map((b) => {
+      const rev = revs.get(b.id);
+      if (rev === undefined || rev === b.rev) return b;
+      changed = true;
+      return { ...b, rev };
+    });
+    return changed ? { boxes } : {};
+  });
+}
+
 export const useBoxesStore = create<BoxesStore>((set, get) => ({
   boxes: [],
   loaded: false,
@@ -204,7 +235,7 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
       }),
     }));
     if (!updated) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    await saveBoxes(get().boxes);
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
@@ -221,7 +252,7 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
       }),
     }));
     if (!changed) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    await saveBoxes(get().boxes);
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
@@ -233,8 +264,12 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
-  setBoxMobileAccess: async (boxId, enabled) => {
-    const updated = await invoke<ProjectBox>("set_box_mobile_access", { boxId, enabled });
+  setBoxMobileAccess: async (boxId, enabled, devices) => {
+    const updated = await invoke<ProjectBox>("set_box_mobile_access", {
+      boxId,
+      enabled,
+      devices: enabled ? devices : null,
+    });
     set((state) => ({
       boxes: state.boxes.map((b) => (b.id === boxId ? updated : b)),
     }));
@@ -252,7 +287,7 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
       }),
     }));
     if (!changed) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    await saveBoxes(get().boxes);
   },
 
   setBoxPillHidden: async (boxId, hidden) => {
@@ -267,7 +302,7 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
       }),
     }));
     if (!changed) return;
-    await invoke<void>("save_boxes", { boxes: get().boxes });
+    await saveBoxes(get().boxes);
   },
 
   boxProjects: async (ids, target) => {
@@ -324,10 +359,26 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
         useProjectsStore.getState().projects.find((p) => p.id === outgoing)?.local_file ?? "";
       void tabsStore.persistScope(outgoing, localFile).catch(() => {});
     }
-    // Lazily create the box folder and capture the resolved path back into state.
-    const folder = await invoke<string>("ensure_box_folder", { boxId });
+    // Lazily create the box folder and capture the resolved path back into
+    // state — with the revision a first open stamps, or the next whole-list
+    // save is refused as stale. (A backend from before answers the folder
+    // alone; it stamps nothing the store could adopt.)
+    const answer = await invoke<ProjectBox | string>("ensure_box_folder", { boxId });
+    const folder = typeof answer === "string" ? answer : answer?.folder;
+    const answeredRev = typeof answer === "string" ? undefined : answer?.rev;
     set((state) => ({
-      boxes: state.boxes.map((b) => (b.id === boxId ? { ...b, folder } : b)),
+      boxes: state.boxes.map((b) => {
+        if (b.id !== boxId) return b;
+        // The answer is the box as the FILE holds it, which may carry an edit
+        // this store never saw (another writer: a project import joining the
+        // box, a second window). Adopting that revision without that edit
+        // would let the next whole-list save erase it unrefused, so the
+        // revision is taken only when it is exactly the first open's own
+        // stamp: no folder held here, and one step past the held revision.
+        const stampedHere =
+          answeredRev !== undefined && !b.folder && answeredRev === (b.rev ?? 0) + 1;
+        return { ...b, folder, ...(stampedHere ? { rev: answeredRev } : {}) };
+      }),
     }));
     // Activate the box scope (disjoint from project ids / "root"). Box scopes
     // are persisted first-class now: CenterPanel's box-restore effect loads the

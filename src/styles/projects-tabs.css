@@ -712,6 +712,18 @@
   overflow-y: auto;
 }
 
+/* The per-phone Mobile access picker (mobile/MobileAccessPicker): the same
+   checklist rows, dropped from a button — `keepBelow` caps it to the room
+   below, and its rows scroll in a `.menu-scroll-region` so the wash spans the
+   whole menu. Portaled into <body>, which sets no text colour. */
+.mobile-access-picker {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  min-width: 220px;
+}
+
 /* Multi-select ring (Ctrl/Cmd-click, 3b): the selection the "Box these…" menu
    entry commits. Distinct from `.active` (the current scope's highlight). */
 .project-pill.is-selected {

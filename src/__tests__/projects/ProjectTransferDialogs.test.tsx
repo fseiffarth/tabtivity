@@ -30,6 +30,7 @@ import { ProjectExportDialog } from "../../components/projects/ProjectExportDial
 import { ProjectImportBundleDialog } from "../../components/projects/ProjectImportBundleDialog";
 import type { BundleInfo, ExportPreview, ProjectEntry } from "../../types";
 import { BRAND, NAMES } from "../../lib/brand";
+import { useBoxesStore } from "../../stores/boxes";
 
 const project: ProjectEntry = {
   id: "p1",
@@ -260,6 +261,9 @@ describe("import dialog", () => {
     const entry: ProjectEntry = { ...project, id: "p2", name: "Thesis copy" };
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "inspect_project_export") return Promise.resolve(bundle());
+      if (cmd === "get_boxes") {
+        return Promise.resolve([{ id: "b1", name: "Papers", member_ids: ["p2"], position: 10, rev: 3 }]);
+      }
       return Promise.resolve({
         entry,
         directory: `/home/me/${BRAND.slug}/projects/thesis-copy`,
@@ -299,5 +303,12 @@ describe("import dialog", () => {
     // The downgrade is reported, so a tab that comes back as a bare shell is
     // explained rather than discovered.
     expect(screen.getByText(/came back as plain shells/)).toBeTruthy();
+    // Joining a box wrote boxes.json: the store reloads it, so the pill shows
+    // the member and the next box save carries the moved-on revision.
+    await vi.waitFor(() =>
+      expect(useBoxesStore.getState().boxes).toEqual([
+        { id: "b1", name: "Papers", member_ids: ["p2"], position: 10, rev: 3 },
+      ]),
+    );
   });
 });

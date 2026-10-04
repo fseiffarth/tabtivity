@@ -17,6 +17,7 @@ import {
   LEGACY_MOBILE_HOST_KEY,
   LEGACY_NAMES,
   MOBILE_ACCESS_KEY,
+  MOBILE_DEVICES_KEY,
   MOBILE_HOST_KEY,
   NAMES,
   envName,
@@ -72,6 +73,7 @@ describe("brand mirror", () => {
   it("keys the phone switches as the backend's serde keys", () => {
     expect(MOBILE_HOST_KEY).toBe(rust.current.MOBILE_HOST_KEY);
     expect(MOBILE_ACCESS_KEY).toBe(rust.current.MOBILE_ACCESS_KEY);
+    expect(MOBILE_DEVICES_KEY).toBe(rust.current.MOBILE_DEVICES_KEY);
     expect(LEGACY_MOBILE_HOST_KEY).toBe(rust.legacy.LEGACY_MOBILE_HOST_KEY);
     expect(LEGACY_MOBILE_ACCESS_KEY).toBe(rust.legacy.LEGACY_MOBILE_ACCESS_KEY);
   });

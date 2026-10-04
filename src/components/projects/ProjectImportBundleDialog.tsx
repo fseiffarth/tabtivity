@@ -15,6 +15,7 @@ import type {
 } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
 import { exportExtensions } from "../../lib/brandMigration";
+import { useBoxesStore } from "../../stores/boxes";
 
 /**
  * "Import project file…" — register a `.tabtivityproj` bundle written by
@@ -97,6 +98,10 @@ export function ProjectImportBundleDialog({
       );
       setResult(imported);
       onProject(imported.entry);
+      // Joining boxes wrote `boxes.json` behind the store's back: reload it,
+      // or the box pills miss the new member and the store's next whole-list
+      // box save is refused as stale (the revisions moved on).
+      if (imported.boxesJoined.length > 0) void useBoxesStore.getState().load();
     } catch (e) {
       setError(String(e));
     } finally {
