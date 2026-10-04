@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { en } from "../../lib/i18n";
 import {
+  ON_DEVICE_CHECK_LIMIT_MS,
+  onDeviceSpeechAsked,
   prepareOnDeviceSpeech,
   sanitizeVoiceTranscript,
   speechRecognitionConstructor,
@@ -36,6 +38,18 @@ function result(transcript: string, isFinal: boolean) {
   return { 0: { transcript }, isFinal, length: 1 };
 }
 
+/** A window as Chromium shows it: `userAgentData` is Chromium's alone. Safari's
+ * has none. Timers go to the test's own, so fake timers reach them. */
+function browserScope(chromium: boolean): Window {
+  return {
+    navigator: chromium ? { userAgentData: {} } : {},
+    setTimeout: (handler: () => void, ms: number) => window.setTimeout(handler, ms),
+    clearTimeout: (id: number) => window.clearTimeout(id),
+  } as unknown as Window;
+}
+const CHROMIUM = browserScope(true);
+const SAFARI = browserScope(false);
+
 describe(`${BRAND.display} Mobile voice input`, () => {
   it("uses standard or prefixed mobile speech recognition", () => {
     const Constructor = FakeRecognition as MobileSpeechRecognitionConstructor;
@@ -52,7 +66,7 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       static available = async () => "available" as const;
     }
 
-    await expect(prepareOnDeviceSpeech(LocalRecognition, "de-DE")).resolves.toBe("local");
+    await expect(prepareOnDeviceSpeech(LocalRecognition, "de-DE", CHROMIUM)).resolves.toBe("local");
   });
 
   it("installs a downloadable on-device language pack before retrying", async () => {
@@ -61,7 +75,7 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       static install = async () => true;
     }
 
-    await expect(prepareOnDeviceSpeech(DownloadableRecognition, "en-US")).resolves.toBe("installed");
+    await expect(prepareOnDeviceSpeech(DownloadableRecognition, "en-US", CHROMIUM)).resolves.toBe("installed");
   });
 
   it("falls back to the browser speech service when local dictation is unavailable", async () => {
@@ -69,7 +83,33 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       static available = async () => "unavailable" as const;
     }
 
-    await expect(prepareOnDeviceSpeech(RemoteRecognition, "en-US")).resolves.toBe("remote");
+    await expect(prepareOnDeviceSpeech(RemoteRecognition, "en-US", CHROMIUM)).resolves.toBe("remote");
+  });
+
+  it("never asks Safari's on-device recognizer, whose check hung on an iPad", async () => {
+    const available = vi.fn(() => new Promise<"available">(() => {}));
+    class SafariRecognition extends FakeRecognition {
+      static available = available;
+    }
+
+    expect(onDeviceSpeechAsked(SafariRecognition, SAFARI)).toBe(false);
+    expect(onDeviceSpeechAsked(SafariRecognition, CHROMIUM)).toBe(true);
+    await expect(prepareOnDeviceSpeech(SafariRecognition, "de-DE", SAFARI)).resolves.toBe("remote");
+    expect(available).not.toHaveBeenCalled();
+  });
+
+  it("uses the speech service when the on-device check does not answer", async () => {
+    vi.useFakeTimers();
+    try {
+      class StuckRecognition extends FakeRecognition {
+        static available = () => new Promise<"available">(() => {});
+      }
+      const prepared = prepareOnDeviceSpeech(StuckRecognition, "en-US", CHROMIUM);
+      await vi.advanceTimersByTimeAsync(ON_DEVICE_CHECK_LIMIT_MS);
+      await expect(prepared).resolves.toBe("remote");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reads the whole result list, whatever resultIndex says", () => {
