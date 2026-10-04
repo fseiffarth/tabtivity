@@ -1,4 +1,4 @@
-// How a PDF the phone can mark up opens — Home → This phone → PDFs open in.
+// How a PDF the phone can mark up opens — Home → ⚙ This device → PDFs open in.
 // Wherever it opens, the pen switches Mark up on as it touches a page, as
 // the phone's own Markup and Notes have it (`MarkupView`); this choice only
 // picks the mode the view starts in. Automatic, where an untouched phone

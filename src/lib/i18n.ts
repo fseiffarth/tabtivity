@@ -267,7 +267,7 @@ export const enSource = {
   "mobile.speech.autoHint": "Each new answer is spoken as it arrives",
   "mobile.speech.unavailable": "This browser cannot read text aloud",
   "mobile.speech.code": "code block",
-  "mobile.home.phoneSettings": "This phone",
+  "mobile.home.thisDevice": "This device",
   "mobile.sendToDesktop.heading": "Desktop",
   "mobile.home.sendToDesktop": "Send a file to the desktop",
   "mobile.sendToDesktop.hint": "Lands in the desktop's inbox, not in any project",
@@ -1730,7 +1730,7 @@ export const enSource = {
   // Settings — usage stats.
   "settings.usageStats": "Usage stats",
   "settings.pdfMarkup": "PDF markup",
-  "settings.pdfMarkupHelp": "What the PDF viewer’s Mark up sends to the agent. Kept on this computer; the phone has its own (Home → This phone → Mark up prompt).",
+  "settings.pdfMarkupHelp": "What the PDF viewer’s Mark up sends to the agent. Kept on this computer; the phone has its own (Home → ⚙ This device → Mark up prompt).",
   "settings.pdfMarkupInstruction": "Mark up prompt",
   "settings.pdfMarkupInstructionHelp": "Put after the file, the marked copy, the layers and your typed notes with each Submit. With Apply marks directly on, the default has the agent make the changes and rebuild the PDF; otherwise — or where no undo can be kept — it asks the agent to list the changes and edit nothing until told.",
   "settings.pdfMarkupApply": "“Make these changes” prompt",

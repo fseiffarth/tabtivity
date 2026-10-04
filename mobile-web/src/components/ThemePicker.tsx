@@ -1,6 +1,6 @@
-// The phone's theme as a list to tap, from the start page's "This phone"
-// section: the desktop's own themes under their desktop names, plus following
-// the desktop, which is where an untouched phone starts.
+// The phone's theme as a list to tap, from the start page's "This device"
+// sheet (the header's gear): the desktop's own themes under their desktop
+// names, plus following the desktop, which is where an untouched phone starts.
 
 import type { TranslationKey } from "../../../src/lib/i18n";
 import { useT } from "../../../src/lib/i18n";

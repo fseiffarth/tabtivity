@@ -120,7 +120,7 @@ off.
   edited since. Where no undo can be kept (not a git repository, a remote
   project, a picture, too many untracked files) the pill says so and the
   agent first only lists the changes; tap **Make these changes** to let it go
-  ahead. Home → This phone → **Mark up prompt** has the **Apply marks
+  ahead. Home → ⚙ This device → **Mark up prompt** has the **Apply marks
   directly** switch (off: always list first), both prompts, and a slider for
   how often it asks you about a mark, from **Ask always** to **Never ask**. A pen (Apple Pencil, a stylus) needs no
   **Mark up** tap: touch a page with it and it starts marking, as in the
@@ -133,7 +133,7 @@ off.
   to a new subagent** (off by default) has the agent pass every round to a
   new subagent of its own and be free again at once, so rounds run side by
   side instead of one after the other — for agents that can start subagents,
-  such as Claude Code; others do the round themselves. Home → This phone →
+  such as Claude Code; others do the round themselves. Home → ⚙ This device →
   **PDFs open in** picks how a PDF opens: **Automatic** (marking once you draw
   with a pen only, or while marks wait to be submitted; reading otherwise),
   **Reading** or **Mark up**. The desktop's PDF viewer has the same **Mark up**
@@ -271,7 +271,7 @@ models from the phone** (under **Project access**), and the row disappears.
 
 ## Notifications on the phone
 
-On the phone, open **This phone → Notifications** (or **Calendar → Reminders**)
+On the phone, open **⚙ This device → Notifications** (or **Calendar → Reminders**)
 and choose what reaches you, even with Tabtivity Mobile closed:
 
 - **Calendar reminders** — each reminder of the desktop calendar. A tap opens

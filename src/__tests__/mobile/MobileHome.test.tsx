@@ -79,18 +79,26 @@ describe("Mobile home — project list states", () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
     render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
-    const row = screen.getByRole("button", { name: /Voice language/ });
+    // The phone's own settings sit behind the header's gear, not on the page.
+    expect(screen.queryByRole("button", { name: /Voice language/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "This device" }));
+    const row = within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ });
     // Until it is set, the row says which language the phone itself reports.
     expect(row.textContent).toContain("en-GB");
 
+    // The row's sheet takes the settings sheet's place; picking comes back to it.
     fireEvent.click(row);
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Deutsch" }));
     expect(localStorage.getItem(storageKey("mobile.speechLang"))).toBe("de");
-    expect(screen.getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch");
+    const settings = screen.getByRole("dialog", { name: "This device" });
+    expect(within(settings).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch");
+    fireEvent.click(within(settings).getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     // The agents mode replaces the project list, not the phone's own settings.
     fireEvent.click(screen.getByRole("button", { name: "Agents" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
+    fireEvent.click(screen.getByRole("button", { name: "This device" }));
+    await waitFor(() => expect(within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
   });
 
   it("opens the project's git sheet from a row's git mark, and the project from the rest", async () => {

@@ -475,7 +475,7 @@ shown sent marks; ⋯ **Show sent marks** hides them). Nothing removes a mark
 automatically.
 
 **Apply marks directly, with an Undo** (`docs/pdf_markup_direct_apply_plan.md`;
-on by default — the phone's switch in Home → This phone → **Mark up prompt**,
+on by default — the phone's switch in Home → ⚙ This device → **Mark up prompt**,
 the desktop's in Settings → Agents → PDF markup). A Submit asks for an `apply`
 round: the desktop first takes a snapshot of the project's git work tree in its
 own state folder (never in the project or its `.git`), and the default prompt
@@ -493,14 +493,14 @@ changed or untracked files, a remote project, a picture — the pill says why in
 one line and the round runs list-first: the default prompt has the agent only
 list the changes, and the pill offers **Make these changes**, which sends the
 go-ahead (edit the sources, rebuild, send the PDF back) — its wording is the
-second field of Home → This phone → **Mark up prompt**. With the switch off
+second field of Home → ⚙ This device → **Mark up prompt**. With the switch off
 every round is list-first. A custom Mark up prompt is sent as written in either
 mode; the field starts from the default of the current mode.
 
 How often the agent stops to ask about a mark is a five-stop slider beside the
 prompt — **Ask always**, **Ask often**, **Ask when unsure** (default: only
 unreadable marks and real choices), **Ask rarely**, **Never ask** — the
-phone's in Home → This phone → **Mark up prompt**, the desktop's in Settings →
+phone's in Home → ⚙ This device → **Mark up prompt**, the desktop's in Settings →
 PDF markup. When a mark leaves the agent a choice it may ask about, a local
 Claude, Codex or MCP-enabled Vibe tab can ask with its `markup_ask` tool (`docs/context/markup_mcp.md`;
 on by default, Manage CLIs → Advanced). The questions show as a card in that

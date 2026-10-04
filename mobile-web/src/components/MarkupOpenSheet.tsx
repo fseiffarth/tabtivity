@@ -1,6 +1,7 @@
 // The mode a PDF the phone can mark up opens in, as a list to tap, from the
-// start page's "This phone" section (`markupOpen.ts`). The pen switches Mark
-// up on in any of them, so this only says where the view starts.
+// start page's "This device" sheet behind the header's gear (`markupOpen.ts`).
+// The pen switches Mark up on in any of them, so this only says where the view
+// starts.
 
 import type { TranslationKey } from "../../../src/lib/i18n";
 import { useT } from "../../../src/lib/i18n";

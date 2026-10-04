@@ -51,7 +51,7 @@ export function writeMarkupInstruction(text: string): void {
   writeChoice("markupInstruction", isDefaultInstruction(clean) ? "" : [...clean].slice(0, MAX_MARKUP_INSTRUCTION).join(""));
 }
 
-/** **Apply marks directly** (Home → This phone → Mark up prompt): a Submit
+/** **Apply marks directly** (Home → ⚙ This device → Mark up prompt): a Submit
  * asks for an `apply` round — the desktop decides whether it can back it
  * with an undo, and answers the mode the round got. On unless switched off. */
 export function readMarkupDirect(): boolean {

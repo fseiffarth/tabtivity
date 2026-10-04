@@ -373,6 +373,10 @@ small { color:#9498aa; }
 .home-logo-frame { position:relative; display:grid; place-items:center; width:50px; height:47px; flex:0 0 auto; }
 .home-logo { position:relative; width:35px; height:35px; color:#f0efff; }
 .home-header > .lamp { flex:0 0 auto; }
+/* The gear that opens the phone's own settings (This device). Square, like
+   the project header's ＋, and never shrinking: the brand gives way. */
+.home-settings { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; padding:0; border-color:#45476a; border-radius:11px; background:rgba(27,30,44,.7); color:#d7d3f5; }
+.home-settings svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .tab-card.home-project-card { --oct-edge:#3b4055; --oct-face:linear-gradient(115deg,rgba(54,49,85,.42),rgba(54,49,85,0) 38%),#1c1f2b; }
 .tab-card.home-project-card:focus-within { --oct-edge:#8d80ee; }
 .home-project-card .card { min-height:62px; }
