@@ -714,6 +714,12 @@ pub struct PtyOptions {
     /// `TABTIVITY_LOCAL_MODEL` env var, which is a usage-recap label.
     #[serde(default)]
     pub host_bound_uid: Option<String>,
+    /// A local-model tab (`kind: "local_agent"`): its agent gets the scope's
+    /// local-model home (`services::agent_home::local_model_home`) instead of
+    /// the scope's own, so an Ollama launch's config and sessions stay apart.
+    /// Chooses a home only; it grants nothing — both homes are fenced alike.
+    #[serde(default)]
+    pub local_model: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

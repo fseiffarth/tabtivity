@@ -184,7 +184,11 @@ closed where used. `--unshare-net` would have closed the same hole but cut
 the agents off the network; and `$HOME` is not the user's home
 at all but the scope's **Tabtivity-owned agent home**
 (`services::agent_home`, `<state_dir>/agent-homes/<project_key(scope)>/`),
-bound over the home path. The owning project is mounted read-write. If it
+bound over the home path. A local-model tab (`PtyOptions.local_model`) gets
+the scope's second home, `<project_key(scope)>.local` — no scope key can
+contain a `.` — so the config an `ollama launch` writes into its agent and
+the sessions a local model runs stay apart from the scope's own agents';
+same fence, same roots, seeded with only `.claude.json`. The owning project is mounted read-write. If it
 belongs to project boxes, every box folder and member root is added
 read-write; membership in several boxes produces the union. A `box:<id>` tab
 receives that box's roots directly. Claude also receives `--add-dir` and

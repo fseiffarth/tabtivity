@@ -272,6 +272,9 @@ pub struct ResolvedTab {
     /// folder's older session (`opencode_store`), as the window's
     /// `launchedAt` does. `None` once its args carry `--continue`.
     pub since: Option<i64>,
+    /// A local-model tab: its agent runs in the scope's local-model home
+    /// (`services::agent_home::local_model_home`), where its transcript is.
+    pub local_model: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -609,6 +612,25 @@ fn agent_label_of(tab: &SavedTab) -> String {
     crate::commands::agents::agent_label_for_bin(bin)
         .map(str::to_string)
         .unwrap_or_else(|| tab.label.chars().take(120).collect())
+}
+
+/// The command a tab's transcript is read as: its own, except that a
+/// local-model tab driving OpenCode (`ollama launch opencode …`) reads as
+/// `opencode` — found by folder, it needs no launch id. The other local
+/// drivers keep their `ollama` line: Claude's and Codex's transcripts need the
+/// launch id a local tab never mints. The window's `agentTranscriptFor` makes
+/// the same call.
+fn transcript_cmd_of(tab: &SavedTab) -> &str {
+    let driver = tab
+        .local_launch
+        .as_ref()
+        .and_then(|launch| launch.get("driver"))
+        .and_then(Value::as_str);
+    if tab.kind == "local_agent" && driver == Some("opencode") {
+        "opencode"
+    } else {
+        &tab.cmd
+    }
 }
 
 fn canonical_below_any(path: &Path, roots: &[PathBuf]) -> bool {
@@ -969,9 +991,10 @@ fn resolve_scope(
             tmux_name: tmux.to_string(),
             session_id: tab.session_id.clone(),
             schedule_target_id: tab.schedule_target_id.clone(),
-            cmd: tab.cmd.clone(),
+            cmd: transcript_cmd_of(&tab).to_string(),
             cwd: tab.cwd.clone(),
             since: fresh_since(&tab),
+            local_model: local_agent,
         });
     }
     let last_activity = tabs.iter().filter_map(|t| t.public.last_activity).max();
@@ -1395,6 +1418,25 @@ mod tests {
         let mut local = tab("qwen3:8b · Claude Code", "ollama");
         local.local_launch = Some(serde_json::json!({ "driver": "claude" }));
         assert_eq!(agent_label_of(&local), "Claude");
+    }
+
+    /// A local-model tab driving OpenCode reads its transcript as `opencode`
+    /// (found by folder); the other drivers keep `ollama`, whose Claude or
+    /// Codex transcript needs a launch id the tab never has.
+    #[test]
+    fn a_local_opencode_tab_reads_as_opencode() {
+        let local = |driver: &str| {
+            serde_json::from_value::<SavedTab>(serde_json::json!({
+                "label": "m · OpenCode", "cmd": "ollama", "cwd": "/p", "kind": "local_agent",
+                "localLaunch": { "driver": driver, "model": "m", "args": ["launch", driver, "--model", "m"] },
+            }))
+            .expect("saved tab")
+        };
+        assert_eq!(transcript_cmd_of(&local("opencode")), "opencode");
+        assert_eq!(transcript_cmd_of(&local("claude")), "ollama");
+        let mut agent = local("opencode");
+        agent.kind = "agent".into();
+        assert_eq!(transcript_cmd_of(&agent), "ollama", "only a local-model tab is remapped");
     }
 
     /// Local-model tabs reach the phone as agent tabs (#31bl): Mistral's by its

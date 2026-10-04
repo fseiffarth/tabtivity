@@ -56,11 +56,17 @@ const CHANGE_TAIL: i64 = 2000;
 /// Tabtivity-owned agent home — where OpenCode's `xdg-basedir` puts it under the
 /// `$HOME` the tab runs with.
 pub fn db_path_for(scope_id: Option<&str>) -> PathBuf {
-    crate::services::agent_home::scope_home(scope_id)
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db")
+    db_in_home(&crate::services::agent_home::scope_home(scope_id))
+}
+
+/// The OpenCode database of the scope's local-model tabs (`ollama launch
+/// opencode`), in the scope's local-model home.
+pub fn local_model_db_path_for(scope_id: Option<&str>) -> PathBuf {
+    db_in_home(&crate::services::agent_home::local_model_home(scope_id))
+}
+
+fn db_in_home(home: &Path) -> PathBuf {
+    home.join(".local").join("share").join("opencode").join("opencode.db")
 }
 
 /// The conversation of the newest top-level, unarchived session OpenCode ran

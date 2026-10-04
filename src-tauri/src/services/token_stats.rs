@@ -1003,7 +1003,8 @@ static SCAN_LOCK: Mutex<()> = Mutex::new(());
 /// return the token counters of every scope.
 ///
 /// `scopes` are the known scope ids (projects, `box:<id>`s, the root); each
-/// one's home is [`agent_home::scope_home_in`]. A home of no known scope (a
+/// one's homes are [`agent_home::scope_home_in`] and its local-model home
+/// ([`agent_home::local_model_home_in`]). A home of no known scope (a
 /// removed project) and the Host session's home count as the root scope.
 pub fn scan(state_dir: &Path, scopes: &[String]) -> TokenStats {
     scan_with(state_dir, scopes, Limits::default(), now_ms())
@@ -1015,9 +1016,13 @@ pub fn scan_with(state_dir: &Path, scopes: &[String], limits: Limits, now_ms: i6
     let _guard = SCAN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = state_dir.join(CACHE_FILE);
     let mut cache = load_cache(&path);
+    // A scope's local-model home counts toward the scope, like its own.
     let by_home: HashMap<PathBuf, &str> = scopes
         .iter()
-        .map(|id| (agent_home::scope_home_in(state_dir, id), id.as_str()))
+        .flat_map(|id| {
+            [agent_home::scope_home_in(state_dir, id), agent_home::local_model_home_in(state_dir, id)]
+                .map(|home| (home, id.as_str()))
+        })
         .collect();
     let host = agent_home::host_home_in(state_dir);
 
@@ -1241,6 +1246,17 @@ mod tests {
         );
         let stats = run(tmp.path());
         assert!(stats.stats.days.is_empty(), "{:?}", stats.stats.days);
+    }
+
+    /// A local-model tab's records count toward its scope, not the root.
+    #[test]
+    fn a_local_model_home_counts_toward_its_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = agent_home::local_model_home_in(tmp.path(), "p1").join(".claude/projects/-home-u-p/s.jsonl");
+        write(&path, &[claude("m1", "r1", OPUS, T1, [1, 0, 0, 9])]);
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_OUT, OPUS)), 9);
+        assert_eq!(total(&stats, storage::ROOT_SCOPE, &ck(metric::TOKENS_OUT, OPUS)), 0);
     }
 
     #[test]

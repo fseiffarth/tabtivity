@@ -92,6 +92,21 @@ fn append_claude_name(args: &mut Vec<String>, name: Option<&str>) -> bool {
 /// mistaken for nesting. O#149's hard gate: mirrors `services::sandbox::cwd_is_within`
 /// in shape, kept as a separate function because that one only ever *classifies*
 /// a docker mount as rw/ro, while this one refuses the spawn outright.
+/// The home a local agent spawn of `scope_id` runs in: the scope's own, or
+/// for a local-model tab its local-model home (`PtyOptions::local_model`).
+fn prepare_agent_home(
+    scope_id: &str,
+    roots: &[std::path::PathBuf],
+    local_model: bool,
+) -> Result<crate::services::agent_home::PreparedHome, String> {
+    let home = if local_model {
+        crate::services::agent_home::prepare_local_model_home(scope_id, roots)
+    } else {
+        crate::services::agent_home::prepare_scope_home(scope_id, roots)
+    };
+    home.map_err(|e| format!("Agent home: {e}"))
+}
+
 fn cwd_within(cwd: &str, allowed: &std::path::Path) -> bool {
     std::path::Path::new(cwd).starts_with(allowed)
 }
@@ -649,9 +664,9 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => {
                 // The scope's Tabtivity-owned home (`services::agent_home`), the
                 // agent's `$HOME` from here on: bound by the Linux fence, set
-                // by environment where the fence cannot redirect a path.
-                let home = crate::services::agent_home::prepare_scope_home(&scope_id, roots)
-                    .map_err(|e| format!("Agent home: {e}"))?;
+                // by environment where the fence cannot redirect a path. A
+                // local-model tab gets the scope's local-model home instead.
+                let home = prepare_agent_home(&scope_id, roots, opts.local_model)?;
                 #[cfg(target_os = "linux")]
                 crate::services::agent_fence::wrap_pty_options_bwrap(
                     &mut opts, roots, &scope_id, &home.dir,
@@ -688,8 +703,7 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::NotApplicable { reason: "platform" }
                 if local_agent =>
             {
-                let home = crate::services::agent_home::prepare_scope_home(&scope_id, roots)
-                    .map_err(|e| format!("Agent home: {e}"))?;
+                let home = prepare_agent_home(&scope_id, roots, opts.local_model)?;
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }

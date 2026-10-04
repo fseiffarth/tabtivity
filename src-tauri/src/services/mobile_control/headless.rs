@@ -297,7 +297,9 @@ const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode"];
 /// session yet, `unsupported` for the rest), then the CLI's own transcript.
 /// An OpenCode tab reads its folder's newest session — begun since the
 /// launch a headless create stamped (`ResolvedTab::since`), so a new tab is
-/// a new chat rather than the folder's last conversation.
+/// a new chat rather than the folder's last conversation — and needs no
+/// session id, which a local-model OpenCode tab never has; that one is read
+/// from the scope's local-model home.
 pub fn transcript(
     project_id: &str,
     tab: &ResolvedTab,
@@ -305,7 +307,18 @@ pub fn transcript(
     version: Option<&str>,
     limit: Option<usize>,
 ) -> AgentTranscript {
-    let Some(session_id) = tab.session_id.as_deref().filter(|id| !id.is_empty()) else {
+    if tab.local_model && tab.cmd == "opencode" {
+        return agent_transcript::local_opencode_transcript(
+            Some(project_id),
+            Some(&tab.cwd),
+            tab.since,
+            subagent,
+            version,
+            limit.unwrap_or(DEFAULT_LIMIT),
+        );
+    }
+    let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
+    let Some(session_id) = session_id.or((tab.cmd == "opencode").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -734,6 +747,7 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         })
         .unwrap_or_default();
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
+    let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
     PtyOptions {
         id: format!("headless:{tmux}"),
         cmd: tab.cmd.clone(),
@@ -744,13 +758,14 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         rows: HEADLESS_ROWS,
         local_only: false,
         sandbox: false,
-        agent: tab.extra.get("kind").and_then(serde_json::Value::as_str) == Some("agent"),
+        agent: kind == Some("agent"),
         project_id: Some(project_id.to_string()),
         schedule_target_id: tab.extra.get("scheduleTargetId").and_then(serde_json::Value::as_str).map(str::to_string),
         remote_host_id: None,
         tmux_session: Some(tmux),
         tmux_attach: None,
         host_bound_uid: None,
+        local_model: kind == Some("local_agent"),
         host_session: false,
     }
 }
@@ -1598,6 +1613,7 @@ mod tests {
             cmd: cmd.into(),
             cwd: "/nowhere".into(),
             since: None,
+            local_model: false,
         }
     }
 
@@ -1638,10 +1654,28 @@ mod tests {
         assert!(!shell.extra.contains_key("launchedAt"));
     }
 
+    /// A local-model tab started with no window gets the scope's local-model
+    /// home, as the window's spawn does; any other tab the scope's own.
+    #[test]
+    fn a_local_model_record_launches_into_the_local_model_home() {
+        let mut record = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
+        assert!(!launch_options("p1", &record).local_model);
+        record.extra.insert("kind".into(), serde_json::json!("local_agent"));
+        let opts = launch_options("p1", &record);
+        assert!(opts.local_model);
+        assert!(!opts.agent, "the fence knows a local-model driver by its command");
+    }
+
     #[test]
     fn a_transcript_answers_the_same_not_yet_reasons_as_the_window() {
         assert_eq!(transcript("p1", &tab("claude", None), None, None, None).reason.as_deref(), Some("no_session"));
         assert_eq!(transcript("p1", &tab("bash", None), None, None, None).reason.as_deref(), Some("unsupported"));
+        // OpenCode is read by folder, so a tab without a session id (a
+        // local-model one) still reaches the reader instead of waiting on one.
+        assert_ne!(transcript("p1", &tab("opencode", None), None, None, None).reason.as_deref(), Some("no_session"));
+        let mut local = tab("opencode", None);
+        local.local_model = true;
+        assert_ne!(transcript("p1", &local, None, None, None).reason.as_deref(), Some("no_session"));
         let unread = transcript("p1", &tab("claude", Some("no-such-session")), None, None, Some(5));
         assert!(!unread.available);
         assert!(unread.reason.is_some());

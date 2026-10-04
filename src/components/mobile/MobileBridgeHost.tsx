@@ -2345,17 +2345,22 @@ async function agentTranscriptFor(
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Agent tab is unavailable" };
-  if (!tab.sessionId) {
+  // A local-model tab runs its driver through `ollama launch <driver>`, so its
+  // `cmd` names no agent. Only an OpenCode driver is readable: OpenCode is
+  // found by folder, while Claude's and Codex's transcripts need the launch id
+  // a local tab never mints.
+  const agent = tab.kind === "local_agent" ? (tab.localLaunch?.driver === "opencode" ? "opencode" : "") : tab.cmd;
+  if (!tab.sessionId && agent !== "opencode") {
     // Two different answers for the phone: a family whose transcript is
     // never read (the backend's `unsupported`, decided by the same list) hands
     // Focus to the terminal; a tab that has no session id *yet* — every tab
     // the phone just created, until the agent's hook records one — keeps
     // Focus reading the screen until the session reads.
-    const reason = TRANSCRIPT_AGENTS.has(tab.cmd) ? "no_session" : "unsupported";
+    const reason = TRANSCRIPT_AGENTS.has(agent) ? "no_session" : "unsupported";
     return { status: "agent_transcript", transcript: { available: false, reason, entries: [], truncated: false } };
   }
   const transcript = await invoke<MobileAgentTranscript>("agent_tab_transcript", {
-    agent: tab.cmd,
+    agent,
     projectId: scope.id,
     // OpenCode records no session id Tabtivity can follow; its session is the
     // newest one of the folder the tab runs in — for a tab opened fresh rather
@@ -2363,10 +2368,12 @@ async function agentTranscriptFor(
     // so a new tab is a new chat and not the folder's last conversation.
     tabDir: tab.cwd || scope.cwd,
     since: tab.launchedAt && !tab.args?.includes("--continue") ? tab.launchedAt : null,
-    sessionId: tab.sessionId,
+    sessionId: tab.sessionId ?? "",
     subagent: subagent ?? null,
     version: version ?? null,
     limit: limit ?? null,
+    // A local-model tab's agent runs in the scope's local-model home.
+    localModel: tab.kind === "local_agent",
   }).catch((): MobileAgentTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
   return { status: "agent_transcript", transcript };
 }

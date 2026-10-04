@@ -1447,9 +1447,12 @@ pub async fn agent_tab_recent_prompts(
 /// entries), the conversation of a subagent it spawned. `since` is the launch
 /// moment (epoch ms) of a tab opened fresh rather than restored. `version` is
 /// the fingerprint the caller last saw; a matching one is answered
-/// `unchanged` without a parse. Always answers: an agent with no readable
-/// transcript comes back `available: false` with the reason, never an error.
+/// `unchanged` without a parse. `local_model` marks a local-model tab, whose
+/// OpenCode keeps its sessions in the scope's local-model home. Always
+/// answers: an agent with no readable transcript comes back
+/// `available: false` with the reason, never an error.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_transcript(
     agent: String,
     project_id: Option<String>,
@@ -1459,9 +1462,20 @@ pub async fn agent_tab_transcript(
     subagent: Option<String>,
     version: Option<String>,
     limit: Option<usize>,
+    local_model: Option<bool>,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
     tauri::async_runtime::spawn_blocking(move || {
+        if local_model == Some(true) && agent == "opencode" {
+            return agent_transcript::local_opencode_transcript(
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                since,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+        }
         agent_transcript::agent_session_transcript(
             &agent,
             project_id.as_deref(),
