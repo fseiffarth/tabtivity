@@ -733,7 +733,14 @@ pub fn export_project_blocking(
         format: BUNDLE_FORMAT,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: storage::iso_now(),
-        entry: entry.clone(),
+        entry: {
+            // Phone access stays on this machine (`mobile_keys`).
+            let mut entry = entry.clone();
+            for key in mobile_keys() {
+                entry.extra.remove(&key);
+            }
+            entry
+        },
         project: project_json,
         session,
         time_days,
@@ -920,6 +927,29 @@ fn drop_imported_openvpn(value: &mut Value) -> bool {
         }
     }
     dropped
+}
+
+/// The registry keys that open a project to phones: the switch, its per-phone
+/// list, and the switch under the name an older build wrote (the migrator
+/// would rename that one into place). None of them travels in a bundle, either
+/// way: phone access is consent given on one machine to the phones paired with
+/// it, and a list names device ids that mean nothing anywhere else.
+fn mobile_keys() -> Vec<String> {
+    let mut keys = vec![
+        crate::brand::MOBILE_ACCESS_KEY.to_string(),
+        crate::brand::MOBILE_DEVICES_KEY.to_string(),
+    ];
+    keys.extend(crate::brand::PAIR.legacy(crate::brand::Name::MOBILE_ACCESS_KEY));
+    keys
+}
+
+/// Drop [`mobile_keys`] from an entry (or `project.json`) body.
+fn drop_mobile_keys(value: &mut Value) {
+    if let Some(map) = value.as_object_mut() {
+        for key in mobile_keys() {
+            map.remove(&key);
+        }
+    }
 }
 
 fn absolutize(path: &Path) -> PathBuf {
@@ -1301,6 +1331,11 @@ pub fn import_project_export_blocking(
     if drop_imported_openvpn(&mut project_value) || vpn_dropped {
         notes.push("vpnDropped".to_string());
     }
+    // Nor is phone access: a bundle exported with it on (or by a build that
+    // still carried it) must not open the project to this machine's phones
+    // without the user switching it on here.
+    drop_mobile_keys(&mut entry_value);
+    drop_mobile_keys(&mut project_value);
 
     let mut entry: ProjectEntry =
         serde_json::from_value(entry_value).map_err(|e| format!("bundle entry: {e}"))?;
@@ -1640,6 +1675,22 @@ mod tests {
         assert_eq!(files, 1);
         assert!(dest.join("ok.txt").exists());
         assert!(!tmp.path().join("escaped.txt").exists());
+    }
+
+    /// An imported bundle never opens the project to a phone: the switch, its
+    /// list and the old switch name are all dropped, the rest is kept.
+    #[test]
+    fn imported_entries_carry_no_mobile_access() {
+        let mut entry = serde_json::json!({
+            "id": "p", "directory": "/d",
+            crate::brand::MOBILE_ACCESS_KEY: true,
+            crate::brand::MOBILE_DEVICES_KEY: ["a".repeat(27)],
+            crate::brand::LEGACY_MOBILE_ACCESS_KEY: true,
+        });
+        drop_mobile_keys(&mut entry);
+        assert_eq!(entry, serde_json::json!({ "id": "p", "directory": "/d" }));
+        drop_mobile_keys(&mut Value::Null);
+        assert!(mobile_keys().iter().all(|key| key.contains("_mobile_")));
     }
 
     fn entry_with(id: &str, extra: &[(&str, Value)]) -> ProjectEntry {
