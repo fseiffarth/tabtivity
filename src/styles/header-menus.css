@@ -2257,6 +2257,7 @@
   color: var(--text-secondary);
   font-size: 10px;
 }
+.mobile-indicator-device-access,
 .mobile-indicator-device-disconnect {
   font-size: 11px;
 }

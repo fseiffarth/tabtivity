@@ -1697,6 +1697,8 @@ export const enSource = {
   "mobile.indDisconnectError": "Could not disconnect {name}: {reason}",
 
   // Tabtivity Mobile — the setup instruction behind the header's phone icon while
+  "mobile.indDeviceAccess": "Access",
+  "mobile.indDeviceAccessHint": "Choose which sections and projects {name} sees",
   // Mobile is off (mobile/MobileSetupGuide). Same ground as the fold in Mobile
   // settings, written as the six things you do, in order.
   "mobile.setupTitle": "Set up {app} Mobile",

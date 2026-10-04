@@ -1703,6 +1703,8 @@ export const dict: Dict = {
   "mobile.indDisconnectError": "Impossible de déconnecter {name} : {reason}",
   "mobile.indSetUpTitle": "{app} Mobile n'est pas configuré",
   "mobile.setupTitle": "Configurer {app} Mobile",
+  "mobile.indDeviceAccess": "Accès",
+  "mobile.indDeviceAccessHint": "Choisir les sections et projets que voit {name}",
   "mobile.setupIntro": "{app} Mobile amène les projets, terminaux et agents de cet ordinateur sur votre téléphone. Tout passe par votre propre réseau Tailscale privé : rien n'est publié sur internet, et le téléphone doit toujours être appairé.",
   "mobile.setupStep1Title": "Installer Tailscale sur cet ordinateur",
   "mobile.setupStep1Body": "Installez Tailscale ici et connectez-vous. C'est lui qui porte la connexion du téléphone — {app} n'écoute que sur la boucle locale.",

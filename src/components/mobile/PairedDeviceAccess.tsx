@@ -8,6 +8,7 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
 import type { PairedPhone } from "./usePairedPhones";
+import type { ProjectEntry } from "../../types";
 
 /** The phone sections a device can be kept out of — the sidecar's
  *  `auth::HIDEABLE_SECTIONS`, in its order. */
@@ -33,6 +34,12 @@ interface Scope {
 function listOf(devices: unknown): string[] | null {
   if (devices === undefined || devices === null) return null;
   return Array.isArray(devices) && devices.every((d) => typeof d === "string") ? devices : [];
+}
+
+/** Whether a project may have Mobile access at all: local, outside a container
+ *  or VM. Settings' access list and the header menu's phone dialog share it. */
+export function isMobileEligible(project: ProjectEntry): boolean {
+  return !project.remote && !project.sandbox?.enabled && !project.vm?.enabled;
 }
 
 /** Whether `scope` is open to the phone `deviceId`, as the sidecar decides it. */

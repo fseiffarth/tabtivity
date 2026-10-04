@@ -1702,6 +1702,8 @@ export const dict: Dict = {
   "mobile.indDisconnectError": "No se pudo desconectar {name}: {reason}",
   "mobile.indSetUpTitle": "{app} Mobile no está configurado",
   "mobile.setupTitle": "Configurar {app} Mobile",
+  "mobile.indDeviceAccess": "Acceso",
+  "mobile.indDeviceAccessHint": "Elegir qué secciones y proyectos ve {name}",
   "mobile.setupIntro": "{app} Mobile lleva los proyectos, terminales y agentes de este ordenador a tu teléfono. Viaja por tu propia red privada de Tailscale: no se publica nada en internet y el teléfono todavía debe emparejarse.",
   "mobile.setupStep1Title": "Instalar Tailscale en este ordenador",
   "mobile.setupStep1Body": "Instala Tailscale aquí e inicia sesión. Es lo que transporta la conexión del teléfono: {app} solo escucha en loopback.",

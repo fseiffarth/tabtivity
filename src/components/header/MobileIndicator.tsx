@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { MobileSetupGuide } from "../mobile/MobileSetupGuide";
+import { PairedDeviceDialog } from "../mobile/PairedDeviceDialog";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
@@ -118,6 +119,10 @@ export function MobileIndicator() {
   const [error, setError] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
+  /** The paired phone whose own access (sections, projects) is open in
+   *  `PairedDeviceDialog` — the same block as under its Settings row. */
+  const [accessFor, setAccessFor] = useState<string | null>(null);
+  const closeAccess = useCallback(() => setAccessFor(null), []);
   const [devices, setDevices] = useState<PairedDevice[] | null>(null);
   /** The device whose Disconnect was clicked once and now asks again. */
   const [armed, setArmed] = useState<string | null>(null);
@@ -429,6 +434,18 @@ export function MobileIndicator() {
                       </span>
                       <button
                         type="button"
+                        className="inbox-menu-delete mobile-indicator-device-access"
+                        title={t("mobile.indDeviceAccessHint", { name: device.name })}
+                        aria-label={`${t("mobile.indDeviceAccess")} ${device.name}`}
+                        onClick={() => {
+                          closeMenu(MENU_ID);
+                          setAccessFor(device.id);
+                        }}
+                      >
+                        {t("mobile.indDeviceAccess")} <UntestedTag id="mobile.indDeviceAccess" />
+                      </button>
+                      <button
+                        type="button"
                         className={"inbox-menu-delete mobile-indicator-device-disconnect" + (armed === device.id ? " armed" : "")}
                         title={t("mobile.indDisconnectHint")}
                         aria-label={`${t("mobile.indDisconnect")} ${device.name}`}
@@ -466,6 +483,7 @@ export function MobileIndicator() {
         </div>
       )}
       {setupGuide}
+      {accessFor && createPortal(<PairedDeviceDialog deviceId={accessFor} onClose={closeAccess} />, document.body)}
     </div>
   );
 }
