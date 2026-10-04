@@ -361,11 +361,22 @@ pub fn inject_env(
     )
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
     pub id: &'static str,
     pub saved: bool,
+    /// The monthly limit in US dollars (`Settings::agent_api_limits`), if a
+    /// valid one is set.
+    pub limit_usd: Option<f64>,
+    /// Spent this month, by `api_prices` (an estimate).
+    pub spent_usd: f64,
+    /// `api_usage::Verdict::id`: `open`, `reached`, or `noLimit` (requests
+    /// are refused until a limit is set).
+    pub budget: &'static str,
+    /// Models used this month that the price table does not know: priced at
+    /// the provider's highest rate.
+    pub unknown_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -381,7 +392,7 @@ pub struct CliStatus {
 }
 
 /// What Manage CLIs shows. Never a key.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyStatus {
     /// The keyring can be read now. While it cannot, every `saved` reads
@@ -389,13 +400,40 @@ pub struct ApiKeyStatus {
     pub readable: bool,
     pub providers: Vec<ProviderStatus>,
     pub clis: Vec<CliStatus>,
+    /// The UTC month the spending is counted for (`YYYY-MM`).
+    pub month: String,
+    /// When the count starts again (`YYYY-MM-01`, UTC).
+    pub resets_on: String,
+    /// When this month's count restarted because the ledger file could not
+    /// be read (RFC 3339).
+    pub ledger_restarted: Option<String>,
+    /// When the price table was read off the vendors' pages.
+    pub prices_date: &'static str,
 }
 
-/// [`status`] over a given `saved` answer and switched-on list. Pure.
-fn status_with(readable: bool, saved: impl Fn(Provider) -> bool, enabled: &[String]) -> ApiKeyStatus {
+/// [`status`] over a given `saved` answer, switched-on list, limits and
+/// ledger. Pure.
+fn status_with(
+    readable: bool,
+    saved: impl Fn(Provider) -> bool,
+    enabled: &[String],
+    limits: &std::collections::BTreeMap<String, f64>,
+    ledger: &crate::services::api_usage::Ledger,
+) -> ApiKeyStatus {
     let providers: Vec<ProviderStatus> = Provider::ALL
         .into_iter()
-        .map(|p| ProviderStatus { id: p.id(), saved: saved(p) })
+        .map(|p| {
+            let limit_usd = limits.get(p.id()).copied();
+            let spent_usd = ledger.spent(p);
+            ProviderStatus {
+                id: p.id(),
+                saved: saved(p),
+                limit_usd,
+                spent_usd,
+                budget: crate::services::api_usage::Verdict::of(spent_usd, limit_usd).id(),
+                unknown_models: ledger.unknown_models(p),
+            }
+        })
         .collect();
     let is_saved = |p: Provider| providers.iter().any(|s| s.id == p.id() && s.saved);
     let clis = CLI_ROUTES
@@ -410,7 +448,15 @@ fn status_with(readable: bool, saved: impl Fn(Provider) -> bool, enabled: &[Stri
             }
         })
         .collect();
-    ApiKeyStatus { readable, providers, clis }
+    ApiKeyStatus {
+        readable,
+        providers,
+        clis,
+        month: ledger.month.clone(),
+        resets_on: crate::services::api_usage::resets_on(&ledger.month),
+        ledger_restarted: ledger.restarted.clone(),
+        prices_date: crate::services::api_prices::PRICES_DATE,
+    }
 }
 
 /// The CLIs that start on a stored key now: switched on, with a key saved for
@@ -431,11 +477,48 @@ fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'
 }
 
 pub fn status() -> ApiKeyStatus {
+    let settings = settings();
     status_with(
         crate::services::remote_credentials::store_readable(),
         has_key,
-        &enabled_clis(),
+        &settings.agent_api_key_clis.clone().unwrap_or_default(),
+        &crate::services::api_usage::limits_in(&settings),
+        &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
     )
+}
+
+/// Of `ready` (from [`ready_clis`]), the CLIs whose every provider is out of
+/// budget this month, or has no limit set: their keyed tabs are refused.
+pub fn budget_blocked_clis(ready: &[&'static str]) -> Vec<&'static str> {
+    let settings = settings();
+    let limits = crate::services::api_usage::limits_in(&settings);
+    let ledger = crate::services::api_usage::book().snapshot(chrono::Utc::now());
+    budget_blocked_with(ready, &limits, &ledger)
+}
+
+fn budget_blocked_with(
+    ready: &[&'static str],
+    limits: &std::collections::BTreeMap<String, f64>,
+    ledger: &crate::services::api_usage::Ledger,
+) -> Vec<&'static str> {
+    ready
+        .iter()
+        .copied()
+        .filter(|id| {
+            let routes = routes_of(id);
+            !routes.is_empty()
+                && routes.iter().all(|r| {
+                    crate::services::api_usage::Verdict::of(ledger.spent(r.provider), limits.get(r.provider.id()).copied())
+                        != crate::services::api_usage::Verdict::Open
+                })
+        })
+        .collect()
+}
+
+/// The monthly limit saving `provider`'s key requires: refused without one.
+pub fn require_limit(provider: Provider) -> Result<f64, String> {
+    crate::services::api_usage::limit_for(provider)
+        .ok_or_else(|| "set a monthly spending limit for this provider before saving its key".to_string())
 }
 
 #[cfg(test)]
@@ -625,7 +708,8 @@ mod tests {
 
     #[test]
     fn status_is_ready_only_for_a_switched_on_cli_with_a_key() {
-        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]));
+        let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
+        let s = status_with(true, |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &ledger);
         let cli = |id: &str| s.clis.iter().find(|c| c.id == id).unwrap().clone();
         assert!(cli("claude").ready);
         assert!(!cli("gemini").ready, "on, but no Gemini key");
@@ -637,6 +721,45 @@ mod tests {
         assert_eq!(s.providers.len(), 2);
         let json = serde_json::to_value(&s).unwrap();
         assert!(json.get("readable").is_some() && json["clis"][0].get("ready").is_some());
+        assert_eq!(json["resetsOn"], "2026-11-01");
+    }
+
+    #[test]
+    fn status_shows_the_budget_per_provider() {
+        use crate::services::api_prices::Charge;
+        use crate::services::api_usage::Ledger;
+        let mut ledger = Ledger { month: "2026-10".into(), ..Default::default() };
+        let charge = |model: &str, usd: f64, known: bool| Charge {
+            model: model.into(),
+            known,
+            input: 1,
+            output: 1,
+            cache_write: 0,
+            cache_read: 0,
+            web_searches: 0,
+            usd,
+        };
+        ledger.add(Provider::Anthropic, &charge("claude-opus-5-5", 12.0, true));
+        ledger.add(Provider::Anthropic, &charge("claude-new", 8.0, false));
+        ledger.add(Provider::Gemini, &charge("gemini-2.5-pro", 1.0, true));
+        ledger.restarted = Some("2026-10-04T12:00:00Z".into());
+        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0)]);
+        let s = status_with(true, |_| true, &on(&["claude", "gemini"]), &limits, &ledger);
+        let anthropic = &s.providers[0];
+        assert_eq!((anthropic.id, anthropic.limit_usd, anthropic.budget), ("anthropic", Some(20.0), "reached"));
+        assert!((anthropic.spent_usd - 20.0).abs() < 1e-9);
+        assert_eq!(anthropic.unknown_models, ["claude-new"]);
+        let gemini = &s.providers[1];
+        assert_eq!((gemini.limit_usd, gemini.budget), (None, "noLimit"));
+        assert_eq!(s.ledger_restarted.as_deref(), Some("2026-10-04T12:00:00Z"));
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["providers"][0]["limitUsd"], 20.0);
+        assert_eq!(json["providers"][1]["budget"], "noLimit");
+        // Claude's only provider is out of budget, Gemini's has no limit:
+        // both are blocked; with a limit and room, Gemini is not.
+        assert_eq!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger), vec!["claude", "gemini"]);
+        let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 50.0), ("gemini".to_string(), 5.0)]);
+        assert!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger).is_empty());
     }
 
     #[test]

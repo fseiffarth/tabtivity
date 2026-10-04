@@ -447,6 +447,12 @@ pub struct Settings {
     /// Opt-in: unset or empty hands no key to any CLI. Never a key itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_api_key_clis: Option<Vec<String>>,
+    /// Monthly spending limit in US dollars per provider id (`anthropic`,
+    /// `gemini`) for the stored API keys (`services::api_usage`), enforced by
+    /// the API proxy. Saving a key requires one; a provider with a key and no
+    /// limit is refused until one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_api_limits: Option<std::collections::BTreeMap<String, f64>>,
     /// Local model names switched off for the root console by the 🧠 menu's
     /// "Root" chips. Opt-out: unset means every local model is offered there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1489,6 +1495,19 @@ mod default_rule_tests {
         let s: Settings = serde_json::from_str(r#"{"agent_api_key_clis":["claude","gemini"]}"#).unwrap();
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.agent_api_key_clis.unwrap(), ["claude", "gemini"]);
+    }
+
+    /// `agent_api_limits` likewise: absent when unset, numbers kept as they are.
+    #[test]
+    fn agent_api_limits_round_trip_and_stay_absent_when_unset() {
+        let s: Settings = serde_json::from_str(r#"{"agent_api_key_clis":["claude"]}"#).unwrap();
+        assert!(s.agent_api_limits.is_none());
+        assert!(!serde_json::to_string(&s).unwrap().contains("agent_api_limits"));
+        let s: Settings = serde_json::from_str(r#"{"agent_api_limits":{"anthropic":20,"gemini":7.5}}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let limits = back.agent_api_limits.unwrap();
+        assert_eq!(limits["anthropic"], 20.0);
+        assert_eq!(limits["gemini"], 7.5);
     }
 
     /// `ide_launchers` is optional on the way in and absent on the way out

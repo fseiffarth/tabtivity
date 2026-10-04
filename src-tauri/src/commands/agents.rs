@@ -1961,8 +1961,12 @@ pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
         // `agent_auth::status_in`, whose tests stay keyring-free. With no CLI
         // switched on this reads no keychain entry at all.
         let ready = crate::services::agent_api_keys::ready_clis();
+        // Of those, the ones whose provider is out of budget this month (or
+        // has no limit): their keyed tabs are refused.
+        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&ready);
         for login in &mut logins {
             login.api_key = ready.contains(&login.id.as_str());
+            login.api_budget_reached = blocked.contains(&login.id.as_str());
         }
         logins
     })
@@ -1985,11 +1989,14 @@ fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::P
 }
 
 /// Save `provider`'s API key in the OS keychain. A locked or missing keyring
-/// refuses (its own message); there is no other place a key is kept.
+/// refuses (its own message); there is no other place a key is kept. A key is
+/// only saved beside a monthly spending limit (`Settings::agent_api_limits`,
+/// written first by Manage CLIs): refused without one.
 #[tauri::command]
 pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
     tauri::async_runtime::spawn_blocking(move || {
+        crate::services::agent_api_keys::require_limit(provider)?;
         crate::services::agent_api_keys::set_key(provider, Some(key.trim()))
     })
     .await

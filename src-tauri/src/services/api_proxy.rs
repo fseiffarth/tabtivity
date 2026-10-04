@@ -401,11 +401,44 @@ impl KeySource {
     }
 }
 
+/// The spending limit (C3, `api_usage`): the ledger answers are charged to,
+/// and where the monthly limit comes from.
+#[derive(Clone)]
+struct Budget {
+    book: Arc<super::api_usage::Book>,
+    limits: Limits,
+}
+
+#[derive(Clone)]
+enum Limits {
+    /// `Settings::agent_api_limits`.
+    Settings,
+    #[cfg(test)]
+    Fixed(Option<f64>),
+}
+
+impl Budget {
+    /// The app's ledger and the limits in `settings.json`.
+    fn app() -> Self {
+        Budget { book: super::api_usage::book(), limits: Limits::Settings }
+    }
+
+    fn verdict(&self, provider: Provider) -> super::api_usage::Verdict {
+        let limit = match &self.limits {
+            Limits::Settings => super::api_usage::limit_for(provider),
+            #[cfg(test)]
+            Limits::Fixed(l) => *l,
+        };
+        super::api_usage::Verdict::of(self.book.spent(provider, chrono::Utc::now()), limit)
+    }
+}
+
 #[derive(Clone)]
 struct ProxyState {
     port: u16,
     upstream: Upstream,
     keys: KeySource,
+    budget: Budget,
     client: reqwest::Client,
     max_body: usize,
     /// Request body bytes held right now, over every socket.
@@ -416,11 +449,12 @@ struct ProxyState {
 }
 
 impl ProxyState {
-    fn new(port: u16, upstream: Upstream, keys: KeySource, client: reqwest::Client) -> Self {
+    fn new(port: u16, upstream: Upstream, keys: KeySource, budget: Budget, client: reqwest::Client) -> Self {
         ProxyState {
             port,
             upstream,
             keys,
+            budget,
             client,
             max_body: MAX_BODY,
             buffered: Arc::new(AtomicUsize::new(0)),
@@ -502,7 +536,7 @@ pub fn start() {
                 return;
             }
         };
-        let state = ProxyState::new(port, Upstream::Provider, KeySource::Keychain, client);
+        let state = ProxyState::new(port, Upstream::Provider, KeySource::Keychain, Budget::app(), client);
         if let Err(e) = serve(listener, state, async { SHUTDOWN.notified().await }).await {
             eprintln!("[api-proxy] server stopped: {e}");
         }
@@ -533,6 +567,8 @@ pub fn stop_for_exit() {
         });
     }
     PORT.store(0, Ordering::Release);
+    // What the drained answers cost (C3), past the throttle.
+    super::api_usage::flush_for_exit();
 }
 
 async fn serve(
@@ -702,6 +738,11 @@ enum Refusal {
     Upstream,
     /// Too many request bodies held at once ([`MAX_BUFFERED`]).
     Busy,
+    /// This month's spending limit for the provider is reached (C3).
+    BudgetReached,
+    /// A key is saved but no monthly limit (a key from before limits
+    /// existed): refused until one is set.
+    NoBudget,
 }
 
 impl Refusal {
@@ -715,11 +756,32 @@ impl Refusal {
             Refusal::BadBody => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
             Refusal::Busy => StatusCode::SERVICE_UNAVAILABLE,
+            Refusal::BudgetReached | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
-    fn message(self) -> &'static str {
+    fn message(self, provider: Option<Provider>) -> &'static str {
         match self {
+            Refusal::BudgetReached => match provider {
+                Some(Provider::Gemini) => concat!(
+                    crate::app_name!(),
+                    " monthly API budget for Google Gemini reached — raise it in Manage CLIs → API keys, or wait for next month"
+                ),
+                _ => concat!(
+                    crate::app_name!(),
+                    " monthly API budget for Anthropic reached — raise it in Manage CLIs → API keys, or wait for next month"
+                ),
+            },
+            Refusal::NoBudget => match provider {
+                Some(Provider::Gemini) => concat!(
+                    crate::app_name!(),
+                    " has no monthly API budget set for Google Gemini — set one in Manage CLIs → API keys"
+                ),
+                _ => concat!(
+                    crate::app_name!(),
+                    " has no monthly API budget set for Anthropic — set one in Manage CLIs → API keys"
+                ),
+            },
             Refusal::Unauthorized => concat!(
                 "this tab's ", crate::app_name!(),
                 " API proxy token is unknown or was revoked; open a new tab to get a new one"
@@ -748,7 +810,7 @@ impl Refusal {
 /// A refusal in the provider's own error shape, so the CLI shows its message.
 fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
     let status = refusal.status();
-    let message = refusal.message();
+    let message = refusal.message(provider);
     let body = match provider {
         Some(Provider::Gemini) => serde_json::json!({
             "error": { "code": status.as_u16(), "message": message, "status": match refusal {
@@ -758,6 +820,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
                 Refusal::Upstream | Refusal::Busy => "UNAVAILABLE",
+                Refusal::BudgetReached | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
             } }
         }),
         // Anthropic's shape; also for a path naming no provider.
@@ -770,6 +833,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::TooLarge => "request_too_large",
                 Refusal::BodyTimeout | Refusal::BadBody => "invalid_request_error",
                 Refusal::Upstream | Refusal::Busy => "api_error",
+                Refusal::BudgetReached | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
         }),
     };
@@ -1002,12 +1066,26 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         return refuse(Some(provider), Refusal::NoKey);
     };
     key_value.set_sensitive(true);
+    // The spending limit (C3): only a request that costs money is metered and
+    // can be refused; token counting and model reads pass.
+    let mut meter = super::api_meter::billing(provider, parts.method.as_str(), rest)
+        .map(|billing| super::api_meter::Meter::new(provider, billing));
+    if meter.is_some() {
+        match state.budget.verdict(provider) {
+            super::api_usage::Verdict::Open => {}
+            super::api_usage::Verdict::NoLimit => return refuse(Some(provider), Refusal::NoBudget),
+            super::api_usage::Verdict::Reached { .. } => return refuse(Some(provider), Refusal::BudgetReached),
+        }
+    }
     let read = read_body(body, state.max_body, &state.buffered, state.max_buffered);
     let (body, held) = match tokio::time::timeout(BODY_WAIT, read).await {
         Err(_) => return refuse(Some(provider), Refusal::BodyTimeout),
         Ok(Err(refusal)) => return refuse(Some(provider), refusal),
         Ok(Ok(read)) => read,
     };
+    if let Some(meter) = meter.as_mut() {
+        meter.request_body(body.len());
+    }
     let url = format!("{}{}{}", state.upstream.base(provider), rest, forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
@@ -1017,7 +1095,7 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     let Ok(upstream) = upstream else {
         return refuse(Some(provider), Refusal::Upstream);
     };
-    relay(upstream, Tap::new(grant, busy))
+    relay(upstream, Tap::new(grant, busy, meter.map(|m| (m, state.budget.book.clone()))))
 }
 
 /// Request body bytes counted against [`ProxyState::buffered`] until dropped.
@@ -1063,7 +1141,7 @@ async fn read_body(
     Ok((Bytes::from(out), held))
 }
 
-/// How a relayed answer ended, for C3's ledger.
+/// How a relayed answer ended, for the ledger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StreamEnd {
     /// The provider's body ended cleanly.
@@ -1075,26 +1153,38 @@ enum StreamEnd {
     Aborted,
 }
 
+/// A billed answer's meter and the ledger it is charged to.
+type Metered = (super::api_meter::Meter, Arc<super::api_usage::Book>);
+
 /// One relayed answer's tap: every chunk to [`usage_tap`], and exactly one
 /// [`usage_end`] — on a clean end, a failed read, or (on drop) an abort.
 struct Tap {
     grant: Grant,
     ended: bool,
+    metered: Option<Metered>,
     _busy: Option<Busy>,
 }
 
 impl Tap {
-    fn new(grant: Grant, busy: Option<Busy>) -> Self {
-        Tap { grant, ended: false, _busy: busy }
+    fn new(grant: Grant, busy: Option<Busy>, metered: Option<Metered>) -> Self {
+        Tap { grant, ended: false, metered, _busy: busy }
     }
 
-    fn chunk(&self, bytes: &Bytes) {
-        usage_tap(&self.grant, bytes);
+    /// The answer's status and content type, before its body.
+    fn answer(&mut self, status: StatusCode, headers: &HeaderMap) {
+        if let Some((meter, _)) = self.metered.as_mut() {
+            let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok());
+            meter.answer(status.as_u16(), content_type);
+        }
+    }
+
+    fn chunk(&mut self, bytes: &Bytes) {
+        usage_tap(&self.grant, self.metered.as_mut().map(|(m, _)| m), bytes);
     }
 
     fn end(&mut self, how: StreamEnd) {
         if !std::mem::replace(&mut self.ended, true) {
-            usage_end(&self.grant, how);
+            usage_end(&self.grant, self.metered.take(), how);
         }
     }
 }
@@ -1111,6 +1201,8 @@ impl Drop for Tap {
 fn relay(upstream: reqwest::Response, tap: Tap) -> Response {
     let status = upstream.status();
     let headers = copy_headers(upstream.headers(), DROP_RESPONSE);
+    let mut tap = tap;
+    tap.answer(status, upstream.headers());
     let stream = futures_util::stream::unfold(Some((upstream, tap)), |state| async move {
         let (mut upstream, mut tap) = state?;
         match upstream.chunk().await {
@@ -1134,22 +1226,32 @@ fn relay(upstream: reqwest::Response, tap: Tap) -> Response {
     response
 }
 
-/// C3's seam (the spending limit): every response chunk of a granted request
+/// The spending limit's seam (C3): every response chunk of a granted request
 /// that reached the provider, in order, as the provider sent it (no content
-/// encoding — none is asked for), error answers included. Anthropic's
-/// `message_start` / `message_delta` usage and Gemini's `usageMetadata` arrive
-/// here. Nothing reads them yet.
-fn usage_tap(_grant: &Grant, _chunk: &Bytes) {
+/// encoding — `accept-encoding` is not forwarded and the client decompresses
+/// nothing), error answers included. A billed request's meter reads
+/// Anthropic's `message_start` / `message_delta` usage and Gemini's
+/// `usageMetadata` out of them (`api_meter`), keeping nothing else.
+fn usage_tap(_grant: &Grant, meter: Option<&mut super::api_meter::Meter>, chunk: &Bytes) {
     #[cfg(test)]
     tests::record_tap(_grant, None);
+    if let Some(meter) = meter {
+        meter.feed(chunk);
+    }
 }
 
-/// The answer ended — cleanly, by a failed read, or by the client going away
-/// (C3: settle the turn's cost with what was seen). Exactly once per answer
-/// [`usage_tap`] saw.
-fn usage_end(_grant: &Grant, _how: StreamEnd) {
+/// The answer ended — cleanly, by a failed read, or by the client going away.
+/// Exactly once per answer [`usage_tap`] saw. What the provider reported so
+/// far is charged in every case: an aborted stream may already be billed.
+fn usage_end(grant: &Grant, metered: Option<Metered>, _how: StreamEnd) {
     #[cfg(test)]
-    tests::record_tap(_grant, Some(_how));
+    tests::record_tap(grant, Some(_how));
+    if let Some((meter, book)) = metered {
+        let now = chrono::Utc::now();
+        if let Some(charge) = meter.charge(&super::api_usage::month_of(now)) {
+            book.record(grant.provider, &charge, now);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1485,7 +1587,8 @@ mod tests {
     ) -> (u16, Arc<AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let mut state = ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), client(false).unwrap());
+        let mut state =
+            ProxyState::new(port, Upstream::Test(upstream), KeySource::Fixed(key), test_budget(Some(1e6)), client(false).unwrap());
         tune(&mut state);
         let buffered = state.buffered.clone();
         tokio::spawn(serve(listener, state, std::future::pending()));
@@ -1852,5 +1955,121 @@ mod tests {
         assert!(requests.iter().any(|(m, u, _, _)| m == "POST" && u.starts_with("/v1/messages")));
         drop(requests);
         on_tab_gone("e2e:claude");
+    }
+
+    // ---- the spending limit (C3) ------------------------------------------
+
+    /// A memory-only ledger with a fixed monthly limit.
+    fn test_budget(limit: Option<f64>) -> Budget {
+        Budget { book: Arc::new(super::super::api_usage::Book::new(None)), limits: Limits::Fixed(limit) }
+    }
+
+    fn spent_charge(usd: f64) -> super::super::api_prices::Charge {
+        super::super::api_prices::Charge {
+            model: "claude-opus-5-5".into(),
+            known: true,
+            input: 1,
+            output: 1,
+            cache_write: 0,
+            cache_read: 0,
+            web_searches: 0,
+            usd,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_streamed_answer_is_charged_to_the_ledger_once_it_ends() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(16));
+        let upstream = stub_upstream(seen.clone(), release).await;
+        let budget = test_budget(Some(20.0));
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:metered", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let r = plain_client().post(&url).header("x-api-key", token.clone()).body("{}").send().await.unwrap();
+        let _ = r.bytes().await.unwrap();
+        ended("e2e:metered").await;
+        let ledger = book.snapshot(chrono::Utc::now());
+        let models = &ledger.providers["anthropic"].models;
+        // The stub's model is not in the table: highest Anthropic rate, flagged.
+        let m = &models["claude-stub"];
+        assert!(m.unknown);
+        assert_eq!((m.input, m.output, m.requests), (5, 3, 1));
+        assert!((ledger.spent(Provider::Anthropic) - (5.0 * 10.0 + 3.0 * 50.0) / 1e6).abs() < 1e-12);
+        // Token counting costs nothing and is not metered.
+        let r = plain_client()
+            .post(format!("{url}/count_tokens"))
+            .header("x-api-key", token)
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        let _ = r.bytes().await.unwrap();
+        ended("e2e:metered").await;
+        assert_eq!(book.snapshot(chrono::Utc::now()).providers["anthropic"].models["claude-stub"].requests, 1);
+        on_tab_gone("e2e:metered");
+    }
+
+    #[tokio::test]
+    async fn at_the_limit_billed_requests_are_refused_in_the_provider_shape() {
+        let seen = Arc::new(Seen::default());
+        let release = Arc::new(tokio::sync::Semaphore::new(16));
+        let upstream = stub_upstream(seen.clone(), release).await;
+        let budget = test_budget(Some(20.0));
+        budget.book.record(Provider::Anthropic, &spent_charge(20.0), chrono::Utc::now());
+        budget.book.record(Provider::Gemini, &spent_charge(25.0), chrono::Utc::now());
+        let (port, _) = proxy_with(upstream.clone(), Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:limit", None)).unwrap();
+        let anthropic = base_url_on(port, Provider::Anthropic);
+        let c = plain_client();
+        let r = c.post(format!("{anthropic}/v1/messages")).header("x-api-key", token.clone()).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 429);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["error"]["type"], "rate_limit_error");
+        let message = json["error"]["message"].as_str().unwrap();
+        assert!(message.starts_with(crate::app_name!()), "{message}");
+        assert!(message.contains("budget for Anthropic reached") && message.contains("Manage CLIs"), "{message}");
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 0, "the provider saw nothing");
+        // What costs nothing still passes.
+        let r = c.post(format!("{anthropic}/v1/messages/count_tokens")).header("x-api-key", token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        let _ = r.bytes().await.unwrap();
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 1);
+        on_tab_gone("e2e:limit");
+
+        // Gemini's shape.
+        let token = issue_grant(grant(Provider::Gemini, "e2e:limit-gemini", None)).unwrap();
+        let r = c
+            .post(format!("{}/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse", base_url_on(port, Provider::Gemini)))
+            .header("x-goog-api-key", token)
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 429);
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["status"], "RESOURCE_EXHAUSTED");
+        assert_eq!(json["error"]["code"], 429);
+        assert!(json["error"]["message"].as_str().unwrap().contains("Google Gemini"));
+        on_tab_gone("e2e:limit-gemini");
+
+        // A key without a limit (saved by an earlier build): refused until set.
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = test_budget(None)).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:nolimit", None)).unwrap();
+        let r = c
+            .post(format!("{}/v1/messages", base_url_on(port, Provider::Anthropic)))
+            .header("x-api-key", token)
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 429);
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert!(json["error"]["message"].as_str().unwrap().contains("no monthly API budget"));
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 1);
+        on_tab_gone("e2e:nolimit");
     }
 }
