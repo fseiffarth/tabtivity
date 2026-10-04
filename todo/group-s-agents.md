@@ -2539,10 +2539,14 @@ unchanged; the new agents are additive.
     failure notice. `ps -eo args | grep -c <first 12 chars of the key>` finds
     only the grep, and `<state_dir>/tmux-launch/` holds no key. Exit Claude in
     a tmux-persisted (phone-scope) tab: `env | grep -c API_KEY` in the shell
-    left behind is 0. Switch Claude off → a new tab is back on the
-    subscription. Restart: the key is still saved. Lock the keyring: Save
-    refuses with the locked message, the rows say "keyring locked", Unlock
-    works.
+    left behind is 0. C1: `tmux show-options -g update-environment` lists
+    the four `<APP>_AGENT_SECRET_*_API_KEY` carriers at 8636–8639 and no
+    `ANTHROPIC_API_KEY`; in the Claude tab `env | grep -c AGENT_SECRET` (via
+    `!`) is 0 and the key works — repeat in a root-console Host session and
+    by typing `claude` into a shell tab (the shim). Switch Claude off → a new
+    tab is back on the subscription. Restart: the key is still saved. Lock
+    the keyring: Save refuses with the locked message, the rows say "keyring
+    locked", Unlock works.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

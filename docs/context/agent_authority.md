@@ -372,13 +372,20 @@ shell tab gets them through the shim too, and in `launch_prep`'s Host-session
 and fence-less-platform arms. Only CLIs listed in `agent_api_key_clis` get
 one; never a remote, container or local-model spawn, nor a subcommand (a
 sign-in tab); a value the user set (or an alias such as
-`ANTHROPIC_AUTH_TOKEN`) wins. The names are in `tmux_local::SECRET_ENV`: on no
-tmux argv or launcher script, their `update-environment` slots stay on the
-user's default tmux server (later sessions there take them from the client or
-drop them), and on tmux < 3.2 the key is dropped rather than put on the argv.
-The unfenced login shell a fenced pane leaves behind starts with `env -u` over
-every `SECRET_ENV` name — before this it inherited the MCP and Copilot tokens
-as well. A keyed local Claude tab skips `--remote-control`, which API-key auth
+`ANTHROPIC_AUTH_TOKEN`) wins. On Linux and macOS the spawn carries a key
+under an app-named carrier (`<APP>_AGENT_SECRET_<VAR>`,
+`agent_api_keys::CARRIERS`), and only the carriers are in
+`tmux_local::SECRET_ENV`: on no tmux argv or launcher script, and the
+`update-environment` slots that stay on the user's default tmux server name
+no variable of theirs. Tabtivity's own binary maps a carrier to the CLI's
+variable and removes every carrier just before the agent runs
+(`services::agent_exec`, `--agent-exec`; `--fence-scope` maps the same way):
+the fence's first step in front of bwrap or `sandbox-exec`, in front of the
+CLI for a Host session; Windows (no tmux) sets the CLI's name directly. On
+tmux < 3.2 the key is dropped rather than put on the argv. The unfenced
+login shell a fenced pane leaves behind starts with `env -u` over every
+`SECRET_ENV` name — before this it inherited the MCP and Copilot tokens as
+well. A keyed local Claude tab skips `--remote-control`, which API-key auth
 refuses. The CLIs' own approval steps stay theirs (Claude asks once per agent
 home, default No; Gemini needs its `/auth` pick). **Stated, not solved:** the
 agent can read its key, and a project's own CLI config (`ANTHROPIC_BASE_URL`

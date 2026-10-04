@@ -845,8 +845,12 @@ to the shared logins, Manage CLIs keeps one provider API key per provider
 hands it, at spawn, to the CLIs the user switched on (`agent_api_key_clis`) as
 the variable each reads: Claude, Gemini, Mistral Vibe and OpenCode; Codex
 documents no interactive env route and is left out. Local session tabs only (no
-remote, container, local-model or sign-in tab); a variable the user set wins;
-the names are tmux secrets (no argv, no launcher script). The CLIs' own prompts
+remote, container, local-model or sign-in tab); a variable the user set wins.
+On Linux and macOS the key travels under an app-named carrier variable — a
+tmux secret (no argv, no launcher script) that names nothing of the user's on
+their own tmux server — and Tabtivity's binary (`--agent-exec`,
+`services/agent_exec.rs`) turns it into the CLI's variable just before the
+agent runs (Part C, C1). The CLIs' own prompts
 stay theirs: Claude asks once per project whether to use a detected key and
 defaults to No; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude
 tab runs without Remote Control. The agent can read its own key, and a

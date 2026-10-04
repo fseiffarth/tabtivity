@@ -555,7 +555,8 @@ Vibe and OpenCode are not installed here: their rows are from docs.
 
 # Part C — hardening: no key in the agent, a spending limit (2026-10-04)
 
-Status: scheduled. Fixes the two open risks Part A left: (1) the common
+Status: C1 built 2026-10-04 (see "C1 implementation notes" at the end; never
+live-verified); C2, C3 scheduled. Fixes the two open risks Part A left: (1) the common
 variable names (`ANTHROPIC_API_KEY`, …) sit in the global `update-environment`
 of the user's own default tmux server; (2) the agent can read the real key,
 and a project's own CLI config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`,
@@ -631,3 +632,79 @@ host — with no ceiling on what it spends.
   (unit tests on canned SSE/JSON), ledger, refusal, Manage CLIs UI (limit
   field required on save, spent/limit per provider, month reset, raise limit),
   `agent_logins`/phone show "budget reached" where relevant. Docs + QA boxes.
+
+## C1 implementation notes (2026-10-04)
+
+Never live-verified. What was built:
+
+- **Carriers.** `agent_api_keys::CARRIERS` —
+  `app_env!("AGENT_SECRET_ANTHROPIC_API_KEY")` and the same for `OPENAI_`,
+  `GEMINI_`, `MISTRAL_API_KEY` — replace the four common names in
+  `tmux_local::SECRET_ENV`, in the same `update-environment` slots
+  (8636–8639), so a tmux server a Part A build touched gets those entries
+  overwritten by the next tab rather than keeping them. `inject_env` writes a
+  key under its carrier on Linux and macOS; the user-wins check still looks at
+  the CLI's names (and their aliases).
+- **The mapping step.** `services::agent_exec`, `tabtivity --agent-exec
+  <prog> [args…]` (`main.rs`, Unix): every variable named
+  `<APP>_AGENT_SECRET_<NAME>` is removed and `<NAME>` set from it (a plain
+  variable name, never an app-named one, a non-empty value), then `exec`.
+  Generic over the prefix rather than a fixed list, so a binary on disk newer
+  than the running app (a rebuild, an update) maps whatever the app carried.
+  `fence_scope::run` (`--fence-scope`) applies the same mapping, so a host
+  with the Landlock scope still runs one step in front of bwrap, not two.
+  The binary is `fence_scope::running_binary` (`/proc/<pid>/exe` once
+  replaced) on Linux, `current_exe` on macOS.
+- **Per spawn path.**
+  - *Fenced Linux* (`wrap_pty_options_bwrap`, also the shell-tab shim):
+    injection now runs before the launcher is built, and
+    `agent_fence::launcher_step` picks the step in front of bwrap —
+    `--fence-scope` where Landlock's scope applies (as before), else
+    `--agent-exec` when the environment carries a secret, else none (no
+    change for spawns without a key).
+  - *macOS sandbox-exec*: `agent_exec::wrap` puts `--agent-exec` in front of
+    `/usr/bin/sandbox-exec` when a carrier is present. `cfg(target_os =
+    "macos")` code: not compiled here.
+  - *Host session* (Linux/macOS): the same `wrap`, in front of the CLI (an off-
+    `PATH` CLI resolved first, as `build_command` would have; on `PATH` it
+    stays bare and resolves through the agent_bin shim, which passes a Host
+    session through).
+  - *Windows*: no carrier, no step — the key goes into the ConPTY child's
+    environment block under the CLI's own name (no tmux, no fence, no argv).
+  - *tmux < 3.2*: `launch_prep` drops the carriers the fence added (was: the
+    common names); a step left in front only `exec`s.
+  - *Trailing shell*: `env -u` over `SECRET_ENV` now strips the carriers; the
+    pane's `sh` never held the CLI's name, so nothing else is needed.
+
+**Deviations, and why.**
+
+- **`AGENT_SECRET_`, not `AGENT_KEY_`.** `brand::Pair::export_both` copies
+  every app variable to its legacy-prefix twin unless the name contains
+  `TOKEN`, `ASKPASS`, `SECRET` or `PASSWORD`; an `…_AGENT_KEY_…` carrier would
+  have been twinned under the old prefix — a name not in `SECRET_ENV` — and
+  ridden `new-session -e` on the world-readable tmux argv. A test
+  (`agent_exec::tests::carriers_get_no_legacy_twin`) holds this.
+- **The step runs in front of bwrap / sandbox-exec, not inside them.**
+  Inside bwrap Tabtivity's binary is not reliably reachable: the home is the
+  scope home (a dev build lives under it), `/tmp` is a tmpfs that hides an
+  AppImage's mount, and the fresh `/proc` has no `/proc/<app pid>/exe`;
+  inside Seatbelt the profile would have to grant the binary. Nothing is
+  lost: bwrap and sandbox-exec pass the environment through unchanged, so the
+  CLI starts with exactly the mapped environment, and the value is in an
+  environment (0400) at every hop, never an argv or file.
+- **The step is added only when there is something to map** (or, as before,
+  for the Landlock scope), not to every spawn, so spawns without a key are
+  unchanged.
+- **The Host session's trailing shell** (unfenced, no `env -u`) keeps the
+  carriers as it kept the MCP tokens and, in Part A, the key itself — the
+  Host session is the user's own unfenced shell; left as is.
+
+**Untestable here.** macOS (`cfg` code, no compile); a live tab (never
+started — AGENTS.md); Windows only `cargo check` (lib and tests). Covered by
+unit tests: the mapping (incl. a real `exec` that sees the variable and no
+carrier), `launcher_step`, the shell launcher with both modes, the carriers
+in `SECRET_ENV` and off `-e`/the launcher script, `env -u` of a carrier, the
+< 3.2 drop, no legacy twin. By hand with the debug binary: the fence's
+`sh -c` launcher with each mode in front of a probe (bwrap itself cannot nest
+in the sandbox this was built in) — the probe saw `ANTHROPIC_API_KEY`, no
+carrier, and the filter on descriptor 9.
