@@ -8909,6 +8909,8 @@ export const dict: Dict = {
   "overlayAgent.hide": "Agentenspalte ausblenden",
   "overlayAgent.shownInConsole": "In der Root-Konsole angezeigt",
   "overlayAgent.shownInConsoleHint": "Schließe die Root-Konsole, um hier mit diesem Agenten zu arbeiten.",
+  "overlayAgent.shownInPopout": "In einem ausgelagerten Fenster angezeigt",
+  "overlayAgent.shownInPopoutHint": "Hole die Tabs dieses Fensters ins Hauptfenster zurück, um hier mit diesem Agenten zu arbeiten.",
   "overlayAgent.rootNotAllowed": "{agent} in der Root-Konsole erlauben: Modelle & Agenten → Root-Chip",
   "overlayAgent.toggle": "Agent",
   "shortcut.cycleProjectBack": "Zum vorherigen Projekt wechseln",

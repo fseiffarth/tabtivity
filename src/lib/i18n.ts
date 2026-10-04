@@ -9146,6 +9146,8 @@ export const enSource = {
   "overlayAgent.hide": "Hide the agent column",
   "overlayAgent.shownInConsole": "Shown in the root console",
   "overlayAgent.shownInConsoleHint": "Close the root console to work with this agent here.",
+  "overlayAgent.shownInPopout": "Shown in a popout window",
+  "overlayAgent.shownInPopoutHint": "Put that window's tabs back in the main window to work with this agent here.",
   "overlayAgent.rootNotAllowed": "Allow {agent} in the root console: Models & agents → Root chip",
   "overlayAgent.toggle": "Agent",
   "shortcut.cycleProjectBack": "Cycle to previous project",

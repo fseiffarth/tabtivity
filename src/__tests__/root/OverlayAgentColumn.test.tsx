@@ -25,13 +25,33 @@ vi.mock("../../components/tabs/TabPane", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { useTabsStore, type DetachedGroup, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { OverlayAgentColumn } from "../../components/layout/OverlayAgentColumn";
 
 let tab: TabEntry;
+
+/** A root popout (`detachGroup`'s record) holding `keys` — a two-pane one, the
+ *  given keys in its SECOND subwindow and not its active tab there, so the
+ *  check has to walk the whole subtree. */
+function rootPopout(keys: string[]): DetachedGroup {
+  return {
+    id: "pop",
+    label: "detached-root-pop",
+    subtree: {
+      type: "split",
+      id: "pop",
+      dir: "row",
+      sizes: [0.5, 0.5],
+      children: [
+        { type: "group", id: "pop-a", tabKeys: ["other"], activeKey: "other" },
+        { type: "group", id: "pop-b", tabKeys: ["other-2", ...keys], activeKey: "other-2" },
+      ],
+    },
+  };
+}
 const lastPane = () => paneProps[paneProps.length - 1];
 const column = () => document.querySelector(".overlay-agent-column") as HTMLElement;
 
@@ -52,6 +72,7 @@ beforeEach(() => {
     tabsByScope: { root: [] },
     layoutByScope: { root: null },
     focusedGroupByScope: { root: null },
+    detachedGroupsByScope: {},
   });
   tab = useTabsStore.getState().addTabToScope("root", {
     label: "Claude",
@@ -126,6 +147,44 @@ describe("OverlayAgentColumn", () => {
     act(() => useRootOverlayStore.setState({ open: false }));
     expect(screen.getByTestId("pane")).toBeTruthy();
     expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
+  });
+
+  it("shows a placeholder, and claims no key, while the tab is in a popped-out root subwindow", async () => {
+    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
+
+    act(() => useTabsStore.setState({ detachedGroupsByScope: { root: [rootPopout([tab.key])] } }));
+
+    expect(screen.queryByTestId("pane")).toBeNull();
+    expect(screen.getByText("Shown in a popout window")).toBeTruthy();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
+    // The console can't show a popped-out tab, so there is no ↗ to it.
+    expect(screen.queryByTitle("Open in the root console")).toBeNull();
+
+    // Put back in the main window: the column draws it again.
+    act(() => useTabsStore.setState({ detachedGroupsByScope: { root: [] } }));
+    expect(screen.getByTestId("pane")).toBeTruthy();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
+    expect(screen.getByTitle("Open in the root console")).toBeTruthy();
+  });
+
+  it("draws a tab while only OTHER root tabs, or another scope's, are popped out", async () => {
+    useTabsStore.setState({
+      detachedGroupsByScope: { root: [rootPopout([])], p1: [rootPopout([tab.key])] },
+    });
+    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
+
+    expect(screen.getByTestId("pane")).toBeTruthy();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
+  });
+
+  it("names the popout, not the console, when both are up", async () => {
+    useTabsStore.setState({ detachedGroupsByScope: { root: [rootPopout([tab.key])] } });
+    useRootOverlayStore.setState({ open: true });
+    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
+
+    expect(screen.getByText("Shown in a popout window")).toBeTruthy();
+    expect(screen.queryByText("Shown in the root console")).toBeNull();
   });
 
   it("↗ hides the column and opens the root console on the tab", async () => {

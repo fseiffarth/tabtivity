@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ROOT_SCOPE, type TabEntry } from "../../stores/tabs";
+import { ROOT_SCOPE, orderedTabKeys, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { clampOverlayAgentWidth, useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useProjectsStore } from "../../stores/projects";
@@ -45,8 +45,10 @@ interface Props {
  * (`RootRightsBadge`), the pane gets the props `RootOverlay` hands its panes.
  *
  * One visible view per PTY: while the root console is open it shows this tab
- * itself, so the column shows a placeholder; while the pane IS drawn here, its
- * key is in `shownKeys` and `CenterPanel`'s root copy steps aside.
+ * itself, and a popped-out root subwindow holding the tab shows it in its own
+ * window, so in both cases the column shows a placeholder; while the pane IS
+ * drawn here, its key is in `shownKeys` and `CenterPanel`'s root copy steps
+ * aside.
  *
  * The root class `overlay-agent-column` is what the overlays' Escape guard
  * looks for: Escape typed into the agent is the agent's cancel key.
@@ -88,7 +90,18 @@ export function OverlayAgentColumn({
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, []);
 
-  const showPane = !!tab && !consoleOpen;
+  // A root subwindow popped out into its own OS window (`detachGroup`, possible
+  // while no project is open) draws its tabs there, attach-only, in a webview
+  // this window's stores never reach. The column can't see whether the popout
+  // shows THIS tab right now, so any tab in a popped-out root group counts as
+  // shown there — the same stand-down as for the root console. (The console
+  // itself draws only the in-window root layout, so it never meets the popout.)
+  const inPopout = useTabsStore(
+    (s) =>
+      tabKey !== null &&
+      (s.detachedGroupsByScope[ROOT_SCOPE] ?? []).some((d) => orderedTabKeys(d.subtree).includes(tabKey)),
+  );
+  const showPane = !!tab && !consoleOpen && !inPopout;
   useEffect(() => {
     if (!showPane || !tabKey) return;
     const { markShown, unmarkShown } = useOverlayAgentStore.getState();
@@ -158,7 +171,9 @@ export function OverlayAgentColumn({
         </span>
         <RootRightsBadge rights={rights} />
         <UntestedTag id="overlayAgent.dock" />
-        {tab && (
+        {/* Not for a popped-out tab: the console can't show it (it draws only
+            the in-window root layout), so ↗ would just close the column. */}
+        {tab && !inPopout && (
           <button
             type="button"
             className="subwindow-hide"
@@ -202,8 +217,12 @@ export function OverlayAgentColumn({
           ) : (
             <div className="center-placeholder" style={{ height: "100%" }}>
               <div className="center-placeholder-card">
-                <div className="center-placeholder-title">{t("overlayAgent.shownInConsole")}</div>
-                <div className="center-placeholder-hint">{t("overlayAgent.shownInConsoleHint")}</div>
+                <div className="center-placeholder-title">
+                  {t(inPopout ? "overlayAgent.shownInPopout" : "overlayAgent.shownInConsole")}
+                </div>
+                <div className="center-placeholder-hint">
+                  {t(inPopout ? "overlayAgent.shownInPopoutHint" : "overlayAgent.shownInConsoleHint")}
+                </div>
               </div>
             </div>
           )}
