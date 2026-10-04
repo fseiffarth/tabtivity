@@ -273,6 +273,7 @@ stores stay at the top. No `index.ts` barrels.
 | `caldav.ts` | CalDAV accounts + sync, a second store beside `calendar.ts`. Sync merges via `caldav_apply` (never a replace); failures visible per collection. |
 | `calendar.ts` | Global calendars/events/tasks (one `calendar.json`); the only owner of task persistence (`moveTasks` = one write per drag, `setColumns`). |
 | `calendar/clipboard.ts` | The calendar clipboard (one copied entry, a snapshot). Module-level, so a copy pastes in another calendar tab and outlives the navigation. |
+| `calendar/arrivals.ts` | "Flying in": id → expiry of event/task rows a root agent just wrote (`RootOverlayHost` marks new ids from `root-mcp-changed`, never updates, `local` moves or deletes); calendar chips and `TodoCard` add `arrived` (`cal-arrive` keyframe). One sweep timer, live marks only. |
 | `overlayAgent.ts` | Docked agent of the mail/calendar/to-do overlays (`docs/overlay_agent_plan.md`): per `SteeringApp` the docked root tab's `{ key, open }` (session-only, no policy), `shownKeys` the columns display (`CenterPanel` steps aside), per-machine column width; forgets a dock whose tab left a hydrated root. |
 | `todo.ts` | To-do board session state only (overlay flag, filters — never persisted, drag, optimistic overlay, mail cache, `collapsedSteps`, `focusTaskId`). |
 | `browser.ts` | In-app browser store (#61). Nothing reaches the network on its own (`load`/`openLive` only, both clicks), actions tolerate a rejected invoke, downloads refused by default. |

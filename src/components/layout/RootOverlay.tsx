@@ -12,6 +12,7 @@ import {
 import { useProjectsStore } from "../../stores/projects";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { useCalendarStore } from "../../stores/calendar/calendar";
+import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
 import { useSettingsStore } from "../../stores/settings";
 import {
   DEFAULT_MIN_SUBWINDOW_PX,
@@ -168,13 +169,21 @@ export function RootOverlayHost() {
   }, [rootTabs, rootLayout, activeScope]);
 
   useEffect(() => {
+    // Ids an agent deleted moments ago: a move to another calendar arrives as
+    // a delete and an upsert of the same id, and that is an update, not an
+    // arrival. Pruned on every event, so it holds a few ids at most.
+    const justDeleted = new Map<string, number>();
     const unlisten = listen<RootMcpChange>("root-mcp-changed", ({ payload }) => {
       const upsert = <T extends { id: string }>(rows: T[], row: T) =>
         rows.some((r) => r.id === row.id)
           ? rows.map((r) => (r.id === row.id ? row : r))
           : [...rows, row];
+      const now = Date.now();
+      for (const [id, at] of justDeleted) if (now - at > ARRIVAL_MS) justDeleted.delete(id);
       // A mail draft lives in the mail store, not the calendar: re-read the
       // list. It opens nothing and steals no focus; the row shows its mark.
+      // No arrival here: an agent draft always lands unfiled, in the approvals
+      // list, and reaches "Drafted by agents" only through the user's ✓.
       if (payload.kind === "draft") {
         void useMailStore.getState().loadAgentDrafts();
         return;
@@ -184,6 +193,15 @@ export function RootOverlayHost() {
         const row = payload.row;
         useCalendarStore.setState((s) => ({ calendars: payload.op === "delete" ? s.calendars.filter((c) => c.id !== row.id) : upsert(s.calendars, row) }));
         return;
+      }
+      // Read before the merge: only an id the store has never held flies in.
+      // An update, a board-only move (`local`) or a delete plays nothing.
+      if (payload.op === "delete") {
+        justDeleted.set(payload.row.id, now);
+      } else if (!payload.local && !justDeleted.delete(payload.row.id)) {
+        const before = useCalendarStore.getState();
+        const rows: { id: string }[] = payload.kind === "event" ? before.events : before.tasks;
+        if (!rows.some((r) => r.id === payload.row.id)) useArrivalsStore.getState().markArrived([payload.row.id]);
       }
       useCalendarStore.setState((s) => {
         if (payload.kind === "event") {

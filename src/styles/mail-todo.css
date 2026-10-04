@@ -1668,6 +1668,17 @@ svg.alerts-toggle-icon {
 .todo-card:hover::after {
   opacity: 1;
 }
+/* A card a root agent just wrote flies in — the `cal-arrive` keyframe from
+   calendar.css (opacity + transform only; the card has no transform of its
+   own to fight). */
+.todo-card.arrived {
+  animation: cal-arrive 450ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .todo-card.arrived {
+    animation: none;
+  }
+}
 .todo-card-done .todo-card-title {
   text-decoration: line-through;
   color: var(--text-muted);

@@ -3,6 +3,7 @@ import type { Calendar, CalendarTask } from "../../types";
 import { datePart, formatLongDate, formatTime, timePart, toStamp } from "../../lib/calendar/calendarTime";
 import { calendarColor } from "../../stores/calendar/calendar";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { useArrivedMarks } from "../../stores/calendar/arrivals";
 
 interface Props {
   tasks: CalendarTask[];
@@ -76,6 +77,7 @@ export function TasksView({
   use24h,
 }: Props) {
   const t = useT();
+  const arrived = useArrivedMarks();
   const lang = useI18nStore((s) => s.lang);
   const [filter, setFilter] = useState<Filter>("open");
   const [title, setTitle] = useState("");
@@ -188,7 +190,8 @@ export function TasksView({
                 className={
                   "cal-task-row" +
                   (done ? " cal-task-done" : "") +
-                  (overdue ? " cal-task-overdue" : "")
+                  (overdue ? " cal-task-overdue" : "") +
+                  (arrived[task.id] ? " arrived" : "")
                 }
               >
                 <input

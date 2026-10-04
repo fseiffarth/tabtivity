@@ -12,6 +12,7 @@ import { eventColor } from "../../lib/calendar/calendarCategories";
 import { calendarColor } from "../../stores/calendar/calendar";
 import { useI18nStore, useT } from "../../lib/i18n";
 import type { CalendarMenuTarget } from "./CalendarContextMenu";
+import { useArrivedMarks } from "../../stores/calendar/arrivals";
 
 /** Rows of chips a cell shows before collapsing the rest into "+N more". */
 const MAX_ROWS = 4;
@@ -156,6 +157,7 @@ export function MonthView({
   weekStart,
 }: Props) {
   const t = useT();
+  const arrived = useArrivedMarks();
   const lang = useI18nStore((s) => s.lang);
   const today = todayStr();
 
@@ -244,7 +246,8 @@ export function MonthView({
                         (spanning ? " cal-month-bar-solid" : "") +
                         (bar.clippedStart ? " cal-month-bar-clip-start" : "") +
                         (bar.clippedEnd ? " cal-month-bar-clip-end" : "") +
-                        (occ.status === "cancelled" ? " cal-block-cancelled" : "")
+                        (occ.status === "cancelled" ? " cal-block-cancelled" : "") +
+                        (arrived[occ.eventId] ? " arrived" : "")
                       }
                       style={{
                         left: `calc(${(bar.col / 7) * 100}% + 3px)`,
