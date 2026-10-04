@@ -90,8 +90,9 @@ export function LocalModelsSheet({ onClose, onChange }: {
   /** Requests of the sheet's own still on their way, by model (`""` = Start). */
   const [pending, setPending] = useState<Record<string, LocalModelAction>>({});
   const [rowError, setRowError] = useState<{ model: string; key: TranslationKey } | null>(null);
-  /** A write went unconfirmed; read on the fast clock for a while. */
-  const [settling, setSettling] = useState(false);
+  /** Writes gone unconfirmed, counted so each one restarts the while the
+   * list is read on the fast clock; 0 when none is recent. */
+  const [settling, setSettling] = useState(0);
   const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
   /** Bumped when a list lands, to schedule the next read from then. */
   const [stamp, setStamp] = useState(0);
@@ -149,11 +150,11 @@ export function LocalModelsSheet({ onClose, onChange }: {
 
   useEffect(() => {
     if (!settling) return;
-    const timer = window.setTimeout(() => setSettling(false), SETTLE_MS);
+    const timer = window.setTimeout(() => setSettling(0), SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [settling]);
 
-  const inFlight = Object.keys(pending).length > 0 || settling;
+  const inFlight = Object.keys(pending).length > 0 || settling > 0;
   const delay = pollDelay(list, inFlight);
   useEffect(() => {
     if (!visible || stamp === 0) return;
@@ -178,7 +179,7 @@ export function LocalModelsSheet({ onClose, onChange }: {
       if (unconfirmed(reason) || wasApplied(reason)) {
         // Not a failure the reader can act on: the read says what happened
         // (and says "open the app" only if it too finds no window).
-        setSettling(true);
+        setSettling((count) => count + 1);
         void load();
       } else if (code === "local_models_disabled") {
         show(null, code);

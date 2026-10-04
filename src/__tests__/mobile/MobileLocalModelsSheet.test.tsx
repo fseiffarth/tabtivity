@@ -247,6 +247,21 @@ describe("local models — the sheet", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("restarts the fast reads for each write that goes unconfirmed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    serve(() => json(listOf([IDLE, row({ name: "phi3:mini" })])), () => json({ error: "desktop_unavailable" }, 503));
+    render(<LocalModelsSheet onClose={() => {}} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(screen.getByRole("button", { name: "Load llama3:latest" }));
+    await tick(20_000);
+    fireEvent.click(screen.getByRole("button", { name: "Load phi3:mini" }));
+    await tick(20_000);
+    // 40 s after the first, 20 s after the second: still on the fast clock.
+    const now = gets();
+    await tick(5_000);
+    expect(gets()).toBe(now + 2);
+  });
+
   it("reads nothing more once closed while a write is on its way", async () => {
     let answer!: (response: Response) => void;
     const onChange = vi.fn();
