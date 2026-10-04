@@ -557,7 +557,8 @@ Vibe and OpenCode are not installed here: their rows are from docs.
 
 Status: C1 and C2 built and reviewed 2026-10-04 (see "C1/C2 implementation
 notes" and "C1/C2 review notes" at the end; never live-verified); C3 built
-2026-10-04 (see "C3 implementation notes"; never live-verified). Fixes the two open risks Part A left: (1) the common
+2026-10-04 and reviewed (see "C3 implementation notes" and "C3 review
+notes"; never live-verified). Fixes the two open risks Part A left: (1) the common
 variable names (`ANTHROPIC_API_KEY`, …) sit in the global `update-environment`
 of the user's own default tmux server; (2) the agent can read the real key,
 and a project's own CLI config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`,
@@ -1140,3 +1141,133 @@ limit in both providers' shapes before the provider sees anything, refusal
 without a limit; the status JSON; UI vitest for the required limit, the
 written-limit-first order, spent/limit, budget reached, reset date, unknown
 models, Set limit, no-limit, the logins row and the phone's label.
+
+## C3 review notes (2026-10-04)
+
+Reviewed bf640037/e6724c2c/234d39f5. Fixed:
+
+- **Hanging up was free.** Only what the provider had reported was charged,
+  so a token holder could stream an answer (or let it think — summarized and
+  omitted thinking stream little or nothing) and close the socket just before
+  Anthropic's `message_delta`: charged `message_start`'s input and *one*
+  output token. Leaving before the answer began (a non-streaming turn waits
+  for its whole answer; the handler future is dropped then) charged nothing
+  at all, and a usage object larger than 16 KiB was dropped silently. The
+  provider bills what it generated either way, so all of these spent past the
+  limit without bound. Now an answer that did not deliver its final count —
+  Anthropic without a root-level usage (`message_delta` / a whole message), a
+  Gemini stream that did not end cleanly, a request the client left before
+  its answer (`Pending` guard in `handle`, from the send on; only a connect
+  error, where nothing reached the provider, stays free), an unreadable usage
+  object (too large, cut by an SSE line break, unparseable — `Found::Lost`) —
+  is charged an estimate on top of what it reported (`api_meter::End`):
+  output = elapsed time × `ANTHROPIC_TOKENS_PER_SEC` (300) /
+  `GEMINI_TOKENS_PER_SEC` (600), above any current model of the provider,
+  capped by the request's `max_tokens` (Anthropic; a body that does not parse
+  or repeats the field gets 128,000) or Gemini's 65,536 + 32,768 (Gemini's
+  own fields are not trusted: it also reads snake_case names); input not yet
+  reported = body bytes / 3 up to a context window; the request's `model`,
+  `speed: "fast"` and `inference_geo: "us"` apply when the answer said
+  nothing. A turn the user cancels with Esc now costs a little more here than
+  on the provider's bill — the intended direction; help, docs, QA box and
+  the untested row say so. Error answers stay free.
+- **Two models in one answer** (a server-side fallback) were priced at the
+  last one named; now at the dearer (`api_prices::output_rate`).
+- **`accept-encoding: identity`** is now sent upstream: with no header at
+  all a server may pick any coding, and compressed bytes would have hidden
+  the usage (now they would at least be estimated).
+- **The limit is checked again after the body is read** (up to 60 s), not
+  only before.
+- **Settings re-read**: a same-size write within the mtime's resolution was
+  never seen; the cached limits are now re-read at least every 10 s
+  (`LIMITS_FRESH`).
+- **Charges after the exit flush** (an answer cut off by the quit drops its
+  tap after `stop_for_exit`'s drain) went to a 5 s flush thread the exit
+  outruns; after `flush_for_exit` a charge is written at once (`closing`).
+- **An unreadable ledger** (EACCES, I/O) was left in place and replaced by
+  the next write, losing its counts; it is now moved aside like a corrupt one.
+- **Overflow**: token sums in `api_prices` and `Ledger::add` saturate (a
+  debug build could panic inside the tap's `Drop` on absurd counts).
+- **UI**: the limit field took `min=1 step=1` while 0.5 or 7.5 are valid
+  limits; now `min=0.01 step="any"`, as `parseApiLimit` accepts.
+- Tests (14): early hang-up charged by time up to `max_tokens` and a final
+  count never estimated over; a request left before its answer (input from
+  the body, request model, fast mode, context-window cap, unknown model at
+  the top rate); repeated/odd `max_tokens` → largest cap; error answers free
+  however they end; oversized and line-broken usage objects unsettled; model
+  text forging an SSE `message_delta` with a huge count (never read);
+  tool input nested 3× past the tracked depth with `usage`/`model` keys at
+  every level, repeated root `usage` keys (per-field max); a fallback's two
+  models; Gemini cut during silent thinking and after chunks; escaped or
+  overlong model ids not taken; the proxy end to end for a hang-up after
+  `message_start` and a client that leaves before the answer; immediate write
+  after the exit flush; saturating ledger counts.
+
+Checked, no change:
+
+- **Scanner**: escapes (incl. `\\` before a quote) and strings across any
+  split; JSON escapes every raw line break, so model text cannot end an SSE
+  line or open structure; keys are classified only at the tracked levels;
+  deeper nesting is counted, not stored; memory per answer bounded (64
+  frames, 128-byte string window, 16 KiB capture); no index or arithmetic
+  that can panic. "Largest value per field" fits both APIs (Anthropic
+  `message_delta` repeats cumulative output, and input/cache when server
+  tools change them; Gemini chunks carry running totals). A non-SSE JSON
+  answer (and Gemini's JSON array) is read. A `usage` object holds no
+  model-written strings, so 16 KiB is ample (now fail-closed if not).
+- **Routes**: `billing` and `path_allowed` agree exactly (Anthropic
+  `POST /v1/messages`; Gemini `POST models/<m>:{generate,streamGenerate}Content`,
+  `{embed,batchEmbed}Contents`, exact-case verbs; everything else either free
+  by nature — `count_tokens`, `countTokens`, model reads — or refused by the
+  allowlist); a verb like `countTokens:generateContent` is refused by both.
+  No billable call can travel a free route.
+- **Prices**: Anthropic rows match the skill's cached table (Opus 5.5
+  $4/$20, cache read $0.20; Opus 5/4.x $5/$25; Sonnet 5.x $2/$10; Sonnet 4.x
+  $3/$15; Haiku 4.5 $1/$5; Fable 5.1 cache read $0.25, Fable 5 $1.00); 5m/1h
+  writes are 1.25×/2× input throughout; fast mode 2× matches $8/$40 and
+  $10/$50; `usage.speed` / `usage.inference_geo` are the documented report
+  fields. Gemini 2.5 rows (Pro $1.25/$10, long $2.50/$15; Flash $0.30/$2.50,
+  audio $1; Flash-Lite $0.10/$0.40) consistent with the dated comment.
+  `normalize` strips only decorations and numeric version tails and then
+  needs an exact table match, so no id can land on another family's row;
+  the only attacker-chosen id is Gemini's path model, used only when the
+  answer names no `modelVersion` — and then it is the model that ran.
+  Unknown → per-kind maximum over current chat models.
+- **Ledger**: one mutex, atomic write through a same-directory
+  `NamedTempFile` (0600) and rename; UTC month; a ledger month ahead of the
+  clock is kept; roll-over keeps last month's totals. Settings and ledger
+  live in `<state_dir>`, which the Linux fence replaces with a tmpfs
+  (`mask_private_state`, only Tabtivity's own support mounts restored, none
+  of them these files); on macOS the state dir is not in the Seatbelt
+  profile's writable list (read, not compiled here). No fenced agent can
+  reset its spend or raise its limit there.
+- **Enforcement**: the verdict comes before the body read for every billed
+  route; a missing, invalid or unreadable limit is `noLimit` → refused.
+- **UI/phone**: Save is disabled without a valid limit and the limit is
+  written (awaited) before the key; the backend refuses a key without one;
+  the key draft is cleared at once and never echoed; all ten keys are in
+  `en` and the four dicts; `settings.agentApiKeys.limit` and
+  `mobile.signIn.apiBudgetReached` are literal ids with register rows; the
+  phone gets a bare `api_budget_reached` flag — no amount, provider or key.
+
+Not fixed, with reason:
+
+- **Concurrent turns overshoot.** Every billed request that starts while
+  the month is under its limit runs to its end; N tabs can overshoot by N
+  turns (and the estimate makes aborted ones count, not free). A reservation
+  per request in flight would need a cost bound before the answer — the
+  estimate's cap is `max_tokens` × output rate, up to several dollars per
+  request, which would refuse ordinary turns near the limit. Documented in
+  the UI and help, as before.
+- **The rate bound is an assumption**: a future model faster than 300
+  (Anthropic) / 600 (Gemini) tokens per second, cut before its final count,
+  would be under-counted; a complete answer is always charged as reported.
+- **A corrupt or unreadable ledger restarts the month at zero** (moved
+  aside, shown in Manage CLIs). Only Tabtivity writes the file; failing
+  closed (refusing until the user acts) would punish a disk error, and the
+  provider-side limit the help recommends is the backstop.
+- **Windows** has no fence: an agent there runs as the user and can write
+  `settings.json` and the ledger. Out of C3's reach; the provider-side limit
+  is the guard there.
+- **Lint**: `npm run lint` reports 31 warnings, all in files neither C3 nor
+  this review touched (the same tree's pre-existing state).
