@@ -293,6 +293,8 @@ export const dict: Dict = {
   "mobile.link.open": "Apri link",
   "mobile.link.copy": "Copia link",
   "mobile.focus.sessionLoading": "Lettura della sessione salvata…",
+  "mobile.focus.starting": "Avvio di {agent}…",
+  "mobile.focus.startingScreen": "Mostra lo schermo",
   "mobile.focus.sessionUnsupported": "Nessuna sessione salvata per questo agente",
   "mobile.focus.sessionNoId": "Questa scheda non ha ancora un ID di sessione",
   "mobile.focus.sessionMissing": "Sessione salvata non trovata",

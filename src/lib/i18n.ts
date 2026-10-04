@@ -323,6 +323,8 @@ export const enSource = {
   "mobile.link.open": "Open link",
   "mobile.link.copy": "Copy link",
   "mobile.focus.sessionLoading": "Reading the stored session…",
+  "mobile.focus.starting": "Starting {agent}…",
+  "mobile.focus.startingScreen": "Show the screen",
   "mobile.focus.sessionUnsupported": "No stored session for this agent",
   "mobile.focus.sessionNoId": "No session id for this tab yet",
   "mobile.focus.sessionMissing": "Stored session not found",

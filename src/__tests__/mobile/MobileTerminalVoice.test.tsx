@@ -75,6 +75,14 @@ function asChromium() {
   Object.defineProperty(window.navigator, "userAgentData", { configurable: true, value: {} });
 }
 
+/** The composer's status line — not the Focus chat's "starting" row, which a
+ * blank agent tab shows over the empty screen. */
+function composerStatus(): HTMLElement {
+  const rows = screen.getAllByRole("status").filter((row) => row.dataset.testid !== "session-starting");
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
 describe(`${BRAND.display} Mobile terminal dictation`, () => {
   beforeEach(() => {
     // The composer's draft is kept on the phone now (`drafts.ts`), and the
@@ -114,7 +122,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     const binary = FakeWebSocket.instances[0].sent.filter((value): value is ArrayBufferView => ArrayBuffer.isView(value));
     expect(binary).toHaveLength(0);
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("fix the mobile voice input");
-    expect(screen.getByRole("status").textContent).toContain("Heard: fix the mobile voice input");
+    expect(composerStatus().textContent).toContain("Heard: fix the mobile voice input");
   });
 
   it("listens in the phone's language, or in the one the Reader's picker chose", async () => {
@@ -197,7 +205,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
     act(() => speech.onresult?.(finalResult("and add a test")));
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("and add a test");
-    expect(screen.getByRole("status").textContent).toBe("Heard: and add a test");
+    expect(composerStatus().textContent).toBe("Heard: and add a test");
   });
 
   it("keeps listening through the pause that ends the phone's recognizer", async () => {
@@ -318,7 +326,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     act(() => speech.onresult?.(reading(["fix the login", true])));
     fireEvent.click(screen.getByRole("button", { name: "Clear the message" }));
     act(() => speech.onresult?.(reading(["fix the login", true], ["and add a test", false])));
-    expect(screen.getByRole("status").textContent).toBe("Heard: and add a test");
+    expect(composerStatus().textContent).toBe("Heard: and add a test");
     act(() => speech.onresult?.(reading(["fix the login", true], ["and add a test", true])));
     expect(composer.value).toBe("and add a test");
 

@@ -189,6 +189,9 @@ const TRANSCRIPT_POLL = 5_000;
  * agent writes an answer to its transcript as it prints it, so a change on
  * screen is the earliest sign that the file has moved. */
 const TRANSCRIPT_SETTLE = 1_200;
+/** How long a fresh tab's Focus chat waits on its CLI to start (or to record
+ * the session a prompt from here began) before it shows the screen instead. */
+const STARTING_GRACE = 30_000;
 /** Turns fetched at first, and added per "Show earlier turns" tap. */
 const TRANSCRIPT_STEP = 120;
 /** A left→right swipe starting in this share of the screen, from the left,
@@ -2085,13 +2088,43 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     }, TRANSCRIPT_SETTLE);
     return () => window.clearTimeout(timer);
   }, [screenTick, sessionFocus, tab.id, transcriptLimit]);
+  /** Where the live screen's input box begins — `liveScreen.length` while the
+   * CLI has not drawn one yet (still starting, or a dialog in its place). */
+  const liveFrameStart = useMemo(
+    () => (tab.kind === "agent" ? inputFrameStart(liveScreen, tab.agent_label ?? tab.label) : liveScreen.length),
+    [tab.kind, tab.agent_label, tab.label, liveScreen],
+  );
+  const cliReady = liveFrameStart < liveScreen.length;
+  /** Whether the screen already holds a conversation: a prompt echo above
+   * the input box, or more history than a CLI's banner fills. */
+  const promptOnScreen = useMemo(() => {
+    const label = tab.agent_label ?? tab.label;
+    const echo = (line: ReadableLine) => isPromptEcho(line, label);
+    return earlier.chunks.length > 0 || earlier.open.some(echo) || (altScreen && lines.some(echo))
+      || liveScreen.slice(0, liveFrameStart).some(echo);
+  }, [tab.agent_label, tab.label, earlier, altScreen, lines, liveScreen, liveFrameStart]);
+  const [startGaveUp, setStartGaveUp] = useState(false);
+  useEffect(() => setStartGaveUp(false), [tab.id]);
+  /** Nothing drawn yet: no history, and every live row blank. */
+  const screenBlank = earlier.chunks.length === 0 && earlier.open.length === 0 && liveScreen.every((line) => !line.text.trim());
+  /** A fresh tab whose session has nothing to read yet: the CLI is starting
+   * and has recorded no session (or, before the first read answers, has drawn
+   * nothing at all). Its screen is only the CLI's banner, so Focus shows the
+   * session chat — a loading row while the CLI starts, then the empty chat —
+   * rather than painting that banner as a conversation. A screen that already
+   * holds a conversation (the session read lost) keeps the screen, and so
+   * does one that waited past `STARTING_GRACE` (`startGaveUp`). */
+  const preSessionWait = sessionFocus && !startGaveUp
+    && (transcript === null ? screenBlank : !transcript.available && (transcript.reason === "no_session" || transcript.reason === "no_transcript"))
+    && (!promptOnScreen || pending.length > 0);
   /** The stored session is what Focus paints: available, and not switched
-   * away from. Until the first read answers, the screen is shown, so the view
-   * never opens blank. */
+   * away from — or a fresh tab's, before it holds anything (`preSessionWait`).
+   * Until the first read answers on a tab with a conversation on screen, the
+   * screen is shown, so the view never opens blank. */
   // Codex can report a fresh session before it has a rollout to read, then
   // temporarily report `no_transcript` while it binds that rollout. A prompt
   // sent from this phone remains part of the Reader during that hand-off.
-  const sessionShown = sessionFocus && (transcript?.available === true
+  const sessionShown = sessionFocus && (transcript?.available === true || preSessionWait
     || (pending.length > 0 && CODEX_AGENT.test(tab.agent_label ?? tab.label)));
   /** The session chat's entries: the stored ones, with each prompt sent
    * from here held in its place (`withPending`). */
@@ -3522,6 +3555,16 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     () => (liveTail.length > 0 ? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel) : null),
     [liveTail, agentLabel],
   );
+  /** A fresh tab's chat waits on the CLI — still starting, or answered from
+   * here with no session recorded yet. A question on screen waits on the
+   * reader instead, so it never runs the clock. Past `STARTING_GRACE` the
+   * screen is shown: an error the CLI printed reaches the reader. */
+  const startWaiting = preSessionWait && !liveQuestion && (!cliReady || promptOnScreen);
+  useEffect(() => {
+    if (!startWaiting) return;
+    const timer = window.setTimeout(() => setStartGaveUp(true), STARTING_GRACE);
+    return () => window.clearTimeout(timer);
+  }, [startWaiting]);
   /** The agent as the markup view's round pill reads it: the live screen
    * only — `tab.agent_status` is the snapshot taken when this tab was
    * opened, and would read "working" forever for a tab opened mid-turn. */
@@ -3989,9 +4032,17 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
           {sessionShown && openStep
             ? subagentView
             : sessionShown
-            ? (transcript && sessionEntries.length === 0 && !liveQuestion && !sessionBusy
+            ? ((transcript || preSessionWait) && sessionEntries.length === 0 && !liveQuestion && !sessionBusy
               ? (undoing
                 ? <div className="readable-empty" role="status" aria-busy="true"><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span><strong>{t("mobile.transcript.undoing")}</strong></div>
+                // A fresh tab while its CLI starts: the banner it draws is not
+                // a conversation. The screen stays one tap away.
+                : preSessionWait && (!cliReady || !transcript)
+                ? <div className="readable-empty" role="status" aria-busy="true" data-testid="session-starting">
+                    <span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>
+                    <strong>{cliReady ? t("mobile.focus.sessionLoading") : t("mobile.focus.starting", { agent: agentLabel })}{isUntested("mobile.focus.starting") && <em> · {t("mobile.focus.untested")}</em>}</strong>
+                    <button onClick={() => setStartGaveUp(true)}>{t("mobile.focus.startingScreen")}</button>
+                  </div>
                 : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span></div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}

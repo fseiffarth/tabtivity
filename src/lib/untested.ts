@@ -439,6 +439,7 @@ export const UNTESTED = {
   "mobile.version.commit": { area: "mobile", what: "Home · The version line under Tabtivity (and the splash and lock sheet) shows the commit the phone bundle was built from: v0.1.x · <hash> · dd-mm hh:mm" },
   "mobile.lock.brandedSheet": { area: "mobile", what: "LocalUnlock · While the fingerprint sheet is up, the mark lifts above it with turning rings; a successful unlock flares it away", tested: "2026-09-28" },
   "mobile.focus.noSessionYet": { area: "mobile", what: "Terminal · A tab created from the phone stays in the Reader and shows its stored session once the agent records one" },
+  "mobile.focus.starting": { area: "mobile", what: "Terminal · A fresh agent tab's Focus chat shows a loading row while its CLI starts, not the CLI's banner" },
   "mobile.calendar.push": { area: "mobile", what: "Calendar · Reminders button → Notifications sheet: desktop calendar reminders as Web Push notifications on the phone (with or without details); tap opens Calendar" },
   "mobile.push.title": { area: "mobile", what: "This phone · Notifications: agent tabs waiting on an answer (or finishing a turn) as push notifications, silent while the tab is open on the phone; tap opens that tab" },
   "mobile.theme": { area: "mobile", what: "This phone · Theme: the desktop's themes on the phone, picked per phone (default: same as the desktop); Plain Dark / Plain Light / Light Lavender / System draw the Focus chat bubbles as octagons" },

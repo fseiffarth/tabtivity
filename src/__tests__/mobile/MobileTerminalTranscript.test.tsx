@@ -158,6 +158,52 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     screen.getByTestId("session-transcript");
   });
 
+  it("shows a fresh tab's chat loading while its CLI starts, never the CLI's banner", async () => {
+    let stored: unknown = { available: false, reason: "no_transcript", entries: [], truncated: false };
+    vi.stubGlobal("fetch", sidecarFetch(() => stored));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const paint = async (text: string) => {
+      const bytes = new TextEncoder().encode(text);
+      const payload = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(payload).set(bytes);
+      act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    };
+    // Before anything is drawn, and while the banner is all there is.
+    expect(screen.getByTestId("session-starting").textContent).toContain("Starting Claude Code…");
+    await paint("╭──────────────────────────╮\r\n│ ✻ Welcome to the agent!  │\r\n╰──────────────────────────╯\r\n");
+    expect(screen.getByTestId("session-starting")).toBeTruthy();
+    expect(screen.queryByText(/Welcome to the agent/)).toBeNull();
+
+    // Its input box drawn, the CLI waits for a first prompt: the empty chat.
+    await paint("\r\n────────────────────────────\r\n> \r\n────────────────────────────\r\n  ? for shortcuts\r\n");
+    expect(screen.queryByTestId("session-starting")).toBeNull();
+    expect(screen.getByText("No turns yet")).toBeTruthy();
+    expect(screen.queryByText(/Welcome to the agent/)).toBeNull();
+
+    // A recorded session takes over as ever.
+    stored = STORED;
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await settle();
+    screen.getByTestId("session-transcript");
+  });
+
+  it("puts the starting screen one tap away", async () => {
+    vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false })));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const bytes = new TextEncoder().encode("Error: could not reach the model\r\n");
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.queryByText(/could not reach the model/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show the screen" }));
+    expect(screen.queryByTestId("session-starting")).toBeNull();
+    expect(screen.getByText(/could not reach the model/)).toBeTruthy();
+  });
+
   it("keeps the chat while the composer has focus, even when a read answers the session unavailable", async () => {
     // Under full load the desktop misses the transcript call's deadline and
     // the host answers from the tab record — the chat dropped to the screen

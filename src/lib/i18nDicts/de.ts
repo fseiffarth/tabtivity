@@ -293,6 +293,8 @@ export const dict: Dict = {
   "mobile.link.open": "Link öffnen",
   "mobile.link.copy": "Link kopieren",
   "mobile.focus.sessionLoading": "Gespeicherte Sitzung wird gelesen…",
+  "mobile.focus.starting": "{agent} startet…",
+  "mobile.focus.startingScreen": "Bildschirm zeigen",
   "mobile.focus.sessionUnsupported": "Keine gespeicherte Sitzung für diesen Agenten",
   "mobile.focus.sessionNoId": "Dieser Tab hat noch keine Sitzungs-ID",
   "mobile.focus.sessionMissing": "Gespeicherte Sitzung nicht gefunden",

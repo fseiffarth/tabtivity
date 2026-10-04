@@ -102,6 +102,14 @@ function pick(files: File[]) {
   fireEvent.change(input);
 }
 
+/** The composer's status line — not the Focus chat's "starting" row, which a
+ * blank agent tab shows over the empty screen. */
+function composerStatus(): HTMLElement {
+  const rows = screen.getAllByRole("status").filter((row) => row.dataset.testid !== "session-starting");
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
 describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () => {
   beforeEach(() => {
     // The composer's draft is kept on the phone now (`drafts.ts`), and the
@@ -318,7 +326,7 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     expect(screen.queryByRole("dialog")).toBeNull();
     // A pending thumbnail names the file while the desktop copies it.
     expect(sending()).toEqual(["Screenshot_2026-09-03.png"]);
-    expect(screen.getByRole("status").textContent).toContain("Copying from the desktop");
+    expect(composerStatus().textContent).toContain("Copying from the desktop");
     await settle(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
