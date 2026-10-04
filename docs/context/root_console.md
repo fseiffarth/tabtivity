@@ -137,9 +137,9 @@ column's pane is attach-only. Closing the overlay or hiding the column ends
 nothing, the tab sits in the console's strip, and `pty_spawn` hands it the MCP
 token as it would any root agent: no backend change. The numbers are the
 console's own `+` menu's (`useAddTabMenuData(ROOT_SCOPE)` →
-`agentShortcutSlots`), so only Root-chip agents are offered. A default agent
-without the chip turns Ctrl+1 into a hint naming the switch rather than a key
-silently passed on.
+`agentShortcutSlots`), so only Root-chip agents are offered. A Ctrl+1 with no
+Root-chip agent behind it (the default lacks the chip, no custom order) becomes
+a hint naming the switch rather than a key silently passed on.
 
 **One visible view per PTY**, as with the console over `CenterPanel`:
 
@@ -174,8 +174,8 @@ then dispatches a cancelable `OVERLAY_AGENT_EVENT` (`requestOverlayAgent`), the
 workspace tab hidden under the overlay. Shell and monitor chords are unchanged.
 
 **Arrivals.** A row an agent's write adds flies into the calendar views and the
-board (`stores/calendar/arrivals`, 1.8 s, opacity and transform only, off under
-`prefers-reduced-motion`). `RootOverlayHost`'s `root-mcp-changed` listener marks
+board (`stores/calendar/arrivals`: a 450 ms `cal-arrive` keyframe, the mark held
+1.8 s; opacity and transform only, off under `prefers-reduced-motion`). `RootOverlayHost`'s `root-mcp-changed` listener marks
 it, reading the store before the merge:
 
 - Only ids the store never held: an update must not replay an entrance.
