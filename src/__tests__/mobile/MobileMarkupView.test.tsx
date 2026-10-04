@@ -29,8 +29,9 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
 
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
 import { DEFAULT_MARKUP_INSTRUCTION, readMarkupInstruction, writeMarkupInstruction } from "../../../mobile-web/src/markupInstruction";
+import { writeMarkupOpen } from "../../../mobile-web/src/markupOpen";
 import { OutboxViewer, type MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
-import { NAMES } from "../../lib/brand";
+import { NAMES, storageDashKey } from "../../lib/brand";
 
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const LAYER = addMark(EMPTY_LAYER, 1, [800, 600], { kind: "ink", color: "red", width: 2, points: [[10, 10, 0.5], [40, 30, 0.5]] });
@@ -194,6 +195,7 @@ describe("OutboxViewer · Mark up", () => {
 
   it("switches a PDF's markup on and off in the same view", async () => {
     desktop();
+    writeMarkupOpen("reading");
     store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     const onClose = vi.fn();
     render(<OutboxViewer scope={{ tab: "t1" }} file={PDF} onClose={onClose} markup={{ tabId: "t1", projectId: "p1", onSend: (): MarkupSend => "sent" }} />);
@@ -229,5 +231,71 @@ describe("OutboxViewer · Mark up", () => {
     expect(store.saveLayer).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MarkupView · reading", () => {
+  const reader = { actions: null };
+  const renderReader = () => render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} reader={reader} />);
+
+  it("lets the pen switch the markup on and keeps the stroke it began", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue(null);
+    store.saveLayer.mockClear();
+    const { container } = renderReader();
+    showPicture();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
+    const canvas = container.querySelector(".markup-page-layer")!;
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Mark up/ })).toBeTruthy());
+    // A finger reads: it scrolls and draws nothing.
+    expect(fireEvent.touchStart(canvas, { touches: [{}], changedTouches: [{}] })).toBe(true);
+    fireEvent.pointerDown(canvas, { pointerId: 1, pointerType: "touch", clientX: 20, clientY: 20 });
+    fireEvent.pointerUp(canvas, { pointerId: 1, pointerType: "touch", clientX: 20, clientY: 20 });
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    // The pen on a page does not scroll it: it marks.
+    expect(fireEvent.touchStart(canvas, { touches: [{ touchType: "stylus" }], changedTouches: [{ touchType: "stylus" }] })).toBe(false);
+    fireEvent.pointerDown(canvas, { pointerId: 2, pointerType: "pen", pressure: 0.5, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(canvas, { pointerId: 2, pointerType: "pen", pressure: 0.5, clientX: 60, clientY: 40 });
+    fireEvent.pointerUp(canvas, { pointerId: 2, pointerType: "pen", pressure: 0.5, clientX: 60, clientY: 40 });
+    expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
+    await waitFor(() => {
+      const calls = store.saveLayer.mock.calls as unknown as [string, Layer][];
+      const marks = calls[calls.length - 1]?.[1].pages[1]?.marks ?? [];
+      expect(marks.map((mark) => mark.kind)).toEqual(["ink"]);
+    });
+    // The first pen here leaves fingers to scroll.
+    expect(localStorage.getItem(storageDashKey("markup-pen"))).toBe("1");
+  });
+
+  it("opens reading, or marking when this phone asks for it", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue(null);
+    renderReader();
+    showPicture();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    cleanup();
+    writeMarkupOpen("markup");
+    renderReader();
+    expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
+  });
+
+  it("opens marking on Automatic once only the pen draws here", () => {
+    desktop();
+    store.loadLayer.mockResolvedValue(null);
+    localStorage.setItem(storageDashKey("markup-pen"), "1");
+    renderReader();
+    expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy();
+  });
+
+  it("opens marking on Automatic while marks wait to be submitted, and not on Reading", async () => {
+    desktop();
+    renderReader();
+    await waitFor(() => expect(screen.getByRole("toolbar", { name: "Markup tools" })).toBeTruthy());
+    cleanup();
+    writeMarkupOpen("reading");
+    renderReader();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Mark up/ }).classList.contains("has-marks")).toBe(true));
+    expect(screen.queryByRole("toolbar")).toBeNull();
   });
 });

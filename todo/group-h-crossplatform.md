@@ -3696,6 +3696,15 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, iPad (Pencil), an Android pen phone and a pen-less phone — the pen switches Mark up on; PDFs open in (2026-10-04; untested ids `mobile.markup.penSwitch`, `mobile.markup.opensIn`; ⚠️ never run on a phone; `npm run mobile:bundle` first): open a PDF from an agent tab's chat or files drawer (reading, the ✕ and Save/Share in the head). On the iPad touch a page with the Pencil and write → the palette appears and the stroke you began is on the page (a Pencil tap leaves a dot); the page did not scroll under it; fingers still scroll and pinch; **Done** → reading again, the stroke on show. The Pencil on the grey gap between pages still scrolls. A PDF from the project screen's 🖼 / 📁 (no agent tab) behaves the same. A PDF that cannot be marked (no Mark up button): the Pencil scrolls as before. Android with an S Pen: the same (unknown whether Chrome lets the pen scroll the page first — note it). Pen-less phone: a finger only scrolls; Mark up still needs the tap. Home → This phone → **PDFs open in** reads Automatic. Automatic: on the iPad (after a Pencil stroke, pen-only) a PDF opens straight in Mark up; on the pen-less phone it opens reading, unless the PDF has marks not yet submitted → it opens in Mark up; after Submit it opens reading again. **Reading**: always reading, the pen still switches. **Mark up**: always marking, the ✕ still closes. The choice survives a reload of the PWA.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bu — A plain `opencode` tab's chat fills its facts and shows it working** (2026-10-01;
   ✅ code-complete, automated tests passing — `MobileOpenCodeMini.test.ts`

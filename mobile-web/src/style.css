@@ -1548,7 +1548,7 @@ span.files-close { background:transparent; }
 .markup-loading { margin:24px 12px; color:#95a6c8; font-size:.85rem; }
 .markup-pages { position:relative; margin:0 12px 12px; }
 .markup-view.marking .markup-pages { margin-bottom:calc(84px + env(safe-area-inset-bottom)); }
-.markup-view:not(.marking) .markup-page-layer { pointer-events:none; }
+/* The layer takes pointers while reading too: the pen there switches the markup on. */
 .markup-pages .markup-page { position:absolute; left:0; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.45); }
 .markup-picture .markup-page { position:relative; background:transparent; }
 .markup-picture img { display:block; width:100%; height:auto; -webkit-user-drag:none; }

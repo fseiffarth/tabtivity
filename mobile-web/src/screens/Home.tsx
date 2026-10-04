@@ -19,6 +19,8 @@ import { GitMark } from "../components/GitMark";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
 import { customMarkupPrompts, MarkupInstructionSheet, markupInstructionSummary } from "../components/MarkupInstructionSheet";
+import { MarkupOpenSheet, markupOpenSummary } from "../components/MarkupOpenSheet";
+import { readMarkupOpen } from "../markupOpen";
 import { getPushState, pushSupport, type HostPushState } from "../push";
 import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
@@ -164,6 +166,9 @@ export function Home({ open, openTab, todo, mail }: {
   /** What a Mark up Submit tells the agent — worded here and nowhere else. */
   const [markupInstruction, setMarkupInstruction] = useState(() => customMarkupPrompts());
   const [markupInstructionSheet, setMarkupInstructionSheet] = useState(false);
+  /** The mode a markable PDF opens in (`markupOpen.ts`). */
+  const [markupOpen, setMarkupOpen] = useState(readMarkupOpen);
+  const [markupOpenSheet, setMarkupOpenSheet] = useState(false);
   /** The phone's own theme (`theme.ts`); unset, it follows the desktop's. */
   const [theme, setTheme] = useState<PhoneTheme>(() => readPhoneTheme());
   const [themeSheet, setThemeSheet] = useState(false);
@@ -351,6 +356,10 @@ export function Home({ open, openTab, todo, mail }: {
           <span><strong>{t("mobile.markup.instruction.title")}{isUntested("mobile.markup.instruction") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{markupInstructionSummary(markupInstruction, t)}</small></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button></li>
+        <li><button aria-haspopup="dialog" aria-expanded={markupOpenSheet} onClick={() => setMarkupOpenSheet(true)}>
+          <span><strong>{t("mobile.markup.opensIn.title")}{isUntested("mobile.markup.opensIn") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{markupOpenSummary(markupOpen, t)}</small></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+        </button></li>
       </ul>
     </section>
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
@@ -358,5 +367,6 @@ export function Home({ open, openTab, todo, mail }: {
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
     {pushSheet && <NotificationsSheet onChange={setPush} onClose={() => setPushSheet(false)} />}
     {markupInstructionSheet && <MarkupInstructionSheet onChange={setMarkupInstruction} onClose={() => setMarkupInstructionSheet(false)} />}
+    {markupOpenSheet && <MarkupOpenSheet chosen={markupOpen} onChoose={setMarkupOpen} onClose={() => setMarkupOpenSheet(false)} />}
   </main>;
 }

@@ -13,6 +13,7 @@ import { openMarkupTab } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
 import { canApply, followRound, nextCheck, startRound, stepRound, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
 import { DEFAULT_MARKUP_APPLY, readMarkupApply, readMarkupInstruction } from "../markupInstruction";
+import { readMarkupOpen } from "../markupOpen";
 import { sizeLabel } from "../terminal/fileLabels";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
@@ -243,7 +244,9 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * back to. Where marks can be sent (`onSend`), its Mark up switches the
  * markup on in place — same page, same zoom — and Done switches it off,
  * leaving the marks on show. Without `reader` the view opens marking, and
- * Done leaves it (`onClose`).
+ * Done leaves it (`onClose`). The pen needs no Mark up tap: touching a page
+ * switches the markup on and draws, as in the phone's own Markup and Notes.
+ * Which mode the reader opens in is this phone's choice (`markupOpen.ts`).
  *
  * Submit keeps the view open (`docs/pdf_markup_rounds_plan.md`): the round's
  * marks move to the layer's sent side, drawn dimmed and never sent again, and
@@ -308,7 +311,17 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const [changed, setChanged] = useState(false);
   const [tool, setTool] = useState<Tool>("ink");
   const [color, setColor] = useState<MarkColor>("red");
-  const [marking, setMarking] = useState(!reading && canMark);
+  /** The reader opens marking where this phone asks for it: always, or —
+   * Automatic — once only the pen draws, where fingers scroll all the same. */
+  const [marking, setMarking] = useState(() => {
+    if (!canMark) return false;
+    if (!reading) return true;
+    const open = readMarkupOpen();
+    return open === "markup" || (open === "auto" && readPenMode() === "pen");
+  });
+  /** Automatic also opens marking when the saved layer has marks not yet
+   * submitted — a round under way. Looked at once, as the layer loads. */
+  const opensOnMarks = useRef(reading && canMark && readMarkupOpen() === "auto");
   const [penMode, setPenMode] = useState(readPenMode);
   const [popover, setPopover] = useState<"colors" | "more" | null>(null);
   const [note, setNote] = useState<NoteDraft | null>(null);
@@ -393,6 +406,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   markingRef.current = marking;
   const fingerDrawsRef = useRef(false);
   fingerDrawsRef.current = marking && penMode !== "pen";
+  /** Reading, the pen on a page would switch the markup on and draw. */
+  const penSwitchesRef = useRef(false);
+  penSwitchesRef.current = canMark && !marking && loaded && sending === null;
 
   const layer = scratch ?? history.present;
   const baseWidth = Math.max(160, Math.min(FIT_WIDTH, viewWidth - 2 * GAP));
@@ -443,7 +459,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         skipSave.current = true;
         setHistory(startHistory(stored.layer));
         setChanged(stale(stored, fingerprintRef.current));
+        if (opensOnMarks.current && !isEmpty(stored.layer)) setMarking(true);
       }
+      opensOnMarks.current = false;
       setLoaded(true);
     });
     return () => { live = false; };
@@ -625,9 +643,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     // first) must not scroll the page instead.
     const holdsNote = () => { const g = gesture.current; return g?.kind === "text" && g.index >= 0; };
     const onTouchStart = (event: TouchEvent) => {
-      // The Pencil would scroll the page and start a text selection — unless
-      // the markup is off, where it scrolls like a finger.
-      if (markingRef.current && (penDown.current || isStylus(event))) { event.preventDefault(); return; }
+      // The Pencil would scroll the page and start a text selection. With the
+      // markup off it scrolls like a finger — except on a page it can mark,
+      // where it switches the markup on and draws (`onPointerDown`).
+      const penSwitches = penSwitchesRef.current && (event.target as Element).closest?.(".markup-page-layer");
+      if ((markingRef.current || penSwitches) && (penDown.current || isStylus(event))) { event.preventDefault(); return; }
       if (event.touches.length === 2) {
         const [a, b] = [event.touches[0], event.touches[1]];
         const rect = element.getBoundingClientRect();
@@ -709,7 +729,14 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
 
   const onPointerDown = (n: number, event: ReactPointerEvent<HTMLCanvasElement>) => {
     const size = pageSize(n);
-    if (!size || sending || !loaded || !marking) return;
+    if (!size || sending || !loaded) return;
+    if (!marking) {
+      // The pen marks without a Mark up tap first, as in the phone's own
+      // Markup and Notes; the stroke it began is kept.
+      if (event.pointerType !== "pen" || !canMark) return;
+      markingRef.current = true;
+      setMarking(true);
+    }
     setPopover(null);
     if (event.pointerType === "pen") {
       penDown.current = true;
@@ -1100,7 +1127,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
 
   const empty = isEmpty(history.present);
   const untested = (reading && isUntested("mobile.outbox.pdf")) || (isPdf && isUntested("mobile.markup.frame"))
-    || (canMark && (isUntested("mobile.markup") || isUntested("mobile.markup.send") || isUntested("mobile.markup.native")));
+    || (canMark && (isUntested("mobile.markup") || isUntested("mobile.markup.send") || isUntested("mobile.markup.native")
+      || (reading && (isUntested("mobile.markup.penSwitch") || isUntested("mobile.markup.opensIn")))));
   const roundUntested = isUntested("mobile.markup.rounds");
   /** Reload is offered once anything went out from here, or was before. */
   const canReload = isPdf && canMark && (submitted !== null || sentShown);
