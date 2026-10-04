@@ -407,6 +407,17 @@ describe("local models — the Home row", () => {
     expect(screen.getByRole("heading", { name: "Local models" })).toBeTruthy();
   });
 
+  it("says to update the desktop app when its window predates the feature", async () => {
+    serve(() => json({ error: "unknown_request" }, 400));
+    render(<LocalModelsSection />);
+    const button = await screen.findByRole("button", { name: /Ollama models on the desktop/ });
+    await waitFor(() => expect(button.textContent).toContain(`Update ${BRAND.display} on the desktop to use local models from the phone.`));
+    expect(button.textContent).not.toContain("Couldn't reach the desktop.");
+    fireEvent.click(button);
+    const dialog = await screen.findByRole("dialog", { name: "Local models" });
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(`Update ${BRAND.display} on the desktop to use local models from the phone.`);
+  });
+
   it("keeps the newer list when an older read lands after it", async () => {
     let releaseFirst: (response: Response) => void = () => {};
     let call = 0;

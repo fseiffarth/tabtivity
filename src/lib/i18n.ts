@@ -978,6 +978,7 @@ export const enSource = {
   "mobile.localModels.unreachable": "Ollama on the desktop isn't answering. Check it there.",
   "mobile.localModels.notInstalled": "Ollama isn't installed on the desktop.",
   "mobile.localModels.needsWindow": "Open {app} on the desktop to see and load models.",
+  "mobile.localModels.needsUpdate": "Update {app} on the desktop to use local models from the phone.",
   "mobile.localModels.disabled": "Turned off in the desktop's Mobile settings.",
   "mobile.localModels.failed": "Couldn't reach the desktop.",
   "mobile.localModels.empty": "No models are installed. Download one on the desktop.",

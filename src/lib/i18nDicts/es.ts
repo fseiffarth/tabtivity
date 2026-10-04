@@ -1021,6 +1021,7 @@ export const dict: Dict = {
   "mobile.localModels.unreachable": "Ollama no responde en el escritorio. Compruébalo allí.",
   "mobile.localModels.notInstalled": "Ollama no está instalado en el escritorio.",
   "mobile.localModels.needsWindow": "Abre {app} en el escritorio para ver y cargar modelos.",
+  "mobile.localModels.needsUpdate": "Actualiza {app} en el escritorio para usar los modelos locales desde el teléfono.",
   "mobile.localModels.disabled": "Desactivado en los ajustes de Mobile del escritorio.",
   "mobile.localModels.failed": "No se pudo contactar con el escritorio.",
   "mobile.localModels.empty": "No hay modelos instalados. Descarga uno en el escritorio.",

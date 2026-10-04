@@ -1022,6 +1022,7 @@ export const dict: Dict = {
   "mobile.localModels.unreachable": "Ollama ne répond pas sur l'ordinateur. Vérifiez-le là-bas.",
   "mobile.localModels.notInstalled": "Ollama n'est pas installé sur l'ordinateur.",
   "mobile.localModels.needsWindow": "Ouvrez {app} sur l'ordinateur pour voir et charger des modèles.",
+  "mobile.localModels.needsUpdate": "Mettez à jour {app} sur l'ordinateur pour utiliser les modèles locaux depuis le téléphone.",
   "mobile.localModels.disabled": "Désactivé dans les réglages Mobile de l'ordinateur.",
   "mobile.localModels.failed": "Impossible de joindre l'ordinateur.",
   "mobile.localModels.empty": "Aucun modèle installé. Téléchargez-en un sur l'ordinateur.",
