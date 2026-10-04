@@ -5,7 +5,7 @@
  * download, delete or the waiting `load_ollama_model`, whatever it is asked.
  */
 import { act, cleanup, render } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -119,6 +119,13 @@ describe("Mobile bridge — local models", () => {
     vi.mocked(listen).mockReset();
   });
 
+  // Whatever order (or subset) the cases run in, none of them reached a
+  // forbidden command.
+  afterAll(() => {
+    expect(log.length).toBeGreaterThan(0);
+    for (const command of FORBIDDEN) expect(log).not.toContain(command);
+  });
+
   it("lists every installed model with its state, placement and keep-alive", async () => {
     useOllamaActivityStore.setState({ loads: { llama3: "loading" } });
     const response = await list();
@@ -208,6 +215,28 @@ describe("Mobile bridge — local models", () => {
     expect(useOllamaActivityStore.getState().loads).toEqual({ "llama3:latest": "loading" });
     expect(response.status).toBe("local_models");
     expect((response.models as Row[])[0]).toMatchObject({ name: "llama3:latest", state: "loading" });
+  });
+
+  it("never re-marks a load whose own progress events beat the answer", async () => {
+    // Ollama refusing at once: "loading" then "error" arrive before the command answers.
+    loadAnswer = (model) => {
+      useOllamaActivityStore.setState({ loads: { [model]: "loading" } });
+      useOllamaActivityStore.setState({ loads: { [model]: "error" } });
+      return Promise.resolve(model);
+    };
+    const failed = await mutate({ type: "load", model: "llama3" });
+    expect(useOllamaActivityStore.getState().loads).toEqual({ "llama3:latest": "error" });
+    expect((failed.models as Row[])[0]).toMatchObject({ name: "llama3:latest", state: "failed" });
+
+    // A load that finished before the answer: its "success" cleared the entry,
+    // and nothing may put a "loading" back that no event would ever clear.
+    loadAnswer = (model) => {
+      useOllamaActivityStore.setState({ loads: { [model]: "loading" } });
+      useOllamaActivityStore.setState({ loads: {} });
+      return Promise.resolve(model);
+    };
+    await mutate({ type: "load", model: "llama3" });
+    expect(useOllamaActivityStore.getState().loads).toEqual({});
   });
 
   it("passes a backend refusal on as its code only", async () => {

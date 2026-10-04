@@ -228,16 +228,27 @@ export async function localModelMutate(action: LocalModelAction): Promise<LocalM
   if (row.remote === true) return refusal("model_not_local");
   const activity = useOllamaActivityStore.getState();
   if (action.type === "load") {
+    // The load's own progress events (keyed by the listed name, which `row.name`
+    // is) can beat this answer: a model Ollama refuses at once fails in
+    // milliseconds. Marking after one has landed would overwrite its "error",
+    // or re-add a "loading" its "success" already cleared — and nothing would
+    // ever clear that one. So watch the entry while the command runs.
+    let heard = false;
+    const stopWatching = useOllamaActivityStore.subscribe((state, prev) => {
+      if (state.loads[row.name] !== prev.loads[row.name]) heard = true;
+    });
     let listed: string;
     try {
       listed = await invoke<string>("load_installed_ollama_model", { model: row.name });
     } catch (error) {
       return refusal(codeOf(error));
+    } finally {
+      stopWatching();
     }
     // A resident model is only re-pinned, which ends in milliseconds — marking
     // it could land after its own "success" and stick. A real load shows its
     // own events within moments; this covers the gap until the first one.
-    if (!row.running) activity.markLoad(typeof listed === "string" && listed ? listed : row.name, "loading");
+    if (!row.running && !heard) activity.markLoad(typeof listed === "string" && listed ? listed : row.name, "loading");
     return answer();
   }
   // A load in flight is not cut short — unless the model is already resident,
