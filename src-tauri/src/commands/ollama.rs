@@ -2979,6 +2979,14 @@ fn systemctl_start_args(ask_password: bool) -> &'static [&'static str] {
     }
 }
 
+/// Held across a whole [`ensure_running`]. Without it two starts that overlap
+/// (the autoload store and a local tab at launch, or a phone Start racing a
+/// desktop one) both see nothing listening and both spawn `ollama serve`; the
+/// loser exits on the taken port, but its pid replaces the winner's in
+/// [`OWNED_SERVER`], and the live server then outlives the quit. Serialized,
+/// the second caller waits and finds the first one's server listening.
+static START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The core of [`ensure_ollama_running`] / [`ensure_ollama_running_unattended`].
 /// `ask_password` only matters to the Linux systemd step.
 fn ensure_running(ask_password: bool) -> Result<(), String> {
@@ -2988,6 +2996,10 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     // Resolve first, so a misconfigured `ollama_host` reports *that* instead of
     // "started but did not become reachable" eight seconds later.
     let addr = ollama_addr()?;
+
+    let _one_start = START_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     if ollama_listening() {
         return Ok(());
