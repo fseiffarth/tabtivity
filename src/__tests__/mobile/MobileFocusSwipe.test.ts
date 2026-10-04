@@ -128,11 +128,16 @@ describe(`${BRAND.display} Mobile Focus swipe listeners`, () => {
       expect(onSwipeRight).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores mouse and pen drags", () => {
+    it("ignores mouse drags", () => {
       install();
       swipe(row, 100, 260, { pointerType: "mouse" });
-      swipe(row, 100, 260, { pointerType: "pen" });
       expect(onSwipeRight).not.toHaveBeenCalled();
+    });
+
+    it("reads a pen (the iPad's Pencil) like a finger", () => {
+      install();
+      swipe(row, 100, 260, { pointerType: "pen" });
+      expect(onSwipeRight).toHaveBeenCalledTimes(1);
     });
 
     it("ignores a drag that is too short, too slow or mostly vertical", () => {
