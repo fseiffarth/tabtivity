@@ -39,10 +39,13 @@
  * See `docs/mobile_focus_cli_survey.md` for what each CLI draws.
  */
 
+import { translate, useI18nStore, type TranslationKey } from "../../../src/lib/i18n";
+
 export interface ModeChoice {
   /** The mode as `statusLine` names it — what an applied switch is checked
    * against. */
   value: string;
+  /** The row's name and line, in the phone's language. */
   label: string;
   description: string;
   /** Other names `statusLine` may report for the same mode. */
@@ -55,10 +58,14 @@ export interface ModeChoice {
   labelled?: boolean;
 }
 
+/** A table row: `ModeChoice` with its words as keys, read out in the
+ * language live when `modeChoices` hands the list over. */
+type ModeRow = Omit<ModeChoice, "label" | "description"> & { label: TranslationKey; description: TranslationKey };
+
 interface ModeFamily {
   /** Matches the tab's agent label ("Claude", "Qwen", …). */
   agent: RegExp;
-  choices: ModeChoice[];
+  choices: ModeRow[];
   /** The session's mode cannot be changed from here: no key this can press
    * switches it. The caller lists the modes as a readout and never walks. */
   fixed?: boolean;
@@ -78,11 +85,11 @@ interface ModeFamily {
 const CLAUDE: ModeFamily = {
   agent: /claude/iu,
   choices: [
-    { value: "default", label: "Default", description: "Asks before each edit or command", silent: true },
-    { value: "accept edits", label: "Accept edits", description: "Applies file edits without asking", aliases: ["auto-accept"] },
-    { value: "plan", label: "Plan", description: "Researches and plans; changes nothing" },
-    { value: "auto", label: "Auto", description: "Approves safe actions on its own judgement", labelled: true },
-    { value: "bypass permissions", label: "Bypass permissions", description: "Runs everything unasked — only where the session allows it" },
+    { value: "default", label: "mobile.mode.default", description: "mobile.mode.defaultHint", silent: true },
+    { value: "accept edits", label: "mobile.mode.acceptEdits", description: "mobile.mode.acceptEditsHint", aliases: ["auto-accept"] },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint" },
+    { value: "auto", label: "mobile.mode.auto", description: "mobile.mode.autoHint", labelled: true },
+    { value: "bypass permissions", label: "mobile.mode.bypass", description: "mobile.mode.bypassHint" },
   ],
 };
 
@@ -98,11 +105,11 @@ const CLAUDE: ModeFamily = {
 const CODEX: ModeFamily = {
   agent: /codex/iu,
   choices: [
-    { value: "working", label: "Working", description: "Edits and runs; asks by its own approval setting", silent: true },
-    { value: "plan", label: "Plan", description: "Researches and plans; changes nothing", aliases: ["plan mode"] },
-    { value: "read only", label: "Read only", description: "Reads and answers; changes nothing" },
-    { value: "auto", label: "Auto", description: "Edits and runs inside the workspace" },
-    { value: "full access", label: "Full access", description: "Edits and runs without a workspace boundary" },
+    { value: "working", label: "mobile.mode.working", description: "mobile.mode.workingHint", silent: true },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", aliases: ["plan mode"] },
+    { value: "read only", label: "mobile.mode.readOnly", description: "mobile.mode.readOnlyHint" },
+    { value: "auto", label: "mobile.mode.auto", description: "mobile.mode.autoWorkspaceHint" },
+    { value: "full access", label: "mobile.mode.fullAccess", description: "mobile.mode.fullAccessHint" },
   ],
 };
 
@@ -112,11 +119,11 @@ const CODEX: ModeFamily = {
 const QWEN: ModeFamily = {
   agent: /qwen/iu,
   choices: [
-    { value: "ask permissions", label: "Ask permissions", description: "Asks before each tool call" },
-    { value: "plan", label: "Plan", description: "Researches and plans; changes nothing" },
-    { value: "auto-accept", label: "Accept edits", description: "Applies file edits without asking", aliases: ["accept edits"] },
-    { value: "auto", label: "Auto", description: "Approves safe tool calls on its own judgement" },
-    { value: "yolo", label: "YOLO", description: "Runs every tool call unasked" },
+    { value: "ask permissions", label: "mobile.mode.askPermissions", description: "mobile.mode.askPermissionsHint" },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint" },
+    { value: "auto-accept", label: "mobile.mode.acceptEdits", description: "mobile.mode.acceptEditsHint", aliases: ["accept edits"] },
+    { value: "auto", label: "mobile.mode.auto", description: "mobile.mode.autoToolsHint" },
+    { value: "yolo", label: "mobile.mode.yolo", description: "mobile.mode.yoloHint" },
   ],
 };
 
@@ -132,10 +139,10 @@ const QWEN: ModeFamily = {
 const GEMINI: ModeFamily = {
   agent: /gemini/iu,
   choices: [
-    { value: "default", label: "Default", description: "Asks before each edit or command", silent: true },
-    { value: "accept edits", label: "Accept edits", description: "Applies file edits without asking", aliases: ["auto-accept"] },
-    { value: "plan", label: "Plan", description: "Researches and plans; changes nothing" },
-    { value: "yolo", label: "YOLO", description: "Runs every tool call unasked — Ctrl+Y on the desktop, not Shift+Tab" },
+    { value: "default", label: "mobile.mode.default", description: "mobile.mode.defaultHint", silent: true },
+    { value: "accept edits", label: "mobile.mode.acceptEdits", description: "mobile.mode.acceptEditsHint", aliases: ["auto-accept"] },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint" },
+    { value: "yolo", label: "mobile.mode.yolo", description: "mobile.mode.yoloGeminiHint" },
   ],
 };
 
@@ -158,14 +165,14 @@ const OPENCODE: ModeFamily = {
   agent: /open\s*code/iu,
   fixed: true,
   choices: [
-    { value: "build", label: "Build", description: "Reads, edits and runs — OpenCode's default agent", labelled: true },
-    { value: "plan", label: "Plan", description: "Researches and plans; changes nothing", labelled: true },
+    { value: "build", label: "mobile.mode.build", description: "mobile.mode.buildHint", labelled: true },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
   ],
 };
 
 const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE];
 
-function claims(choice: ModeChoice, mode: string) {
+function claims(choice: Pick<ModeChoice, "value" | "aliases">, mode: string) {
   return choice.value === mode || (choice.aliases?.includes(mode) ?? false);
 }
 
@@ -175,6 +182,15 @@ function claims(choice: ModeChoice, mode: string) {
  * mode: with no mode text on screen, only a label naming a silent-mode family
  * earns a list. */
 export function modeChoices(mode?: string, agentLabel?: string): ModeChoice[] {
+  const lang = useI18nStore.getState().lang;
+  return familyChoices(mode, agentLabel).map((choice) => ({
+    ...choice,
+    label: translate(lang, choice.label),
+    description: translate(lang, choice.description),
+  }));
+}
+
+function familyChoices(mode?: string, agentLabel?: string): ModeRow[] {
   const labelled = agentLabel
     ? FAMILIES.find((family) => family.agent.test(agentLabel))
     : undefined;

@@ -97,6 +97,14 @@ describe(`${BRAND.display} Mobile agent status sheet`, () => {
     expect(resetCountdown("6:20pm", new Date(2026, 8, 15, 18, 21), readAt)).toBe("");
   });
 
+  it("shows minutes instead of a zero hours past two days", () => {
+    const readAt = new Date(2026, 8, 14, 8, 0);
+    // Mon 9am from Thu 8:23 is 4d 0h 37m away; from Thu 7:23 it is 4d 1h 37m.
+    expect(resetCountdown("Mon 9am", new Date(2026, 8, 17, 8, 23), new Date(2026, 8, 17, 8, 0))).toBe("4d 37m");
+    expect(resetCountdown("Mon 9am", new Date(2026, 8, 17, 7, 23), new Date(2026, 8, 17, 7, 0))).toBe("4d 1h");
+    expect(resetCountdown("6:20pm", new Date(2026, 8, 14, 8, 0), readAt)).toBe("10h 20m");
+  });
+
   it("labels the project-wide counters as project-wide, not as this agent's", async () => {
     answer(report());
     render(<StatusSheet tab={tab} live={null} onClose={() => {}} />);

@@ -1,4 +1,5 @@
 import { resolveResetAt } from "../../../shared/usageReport";
+import { dateLocale, translate, useI18nStore } from "../../../src/lib/i18n";
 
 /* The facts row's reset readouts, shared by the phone's facts row and status
  * sheet and the desktop Reader's facts row (`TerminalReaderFacts`). */
@@ -14,7 +15,13 @@ export function resetCountdown(phrase: string, now: Date, readAt = now): string 
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours}h ${minutes % 60}m`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  // Past two days the minutes drop off, unless the hours read zero: `4d 0h`
+  // says nothing a `4d 37m` doesn't say better.
+  const days = Math.floor(hours / 24);
+  const lang = useI18nStore.getState().lang;
+  return hours % 24
+    ? translate(lang, "mobile.time.daysHours", { days, hours: hours % 24 })
+    : translate(lang, "mobile.time.daysMinutes", { days, minutes: minutes % 60 });
 }
 
 /**
@@ -28,10 +35,11 @@ export function resetCountdown(phrase: string, now: Date, readAt = now): string 
  */
 export function resetText(phrase: string, now: Date, readAt = now): string {
   const at = resolveResetAt(phrase, readAt);
-  if (!at) return `resets ${phrase}`;
-  const when = new Intl.DateTimeFormat(undefined, {
+  const lang = useI18nStore.getState().lang;
+  if (!at) return translate(lang, "mobile.time.resets", { when: phrase });
+  const when = new Intl.DateTimeFormat(dateLocale(lang), {
     weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
   }).format(at);
   const left = resetCountdown(phrase, now, readAt);
-  return left ? `resets ${when} · in ${left}` : `resets ${when}`;
+  return left ? translate(lang, "mobile.time.resetsIn", { when, left }) : translate(lang, "mobile.time.resets", { when });
 }

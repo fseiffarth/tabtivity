@@ -31,7 +31,7 @@ export function themeSummary(choice: PhoneTheme, t: Translate): string {
 export function ThemeRow({ choice, open, expanded }: { choice: PhoneTheme; open: () => void; expanded: boolean }) {
   const t = useT();
   return <li><button aria-haspopup="dialog" aria-expanded={expanded} onClick={open}>
-    <span><strong>{t("mobile.theme.title")}{isUntested("mobile.theme") && <span className="untested">Untested</span>}</strong><small>{themeSummary(choice, t)}</small></span>
+    <span><strong>{t("mobile.theme.title")}{isUntested("mobile.theme") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{themeSummary(choice, t)}</small></span>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
   </button></li>;
 }

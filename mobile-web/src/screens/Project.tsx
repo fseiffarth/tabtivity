@@ -18,21 +18,23 @@ import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { tabColorCss } from "../tabColors";
-import { useT } from "../../../src/lib/i18n";
+import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { GripHint } from "./Home";
 import { isUntested } from "../../../src/lib/untested";
 import { describeFailure } from "../connection";
 import { installFocusSwipe } from "../terminal/focusSwipe";
-import { BRAND } from "../../../src/lib/brand";
+
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
 /** The orders this list offers, in the words this screen can use for them. The
  * cross-project Agents list calls `native` "Status", because there the arrival
  * order is the sidecar's status ranking; here it is the desktop's own tab
  * order, which is the thing a reader arranges by hand — so here it is
  * "Manual", and it is the only order a drag can be dropped into. */
-const SORT_LABEL: Record<AgentSort, string> = {
-  lastWorking: "Last working",
-  lastDone: "Last done",
-  native: "Manual (tab order)",
+const SORT_LABEL: Record<AgentSort, TranslationKey> = {
+  lastWorking: "agentPrompts.sort.lastWorking",
+  lastDone: "agentPrompts.sort.lastDone",
+  native: "mobile.project.sortManual",
 };
 
 /** How long a closed row is held back from the catalog before the phone gives
@@ -48,14 +50,14 @@ const CLOSED_HELD_MS = 30_000;
  * computed both against its own clock, so the phone only formats them. A tab
  * with none — or a desktop that did not say — gets no line at all: the ◷
  * beside the model is always there to add one. */
-function scheduleLine(schedules: TabSchedules | undefined): string | null {
+function scheduleLine(schedules: TabSchedules | undefined, t: Translate): string | null {
   if (!schedules || schedules.total === 0) return null;
   const count = schedules.enabled === schedules.total
-    ? `${schedules.total} scheduled`
-    : `${schedules.enabled} of ${schedules.total} scheduled`;
+    ? t("mobile.project.scheduledCount", { count: schedules.total })
+    : t("mobile.project.scheduledSome", { enabled: schedules.enabled, total: schedules.total });
   // Desktop-local wall clock, year trimmed: the sheet below spells out the
   // time zone this belongs to.
-  return `${count} · ${schedules.next ? `next ${schedules.next.slice(5).replace("T", " ")}` : "no next run"}`;
+  return `${count} · ${schedules.next ? t("mobile.project.nextRun", { when: schedules.next.slice(5).replace("T", " ") }) : t("mobile.project.noNextRun")}`;
 }
 
 /**
@@ -77,7 +79,7 @@ function PromptLines({ tab }: { tab: TabRow }) {
   const lines = promptLines(tab);
   const scheduled = tab.schedules?.upcoming ?? [];
   return <div className="tab-card-prompts">
-    <small className="tab-card-prompts-label">Last prompts</small>
+    <small className="tab-card-prompts-label">{t("mobile.project.lastPrompts")}</small>
     {scheduled.map((prompt, index) => {
       const when = prompt.at ? scheduleClock(prompt.at) : "";
       return <p className="tab-card-prompt scheduled" key={`scheduled-${prompt.at ?? ""}-${index}`} title={when ? t("mobile.project.scheduledAt", { at: when }) : undefined}>
@@ -87,8 +89,8 @@ function PromptLines({ tab }: { tab: TabRow }) {
     })}
     {lines.length === 0
       ? <p className="tab-card-prompt empty">{promptsFromTranscript(tab)
-        ? "Nothing read from this session's transcript yet."
-        : `OpenCode's own history is not read yet — prompts sent from ${BRAND.display} show here.`}</p>
+        ? t("mobile.project.noPromptsRead")
+        : t("mobile.project.openCodeHistory")}</p>
       : lines.map((prompt, index) => {
         const when = promptClock(prompt.at);
         return <p className={index === 0 ? "tab-card-prompt latest" : "tab-card-prompt"} key={`${prompt.at ?? ""}-${index}`}>
@@ -337,8 +339,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       if (tab.kind === "agent") void load();
     } catch (cause) {
       setError(cause instanceof ApiError && (cause.status === 503 || cause.code === "desktop_unavailable")
-        ? `Open desktop ${BRAND.display} to close a tab.`
-        : "The tab could not be closed.");
+        ? t("mobile.project.closeNeedsDesktop")
+        : t("mobile.project.closeFailed"));
     } finally {
       setClosingId(null);
     }
@@ -385,8 +387,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     } catch (cause) {
       setDetail((prev) => prev ? { ...prev, tabs: applyServerOrder(prev.tabs, (row) => row.id, before) } : prev);
       setError(cause instanceof ApiError && (cause.status === 503 || cause.code === "desktop_unavailable")
-        ? `Open desktop ${BRAND.display} to rearrange tabs.`
-        : "The tab could not be moved.");
+        ? t("mobile.project.moveNeedsDesktop")
+        : t("mobile.project.moveFailed"));
     } finally {
       moving.current = false;
     }
@@ -427,13 +429,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           aria-haspopup="menu"
           aria-expanded={projectMenu}
           title={t("mobile.project.menu")}
-        ><span>{detail?.project.label ?? "Project"}</span><span className="view-caret" aria-hidden="true" /></button>
-        : detail?.project.label ?? "Project"}</h1></div>
+        ><span>{detail?.project.label ?? t("mobile.project.fallbackName")}</span><span className="view-caret" aria-hidden="true" /></button>
+        : detail?.project.label ?? t("mobile.project.fallbackName")}</h1></div>
       <div className="project-header-tools">
         {tabs.length > 1 && <label className="activity-sort in-header">
-          <span>Sort</span>
-          <select aria-label="Sort tabs" value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
-            {AGENT_SORTS.map((value) => <option key={value} value={value}>{SORT_LABEL[value]}</option>)}
+          <span>{t("agentPrompts.sort.label")}</span>
+          <select aria-label={t("mobile.project.sortAria")} value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
+            {AGENT_SORTS.map((value) => <option key={value} value={value}>{t(SORT_LABEL[value])}</option>)}
           </select>
         </label>}
         {/* Opening a session is what this screen is for, so it sits where the
@@ -447,8 +449,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           onClick={() => setNewTabOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={newTabOpen}
-          aria-label="New tab"
-          title="New agent or shell"
+          aria-label={t("mobile.newTab.title")}
+          title={t("mobile.project.newTabTitle")}
         ><span aria-hidden="true">＋</span></button>
       </div>
     </header>
@@ -472,7 +474,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && !detail.desktop_available && <p className="notice">{t("mobile.project.desktopUnavailable")} {isUntested("mobile.headless.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
     {projectInbox.view}
-    {canReorder && <p className="reorder-hint">Drag <span aria-hidden="true">⠿</span> to arrange — this is the desktop's own tab order, so the {BRAND.display} window follows. {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {canReorder && <p className="reorder-hint"><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     <section className="cards">{tabs.map((tab) => <div
       className={`tab-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}`}
       key={tab.id}
@@ -488,7 +490,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       {/* The colour chooser is the dot in the card's upper-left corner: it
           shows the tab's colour (a hollow ring when it has none) and opens the
           sheet, so the foot keeps its width for the worded actions. */}
-      <button className="tab-card-dot" onClick={() => setColorTab(tab)} aria-haspopup="dialog" aria-expanded={colorTab?.id === tab.id} aria-label={`Colour ${tab.label}`}><span aria-hidden="true" /></button>
+      <button className="tab-card-dot" onClick={() => setColorTab(tab)} aria-haspopup="dialog" aria-expanded={colorTab?.id === tab.id} aria-label={t("mobile.project.colorTab", { label: tab.label })}><span aria-hidden="true" /></button>
       {/* The card opens the session; on an agent tab its name renames it.
           A button cannot hold a button, so the opener is a sibling stretched
           over the whole card — head, prompts and foot — and the controls that
@@ -499,46 +501,46 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         <span>
           <span className="tab-card-title">
             {tab.kind === "agent"
-              ? <button className="tab-card-name" onClick={() => setRenameTab(tab)} aria-haspopup="dialog" aria-expanded={renameTab?.id === tab.id} aria-label={`Rename ${tab.label}`} title="Rename"><strong>{tab.label}</strong></button>
+              ? <button className="tab-card-name" onClick={() => setRenameTab(tab)} aria-haspopup="dialog" aria-expanded={renameTab?.id === tab.id} aria-label={t("mobile.project.renameTab", { label: tab.label })} title={t("common.rename")}><strong>{tab.label}</strong></button>
               : <strong>{tab.label}</strong>}
             {/* The model is its own control, like the name: a tap opens the
                 session with its model picker already up, so changing the
                 model (and, where the agent asks, the effort) is one tap from
                 here rather than open-then-find-the-chip. */}
-            {tab.agent_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={`Change the model of ${tab.label}`} title="Change the model">{tab.agent_model}</button>}
+            {tab.agent_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
             {tab.agent_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             <AgentModeMarks tab={tab} />
             <SubagentCount tab={tab} />
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}
-            {tab.kind === "agent" && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={`Scheduled prompts for ${tab.label}`} title="Scheduled prompts"><span aria-hidden="true">◷</span></button>}
+            {tab.kind === "agent" && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
             {tab.kind === "agent" && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </span>
         </span>
       </div>
       {/* Close is the card's top-right ✕, where a phone looks for it; every tab
           the phone lists offers it, shell included. */}
-      <button className="tab-card-icon tab-card-close" disabled={closingId !== null} onClick={() => void close(tab)} aria-label={`Close ${tab.label}`} title="Close"><span aria-hidden="true">✕</span></button>
+      <button className="tab-card-icon tab-card-close" disabled={closingId !== null} onClick={() => void close(tab)} aria-label={t("mobile.project.closeTab", { label: tab.label })} title={t("common.close")}><span aria-hidden="true">✕</span></button>
       {/* The grip, under the manual order only. It is also the keyboard's way
           in: the arrows move the tab one place, which a drag cannot be asked
           for without a finger. */}
       {canReorder && <button
         className="tab-card-grip"
-        aria-label={`Move ${tab.label}`}
-        title="Drag to move this tab, or use the arrow keys"
+        aria-label={t("mobile.home.move", { label: tab.label })}
+        title={t("mobile.project.moveHint")}
         {...drag.gripProps(tab.id)}
       ><span aria-hidden="true">⠿</span></button>}
       </div>
       {tab.kind === "agent" && <PromptLines tab={tab} />}
       {/* The desktop's schedule summary, where it puts it — only when the tab
           has schedules; the upcoming ones are listed with the prompts above. */}
-      {tab.kind === "agent" && scheduleLine(tab.schedules) && <div className="tab-card-foot">
-        <small className="tab-card-when" title={tab.schedules?.next ? `Next run ${tab.schedules.next.replace("T", " ")} (desktop time)` : undefined}>{scheduleLine(tab.schedules)}</small>
+      {tab.kind === "agent" && scheduleLine(tab.schedules, t) && <div className="tab-card-foot">
+        <small className="tab-card-when" title={tab.schedules?.next ? t("mobile.project.nextRunTitle", { when: tab.schedules.next.replace("T", " ") }) : undefined}>{scheduleLine(tab.schedules, t)}</small>
       </div>}
       {/* Last, so it lies over the whole card: a tap anywhere the controls above
           have not claimed opens the session. */}
-      <button className="tab-card-open" disabled={!tab.available} onClick={() => terminal(tab)} aria-label={`Open ${tab.label}`} />
+      <button className="tab-card-open" disabled={!tab.available} onClick={() => terminal(tab)} aria-label={t("mobile.project.openTab", { label: tab.label })} />
       {/* The agent's state is the desktop's bare glyph — ▶ working, ? asking,
           ✓ done — set on the card's left border, where it reads down the list
           at a glance without spending a row's width on a worded pill. */}
@@ -560,8 +562,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.reopening", { label: row.label })}{isUntested("mobile.project.reopening") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
         : <><span aria-hidden="true">↺</span> {row.label}</>}</button>)}
     </section>}
-    {detail?.project.status === "inactive" && <section className="create"><button className="primary" disabled={activating} onClick={() => void activate()}>Activate project</button></section>}
-    <section className="create"><button disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ Collected prompts</button></section>
+    {detail?.project.status === "inactive" && <section className="create"><button className="primary" disabled={activating} onClick={() => void activate()}>{t("mobile.project.activate")}</button></section>}
+    <section className="create"><button disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}</button></section>
     {/* The shell and agent buttons that stood here are the header's ＋ now: a
         project with a screenful of tabs put them past the end of the scroll. */}
     {newTabOpen && detail && <NewTabSheet

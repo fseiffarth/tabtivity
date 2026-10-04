@@ -1,5 +1,5 @@
 import { NAMES } from "../../../src/lib/brand";
-import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { translate, useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
@@ -58,7 +58,7 @@ import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
 import { TERMINAL_PROTOCOL, TERMINAL_SIZE } from "../terminal/protocol";
-import { dedentRows, readableRange, readableScreen, readableText, TRUNCATION_NOTICE, type ReadableLine } from "../terminal/readableScreen";
+import { dedentRows, readableRange, readableScreen, readableText, type ReadableLine } from "../terminal/readableScreen";
 import {
   absorbHistory,
   emptyHistory,
@@ -305,28 +305,28 @@ const MODE_SETTLE = 340;
 const MODE_CYCLE_LIMIT = 6;
 
 /** Why a phone file did not reach the project inbox, by the desktop's code. */
-const UPLOAD_FAILURES: Record<string, string> = {
-  file_too_large: "is larger than 24 MB.",
-  empty_file: "is empty.",
-  inbox_full: "did not fit — the project's inbox is full.",
-  project_unavailable: "could not be saved — the project folder is unavailable.",
-  tab_not_found: "could not be saved — this session's project is no longer shared.",
-  timeout: "took too long to send.",
-  offline: "did not reach the desktop — the connection dropped.",
+const UPLOAD_FAILURES: Record<string, TranslationKey> = {
+  file_too_large: "mobile.sendToDesktop.tooLarge",
+  empty_file: "mobile.sendToDesktop.empty",
+  inbox_full: "mobile.projectInbox.full",
+  project_unavailable: "mobile.projectInbox.unavailable",
+  tab_not_found: "mobile.inbox.failed.tabGone",
+  timeout: "mobile.sendToDesktop.timeout",
+  offline: "mobile.sendToDesktop.offline",
   // The desktop's own refusals when the file comes from its side.
-  image_not_found: "is no longer on the desktop.",
-  no_clipboard_image: "is gone — the desktop's clipboard no longer holds an image.",
-  project_ineligible: "could not be saved — this project is no longer shared.",
-  desktop_unavailable: "could not be copied — the desktop window is not answering.",
+  image_not_found: "mobile.inbox.failed.imageGone",
+  no_clipboard_image: "mobile.inbox.failed.clipboardGone",
+  project_ineligible: "mobile.projectInbox.notShared",
+  desktop_unavailable: "mobile.inbox.failed.desktopDown",
 };
 
 /** Why the desktop could not say what it has to attach. */
-const DESKTOP_LIST_FAILURES: Record<string, string> = {
-  desktop_unavailable: "The desktop window is not answering.",
-  tab_not_found: "This session's project is no longer shared.",
-  project_ineligible: "This project is no longer shared with the phone.",
-  timeout: "The desktop took too long to answer.",
-  offline: "The connection dropped.",
+const DESKTOP_LIST_FAILURES: Record<string, TranslationKey> = {
+  desktop_unavailable: "mobile.desktopImages.failed.desktopDown",
+  tab_not_found: "mobile.desktopImages.failed.tabGone",
+  project_ineligible: "mobile.desktopImages.failed.notShared",
+  timeout: "mobile.desktopImages.failed.timeout",
+  offline: "mobile.desktopImages.failed.offline",
 };
 
 /** A file on its way into the project inbox — from the phone, or copied on
@@ -341,7 +341,8 @@ interface InboxUpload {
   source: "phone" | "desktop";
   /** The desktop's project-relative reference, once the file has landed. */
   reference?: string;
-  failure?: string;
+  /** Why it did not land, said after its name. */
+  failure?: TranslationKey;
   /** The phone's own copy of a picture (an object URL), shown while it
    * travels and after; the inbox's copy stands in for the others. */
   preview?: string;
@@ -607,11 +608,11 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
               it is, says so, and offers to go again (a shown bubble never
               changes or moves). While the resend waits it says that. */}
           {turn.retrying
-            ? <small className="transcript-send-state" role="status">Sending again…</small>
+            ? <small className="transcript-send-state" role="status">{t("mobile.transcript.sendingAgain")}</small>
             : turn.failed && <small className="transcript-send-state failed" role="alert">
-                Not delivered — the connection dropped.
-                {onResend && turn.pending !== undefined && <button type="button" onClick={() => onResend(turn.pending as number)}>Resend</button>}
-                {isUntested("mobile.link.ack") && <em>Untested</em>}
+                {t("mobile.transcript.notDelivered")}
+                {onResend && turn.pending !== undefined && <button type="button" onClick={() => onResend(turn.pending as number)}>{t("mobile.transcript.resend")}</button>}
+                {isUntested("mobile.link.ack") && <em>{t("mobile.newTab.untested")}</em>}
               </small>}
         </div>
       : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...hold(turn.key, () => turn.text)}>
@@ -1055,7 +1056,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   /** The "From the desktop" list: `null` while the desktop is being asked. */
   const [desktopSheet, setDesktopSheet] = useState(false);
   const [desktopImages, setDesktopImages] = useState<DesktopImage[] | null>(null);
-  const [desktopFailure, setDesktopFailure] = useState("");
+  const [desktopFailure, setDesktopFailure] = useState<TranslationKey | "">("");
   const [uploads, setUploads] = useState<InboxUpload[]>(() => liftedDraft(readDraft(tab.id)).uploads);
   uploadsRef.current = uploads;
   // A picture's own copy is let go once its file leaves the composer.
@@ -1683,7 +1684,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       // which walked the screen away from what the reader was reading.
       if (!interrupted) {
         interrupted = true;
-        term.write("\r\n\x1b[33m[Connection interrupted; reconnecting…]\x1b[0m\r\n");
+        term.write(`\r\n\x1b[33m[${translate(useI18nStore.getState().lang, "mobile.terminal.interrupted")}]\x1b[0m\r\n`);
       }
       const delay = Math.min(1_000 * 2 ** reconnectAttempt, 15_000);
       reconnectAttempt += 1;
@@ -2955,10 +2956,13 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   };
   /** The composer's `/` menu: the commands that continue the draft, the
    * reader's own first. Picking one only fills the field — the reader still
-   * sends it, so a stray tap never runs `/clear` on a session. */
+   * sends it, so a stray tap never runs `/clear` on a session. Its rows,
+   * like the mode sheet's, are worded in the language live when read. */
+  const lang = useI18nStore((state) => state.lang);
   const slashMenu = useMemo(
     () => (tab.kind === "agent" && connected ? slashSuggestions(draft, slashCliKey, usedSlash) : []),
-    [tab.kind, connected, draft, slashCliKey, usedSlash],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `lang` re-words the rows
+    [tab.kind, connected, draft, slashCliKey, usedSlash, lang],
   );
   const pickSlash = (suggestion: SlashSuggestion) => {
     setDraft(suggestion.args ? `${suggestion.line} ` : suggestion.line);
@@ -3324,7 +3328,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
    * tab's agent label as the tie-break (and, for a family whose default mode
    * draws no text at all, as the way in). Empty for a session no family
    * claims — the chip then keeps cycling, as before. */
-  const modes = useMemo(() => modeChoices(status?.mode, agentLabel), [status?.mode, agentLabel]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `lang` re-words the rows
+  const modes = useMemo(() => modeChoices(status?.mode, agentLabel), [status?.mode, agentLabel, lang]);
   const activeMode = currentMode(modes, status?.mode, status != null);
   /** A family whose mode no key here can change (OpenCode's mini interface).
    * The sheet lists its modes as a readout: nothing is pressed, and the chip
@@ -3412,7 +3417,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
         (error: unknown) => {
           if (uploadRun.current !== run) return;
           const code = error instanceof ApiError ? error.code : "";
-          const failure = UPLOAD_FAILURES[code] ?? "could not be sent to the desktop.";
+          const failure = UPLOAD_FAILURES[code] ?? "mobile.sendToDesktop.failed";
           setUploads((current) => current.map((upload) => upload.id === id ? { ...upload, failure } : upload));
         },
       );
@@ -3433,7 +3438,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       (error: unknown) => {
         if (uploadRun.current !== run) return;
         const code = error instanceof ApiError ? error.code : "";
-        setDesktopFailure(DESKTOP_LIST_FAILURES[code] ?? "The desktop could not list its images.");
+        setDesktopFailure(DESKTOP_LIST_FAILURES[code] ?? "mobile.desktopImages.failed.other");
         setDesktopImages([]);
       },
     );
@@ -3455,7 +3460,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       (error: unknown) => {
         if (uploadRun.current !== run) return;
         const code = error instanceof ApiError ? error.code : "";
-        const failure = UPLOAD_FAILURES[code] ?? "could not be copied into the project inbox.";
+        const failure = UPLOAD_FAILURES[code] ?? "mobile.inbox.failed.copy";
         setUploads((current) => current.map((upload) => upload.id === id ? { ...upload, failure } : upload));
       },
     );
@@ -3832,7 +3837,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
    * the same way, or the transcript's id behind it. */
   const modelChip = status?.model
     ? (status.effort ? `${status.model} · ${status.effort}` : status.model)
-    : transcriptModel ?? tab.agent_model ?? "Model";
+    : transcriptModel ?? tab.agent_model ?? t("terminal.reader.model");
   const shownStep = listedStep ?? (answered && picker ? answered : null);
   /** The highlighted row — where it was before a reveal walk moved it. */
   const shownAt = reveal?.origin ?? picker?.options[picker.current]?.number;
@@ -3859,10 +3864,10 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   }));
   const failedMode = modes.find((choice) => choice.value === switchFailed);
   const addOptions: SheetOption[] = [
-    { key: "phone", label: "From this phone", description: "A photo, screenshot or file — saved to the project's inbox and referenced in the message", current: false },
-    { key: "gallery", label: "From the gallery", description: "Photos and videos from this phone's gallery — saved to the project's inbox and referenced in the message", current: false },
-    { key: "desktop", label: "From the desktop", description: "The desktop's clipboard image or a recent screenshot or picture — copied to the project's inbox and referenced in the message", current: false },
-    { key: "project", label: "A project file (@)", description: "Type a path after the @ for the agent to read", current: false },
+    { key: "phone", label: t("mobile.add.phone"), description: t("mobile.add.phoneHint"), current: false },
+    { key: "gallery", label: t("mobile.add.gallery"), description: t("mobile.add.galleryHint"), current: false },
+    { key: "desktop", label: t("mobile.add.desktop"), description: t("mobile.add.desktopHint"), current: false },
+    { key: "project", label: t("mobile.add.project"), description: t("mobile.add.projectHint"), current: false },
   ];
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
@@ -4008,7 +4013,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionShown && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span>{openCode && !transcript?.available && <span>{t("mobile.focus.openCodeMini")}</span>}{tab.kind === "agent" && transcript?.available && <button onClick={() => setFocusSource("session")}>{t("mobile.focus.sessionHint")}</button>}<button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
       {view === "focus" && (!altScreen || sessionShown) && <>
-        <section ref={readableHost} className="readable-output" aria-label="Session output" aria-live="polite"
+        <section ref={readableHost} className="readable-output" aria-label={t("mobile.focus.output")} aria-live="polite"
           onScroll={(event) => {
             const stream = event.currentTarget;
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);
@@ -4074,11 +4079,11 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
                   {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox} />}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
-            ? <div className="readable-empty"><strong>Waiting for output</strong><span>The exact terminal is running behind this view.</span></div>
+            ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
             : <div className={chat ? "readable-lines chat" : "readable-lines"}>
-                {clipped && <div className="readable-notice">{TRUNCATION_NOTICE}</div>}
-                {hiddenLines > 0 && <button className="readable-earlier" onClick={showEarlier}>Show earlier output ({hiddenLines.toLocaleString()} lines)</button>}
-                {hiddenLines === 0 && earlier.dropped && <div className="readable-notice">{TRUNCATION_NOTICE}</div>}
+                {clipped && <div className="readable-notice">{t("mobile.focus.truncated")}</div>}
+                {hiddenLines > 0 && <button className="readable-earlier" onClick={showEarlier}>{t("mobile.focus.earlierOutput", { count: hiddenLines.toLocaleString() })}</button>}
+                {hiddenLines === 0 && earlier.dropped && <div className="readable-notice">{t("mobile.focus.truncated")}</div>}
                 {/* An agent's output is laid out as ONE stream: grouped piece by
                     piece, a turn that ran from the history into the live
                     screen was cut in two where they met — and that seam moved
@@ -4107,15 +4112,15 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
         {/* A chat copies message by message and picks its source under the
             Focus button, so nothing floats over its newest lines. */}
         {!chat && lines.length > 0 && <div className="readable-tools">
-          <button onClick={() => void copyReadable()} aria-label="Copy the session text">{copied ? "Copied" : "Copy"}</button>
+          <button onClick={() => void copyReadable()} aria-label={t("mobile.focus.copySession")}>{t(copied ? "mobile.focus.copied" : "mobile.focus.copy")}</button>
         </div>}
-        {!atBottom && <button className="readable-jump" onClick={jumpToLatest}>Jump to latest ↓</button>}
+        {!atBottom && <button className="readable-jump" onClick={jumpToLatest}>{t("mobile.focus.jumpLatest")}</button>}
       </>}
     </div>
     <div className="terminal-controls">
       {tab.kind === "agent" && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
-      {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">That did not reach the desktop — the connection dropped. Send it again once it is back.</div>}
+      {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {undoNote && <div className="voice-feedback" role="status">{t(undoNote)}</div>}
       {subagentTarget && (subagentSending || subagentNote) && <div className={subagentNote ? "voice-feedback error" : "voice-feedback"} role={subagentNote ? "alert" : "status"}>{t(subagentNote || "mobile.subagent.sending")}{isUntested("mobile.subagent.input") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {editNote && !editing && <div className={editNote === "mobile.composer.heldEditFailed" ? "voice-feedback error" : "voice-feedback"} role="status">{t(editNote)}{editNote === "mobile.composer.heldNote" && <> {t("mobile.composer.holdToInterrupt")}{isUntested("mobile.composer.sendHold") && <> · <em>{t("mobile.focus.untested")}</em></>}</>}{isUntested("mobile.chat.editHeld") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
@@ -4124,8 +4129,8 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
         <button onPointerDown={(event) => event.preventDefault()} onClick={cancelEdit}>{t("mobile.composer.editCancel")}</button>
       </div>}
       {clearRefused && liveBusy && <div className="voice-feedback" role="status">{t("mobile.composer.clearBusy")}{isUntested("mobile.composer.clearBusy") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
-      {lastSent && !sessionShown && <div className="last-sent"><span>Sent</span><p>{lastSent}</p></div>}
-      {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{upload.failure}</span><button onClick={() => dismissUpload(upload.id)} aria-label={`Dismiss ${upload.name}`}>✕</button></div>)}
+      {lastSent && !sessionShown && <div className="last-sent"><span>{t("mobile.composer.lastSent")}</span><p>{lastSent}</p></div>}
+      {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{t(upload.failure)}</span><button onClick={() => dismissUpload(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}>✕</button></div>)}
       {/* What goes with the next message, as pictures beside the draft —
           never as `@` text in it (`withAttachments` adds the references on
           Send). */}
@@ -4179,14 +4184,14 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
         {/* An agent tab's model, mode and status lead the row as tappable facts:
             the composer keeps the whole bar for the draft and its buttons. */}
         {tab.kind === "agent" && <>
-          <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title="Session status and the agent's own usage"><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">Status</span></button>
-          <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title="Choose the model (/model)"><span className="fact-action-label">{modelChip}</span></button>
-          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={modes.length > 0 ? "Choose the permission mode" : "Switch mode (Shift+Tab)"}><span className="fact-action-label">{status?.mode ?? activeMode ?? "Mode"}</span></button>
+          <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
+          <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>
+          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         </>}
         {status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
-        {contextLeft && <span className="fact-context">{contextLeft} context</span>}
+        {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {shownLimits.session && <span className={`fact-limit${shownLimits.session.percent >= 90 ? " high" : ""}`} title={shownLimits.session.resets ? resetText(shownLimits.session.resets, limitTime, readTime) : undefined}>{t("mobile.facts.session", { percent: Math.round(100 - shownLimits.session.percent) })}{sessionReset && <> · {t("mobile.facts.resetIn", { time: sessionReset })}</>}</span>}
         {shownLimits.week && <span className={`fact-limit${shownLimits.week.percent >= 90 ? " high" : ""}`} title={shownLimits.week.resets ? resetText(shownLimits.week.resets, limitTime, readTime) : undefined}>{t("mobile.facts.week", { percent: Math.round(100 - shownLimits.week.percent) })}{weekReset && <> · {t("mobile.facts.resetIn", { time: weekReset })}</>}</span>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
@@ -4205,7 +4210,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
           </div>)}
         </div>}
         <div className="composer-field">
-          <textarea ref={composerInput} value={draft} disabled={!connected} rows={1} aria-label={tab.kind === "agent" ? "Message agent" : "Shell command"} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : "Message the agent…") : "Type a command…") : "Reconnecting…"} onChange={(event) => setDraft(event.target.value)} onFocus={() => setComposerTyping(true)} onBlur={typingStopped} onKeyDown={(event) => {
+          <textarea ref={composerInput} value={draft} disabled={!connected} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={() => setComposerTyping(true)} onBlur={typingStopped} onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey) return;
             // Enter confirms a candidate inside an IME composition (CJK keyboards,
             // and 229 is what Android keyboards report mid-composition); that
@@ -4222,7 +4227,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
           {tab.kind === "agent" && <>
             <input ref={fileInput} type="file" accept={ANY_FILE_ACCEPT} multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-file-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
-            <button className="composer-add" disabled={!connected} onClick={() => setAddSheet(true)} aria-label="Add to the message" aria-haspopup="dialog" aria-expanded={addSheet} title="Add a photo or file from this phone, pictures from its gallery, an image from the desktop, or a project file (@)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+            <button className="composer-add" disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
             {/* Folds the key row below in and out; it starts folded. */}
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
@@ -4253,12 +4258,12 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
               return;
             }
             submitDraft();
-          }} aria-label={editing ? t("mobile.composer.editSave") : "Send"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 16 8-16 8 3-8-3-8Z" /><path d="M7 12h13" /></svg></button>
+          }} aria-label={t(editing ? "mobile.composer.editSave" : "mobile.question.typeSend")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 16 8-16 8 3-8-3-8Z" /><path d="M7 12h13" /></svg></button>
         </div>
       </div>
       {keysShown && <div className="keys" id="terminal-keys">
       {isUntested("mobile.composer.keysToggle") && <em className="composer-untested keys-untested">{t("mobile.focus.untested")}</em>}
-      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => window.confirm("Send interrupt (Ctrl+C)?") && type("\u0003")}>Interrupt</button>
+      <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => window.confirm(t("mobile.keys.interruptConfirm")) && type("\u0003")}>{t("mobile.keys.interrupt")}</button>
       </div>}
     </div>
     {modelSheet && (effortStep
@@ -4268,25 +4273,25 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
           ? `${t("mobile.model.effortHint")} · ${t("mobile.focus.untested")}`
           : t("mobile.model.effortHint") }}
         options={effortOptions}
-        waiting={connected ? "Waiting for the session…" : "Waiting for the connection…"}
+        waiting={t(connected ? "mobile.model.waitingSession" : "mobile.model.waitingConnection")}
         busy={effortOptions.length === 0}
         onPick={chooseEffort}
         onClose={closeModelSheet}
       />
       : <OptionSheet
-        title={shownStep?.title ?? "Select model"}
+        title={shownStep?.title ?? t("terminal.reader.modelTitle")}
         note={cursorAgent && isUntested("mobile.model.cursor") ? { text: t("mobile.focus.untested") } : undefined}
         options={pickerOptions}
-        waiting={!connected
-          ? "Waiting for the connection…"
-          : answered ? "Waiting for the session…" : "Waiting for the session's model picker…"}
+        waiting={t(!connected
+          ? "mobile.model.waitingConnection"
+          : answered ? "mobile.model.waitingSession" : "terminal.reader.modelWaiting")}
         busy={shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
         onPick={chooseModel}
         onClose={closeModelSheet}
       />)}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
     {addSheet && <OptionSheet
-      title="Add to the message"
+      title={t("mobile.add.title")}
       options={addOptions}
       waiting=""
       busy={false}
@@ -4303,25 +4308,25 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
       onClose={() => setCommitSheet(false)}
     />}
     {desktopSheet && <OptionSheet
-      title="From the desktop"
+      title={t("mobile.add.desktop")}
       note={desktopFailure
-        ? { text: desktopFailure, error: true }
-        : desktopImages?.length ? { text: "Pick one to copy it into the project's inbox and reference it in the message." } : undefined}
+        ? { text: t(desktopFailure), error: true }
+        : desktopImages?.length ? { text: t("mobile.desktopImages.pick") } : undefined}
       options={desktopOptions}
       waiting={desktopImages === null
-        ? "Looking on the desktop…"
-        : desktopFailure ? "Close and try again." : "Nothing to attach — copy an image or take a screenshot on the desktop first."}
+        ? t("mobile.desktopImages.looking")
+        : t(desktopFailure ? "mobile.desktopImages.retry" : "mobile.desktopImages.none")}
       busy={false}
       onPick={attachFromDesktop}
       onClose={() => setDesktopSheet(false)}
     />}
     {modeSheet && <OptionSheet
-      title="Permission mode"
+      title={t("terminal.reader.modeTitle")}
       note={failedMode
-        ? { text: `This session did not switch to ${failedMode.label}; it is back in the mode it was in.`, error: true }
+        ? { text: t("mobile.mode.failed", { mode: failedMode.label }), error: true }
         : fixedMode ? { text: t("mobile.focus.modeFixed") } : undefined}
       options={modeOptions}
-      waiting={fixedMode ? t("mobile.focus.modeFixed") : "This session reports no mode."}
+      waiting={t(fixedMode ? "mobile.focus.modeFixed" : "mobile.mode.none")}
       busy={switching !== "" || fixedMode}
       onPick={(key) => void applyMode(key)}
       onClose={() => { if (!switching) setModeSheet(false); }}

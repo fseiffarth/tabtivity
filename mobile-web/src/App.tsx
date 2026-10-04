@@ -10,7 +10,7 @@ import { hasLocalUnlock } from "./localLock";
 import { clearConnectReload, isConnectReload, noteUnlockedLeave, takeConnectReload, takeReloadGrace } from "./reloadGrace";
 import { noteDesktopTheme } from "./theme";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
-import { useT } from "../../src/lib/i18n";
+import { useT, type TranslationKey } from "../../src/lib/i18n";
 import { Pair } from "./screens/Pair";
 import { LocalUnlock } from "./screens/LocalUnlock";
 import { LockedHomeShell } from "./screens/LockedHomeShell";
@@ -47,11 +47,11 @@ function currentPlace(tab: Tab, projectView: ProjectView, terminal: { project: s
   if (tab !== "projects") return { section: tab };
   return projectView.kind === "project" ? { section: "projects", projectId: projectView.id } : { section: "projects" };
 }
-const TABS: { id: Tab; icon: string; label: string }[] = [
-  { id: "projects", icon: SECTION_GLYPH.projects, label: "Projects" },
-  { id: "todo", icon: SECTION_GLYPH.todo, label: "To-do" },
-  { id: "calendar", icon: SECTION_GLYPH.calendar, label: "Calendar" },
-  { id: "mail", icon: SECTION_GLYPH.mail, label: "Mail" },
+const TABS: { id: Tab; icon: string; label: TranslationKey }[] = [
+  { id: "projects", icon: SECTION_GLYPH.projects, label: "mobile.tabs.projects" },
+  { id: "todo", icon: SECTION_GLYPH.todo, label: "mobile.tabs.todo" },
+  { id: "calendar", icon: SECTION_GLYPH.calendar, label: "mobile.tabs.calendar" },
+  { id: "mail", icon: SECTION_GLYPH.mail, label: "mobile.tabs.mail" },
 ];
 /**
  * How long Tabtivity Mobile may go untouched before the local lock closes the
@@ -118,6 +118,7 @@ const ACTIVITY_EVENTS = ["pointerdown", "keydown", "input", "touchstart", "touch
  * should reach the user at once rather than be held behind a flourish.
  */
 function Splash({ message, progress, tone, children }: { message: string; progress?: boolean; tone?: "error"; children?: ReactNode }) {
+  const t = useT();
   return (
     <main className={`screen splash${tone === "error" ? " splash-failed" : ""}`} role="status" aria-live="polite">
       <div className="splash-mark" aria-hidden="true">
@@ -129,7 +130,7 @@ function Splash({ message, progress, tone, children }: { message: string; progre
       <p className="splash-message">{message}</p>
       {progress ? <div className="splash-progress" aria-hidden="true"><span /></div> : null}
       {children}
-      <p className="splash-version">{SPLASH_VERSION}{isUntested("mobile.link.splashVersion") && <> <span className="untested">Untested</span></>}</p>
+      <p className="splash-version">{SPLASH_VERSION}{isUntested("mobile.link.splashVersion") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</p>
     </main>
   );
 }
@@ -157,7 +158,7 @@ function SlowConnectHint() {
   return <>
     <p className="splash-hint">
       {t("mobile.tunnel.slow")}
-      {isUntested("mobile.link.slowConnectHint") && <> <span className="untested">Untested</span></>}
+      {isUntested("mobile.link.slowConnectHint") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}
     </p>
     <TunnelSteps />
     <ConnectTrace />
@@ -173,7 +174,7 @@ function TunnelSteps() {
   return <div className="splash-steps">
     <p className="splash-steps-title">
       {t("mobile.tunnel.try")}
-      {isUntested("mobile.link.tunnelSteps") && <> <span className="untested">Untested</span></>}
+      {isUntested("mobile.link.tunnelSteps") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}
     </p>
     <ol>
       {TUNNEL_STEPS.map((key, index) => <li key={key}>
@@ -187,26 +188,31 @@ function TunnelSteps() {
 
 /** The way in so far (`traceConnect`), for a slow or failed sign-in. */
 function ConnectTrace() {
+  const t = useT();
   const lines = connectTrace();
   if (lines.length === 0) return null;
-  return <pre className="splash-detail connect-trace" aria-label="Connection timeline">
+  // The lines themselves stay in English: they are a diagnostic log for a bug
+  // report, carrying status codes and timings rather than prose.
+  return <pre className="splash-detail connect-trace" aria-label={t("mobile.app.connectTrace")}>
     {lines.join("\n")}
-    {isUntested("mobile.link.connectTrace") && <>{"\n"}<span className="untested">Untested</span></>}
+    {isUntested("mobile.link.connectTrace") && <>{"\n"}<span className="untested">{t("mobile.newTab.untested")}</span></>}
   </pre>;
 }
 
 function TabBar({ active, open }: { active: Tab; open: (tab: Tab) => void }) {
-  return <nav className="mobile-tabbar" aria-label="Sections">
+  const t = useT();
+  return <nav className="mobile-tabbar" aria-label={t("mobile.tabs.sections")}>
     {TABS.map((tab) => <button
       key={tab.id}
       className={`mobile-tab${active === tab.id ? " active" : ""}`}
       aria-current={active === tab.id ? "page" : undefined}
       onClick={() => open(tab.id)}
-    ><span aria-hidden="true">{tab.icon}</span>{tab.label}</button>)}
+    ><span aria-hidden="true">{tab.icon}</span>{t(tab.label)}</button>)}
   </nav>;
 }
 
 export function App() {
+  const t = useT();
   const [auth, setAuth] = useState<"loading" | "paired" | "unpaired" | "setup" | "locked" | "unavailable">("loading");
   const [pairNeedsLock, setPairNeedsLock] = useState(false);
   const [, refreshTags] = useState(0);
@@ -504,20 +510,20 @@ export function App() {
     if (unavailable.reason !== "storage_blocked" && Date.now() - unlockedAt.current < LOCK_AFTER_IDLE_MS) resume();
     else begin();
   };
-  if (auth === "loading") return <Splash message="Connecting to your workspace…" progress><SlowConnectHint /></Splash>;
+  if (auth === "loading") return <Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>;
   if (auth === "unavailable") {
     const { title, hint } = describeUnavailable(unavailable.reason);
     return (
       <Splash message={title} tone="error">
         <p className="splash-hint">{hint}</p>
         {suspectsTunnel(unavailable.reason) && <TunnelSteps />}
-        {unavailable.reason === "host_down" && isUntested("mobile.link.offlineShell") && <p className="splash-hint muted"><span className="untested">Untested</span></p>}
-        <p className="splash-hint muted">No project or terminal data is loaded from cache.</p>
+        {unavailable.reason === "host_down" && isUntested("mobile.link.offlineShell") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+        <p className="splash-hint muted">{t("mobile.app.noCache")}</p>
         {unavailable.detail && <p className="splash-detail">{unavailable.detail}</p>}
         <ConnectTrace />
-        <button className="primary" onClick={retry}>Retry</button>
-        {isUntested("mobile.link.unlockRetry") && <p className="splash-hint muted"><span className="untested">Untested</span></p>}
-        {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">Untested</span></p>}
+        <button className="primary" onClick={retry}>{t("mobile.app.retry")}</button>
+        {isUntested("mobile.link.unlockRetry") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+        {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </Splash>
     );
   }

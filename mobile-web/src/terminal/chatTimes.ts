@@ -1,3 +1,5 @@
+import { dateLocale } from "../../../src/lib/i18n";
+
 /**
  * The times a messenger puts on a chat: the clock time in a bubble's corner,
  * and a day chip across the chat where the day changes. Both read the
@@ -36,8 +38,8 @@ export function chatDayLabel(moment: Date, now: Date, labels: { today: string; y
   const days = Math.round((midnight(now) - midnight(moment)) / 86_400_000);
   if (days === 0) return labels.today;
   if (days === 1) return labels.yesterday;
-  if (days > 1 && days < 7) return moment.toLocaleDateString([], { weekday: "long" });
-  return moment.toLocaleDateString([], moment.getFullYear() === now.getFullYear()
+  if (days > 1 && days < 7) return moment.toLocaleDateString(dateLocale(), { weekday: "long" });
+  return moment.toLocaleDateString(dateLocale(), moment.getFullYear() === now.getFullYear()
     ? { weekday: "short", day: "numeric", month: "short" }
     : { day: "numeric", month: "short", year: "numeric" });
 }

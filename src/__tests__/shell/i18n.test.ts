@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { translate, normalizeLang, LANGUAGES, enSource, type TranslationKey } from "../../lib/i18n";
+import { translate, normalizeLang, dateLocale, LANGUAGES, enSource, type TranslationKey } from "../../lib/i18n";
 import { BRAND } from "../../lib/brand";
 // The aggregator also registers every lazy dictionary, so `translate` below
 // answers in all five languages without awaiting a chunk.
@@ -143,5 +143,12 @@ describe("i18n", () => {
       if ((text as string).toLowerCase().includes(BRAND.slug)) spelled.push(key);
     }
     expect(spelled).toEqual([]);
+  });
+
+  it("spells dates in the app language, keeping the browser's region when it matches", () => {
+    expect(dateLocale("de", "de-AT")).toBeUndefined();
+    expect(dateLocale("en", "en-GB")).toBeUndefined();
+    expect(dateLocale("de", "en-US")).toBe("de");
+    expect(dateLocale("fr", undefined)).toBe("fr");
   });
 });

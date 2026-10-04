@@ -1,6 +1,5 @@
 import { ApiError } from "./api";
-import type { TranslationKey } from "../../src/lib/i18n";
-import { BRAND } from "../../src/lib/brand";
+import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
 
 /**
  * Why Tabtivity Mobile could not reach the workspace, at the granularity the
@@ -89,56 +88,31 @@ export interface UnavailableCopy {
  * readers to fix the wrong machine.
  */
 export function describeUnavailable(reason: UnavailableReason): UnavailableCopy {
-  switch (reason) {
-    case "phone_offline":
-      return {
-        title: "This phone is offline.",
-        hint: "There is no network connection at all. Turn on Wi‑Fi or mobile data, then retry.",
-      };
-    case "unreachable":
-      return {
-        title: "Can't reach your desktop. Is Tailscale on?",
-        hint: "Nothing answered at your desktop's address. Usually Tailscale on this phone is off or stuck; otherwise the desktop is asleep or shut down.",
-      };
-    // With Tailscale off, the desktop's 100.x address routes nowhere and the
-    // request stalls instead of failing — so a timeout is the usual shape of
-    // "off the tailnet", not proof the desktop was reached.
-    case "timeout":
-      return {
-        title: "Your desktop didn't answer. Is Tailscale on?",
-        hint: "Nothing came back in time. Usually Tailscale on this phone is off or stuck — while it is, requests to your desktop go nowhere; otherwise the desktop may be asleep or the signal weak.",
-      };
-    case "host_down":
-      return {
-        title: `${BRAND.display} Mobile isn't running on your desktop.`,
-        hint: `The desktop is reachable, but nothing is serving ${BRAND.display} Mobile on it. Start ${BRAND.display} on the desktop, or switch ${BRAND.display} Mobile back on in its settings.`,
-      };
-    case "desktop_down":
-      return {
-        title: `${BRAND.display} isn't running on your desktop.`,
-        hint: `${BRAND.display} Mobile is up and answering, but the ${BRAND.display} app itself is not connected to it. Start ${BRAND.display} on the desktop.`,
-      };
-    case "busy":
-      return {
-        title: "Too many sign-in attempts.",
-        hint: `${BRAND.display} Mobile is rate-limiting sign-ins from this device. Wait a moment before retrying.`,
-      };
-    case "blocked_origin":
-      return {
-        title: "This isn't the address your desktop expects.",
-        hint: `${BRAND.display} Mobile only answers on the exact address configured on the desktop. Open it from the address shown in the desktop's ${BRAND.display} Mobile settings — renaming your tailnet changes it.`,
-      };
-    case "storage_blocked":
-      return {
-        title: `This browser blocked ${BRAND.display} Mobile's key store.`,
-        hint: "The paired device key lives in this browser's storage. Leave private browsing, or allow site data for this address, then retry.",
-      };
-    case "server_error":
-      return {
-        title: "Your desktop reported an error.",
-        hint: `${BRAND.display} Mobile answered but could not complete the request. Retry — if it keeps failing, check ${BRAND.display} Mobile on the desktop.`,
-      };
-  }
+  const [title, hint] = UNAVAILABLE_KEYS[reason];
+  return { title: tr(title), hint: tr(hint) };
+}
+
+/** The title and hint of each reason. With Tailscale off, the desktop's 100.x
+ * address routes nowhere and the request stalls instead of failing — so a
+ * timeout is the usual shape of "off the tailnet", not proof the desktop was
+ * reached; its copy says so. */
+const UNAVAILABLE_KEYS: Record<UnavailableReason, [TranslationKey, TranslationKey]> = {
+  phone_offline: ["mobile.unavailable.phoneOfflineTitle", "mobile.unavailable.phoneOfflineHint"],
+  unreachable: ["mobile.unavailable.unreachableTitle", "mobile.unavailable.unreachableHint"],
+  timeout: ["mobile.unavailable.timeoutTitle", "mobile.unavailable.timeoutHint"],
+  host_down: ["mobile.unavailable.hostDownTitle", "mobile.unavailable.hostDownHint"],
+  desktop_down: ["mobile.unavailable.desktopDownTitle", "mobile.unavailable.desktopDownHint"],
+  busy: ["mobile.unavailable.busyTitle", "mobile.unavailable.busyHint"],
+  blocked_origin: ["mobile.unavailable.blockedOriginTitle", "mobile.unavailable.blockedOriginHint"],
+  storage_blocked: ["mobile.unavailable.storageBlockedTitle", "mobile.unavailable.storageBlockedHint"],
+  server_error: ["mobile.unavailable.serverErrorTitle", "mobile.unavailable.serverErrorHint"],
+};
+
+/** In the language the phone is set to, read when the copy is asked for —
+ * these are plain functions called from render, so the next render after a
+ * language switch reads the new one. */
+function tr(key: TranslationKey): string {
+  return translate(useI18nStore.getState().lang, key);
 }
 
 /**
@@ -161,101 +135,101 @@ export function unavailableDetail(error: unknown): string | undefined {
  * front of the reader; nothing renders a code now, and a code this table does
  * not know reads as the generic line rather than as itself.
  */
-const FAILURE_TEXT: Record<string, string> = {
+const FAILURE_TEXT: Record<string, TranslationKey> = {
   // The terminal socket's `closing` reasons (`pty_bridge.rs`).
-  access_revoked: "This device's access to the session was withdrawn.",
-  session_expired: "Your sign-in lapsed while you were away. Unlock to continue.",
-  idle_timeout: "The session was released after a period without contact.",
-  invalid_terminal_control: "The connection sent something the desktop rejected.",
-  invalid_terminal_size: "The connection sent something the desktop rejected.",
-  input_frame_too_large: "The last input was too large to deliver.",
-  resize_failed: "The desktop could not resize the session.",
-  replaced: "This session was opened on another device or tab.",
-  session_busy: "Another viewer is holding this session.",
-  session_gone: "This session has ended on the desktop.",
+  access_revoked: "mobile.failure.accessRevoked",
+  session_expired: "mobile.failure.sessionExpired",
+  idle_timeout: "mobile.failure.idleTimeout",
+  invalid_terminal_control: "mobile.failure.invalidTerminal",
+  invalid_terminal_size: "mobile.failure.invalidTerminal",
+  input_frame_too_large: "mobile.failure.inputTooLarge",
+  resize_failed: "mobile.failure.resizeFailed",
+  replaced: "mobile.failure.replaced",
+  session_busy: "mobile.failure.sessionBusy",
+  session_gone: "mobile.failure.sessionGone",
   // The sidecar's own refusals (`host.rs`).
-  desktop_unavailable: `${BRAND.display} isn't running on your desktop.`,
-  launch_pending: "The desktop is still opening that tab. Try again in a moment.",
-  catalog_unavailable: "The desktop's project list could not be read.",
-  request_failed: "Your desktop reported an error.",
-  malformed_response: "The desktop answered in a shape this app does not recognize.",
-  authentication_required: "Your sign-in lapsed. Unlock to continue.",
-  invalid_origin: "This isn't the address your desktop expects.",
-  too_many_attempts: "Too many attempts. Wait a moment before retrying.",
-  timeout: "Your desktop didn't answer in time.",
-  offline: "The connection dropped.",
-  project_not_found: "This project is no longer shared with the phone.",
-  project_ineligible: "This project is no longer shared with the phone.",
-  tab_not_found: "That tab is no longer available.",
-  shells_off: "Shells are switched off for the phone in the desktop's Mobile settings.",
+  desktop_unavailable: "mobile.unavailable.desktopDownTitle",
+  launch_pending: "mobile.failure.launchPending",
+  catalog_unavailable: "mobile.failure.catalogUnavailable",
+  request_failed: "mobile.unavailable.serverErrorTitle",
+  malformed_response: "mobile.failure.malformedResponse",
+  authentication_required: "mobile.failure.authenticationRequired",
+  invalid_origin: "mobile.unavailable.blockedOriginTitle",
+  too_many_attempts: "mobile.failure.tooManyAttempts",
+  timeout: "mobile.failure.timeout",
+  offline: "mobile.failure.offline",
+  project_not_found: "mobile.failure.projectNotShared",
+  project_ineligible: "mobile.failure.projectNotShared",
+  tab_not_found: "mobile.failure.tabNotFound",
+  shells_off: "mobile.failure.shellsOff",
   // A sign-in address the phone handed back (`sign_in.rs`).
-  invalid_callback: "That is not the address the browser ended on. Copy all of it — it starts with http://localhost.",
-  callback_not_local: "That address does not lead to the agent waiting on the desktop.",
-  callback_without_code: "That address carries no sign-in code. Copy it from the page that failed to load, after approving.",
-  callback_unreachable: "Nothing on the desktop is waiting for that sign-in anymore. Start the sign-in again.",
-  callback_refused: "The agent did not accept that sign-in; the code may be used up or expired. Start the sign-in again.",
-  callback_timeout: "The agent took too long to finish the sign-in. Check the session.",
-  tab_scope_mismatch: "That tab belongs to another project.",
-  agent_tab_required: "That is not an agent tab.",
-  invalid_request: "The desktop rejected the request.",
-  invalid_view: "The desktop rejected the request.",
-  invalid_month: "The desktop rejected that month.",
-  invalid_subagent: "That subagent is no longer available.",
-  invalid_prompt: "The desktop rejected that prompt.",
-  invalid_label: "The desktop rejected that name.",
-  invalid_color: "The desktop rejected that colour.",
-  invalid_anchor: "The desktop rejected that move.",
-  query_too_long: "That search is too long.",
-  file_not_found: "That file is no longer on the desktop.",
-  read_failed: "The desktop could not read that.",
-  delete_failed: "The desktop could not delete that.",
-  reply_too_long: "The reply is too long.",
-  empty_reply: "The reply is empty.",
+  invalid_callback: "mobile.failure.invalidCallback",
+  callback_not_local: "mobile.failure.callbackNotLocal",
+  callback_without_code: "mobile.failure.callbackWithoutCode",
+  callback_unreachable: "mobile.failure.callbackUnreachable",
+  callback_refused: "mobile.failure.callbackRefused",
+  callback_timeout: "mobile.failure.callbackTimeout",
+  tab_scope_mismatch: "mobile.failure.tabScopeMismatch",
+  agent_tab_required: "mobile.failure.agentTabRequired",
+  invalid_request: "mobile.failure.invalidRequest",
+  invalid_view: "mobile.failure.invalidRequest",
+  invalid_month: "mobile.failure.invalidMonth",
+  invalid_subagent: "mobile.failure.invalidSubagent",
+  invalid_prompt: "mobile.failure.invalidPrompt",
+  invalid_label: "mobile.failure.invalidLabel",
+  invalid_color: "mobile.failure.invalidColor",
+  invalid_anchor: "mobile.failure.invalidAnchor",
+  query_too_long: "mobile.failure.queryTooLong",
+  file_not_found: "mobile.failure.fileNotFound",
+  read_failed: "mobile.failure.readFailed",
+  delete_failed: "mobile.failure.deleteFailed",
+  reply_too_long: "mobile.failure.replyTooLong",
+  empty_reply: "mobile.failure.emptyReply",
   // The desktop bridge's refusals (`MobileBridgeHost.tsx`).
-  desktop_error: `${BRAND.display} on the desktop hit an error handling that.`,
-  unknown_request: `${BRAND.display} on the desktop does not know that request.`,
-  response_too_large: "That is too large for the desktop to send to the phone.",
+  desktop_error: "mobile.failure.desktopError",
+  unknown_request: "mobile.failure.unknownRequest",
+  response_too_large: "mobile.failure.responseTooLarge",
   // A write the desktop made whose refreshed list did not come back
   // (`reloadIfApplied` in `api.ts`): never worded as a refusal, so the reader
   // does not send it again.
-  applied_response_too_large: "The change was made, but the updated list is too large to send to the phone.",
-  applied_list_too_large: "The change was made, but the list is now too large to show on the phone.",
-  applied_reload_failed: "The change was made, but the list could not be reloaded.",
-  launch_failed: "The desktop could not open that tab.",
-  unknown_agent: "The desktop does not know that agent.",
-  unsupported_sign_in: "The desktop cannot sign that agent in from the phone.",
-  unsupported_mode: "Agent mode is unavailable for that agent.",
-  persist_failed: "The desktop could not save that.",
-  calendar_unavailable: "The desktop's calendar could not be read.",
+  applied_response_too_large: "mobile.failure.appliedResponseTooLarge",
+  applied_list_too_large: "mobile.failure.appliedListTooLarge",
+  applied_reload_failed: "mobile.failure.appliedReloadFailed",
+  launch_failed: "mobile.failure.launchFailed",
+  unknown_agent: "mobile.failure.unknownAgent",
+  unsupported_sign_in: "mobile.failure.unsupportedSignIn",
+  unsupported_mode: "mobile.failure.unsupportedMode",
+  persist_failed: "mobile.failure.persistFailed",
+  calendar_unavailable: "mobile.failure.calendarUnavailable",
   // Reminders on this phone (`push.ts`).
-  invalid_push_subscription: "The desktop refused this browser's push subscription.",
-  push_unavailable: "The desktop could not change reminders for this phone.",
-  permission_denied: `Notifications are blocked for ${BRAND.display} Mobile in this phone's settings.`,
-  invalid_event: "The desktop rejected that event.",
-  event_not_found: "That event is no longer in the calendar.",
-  invalid_task: "The desktop rejected that card.",
-  task_not_found: "That card is no longer on the board.",
-  invalid_column: "The desktop rejected that column.",
-  column_follows_date: "That column is set by the card's date; change the date instead.",
-  prompt_not_found: "That prompt is no longer collected.",
-  alert_gone: "That alert has already been handled.",
-  alert_resolve_failed: `That alert could not be completed. ${BRAND.display} on the desktop owns it.`,
-  mail_read_disabled: `Mail on the phone is switched off in ${BRAND.display} → Settings → ${BRAND.display} Mobile.`,
-  mail_actions_disabled: `Switched off in ${BRAND.display} → Settings → ${BRAND.display} Mobile → Mail from the phone.`,
-  mail_reply_disabled: `Replies from the phone are switched off in ${BRAND.display} → Settings → ${BRAND.display} Mobile.`,
-  mail_mark_failed: "The desktop could not change that flag.",
-  mail_reply_failed: "The desktop could not send that reply.",
-  no_reply_address: "That message has no address to reply to.",
-  folder_not_found: "That folder is no longer available.",
-  message_not_found: "The message moved; refresh the folder.",
-  unexpected_mail_view: "The desktop answered in a shape this app does not recognize.",
+  invalid_push_subscription: "mobile.failure.invalidPushSubscription",
+  push_unavailable: "mobile.failure.pushUnavailable",
+  permission_denied: "mobile.failure.permissionDenied",
+  invalid_event: "mobile.failure.invalidEvent",
+  event_not_found: "mobile.failure.eventNotFound",
+  invalid_task: "mobile.failure.invalidTask",
+  task_not_found: "mobile.failure.taskNotFound",
+  invalid_column: "mobile.failure.invalidColumn",
+  column_follows_date: "mobile.failure.columnFollowsDate",
+  prompt_not_found: "mobile.failure.promptNotFound",
+  alert_gone: "mobile.failure.alertGone",
+  alert_resolve_failed: "mobile.failure.alertResolveFailed",
+  mail_read_disabled: "mobile.failure.mailReadDisabled",
+  mail_actions_disabled: "mobile.failure.mailActionsDisabled",
+  mail_reply_disabled: "mobile.failure.mailReplyDisabled",
+  mail_mark_failed: "mobile.failure.mailMarkFailed",
+  mail_reply_failed: "mobile.failure.mailReplyFailed",
+  no_reply_address: "mobile.failure.noReplyAddress",
+  folder_not_found: "mobile.failure.folderNotFound",
+  message_not_found: "mobile.failure.messageNotFound",
+  unexpected_mail_view: "mobile.failure.malformedResponse",
   // The usage sheet (`commands::agent_usage`).
-  no_usage_readout: `This agent has no usage readout ${BRAND.display} can ask for without opening a tab.`,
-  cli_not_installed: "This agent's CLI is not installed on the desktop.",
-  cli_failed: "The agent's CLI could not be run on the desktop.",
-  cli_timeout: "The agent's CLI did not answer in time. Try again.",
-  cli_error: "The agent's CLI reported an error instead of its usage panel.",
-  cli_output_withheld: "The agent's CLI answered with text the desktop keeps to itself.",
+  no_usage_readout: "mobile.failure.noUsageReadout",
+  cli_not_installed: "mobile.failure.cliNotInstalled",
+  cli_failed: "mobile.failure.cliFailed",
+  cli_timeout: "mobile.failure.cliTimeout",
+  cli_error: "mobile.failure.cliError",
+  cli_output_withheld: "mobile.failure.cliOutputWithheld",
 };
 
 const GENERIC_FAILURE = FAILURE_TEXT.request_failed;
@@ -287,7 +261,7 @@ export function describeFailure(source: unknown): string {
     if (reason !== "server_error") return describeUnavailable(reason).title;
   }
   const code = failureCode(source);
-  return (code && FAILURE_TEXT[code]) || GENERIC_FAILURE;
+  return tr((code && FAILURE_TEXT[code]) || GENERIC_FAILURE);
 }
 
 /** Every code the table knows, for the test that checks each reads as prose. */
@@ -303,7 +277,7 @@ export function knownFailureCodes(): string[] {
  */
 export function localFailureText(reason: unknown): string {
   if (reason instanceof Error && reason.message && !isCode(reason.message)) return reason.message;
-  return "That did not work. Try again.";
+  return tr("mobile.failure.generic");
 }
 
 /**

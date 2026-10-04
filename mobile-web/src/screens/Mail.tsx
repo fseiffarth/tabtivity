@@ -15,7 +15,9 @@ import {
 } from "../api";
 import { readChoice, writeChoice } from "../prefs";
 import { isUntested } from "../../../src/lib/untested";
-import { BRAND } from "../../../src/lib/brand";
+import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
+
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
 const PAGE_SIZE = 25;
 const FORMAT_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
@@ -24,14 +26,14 @@ function safeText(value: string) {
   return value.replace(FORMAT_CONTROLS, "");
 }
 
-function sender(message: MobileMailHeader) {
+function sender(message: MobileMailHeader, t: Translate) {
   const name = safeText(message.sender.name ?? "").trim();
-  return name || safeText(message.sender.address) || "Unknown sender";
+  return name || safeText(message.sender.address) || t("mobile.mail.unknownSender");
 }
 
-function dateLabel(value: string) {
+function dateLabel(value: string, lang: Language) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? safeText(value) : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? safeText(value) : date.toLocaleString(lang);
 }
 
 /** Longest reply the sidecar accepts (`protocol::MAX_MAIL_REPLY_BYTES`). */
@@ -72,14 +74,16 @@ function homeFolder(account: MobileMailAccount): MobileMailFolder | undefined {
 /** An account's entry in the picker carries its inbox's unread count — the one
  * number that says whether switching to it is worth the tap. Junk and trash
  * unread counts would only be noise there. */
-function accountOption(account: MobileMailAccount) {
+function accountOption(account: MobileMailAccount, t: Translate) {
   const unread = account.folders.filter((item) => item.kind === "inbox").reduce((sum, item) => sum + item.unread, 0);
-  return `${safeText(account.label) || safeText(account.address)}${unread > 0 ? ` · ${unread} unread` : ""}`;
+  return `${safeText(account.label) || safeText(account.address)}${unread > 0 ? ` · ${t("mobile.mail.unreadCount", { count: unread })}` : ""}`;
 }
 
 const isAccountId = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
 export function Mail() {
+  const t = useT();
+  const lang = useI18nStore((state) => state.lang);
   const [accounts, setAccounts] = useState<MobileMailAccount[] | null>(null);
   const [folder, setFolder] = useState<Extract<MobileMailView, { view: "folder" }> | null>(null);
   const [message, setMessage] = useState<Extract<MobileMailView, { view: "message" }> | null>(null);
@@ -152,11 +156,11 @@ export function Mail() {
 
   const accountPicker = accounts && accounts.length > 1 && <select
     className="mail-mobile-account-select"
-    aria-label="Mail account"
+    aria-label={t("mobile.mail.account")}
     value={(folder ? folderAccount : account)?.id ?? ""}
     disabled={busy}
     onChange={(event) => chooseAccount(event.target.value)}
-  >{accounts.map((item) => <option key={item.id} value={item.id}>{accountOption(item)}</option>)}</select>;
+  >{accounts.map((item) => <option key={item.id} value={item.id}>{accountOption(item, t)}</option>)}</select>;
 
   /** Both writes answer with the refreshed folder page, so the list and the
    * open message's own header are updated from the desktop's answer rather
@@ -220,66 +224,71 @@ export function Mail() {
   return <main className="screen mail-mobile-screen">
     <header>
       {goBack && <button className="back" onClick={goBack}>‹</button>}
-      <h1>{message ? safeText(message.message.subject) || "(No subject)" : folder ? safeText(folder.folder.name) : "Mail"}</h1>
+      <h1>{message ? safeText(message.message.subject) || t("mobile.mail.noSubject") : folder ? safeText(folder.folder.name) : t("mobile.mail.title")}</h1>
       <button onClick={refresh} disabled={busy}>↻</button>
     </header>
     <p className="notice">{writes.actions || writes.reply
-      ? `Mail through the connected ${BRAND.display} desktop. ${writes.actions ? "Read state and star can be changed here. " : ""}${writes.reply ? "Plain-text replies go to the original sender only. " : ""}No sync, delete, move, links, or downloads.`
-      : `Read-only mail through the connected ${BRAND.display} desktop. No sync, reply, state changes, links, or downloads.`}</p>
+      ? [
+        t("mobile.mail.noticeWrites"),
+        writes.actions ? t("mobile.mail.noticeActions") : "",
+        writes.reply ? t("mobile.mail.noticeReply") : "",
+        t("mobile.mail.noticeLimits"),
+      ].filter(Boolean).join(" ")
+      : t("mobile.mail.noticeReadOnly")}</p>
     {error && <p className="error">{error}</p>}
-    {busy && !accounts && <p className="mail-mobile-empty">Loading…</p>}
+    {busy && !accounts && <p className="mail-mobile-empty">{t("common.loading")}</p>}
 
     {message ? <article className="mail-mobile-message">
       <div className="mail-mobile-message-meta">
-        <strong>{sender(message.message)}</strong>
+        <strong>{sender(message.message, t)}</strong>
         <span>{safeText(message.message.sender.address)}</span>
-        <time>{dateLabel(message.message.date)}</time>
+        <time>{dateLabel(message.message.date, lang)}</time>
       </div>
       {writes.actions && <div className="mail-mobile-actions">
         <button disabled={busy} onClick={() => void mark(message.message.seen ? "unseen" : "seen")}>
-          {message.message.seen ? "Mark unread" : "Mark read"}
+          {t(message.message.seen ? "mobile.mail.markUnread" : "mobile.mail.markRead")}
         </button>
         <button disabled={busy} onClick={() => void mark(message.message.flagged ? "unflag" : "flag")}>
-          {message.message.flagged ? "☆ Unstar" : "★ Star"}
+          {t(message.message.flagged ? "mobile.mail.unstar" : "mobile.mail.star")}
         </button>
       </div>}
-      {message.truncated && <p className="mail-mobile-warning">Message text was truncated for the mobile view.</p>}
-      <pre>{safeText(message.body) || "No plain-text body is available."}</pre>
+      {message.truncated && <p className="mail-mobile-warning">{t("mobile.mail.truncated")}</p>}
+      <pre>{safeText(message.body) || t("mobile.mail.noBody")}</pre>
       {message.attachments.length > 0 && <section className="mail-mobile-attachments">
-        <h2>Attachments</h2>
+        <h2>{t("mail.attachments")}</h2>
         {message.attachments.map((attachment, index) => <div key={`${attachment.filename}-${index}`}>
           <span>{safeText(attachment.filename)}</span><small>{safeText(attachment.mime)} · {sizeLabel(attachment.size)}</small>
         </div>)}
       </section>}
       {writes.reply && <section className="mail-mobile-reply">
-        <h2>Reply</h2>
-        <small>To {safeText(message.message.sender.address)} — the recipient, subject and thread come from the original; only the text is yours.</small>
-        {sent && <p className="mail-mobile-sent">Reply sent from the desktop.</p>}
+        <h2>{t("mail.composeReply")}</h2>
+        <small>{t("mobile.mail.replyTo", { address: safeText(message.message.sender.address) })}</small>
+        {sent && <p className="mail-mobile-sent">{t("mobile.mail.replySent")}</p>}
         <textarea
-          aria-label="Reply text"
+          aria-label={t("mobile.mail.replyText")}
           value={reply}
           disabled={busy}
-          placeholder="Type a short reply…"
+          placeholder={t("mobile.mail.replyPlaceholder")}
           onChange={(event) => { setReply(event.target.value); setConfirmReply(false); setSent(false); }}
         />
         {confirmReply ? <div className="mail-mobile-reply-confirm">
-          <span>Send this reply to {safeText(message.message.sender.address)} now? It cannot be recalled.</span>
+          <span>{t("mobile.mail.replyConfirm", { address: safeText(message.message.sender.address) })}</span>
           <div>
-            <button className="primary" disabled={busy} onClick={() => void sendReply()}>Send</button>
-            <button disabled={busy} onClick={() => setConfirmReply(false)}>Cancel</button>
+            <button className="primary" disabled={busy} onClick={() => void sendReply()}>{t("mobile.question.typeSend")}</button>
+            <button disabled={busy} onClick={() => setConfirmReply(false)}>{t("common.cancel")}</button>
           </div>
         </div> : <button
           className="primary"
           disabled={busy || !reply.trim() || replyBytes(reply) > MAX_REPLY_BYTES}
           onClick={() => setConfirmReply(true)}
-        >Send reply…</button>}
-        {replyBytes(reply) > MAX_REPLY_BYTES && <p className="mail-mobile-warning">The reply is longer than the phone may send; finish it on the desktop.</p>}
+        >{t("mobile.mail.sendReply")}</button>}
+        {replyBytes(reply) > MAX_REPLY_BYTES && <p className="mail-mobile-warning">{t("mobile.mail.replyTooLong")}</p>}
       </section>}
     </article> : folder ? <>
       <div className="mail-mobile-switch">
         {accountPicker}
         {folderAccount && <select
-          aria-label="Folder"
+          aria-label={t("mobile.mail.folder")}
           value={folder.folder.id}
           disabled={busy}
           onChange={(event) => {
@@ -292,26 +301,26 @@ export function Mail() {
       </div>
       <section className="mail-mobile-list">
         {folder.messages.map((item) => <button className={`mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
-          <div><strong>{sender(item)}</strong><time>{dateLabel(item.date)}</time></div>
-          <b>{safeText(item.subject) || "(No subject)"}{item.has_attachments ? " 📎" : ""}</b>
+          <div><strong>{sender(item, t)}</strong><time>{dateLabel(item.date, lang)}</time></div>
+          <b>{safeText(item.subject) || t("mobile.mail.noSubject")}{item.has_attachments ? " 📎" : ""}</b>
           <span>{safeText(item.preview)}</span>
         </button>)}
-        {!busy && folder.messages.length === 0 && <p className="mail-mobile-empty">No messages in this page.</p>}
+        {!busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
       </section>
       <div className="mail-mobile-pager">
-        <button disabled={busy || folder.offset === 0} onClick={() => void loadFolder(folder.folder, Math.max(0, folder.offset - PAGE_SIZE))}>Previous</button>
-        <small>{folder.total === 0 ? "0" : `${folder.offset + 1}–${Math.min(folder.offset + folder.messages.length, folder.total)}`} of {folder.total}</small>
-        <button disabled={busy || folder.offset + folder.messages.length >= folder.total} onClick={() => void loadFolder(folder.folder, folder.offset + PAGE_SIZE)}>Next</button>
+        <button disabled={busy || folder.offset === 0} onClick={() => void loadFolder(folder.folder, Math.max(0, folder.offset - PAGE_SIZE))}>{t("mobile.mail.previous")}</button>
+        <small>{t("mobile.mail.pageOf", { range: folder.total === 0 ? "0" : `${folder.offset + 1}–${Math.min(folder.offset + folder.messages.length, folder.total)}`, total: folder.total })}</small>
+        <button disabled={busy || folder.offset + folder.messages.length >= folder.total} onClick={() => void loadFolder(folder.folder, folder.offset + PAGE_SIZE)}>{t("common.next")}</button>
       </div>
     </> : accounts && <section className="mail-mobile-accounts">
-      {accountPicker && <label className="mail-mobile-picker"><span>Account {isUntested("mobile.mail.accountPicker") && <span className="untested">Untested</span>}</span>{accountPicker}</label>}
+      {accountPicker && <label className="mail-mobile-picker"><span>{t("mobile.mail.accountLabel")} {isUntested("mobile.mail.accountPicker") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>{accountPicker}</label>}
       {account && <div className="mail-mobile-account">
         <div><strong>{safeText(account.label)}</strong><small>{safeText(account.address)}</small></div>
         <div className="mail-mobile-folders">{sortedFolders(account.folders).map((item) => <button className={item.unread > 0 ? "has-unread" : undefined} key={item.id} onClick={() => void loadFolder(item)} disabled={busy}>
-          <i aria-hidden="true">{KIND_GLYPH[item.kind] ?? "📁"}</i><span>{safeText(item.name)}</span><small>{item.unread} unread · {item.total}</small>
+          <i aria-hidden="true">{KIND_GLYPH[item.kind] ?? "📁"}</i><span>{safeText(item.name)}</span><small>{t("mobile.mail.folderCounts", { unread: item.unread, total: item.total })}</small>
         </button>)}</div>
       </div>}
-      {accounts.length === 0 && <p className="mail-mobile-empty">No mail accounts are configured in {BRAND.display}.</p>}
+      {accounts.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noAccounts")}</p>}
     </section>}
   </main>;
 }

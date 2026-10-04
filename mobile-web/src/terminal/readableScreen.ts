@@ -13,6 +13,8 @@
  * whenever earlier output is left out.
  */
 
+import { translate, useI18nStore } from "../../../src/lib/i18n";
+
 export interface ReadableSpan {
   text: string;
   /** Space-separated attribute classes (`b`, `i`, `u`, `d`, `s`). */
@@ -78,9 +80,6 @@ export const MAX_ROWS = 1_200;
 export const MAX_LINES = 400;
 /** A single logical line longer than this is clipped, with a marker. */
 const MAX_LINE = 4_000;
-
-export const TRUNCATION_NOTICE =
-  "Earlier output is not shown here. Switch to Terminal for the full session.";
 
 /** The default foreground/background of the phone terminal theme. Needed to
  * resolve `inverse` on a cell that is otherwise using terminal defaults. */
@@ -330,8 +329,9 @@ function capLine(line: ReadableLine): ReadableLine {
   if (line.text.length <= MAX_LINE) return line;
   const spans = line.spans.slice();
   trimSpansRight(spans, line.text.length - MAX_LINE);
-  spans.push({ text: "… [line truncated]", className: "d" });
-  return { ...line, text: `${line.text.slice(0, MAX_LINE)}… [line truncated]`, spans };
+  const marker = `… ${translate(useI18nStore.getState().lang, "mobile.focus.lineTruncated")}`;
+  spans.push({ text: marker, className: "d" });
+  return { ...line, text: `${line.text.slice(0, MAX_LINE)}${marker}`, spans };
 }
 
 /**

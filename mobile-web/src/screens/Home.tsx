@@ -9,9 +9,10 @@ import { Activity } from "./Activity";
 import { SECTION_GLYPH } from "../glyphs";
 import { BUNDLE_VERSION } from "../buildInfo";
 import { isUntested } from "../../../src/lib/untested";
-import { useT } from "../../../src/lib/i18n";
+import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { ThemeRow, ThemeSheet } from "../components/ThemePicker";
+import { LanguageRow, LanguageSheet } from "../components/LanguagePicker";
 import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { GitMark } from "../components/GitMark";
@@ -22,37 +23,47 @@ import { getPushState, pushSupport, type HostPushState } from "../push";
 import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
 
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
+
+/** A reorder hint with the drag grip drawn where its `{grip}` stands, so the
+ * sentence stays one translatable string. The project screen's hint too. */
+export function GripHint({ text }: { text: string }) {
+  const [before, after = ""] = text.split("{grip}");
+  return <>{before}<span aria-hidden="true">⠿</span>{after}</>;
+}
+
 const ALERT_ICON: Record<MobileAlertItem["kind"], string> = {
   mail: SECTION_GLYPH.mail,
   event: SECTION_GLYPH.calendar,
   task: SECTION_GLYPH.todo,
 };
 
-function relativeAlertTime(item: MobileAlertItem): string {
-  if (item.minutes_away === undefined) return "No date";
+function relativeAlertTime(item: MobileAlertItem, t: Translate): string {
+  if (item.minutes_away === undefined) return t("filesAlerts.noDate");
   if (item.all_day) {
     const days = item.days_away ?? 0;
-    if (days === 0) return "Today";
-    return days < 0 ? `${Math.abs(days)}d overdue` : `In ${days}d`;
+    if (days === 0) return t("filesAlerts.today");
+    const amount = t("mobile.home.alertDays", { count: Math.abs(days) });
+    return days < 0 ? t("mobile.home.alertOverdue", { amount }) : t("mobile.home.alertIn", { amount });
   }
   const minutes = item.minutes_away;
-  if (minutes === 0) return "Now";
+  if (minutes === 0) return t("filesAlerts.rightNow");
   const abs = Math.abs(minutes);
   const amount = abs >= 1440
-    ? `${Math.floor(abs / 1440)}d`
+    ? t("mobile.home.alertDays", { count: Math.floor(abs / 1440) })
     : abs >= 60
-      ? `${Math.floor(abs / 60)}h`
-      : `${abs}m`;
-  return minutes < 0 ? `${amount} overdue` : `In ${amount}`;
+      ? t("mobile.home.alertHours", { count: Math.floor(abs / 60) })
+      : t("mobile.home.alertMinutes", { count: abs });
+  return minutes < 0 ? t("mobile.home.alertOverdue", { amount }) : t("mobile.home.alertIn", { amount });
 }
 
 /** What the ✓ does to *this* row, said in the row's own terms — the desktop's
  * three labels verbatim, because it is the same act reaching the same stores.
  * None of the three deletes anything. */
-const DONE_LABEL: Record<MobileAlertItem["kind"], string> = {
-  mail: "Return this mail to normal",
-  event: "Remove this appointment from alerts",
-  task: "Mark this to-do done",
+const DONE_LABEL: Record<MobileAlertItem["kind"], TranslationKey> = {
+  mail: "filesAlerts.doneMail",
+  event: "filesAlerts.doneEvent",
+  task: "filesAlerts.doneTask",
 };
 
 function AlertRows({ alerts, onAlerts, todo, mail }: {
@@ -61,6 +72,7 @@ function AlertRows({ alerts, onAlerts, todo, mail }: {
   todo: (card?: string) => void;
   mail: () => void;
 }) {
+  const t = useT();
   // The row being resolved, so its own ✓ can say it is working and the rest go
   // quiet: the three resolutions are desktop store writes, and two of them
   // landing at once is how a phone on bad signal ends up ticking the wrong card.
@@ -78,17 +90,17 @@ function AlertRows({ alerts, onAlerts, todo, mail }: {
       onAlerts((await resolveAlert(alertId)).alerts);
     } catch (reason) {
       // Done on the desktop with a feed too large to show is not a failed ✓.
-      setError(wasApplied(reason) ? describeFailure(reason) : `That alert could not be completed. ${BRAND.display} on the desktop owns it.`);
+      setError(wasApplied(reason) ? describeFailure(reason) : t("mobile.failure.alertResolveFailed"));
     } finally {
       setFinishing(null);
     }
   };
   if (!alerts.enabled) return null;
   return <section className="mobile-alerts" aria-labelledby="mobile-alerts-heading">
-    <h2 id="mobile-alerts-heading">Alerts</h2>
+    <h2 id="mobile-alerts-heading">{t("filesAlerts.title")}</h2>
     {error && <p className="mobile-alerts-error" role="alert">{error}</p>}
     {alerts.items.length === 0
-      ? <p className="mobile-alerts-empty">Nothing needs attention.</p>
+      ? <p className="mobile-alerts-empty">{t("mobile.home.alertsEmpty")}</p>
       : <div className="mobile-alert-list">{alerts.items.map((item, index) => {
         // A card row opens *its own* card: the alert has already named the one
         // thing that needs attention, and a board of forty is where finding it
@@ -104,7 +116,7 @@ function AlertRows({ alerts, onAlerts, todo, mail }: {
           <span className={`mobile-alert-dot ${item.severity}`} aria-hidden="true" />
           <span className="mobile-alert-icon" aria-hidden="true">{ALERT_ICON[item.kind]}</span>
           <span className="mobile-alert-copy"><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span>
-          <time>{relativeAlertTime(item)}</time>
+          <time>{relativeAlertTime(item, t)}</time>
         </>;
         // The ✓ sits **beside** the row rather than inside it, for the desktop
         // strip's reason: a button nested in a button is invalid markup, and it
@@ -116,8 +128,8 @@ function AlertRows({ alerts, onAlerts, todo, mail }: {
             className="mobile-alert-done"
             disabled={finishing !== null}
             onClick={() => void finish(item.alert_id as string)}
-            title={DONE_LABEL[item.kind]}
-            aria-label={DONE_LABEL[item.kind]}
+            title={t(DONE_LABEL[item.kind])}
+            aria-label={t(DONE_LABEL[item.kind])}
           >{finishing === item.alert_id ? "…" : "✓"}</button>}
           {open
             ? <button className="mobile-alert-row" onClick={open}>{contents}</button>
@@ -132,7 +144,7 @@ function AlertRows({ alerts, onAlerts, todo, mail }: {
  * are working, waiting or done, flat — so it is the one mode worth remembering
  * across the re-mounts a tab switch and a terminal visit cause. */
 type HomeView = "active" | "agents" | "search";
-const HOME_VIEWS: [HomeView, string][] = [["active", "Active"], ["agents", "Agents"], ["search", "Search"]];
+const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["search", "mobile.home.viewSearch"]];
 
 export function Home({ open, openTab, todo, mail }: {
   open: (id: string) => void;
@@ -148,6 +160,7 @@ export function Home({ open, openTab, todo, mail }: {
    * fix it mid-answer has already been read to in the wrong voice. */
   const [speechLang, setSpeechLang] = useState<SpeechLang>(() => readSpeechLang());
   const [speechLangSheet, setSpeechLangSheet] = useState(false);
+  const [languageSheet, setLanguageSheet] = useState(false);
   /** What a Mark up Submit tells the agent — worded here and nowhere else. */
   const [markupInstruction, setMarkupInstruction] = useState(() => customMarkupPrompts());
   const [markupInstructionSheet, setMarkupInstructionSheet] = useState(false);
@@ -264,35 +277,35 @@ export function Home({ open, openTab, todo, mail }: {
     <header className="home-header">
       <div className="home-brand" aria-label={BRAND.display}>
         <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" /></span>
-        <span className="home-brand-copy"><strong>{BRAND.display}</strong><small>{BUNDLE_VERSION}{isUntested("mobile.version.commit") && <span className="untested">Untested</span>}</small></span>
+        <span className="home-brand-copy"><strong>{BRAND.display}</strong><small>{BUNDLE_VERSION}{isUntested("mobile.version.commit") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small></span>
       </div>
       {/* The global views used to live here as a header rail; they are tabs of
           their own now, so the bar at the bottom of every screen carries them. */}
       <span className={offline ? "lamp off" : "lamp"} />
     </header>
     <div className="projects-row">
-      <h1>{view === "agents" ? "Agents" : "Projects"}</h1>
+      <h1>{view === "agents" ? t("mobile.home.agentsTitle") : t("mobile.home.projectsTitle")}</h1>
     </div>
     <nav>{HOME_VIEWS.map(([id, label]) => <button
       key={id}
       className={view === id ? "selected" : ""}
       aria-pressed={view === id}
       onClick={() => choose(id)}
-    >{label}</button>)}</nav>
+    >{t(label)}</button>)}</nav>
     {view === "agents" && <Activity open={openTab} onConnection={setOffline} />}
     {view !== "agents" && <>
-      {view === "search" && <input className="search" placeholder="Project name" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
+      {view === "search" && <input className="search" placeholder={t("mobile.home.searchPlaceholder")} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
       {offline && <p className="error connection-error">
         <strong>{describeUnavailable(offline).title}</strong>
         <span>{describeUnavailable(offline).hint}</span>
-        <span>{rows.length ? "Showing the last list this session loaded." : "Project data is never loaded from cache."}</span>
-        {isUntested("mobile.home.recover") && <span className="untested">Untested</span>}
+        <span>{rows.length ? t("mobile.home.showingLast") : t("mobile.home.neverCached")}</span>
+        {isUntested("mobile.home.recover") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </p>}
-      {!loaded && !offline && <p className="projects-empty" role="status">Loading projects…</p>}
+      {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.home.loading")}</p>}
       {loaded && rows.length === 0 && <p className="projects-empty">{view === "search"
-        ? query.trim() ? `No project by that name has ${BRAND.display} Mobile access.` : "Type a project's name to find it."
-        : `No project is active right now. Search finds any project with ${BRAND.display} Mobile access.`}</p>}
-      {canReorder && <p className="reorder-hint">Drag <span aria-hidden="true">⠿</span> to arrange — this order is kept on this phone, so the {BRAND.display} window's own project pills stay as they are. A project that has only just become active joins the end. {isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+        ? query.trim() ? t("mobile.home.noMatch") : t("mobile.home.typeToSearch")
+        : t("mobile.home.noneActive")}</p>}
+      {canReorder && <p className="reorder-hint"><GripHint text={t("mobile.home.reorderHint")} /> {isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       {/* A box row says it is one where a project row says its status: a box
           has no status of its own (listing it is what its switch means), and
           a "Paper" box beside a "Paper" project must be tellable apart.
@@ -310,8 +323,8 @@ export function Home({ open, openTab, todo, mail }: {
           <button className="card" onClick={() => open(project.id)}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="count">{project.live_sessions}</span></button>
           {canReorder && <button
             className="tab-card-grip"
-            aria-label={`Move ${project.label}`}
-            title="Drag to move this project, or use the arrow keys"
+            aria-label={t("mobile.home.move", { label: project.label })}
+            title={t("mobile.home.moveHint")}
             {...drag.gripProps(project.id)}
           ><span aria-hidden="true">⠿</span></button>}
         </div>
@@ -324,21 +337,23 @@ export function Home({ open, openTab, todo, mail }: {
     <section className="phone-settings" aria-labelledby="phone-settings-heading">
       <h2 id="phone-settings-heading">{t("mobile.home.phoneSettings")}</h2>
       <ul className="option-list">
+        <LanguageRow open={() => setLanguageSheet(true)} expanded={languageSheet} />
         <ThemeRow choice={theme} open={() => setThemeSheet(true)} expanded={themeSheet} />
         <li><button aria-haspopup="dialog" aria-expanded={speechLangSheet} onClick={() => setSpeechLangSheet(true)}>
-          <span><strong>{t("mobile.speech.language")}{isUntested("mobile.speech.language") && <span className="untested">Untested</span>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
+          <span><strong>{t("mobile.speech.language")}{isUntested("mobile.speech.language") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button></li>
         <li><button aria-haspopup="dialog" aria-expanded={pushSheet} onClick={() => setPushSheet(true)}>
-          <span><strong>{t("mobile.push.title")}{isUntested("mobile.push.title") && <span className="untested">Untested</span>}</strong><small>{pushSummary(push, t)}</small></span>
+          <span><strong>{t("mobile.push.title")}{isUntested("mobile.push.title") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{pushSummary(push, t)}</small></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button></li>
         <li><button aria-haspopup="dialog" aria-expanded={markupInstructionSheet} onClick={() => setMarkupInstructionSheet(true)}>
-          <span><strong>{t("mobile.markup.instruction.title")}{isUntested("mobile.markup.instruction") && <span className="untested">Untested</span>}</strong><small>{markupInstructionSummary(markupInstruction, t)}</small></span>
+          <span><strong>{t("mobile.markup.instruction.title")}{isUntested("mobile.markup.instruction") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{markupInstructionSummary(markupInstruction, t)}</small></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button></li>
       </ul>
     </section>
+    {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
     {pushSheet && <NotificationsSheet onChange={setPush} onClose={() => setPushSheet(false)} />}
