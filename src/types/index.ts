@@ -166,6 +166,11 @@ export interface Settings {
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
     shell_tabs?: boolean;
+    /** A paired phone may list the Ollama models installed here and load or
+     * unload them (never download or delete). Unset is on; an explicit false
+     * closes the routes. Read by the sidecar per request and repeated by the
+     * desktop bridge (`lib/mobileLocalModels`). */
+    local_models?: boolean;
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */

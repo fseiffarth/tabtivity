@@ -1006,6 +1006,8 @@ export const dict: Dict = {
   "mobile.projectFiles": "Archivos del proyecto en el teléfono",
   "mobile.noShells": "Sin shells en el teléfono",
   "mobile.noShellsHelp": "Un teléfono emparejado solo ve y abre pestañas de agentes. Las pestañas de shell no aparecen en sus listas y no puede iniciar ninguna; si lo desactivas, puede conectarse a shells y abrirlas, que se ejecutan como tú sin nada en medio.",
+  "mobile.localModelsGate": "Modelos locales desde el teléfono",
+  "mobile.localModelsGateHelp": "Un teléfono emparejado puede ver los modelos de Ollama instalados aquí y cargarlos o descargarlos de la memoria. No puede descargar, actualizar ni eliminar modelos, y solo inicia Ollama sin pedir una contraseña. Cargar un único modelo lo convierte en el modelo de todos los roles, igual que aquí.",
   "mobile.projectFilesHelp": "Un teléfono emparejado puede recorrer las carpetas de los proyectos de arriba y abrir archivos para leerlos, guardarlos o compartirlos. Desde el teléfono no se puede cambiar nada. Se omiten .git, .{slug} y los archivos .env, y no se siguen los enlaces simbólicos.",
   "mobile.rootAccessClosed": "Cerrado ahora mismo: los agentes raíz tienen las herramientas MCP, pero no todas sus escrituras quedan en espera de revisión tras el sandbox de agentes. Pon «Revisar escrituras de agentes de raíz» en «Todas las escrituras» y mantén el sandbox activo para la raíz, o desactiva las herramientas MCP de la consola raíz.",
   "mobile.projectAccess": "Acceso por proyecto",

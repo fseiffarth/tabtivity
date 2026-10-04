@@ -1007,6 +1007,8 @@ export const dict: Dict = {
   "mobile.projectFiles": "Fichiers du projet sur le téléphone",
   "mobile.noShells": "Pas de shells sur le téléphone",
   "mobile.noShellsHelp": "Un téléphone appairé ne voit et n'ouvre que les onglets d'agents. Les onglets shell n'apparaissent pas dans ses listes et il ne peut pas en lancer ; désactivé, il peut se connecter aux shells et en ouvrir, qui s'exécutent en votre nom sans rien entre les deux.",
+  "mobile.localModelsGate": "Modèles locaux depuis le téléphone",
+  "mobile.localModelsGateHelp": "Un téléphone appairé peut voir les modèles Ollama installés ici et les charger ou les décharger. Il ne peut ni télécharger, ni mettre à jour, ni supprimer de modèles, et ne démarre Ollama que sans demander de mot de passe. Charger un seul modèle en fait le modèle de tous les rôles, comme ici.",
   "mobile.projectFilesHelp": "Un téléphone appairé peut parcourir les dossiers des projets ci-dessus et ouvrir des fichiers pour les lire, les enregistrer ou les partager. Rien ne peut être modifié depuis le téléphone. .git, .{slug} et les fichiers .env sont omis, et les liens symboliques ne sont pas suivis.",
   "mobile.rootAccessClosed": "Fermé pour l’instant : les agents racine disposent des outils MCP, mais leurs écritures ne sont pas toutes mises en attente d’examen derrière le bac à sable des agents. Réglez « Examiner les écritures des agents racine » sur « Toutes les écritures » et gardez le bac à sable actif pour la racine, ou désactivez les outils MCP de la console racine.",
   "mobile.projectAccess": "Accès par projet",

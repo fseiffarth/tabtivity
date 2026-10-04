@@ -963,6 +963,8 @@ export const enSource = {
   "mobile.projectFiles": "Project files on the phone",
   "mobile.noShells": "No shells on the phone",
   "mobile.noShellsHelp": "A paired phone sees and opens only agent tabs. Shell tabs are left off its lists and it cannot start one; turning this off lets it attach to and open shells, which run as you with nothing in between.",
+  "mobile.localModelsGate": "Local models from the phone",
+  "mobile.localModelsGateHelp": "A paired phone may see the Ollama models installed here and load or unload them. It can't download, update or delete models, and it starts Ollama only without asking for a password. Loading a single model makes it the model for every role, as it does here.",
   "mobile.projectFilesHelp": "A paired phone may browse the folders of the projects above and open files to read, save or share. Nothing can be changed from the phone. .git, .{slug} and .env files are left out, and symbolic links are not followed.",
   "mobile.rootAccessClosed": "Closed right now: root agents have the MCP tools, but their writes are not all staged behind the agent sandbox. Set \"Review root-agent writes\" to \"All writes\" and keep the sandbox on for root, or switch the root MCP tools off.",
   "mobile.projectAccess": "Project access",

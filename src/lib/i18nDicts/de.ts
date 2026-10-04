@@ -1008,6 +1008,8 @@ export const dict: Dict = {
   "mobile.projectFiles": "Projektdateien auf dem Telefon",
   "mobile.noShells": "Keine Shells auf dem Telefon",
   "mobile.noShellsHelp": "Ein gekoppeltes Telefon sieht und öffnet nur Agenten-Tabs. Shell-Tabs fehlen in seinen Listen, und es kann keine starten; ausgeschaltet darf es sich mit Shells verbinden und sie öffnen – sie laufen als du, ohne etwas dazwischen.",
+  "mobile.localModelsGate": "Lokale Modelle vom Telefon",
+  "mobile.localModelsGateHelp": "Ein gekoppeltes Telefon darf die hier installierten Ollama-Modelle sehen und laden oder entladen. Es kann keine Modelle herunterladen, aktualisieren oder löschen, und es startet Ollama nur, ohne nach einem Passwort zu fragen. Wird ein einzelnes Modell geladen, wird es wie hier zum Modell für jede Rolle.",
   "mobile.projectFilesHelp": "Ein gekoppeltes Telefon darf die Ordner der obigen Projekte durchsehen und Dateien zum Lesen, Speichern oder Teilen öffnen. Vom Telefon aus lässt sich nichts ändern. .git, .{slug} und .env-Dateien bleiben ausgeblendet, symbolischen Links wird nicht gefolgt.",
   "mobile.rootAccessClosed": "Derzeit geschlossen: Root-Agenten haben die MCP-Werkzeuge, aber ihre Schreibzugriffe werden nicht alle hinter der Agenten-Sandbox zur Prüfung vorgemerkt. Stelle „Schreibzugriffe von Root-Agenten prüfen“ auf „Alle Schreibzugriffe“ und lass die Sandbox für Root eingeschaltet, oder schalte die MCP-Werkzeuge der Root-Konsole aus.",
   "mobile.projectAccess": "Projektzugriff",
