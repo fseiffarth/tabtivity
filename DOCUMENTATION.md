@@ -839,6 +839,20 @@ What survives a relaunch is the agent's own answer: the backend re-applies the
 mode Claude's Stop hook recorded onto the `--resume` line. Args are never
 persisted as the source of truth — they are rebuilt from layout state.
 
+**API keys** (`services/agent_api_keys.rs`, `docs/api_chat_plan.md` Part A). Next
+to the shared logins, Manage CLIs keeps one provider API key per provider
+(Anthropic, OpenAI, Gemini, Mistral) in the OS keychain — never in a file — and
+hands it, at spawn, to the CLIs the user switched on (`agent_api_key_clis`) as
+the variable each reads: Claude, Gemini, Mistral Vibe and OpenCode; Codex
+documents no interactive env route and is left out. Local session tabs only (no
+remote, container, local-model or sign-in tab); a variable the user set wins;
+the names are tmux secrets (no argv, no launcher script). The CLIs' own prompts
+stay theirs: Claude asks once per project whether to use a detected key and
+defaults to No; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude
+tab runs without Remote Control. The agent can read its own key, and a
+project's CLI config can point the CLI at another host that then receives it —
+the settings text recommends a spend-limited key.
+
 ### Remote, Sync, and Multi-Host
 
 Remote projects are **mount-free**: no sshfs, no FUSE. Tabs run on the host over

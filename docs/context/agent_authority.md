@@ -362,6 +362,29 @@ keyring entry and hands it to each fenced Copilot as `COPILOT_GITHUB_TOKEN`
 keeper moves a `/login` token out of the file within seconds). A harvested
 token replaces a stored one only once GitHub rejects the stored one.
 
+Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Part A)
+take the same keychain route: one key per provider under
+`remote_credentials`' service (account `agent-key:<provider>`), never in a
+file. At spawn they are set as the variable each CLI reads
+(`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`, and all four for
+OpenCode; Codex has none) — inside both fence wraps, so a CLI typed into a
+shell tab gets them through the shim too, and in `launch_prep`'s Host-session
+and fence-less-platform arms. Only CLIs listed in `agent_api_key_clis` get
+one; never a remote, container or local-model spawn, nor a subcommand (a
+sign-in tab); a value the user set (or an alias such as
+`ANTHROPIC_AUTH_TOKEN`) wins. The names are in `tmux_local::SECRET_ENV`: on no
+tmux argv or launcher script, their `update-environment` slots stay on the
+user's default tmux server (later sessions there take them from the client or
+drop them), and on tmux < 3.2 the key is dropped rather than put on the argv.
+The unfenced login shell a fenced pane leaves behind starts with `env -u` over
+every `SECRET_ENV` name — before this it inherited the MCP and Copilot tokens
+as well. A keyed local Claude tab skips `--remote-control`, which API-key auth
+refuses. The CLIs' own approval steps stay theirs (Claude asks once per agent
+home, default No; Gemini needs its `/auth` pick). **Stated, not solved:** the
+agent can read its key, and a project's own CLI config (`ANTHROPIC_BASE_URL`
+in `.claude/settings.json`, an OpenCode `baseURL`, Gemini's `.env`) can send
+it to another host without a tool call — hence the spend-limited-key advice.
+
 Composition is explicit:
 
 - A project container is already the stronger boundary, so the fence is skipped.

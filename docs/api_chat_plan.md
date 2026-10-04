@@ -1,8 +1,8 @@
 # API keys for agent CLIs, and a built-in API chat — plan
 
-Status: plan only (2026-10-04), reviewed against the code the same day (see
-"Review notes" at the end). Nothing built. Part A is scheduled; Part B is
-not.
+Status: Part A built 2026-10-04 (see "Implementation notes (Part A)" at the
+end; never live-verified); Part B not scheduled. Reviewed against the code the
+same day (see "Review notes").
 
 ## Why
 
@@ -94,16 +94,17 @@ kind and is written down here so Part A's storage is shaped to serve it.
 ## Which CLIs, and how each takes a key
 
 Checked against vendor docs on 2026-10-04; only `claude` 2.1.288 is
-installed here, and none was run with a key. "Aliases" are the other names
+installed here (A0 ran it with a fake key, below); the other rows are
+**from docs**, not run. "Aliases" are the other names
 that count as user-set (decision 5).
 
 | CLI (registry id) | Provider | Injected variable | Aliases | What the docs say | v1 |
 |---|---|---|---|---|---|
-| `claude` | anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_AUTH_TOKEN` | code.claude.com/docs/en/iam: ranks above `/login`; interactive mode asks once to approve, remembered; `-p` always uses it. Remote Control refuses API-key auth (`--remote-control` still starts, then shows a failure notice). | yes |
-| `codex` | openai | — | — | developers.openai.com/codex/auth: the documented route is `codex login --with-api-key` (writes `auth.json`); `CODEX_API_KEY` is for exec/review/SDK only; interactive use of `OPENAI_API_KEY` is not documented. | **no** — unless A0 shows the TUI uses `OPENAI_API_KEY` |
-| `gemini` | gemini | `GEMINI_API_KEY` | `GOOGLE_API_KEY` | geminicli.com auth docs: interactive mode needs "Use Gemini API key" picked in `/auth` (`security.auth.selectedType = "gemini-api-key"`); a home already on Google login keeps it. | yes, untested |
-| `vibe` | mistral | `MISTRAL_API_KEY` | — | env or `~/.vibe/.env`; which wins when both exist is unverified. | yes, untested |
-| `opencode` | all four | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` | google: `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` | models.dev `env` lists (OpenCode's provider source); precedence against its own `auth.json` unverified. | yes, untested |
+| `claude` | anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_AUTH_TOKEN` | code.claude.com/docs/en/iam: ranks above `/login`; interactive mode asks once to approve, remembered; `-p` always uses it. Remote Control refuses API-key auth (`--remote-control` still starts, then shows a failure notice). **A0, 2.1.288, scratch `HOME`, fake key:** `-p` sends the key (debug log: "API-key auth precedence active", 401 "API key is invalid", retried 11×, so a bad key in `-p` takes minutes to fail); the TUI, after the theme screen, shows "Detected a custom API key in your environment", the variable's name with the key's last 20 characters, then "Do you want to use this API key? Yes / ❯ No (recommended)". The Remote Control notice was not checked (needs a real key). | yes |
+| `codex` | openai | — | — | developers.openai.com/codex/auth: the documented route is `codex login --with-api-key` (writes `auth.json`); `CODEX_API_KEY` is for exec/review/SDK only; interactive use of `OPENAI_API_KEY` is not documented. **A0:** not installed here, so not run — stays out. | **no** |
+| `gemini` | gemini | `GEMINI_API_KEY` | `GOOGLE_API_KEY` | geminicli.com auth docs: interactive mode needs "Use Gemini API key" picked in `/auth` (`security.auth.selectedType = "gemini-api-key"`); a home already on Google login keeps it. **From docs** (not installed here). Implemented aliases: `GOOGLE_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` (the provider's, shared with OpenCode). | yes, untested |
+| `vibe` | mistral | `MISTRAL_API_KEY` | — | env or `~/.vibe/.env`; which wins when both exist is unverified. **From docs** (not installed here). | yes, untested |
+| `opencode` | all four | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` | google: `GOOGLE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` | models.dev `env` lists (OpenCode's provider source); precedence against its own `auth.json` unverified. **From docs** (not installed here). | yes, untested |
 
 So the OpenAI key serves only OpenCode in v1. Others (Qwen's
 OpenAI-compatible triple, Crush, Goose, Pi, Droid's `FACTORY_API_KEY`, Amp's
@@ -492,3 +493,62 @@ Open for the implementer:
 - The kernel-keyring seccomp filter that stops a fenced agent from reading
   *other* providers' keys out of the session keyring was committed but never
   live-verified.
+
+# Implementation notes (Part A, 2026-10-04)
+
+Built on the plan above with the review notes applied. Never live-verified;
+the untested pills are `settings.agentApiKeys`, `settings.agentApiKeys.claude`,
+`settings.agentApiKeys.gemini`, `settings.agentApiKeys.vibe`,
+`settings.agentApiKeys.opencode` and `mobile.signIn.apiKey`.
+
+**A0.** Only Claude 2.1.288 could be run (scratch `HOME`, `env -i`, off the tab
+record, fake key). Verified: the key is used ahead of any login (`-p` sends it;
+debug log "API-key auth precedence active"), and the TUI's approval dialog
+exists with **No (recommended)** preselected. Not verified: Remote Control's
+refusal notice, `/status` on a real key. Reader / phone Focus: nothing renders
+this dialog as buttons — its rows are unnumbered, and `selectPrompt` reads only
+numbered dialogs it opened itself — so it stays on screen and is answered with
+the arrow keys (desktop terminal, or the phone's keys). The dialog prints the
+key's **last 20 characters** on screen, so they reach the phone's terminal
+mirror while it is up — the CLI's own UI, noted, not changed. Codex, Gemini,
+Vibe and OpenCode are not installed here: their rows are from docs.
+
+**Deviations from the plan, and why.**
+
+- Keychain account `agent-key:<provider>` instead of the drafted
+  `agent-api-key` prefix: `scripts/privacy-check.sh` reads "api-key", a colon
+  and text as a credential
+  assignment and blocks every line naming the account. Same service, same
+  rules, new accounts either way.
+- `opts.local_model` does not exist on `PtyOptions`. A local-model spawn is
+  recognised by `agent_api_keys::is_local_model`: the tab's host-bound marker
+  (`host_bound_uid`), the model label the frontend puts on every such tab
+  (`<APP>_LOCAL_MODEL`), or Vibe's `VIBE_ACTIVE_MODEL`.
+- The pure core takes the subcommand flag (captured by each caller before a
+  fence rewrites `opts.args`) and Tabtivity's own environment as a function,
+  so the tests do not depend on the runner's environment.
+- Remote Control is skipped by `launch_prep::local_claude_keyed`: Claude
+  switched on **and** an Anthropic key saved (`agent_api_keys::keyed`), not
+  the setting alone — a switch left on after the key was removed must not cost
+  the tab its Remote Control. One keychain read, only when Claude is switched
+  on and Remote Control would be added.
+- tmux < 3.2: `launch_prep` records which key variables the tab brought
+  before the fence and drops only the ones the fence added
+  (`drop_added_api_keys`); one stderr line names them.
+- The unfenced-shell fix (`tmux_local::trailing_shell`) covers every
+  `SECRET_ENV` name, so the MCP tokens and the Copilot token no longer leak
+  into the shell a fenced pane leaves behind either.
+- Nothing is logged at injection: in the `--agent-shim` process stderr is the
+  user's own terminal.
+- The user help went to `docs/help/agent-clis.md` (where the shared-logins
+  text lives, served by the help MCP) as well as a short paragraph in
+  `DOCUMENTATION.md`'s agent-authority section; `DOCUMENTATION.md` has no
+  shared-logins text to sit next to.
+- The phone row: `signInOptions` sends `signed_in: true` and `api_key: true`
+  for a keyed CLI even where the login store is not shared, and the backend's
+  `MobileSignInOption` gained `api_key` (it re-serializes the desktop's answer
+  and would otherwise drop the field). The phone pill is
+  `mobile.signIn.apiKey`. The phone test went into
+  `MobileSignInTab.test.tsx`, where the sign-in list's test already lives.
+- `AgentApiKeysRows` is exported for its test; `AgentLoginsRows` re-reads on
+  every key or switch change (`refreshKey`).

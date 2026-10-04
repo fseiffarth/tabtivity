@@ -1,7 +1,7 @@
 ---
 id: agent-clis
 title: AI agent CLIs — install, sign in, open
-keywords: [agent, cli, install, claude, codex, gemini, npm, node, manage clis, sign in, login, resume, custom agent, skills]
+keywords: [agent, cli, install, claude, codex, gemini, npm, node, manage clis, sign in, login, api key, resume, custom agent, skills]
 ---
 
 Tabtivity runs AI coding agents as terminal tabs. It does not bundle them: each
@@ -81,6 +81,22 @@ that for you, once, for every CLI Tabtivity has no login for yet. **Sign out** t
 everywhere. A CLI that keeps its login in the system keyring or a database
 (Kiro, Kilo, OpenClaw, Copilot) signs in once per project instead — Copilot's
 case is described under the sandbox below.
+
+**API keys instead of a subscription.** If you pay per token, Settings → Agent
+sandbox → **API keys** keeps one key per provider (Anthropic, OpenAI, Google
+Gemini, Mistral) in your system keyring, and a switch per CLI (Claude, Gemini,
+Mistral, OpenCode) hands it to that CLI's new local tabs. Nothing is switched on
+by default — Claude prefers a key over your subscription once you approve it.
+Claude asks once per project whether to use the key and its default answer is
+**No**: pick Yes (change it later in `/config` → Use custom API key). Gemini
+uses the key only after you pick "Use Gemini API key" in its `/auth`, once per
+project. Claude tabs on a key run without Remote Control. Remote, container and
+local-model tabs never get a key, and a key you exported yourself wins. Changes
+reach new tabs only. An agent can read its own key, and a project's own CLI
+config can send it to another server, so use a spend-limited key. If a tab
+reports an invalid key, fix or remove it there — signing in again does not help
+while the key is in use. Codex is not offered: use `codex login --with-api-key`
+in a Codex tab instead (its login file is shared like any other).
 
 ## Open an agent tab
 
