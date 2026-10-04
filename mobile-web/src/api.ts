@@ -40,8 +40,9 @@ export interface CloudLaunchRow { agent_id: string; action: "new" | "open"; task
 /** One agent the ＋ can open a sign-in tab for. `signed_in` is absent where
  * the desktop cannot tell; `alternate` names the CLI's other way in;
  * `api_key` says it starts on an API key the desktop keeps (then
- * `signed_in` is true — it needs no login). */
-export interface SignInRow { agent_id: string; signed_in?: boolean; account?: string; alternate?: "console" | "browser"; api_key?: boolean }
+ * `signed_in` is true — it needs no login); `api_budget_reached` says that
+ * key's monthly budget is spent or unset, so a new tab would be refused. */
+export interface SignInRow { agent_id: string; signed_in?: boolean; account?: string; alternate?: "console" | "browser"; api_key?: boolean; api_budget_reached?: boolean }
 /** The ＋ sheet's local-model group: the model the desktop's "+" drives and
  * the agents it offers for it. `ready` is false until the model is on the GPU
  * (a start then loads it first); `caution` marks an agent built for hosted

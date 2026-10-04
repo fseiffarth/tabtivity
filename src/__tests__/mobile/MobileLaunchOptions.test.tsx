@@ -110,13 +110,14 @@ describe("Mobile bridge — launch options", () => {
       command === "agent_logins"
         ? Promise.resolve([
             { id: "claude", signed_in: true, account: "me@example.com", importable: false, blocked: null, shared: true, api_key: true },
-            { id: "gemini", signed_in: false, account: null, importable: false, blocked: null, shared: true, api_key: true },
+            { id: "gemini", signed_in: false, account: null, importable: false, blocked: null, shared: true, api_key: true, api_budget_reached: true },
           ])
         : answer(command, args as Parameters<typeof invoke>[1]));
     const response = await ask({ type: "launch_options", request_id: "l3", project_id: paper.id });
     expect(response.sign_in).toEqual([
       { agent_id: "agent-6", signed_in: true, account: "me@example.com", alternate: "console", api_key: true },
-      { agent_id: "agent-6", signed_in: true, api_key: true },
+      // Out of budget: the flag crosses, never an amount.
+      { agent_id: "agent-6", signed_in: true, api_key: true, api_budget_reached: true },
     ]);
     // No provider name crosses.
     expect(JSON.stringify(response.sign_in)).not.toMatch(/anthropic|gemini_api|google/i);

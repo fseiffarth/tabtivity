@@ -208,4 +208,21 @@ describe("NewTabSheet → Sign in to an agent", () => {
     // Signing in is still offered: the CLI's own login stays the user's.
     expect(screen.getAllByRole("button", { name: "Sign in again" })).toHaveLength(2);
   });
+
+  it("says when the desktop's API key is out of budget", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        worktrees: [],
+        cloud: [],
+        sign_in: [{ agent_id: "a1", signed_in: true, api_key: true, api_budget_reached: true }],
+      }),
+    } as Response);
+    const agents = [{ id: "a1", label: "Claude", modes: [] }];
+    render(<NewTabSheet projectId="p1" agents={agents} shells={false} busy={false} onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Sign in to an agent/ }));
+    expect(screen.getByText("API budget reached")).toBeTruthy();
+    expect(screen.queryByText("Uses an API key")).toBeNull();
+  });
 });

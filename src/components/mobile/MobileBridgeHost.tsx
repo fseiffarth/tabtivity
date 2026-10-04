@@ -120,14 +120,14 @@ interface CreateRequest {
 }
 interface MobileWorktree { id: string; label: string; branch?: string; main: boolean }
 interface MobileCloudLaunch { agent_id: string; action: string; task: boolean }
-interface MobileSignInOption { agent_id: string; signed_in?: boolean; account?: string; alternate?: string; api_key?: boolean }
+interface MobileSignInOption { agent_id: string; signed_in?: boolean; account?: string; alternate?: string; api_key?: boolean; api_budget_reached?: boolean }
 /** The ＋ sheet's local-model group: the model the desktop's "+" drives and
  * the agents it offers for it. `ready` is false until the model sits on the
  * GPU (`probeLocalModelPlacement`) — a start then loads it first. */
 interface MobileLocalAgent { id: string; label: string; caution: boolean }
 interface MobileLocalLaunch { model: string; ready: boolean; agents: MobileLocalAgent[] }
 /** One row of `agent_logins` (`services::agent_auth::LoginStatus`). */
-interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean }
+interface AgentLoginRow { id: string; signed_in: boolean; account: string | null; shared: boolean; api_key?: boolean; api_budget_reached?: boolean }
 interface TodoColumn { id: string; name: string; position: number; done: boolean; archived: boolean; overdue?: boolean; due_today?: boolean; color?: string }
 interface TodoSubtask { id: string; title: string; done: boolean }
 interface TodoTaskInput {
@@ -1028,6 +1028,9 @@ async function signInOptions(): Promise<MobileSignInOption[]> {
         ...(login?.shared && login.signed_in && login.account ? { account: login.account } : {}),
         ...(alternate ? { alternate } : {}),
         ...(keyed ? { api_key: true } : {}),
+        // Its key's monthly budget is spent (or unset): a new tab is refused.
+        // A flag only — no amount crosses.
+        ...(keyed && login?.api_budget_reached ? { api_budget_reached: true } : {}),
       };
     });
 }
