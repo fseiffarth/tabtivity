@@ -85,7 +85,7 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     vi.restoreAllMocks();
   });
 
-  it("lists both directions newest first in the strip over the chat, and opens a row in the viewer", async () => {
+  it("splits the files into In and Out in the strip over the chat, and opens a row in the viewer", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
       { name: "board.md", kind: "text/markdown", size: 900, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },
       { name: "theirs.png", kind: "image/png", size: 9_000, modified: secs("2026-10-04T10:17:00Z") },
@@ -102,15 +102,17 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
-    // Another tab's file stays in the gallery; this chat's two, newest first.
-    const rows = within(index).getAllByRole("listitem");
-    expect(rows.map((row) => row.querySelector(".sent-index-name")?.textContent)).toEqual(["board.md", "photo.jpg"]);
-    expect(rows[0].querySelector(".sent-index-from")?.textContent).toBe("Agent");
-    expect(rows[1].querySelector(".sent-index-from")?.textContent).toBe("You");
-    expect(within(rows[0]).getByRole("button").getAttribute("aria-label")).toContain("From the agent");
-    expect(rows[1].querySelector("img")?.getAttribute("src")).toBe(`/api/v1/tabs/tab-7/inbox/${PHOTO}`);
+    // Another tab's file stays in the gallery; this chat's two, split by side.
+    const names = (region: HTMLElement) => within(region).getAllByRole("listitem").map((row) => row.querySelector(".sent-index-name")?.textContent);
+    const sections = within(index).getAllByRole("region");
+    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["In · from you (1)", "Out · from the agent (1)"]);
+    const [inbound, outbound] = sections;
+    expect(names(inbound)).toEqual(["photo.jpg"]);
+    expect(names(outbound)).toEqual(["board.md"]);
+    expect(within(outbound).getByRole("button").getAttribute("aria-label")).toContain("From the agent");
+    expect(inbound.querySelector("img")?.getAttribute("src")).toBe(`/api/v1/tabs/tab-7/inbox/${PHOTO}`);
 
-    fireEvent.click(within(rows[1]).getByRole("button", { name: "Open photo.jpg · From you" }));
+    fireEvent.click(within(inbound).getByRole("button", { name: "Open photo.jpg · From you" }));
     expect(screen.getByRole("dialog", { name: "photo.jpg" })).toBeTruthy();
   });
 
@@ -135,6 +137,17 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     expect(agents.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(agents);
     expect(files.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("leaves out a side that carried nothing", async () => {
+    vi.stubGlobal("fetch", sidecarFetch([
+      { name: "plot.png", kind: "image/png", size: 9_000, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },
+    ], { ...TRANSCRIPT, entries: [TRANSCRIPT.entries[1]] }));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const index = screen.getByRole("navigation", { name: "Files in this conversation" });
+    fireEvent.click(within(index).getByRole("button", { name: /^Files \(1\)/ }));
+    expect(within(index).getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["Out · from the agent (1)"]);
   });
 
   it("shows no list when the conversation carried no file", async () => {

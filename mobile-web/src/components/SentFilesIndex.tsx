@@ -31,9 +31,10 @@ export function sentFiles(outbox: readonly OutboxFile[], leaves: readonly string
 
 /**
  * The conversation's files, beside the subagent index in the sticky strip over
- * the chat: shut, one chip with the count; open, a grid of tiles the strip's
- * full width — each file's picture or badge tagged with who sent it, its name,
- * when and how big. A tap opens the file full screen (the chat's own viewer for
+ * the chat: shut, one chip with the count; open, the strip's full width split
+ * in two — In (what you sent into the tab) over Out (what the agent sent out of
+ * it), each a grid of tiles: the file's picture or badge, its name, when and
+ * how big. A tap opens the file full screen (the chat's own viewer for
  * its side), or saves bytes the phone cannot show. The pictures stay where they were sent in the chat;
  * this is the way to one without scrolling the conversation for it.
  */
@@ -56,27 +57,36 @@ export function SentFilesIndex({ tabId, files, open, onToggle, onOpen }: {
       <span>{t("mobile.sentIndex.toggle", { count: files.length })}{untested && <em> · {t("mobile.focus.untested")}</em>}</span>
       <svg className={open ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
-    {open && <ul id="mobile-sent-list" className="sent-index-list">
-      {files.map((row) => {
-        const { file, from } = row;
-        const name = sentName(file);
-        const content = <>
-          <span className="sent-index-thumb">
-            {file.kind.startsWith("image/")
-              ? <img src={urlOf(row)} alt="" loading="lazy" decoding="async" />
-              : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
-            <b className={`sent-index-from ${from}`}>{t(from === "agent" ? "mobile.sentIndex.tagAgent" : "mobile.sentIndex.tagYou")}</b>
-          </span>
-          <span className="sent-index-name">{name}</span>
-          <small>{ageLabel(Math.max(0, now - file.modified))} · {sizeLabel(file.size)}</small>
-        </>;
-        const label = `${t("mobile.outbox.open", { name })} · ${t(from === "agent" ? "mobile.sentIndex.fromAgent" : "mobile.sentIndex.fromYou")}`;
-        return <li key={`${from}:${file.name}`}>
-          {viewableFile(file)
-            ? <button type="button" onClick={() => onOpen(row)} aria-label={label} title={name}>{content}</button>
-            : <a href={urlOf(row, true)} download={name} aria-label={label} title={name}>{content}</a>}
-        </li>;
+    {open && <div id="mobile-sent-list" className="sent-index-groups">
+      {([["phone", "mobile.sentIndex.in"], ["agent", "mobile.sentIndex.out"]] as const).map(([side, heading]) => {
+        const rows = files.filter((row) => row.from === side);
+        if (rows.length === 0) return null;
+        const title = t(heading, { count: rows.length });
+        return <section key={side} aria-label={title}>
+          <h3 className={`sent-index-head ${side}`}>{title}</h3>
+          <ul className="sent-index-list">
+            {rows.map((row) => {
+              const { file, from } = row;
+              const name = sentName(file);
+              const content = <>
+                <span className="sent-index-thumb">
+                  {file.kind.startsWith("image/")
+                    ? <img src={urlOf(row)} alt="" loading="lazy" decoding="async" />
+                    : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
+                </span>
+                <span className="sent-index-name">{name}</span>
+                <small>{ageLabel(Math.max(0, now - file.modified))} · {sizeLabel(file.size)}</small>
+              </>;
+              const label = `${t("mobile.outbox.open", { name })} · ${t(from === "agent" ? "mobile.sentIndex.fromAgent" : "mobile.sentIndex.fromYou")}`;
+              return <li key={file.name}>
+                {viewableFile(file)
+                  ? <button type="button" onClick={() => onOpen(row)} aria-label={label} title={name}>{content}</button>
+                  : <a href={urlOf(row, true)} download={name} aria-label={label} title={name}>{content}</a>}
+              </li>;
+            })}
+          </ul>
+        </section>;
       })}
-    </ul>}
+    </div>}
   </nav>;
 }
