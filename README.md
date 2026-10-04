@@ -15,6 +15,10 @@
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri)
 
+[![Tabtivity in 90 seconds: projects, any agent, local models, split tabs, Git, remote runs, PDF markup, the phone app, mail and calendar](screenshots/tabtivity-promo.gif)](screenshots/tabtivity-promo.mp4)
+
+▶ **[Watch the 90-second promo with sound](screenshots/tabtivity-promo.mp4)**
+
 ## Introduction
 
 Tabtivity is a project-centric desktop layer that swaps your entire working context — windows, files, apps, Git state, layout, and especially AI agent terminals — as a single unit when you switch projects.
