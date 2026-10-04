@@ -177,6 +177,12 @@ pub fn refusal(code: &str) -> (StatusCode, &'static str) {
         "unreachable" => (StatusCode::BAD_GATEWAY, "unreachable"),
         // A window older than this feature.
         "unknown_request" => (StatusCode::BAD_REQUEST, "unknown_request"),
+        // The bridge's own, as every list-answering route forwards them: a
+        // write the window made whose fresh list could not be relayed must
+        // keep its code, or the phone offers to send it again instead of
+        // reloading (`reloadIfApplied` in `api.ts`).
+        "applied_response_too_large" => (StatusCode::BAD_REQUEST, "applied_response_too_large"),
+        "response_too_large" => (StatusCode::BAD_REQUEST, "response_too_large"),
         _ => (StatusCode::BAD_GATEWAY, "desktop_error"),
     }
 }
@@ -212,7 +218,21 @@ mod tests {
 
     #[test]
     fn model_refs_follow_the_desktop_charset_with_a_length_cap() {
-        for ok in ["hf.co/u/m:q4", "qwen3.5:9b", "llama3", "library/llama3:latest", "m@sha256", "phi-4_x", &"a".repeat(200)] {
+        let digest = format!("llama3@sha256:{}", "0123abcd".repeat(8));
+        for ok in [
+            "hf.co/u/m:q4",
+            "hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M",
+            "namespace/model:tag",
+            "registry.example.com:5000/ns/model:tag",
+            "qwen3.5:9b",
+            "llama3",
+            "library/llama3:latest",
+            "m@sha256",
+            &digest,
+            "gpt-oss:120b-cloud",
+            "phi-4_x",
+            &"a".repeat(200),
+        ] {
             assert!(valid_model_ref(ok), "{ok} refused");
         }
         for bad in [
@@ -347,6 +367,9 @@ mod tests {
             assert_eq!(refusal(code), (StatusCode::CONFLICT, code));
         }
         assert_eq!(refusal("unknown_request").0, StatusCode::BAD_REQUEST);
+        for code in ["applied_response_too_large", "response_too_large"] {
+            assert_eq!(refusal(code), (StatusCode::BAD_REQUEST, code));
+        }
         assert_eq!(refusal("unreachable").0, StatusCode::BAD_GATEWAY);
         assert_eq!(refusal("connect ECONNREFUSED 127.0.0.1:11434 /home/u/.ollama"), (StatusCode::BAD_GATEWAY, "desktop_error"));
     }

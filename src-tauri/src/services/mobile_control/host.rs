@@ -8805,7 +8805,10 @@ mod tests {
                 json!({ "body": "Thanks" }),
             ),
             (format!("/api/v1/projects/{project}/prompts"), json!({ "message": "Review" })),
+            ("/api/v1/local-models".into(), json!({ "action": "load", "model": "llama3" })),
         ];
+        // The local-models switch is unset (on) in a settings file that exists.
+        std::fs::write(host.state.config.state_dir.join("settings.json"), "{}").expect("settings");
 
         let socket = host.state.config.control_dir.join("desktop-control.sock");
         let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
