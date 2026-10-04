@@ -365,11 +365,20 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     // alone; it stamps nothing the store could adopt.)
     const answer = await invoke<ProjectBox | string>("ensure_box_folder", { boxId });
     const folder = typeof answer === "string" ? answer : answer?.folder;
-    const rev = typeof answer === "string" ? undefined : answer?.rev;
+    const answeredRev = typeof answer === "string" ? undefined : answer?.rev;
     set((state) => ({
-      boxes: state.boxes.map((b) =>
-        b.id === boxId ? { ...b, folder, ...(rev === undefined ? {} : { rev }) } : b,
-      ),
+      boxes: state.boxes.map((b) => {
+        if (b.id !== boxId) return b;
+        // The answer is the box as the FILE holds it, which may carry an edit
+        // this store never saw (another writer: a project import joining the
+        // box, a second window). Adopting that revision without that edit
+        // would let the next whole-list save erase it unrefused, so the
+        // revision is taken only when it is exactly the first open's own
+        // stamp: no folder held here, and one step past the held revision.
+        const stampedHere =
+          answeredRev !== undefined && !b.folder && answeredRev === (b.rev ?? 0) + 1;
+        return { ...b, folder, ...(stampedHere ? { rev: answeredRev } : {}) };
+      }),
     }));
     // Activate the box scope (disjoint from project ids / "root"). Box scopes
     // are persisted first-class now: CenterPanel's box-restore effect loads the

@@ -277,6 +277,34 @@ describe("boxes store — revisions follow the backend's writes", () => {
     expect(disk.get("boxA")).toMatchObject({ hide_pill: true, folder: "/boxes/boxA", rev: 3 });
   });
 
+  it("never adopts a revision that carries another writer's edit, so the next save cannot erase it", async () => {
+    // Another writer (a project import joining the box) moved both boxes on
+    // in the file; this store never reloaded. boxA was opened before (has its
+    // folder), boxB is opened for the first time now.
+    const disk = fakeBackend([
+      { ...box("boxA", ["imported"]), folder: "/boxes/boxA", rev: 2 },
+      { ...box("boxB", ["imported"]), rev: 2 },
+    ]);
+    useBoxesStore.setState({
+      boxes: [
+        { ...box("boxA", []), folder: "/boxes/boxA", rev: 1 },
+        { ...box("boxB", []), rev: 1 },
+      ],
+    });
+
+    await useBoxesStore.getState().openBox("boxA");
+    await useBoxesStore.getState().openBox("boxB");
+    const [a, b] = useBoxesStore.getState().boxes;
+    expect(a.rev).toBe(1);
+    expect(b).toMatchObject({ folder: "/boxes/boxB", rev: 1 });
+
+    // So the next whole-list save is refused as stale instead of writing the
+    // store's member lists over the imported membership.
+    await expect(useBoxesStore.getState().setBoxColor("boxA", "#336699")).rejects.toMatch(/changed on disk/);
+    expect(disk.get("boxA")?.member_ids).toEqual(["imported"]);
+    expect(disk.get("boxB")?.member_ids).toEqual(["imported"]);
+  });
+
   it("takes back only the revision, so an edit made while a save was in flight survives", async () => {
     fakeBackend([{ ...box("boxA", []), rev: 1 }, { ...box("boxB", []), rev: 1 }]);
     useBoxesStore.setState({
