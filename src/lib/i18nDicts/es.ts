@@ -1283,6 +1283,7 @@ export const dict: Dict = {
   "mcpSecurity.help": "Los permisos solo se aplican a esta sesión en ejecución. Las nuevas sesiones raíz conservan los valores predeterminados; los lectores de correo empiezan solo con correo. Desactivar la escritura da acceso de solo lectura. Los datos compartidos con un agente con acceso a la red pueden salir de este equipo. Las escrituras acotadas de calendario y tablero siempre requieren revisión. Revocar es definitivo para la pestaña: su agente queda rechazado desde entonces, y solo reabrir la pestaña entrega un token nuevo.",
   "mcpSecurity.refresh": "Actualizar",
   "mcpSecurity.empty": "No hay sesiones MCP activas.",
+  "mcpSecurity.headless": "Las pestañas que {app} Mobile abrió sin ninguna ventana abierta reciben sus herramientas de programación, push y ayuda del servicio en segundo plano de Mobile, no de esta ventana. Sus sesiones no aparecen aquí. Terminan cuando se cierra la pestaña o se detiene el servicio. Sus solicitudes de push y release se rechazan hasta que la pestaña se reinicie desde esta ventana.",
   "mcpSecurity.write": "Permitir cambios en calendarios, tableros y borradores",
   "mcpSecurity.revoke": "Revocar acceso",
   "mcpSecurity.all": "Todos, incluidas las entradas futuras",

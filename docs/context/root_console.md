@@ -675,6 +675,9 @@ So root is a phone scope, behind a line drawn where the rights actually are:
   through the same `pty_spawn` with no project id, so `apply_to_spawn` decides
   its tools by the same Root / MCP chips as a tab made at the desk. "Activate"
   raises the console (`useRootOverlayStore.show`); root is never switched to.
+- **Never with no window.** `headless::create_tab` refuses the root scope, and
+  the Mobile host's own MCP listener (`docs/headless_mcp_plan.md`) has no root
+  lane: `/mcp` is not routed there and `Runtime::serves_root` is false.
 - Root Claude tabs still spawn without `--remote-control`, so they never appear
   in Claude's own phone app — a different decision from Tabtivity's paired phone.
 - **The phone's raw terminal input is trusted as the user's, and reaches the

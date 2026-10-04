@@ -110,6 +110,7 @@ fn status_failure(status: reqwest::StatusCode, body: &str, have_token: bool) -> 
     match status.as_u16() {
         401 => Failure::new(Category::AuthFailed, "GitHub refused the stored token. Ask the user to check it in Settings → Git Hosting."),
         403 | 429 if lower.contains("rate limit") => Failure::new(Category::RateLimited, "GitHub's API rate limit is used up; try again later."),
+        403 | 404 if !have_token && super::git_push_mcp::keyring_free() => Failure::new(Category::NotAvailable, concat!("GitHub did not show this without a token, and this tab was started by ", crate::app_name!(), " Mobile while no window was open, which reads CI without the stored token. Ask the user to restart this tab from the ", crate::app_name!(), " window to read it with the token.")),
         403 | 404 if !have_token => Failure::new(Category::NotAvailable, "GitHub did not show this without a token. Ask the user to add a GitHub token in Settings → Git Hosting."),
         403 => Failure::new(Category::NotAvailable, "GitHub refused this for the stored token (its scopes may not cover it)."),
         404 => Failure::new(Category::NotFound, "GitHub has no such run, job or feature for this repository."),

@@ -1284,6 +1284,7 @@ export const dict: Dict = {
   "mcpSecurity.help": "Berechtigungen gelten nur für diese laufende Sitzung. Neue Root-Sitzungen behalten die bisherigen Standardrechte; Mail-Leser erhalten zunächst nur Mail-Zugriff. Ohne Schreibrechte ist der Zugriff schreibgeschützt. Daten für einen Agenten mit Netzwerkzugriff können diesen Computer verlassen. Eingeschränkte Kalender- und Board-Änderungen erfordern immer eine Prüfung. Ein Entzug ist für den Tab endgültig: sein Agent wird ab dann abgewiesen, und nur ein erneutes Öffnen des Tabs vergibt ein neues Token.",
   "mcpSecurity.refresh": "Aktualisieren",
   "mcpSecurity.empty": "Keine aktiven MCP-Sitzungen.",
+  "mcpSecurity.headless": "Tabs, die {app} Mobile ohne offenes Fenster gestartet hat, erhalten ihre Zeitplan-, Push- und Hilfe-Werkzeuge vom Mobile-Hintergrunddienst, nicht von diesem Fenster. Ihre Sitzungen werden hier nicht aufgeführt. Sie enden, wenn der Tab geschlossen wird oder der Dienst stoppt. Ihre Push- und Release-Anfragen werden abgelehnt, bis der Tab aus diesem Fenster neu gestartet wird.",
   "mcpSecurity.write": "Kalender-, Board- und Entwurfsänderungen erlauben",
   "mcpSecurity.revoke": "Zugriff widerrufen",
   "mcpSecurity.all": "Alle, einschließlich zukünftiger Einträge",

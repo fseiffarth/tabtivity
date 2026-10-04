@@ -11,10 +11,11 @@
 //!
 //! - minted per agent spawn from the OS CSPRNG, held in memory, **never written to
 //!   disk** — a project agent's fence sees `/` read-only, so a token in a file
-//!   would be a token it can read;
-//! - handed out in exactly one place, [`apply_to_spawn`], which the PTY spawn
-//!   path calls only for a *local agent whose scope is root* (`project_id ==
-//!   None`). The scope comes from the spawn request, the same trusted input
+//!   would be a token it can read. Each process keeps its own ([`TokenStore`]):
+//!   the Mobile host serves the tabs it spawns with no window open on a
+//!   listener of its own, never the root lane (`docs/headless_mcp_plan.md`);
+//! - handed out in exactly one place, [`grant_lanes`], which hands the root
+//!   lane only to a *local agent whose scope is root* (`project_id == None`). The scope comes from the spawn request, the same trusted input
 //!   that already decides the fence roots — a project agent cannot make Tauri
 //!   calls, so it cannot ask for a root spawn;
 //! - unreadable from a fenced project agent: bubblewrap gives it its own pid
@@ -75,8 +76,14 @@ pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 const PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// The listener endpoint. Secrets belong to individual root-agent spawns.
+///
+/// Each process that spawns agent tabs runs its own listener and serves the
+/// tabs it spawned (`docs/headless_mcp_plan.md`): the window, and the Mobile
+/// host for the tabs it starts with no window open. `serves_root` is false in
+/// the Mobile host, which serves the schedule, push and help lanes only — so
+/// [`grant_lanes`] hands out neither a root nor a reader token there.
 #[derive(Debug, Clone)]
-pub struct Runtime { pub port: u16 }
+pub struct Runtime { pub port: u16, pub serves_root: bool }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -114,8 +121,53 @@ fn lane(caller: Caller) -> u8 {
         Caller::Marker => 4,
     }
 }
-static TOKENS: OnceLock<std::sync::Mutex<HashMap<String, Session>>> = OnceLock::new();
-fn tokens() -> &'static std::sync::Mutex<HashMap<String, Session>> {
+/// One process's bearer tokens and the sessions they open, in memory only.
+/// Each process has exactly one ([`tokens`]) and its listener authenticates
+/// against it alone, so a token is accepted only where it was minted: a
+/// Mobile host's token is refused by the window's listener, and by the Mobile
+/// host's own after a restart (`docs/headless_mcp_plan.md`).
+#[derive(Default)]
+pub struct TokenStore(std::sync::Mutex<HashMap<String, Session>>);
+impl TokenStore {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// The session `header` (the raw `Authorization` value) opens here.
+    pub fn authenticate(&self, header: Option<&str>) -> Option<Session> {
+        let map = self.map();
+        let mut found = None;
+        for (token, session) in map.iter() {
+            if authorized(header, token) { found = Some(session.clone()); }
+        }
+        found
+    }
+    /// See [`register_token`].
+    fn register(&self, token: String, identity: Identity, read_mail: bool) {
+        let mut map = self.map();
+        let new_lane = lane(identity.caller);
+        map.retain(|_, old| {
+            if old.identity.tab == identity.tab && lane(old.identity.caller) == new_lane {
+                old.revoked.store(true, Ordering::Release);
+                false
+            } else { true }
+        });
+        let session = Session {
+            id: super::root_mcp_review::hash(token.as_bytes()),
+            access: Access::initial(identity.caller), identity,
+            revoked: Arc::new(AtomicBool::new(false)),
+            read_mail: Arc::new(AtomicBool::new(read_mail)),
+            projects_grant: Arc::new(std::sync::Mutex::new(ProjectsGrant::Hidden)),
+            permits: Arc::new(tokio::sync::Semaphore::new(2)),
+            rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
+            schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        };
+        map.insert(token, session);
+    }
+}
+static TOKENS: OnceLock<TokenStore> = OnceLock::new();
+/// This process's token store.
+pub fn tokens() -> &'static TokenStore {
     TOKENS.get_or_init(Default::default)
 }
 /// `read_mail` seeds the taint: `true` for a tab that read mail in an earlier
@@ -124,27 +176,20 @@ fn tokens() -> &'static std::sync::Mutex<HashMap<String, Session>> {
 /// A tab holds at most one session per *lane* ([`lane`]): the help, schedule
 /// and push identities ride beside a tab's root or reader token, so a respawn
 /// replaces only the session of its own lane.
+#[cfg(test)]
 fn register_token(token: String, identity: Identity, read_mail: bool) {
-    let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
-    let new_lane = lane(identity.caller);
-    map.retain(|_, old| {
-        if old.identity.tab == identity.tab && lane(old.identity.caller) == new_lane {
-            old.revoked.store(true, Ordering::Release);
-            false
-        } else { true }
-    });
-    let session = Session {
-        id: super::root_mcp_review::hash(token.as_bytes()),
-        access: Access::initial(identity.caller), identity,
-        revoked: Arc::new(AtomicBool::new(false)),
-        read_mail: Arc::new(AtomicBool::new(read_mail)),
-        projects_grant: Arc::new(std::sync::Mutex::new(ProjectsGrant::Hidden)),
-        permits: Arc::new(tokio::sync::Semaphore::new(2)),
-        rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
-        schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-        push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-    };
-    map.insert(token, session);
+    tokens().register(token, identity, read_mail);
+}
+/// Every tab that holds a token in this process with the session ids
+/// ([`Session::id`]) it holds, sorted — what the Mobile host's sweep checks
+/// against the tmux server. A respawn replaces the ids, so the pair names
+/// one generation of a tab's tokens.
+pub fn token_generations() -> Vec<(String, Vec<String>)> {
+    let mut by_tab: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for session in tokens().map().values() {
+        by_tab.entry(session.identity.tab.clone()).or_default().push(session.id.clone());
+    }
+    by_tab.into_iter().map(|(tab, mut ids)| { ids.sort(); (tab, ids) }).collect()
 }
 /// Record that `tab`'s fence lets it read the projects
 /// ([`Session::projects_grant`]): a root spawn with
@@ -153,7 +198,7 @@ fn register_token(token: String, identity: Identity, read_mail: bool) {
 /// Called from the spawn path before the agent process exists, so nothing can
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
-    for s in tokens().lock().unwrap_or_else(|p| p.into_inner()).values() {
+    for s in tokens().map().values() {
         if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker) {
             *s.projects_grant.lock().unwrap_or_else(|p| p.into_inner()) = grant.clone();
         }
@@ -176,7 +221,7 @@ pub enum ProjectsGrant {
 /// Whether the tab held a token.
 pub fn revoke_tab(tab: &str) -> bool {
     let mut held = false;
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).retain(|_, s| {
+    tokens().map().retain(|_, s| {
         if s.identity.tab == tab { s.revoked.store(true, Ordering::Release); held = true; false } else { true }
     });
     held
@@ -184,7 +229,7 @@ pub fn revoke_tab(tab: &str) -> bool {
 /// Whether a spawn of `tab` still holds a root-lane session (the help and
 /// markup lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values()
+    tokens().map().values()
         .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker))
 }
 
@@ -371,14 +416,14 @@ pub struct SessionInfo {
 /// Help and markup sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
 /// Tauri-only: replacing a grant invalidates all requests queued under the old grant.
 pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
-    let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
     if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
@@ -390,7 +435,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     Ok(())
 }
 pub fn revoke_session(id: &str) -> Result<String, String> {
-    let mut map = tokens().lock().unwrap_or_else(|p| p.into_inner());
+    let mut map = tokens().map();
     let key = map.iter().find(|(_, s)| s.id == id).map(|(k, _)| k.clone()).ok_or("MCP session is closed")?;
     let s = map.remove(&key).unwrap();
     s.revoked.store(true, Ordering::Release);
@@ -399,16 +444,11 @@ pub fn revoke_session(id: &str) -> Result<String, String> {
 /// Whether the session `id` (a [`Session::id`]) still holds an unrevoked
 /// token — what a record bound to a session checks before it trusts it.
 pub fn session_alive(id: &str) -> bool {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).values()
+    tokens().map().values()
         .any(|s| s.id == id && !s.revoked.load(Ordering::Acquire))
 }
 pub fn authenticate(header: Option<&str>) -> Option<Session> {
-    let map = tokens().lock().unwrap_or_else(|p| p.into_inner());
-    let mut found = None;
-    for (token, session) in map.iter() {
-        if authorized(header, token) { found = Some(session.clone()); }
-    }
-    found
+    tokens().authenticate(header)
 }
 pub fn caller(header: Option<&str>) -> Option<Identity> {
     authenticate(header).map(|s| s.identity)
@@ -603,7 +643,7 @@ impl Drop for SpawnTokenGuard {
     }
 }
 pub fn revoke_token(token: &str) -> Option<Identity> {
-    tokens().lock().unwrap_or_else(|p| p.into_inner()).remove(token).map(|s| {
+    tokens().map().remove(token).map(|s| {
         s.revoked.store(true, Ordering::Release);
         s.identity
     })
@@ -630,17 +670,122 @@ pub fn enabled() -> bool {
     enabled_in(&crate::storage::state_dir().join("settings.json"))
 }
 
-/// [`apply_to_spawn_with`] against the live listener; a no-op while none is up
-/// or while the tools are switched off.
-pub fn apply_to_spawn(opts: &mut PtyOptions) {
-    let Some(runtime) = runtime() else { return };
-    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(
-        &crate::storage::state_dir().join("settings.json"),
-    ) else { return };
+/// The trusted state a spawn's MCP grants are decided from, read once from a
+/// state dir: `settings.json` and the scope's `projects.json` entry — never
+/// anything inside the project folder.
+pub(crate) struct Trusted {
+    state: std::path::PathBuf,
+    settings: Option<crate::schema::Settings>,
+    entry: Option<crate::schema::projects::ProjectEntry>,
+}
+impl Trusted {
+    pub(crate) fn read(state: &Path, project: Option<&str>) -> Self {
+        let settings = crate::storage::read_json(&state.join("settings.json")).ok();
+        let entry = project.and_then(|id| {
+            crate::storage::read_json::<crate::schema::projects::ProjectsList>(&state.join("projects.json")).ok()?
+                .into_iter().find(|e| e.id == id)
+        });
+        Trusted { state: state.to_path_buf(), settings, entry }
+    }
+    fn tool_models(&self) -> Vec<String> {
+        self.settings.as_ref().and_then(|s| s.ollama_mcp_models.clone()).unwrap_or_default()
+    }
+    fn vm(&self) -> Option<crate::schema::project::VmSpec> {
+        serde_json::from_value(self.entry.as_ref()?.extra.get("vm")?.clone()).ok()
+    }
+    /// The spawn's project runs off this host's loopback: remote for the
+    /// tab's host, a container project, or a VM project — what
+    /// `remote_target_for_host`, `sandbox_spec_for` and `vm_spec_for` answer.
+    fn off_host(&self, opts: &PtyOptions) -> bool {
+        let Some(entry) = self.entry.as_ref() else { return false };
+        let host = opts.remote_host_id.as_deref().unwrap_or(super::remote::PRIMARY_HOST);
+        super::remote::entry_is_remote_for_host(entry, host)
+            || entry.extra.get("sandbox").cloned()
+                .and_then(|v| serde_json::from_value::<crate::schema::project::SandboxSpec>(v).ok())
+                .is_some_and(|s| s.enabled)
+            || self.vm().is_some()
+    }
+}
+
+/// Whether a spawn runs on this machine's loopback: not a container tab, and
+/// not a remote, VM or container project unless the tab is `local_only`.
+fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
+    if opts.sandbox { return false; }
+    if opts.project_id.is_none() || opts.local_only { return true; }
+    !trusted.off_host(opts)
+}
+
+/// Every MCP token a spawn is handed, decided from the trusted state under
+/// `state` — the one place `launch_prep::prepare` grants them, in the window
+/// and in the Mobile host alike (`docs/headless_mcp_plan.md`):
+///
+/// - a local agent in the **root** scope: the root lane ([`apply_to_spawn_with`]);
+/// - an agent in a `mail_reader` **VM** project: the reader lane;
+/// - every other local **project** agent: the schedule lane (a schedule target,
+///   `schedule_mcp` on and the project's level not off) and the push lane
+///   (`git_push_mcp` on, the trusted entry's directory);
+/// - every local agent: the **help** lane while `help_mcp` is on;
+/// - those project agents with a schedule target: the **markup** lane while
+///   `markup_mcp` is on (window only).
+///
+/// `runtime` is this process's listener ([`runtime`]): `None` hands out
+/// nothing, and one that does not serve the root lane (the Mobile host) hands
+/// out neither a root, a reader nor a markup token. Tokens go into `store`, the one that
+/// listener authenticates against. Returns whether the spawn is a root agent.
+pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Runtime>, store: &TokenStore, state: &Path) -> bool {
+    let root_agent = is_root_agent(opts, agent_spawn);
+    let Some(runtime) = runtime else { return root_agent };
+    let trusted = Trusted::read(state, opts.project_id.as_deref());
+    if root_agent && runtime.serves_root {
+        grant_root(opts, runtime, store, &trusted);
+    }
+    let reader_project = opts.project_id.clone()
+        .filter(|_| agent_spawn && !root_agent && !opts.local_only)
+        .filter(|_| trusted.vm().is_some_and(|spec| spec.mail_reader));
+    if let Some(project) = reader_project.as_deref() {
+        if runtime.serves_root {
+            let cmd = opts.cmd.clone();
+            if let Some(env) = grant_reader(&opts.id, project, &cmd, &mut opts.args, store, &trusted) {
+                opts.env.extend(env);
+            }
+        }
+    }
+    let project_lanes = agent_spawn && !root_agent && reader_project.is_none() && !opts.sandbox
+        && opts.project_id.is_some() && !trusted.off_host(opts) && trusted.settings.is_some();
+    if project_lanes {
+        let project = opts.project_id.clone().unwrap_or_default();
+        let tool_models = trusted.tool_models();
+        if super::schedule_mcp::level_at(&trusted.state, &project).is_ok() {
+            grant_schedule(opts, runtime, store, &tool_models);
+        }
+        // Agent-requested pushes (`services::git_push_mcp`), beside the
+        // schedule lane. The project's level is *not* checked here — an `off`
+        // project still gets the tools, so the agent can be told where to turn
+        // them on. The bound directory is the trusted entry's, canonicalised;
+        // a project without one gets no token.
+        let dir = trusted.entry.as_ref().and_then(super::remote::entry_directory).and_then(|d| std::fs::canonicalize(d).ok());
+        if let Some(dir) = dir.filter(|_| super::git_push_mcp::enabled_in(&trusted.state.join("settings.json"))) {
+            grant_git_push(opts, runtime, store, dir, &tool_models);
+        }
+    }
+    // The help lane merges into the Vibe env the lanes above set outright.
+    if agent_spawn && help_reaches(opts, &trusted) && trusted.settings.as_ref().is_some_and(|s| s.help_mcp()) {
+        grant_help(opts, runtime, store, &trusted.tool_models());
+    }
+    // Last, after help: the markup questions server (`services::markup_mcp`)
+    // merges into the same Vibe env. Its asks live in this process and are
+    // answered in the window's markup view, so only the window grants it.
+    if project_lanes && runtime.serves_root && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
+        grant_markup(opts, runtime, store, &trusted.tool_models());
+    }
+    root_agent
+}
+
+/// The root lane of [`grant_lanes`]: [`apply_to_spawn_with`] while the tools
+/// are switched on.
+fn grant_root(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, trusted: &Trusted) {
+    let Some(settings) = trusted.settings.as_ref() else { return };
     if !settings.root_mcp() { return; }
-    let local_only = settings.root_mcp_local_only();
-    let tool_agents = settings.root_mcp_agent_list();
-    let tool_models = settings.ollama_mcp_models.unwrap_or_default();
     let Some(token) = mint_token() else { return };
     let caller = if is_local_model(opts) { Caller::LocalModel } else { Caller::Agent };
     // The endpoint this tab's model answers from, fixed here like its Vibe
@@ -649,12 +794,45 @@ pub fn apply_to_spawn(opts: &mut PtyOptions) {
     let endpoint = (caller == Caller::LocalModel)
         .then(|| crate::commands::ollama::resolve_ollama_addr(settings.ollama_host.as_deref(), true).ok())
         .flatten();
-    apply_to_spawn_with(opts, runtime, &token, &tool_agents, &tool_models, local_only);
+    apply_to_spawn_with(opts, runtime, &token, &settings.root_mcp_agent_list(), &trusted.tool_models(), settings.root_mcp_local_only());
     if opts.env.get(TOKEN_ENV) == Some(&token) {
-        let state = crate::storage::state_dir();
-        let read_mail = tab_read_mail(&state, &opts.id);
-        register_token(token, Identity { schedule_target: None, push: None, tab: opts.id.clone(), caller, project: None, endpoint }, read_mail);
+        let read_mail = tab_read_mail(&trusted.state, &opts.id);
+        store.register(token, Identity { schedule_target: None, push: None, tab: opts.id.clone(), caller, project: None, endpoint }, read_mail);
     }
+}
+
+/// The reader lane of [`grant_lanes`]: hand a **contained reader** its
+/// endpoint — an agent spawn into a VM project whose trusted record carries
+/// `mail_reader`. `agent_cmd`/`agent_args` are the agent CLI's own command
+/// line (the one `ssh -tt` runs in the guest), so the server is named on it
+/// exactly as [`apply_to_spawn_with`] does for a root agent; the returned env
+/// pair travels in the remote command's environment. The token is visible to
+/// everything inside that VM — the VM is the unit of containment, the token
+/// is scoped to the `Reader` tool set, and it dies with the tab. `None` when
+/// the tools are off, local-only, mail is not switched on
+/// (`Settings::root_mcp_mail`) or kept to local models (a reader is always a
+/// cloud CLI), or the CLI is not wired.
+fn grant_reader(
+    tab: &str,
+    project: &str,
+    agent_cmd: &str,
+    agent_args: &mut Vec<String>,
+    store: &TokenStore,
+    trusted: &Trusted,
+) -> Option<Vec<(String, String)>> {
+    // The endpoint's own per-request verdict, so spawn and request agree.
+    // Mail is off unless switched on, a missing settings file included.
+    if !trusted.settings.as_ref().is_some_and(|s| Policy::from_settings(s).serves(Caller::Reader)) {
+        return None;
+    }
+    let token = mint_token()?;
+    let env = reader_wiring(agent_cmd, agent_args, &token)?;
+    store.register(
+        token,
+        Identity { schedule_target: None, push: None, tab: tab.to_string(), caller: Caller::Reader, project: Some(project.to_string()), endpoint: None },
+        false,
+    );
+    Some(env)
 }
 
 pub fn apply_schedule_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
@@ -673,28 +851,23 @@ pub fn apply_schedule_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, to
     }
 }
 
-pub fn apply_schedule_to_spawn(opts: &mut PtyOptions) {
-    let Some(project) = opts.project_id.as_deref() else { return };
-    if !super::agent_fence::is_agent(opts) || opts.sandbox
-        || super::remote::remote_target_for_host(project, opts.remote_host_id.as_deref().unwrap_or("primary")).is_some()
-        || super::sandbox::sandbox_spec_for(project).is_some_and(|s| s.enabled)
-        || super::vm::vm_spec_for(project).is_some()
-        || super::schedule_mcp::level(project).is_err() { return; }
+/// The schedule lane of [`grant_lanes`] once its gates passed: mint a token,
+/// wire the spawn and register the token in `store` — the store the listener
+/// at `runtime` authenticates against.
+pub fn grant_schedule(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
     let Some(target) = opts.schedule_target_id.clone() else { return };
     if super::agent_tasks::validate_id("schedule target", &target).is_err() { return; }
-    let Some(runtime) = runtime() else { return };
-    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
     let Some(token) = mint_token() else { return };
     let agent = basename(&opts.cmd).to_string();
-    apply_schedule_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_schedule_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(SCHEDULE_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Scheduler, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Scheduler, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
     }
 }
 
 /// Hand a local project-agent tab the push server (`services::git_push_mcp`).
-/// Pure over `runtime` so it is testable; [`apply_git_push_to_spawn`] decides
-/// who qualifies. Claude and Codex get the server on their own command line,
+/// Pure over `runtime` so it is testable; [`grant_lanes`] decides who
+/// qualifies. Claude and Codex get the server on their own command line,
 /// a tool-tagged local Vibe model gets it merged into its MCP env (so this
 /// runs after the schedule wiring, which sets that env outright), every other
 /// CLI gets the inert env pair.
@@ -725,32 +898,18 @@ pub fn git_push_endpoint_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/mcp/git")
 }
 
-/// [`apply_git_push_to_spawn_with`] for a real spawn: a local project-agent
-/// tab (not a container tab; not a remote, container or VM project) while
-/// `Settings::git_push_mcp` is on. The project's level is *not* checked here —
-/// an `off` project still gets the tools, so the agent can be told where to
-/// turn them on (`services::git_push_mcp::Category::LevelOff`). The bound
-/// directory is the trusted entry's, canonicalised; a project without one
-/// gets no token.
-pub fn apply_git_push_to_spawn(opts: &mut PtyOptions) {
-    let Some(project) = opts.project_id.as_deref() else { return };
-    if !super::agent_fence::is_agent(opts) || opts.sandbox
-        || super::remote::remote_target_for_host(project, opts.remote_host_id.as_deref().unwrap_or("primary")).is_some()
-        || super::sandbox::sandbox_spec_for(project).is_some_and(|s| s.enabled)
-        || super::vm::vm_spec_for(project).is_some()
-        || !super::git_push_mcp::enabled() { return; }
-    let Some(dir) = super::remote::project_directory(project).and_then(|d| std::fs::canonicalize(d).ok()) else { return };
-    let Some(runtime) = runtime() else { return };
-    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
+/// The push lane of [`grant_lanes`], as [`grant_schedule`]: `dir` is the
+/// trusted entry's canonical directory.
+pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, dir: std::path::PathBuf, tool_models: &[String]) {
     let Some(token) = mint_token() else { return };
-    apply_git_push_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir }), endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { dir }), endpoint: None }, false);
     }
 }
 
 /// Hand an agent tab the help server (`services::help_mcp`). Pure over
-/// `runtime` so it is testable; [`apply_help_to_spawn`] decides who qualifies.
+/// `runtime` so it is testable; [`grant_lanes`] decides who qualifies.
 ///
 /// Claude and Codex get the server on their own command line
 /// ([`wire_named_cli_args`], joining a root or schedule server already there);
@@ -791,34 +950,18 @@ pub fn help_enabled_in(settings: &Path) -> bool {
     crate::storage::read_json::<crate::schema::Settings>(settings).is_ok_and(|s| s.help_mcp())
 }
 
-/// Whether a spawn runs on this machine's loopback: not a container tab, and
-/// not a remote, VM or container project unless the tab is `local_only`.
-pub fn help_reaches(opts: &PtyOptions) -> bool {
-    if opts.sandbox { return false; }
-    let Some(project) = opts.project_id.as_deref() else { return true };
-    if opts.local_only { return true; }
-    super::remote::remote_target_for_host(project, opts.remote_host_id.as_deref().unwrap_or("primary")).is_none()
-        && !super::sandbox::sandbox_spec_for(project).is_some_and(|s| s.enabled)
-        && super::vm::vm_spec_for(project).is_none()
-}
-
-/// [`apply_help_to_spawn_with`] for a real spawn: every local agent tab, root
-/// or project, fenced or not, while the listener is up and `help_mcp` is on.
-pub fn apply_help_to_spawn(opts: &mut PtyOptions) {
-    if !super::agent_fence::is_agent(opts) || !help_reaches(opts) { return; }
-    let Some(runtime) = runtime() else { return };
-    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
-    if !settings.help_mcp() { return; }
+/// The help lane of [`grant_lanes`], as [`grant_schedule`].
+pub fn grant_help(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
     let Some(token) = mint_token() else { return };
-    apply_help_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_help_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(HELP_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Helper, project: None, schedule_target: None, push: None, endpoint: None }, false);
     }
 }
 
 /// Hand a local project-agent tab the markup questions server
 /// (`services::markup_mcp`). Pure over `runtime` so it is testable;
-/// [`apply_markup_to_spawn`] decides who qualifies. Wired as help is: Claude
+/// [`grant_lanes`] decides who qualifies. Wired as help is: Claude
 /// and Codex on their own command line (joining the servers already named),
 /// a tool-tagged local Vibe model merged into its MCP env — so this runs
 /// after the root, schedule, push and help wiring — and every other agent CLI
@@ -852,27 +995,16 @@ pub fn markup_endpoint_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/mcp/markup")
 }
 
-/// [`apply_markup_to_spawn_with`] for a real spawn: a local project-agent
-/// tab with a valid schedule target (not a container tab; not a remote,
-/// worker, container or VM project) while the listener is up and
-/// `Settings::markup_mcp` is on. The token binds the project and target, the
-/// key every ask is stored under.
-pub fn apply_markup_to_spawn(opts: &mut PtyOptions) {
-    let Some(project) = opts.project_id.as_deref() else { return };
-    if !super::agent_fence::is_agent(opts) || opts.sandbox
-        || super::remote::remote_target_for_host(project, opts.remote_host_id.as_deref().unwrap_or("primary")).is_some()
-        || super::sandbox::sandbox_spec_for(project).is_some_and(|s| s.enabled)
-        || super::vm::vm_spec_for(project).is_some() { return; }
+/// The markup lane of [`grant_lanes`], as [`grant_schedule`]: the token binds
+/// the project and schedule target, the key every ask is stored under.
+pub fn grant_markup(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
     let Some(target) = opts.schedule_target_id.clone() else { return };
     if super::agent_tasks::validate_id("schedule target", &target).is_err() { return; }
-    let Some(runtime) = runtime() else { return };
-    let Ok(settings) = crate::storage::read_json::<crate::schema::Settings>(&crate::storage::state_dir().join("settings.json")) else { return };
-    if !settings.markup_mcp() { return; }
     let Some(token) = mint_token() else { return };
     let agent = basename(&opts.cmd).to_string();
-    apply_markup_to_spawn_with(opts, runtime, &token, &settings.ollama_mcp_models.unwrap_or_default());
+    apply_markup_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(MARKUP_TOKEN_ENV) == Some(&token) {
-        register_token(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None }, false);
     }
 }
 
@@ -886,43 +1018,7 @@ pub fn reader_endpoint_url() -> String {
     format!("http://{READER_GUEST_HOST}:{READER_GUEST_PORT}/mcp")
 }
 
-/// Hand a **contained reader** its endpoint: an agent spawn into a VM project
-/// whose trusted record carries `mail_reader`. `agent_cmd`/`agent_args` are the
-/// agent CLI's own command line (the one `ssh -tt` runs in the guest), so the
-/// server is named on it exactly as [`apply_to_spawn_with`] does for a root
-/// agent; the returned env pair travels in the remote command's environment.
-/// The token is visible to everything inside that VM — the VM is the unit of
-/// containment, the token is scoped to the `Reader` tool set, and it dies with
-/// the tab. `None` when the tools are off, local-only, mail is not switched on
-/// (`Settings::root_mcp_mail`) or kept to local models (a reader is always a
-/// cloud CLI), or the CLI is not wired.
-pub fn apply_reader_to_spawn(
-    tab: &str,
-    project: &str,
-    agent_cmd: &str,
-    agent_args: &mut Vec<String>,
-) -> Option<Vec<(String, String)>> {
-    runtime()?;
-    let settings = crate::storage::read_json::<crate::schema::Settings>(
-        &crate::storage::state_dir().join("settings.json"),
-    )
-    .ok();
-    // The endpoint's own per-request verdict, so spawn and request agree.
-    // Mail is off unless switched on, a missing settings file included.
-    if !settings.as_ref().is_some_and(|s| Policy::from_settings(s).serves(Caller::Reader)) {
-        return None;
-    }
-    let token = mint_token()?;
-    let env = reader_wiring(agent_cmd, agent_args, &token)?;
-    register_token(
-        token,
-        Identity { schedule_target: None, push: None, tab: tab.to_string(), caller: Caller::Reader, project: Some(project.to_string()), endpoint: None },
-        false,
-    );
-    Some(env)
-}
-
-/// The pure half of [`apply_reader_to_spawn`].
+/// The pure half of the reader lane ([`grant_lanes`]).
 pub fn reader_wiring(agent_cmd: &str, agent_args: &mut Vec<String>, token: &str) -> Option<Vec<(String, String)>> {
     let bin = basename(agent_cmd);
     if !WIRED_CLIS.contains(&bin) {
@@ -3279,7 +3375,7 @@ mod tests {
 
     #[test]
     fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
-        let runtime = Runtime { port: 8765 };
+        let runtime = Runtime { port: 8765, serves_root: true };
         for cli in WIRED_CLIS {
             let mut spawn = opts(cli, &[], Some("p"));
             apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
@@ -3302,7 +3398,7 @@ mod tests {
     }
 
     fn rt() -> Runtime {
-        Runtime { port: 4321 }
+        Runtime { port: 4321, serves_root: true }
     }
 
     /// Every agent CLI gets the help pair; Claude and Codex are also named the
@@ -3336,7 +3432,7 @@ mod tests {
             boxed.sandbox = true;
             apply_help_to_spawn_with(&mut boxed, &runtime, "helptok", &[]);
             assert!(boxed.env.is_empty() && boxed.args.is_empty());
-            assert!(!help_reaches(&boxed));
+            assert!(!help_reaches(&boxed, &Trusted::read(Path::new("/nonexistent"), Some("p"))));
         }
         // Claude's `--mcp-config` stays one variadic flag holding both configs.
         let mut claude = opts("claude", &[], None);

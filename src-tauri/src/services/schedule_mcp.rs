@@ -17,7 +17,7 @@ pub fn level(project: &str) -> Result<Level, String> {
     level_at(&state, project)
 }
 
-fn level_at(state: &std::path::Path, project: &str) -> Result<Level, String> {
+pub(crate) fn level_at(state: &std::path::Path, project: &str) -> Result<Level, String> {
     let settings: crate::schema::Settings = crate::storage::read_json(&state.join("settings.json")).map_err(|_| "schedule MCP settings unavailable")?;
     if settings.schedule_mcp != Some(true) { return Err("schedule MCP is switched off".into()); }
     let projects: crate::schema::projects::ProjectsList = crate::storage::read_json(&state.join("projects.json")).map_err(|_| "project policy unavailable")?;

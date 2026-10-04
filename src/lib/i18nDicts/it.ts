@@ -1283,6 +1283,7 @@ export const dict: Dict = {
   "mcpSecurity.help": "I permessi valgono solo per questa sessione in corso. Le nuove sessioni root mantengono i valori predefiniti; i lettori di posta iniziano solo con la posta. Disattivare la scrittura dà accesso in sola lettura. I dati condivisi con un agente con accesso alla rete possono lasciare questo computer. Le scritture limitate di calendario e bacheca richiedono sempre una revisione. La revoca è definitiva per la scheda: il suo agente viene rifiutato da quel momento, e solo riaprire la scheda consegna un nuovo token.",
   "mcpSecurity.refresh": "Aggiorna",
   "mcpSecurity.empty": "Nessuna sessione MCP attiva.",
+  "mcpSecurity.headless": "Le schede che {app} Mobile ha avviato senza finestre aperte ricevono gli strumenti di pianificazione, push e aiuto dal servizio in background di Mobile, non da questa finestra. Le loro sessioni non sono elencate qui. Terminano quando la scheda viene chiusa o il servizio si ferma. Le loro richieste di push e release vengono rifiutate finché la scheda non viene riavviata da questa finestra.",
   "mcpSecurity.write": "Consenti modifiche a calendari, bacheche e bozze",
   "mcpSecurity.revoke": "Revoca accesso",
   "mcpSecurity.all": "Tutti, comprese le voci future",

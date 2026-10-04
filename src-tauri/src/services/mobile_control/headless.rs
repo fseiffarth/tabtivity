@@ -728,6 +728,11 @@ fn epoch_ms_now() -> i64 {
 const HEADLESS_COLS: u16 = 200;
 const HEADLESS_ROWS: u16 = 50;
 
+/// What a headless launch's PTY id starts with: the tab is `headless:<tmux>`,
+/// the identity its MCP tokens are registered under in the Mobile host
+/// (`docs/headless_mcp_plan.md`), so they can be revoked by tmux name.
+pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
+
 /// The launch of a stored tab record, for the detached spawn: what the
 /// window's `TerminalView` hands `pty_spawn`, at a fixed
 /// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
@@ -753,7 +758,7 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
     let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
     PtyOptions {
-        id: format!("headless:{tmux}"),
+        id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),
         env,
