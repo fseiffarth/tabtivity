@@ -455,6 +455,30 @@ instead** closes it unanswered. The phone's chat shows a one-line banner while
 a question is open; on the desktop, with marking off, the **Mark up** button is
 underlined and opens on the asking tab.
 
+**Local models from the phone** (`docs/mobile_local_model_control_plan.md`).
+Home → **Local models** lists the Ollama models installed on the desktop —
+size, parameters and quantization, idle / loading / loaded / last load failed,
+where a loaded one sits (GPU, N % on the GPU, CPU) and whether it stays loaded
+or unloads in N minutes — with **Load** (Ollama picks the device, kept loaded)
+and **Unload** (no confirmation), and **Start Ollama** when the desktop can
+start it without a password (`systemctl --no-ask-password`, else an owned
+`ollama serve` that quitting stops). The sheet polls every 2.5 s while
+something loads or starts and every 10 s otherwise. Every request goes
+`GET`/`POST /api/v1/local-models` → sidecar (`mobile_control/local_models.rs`)
+→ desktop bridge (`src/lib/mobileLocalModels.ts`) → the window's Ollama
+commands, so the desktop's 🧠 menu shows a load the phone started; with no
+window open the routes answer 503 `desktop_unavailable` and the phone says to
+open the app (there is no headless fallback). Load and Start answer at once and
+the work runs on the desktop; a write whose answer misses the deadline is read
+again rather than shown as failed. Downloading, updating and deleting stay
+desktop-only: the sidecar refuses any other action with 400
+`unsupported_action` before the desktop is asked, and the load command loads
+only a name `/api/tags` lists. **Settings → Mobile → Local models from the
+phone** (under Project access; unset = on) switches it off — both routes then
+answer 403 `local_models_disabled` and the Home row disappears. A desktop window
+older than the feature answers `unknown_request`, and the phone says to update
+the desktop app.
+
 ### Workspace Apps
 
 Each of these replaced a global-app role, on the same reasoning: what sits
@@ -615,10 +639,14 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 |---------|----------|
 | `ollama_is_installed` | Checks whether the `ollama` binary exists in `$PATH`. |
 | `ensure_ollama_running` | Starts the system `ollama` service when possible, otherwise falls back to `ollama serve`. |
+| `ensure_ollama_running_unattended` | `ensure_ollama_running` for the phone: `systemctl --no-ask-password start ollama` (fails instead of a polkit dialog), then the owned `ollama serve` fallback that quit stops. Runs off the async runtime. |
+| `ollama_server_kind` | Whether the configured Ollama server is on this machine (`"local"`) or another (`"remote"`); a bad `ollama_host` is an error. |
 | `list_ollama_models` | Lists installed model names for the Local Agents tab menu. |
 | `list_ollama_models_detailed` | Returns installed model names, disk sizes, family, parameter size, quantization, running state, and VRAM use. |
 | `list_installable_models` | Returns Tabtivity's built-in catalog of common model families and tags. |
 | `pull_ollama_model` | Pulls or updates a model through `/api/pull`. |
+| `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
+| `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
 | `stop_ollama_model` | Unloads a model from memory with `keep_alive = 0`. |
 | `delete_ollama_model` | Deletes a local model through `/api/delete`. |
 | `prepare_local_agent` | Writes an isolated per-model Vibe config and returns `VIBE_HOME` plus alias. |

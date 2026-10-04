@@ -6,7 +6,8 @@ Then **load** one into memory or **unload** it. **Downloading, updating and
 deleting stay desktop-only.** The backend refuses them; hiding the buttons is
 not what stops them.
 
-Status: plan (2026-10-04), reviewed the same day. Not built.
+Status: implemented (2026-10-04, P1–P5 on branch `mobile-local-models`);
+QA item 31by, not yet verified on a phone.
 
 ## 0. Decisions
 
@@ -735,7 +736,8 @@ it. The phone part needs `npm run mobile:bundle`. Never start or stop the app.
 - **Two Rust halves**: the desktop's `commands::ollama` and the sidecar's
   routes. A sidecar older than this answers 404 for `/api/v1/local-models`;
   Home then hides the section. A desktop window older than this answers
-  `unknown_request` (400); the sheet shows `failed`.
+  `unknown_request` (400); the Home row and the sheet say to update the
+  desktop app (`mobile.localModels.needsUpdate`).
 - **Merge interaction** with `docs/mobile_device_scoped_access_plan.md`: the
   router lines and the `mutation_guard` call site (§4.3). No catalog use here.
 - **Energy Saver** suppresses only the launch-time autoload. A phone load is

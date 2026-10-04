@@ -153,6 +153,35 @@ read-only: nothing can be changed, moved or deleted from there.
 - Files up to 24 MiB open; a longer text file shows its first 24 MiB.
 - Switching it off closes the drawer within seconds, without restarting the host.
 
+## Local models from the phone
+
+Home → **Local models** opens the Ollama models installed on the desktop
+(help topic `local-models`). Each row shows the model's size, its parameters
+and quantization, and whether it is in memory: where (**On the GPU**, **N %
+on the GPU**, **On the CPU**) and for how long (**Stays loaded until
+unloaded**, or **Unloads in N min**). The model new Local Model tabs use is
+marked.
+
+- **Load** puts a model into memory and keeps it there; Ollama decides GPU or
+  CPU. The desktop's Models & agents menu shows the load while it runs.
+- **Unload** frees the memory at once, without asking.
+- With Ollama stopped, **Start Ollama** starts it — only in ways that need no
+  password on the desktop. If it was started as Tabtivity's own server,
+  quitting Tabtivity stops it again.
+- The list refreshes on its own: every few seconds while something loads or
+  starts, otherwise every 10 seconds.
+- Downloading, updating and deleting models stay on the desktop; the phone
+  offers none of them, and the desktop refuses them.
+- Loading a single model when none is in memory makes it the model for every
+  role (Tabs included), as it does on the desktop.
+
+The desktop window must be open: with Tabtivity closed, the sheet says to open
+the app. A Load that takes longer than the phone waits is not reported as
+failed — the list is read again and shows whether it started. If the phone
+says to update Tabtivity on the desktop, the window is older than this
+feature. It is on by default; switch it off in Settings → Mobile → **Local
+models from the phone** (under **Project access**), and the row disappears.
+
 ## Notifications on the phone
 
 On the phone, open **This phone → Notifications** (or **Calendar → Reminders**)
