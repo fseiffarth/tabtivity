@@ -31,12 +31,13 @@ use super::{
     files,
     headless,
     inbox,
+    local_models,
     markup,
     outbox,
     limits,
     protocol::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
-        MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobilePromptInput, MobileSchedule,
+        LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation,
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
@@ -1979,6 +1980,80 @@ fn mail_response(
         ),
         _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
     }
+}
+
+/// The window's answer to a local-models request, as the phone gets it: the
+/// list rebuilt by `local_models::sanitize` under `ok`, a refusal as its code
+/// alone (`local_models::refusal`), and anything else — no window, a wedged
+/// one, an answer of another kind — as `desktop_unavailable`, which the phone
+/// reads as "open the app on the desktop". There is no headless answer.
+fn local_models_response(
+    response: Result<DesktopResponse, String>,
+    ok: StatusCode,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match response {
+        Ok(DesktopResponse::LocalModels { server, can_start, start_failed, models }) => {
+            (ok, Json(local_models::sanitize(&server, can_start, start_failed, &models)))
+        }
+        Ok(DesktopResponse::Error { code, .. }) => {
+            let (status, code) = local_models::refusal(&code);
+            api_error(status, code)
+        }
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
+/// `GET /api/v1/local-models` — the desktop's installed Ollama models, their
+/// residency and the server's state. Host-wide; the switch is read per
+/// request and, when off, answers before the desktop is asked.
+async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !local_models::local_models_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    local_models_response(
+        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModels { request_id }).await,
+        StatusCode::OK,
+    )
+}
+
+/// `POST /api/v1/local-models` `{ action: load | unload | start, model? }`.
+/// Guarded like every write; then the switch, then the action — a pull, a
+/// delete or anything else unnamed is `unsupported_action` and never reaches
+/// the desktop. The answer is the fresh list: 202 for a load or a start,
+/// which run on in the window after it answers, 200 for an unload.
+async fn local_models_mutate(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Err(error) = mutation_guard(&headers, &state) {
+        return error;
+    }
+    if !local_models::local_models_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
+    }
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let action = match local_models::parse_action(&body) {
+        Ok(action) => action,
+        Err(code) => return api_error(StatusCode::BAD_REQUEST, code),
+    };
+    let ok = match action {
+        LocalModelAction::Unload { .. } => StatusCode::OK,
+        LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    local_models_response(
+        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModelMutate { request_id, action }).await,
+        ok,
+    )
 }
 
 /// Mail stays behind the live desktop for the same reason the board does: the
@@ -4874,6 +4949,12 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/calendar", get(calendar).post(calendar_mutate))
         .route("/api/v1/push", get(push_get).put(push_put).delete(push_delete))
         .route("/api/v1/mail", get(mail_overview))
+        // Host-wide, no project or path: list, and load / unload / start.
+        // A body is one action and at most one model name.
+        .route(
+            "/api/v1/local-models",
+            get(local_models_list).merge(post(local_models_mutate).layer(DefaultBodyLimit::max(1024))),
+        )
         .route("/api/v1/mail/folders/{folder_id}", get(mail_folder))
         .route(
             "/api/v1/mail/folders/{folder_id}/messages/{message_id}",
@@ -5442,6 +5523,7 @@ mod tests {
         "/api/v1/projects/anything/prompts",
         "/api/v1/tabs/anything/desktop-images",
         "/api/v1/tabs/anything/markup/questions",
+        "/api/v1/local-models",
     ];
 
     /// The desktop bounds the tail before it sends one; this bounds it again at
@@ -5630,6 +5712,7 @@ mod tests {
             "/api/v1/projects/anything/prompts/anything/send",
             "/api/v1/mail/folders/anything/messages/anything/mark",
             "/api/v1/mail/folders/anything/messages/anything/reply",
+            "/api/v1/local-models",
         ] {
             let (status, _, body) = host.send(post_json(uri, ORIGIN, &create)).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} answered: {body}");
@@ -8188,6 +8271,181 @@ mod tests {
         assert_eq!(answers[1].options, vec![0, 2]);
         assert_eq!(answers[1].other.as_deref(), Some("both"));
         assert!(matches!(&seen[4], DesktopRequest::MarkupDismiss { .. }));
+    }
+
+    /// Local models from the phone: the switch and every refusal the sidecar
+    /// owns answer before the desktop is asked (a pull never reaches it), no
+    /// window is `desktop_unavailable` with no headless answer, the window's
+    /// list is rebuilt before it crosses, and a refusal crosses as its code.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_models_go_through_the_window_and_a_pull_never_does() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(65)).await.0;
+        let uri = "/api/v1/local-models";
+        let settings = host.state.config.state_dir.join("settings.json");
+        let switch = |local_models: Option<bool>| {
+            let mut mobile = json!({ "enabled": true });
+            if let Some(on) = local_models {
+                mobile["local_models"] = json!(on);
+            }
+            std::fs::write(&settings, json!({ crate::brand::MOBILE_HOST_KEY: mobile }).to_string()).unwrap();
+        };
+        let post = |body: Value| request_as("POST", uri, &cookie, Some(body));
+        let load = json!({ "action": "load", "model": "llama3" });
+
+        // No settings at all: closed.
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "local_models_disabled");
+
+        // Unset is on; no window → open the app, never a headless list.
+        switch(None);
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        let (status, _, body) = host.send(post(load.clone())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+        let log = seen.clone();
+        let list = |server: &str| -> DesktopResponse {
+            serde_json::from_value(json!({
+                "status": "local_models",
+                "server": server,
+                "can_start": false,
+                "start_failed": false,
+                "path": "/home/someone/.ollama",
+                "models": [
+                    { "name": "qwen3.5:9b", "size": 6594474711u64, "parameter_size": "9B", "quantization": "Q4_K_M",
+                      "state": "loaded", "loaded_size": 7100000000u64, "vram": 3550000000u64, "pinned": true,
+                      "expires_in": null, "for_tabs": true, "remote": false, "digest": "sha256:feed",
+                      "path": "/home/someone/.ollama/models/blobs" },
+                    { "name": "../escape", "state": "idle" },
+                    { "name": "llama3:latest", "size": 1, "state": "warming", "loaded_size": 9 },
+                ],
+            }))
+            .expect("list")
+        };
+        let desktop = tokio::spawn(async move {
+            for _ in 0..7 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                let refuse = |code: &str| DesktopResponse::Error {
+                    code: code.into(),
+                    message: "not_running at /home/someone/.ollama: secret prose".into(),
+                };
+                let response = match &request {
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Unload { model }, .. } if model == "gone:1" => {
+                        refuse("model_not_installed")
+                    }
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Unload { model }, .. } if model == "busy:1" => {
+                        refuse("model_loading")
+                    }
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Load { model }, .. } if model == "odd:1" => {
+                        refuse("Error: /home/someone/.ollama refused")
+                    }
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Start, .. } => list("starting"),
+                    _ => list("running"),
+                };
+                log.lock().unwrap().push(request);
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+            }
+        });
+
+        // Switched off: refused here, for both verbs, with the window open.
+        switch(Some(false));
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "local_models_disabled");
+        let (status, _, body) = host.send(post(load.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "local_models_disabled");
+
+        // On again: what the sidecar refuses never reaches the window either.
+        switch(Some(true));
+        for (bad, code) in [
+            (json!({ "action": "pull", "model": "llama3" }), "unsupported_action"),
+            (json!({ "action": "delete", "model": "llama3" }), "unsupported_action"),
+            (json!({ "action": "start", "model": "llama3" }), "invalid_request"),
+            (json!({ "action": "load", "model": "a b" }), "invalid_request"),
+            (json!({ "action": "load" }), "invalid_request"),
+        ] {
+            let (status, _, body) = host.send(post(bad.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} answered: {body}");
+            assert_eq!(json(&body)["error"], code, "{bad}");
+        }
+        let mut not_json = post(json!({}));
+        *not_json.body_mut() = Body::from("{\"action\":");
+        let (status, _, body) = host.send(not_json).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
+        let mut foreign = post(load.clone());
+        foreign.headers_mut().insert(header::ORIGIN, HeaderValue::from_static("https://elsewhere.example"));
+        let (status, _, body) = host.send(foreign).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "invalid_origin");
+        let (status, _, body) = host.send(post_json(uri, ORIGIN, &load)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "answered: {body}");
+        // No route below it: not the shell, not a write.
+        let (status, ..) = host.send(get_as("/api/v1/local-models/pull", &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, ..) = host.send(request_as("POST", "/api/v1/local-models/pull", &cookie, Some(load.clone()))).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(seen.lock().unwrap().is_empty(), "the window was asked: {:?}", seen.lock().unwrap());
+
+        // The list, rebuilt: the bad name gone, the unknown state idle,
+        // residency only on the loaded row, no field the phone was not given.
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let list = json(&body);
+        assert_eq!(list["server"], "running");
+        let models = list["models"].as_array().unwrap();
+        assert_eq!(models.len(), 2, "{body}");
+        assert_eq!(models[0]["name"], "qwen3.5:9b");
+        assert_eq!(models[0]["vram"], 3_550_000_000u64);
+        assert_eq!(models[0]["pinned"], true);
+        assert_eq!(models[1]["state"], "idle");
+        assert!(models[1].get("loaded_size").is_none(), "{body}");
+        assert!(!body.contains("/home") && !body.contains("path") && !body.contains("digest") && !body.contains("escape"), "{body}");
+
+        // A load and a start answer at once (202); an unload is done (200).
+        let (status, _, body) = host.send(post(load.clone())).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "answered: {body}");
+        assert_eq!(json(&body)["models"].as_array().unwrap().len(), 2);
+        let (status, _, body) = host.send(post(json!({ "action": "unload", "model": "gone:1" }))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body), json!({ "error": "model_not_installed" }));
+        let (status, _, body) = host.send(post(json!({ "action": "unload", "model": "busy:1" }))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "model_loading");
+        let (status, _, body) = host.send(post(json!({ "action": "start" }))).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "answered: {body}");
+        assert_eq!(json(&body)["server"], "starting");
+        let (status, _, body) = host.send(post(json!({ "action": "unload", "model": "qwen3.5:9b" }))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        // A code this feature does not define becomes a fixed one.
+        let (status, _, body) = host.send(post(json!({ "action": "load", "model": "odd:1" }))).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "answered: {body}");
+        assert_eq!(json(&body), json!({ "error": "desktop_error" }));
+        desktop.await.expect("fake desktop");
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 7, "{seen:?}");
+        assert!(matches!(&seen[0], DesktopRequest::LocalModels { .. }));
+        assert!(matches!(
+            &seen[1],
+            DesktopRequest::LocalModelMutate { action: LocalModelAction::Load { model }, .. } if model == "llama3"
+        ));
+        assert!(matches!(&seen[4], DesktopRequest::LocalModelMutate { action: LocalModelAction::Start, .. }));
+        assert!(matches!(
+            &seen[5],
+            DesktopRequest::LocalModelMutate { action: LocalModelAction::Unload { model }, .. } if model == "qwen3.5:9b"
+        ));
     }
 
     /// The browser's own PDF viewer fetches without the strict session cookie;

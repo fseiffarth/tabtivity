@@ -222,6 +222,51 @@ pub struct MobileLocalLaunch {
     pub agents: Vec<MobileLocalAgent>,
 }
 
+/// Everything a phone may ask of the desktop's Ollama
+/// (`docs/mobile_local_model_control_plan.md`): load an installed model,
+/// unload one, start the server. There is deliberately no pull, delete, copy
+/// or update variant — downloading and deleting stay desktop-only, so such a
+/// request cannot even be deserialized on either side of the bridge. Strict
+/// like every input type; serde ignores extra fields on the unit `Start`,
+/// which `local_models::parse_action` refuses itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LocalModelAction {
+    Load { model: String },
+    Unload { model: String },
+    Start,
+}
+
+/// One installed Ollama model as the desktop window reports it (a
+/// `DesktopResponse::LocalModels` row). `state` is `idle`, `loading`,
+/// `loaded` or `failed`; the four residency fields are meaningful only while
+/// `loaded`. The sidecar re-checks all of it (`local_models::sanitize`) before
+/// a row reaches the phone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLocalModel {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub parameter_size: Option<String>,
+    #[serde(default)]
+    pub quantization: Option<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub for_tabs: bool,
+    #[serde(default)]
+    pub remote: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MobileLocalAgent {
     pub id: String,
@@ -1159,6 +1204,19 @@ pub enum DesktopRequest {
         tmux_session: String,
         ask_id: String,
     },
+    /// The desktop's installed Ollama models, their residency and the
+    /// server's state (`lib/mobileLocalModels.ts`). Host-wide: no project or
+    /// path is involved. Answered `LocalModels`; there is no headless answer.
+    LocalModels {
+        request_id: String,
+    },
+    /// Load, unload or start (`LocalModelAction`). Load and start answer as
+    /// soon as the request checks out and run on in the window, so the
+    /// default deadlines hold; the answer is a fresh `LocalModels`.
+    LocalModelMutate {
+        request_id: String,
+        action: LocalModelAction,
+    },
     /// The owner wrote a slice with no window answering (headless owner
     /// plan, H3) and a window is open after all: re-read it. `slices` names
     /// what moved — `workspace` (the scope's tab set; `project_id` is the raw
@@ -1216,6 +1274,8 @@ impl DesktopRequest {
             | Self::MarkupQuestions { request_id, .. }
             | Self::MarkupAnswer { request_id, .. }
             | Self::MarkupDismiss { request_id, .. }
+            | Self::LocalModels { request_id }
+            | Self::LocalModelMutate { request_id, .. }
             | Self::Refresh { request_id, .. } => request_id,
         }
     }
@@ -1282,7 +1342,8 @@ impl DesktopRequest {
             | Self::HoldPrompt { .. }
             | Self::EditHeldPrompt { .. }
             | Self::MarkupAnswer { .. }
-            | Self::MarkupDismiss { .. } => true,
+            | Self::MarkupDismiss { .. }
+            | Self::LocalModelMutate { .. } => true,
             Self::Catalog { .. }
             | Self::Activity { .. }
             | Self::GitStates { .. }
@@ -1304,6 +1365,7 @@ impl DesktopRequest {
             | Self::DesktopImages { .. }
             | Self::AttachDesktopImage { .. }
             | Self::MarkupQuestions { .. }
+            | Self::LocalModels { .. }
             | Self::Refresh { .. } => false,
         }
     }
@@ -1693,6 +1755,20 @@ pub enum DesktopResponse {
     MarkupQuestions {
         #[serde(default)]
         asks: Vec<MobileMarkupAsk>,
+    },
+    /// Answers [`DesktopRequest::LocalModels`] and a successful
+    /// [`DesktopRequest::LocalModelMutate`]. `server` is `running`,
+    /// `starting`, `stopped`, `unreachable` or `not_installed`; the sidecar
+    /// forces it, and every row, into shape before the phone sees them.
+    LocalModels {
+        #[serde(default)]
+        server: String,
+        #[serde(default)]
+        can_start: bool,
+        #[serde(default)]
+        start_failed: bool,
+        #[serde(default)]
+        models: Vec<MobileLocalModel>,
     },
     Error {
         code: String,
@@ -2094,6 +2170,106 @@ mod tests {
             .expect("serialize held answer");
         assert_eq!(answer["status"], "held");
         assert_eq!(answer["held_id"], "held-1");
+    }
+
+    /// Local models from the phone: list and mutate round-trip, a pull (or
+    /// any action the enum does not name) cannot even be deserialized, and
+    /// the mutate is the one write — on the default deadlines, since nothing
+    /// waits on a load or a start.
+    #[test]
+    fn local_model_requests_round_trip_and_a_pull_cannot_cross() {
+        use super::{LocalModelAction, MobileLocalModel};
+        let list = DesktopRequest::LocalModels { request_id: "r-list".into() };
+        let json = serde_json::to_value(&list).expect("serialize list");
+        assert_eq!(json, serde_json::json!({ "type": "local_models", "request_id": "r-list" }));
+        let restored: DesktopRequest = serde_json::from_value(json).expect("round-trip list");
+        assert_eq!(restored.request_id(), "r-list");
+        assert!(!restored.is_mutation());
+
+        for (action, wire) in [
+            (LocalModelAction::Load { model: "qwen3.5:9b".into() }, serde_json::json!({ "type": "load", "model": "qwen3.5:9b" })),
+            (LocalModelAction::Unload { model: "llama3".into() }, serde_json::json!({ "type": "unload", "model": "llama3" })),
+            (LocalModelAction::Start, serde_json::json!({ "type": "start" })),
+        ] {
+            let request = DesktopRequest::LocalModelMutate { request_id: "r-mut".into(), action: action.clone() };
+            let json = serde_json::to_value(&request).expect("serialize mutate");
+            assert_eq!(json["type"], "local_model_mutate");
+            assert_eq!(json["action"], wire);
+            let restored: DesktopRequest = serde_json::from_value(json).expect("round-trip mutate");
+            assert_eq!(restored.request_id(), "r-mut");
+            assert!(restored.is_mutation());
+            assert!(matches!(restored, DesktopRequest::LocalModelMutate { action: ref back, .. } if *back == action));
+        }
+
+        for request in [
+            list,
+            DesktopRequest::LocalModelMutate { request_id: "r".into(), action: LocalModelAction::Start },
+        ] {
+            assert_eq!(request.response_timeout(), std::time::Duration::from_secs(10));
+            assert!(request.desktop_timeout() < request.response_timeout());
+        }
+
+        for hostile in [
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "pull", "model": "x" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "delete", "model": "x" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "load", "model": "x", "insecure": true } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "unload", "model": "x", "device": "gpu" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "load" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "start" }, "model": "x" }),
+            serde_json::json!({ "type": "local_models", "request_id": "r", "project_id": "p" }),
+        ] {
+            assert!(serde_json::from_value::<DesktopRequest>(hostile.clone()).is_err(), "accepted {hostile}");
+        }
+        // The serde gap documented in
+        // `terminal_frames_match_the_phones_wire_shapes_exactly`: the unit
+        // `start` ignores an extra field. `local_models::parse_action` refuses
+        // it before a request is ever built.
+        let gap = serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "start", "model": "x" } });
+        assert!(matches!(
+            serde_json::from_value::<DesktopRequest>(gap),
+            Ok(DesktopRequest::LocalModelMutate { action: LocalModelAction::Start, .. })
+        ));
+
+        // The answer: lenient like every response, defaulted field by field.
+        let response: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "local_models",
+            "server": "running",
+            "can_start": false,
+            "start_failed": false,
+            "models": [
+                { "name": "qwen3.5:9b", "size": 6594474711u64, "parameter_size": "9B", "quantization": "Q4_K_M",
+                  "state": "loaded", "loaded_size": 7100000000u64, "vram": 7100000000u64, "pinned": true,
+                  "expires_in": null, "for_tabs": true, "remote": false, "added_later": 1 },
+                { "name": "llama3:latest" },
+            ],
+            "added_later": "ignored",
+        }))
+        .expect("local models answer");
+        let DesktopResponse::LocalModels { server, models, .. } = &response else { panic!("{response:?}") };
+        assert_eq!(server, "running");
+        assert_eq!(models[0].vram, Some(7_100_000_000));
+        assert_eq!(models[0].pinned, Some(true));
+        assert_eq!(models[0].expires_in, None);
+        assert_eq!(
+            models[1],
+            MobileLocalModel {
+                name: "llama3:latest".into(),
+                size: 0,
+                parameter_size: None,
+                quantization: None,
+                state: String::new(),
+                loaded_size: None,
+                vram: None,
+                pinned: None,
+                expires_in: None,
+                for_tabs: false,
+                remote: false,
+            }
+        );
+        let back = serde_json::to_value(&response).expect("serialize answer");
+        assert_eq!(back["status"], "local_models");
+        let restored: DesktopResponse = serde_json::from_value(back).expect("round-trip answer");
+        assert!(matches!(restored, DesktopResponse::LocalModels { ref models, .. } if models.len() == 2));
     }
 
     #[test]
