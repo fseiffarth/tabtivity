@@ -97,15 +97,6 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
       {headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
         {shells && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
-        {/* Right under the shell, not after the agents: at the foot of a
-            project with many agents it sat past the sheet's fold, and the
-            reader never found it. No desktop round trip — the sidecar writes
-            the file itself — so neither a create in flight nor an absent
-            desktop holds it back. */}
-        <button className="new-tab-file" onClick={onSendFile}>
-          <span><strong>{t("mobile.projectInbox.send")}{isUntested("mobile.project.sendFile") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{t("mobile.projectInbox.hint")}</small></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
-        </button>
         {linked.length > 0 && agents.length > 0 && !headless && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
           <small>{t("mobile.newTab.where")}{isUntested("mobile.newTab.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
           <button className={where === "" ? "selected" : ""} aria-pressed={where === ""} onClick={() => setWhere("")}>{t("mobile.newTab.projectFolder")}</button>
@@ -122,6 +113,13 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         {options.local && !headless && <LocalModelGroup local={options.local} busy={busy} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
         {options.sign_in.length > 0 && !headless && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && <NeedsWindow agents={agents} options={options} linked={linked} />}
+        {/* At the sheet's foot, under everything that opens a tab. No desktop
+            round trip — the sidecar writes the file itself — so neither a
+            create in flight nor an absent desktop holds it back. */}
+        <button className="new-tab-file" onClick={onSendFile}>
+          <span><strong>{t("mobile.projectInbox.send")}{isUntested("mobile.project.sendFile") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{t("mobile.projectInbox.hint")}</small></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
+        </button>
       </div>
       </>}
     </section>

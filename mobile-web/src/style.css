@@ -328,7 +328,9 @@ small { color:#9498aa; }
 .new-tab-sheet .create > .primary { min-height:48px; }
 .new-tab-agents { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
 .new-tab-agents .agent-create { flex-wrap:wrap; align-content:start; gap:6px; min-width:0; padding:6px; border:1px solid #383c4d; border-radius:12px; background:#1b1e29; }
-.new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 8px; border:0; background:transparent; overflow-wrap:anywhere; }
+/* The agent's name is the tile's headline: the accent face the agent tab
+   icons wear (`.tab-card-icon.accent`), so it reads apart from its modes. */
+.new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 10px; border:0; border-radius:9px; background:#2e2b48; color:#bcb0ff; font-weight:700; overflow-wrap:anywhere; }
 .new-tab-sheet .new-tab-file { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:8px 12px; text-align:left; }
 .new-tab-sheet .new-tab-file > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .new-tab-sheet .new-tab-file small { color:#aeb4c8; font-size:.76rem; }
