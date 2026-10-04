@@ -128,6 +128,7 @@ import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared
 import { isUntested } from "../../../src/lib/untested";
 import { draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
 import {
+  onDeviceSpeechAsked,
   prepareOnDeviceSpeech,
   speechRecognitionConstructor,
   speechRecognitionSupported,
@@ -1149,7 +1150,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const [speechLangSheet, setSpeechLangSheet] = useState(false);
   useEffect(() => {
     const Recognition = speechRecognitionConstructor();
-    if (!Recognition?.available) {
+    if (!Recognition?.available || !onDeviceSpeechAsked(Recognition)) {
       setVoiceLocalOffered(false);
       return;
     }
@@ -3682,6 +3683,13 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
     followReadable(true);
   };
   const stopVoice = () => recognition.current?.stop();
+  /** A tap while the on-device check runs takes the check back, so a browser
+   * whose check hangs (or a long language download) never locks the button. */
+  const cancelVoicePrep = () => {
+    voiceRequest.current += 1;
+    setPreparingVoice(false);
+    setVoiceStatus(null);
+  };
   const startVoice = async () => {
     if (!connectedRef.current || recognition.current || preparingVoice) return;
     const Recognition = speechRecognitionConstructor();
@@ -4157,7 +4165,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
           }} />
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
-          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable || preparingVoice} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
+          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>
