@@ -925,6 +925,60 @@ svg.alerts-toggle-icon {
   color: var(--text-secondary);
   white-space: nowrap;
 }
+/* The docked agent column (layout/OverlayAgentColumn): a root agent tab beside
+   the app, on the body's right like the ◫ file column — same edge, same
+   resize handle (`.subwindow-files-resize`), fixed width set inline. Flat: no
+   shadow of its own, the overlay's frame already has one. */
+.overlay-agent-column {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  overflow: clip;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+.overlay-agent-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+.overlay-agent-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Ctrl+1 with no root-allowed default agent: the switch to flip, in words. */
+.overlay-agent-hint {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+/* The pane fills what the head leaves; TabPane lays itself out in it as in a
+   `.center-pane`. */
+.overlay-agent-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Not a scroll container (see ViewerOverflowClip.test.ts). */
+  overflow: hidden;
+  overflow: clip;
+}
 /* Every mail tab gets the same width, whatever its subject: 200px while they
    fit, then all shrink evenly as more open (a browser's strip), down to a floor
    past which the strip scrolls. A subject longer than its tab ends in an

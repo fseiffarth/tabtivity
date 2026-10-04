@@ -1,6 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   clampRootOverlayFrame,
@@ -50,7 +49,7 @@ import { StarIcon } from "./StarIcon";
 import { RootReviewStrip } from "./RootReviewStrip";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
-import { MailIcon, WarningIcon } from "../common/icons/Icon";
+import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -63,21 +62,6 @@ type RootMcpChange = (
   /** Board-only fields changed (a move's column/rank): merge, push nothing. */
   local?: boolean;
 };
-
-interface RootMcpStatus {
-  running: boolean;
-  tools: string[];
-  /** At least one mail account is open to a contained reader agent. */
-  mail_open?: boolean;
-  /** With `mail_open`: the widest per-account scope — a few marked messages,
-   *  or a whole account. */
-  mail_scope?: "marked" | "all";
-  /** Root agents run fenced, so the staged-write review cannot be bypassed. */
-  review_enforced?: boolean;
-  /** A root agent started now could read the projects (the fence switch is
-   *  on, or it runs unfenced) — what a mail draft's `attach` needs. */
-  projects_readable?: boolean;
-}
 
 /** A rect relative to the overlay's pane region. */
 interface Rect {
@@ -283,7 +267,9 @@ function RootOverlay() {
     null,
   );
   const [manageAgents, setManageAgents] = useState(false);
-  const [status, setStatus] = useState<RootMcpStatus | null>(null);
+  // The ⚿ badge's reading (`root_mcp_status`, once per mount) — also what
+  // tells the proposals panel whether the review gate is only advisory.
+  const rights = useRootMcpRights();
   const [drag, setDrag] = useState<OverlayDrag | null>(null);
   const [groupRects, setGroupRects] = useState<Record<string, Rect>>({});
   // The frame while a move/resize drag is in flight — local, so a gesture costs
@@ -318,7 +304,6 @@ function RootOverlay() {
   const soleGroupId = split ? null : (allGroups(layout)[0]?.id ?? EMPTY_GROUP_ID);
 
   useEffect(() => {
-    invoke<RootMcpStatus>("root_mcp_status").then(setStatus).catch(() => setStatus(null));
     void useMailStore.getState().loadAgentDrafts();
   }, []);
 
@@ -635,19 +620,7 @@ function RootOverlay() {
     [addMenu],
   );
 
-  // The global switch is the settings store's, so the badge follows a flip made
-  // in Settings at once; `running` is the listener's and only a restart moves it.
-  const toolsEnabled = useSettingsStore((s) => s.settings?.root_mcp ?? true);
-  const localOnly = useSettingsStore((s) => s.settings?.root_mcp_local_only ?? false);
-  const toolsOn = toolsEnabled && !!status?.running;
-  // `=== false`: a backend that predates the field says nothing, which is not
-  // a claim that the gate is off.
-  const reviewAdvisory = toolsOn && status?.review_enforced === false;
-  const agentsWithTools = !toolsEnabled
-    ? t("rootConsole.rightsDisabled")
-    : status?.running
-      ? t(localOnly ? "rootConsole.rightsLocalOnly" : "rootConsole.rightsOn")
-      : t("rootConsole.rightsOff");
+  const reviewAdvisory = rights.reviewAdvisory;
   const groupOfKey = useMemo(() => {
     const map = new Map<string, { groupId: string; active: boolean }>();
     for (const g of groups) {
@@ -796,19 +769,7 @@ function RootOverlay() {
                 tools' own state; the ✓ button beside it is that door now, and
                 the panel hangs from the button that counts it. Switching the
                 tools on and off stays in Settings, where it always was. */}
-            <span
-              className={`root-overlay-rights status${toolsOn ? " on" : ""}${toolsEnabled ? "" : " off"}`}
-              title={`${agentsWithTools}${
-                toolsOn ? `\n${status?.tools.join(", ")}` : ""
-              }\n${t("rootConsole.rightsInSettings")}\n${t("rootConsole.noPhone")}${
-                status?.mail_open
-                  ? `\n${t(status.mail_scope === "all" ? "rootConsole.mailOpenAll" : "rootConsole.mailOpen")}`
-                  : ""
-              }${reviewAdvisory ? `\n${t("rootConsole.reviewAdvisory")}` : ""}`}
-            >
-              {t("rootConsole.rightsBadge")}{reviewAdvisory && <> <WarningIcon /></>}
-              {status?.mail_open && <> <MailIcon />{status.mail_scope === "all" && <MailIcon />}</>}
-            </span>
+            <RootRightsBadge rights={rights} />
             <button
               type="button"
               ref={approvalsRef}

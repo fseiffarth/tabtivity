@@ -78,8 +78,15 @@ export interface AddTabMenuData {
  * detached popout's `NewTabMenu` are separate React roots (an entry or a probe
  * fixed in one used to be silently missing or stale in the other; this ~80-line
  * block was maintained verbatim in both).
+ *
+ * `active: false` holds every probe back (and the registry listeners off) —
+ * for a host that stays mounted while it is hidden, like the mail overlay's
+ * docked-agent hook. The data then keeps its last answer (`null` before any).
  */
-export function useAddTabMenuData(scope: string): AddTabMenuData {
+export function useAddTabMenuData(
+  scope: string,
+  { active = true }: { active?: boolean } = {},
+): AddTabMenuData {
   const isRoot = scope === ROOT_SCOPE;
   const tabsModel = useSettingsStore(
     (s) => s.settings?.ollama_roles?.tabs ?? s.settings?.ollama_model,
@@ -98,10 +105,11 @@ export function useAddTabMenuData(scope: string): AddTabMenuData {
       .catch(() => {});
   }, [localModel]);
   useEffect(() => {
+    if (!active) return;
     refreshLocalDrivers();
     window.addEventListener(AGENT_REGISTRY_CHANGED_EVENT, refreshLocalDrivers);
     return () => window.removeEventListener(AGENT_REGISTRY_CHANGED_EVENT, refreshLocalDrivers);
-  }, [refreshLocalDrivers]);
+  }, [refreshLocalDrivers, active]);
 
   const [agentStatuses, setAgentStatuses] = useState<
     (BuiltInAgentStatus & { id: string })[] | null
@@ -112,10 +120,11 @@ export function useAddTabMenuData(scope: string): AddTabMenuData {
       .catch(() => setAgentStatuses([]));
   }, []);
   useEffect(() => {
+    if (!active) return;
     refreshInstalledAgents();
     window.addEventListener(AGENT_REGISTRY_CHANGED_EVENT, refreshInstalledAgents);
     return () => window.removeEventListener(AGENT_REGISTRY_CHANGED_EVENT, refreshInstalledAgents);
-  }, [refreshInstalledAgents]);
+  }, [refreshInstalledAgents, active]);
 
   // Built-in agents the user turned off in "Manage Agents" (Settings) despite
   // being installed — hidden from the menu without uninstalling the CLI.
@@ -156,6 +165,7 @@ export function useAddTabMenuData(scope: string): AddTabMenuData {
   const [installedCustom, setInstalledCustom] = useState<Set<string> | null>(null);
   // Re-probe custom commands whenever the set changes (adding one in the dialog).
   useEffect(() => {
+    if (!active) return;
     const cmds = customAgents.map((a) => a.cmd);
     if (cmds.length === 0) {
       setInstalledCustom(new Set());
@@ -164,7 +174,7 @@ export function useAddTabMenuData(scope: string): AddTabMenuData {
     invoke<string[]>("probe_binaries", { bins: cmds })
       .then((found) => setInstalledCustom(new Set(found)))
       .catch(() => setInstalledCustom(new Set()));
-  }, [customAgents]);
+  }, [customAgents, active]);
 
   const boxes = useBoxesStore((st) => st.boxes);
   const projects = useProjectsStore((st) => st.projects);

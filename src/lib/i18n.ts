@@ -9142,6 +9142,11 @@ export const enSource = {
   "rootConsole.emptyTitle": "The root console is empty",
   "rootConsole.emptyHint":
     "Press + to open an agent or a shell here. It belongs to no project, so it stays one keystroke away from all of them.",
+  "overlayAgent.openInConsole": "Open in the root console",
+  "overlayAgent.hide": "Hide the agent column",
+  "overlayAgent.shownInConsole": "Shown in the root console",
+  "overlayAgent.shownInConsoleHint": "Close the root console to work with this agent here.",
+  "overlayAgent.rootNotAllowed": "Allow {agent} in the root console: Models & agents → Root chip",
   "shortcut.cycleProjectBack": "Cycle to previous project",
   "shortcut.cycleBox": "Cycle to next box",
   "shortcut.cycleBoxBack": "Cycle to previous box",
