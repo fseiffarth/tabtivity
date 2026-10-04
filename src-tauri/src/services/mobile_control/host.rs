@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::services::desktop_images;
+use crate::services::markup_rounds;
 use crate::terminal::PtyOptions;
 
 use super::{
@@ -4434,6 +4435,13 @@ async fn inbox_file(
 /// The source is named by a sealed file token of this tab's project or an
 /// outbox leaf, read only; the answer carries project-relative references and
 /// never the root.
+///
+/// A request with `mode: "apply"` (**Apply marks directly**,
+/// `docs/pdf_markup_direct_apply_plan.md`) takes an undo snapshot of the
+/// project's work tree first (`services::markup_rounds`, owned by this tab and
+/// its project; a remote project gets none). The answer adds `mode` (what the
+/// round got), `undo` (the snapshot's id) and `noUndo` (why a requested
+/// `apply` runs as `list`).
 async fn markup_submit(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -4479,16 +4487,137 @@ async fn markup_submit(
         }
         markup::MarkupSource::Outbox(name) => markup::ResolvedSource::Outbox(name.clone()),
     };
-    // Reads, a bake bounded by its own deadline, and an inbox write.
-    let submitted = tokio::task::spawn_blocking(move || markup::submit(&root, &source, &request, send_back)).await;
+    let state_dir = state.config.state_dir.clone();
+    let owner = markup_rounds::Owner::Phone { tab: tab_id.clone(), project: raw_id.clone() };
+    // Reads, a bake bounded by its own deadline, an inbox write, and an
+    // `apply` round's snapshot (git calls bounded by theirs).
+    let submitted = tokio::task::spawn_blocking(move || {
+        let undo = if crate::services::remote::remote_target_for(&raw_id).is_some() {
+            Err(markup_rounds::NoUndo::Remote)
+        } else {
+            Ok(markup::UndoTarget { state_dir: &state_dir, owner })
+        };
+        markup::submit_with_undo(&root, &source, &request, send_back, undo)
+    })
+    .await;
     match submitted {
-        Ok(Ok(done)) => (StatusCode::OK, Json(json!({ "prompt": done.prompt, "marked": done.marked }))),
+        Ok(Ok(done)) => (
+            StatusCode::OK,
+            Json(json!({
+                "prompt": done.prompt,
+                "marked": done.marked,
+                "mode": done.mode,
+                "undo": done.undo,
+                "noUndo": done.no_undo.map(markup_rounds::NoUndo::code),
+            })),
+        ),
         Ok(Err(markup::MarkupError::Files(error))) => files_error(error),
         Ok(Err(markup::MarkupError::Outbox(error))) => outbox_error(error),
         Ok(Err(error @ markup::MarkupError::Unsupported)) => api_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, error.code()),
         Ok(Err(error)) => api_error(StatusCode::BAD_REQUEST, error.code()),
         Err(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "markup_failed"),
     }
+}
+
+// ── Markup undo (`services::markup_rounds`, the phone's half) ───────────────
+
+/// The owner of the undo snapshot `undo_id` a phone route names: this tab, of
+/// this tab's project. A malformed id is `round_not_found`, as another tab's
+/// round is (`markup_rounds::load`).
+fn markup_undo_owner(state: &HostState, tab_id: &str, undo_id: &str) -> Result<markup_rounds::Owner, ApiRefusal> {
+    if !markup_rounds::valid_id(undo_id) {
+        return Err(api_error(StatusCode::NOT_FOUND, markup_rounds::RoundError::NotFound.code()));
+    }
+    let catalog = catalog(state)?;
+    let Some((project, _)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    Ok(markup_rounds::Owner::Phone { tab: tab_id.to_string(), project: project.raw_id.clone() })
+}
+
+/// A refused settle, preview or undo under the status the phone reads it by:
+/// `undo_conflict` (409) carries the project-relative files changed since
+/// and how many more.
+fn markup_undo_error(error: markup_rounds::RoundError) -> ApiRefusal {
+    let code = error.code();
+    match error {
+        markup_rounds::RoundError::Conflict { files, more } => {
+            (StatusCode::CONFLICT, Json(json!({ "error": code, "files": files, "more": more })))
+        }
+        markup_rounds::RoundError::NotFound => api_error(StatusCode::NOT_FOUND, code),
+        markup_rounds::RoundError::Gone => api_error(StatusCode::GONE, code),
+        markup_rounds::RoundError::NotReady => api_error(StatusCode::CONFLICT, code),
+        markup_rounds::RoundError::Failed => api_error(StatusCode::INTERNAL_SERVER_ERROR, code),
+    }
+}
+
+/// One undo call for a phone route, after its gates: off the async runtime.
+async fn markup_undo_call<T: Serialize + Send + 'static>(
+    state: &HostState,
+    tab_id: &str,
+    undo_id: String,
+    call: fn(&std::path::Path, &str, &markup_rounds::Owner) -> Result<T, markup_rounds::RoundError>,
+) -> ApiRefusal {
+    let owner = match markup_undo_owner(state, tab_id, &undo_id) {
+        Ok(owner) => owner,
+        Err(error) => return error,
+    };
+    let state_dir = state.config.state_dir.clone();
+    match tokio::task::spawn_blocking(move || call(&state_dir, &undo_id, &owner)).await {
+        Ok(Ok(answer)) => (StatusCode::OK, Json(json!(answer))),
+        Ok(Err(error)) => markup_undo_error(error),
+        Err(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "markup_failed"),
+    }
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/undo/{undo_id}/settle` → `{}` — the
+/// round's after-snapshot, each time its turn finishes (the last one wins).
+async fn markup_undo_settle(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, undo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let settle = |dir: &std::path::Path, id: &str, owner: &markup_rounds::Owner| {
+        markup_rounds::settle(dir, id, owner).map(|()| serde_json::Map::new())
+    };
+    markup_undo_call(&state, &tab_id, undo_id, settle).await
+}
+
+/// `GET /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files: [{ path,
+/// change }], more, pdf }` — what an undo would put back, project-relative
+/// (settles first when the round has not).
+async fn markup_undo_preview(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, undo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    markup_undo_call(&state, &tab_id, undo_id, markup_rounds::preview).await
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files, more, pdf }`
+/// — puts the round's changes back, or 409 `undo_conflict` with the files
+/// changed since and nothing touched.
+async fn markup_undo(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, undo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    markup_undo_call(&state, &tab_id, undo_id, markup_rounds::undo).await
 }
 
 // ── Markup questions (`services::markup_mcp`, the phone's half) ──────────────
@@ -5107,6 +5236,14 @@ fn router(state: HostState) -> Router {
             post(markup_submit).layer(DefaultBodyLimit::max(markup::MAX_MARKUP_BODY)),
         )
         .route("/api/v1/tabs/{tab_id}/markup/questions", get(markup_questions))
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/undo/{undo_id}",
+            get(markup_undo_preview).post(markup_undo).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/undo/{undo_id}/settle",
+            post(markup_undo_settle).layer(DefaultBodyLimit::max(1024)),
+        )
         .route(
             "/api/v1/tabs/{tab_id}/markup/answer",
             post(markup_answer).layer(DefaultBodyLimit::max(MAX_MARKUP_ANSWER_BODY)),
@@ -8295,6 +8432,100 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
         let inbox: Vec<_> = std::fs::read_dir(host.root.join(inbox::INBOX_DIR)).unwrap().flatten().collect();
         assert_eq!(inbox.len(), 2, "the layer and one marked copy");
+    }
+
+    /// **Apply marks directly** over the wire: an `apply` Submit in a git
+    /// project answers an undo id; settle, preview and undo answer
+    /// project-relative names only; a forged id or tab is not found, a
+    /// foreign origin refused, and nothing raw crosses.
+    #[tokio::test]
+    async fn an_apply_submit_answers_an_undo_the_phone_can_settle_preview_and_run() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(64)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().unwrap().to_string();
+        std::fs::create_dir_all(host.root.join("docs")).unwrap();
+        std::fs::write(host.root.join("docs/draft.pdf"), super::super::markup_pdf::tests::classic_pdf(&[0], false)).unwrap();
+        std::fs::write(host.root.join("docs/draft.tex"), "teh cat\n").unwrap();
+        for args in [&["init", "-q"][..], &["add", "-A"], &["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "i"]] {
+            let mut git = std::process::Command::new("git");
+            for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"] {
+                git.env_remove(name);
+            }
+            assert!(git.args(args).current_dir(&host.root).output().unwrap().status.success(), "git {args:?}");
+        }
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files"), &cookie)).await;
+        let docs = json(&body)["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "docs").unwrap()["token"].as_str().unwrap().to_string();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files?dir={docs}"), &cookie)).await;
+        let token = json(&body)["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "draft.pdf").unwrap()["token"].as_str().unwrap().to_string();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-layer".to_vec();
+        let (_, _, body) = host.send(inbox_request(&tab_id, "draft-p1-layer.png", &cookie, png)).await;
+        let layer = json(&body)["attachment"]["reference"].as_str().unwrap().to_string();
+        let call = |method: &str, uri: String, origin: &str| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(if method == "POST" { b"{}".to_vec() } else { Vec::new() }))
+                .unwrap()
+        };
+        let submit = serde_json::json!({
+            "source": { "files": token },
+            "pages": [{ "n": 1, "size": [600, 800], "layer": layer, "marks": [{ "kind": "box", "color": "red", "rect": [1, 1, 5, 5] }] }],
+            "mode": "apply",
+        });
+        let mut request = call("POST", format!("/api/v1/tabs/{tab_id}/markup"), ORIGIN);
+        *request.body_mut() = Body::from(serde_json::to_vec(&submit).unwrap());
+        let (status, _, body) = host.send(request).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let answer = json(&body);
+        assert_eq!((answer["mode"].as_str(), answer["noUndo"].as_str()), (Some("apply"), None), "{body}");
+        let undo = answer["undo"].as_str().unwrap().to_string();
+        assert!(markup_rounds::valid_id(&undo));
+
+        // The agent's turn.
+        std::fs::write(host.root.join("docs/draft.tex"), "the cat\n").unwrap();
+        let base = format!("/api/v1/tabs/{tab_id}/markup/undo/{undo}");
+        let (status, _, body) = host.send(call("POST", format!("{base}/settle"), "https://elsewhere.example")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        let (status, _, body) = host.send(call("POST", format!("{base}/settle"), ORIGIN)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let (status, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["files"], serde_json::json!([{ "path": "docs/draft.tex", "change": "modified" }]), "{body}");
+        for leak in [host.root.to_string_lossy().to_string(), RAW_PROJECT.to_string()] {
+            assert!(!body.contains(&leak), "{leak} leaked: {body}");
+        }
+
+        // Forged ids and tabs, and a foreign origin on the undo itself.
+        for uri in [
+            format!("/api/v1/tabs/{tab_id}/markup/undo/{}", "0".repeat(32)),
+            format!("/api/v1/tabs/{tab_id}/markup/undo/..%2F..%2Fsecrets"),
+            format!("/api/v1/tabs/nope/markup/undo/{undo}"),
+        ] {
+            let (status, _, body) = host.send(call("POST", uri.clone(), ORIGIN)).await;
+            assert!(matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE), "{uri} answered {status}: {body}");
+        }
+        let (status, ..) = host.send(call("POST", base.clone(), "https://elsewhere.example")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(std::fs::read_to_string(host.root.join("docs/draft.tex")).unwrap(), "the cat\n", "nothing undone yet");
+
+        let (status, _, body) = host.send(call("POST", base.clone(), ORIGIN)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(std::fs::read_to_string(host.root.join("docs/draft.tex")).unwrap(), "teh cat\n");
+        let (status, _, body) = host.send(call("POST", base, ORIGIN)).await;
+        assert_eq!(status, StatusCode::GONE, "undone once: {body}");
+        assert_eq!(json(&body)["error"], "undo_gone");
     }
 
     /// The markup questions routes: with no window, a quiet

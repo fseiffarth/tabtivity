@@ -1136,6 +1136,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .mobile-schedule-form textarea,
 .mobile-schedule-form select,
 .mobile-schedule-form input { box-sizing:border-box; width:100%; padding:9px 10px; border:1px solid #42485c; border-radius:9px; background:#11141c; color:#f2f4fa; font:inherit; }
+.mobile-schedule-form input.markup-ask-dial { padding:0; border:0; background:none; accent-color:#8c7df4; min-height:32px; }
 .mobile-schedule-weekdays { display:flex; flex-wrap:wrap; gap:7px; }
 .mobile-schedule-weekdays label { display:flex; gap:4px; align-items:center; padding:6px 8px; border:1px solid #383c4d; border-radius:999px; }
 .mobile-schedule-weekdays input { width:auto; }

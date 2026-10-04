@@ -3629,7 +3629,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     folder: row.folder,
   });
   /** A shell tab has no chat to send marks to: Mark up's Submit opens a new
-   * tab of the desktop's default agent and shows it in place of this one. */
+   * tab of the desktop's default agent; its Open tab shows that tab in place
+   * of this one. */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
     () => (tab.kind !== "agent" && project && openTab ? { projectId: project, show: (row: TabRow) => openTab(row) } : undefined),
     [tab.kind, project, openTab],

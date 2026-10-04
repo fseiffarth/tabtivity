@@ -51,7 +51,7 @@ pub const TOOL_WITHDRAW: &str = "markup_withdraw";
 /// The tools, in the order `tools/list` gives them.
 pub const TOOLS: &[&str] = &[TOOL_ASK, TOOL_WITHDRAW];
 
-pub const INSTRUCTIONS: &str = concat!("Questions about the user's PDF markup, shown inside ", crate::app_name!(), "'s markup view of this tab. When a mark leaves you a choice, call markup_ask with up to four questions, each with 2–6 options, the 1-based page and a short quote of the page's own words the mark is on; the user taps an answer beside the PDF. markup_ask returns at once — the user's answer arrives as your next prompt, so end your turn after asking. A new ask replaces this tab's open one; markup_withdraw takes one back. Every refusal is a normal result with a fixed `category` and a `message`. Budget: twenty asks per tab per hour.");
+pub const INSTRUCTIONS: &str = concat!("Questions about the user's PDF markup, shown inside ", crate::app_name!(), "'s markup view of this tab. When a mark leaves you a choice the markup prompt says to ask about, call markup_ask with up to four questions, each with 2–6 options, the 1-based page and a short quote of the page's own words the mark is on; the user taps an answer beside the PDF. markup_ask returns at once — the user's answer arrives as your next prompt, so end your turn after asking. A new ask replaces this tab's open one; markup_withdraw takes one back. Every refusal is a normal result with a fixed `category` and a `message`. Budget: twenty asks per tab per hour.");
 
 /// Bounds, in characters after cleaning (`file` in bytes).
 pub const MAX_QUESTIONS: usize = 4;

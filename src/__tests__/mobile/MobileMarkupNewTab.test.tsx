@@ -1,8 +1,9 @@
 /**
  * Mark up with no agent tab to send to (the project screen, a shell tab):
  * Submit opens a new tab of the desktop's default agent, sends the marks
- * through it, hands it the prompt as a held prompt and shows it — and a retry
- * after a later step failed reuses that tab instead of opening another.
+ * through it and hands it the prompt as a held prompt. The view stays open,
+ * its pill following the new tab, and Open tab shows it — and a retry after a
+ * later step failed reuses that tab instead of opening another.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,15 +44,21 @@ function jsonResponse(status: number, body: unknown) {
 }
 
 /** The sidecar: project detail, tab create, inbox, `/markup`, `/held`. */
-function desktop({ heldFails = 0 } = {}) {
+function desktop({ heldFails = 0, status }: { heldFails?: number; status?: string } = {}) {
   const calls: Call[] = [];
   let holdFailures = heldFails;
+  let opened = false;
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body });
-    if (url === "/api/v1/projects/p1" && method === "GET") return jsonResponse(200, { agents: AGENTS, tabs: [] });
-    if (url === "/api/v1/projects/p1/tabs" && method === "POST") return jsonResponse(201, { tab: NEW_TAB });
+    if (url === "/api/v1/projects/p1" && method === "GET") {
+      return jsonResponse(200, { agents: AGENTS, tabs: opened ? [{ ...NEW_TAB, ...(status ? { agent_status: status } : {}) }] : [] });
+    }
+    if (url === "/api/v1/projects/p1/tabs" && method === "POST") {
+      opened = true;
+      return jsonResponse(201, { tab: NEW_TAB });
+    }
     if (url.includes("/inbox?name=")) {
       const name = decodeURIComponent(url.split("name=")[1]);
       return jsonResponse(201, { attachment: { name, reference: `inbox/${name}`, size: 6 } });
@@ -107,15 +114,20 @@ describe("OutboxViewer · Mark up with no agent tab", () => {
 });
 
 describe("MarkupView · Submit with no agent tab", () => {
-  it("opens a tab of the default agent, sends the marks through it, holds the prompt there and shows it", async () => {
+  it("opens a tab of the default agent, sends the marks through it, holds the prompt there and stays open", async () => {
     const calls = desktop();
     const show = vi.fn();
-    render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show }} onClose={vi.fn()} />);
+    const onClose = vi.fn();
+    render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show }} onClose={onClose} />);
     showPicture();
     expect(screen.getByText(/Submit opens a new tab of your default agent/)).toBeTruthy();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
-    await waitFor(() => expect(show).toHaveBeenCalledWith(NEW_TAB));
+    await screen.findByText("Sent to a new Claude Code tab.");
+    expect(screen.getByText("Sent — waiting for the agent")).toBeTruthy();
+    expect(screen.queryByText(/Submit opens a new tab of your default agent/)).toBeNull();
+    expect(show).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
 
     const create = calls.find((call) => call.url === "/api/v1/projects/p1/tabs")!;
     expect(JSON.parse(String(create.body))).toMatchObject({ project_id: "p1", kind: "agent", agent_id: "agent-claude" });
@@ -124,9 +136,20 @@ describe("MarkupView · Submit with no agent tab", () => {
     expect(tabCalls).toContain("/api/v1/tabs/tab-new/markup");
     const held = calls.find((call) => call.url === "/api/v1/tabs/tab-new/held")!;
     expect(JSON.parse(String(held.body))).toEqual({ message: "Look at the marks" });
-    // The sent marks are written before the jump takes the view away.
-    const written = store.saveLayer.mock.calls[store.saveLayer.mock.calls.length - 1][1] as Layer;
-    expect(hasSent(written)).toBe(true);
+    // The round's marks move to the sent side, as after a Submit into a chat.
+    await waitFor(() => expect(hasSent(store.saveLayer.mock.calls[store.saveLayer.mock.calls.length - 1][1] as Layer)).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open tab" }));
+    expect(show).toHaveBeenCalledWith(NEW_TAB);
+  });
+
+  it("follows the opened tab's turn in the round's pill", async () => {
+    desktop({ status: "working" });
+    render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show: vi.fn() }} onClose={vi.fn()} />);
+    showPicture();
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await screen.findByText("Agent is working…");
   });
 
   it("retries a failed hand-over in the tab it already opened", async () => {
@@ -140,7 +163,10 @@ describe("MarkupView · Submit with no agent tab", () => {
     expect(show).not.toHaveBeenCalled();
 
     fireEvent.click(submitButton());
-    await waitFor(() => expect(show).toHaveBeenCalledWith(NEW_TAB));
+    await screen.findByText("Sent to a new Claude Code tab.");
+    await screen.findByText("Sent — waiting for the agent");
+    expect(show).not.toHaveBeenCalled();
     expect(calls.filter((call) => call.url === "/api/v1/projects/p1/tabs")).toHaveLength(1);
+    expect(calls.filter((call) => call.url === "/api/v1/tabs/tab-new/held")).toHaveLength(2);
   });
 });

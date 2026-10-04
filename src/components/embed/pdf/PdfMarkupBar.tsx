@@ -11,7 +11,8 @@ import { useT, type TranslationKey } from "../../../lib/i18n";
 import { MARK_COLORS, type MarkColor } from "../../../../mobile-web/src/markup/layer";
 import { EraserIcon } from "../../../../mobile-web/src/markup/EraserIcon";
 import { INK } from "../../../../mobile-web/src/markup/rasterize";
-import type { RoundPhase } from "../../../../mobile-web/src/markup/submitState";
+import { undoSummary, type RoundPhase } from "../../../../mobile-web/src/markup/submitState";
+import { ConfirmDialog } from "../../common/PromptDialogs";
 import { UntestedTag } from "../../common/UntestedTag";
 import { TabStatusMark } from "../../tabs/TabLocalityBadges";
 import type { MarkupTool, PdfMarkup } from "./usePdfMarkup";
@@ -39,6 +40,17 @@ const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
   unconfirmed: "mobile.markup.round.unconfirmed",
 };
 
+/** Why an asked-for `apply` round runs as `list` (the backend's `noUndo`). */
+const NO_UNDO_KEYS: Record<string, TranslationKey> = {
+  not_git: "mobile.markup.noUndo.notGit",
+  no_git: "mobile.markup.noUndo.noGit",
+  too_big: "mobile.markup.noUndo.tooBig",
+  filtered: "mobile.markup.noUndo.filtered",
+  git_failed: "mobile.markup.noUndo.gitFailed",
+  remote: "mobile.markup.noUndo.remote",
+  not_pdf: "mobile.markup.noUndo.notPdf",
+};
+
 /** The tab bar's own status mark, where a phase has one. */
 const ROUND_MARK: Partial<Record<RoundPhase, string>> = {
   working: "working",
@@ -61,7 +73,7 @@ export function PdfMarkupBar({
   onDone: () => void;
 }) {
   const t = useT();
-  const { round, target, targets } = markup;
+  const { round, target, targets, roundUndo } = markup;
   const busy = markup.sending;
   const canSubmit = markup.sendable.length > 0 && target !== null && !busy && markup.edit.note === null;
   const roundWords = round
@@ -72,9 +84,10 @@ export function PdfMarkupBar({
         : t(ROUND_KEYS[round.phase])
     : null;
   const mark = round ? ROUND_MARK[round.phase] : undefined;
-  /** Reload is offered once a round went out, or the file changed under the
-   *  marks; it leads once the agent is done and the file is new. */
-  const canReload = round !== null || markup.stale;
+  /** Reload is offered only when the file changed under the marks — the
+   *  mtime poll's word — never when there is nothing new to load; it leads
+   *  until reloaded once. */
+  const canReload = markup.stale;
   const reloadLeads = markup.stale && !markup.reloaded;
 
   return (
@@ -194,12 +207,13 @@ export function PdfMarkupBar({
         >
           {t("mobile.markup.submit")}
         </button>
+        <UntestedTag id="desktop.markup.anchors" />
         <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={onDone} disabled={busy}>
           {t("mobile.markup.done")}
         </button>
       </div>
-      {(round || markup.stale || busy || markup.failure || markup.storage === "unsaved" || markup.changed
-        || markup.leftOut > 0 || markup.limitHit || markup.askElsewhere) && (
+      {(round || markup.stale || markup.autoReloaded || busy || markup.failure || markup.storage === "unsaved" || markup.changed
+        || markup.leftOut > 0 || markup.limitHit || markup.askElsewhere || roundUndo.note) && (
         <div className="file-viewer-pdf-copy-bar file-viewer-pdf-markup-status" role="status" aria-live="polite">
           {round && roundWords && (
             <span className="file-viewer-pdf-markup-round">
@@ -208,6 +222,11 @@ export function PdfMarkupBar({
             </span>
           )}
           {markup.stale && !(round?.phase === "finished") && <span>{t("pdfMarkup.stale")}</span>}
+          {markup.autoReloaded && !markup.stale && (
+            <span className="file-viewer-pdf-markup-auto-reloaded">
+              {t("pdfMarkup.autoReloaded")} <UntestedTag id="desktop.markup.autoReload" />
+            </span>
+          )}
           {markup.canApply && (
             <button
               type="button"
@@ -218,6 +237,26 @@ export function PdfMarkupBar({
             >
               {t("mobile.markup.apply")} <UntestedTag id="desktop.markup.apply" />
             </button>
+          )}
+          {roundUndo.offered && (
+            <button
+              type="button"
+              className={`file-viewer-zoom-btn file-viewer-zoom-text${reloadLeads ? "" : " active"}`}
+              onClick={() => void roundUndo.ask()}
+              disabled={busy || roundUndo.busy}
+              title={t("mobile.markup.undoRoundTitle")}
+              aria-label={t("mobile.markup.undoRoundTitle")}
+            >
+              {t("mobile.markup.undoRound")} <UntestedTag id="desktop.markup.undo" />
+            </button>
+          )}
+          {roundUndo.noUndo && (
+            <span>{t("mobile.markup.noUndo", { reason: t(NO_UNDO_KEYS[roundUndo.noUndo] ?? "mobile.markup.noUndo.other") })}</span>
+          )}
+          {roundUndo.note && (
+            <span className={roundUndo.note.alert ? "file-viewer-pdf-redact-warn" : undefined} role={roundUndo.note.alert ? "alert" : undefined}>
+              {roundUndo.note.text}
+            </span>
           )}
           {canReload && (
             <button
@@ -262,6 +301,20 @@ export function PdfMarkupBar({
             </span>
           )}
         </div>
+      )}
+      {roundUndo.preview && (
+        <ConfirmDialog
+          title={t("mobile.markup.undo.confirmTitle")}
+          body={undoSummary(roundUndo.preview, t)}
+          confirmLabel={t("mobile.markup.undo.confirm")}
+          danger
+          onCancel={roundUndo.cancel}
+          onConfirm={() => {
+            void roundUndo.confirm().then((done) => {
+              if (done) onReload();
+            });
+          }}
+        />
       )}
     </>
   );

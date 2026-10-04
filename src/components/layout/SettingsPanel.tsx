@@ -81,7 +81,7 @@ import { setVpnAutoConnect, vpnUsernameFor } from "../../lib/remote/vpn/vpnAutoC
 import type { StoredVpnConfig } from "../../types";
 import { MobileSettings } from "../mobile/MobileSettings";
 import { UpdatesPanel } from "./UpdatesPanel";
-import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_INSTRUCTION, MAX_PDF_MARKUP_PROMPT } from "../../lib/viewers/pdfMarkup";
+import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION, DEFAULT_PDF_MARKUP_ASK, DEFAULT_PDF_MARKUP_INSTRUCTION, MAX_PDF_MARKUP_PROMPT, PDF_MARKUP_ASK_STOPS, pdfMarkupAsk, pdfMarkupInstruction } from "../../lib/viewers/pdfMarkup";
 import { BugIcon, PlayIcon, WarningIcon } from "../common/icons/Icon";
 import {
   SETTINGS_ANCHORS,
@@ -159,6 +159,37 @@ function PdfMarkupPromptCard({ id, label, help, value, fallback, onChange }: {
         </button>
       </div>
     </SettingsCard>
+  );
+}
+
+/** Settings → PDF markup's asking dial: how often a Submit lets the agent
+ *  stop to ask about a mark, five stops from Ask always to Never ask. The
+ *  backend words each stop (`markup::ASK_LINES`) and puts it after the
+ *  prompt; the phone keeps its own dial. */
+function PdfMarkupAskCard({ value, onChange }: { value: number; onChange: (stop: number) => void }) {
+  const t = useT();
+  const stop = t(`markup.ask.stop${value}` as TranslationKey);
+  return (
+    <SettingRow
+      label={<>{t("markup.ask.label")} <UntestedTag id="desktop.markup.ask" /></>}
+      htmlFor="pdf-markup-ask"
+      control={
+        <span className="settings-ask-dial">
+          <input
+            id="pdf-markup-ask"
+            type="range"
+            min={0}
+            max={PDF_MARKUP_ASK_STOPS - 1}
+            step={1}
+            value={value}
+            aria-valuetext={stop}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+          <output htmlFor="pdf-markup-ask">{stop}</output>
+        </span>
+      }
+      help={<>{t(`markup.ask.hint${value}` as TranslationKey)} {t("markup.ask.help")}</>}
+    />
   );
 }
 
@@ -1149,7 +1180,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   browser: ["settings.browserHome", "settings.browserSearch", "settings.browserLinkTarget", "settings.browserRestoreNavigate", "settings.browserLivePages"],
   calendar: ["settings.calendarGlobalApp", "settings.todoBoard", "settings.weekStartsOn", "settings.defaultView", "settings.dayGridStart", "settings.defaultReminder"],
   usageStats: ["settings.dailyRecap", "settings.openUsageStats"],
-  pdfMarkup: ["settings.pdfMarkupInstruction", "settings.pdfMarkupApply"],
+  pdfMarkup: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply"],
   rootConsole: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
@@ -1756,13 +1787,28 @@ export function SettingsDialog({
                 the phone keeps its own (Home → This phone → Mark up prompt).
                 Blank = the default, shown as the starting text. */}
             <SettingsSection anchor="settings-anchor-pdfMarkup" title={<>{t("settings.pdfMarkup")} <UntestedTag id="desktop.markup.apply" /></>} help={t("settings.pdfMarkupHelp")} />
+            {/* Absent means on: a Submit asks for an `apply` round, which the
+                backend backs with an undo snapshot or runs as `list`. The
+                instruction below starts from the default of this mode. */}
+            <ToggleCard
+              label={<>{t("settings.pdfMarkupDirect")} <UntestedTag id="desktop.markup.undo" /></>}
+              checked={settings?.pdf_markup_direct ?? true}
+              onChange={(e) => void updateSettings({ pdf_markup_direct: e.target.checked })}
+              help={t("settings.pdfMarkupDirectHelp")}
+            />
             <PdfMarkupPromptCard
               id="pdf-markup-instruction"
               label={t("settings.pdfMarkupInstruction")}
               help={t("settings.pdfMarkupInstructionHelp")}
-              value={settings?.pdf_markup_instruction}
-              fallback={DEFAULT_PDF_MARKUP_INSTRUCTION}
+              // Either mode's default kept from before is no instruction of
+              // the user's: the field shows (and a Submit sends) this mode's.
+              value={pdfMarkupInstruction(settings?.pdf_markup_instruction) === null ? undefined : settings?.pdf_markup_instruction}
+              fallback={(settings?.pdf_markup_direct ?? true) ? DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION : DEFAULT_PDF_MARKUP_INSTRUCTION}
               onChange={(value) => void updateSettings({ pdf_markup_instruction: value })}
+            />
+            <PdfMarkupAskCard
+              value={pdfMarkupAsk(settings?.pdf_markup_ask) ?? DEFAULT_PDF_MARKUP_ASK}
+              onChange={(stop) => void updateSettings({ pdf_markup_ask: stop === DEFAULT_PDF_MARKUP_ASK ? undefined : stop })}
             />
             <PdfMarkupPromptCard
               id="pdf-markup-apply"
@@ -1771,6 +1817,18 @@ export function SettingsDialog({
               value={settings?.pdf_markup_apply}
               fallback={DEFAULT_PDF_MARKUP_APPLY}
               onChange={(value) => void updateSettings({ pdf_markup_apply: value })}
+            />
+            <ToggleCard
+              label={<>{t("settings.pdfMarkupAutoReload")} <UntestedTag id="desktop.markup.autoReload" /></>}
+              checked={settings?.pdf_markup_auto_reload ?? true}
+              onChange={(e) => void updateSettings({ pdf_markup_auto_reload: e.target.checked })}
+              help={t("settings.pdfMarkupAutoReloadHelp")}
+            />
+            <ToggleCard
+              label={<>{t("settings.pdfMarkupSubagents")} <UntestedTag id="desktop.markup.subagents" /></>}
+              checked={settings?.pdf_markup_subagents ?? false}
+              onChange={(e) => void updateSettings({ pdf_markup_subagents: e.target.checked })}
+              help={t("settings.pdfMarkupSubagentsHelp")}
             />
             </>)}
 

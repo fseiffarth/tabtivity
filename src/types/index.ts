@@ -397,6 +397,19 @@ export interface Settings {
    *  unset/blank = the defaults. */
   pdf_markup_instruction?: string;
   pdf_markup_apply?: string;
+  /** How often a Submit lets the agent stop to ask about the marks, 0 (about
+   *  every mark) … 4 (never); unset = the default stop (`DEFAULT_PDF_MARKUP_ASK`). */
+  pdf_markup_ask?: number;
+  /** A marked PDF that changes on disk loads under the marks on its own;
+   *  unset = on, `false` waits for **Reload PDF**. */
+  pdf_markup_auto_reload?: boolean;
+  /** Subagent mode: each Submit asks the tab's agent to hand the round to a
+   *  new subagent (`markupForSubagent`); unset = off. */
+  pdf_markup_subagents?: boolean;
+  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): a
+   *  Submit asks for an `apply` round backed by an undo snapshot; unset = on,
+   *  `false` = the agent lists the changes first (**Make these changes**). */
+  pdf_markup_direct?: boolean;
   /** Built-in agent registry ids shown without searching in the compact Agents
    *  group of the + tab menu. Set by the 🧠 menu's “+ tab” chips. Unset keeps
    *  the familiar Claude/Codex/Gemini quick picks; an empty array is a deliberate

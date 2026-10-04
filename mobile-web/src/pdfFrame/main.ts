@@ -15,14 +15,15 @@
  * the polyfills the newest language features pdf.js leans on need on an
  * older phone browser. Canvas only: no text layer, no annotation layer, no
  * links, no forms — PDF content never becomes DOM. The page's text is read
- * for one thing only: where an agent's markup question quotes it
- * (`findText`), answered as boxes in page points.
+ * for two things only: where an agent's markup question quotes it
+ * (`findText`), answered as boxes in page points, and the runs a Submit reads
+ * the words under each mark from (`text`).
  */
 
 import * as worker from "pdfjs-dist/legacy/build/pdf.worker.mjs";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
-import { acceptToFrame, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FromFrame } from "../markup/frameProtocol";
+import { acceptToFrame, MAX_FRAME_PAGES, MAX_PAGE_CHARS, MAX_RENDER_WIDTH, MAX_RUN_CHARS, MAX_TEXT_RUNS, type FromFrame } from "../markup/frameProtocol";
 import { findQuote, type TextRun } from "../markup/findText";
 
 (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = worker;
@@ -76,11 +77,11 @@ async function open(bytes: ArrayBuffer): Promise<void> {
   post({ type: "meta", pages });
 }
 
-async function render(n: number, width: number): Promise<void> {
-  if (!doc || n > doc.numPages) return;
+/** Page `n` drawn about `width` pixels wide, as a bitmap. */
+async function draw(n: number, width: number): Promise<ImageBitmap> {
   const canvas = document.createElement("canvas");
   try {
-    const page = await doc.getPage(n);
+    const page = await doc!.getPage(n);
     const base = page.getViewport({ scale: 1 });
     // As wide as asked, unless that makes a long page taller (or bigger)
     // than the PWA accepts — then narrower.
@@ -95,13 +96,32 @@ async function render(n: number, width: number): Promise<void> {
     await page.render({ canvas, canvasContext: ctx, viewport }).promise;
     const bitmap = await createImageBitmap(canvas);
     page.cleanup();
-    post({ type: "page", n, width, bitmap }, [bitmap]);
-  } catch {
-    post({ type: "failed", code: "render", n });
+    return bitmap;
   } finally {
     // Free the backing store now rather than at the next collection.
     canvas.width = 0;
     canvas.height = 0;
+  }
+}
+
+async function render(n: number, width: number): Promise<void> {
+  if (!doc || n > doc.numPages) return;
+  try {
+    const bitmap = await draw(n, width);
+    post({ type: "page", n, width, bitmap }, [bitmap]);
+  } catch {
+    post({ type: "failed", code: "render", n });
+  }
+}
+
+/** Submit's own picture of a page — never one of the view's. */
+async function snapshot(id: number, n: number, width: number): Promise<void> {
+  if (!doc || n > doc.numPages) { post({ type: "snapshot", id, n }); return; }
+  try {
+    const bitmap = await draw(n, width);
+    post({ type: "snapshot", id, n, bitmap }, [bitmap]);
+  } catch {
+    post({ type: "snapshot", id, n });
   }
 }
 
@@ -127,6 +147,19 @@ async function textRuns(n: number): Promise<TextRun[]> {
   return runs;
 }
 
+/** A page's runs for Submit's words under each mark (`anchors.ts`). */
+async function text(id: number, n: number): Promise<void> {
+  let runs: TextRun[] = [];
+  try {
+    if (doc && n <= doc.numPages) runs = await textRuns(n);
+  } catch {
+    // A page whose text cannot be read sends its marks without words.
+  }
+  let chars = 0;
+  const bounded = runs.slice(0, MAX_TEXT_RUNS).filter((run) => run.str.length <= MAX_RUN_CHARS && (chars += run.str.length) <= MAX_PAGE_CHARS);
+  post({ type: "text", id, page: n, runs: bounded });
+}
+
 async function findText(id: number, n: number, quote: string): Promise<void> {
   if (!doc || n > doc.numPages) return;
   let rects: { x: number; y: number; w: number; h: number }[] = [];
@@ -144,7 +177,9 @@ window.addEventListener("message", (event) => {
   if (!message) return;
   queue = queue.then(() => (message.type === "open" ? open(message.bytes)
     : message.type === "render" ? render(message.n, message.width)
-      : findText(message.id, message.page, message.quote)));
+      : message.type === "snapshot" ? snapshot(message.id, message.n, message.width)
+        : message.type === "text" ? text(message.id, message.page)
+          : findText(message.id, message.page, message.quote)));
 });
 
 post({ type: "ready" });

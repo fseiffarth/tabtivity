@@ -6,7 +6,7 @@
  * the sent side. Without an agent tab there is nothing to send to; a prompt the
  * scheduler refuses leaves the marks unsent.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -29,13 +29,20 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
   layerPng: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
 }));
 
+vi.mock("../../components/embed/pdf/markupPage", async (original) => {
+  const real = await original<typeof import("../../components/embed/pdf/markupPage")>();
+  return { ...real, markupPagePicture: vi.fn(real.markupPagePicture) };
+});
+
 import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
+import { markupPagePicture } from "../../components/embed/pdf/markupPage";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
-import { DEFAULT_PDF_MARKUP_APPLY } from "../../lib/viewers/pdfMarkup";
+import { DEFAULT_PDF_MARKUP_APPLY, markupUndoNote } from "../../lib/viewers/pdfMarkup";
 import { SETTLE_MS } from "../../../mobile-web/src/markup/submitState";
+import { MARKUP_SUBAGENT_LINE } from "../../../mobile-web/src/markupInstruction";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { EMPTY_LAYER, addMark, type Layer } from "../../../mobile-web/src/markup/layer";
 import { BRAND, NAMES } from "../../lib/brand";
@@ -49,7 +56,7 @@ function agentTab(key: string, scheduleTargetId: string, label: string): TabEntr
   return { key, label, cmd: "claude", cwd: "/home/u/paper", kind: "agent", scheduleTargetId } as TabEntry;
 }
 
-function Harness() {
+function Harness({ onReload = () => {} }: { onReload?: () => void }) {
   const markup = usePdfMarkup({
     projectId: "p1",
     scope: "p1",
@@ -60,7 +67,7 @@ function Harness() {
     docSize: 9_000,
     docVersion: 0,
   });
-  return <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />;
+  return <PdfMarkupBar markup={markup} page={1} onReload={onReload} onDone={() => {}} />;
 }
 
 const submitButton = () => screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
@@ -89,6 +96,23 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("desktop markup Submit", () => {
+  it("sends each page drawn with its marks and the words they are on", async () => {
+    vi.mocked(markupPagePicture).mockResolvedValueOnce({
+      png: new Blob(["page"], { type: "image/png" }),
+      composed: true,
+      anchors: [{ mark: 0, how: "through", words: "teh", line: "teh result" }],
+    });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    const call = mocks.invoke.mock.calls.find(([command]) => command === "pdf_markup_submit")!;
+    expect(call[1].pages).toEqual([{
+      n: 1, size: SIZE, marks: [STROKE], layerPng: btoa("page"), composed: true,
+      anchors: [{ mark: 0, how: "through", words: "teh", line: "teh result" }],
+    }]);
+  });
+
   it("bakes the marks, queues the prompt for the agent tab and holds it for its queue", async () => {
     render(<Harness />);
     await waitFor(() => expect(submitButton().disabled).toBe(false));
@@ -100,6 +124,8 @@ describe("desktop markup Submit", () => {
       projectId: "p1",
       path: PATH,
       pages: [{ n: 1, size: SIZE, marks: [STROKE], layerPng: btoa("png") }],
+      // Apply marks directly is on unset.
+      mode: "apply",
     });
     expect(mocks.queuePromptForTab).toHaveBeenCalledWith("p1", "s1", "Look at the marked copy.");
     // Queued first, held second — the hold names the schedule just made.
@@ -118,6 +144,28 @@ describe("desktop markup Submit", () => {
     await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
     const call = mocks.invoke.mock.calls.find(([command]) => command === "pdf_markup_submit")!;
     expect(call[1]).toMatchObject({ instruction: "Fix only typos." });
+    expect(call[1]).not.toHaveProperty("ask");
+  });
+
+  it("sends the desktop's asking dial once it is off the default", async () => {
+    useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, pdf_markup_ask: 0 } as Settings });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    const call = mocks.invoke.mock.calls.find(([command]) => command === "pdf_markup_submit")!;
+    expect(call[1]).toMatchObject({ ask: 0 });
+  });
+
+  it("hands the round to a new subagent in subagent mode, the request unchanged", async () => {
+    useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, pdf_markup_subagents: true } as Settings });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    expect(mocks.queuePromptForTab).toHaveBeenCalledWith("p1", "s1", `${MARKUP_SUBAGENT_LINE}\n\nLook at the marked copy.`);
+    const call = mocks.invoke.mock.calls.find(([command]) => command === "pdf_markup_submit")!;
+    expect(Object.keys(call[1]).sort()).toEqual(["mode", "pages", "path", "projectId"]);
   });
 
   it("offers Make these changes once the agent is done, queues the follow-up and offers it once", async () => {
@@ -203,5 +251,126 @@ describe("desktop markup Submit", () => {
     expect(await screen.findByText("→ Claude")).toBeTruthy();
     fireEvent.click(submitButton());
     await waitFor(() => expect(mocks.queuePromptForTab).toHaveBeenCalledWith("p1", "s1", "Look at the marked copy."));
+  });
+});
+
+describe("desktop markup Undo (apply rounds)", () => {
+  const UNDO_ID = "0123456789abcdef0123456789abcdef";
+  const CHANGES = { files: [{ path: "paper.tex", change: "modified" }], more: 0, pdf: "restored" };
+  const undoButton = () => screen.queryByRole("button", { name: "Undo the agent's changes from this round" });
+
+  function backend(overrides: Record<string, () => unknown> = {}) {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (overrides[command]) return overrides[command]();
+      if (command === "file_mtime") return 1_790_000_000;
+      if (command === "pdf_markup_submit") return { prompt: "Look at the marked copy.", marked: null, mode: "apply", undo: UNDO_ID, noUndo: null };
+      if (command === "pdf_markup_undo_preview" || command === "pdf_markup_undo") return CHANGES;
+      return null;
+    });
+  }
+  const calls = (command: string) => mocks.invoke.mock.calls.filter(([name]) => name === command);
+
+  /** Submit, then one turn of the agent to finished. */
+  async function finishedRound(onReload = vi.fn()) {
+    render(<Harness onReload={onReload} />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalledWith("sched-1"));
+    expect(undoButton()).toBeNull();
+    act(() => useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} }));
+    expect(await screen.findByText("Agent is working…")).toBeTruthy();
+    expect(undoButton()).toBeNull();
+    act(() => useActivityStore.setState({ busyByTab: {}, attentionByTab: {} }));
+    await screen.findByText(/^Agent finished/, undefined, { timeout: SETTLE_MS + 2_000 });
+    return onReload;
+  }
+
+  it("settles as the round finishes, and the dialog's Undo puts the files back, reloads and queues a note — no new round", async () => {
+    backend();
+    const onReload = await finishedRound();
+    await waitFor(() => expect(calls("pdf_markup_undo_settle")).toEqual([["pdf_markup_undo_settle", { projectId: "p1", undoId: UNDO_ID }]]));
+    expect(screen.queryByRole("button", { name: /Make these changes/ })).toBeNull();
+    fireEvent.click(undoButton()!);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("Undo the agent's changes from these marks?");
+    expect(dialog.textContent).toContain("Back as before: paper.tex. The PDF goes back to before.");
+    expect(calls("pdf_markup_undo_preview")).toEqual([["pdf_markup_undo_preview", { projectId: "p1", undoId: UNDO_ID }]]);
+    mocks.queuePromptForTab.mockResolvedValueOnce({ pruned: 0, id: "sched-2" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onReload).toHaveBeenCalledTimes(1));
+    expect(calls("pdf_markup_undo")).toEqual([["pdf_markup_undo", { projectId: "p1", undoId: UNDO_ID }]]);
+    expect(mocks.queuePromptForTab).toHaveBeenLastCalledWith("p1", "s1", markupUndoNote(["paper.tex"], 0));
+    expect(mocks.holdPhonePrompt).toHaveBeenLastCalledWith("sched-2");
+    expect(await screen.findByText("Undone — the files are back as they were before the round.")).toBeTruthy();
+    expect(screen.queryByText("Sent — waiting for the agent")).toBeNull();
+    expect(undoButton()).toBeNull();
+    expect(screen.queryByRole("button", { name: /Make these changes/ })).toBeNull();
+  });
+
+  it("says which files changed since when the undo is refused, and reloads nothing", async () => {
+    backend({ pdf_markup_undo: () => { throw { code: "undo_conflict", files: ["paper.tex"], more: 0 }; } });
+    const onReload = await finishedRound();
+    fireEvent.click(undoButton()!);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Undo" }));
+    expect(await screen.findByText("Can't undo — `paper.tex` changed since. Nothing was changed.")).toBeTruthy();
+    expect(onReload).not.toHaveBeenCalled();
+    expect(mocks.queuePromptForTab).toHaveBeenCalledTimes(1);
+    expect(undoButton()).toBeTruthy();
+  });
+
+  it("runs a list round with Make these changes and says why there is no undo", async () => {
+    backend({ pdf_markup_submit: () => ({ prompt: "Look at the marked copy.", marked: null, mode: "list", undo: null, noUndo: "too_big" }) });
+    await finishedRound();
+    expect(screen.getByText("No undo here (too many changed or untracked files) — the agent lists the changes first.")).toBeTruthy();
+    const apply = await screen.findByRole("button", { name: /Make these changes/ });
+    expect(undoButton()).toBeNull();
+    expect(calls("pdf_markup_undo_settle")).toHaveLength(0);
+    // The follow-up makes the changes: the line about listing first is past.
+    fireEvent.click(apply);
+    expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
+    expect(screen.queryByText(/No undo here/)).toBeNull();
+  });
+
+  it("treats an older backend's answer (no mode) as a list round, with no fallback line", async () => {
+    backend({ pdf_markup_submit: () => ({ prompt: "Look at the marked copy.", marked: null }) });
+    await finishedRound();
+    expect(await screen.findByRole("button", { name: /Make these changes/ })).toBeTruthy();
+    expect(undoButton()).toBeNull();
+    expect(screen.queryByText(/No undo here/)).toBeNull();
+    expect(calls("pdf_markup_undo_settle")).toHaveLength(0);
+  });
+
+  it("offers an undo the backend no longer holds no more", async () => {
+    backend({ pdf_markup_undo_preview: () => { throw { code: "undo_gone", files: [], more: 0 }; } });
+    await finishedRound();
+    fireEvent.click(undoButton()!);
+    expect(await screen.findByText("This undo is no longer available.")).toBeTruthy();
+    expect(undoButton()).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls("pdf_markup_undo")).toHaveLength(0);
+  });
+
+  it("sends one preview for a double click, and opens the dialog once it answers", async () => {
+    let answer: (changes: unknown) => void = () => {};
+    backend({ pdf_markup_undo_preview: () => new Promise((resolve) => { answer = resolve; }) });
+    await finishedRound();
+    const button = undoButton()!;
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(calls("pdf_markup_undo_preview")).toHaveLength(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await act(async () => { answer(CHANGES); });
+    expect((await screen.findByRole("dialog")).textContent).toContain("Back as before: paper.tex.");
+  });
+
+  it("asks for a list round with Apply marks directly switched off", async () => {
+    backend({ pdf_markup_submit: () => ({ prompt: "Look at the marked copy.", marked: null, mode: "list", undo: null, noUndo: null }) });
+    useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, pdf_markup_direct: false } as Settings });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    expect(calls("pdf_markup_submit")[0][1]).toMatchObject({ mode: "list" });
+    expect(screen.queryByText(/No undo here/)).toBeNull();
   });
 });

@@ -332,7 +332,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     setFileOpen((open) => open?.name === file.name ? null : open);
   }, [id]);
   /** Mark up from here has no chat to send to: its Submit opens a new tab of
-   * the desktop's default agent and shows it — offered once there is one. */
+   * the desktop's default agent, which its Open tab shows — offered once
+   * there is one. */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
     () => detail?.agents.length ? { projectId: id, show: (tab: TabRow) => terminal(tab) } : undefined,
     [detail?.agents.length, id, terminal],

@@ -4018,6 +4018,21 @@ label.settings-toggle-card-row {
   max-height: min(860px, calc(100vh - 64px));
 }
 
+/* The PDF markup asking dial: five stops, the stop's name beside it. */
+.settings-ask-dial {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-ask-dial > input[type="range"] {
+  width: 160px;
+  accent-color: var(--accent);
+}
+.settings-ask-dial > output {
+  min-width: 8.5em;
+  color: var(--text-primary);
+}
+
 /* A free-text prompt (Settings → PDF markup): the field chrome above, full
    card width, several lines. */
 .settings-card > .settings-prompt-text {

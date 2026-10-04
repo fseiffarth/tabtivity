@@ -14,13 +14,21 @@
 //!
 //! Errors are wire codes (`MarkupError::code()` plus `project_not_found`,
 //! `remote_project`, `markup_failed`) for the frontend to map to text.
+//!
+//! **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): a
+//! Submit with `mode: "apply"` takes an undo snapshot first
+//! (`services::markup_rounds`, owned by the project id) and answers which mode
+//! the round got; `pdf_markup_undo_settle` / `_preview` / `pdf_markup_undo`
+//! settle, show and undo it. Their refusals are `{ code, files, more }`
+//! (`PdfMarkupUndoFailure`).
 
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use crate::services::mobile_control::markup::{self, LocalPage, Mark};
+use crate::services::markup_rounds;
+use crate::services::mobile_control::markup::{self, Anchor, LocalPage, Mark};
 use crate::services::remote;
 
 /// One marked page as the viewer sends it.
@@ -32,16 +40,28 @@ pub struct PdfMarkupPage {
     /// The page's size in points after `/Rotate` — the units of `marks`.
     pub size: [f64; 2],
     pub marks: Vec<Mark>,
-    /// The page's transparent layer PNG, standard base64 (no `data:` prefix).
+    /// The page's PNG, standard base64 (no `data:` prefix): the page with its
+    /// marks drawn on (`composed`), or the marks alone on a transparent page.
     pub layer_png: String,
+    #[serde(default)]
+    pub composed: bool,
+    /// The page's words each mark is on (`markup::Anchor`).
+    #[serde(default)]
+    pub anchors: Vec<Anchor>,
 }
 
 /// What a submit answers: the prompt to queue into the agent tab and the
-/// marked copy's project-relative inbox reference, when one was baked.
+/// marked copy's project-relative inbox reference, when one was baked; the
+/// mode the round got (`apply` only with an undo snapshot), the snapshot's
+/// id, and why a requested `apply` runs as `list` (`markup_rounds::NoUndo`).
 #[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct PdfMarkupSubmitted {
     pub prompt: String,
     pub marked: Option<String>,
+    pub mode: markup::Mode,
+    pub undo: Option<String>,
+    pub no_undo: Option<&'static str>,
 }
 
 /// The local project folder to submit into, from what `projects.json` says
@@ -56,13 +76,37 @@ fn local_root(is_remote: bool, directory: Option<String>) -> Result<PathBuf, &'s
 
 #[cfg(test)]
 fn submit_in(root: &Path, path: &str, pages: Vec<PdfMarkupPage>) -> Result<PdfMarkupSubmitted, String> {
-    submit_in_with(root, path, pages, None)
+    submit_in_with(root, path, pages, None, None, None)
+}
+
+/// A `list` Submit, as before the **Apply marks directly** switch.
+#[cfg(test)]
+fn submit_in_with(
+    root: &Path,
+    path: &str,
+    pages: Vec<PdfMarkupPage>,
+    instruction: Option<String>,
+    ask: Option<u8>,
+    round: Option<String>,
+) -> Result<PdfMarkupSubmitted, String> {
+    let list = markup::UndoRequest { mode: markup::Mode::List, target: Err(markup_rounds::NoUndo::Failed) };
+    submit_in_with_undo(root, path, pages, instruction, ask, round, list)
 }
 
 /// Decodes the payload and runs the shared core. Blocking (file reads, the
-/// bake, inbox writes). `instruction`: the desktop's own Mark up prompt
-/// setting; `None` or blank is `DEFAULT_INSTRUCTION`.
-fn submit_in_with(root: &Path, path: &str, pages: Vec<PdfMarkupPage>, instruction: Option<String>) -> Result<PdfMarkupSubmitted, String> {
+/// bake, inbox writes, an `apply` round's snapshot). `instruction`: the
+/// desktop's own Mark up prompt setting; `None` or blank is the mode's
+/// default. `ask`: its asking dial (`markup::ASK_LINES`); `None` is
+/// `DEFAULT_ASK`. `undo`: the switch's mode and where the snapshot goes.
+fn submit_in_with_undo(
+    root: &Path,
+    path: &str,
+    pages: Vec<PdfMarkupPage>,
+    instruction: Option<String>,
+    ask: Option<u8>,
+    round: Option<String>,
+    undo: markup::UndoRequest,
+) -> Result<PdfMarkupSubmitted, String> {
     if pages.is_empty() || pages.len() > markup::MAX_PAGES {
         return Err(markup::MarkupError::Invalid.code().into());
     }
@@ -75,31 +119,110 @@ fn submit_in_with(root: &Path, path: &str, pages: Vec<PdfMarkupPage>, instructio
         let layer_png = base64::engine::general_purpose::STANDARD
             .decode(page.layer_png.as_bytes())
             .map_err(|_| markup::MarkupError::InvalidLayer.code().to_string())?;
-        local.push(LocalPage { n: page.n, size: page.size, marks: page.marks, layer_png });
+        local.push(LocalPage { n: page.n, size: page.size, marks: page.marks, layer_png, composed: page.composed, anchors: page.anchors });
     }
-    markup::submit_local(root, Path::new(path), local, instruction)
-        .map(|done| PdfMarkupSubmitted { prompt: done.prompt, marked: done.marked })
+    markup::submit_local_with_undo(root, Path::new(path), local, instruction, ask, round, undo)
+        .map(|done| PdfMarkupSubmitted {
+            prompt: done.prompt,
+            marked: done.marked,
+            mode: done.mode,
+            undo: done.undo,
+            no_undo: done.no_undo.map(markup_rounds::NoUndo::code),
+        })
         .map_err(|error| error.code().into())
 }
 
-/// `pdf_markup_submit({ projectId, path, pages, instruction? })` →
-/// `{ prompt, marked }`.
+/// `pdf_markup_submit({ projectId, path, pages, instruction?, ask?, round?, mode? })` →
+/// `{ prompt, marked, mode, undo, noUndo }`. `round` is the id the viewer
+/// minted for this Submit (`markup::valid_round`), under which the agent
+/// ticks marks off. `mode`: `"apply"` (the **Apply marks directly** switch,
+/// `Settings::pdf_markup_direct`) or `"list"`; absent is `list`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn pdf_markup_submit(
     project_id: String,
     path: String,
     pages: Vec<PdfMarkupPage>,
     instruction: Option<String>,
+    ask: Option<u8>,
+    round: Option<String>,
+    mode: Option<markup::Mode>,
 ) -> Result<PdfMarkupSubmitted, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = local_root(
             remote::remote_target_for(&project_id).is_some(),
             remote::project_directory(&project_id),
         )?;
-        submit_in_with(&root, &path, pages, instruction)
+        let state_dir = crate::storage::state_dir();
+        let undo = markup::UndoRequest {
+            mode: mode.unwrap_or_default(),
+            target: Ok(markup::UndoTarget { state_dir: &state_dir, owner: desktop_owner(&project_id) }),
+        };
+        submit_in_with_undo(&root, &path, pages, instruction, ask, round, undo)
     })
     .await
     .map_err(|_| "markup_failed".to_string())?
+}
+
+/// The owner a desktop Submit's undo snapshot is recorded under.
+fn desktop_owner(project_id: &str) -> markup_rounds::Owner {
+    markup_rounds::Owner::Desktop { project: project_id.to_string() }
+}
+
+/// A refused settle, preview or undo: `markup_rounds::RoundError::code()`
+/// (`round_not_found`, `undo_gone`, `undo_not_ready`, `undo_conflict`,
+/// `undo_failed`, or `markup_failed` when the task died), and for
+/// `undo_conflict` the project-relative files changed since and how many more.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct PdfMarkupUndoFailure {
+    pub code: &'static str,
+    pub files: Vec<String>,
+    pub more: usize,
+}
+
+impl From<markup_rounds::RoundError> for PdfMarkupUndoFailure {
+    fn from(error: markup_rounds::RoundError) -> Self {
+        let code = error.code();
+        match error {
+            markup_rounds::RoundError::Conflict { files, more } => PdfMarkupUndoFailure { code, files, more },
+            _ => PdfMarkupUndoFailure { code, files: Vec::new(), more: 0 },
+        }
+    }
+}
+
+/// Runs one round call off the async runtime under the desktop owner.
+async fn round_call<T: Send + 'static>(
+    project_id: String,
+    undo_id: String,
+    call: fn(&Path, &str, &markup_rounds::Owner) -> Result<T, markup_rounds::RoundError>,
+) -> Result<T, PdfMarkupUndoFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        call(&crate::storage::state_dir(), &undo_id, &desktop_owner(&project_id)).map_err(PdfMarkupUndoFailure::from)
+    })
+    .await
+    .map_err(|_| PdfMarkupUndoFailure { code: "markup_failed", files: Vec::new(), more: 0 })?
+}
+
+/// `pdf_markup_undo_settle({ projectId, undoId })` → `null`: the round's
+/// after-snapshot, each time its turn finishes (the last one wins).
+#[tauri::command]
+pub async fn pdf_markup_undo_settle(project_id: String, undo_id: String) -> Result<(), PdfMarkupUndoFailure> {
+    round_call(project_id, undo_id, markup_rounds::settle).await
+}
+
+/// `pdf_markup_undo_preview({ projectId, undoId })` → `{ files: [{ path,
+/// change }], more, pdf }`: what an undo would put back (settles first when
+/// the round has not).
+#[tauri::command]
+pub async fn pdf_markup_undo_preview(project_id: String, undo_id: String) -> Result<markup_rounds::Changes, PdfMarkupUndoFailure> {
+    round_call(project_id, undo_id, markup_rounds::preview).await
+}
+
+/// `pdf_markup_undo({ projectId, undoId })` → `{ files, more, pdf }`, or
+/// `{ code: "undo_conflict", files, more }` with nothing changed.
+#[tauri::command]
+pub async fn pdf_markup_undo(project_id: String, undo_id: String) -> Result<markup_rounds::Changes, PdfMarkupUndoFailure> {
+    round_call(project_id, undo_id, markup_rounds::undo).await
 }
 
 #[cfg(test)]
@@ -127,7 +250,7 @@ mod tests {
     }
 
     fn page(n: u32) -> PdfMarkupPage {
-        PdfMarkupPage { n, size: [600.0, 800.0], marks: vec![ink()], layer_png: b64(&png()) }
+        PdfMarkupPage { n, size: [600.0, 800.0], marks: vec![ink()], layer_png: b64(&png()), composed: false, anchors: vec![] }
     }
 
     /// A local project with a three-page PDF at `docs/draft.pdf`.
@@ -191,7 +314,7 @@ mod tests {
         assert_eq!(fs::metadata(root.join("docs/draft.pdf")).unwrap().modified().unwrap(), before);
         assert!(done.prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."));
         assert!(done.prompt.contains("- p3: \"use the 2024 numbers\""));
-        assert!(done.prompt.ends_with(markup::DEFAULT_INSTRUCTION), "desktop: default instruction, no send-back line");
+        assert!(done.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None))), "desktop: default instruction and asking line, no send-back line");
         assert!(!done.prompt.contains(&root.to_string_lossy().to_string()), "no absolute path in the prompt");
     }
 
@@ -199,15 +322,16 @@ mod tests {
     fn the_desktop_instruction_replaces_the_default_and_is_bounded() {
         let (_dir, root, _pdf) = project();
         let path = path_of(&root, "docs/draft.pdf");
-        let done = submit_in_with(&root, &path, vec![page(1)], Some("Fix only the typos.".into())).unwrap();
-        assert!(done.prompt.ends_with("Fix only the typos."));
+        let done = submit_in_with(&root, &path, vec![page(1)], Some("Fix only the typos.".into()), Some(4), None).unwrap();
+        assert!(done.prompt.ends_with(&format!("Fix only the typos.\n{}", markup::ASK_LINES[4])));
         assert!(!done.prompt.contains(markup::DEFAULT_INSTRUCTION));
-        let blank = submit_in_with(&root, &path, vec![page(1)], Some("  \n ".into())).unwrap();
-        assert!(blank.prompt.ends_with(markup::DEFAULT_INSTRUCTION));
+        let blank = submit_in_with(&root, &path, vec![page(1)], Some("  \n ".into()), None, None).unwrap();
+        assert!(blank.prompt.ends_with(&format!("{}\n{}", markup::DEFAULT_INSTRUCTION, markup::ask_line(None))));
         let before = inbox_names(&root).len();
         let long = "x".repeat(markup::MAX_INSTRUCTION + 1);
-        assert_eq!(submit_in_with(&root, &path, vec![page(1)], Some(long)), Err("invalid_markup".into()));
-        assert_eq!(inbox_names(&root).len(), before, "a refused instruction writes nothing");
+        assert_eq!(submit_in_with(&root, &path, vec![page(1)], Some(long), None, None), Err("invalid_markup".into()));
+        assert_eq!(submit_in_with(&root, &path, vec![page(1)], None, Some(5), None), Err("invalid_markup".into()));
+        assert_eq!(inbox_names(&root).len(), before, "a refused instruction or dial writes nothing");
     }
 
     #[test]
@@ -220,9 +344,19 @@ mod tests {
         let layer = inbox_names(&root).into_iter().find(|n| n.ends_with("-p2-layer.png")).unwrap();
         let phone = markup::MarkupRequest {
             source: markup::MarkupSource::Files("tok".into()),
-            pages: vec![markup::MarkupPage { n: 2, size: [600.0, 800.0], marks, layer: format!("{}/{layer}", inbox::INBOX_DIR) }],
+            pages: vec![markup::MarkupPage {
+                n: 2,
+                size: [600.0, 800.0],
+                marks,
+                layer: format!("{}/{layer}", inbox::INBOX_DIR),
+                composed: false,
+                anchors: vec![],
+            }],
             picture: None,
             instruction: None,
+            ask: None,
+            round: None,
+            mode: markup::Mode::List,
         };
         markup::validate(&phone).unwrap();
         let sidecar = markup::submit(&root, &markup::ResolvedSource::Files("docs/draft.pdf".into()), &phone, false).unwrap();
@@ -318,6 +452,8 @@ mod tests {
                 size: [600.0, 800.0],
                 marks: vec![Mark::Text { color: Color::Blue, at: [5.0, 5.0], size: 12.0, text: format!("note on page {n}: {}", "x".repeat(120)) }],
                 layer: format!(concat!(".", crate::app_slug!(), "/inbox/20261002-120000-a-rather-long-draft-name-p{}-layer.png"), n),
+                composed: false,
+                anchors: vec![],
             })
             .collect();
         let text = markup::prompt(&markup::Prompt {
@@ -326,14 +462,51 @@ mod tests {
             marked: Some(concat!(".", crate::app_slug!(), "/inbox/20261002-120000-draft-marked.pdf")),
             failure: None,
             pages: &pages,
+            sources: &Default::default(),
             instruction: None,
+            ask: None,
+            round: None,
             send_back: true,
         });
         assert!(text.len() <= MAX_PROMPT_BYTES, "{} bytes", text.len());
         assert!(text.contains(concat!("Page 1: @.", crate::app_slug!(), "/inbox/")));
-        assert!(text.contains(concat!("more layers, beside these in `.", crate::app_slug!(), "/inbox/`")));
+        assert!(text.contains(concat!("more layers, beside these in `.", crate::app_slug!(), "/inbox/`, named `…-p<page>-layer.png`")));
         assert!(text.contains("- p1: \"note on page 1:"));
         assert!(text.contains("more notes — read them in the marked copy."));
         assert!(text.ends_with(concat!("send it to me with `", crate::app_slug!(), "-send <file>`.")));
+    }
+
+    #[test]
+    fn an_apply_submit_answers_its_mode_and_undo_in_camel_case() {
+        let (_dir, root, _pdf) = project();
+        let state = tempfile::tempdir().unwrap();
+        let path = path_of(&root, "docs/draft.pdf");
+        let apply = |state_dir| markup::UndoRequest {
+            mode: markup::Mode::Apply,
+            target: Ok(markup::UndoTarget { state_dir, owner: desktop_owner("p") }),
+        };
+        // A folder in no git work tree: list, and why.
+        let plain = submit_in_with_undo(&root, &path, vec![page(1)], None, None, None, apply(state.path())).unwrap();
+        assert_eq!((plain.mode, plain.undo.as_deref(), plain.no_undo), (markup::Mode::List, None, Some("not_git")));
+        let wire = serde_json::to_value(&plain).unwrap();
+        assert_eq!((wire["mode"].as_str(), wire["noUndo"].as_str()), (Some("list"), Some("not_git")));
+        assert!(wire.get("undo").is_some_and(serde_json::Value::is_null));
+        // In a repo: apply, with a snapshot the same owner can settle.
+        let ok = std::process::Command::new("git").args(["init", "-q"]).current_dir(&root).env_remove("GIT_DIR").env_remove("GIT_INDEX_FILE").status().unwrap();
+        assert!(ok.success());
+        let done = submit_in_with_undo(&root, &path, vec![page(1)], None, None, None, apply(state.path())).unwrap();
+        assert_eq!((done.mode, done.no_undo), (markup::Mode::Apply, None));
+        let id = done.undo.unwrap();
+        assert!(done.prompt.contains(markup::DEFAULT_APPLY_INSTRUCTION));
+        assert_eq!(markup_rounds::settle(state.path(), &id, &desktop_owner("p")), Ok(()));
+        assert_eq!(markup_rounds::settle(state.path(), &id, &desktop_owner("q")), Err(markup_rounds::RoundError::NotFound));
+    }
+
+    #[test]
+    fn an_undo_conflict_carries_its_files() {
+        let conflict = PdfMarkupUndoFailure::from(markup_rounds::RoundError::Conflict { files: vec!["a.tex".into()], more: 2 });
+        assert_eq!(serde_json::to_value(&conflict).unwrap(), serde_json::json!({ "code": "undo_conflict", "files": ["a.tex"], "more": 2 }));
+        let gone = PdfMarkupUndoFailure::from(markup_rounds::RoundError::Gone);
+        assert_eq!((gone.code, gone.files.len(), gone.more), ("undo_gone", 0, 0));
     }
 }

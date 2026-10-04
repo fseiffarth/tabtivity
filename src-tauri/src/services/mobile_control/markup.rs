@@ -19,11 +19,13 @@
 //! everything here is AppHandle-free and checked before anything is read.
 
 use crate::brand::SLUG;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
 
 use super::{files, inbox, markup_pdf, outbox};
+use crate::services::markup_rounds::{self, NoUndo};
 
 /// The request body's ceiling — handwriting is many points, but vectors, not
 /// pictures (the layers went up through the inbox already).
@@ -37,16 +39,88 @@ pub const MAX_POINTS: usize = 200_000;
 pub const MAX_PAGE_TEXT: usize = 2_000;
 /// Characters the phone's own instruction (its settings) may hold.
 pub const MAX_INSTRUCTION: usize = 2_000;
-/// What the agent is told to do with the marks when the phone's settings
-/// hold no instruction of their own. It asks first: a marked PDF is often
-/// built from a `.tex` or `.md` beside it, and an agent told to "apply" the
-/// marks went and edited that file unasked. Its last sentence points at the
-/// markup questions tool (`services::markup_mcp`), so a mark that leaves a
-/// choice comes back as a card on the page rather than as prose; "if you have
-/// it" covers remote tabs and the switch being off. The phone shows this text as the
-/// setting's starting point (`mobile-web/src/markupInstruction.ts`, kept equal
-/// by a test below).
-pub const DEFAULT_INSTRUCTION: &str = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make. If a mark leaves you a choice, ask me with the `markup_ask` tool if you have it — give the page and the words the mark is on — rather than in prose.";
+/// Characters an anchor's words and its line may hold.
+pub const MAX_ANCHOR_WORDS: usize = 200;
+pub const MAX_ANCHOR_LINE: usize = 300;
+/// What the agent is told to do with the marks in a `list` round
+/// (`Mode::List`) when the phone's settings hold no instruction of their
+/// own. It asks first: a marked PDF is often built from a `.tex` or `.md`
+/// beside it, and an agent told to "apply" the marks went and edited that
+/// file unasked. A round that can be undone (`Mode::Apply`,
+/// `docs/pdf_markup_direct_apply_plan.md`) gets `DEFAULT_APPLY_INSTRUCTION`
+/// instead — the default since the Undo exists; this one is the fallback
+/// where no snapshot could be taken. How often it may stop to ask about a
+/// mark is not part of it but the reader's own dial, `ASK_LINES`, put after
+/// it. The phone shows this text as the setting's starting point
+/// (`mobile-web/src/markupInstruction.ts`, kept equal by a test below).
+pub const DEFAULT_INSTRUCTION: &str = "Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.";
+/// What the agent is told in an `apply` round with no instruction of the
+/// user's own: make the changes and rebuild in one turn. Safe because the
+/// round's snapshot (`services::markup_rounds`) backs an **Undo**. Mirrored
+/// in `mobile-web/src/markupInstruction.ts` (same test as above).
+pub const DEFAULT_APPLY_INSTRUCTION: &str = "Make the changes these marks ask for (strike-throughs, insertions, circled parts, margin notes): edit the sources the PDF is built from — not the PDF itself and not the marked copy — and rebuild it. Afterwards list what you changed, and any mark you could not read.";
+
+/// How a Submit's round runs: `list` (the agent lists the changes; **Make
+/// these changes** follows) or `apply` (the agent makes them; **Undo**
+/// follows). The request's `mode` is what the user asked for; `Submitted::mode`
+/// is what the round got — `apply` only when its snapshot was taken.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// Absent on the wire (an older phone bundle): today's behaviour.
+    #[default]
+    List,
+    Apply,
+}
+
+/// Where an `apply` Submit's undo snapshot goes and whose it is
+/// (`services::markup_rounds`) — not the view's own round id
+/// (`MarkupRequest::round`).
+pub struct UndoTarget<'a> {
+    pub state_dir: &'a Path,
+    pub owner: markup_rounds::Owner,
+}
+
+/// How often the agent asks about the marks, from "about every mark" (0) to
+/// "never" (4) — the five stops of the reader's slider (phone settings,
+/// desktop Settings → PDF markup). Each points at the markup questions tool
+/// (`services::markup_mcp`), so a question comes back as a card on the page
+/// rather than as prose; "if you have it" covers remote tabs and the switch
+/// being off. Asking about every mark was the old default and the reason the
+/// dial exists: one card per mark made a long markup a quiz.
+pub const ASK_LINES: [&str; 5] = [
+    "Ask me about every mark before you count it as a change — with the `markup_ask` tool if you have it (give the page and the words the mark is on, up to four marks per ask), rather than in prose.",
+    "If a mark leaves you any choice or you are not sure what it asks, ask me with the `markup_ask` tool if you have it — give the page and the words the mark is on — rather than in prose.",
+    "Ask me only about a mark you cannot read or that leaves a real choice where a wrong guess would change what the text says — with the `markup_ask` tool if you have it, giving the page and the words the mark is on. For every other mark, take the obvious reading and say which one you took.",
+    "Ask me only about a mark you cannot act on at all without my answer — with the `markup_ask` tool if you have it, giving the page and the words the mark is on. Decide everything else yourself and say what you decided.",
+    "Do not ask me anything about the marks. Decide every unclear mark yourself and list what you decided and why.",
+];
+/// The dial's stop while the reader has not moved it.
+pub const DEFAULT_ASK: u8 = 2;
+/// The longest round id a view may mint for a Submit (`valid_round`).
+pub const MAX_ROUND_CHARS: usize = 16;
+
+/// Whether `round` is an id a view minted for one Submit: short, lowercase
+/// letters and digits — it is quoted in the prompt and copied back by the
+/// agent into `markup_done` (`services::markup_mcp`).
+pub fn valid_round(round: &str) -> bool {
+    !round.is_empty() && round.len() <= MAX_ROUND_CHARS && round.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+/// The line that tells the agent how to tick off the marks it has handled,
+/// so the reader can approve each and see it go (`markup_done`); "if you
+/// have it" covers remote tabs and the switch being off.
+fn tick_line(round: &str) -> String {
+    format!(
+        "This is markup round `{round}`; each mark above has its reference (`p<page> m<mark>`). Once you have made the change a mark asks for, tick it off with the `markup_done` tool if you have it (this round, the file, each mark's page and mark number), so I can approve it and clear it from the page."
+    )
+}
+
+/// The asking line for a dial stop; `None` (or out of range, which
+/// `validate_body` refuses before this is reached) is `DEFAULT_ASK`.
+pub fn ask_line(ask: Option<u8>) -> &'static str {
+    ASK_LINES.get(usize::from(ask.unwrap_or(DEFAULT_ASK))).copied().unwrap_or(ASK_LINES[usize::from(DEFAULT_ASK)])
+}
 /// How far outside its page a mark may reach, in page units — a stroke that
 /// leaves the edge by a hair is still the reader's.
 const EDGE_SLACK: f64 = 2.0;
@@ -78,6 +152,41 @@ pub enum Mark {
     Text { color: Color, at: [f64; 2], size: f64, text: String },
 }
 
+/// How a mark sits on the page's words, as the viewer read it off the page's
+/// text (`mobile-web/src/markup/anchors.ts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum How {
+    /// A stroke through the words — struck out.
+    Through,
+    /// A stroke under them.
+    Under,
+    /// A stroke around them — circled.
+    Around,
+    /// A small stroke between or beside words — an insertion mark.
+    At,
+    /// Anything else drawn over them, a highlighter box among it.
+    On,
+    /// A note in the margin, beside the line.
+    Beside,
+}
+
+/// The page's own words one mark is on, read by the viewer from the page's
+/// text runs, so the agent can find them in the sources without reading
+/// them off a picture first. Text out of the PDF: bounded, one line, and
+/// quoted in the prompt as the page's words, never as an instruction.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Anchor {
+    /// The mark's index in its page's `marks`.
+    pub mark: usize,
+    pub how: How,
+    pub words: String,
+    /// The line around `words`, when it says more than they do.
+    #[serde(default)]
+    pub line: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MarkupPage {
@@ -86,8 +195,15 @@ pub struct MarkupPage {
     /// The page's displayed size the marks are measured in.
     pub size: [f64; 2],
     pub marks: Vec<Mark>,
-    /// The page's layer PNG, as the inbox answered it (`.tabtivity/inbox/<name>`).
+    /// The page's PNG, as the inbox answered it (`.tabtivity/inbox/<name>`):
+    /// the page with its marks drawn on (`composed`), or the marks alone on a
+    /// transparent page when the viewer could not draw the page.
     pub layer: String,
+    #[serde(default)]
+    pub composed: bool,
+    /// What the marks are on, at most one per mark.
+    #[serde(default)]
+    pub anchors: Vec<Anchor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -112,6 +228,19 @@ pub struct MarkupRequest {
     /// is `DEFAULT_INSTRUCTION`. The user's own words, as the prompt is.
     #[serde(default)]
     pub instruction: Option<String>,
+    /// How often the agent may ask about the marks, a stop of `ASK_LINES`;
+    /// absent is `DEFAULT_ASK`.
+    #[serde(default)]
+    pub ask: Option<u8>,
+    /// The id the view minted for this Submit (`valid_round`): the prompt
+    /// names each mark by page and index under it, and the agent ticks
+    /// handled marks off with `markup_done`. Absent: no references.
+    #[serde(default)]
+    pub round: Option<String>,
+    /// What the user's **Apply marks directly** switch asked for; absent is
+    /// `list` (`docs/pdf_markup_direct_apply_plan.md` §2.1).
+    #[serde(default)]
+    pub mode: Mode,
 }
 
 /// Why a submit was refused, as the phone's wire code.
@@ -200,6 +329,12 @@ pub fn validate_body(request: &MarkupRequest) -> Result<(), MarkupError> {
     }) {
         return invalid;
     }
+    if request.ask.is_some_and(|ask| usize::from(ask) >= ASK_LINES.len()) {
+        return invalid;
+    }
+    if request.round.as_deref().is_some_and(|round| !valid_round(round)) {
+        return invalid;
+    }
     let mut numbers = std::collections::HashSet::new();
     let (mut marks, mut points) = (0usize, 0usize);
     for page in &request.pages {
@@ -250,6 +385,18 @@ pub fn validate_body(request: &MarkupRequest) -> Result<(), MarkupError> {
         }
         if text_chars > MAX_PAGE_TEXT {
             return invalid;
+        }
+        let mut anchored = std::collections::HashSet::new();
+        for anchor in &page.anchors {
+            let one_line = |text: &str, max: usize| text.chars().count() <= max && !text.chars().any(char::is_control);
+            if anchor.mark >= page.marks.len()
+                || !anchored.insert(anchor.mark)
+                || anchor.words.trim().is_empty()
+                || !one_line(&anchor.words, MAX_ANCHOR_WORDS)
+                || !one_line(&anchor.line, MAX_ANCHOR_LINE)
+            {
+                return invalid;
+            }
         }
     }
     if marks > MAX_MARKS || points > MAX_POINTS {
@@ -311,21 +458,42 @@ pub struct Submitted {
     pub prompt: String,
     /// The marked copy's inbox reference, when there is one.
     pub marked: Option<String>,
+    /// How the round runs: `apply` only when the request asked for it and its
+    /// undo snapshot was taken (`undo`).
+    pub mode: Mode,
+    /// The undo snapshot's id (`services::markup_rounds`) of an `apply` round.
+    pub undo: Option<String>,
+    /// Why a request for `apply` runs as `list`.
+    pub no_undo: Option<NoUndo>,
 }
 
 /// One submit, after `validate`: checks the layers, reads the source, bakes
 /// a PDF's marked copy into the inbox and builds the prompt. `send_back` is
-/// whether the tab can answer with `tabtivity-send` into this chat.
+/// whether the tab can answer with `tabtivity-send` into this chat. No undo
+/// target: a request for `apply` runs as `list` (`submit_with_undo`).
 pub fn submit(
     root: &Path,
     source: &ResolvedSource,
     request: &MarkupRequest,
     send_back: bool,
 ) -> Result<Submitted, MarkupError> {
+    submit_with_undo(root, source, request, send_back, Err(NoUndo::Failed))
+}
+
+/// `submit` for a request that may ask for `apply`: `undo` is where its
+/// snapshot goes, or why there can be none (a remote project) — the round
+/// then runs as `list` and says why (`Submitted::no_undo`).
+pub fn submit_with_undo(
+    root: &Path,
+    source: &ResolvedSource,
+    request: &MarkupRequest,
+    send_back: bool,
+    undo: Result<UndoTarget, NoUndo>,
+) -> Result<Submitted, MarkupError> {
     speakable(source)?;
     layers_present(root, request)?;
     let (bytes, kind) = read_source(root, source)?;
-    bake_and_prompt(root, source, request, send_back, bytes, kind)
+    bake_and_prompt(root, source, request, send_back, bytes, kind, undo)
 }
 
 /// The path goes into a prompt sent as the user's own words: a project file
@@ -362,6 +530,7 @@ fn bake_and_prompt(
     send_back: bool,
     bytes: Vec<u8>,
     kind: &str,
+    undo: Result<UndoTarget, NoUndo>,
 ) -> Result<Submitted, MarkupError> {
     let is_pdf = kind == "application/pdf";
     let is_picture = kind.starts_with("image/");
@@ -372,11 +541,13 @@ fn bake_and_prompt(
     {
         return Err(MarkupError::Unsupported);
     }
+    let bytes = std::sync::Arc::new(bytes);
     let (marked, failure) = if is_pdf {
         let pages = request.pages.clone();
+        let source_bytes = bytes.clone();
         // The reader is bounded and returns errors, but a panic in it must
         // still cost only the marked copy, never the submit.
-        let baked = std::panic::catch_unwind(move || markup_pdf::bake(&bytes, &pages))
+        let baked = std::panic::catch_unwind(move || markup_pdf::bake(&source_bytes, &pages))
             .unwrap_or(Err(markup_pdf::BakeError::Unreadable));
         match baked {
             Ok(copy) => match inbox::store(root, &format!("{}-marked.pdf", source.stem()), &copy) {
@@ -390,16 +561,63 @@ fn bake_and_prompt(
     } else {
         (request.picture.clone(), None)
     };
+    // After the bake: the marked copy and the layers are in the snapshot's
+    // "before", so an undo never takes them away.
+    let (mode, undo, no_undo) = undo_snapshot(root, source, request.mode, is_pdf, &bytes, undo);
+    let sources = if is_pdf { source_lines(root, source, &request.pages) } else { BTreeMap::new() };
+    // An `apply` round with no instruction of the user's own makes the
+    // changes; the user's own text is sent as written in either mode.
+    let instruction = request
+        .instruction
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .or((mode == Mode::Apply).then_some(DEFAULT_APPLY_INSTRUCTION));
     let prompt = prompt(&Prompt {
         source: &source.rel(),
         picture: is_picture,
         marked: marked.as_deref(),
         failure,
         pages: &request.pages,
-        instruction: request.instruction.as_deref(),
+        sources: &sources,
+        instruction,
+        ask: request.ask,
+        round: request.round.as_deref(),
         send_back,
     });
-    Ok(Submitted { prompt, marked })
+    Ok(Submitted { prompt, marked, mode, undo, no_undo })
+}
+
+/// The round's effective mode (§2.1 of the direct-apply plan): `apply` only
+/// when asked for, the source is a PDF and the snapshot was taken. A project
+/// file's bytes as read are kept for the undo (a built PDF is usually
+/// git-ignored, so the snapshot's tree does not hold it); an outbox copy is
+/// not the user's file and is left alone.
+fn undo_snapshot(
+    root: &Path,
+    source: &ResolvedSource,
+    asked: Mode,
+    is_pdf: bool,
+    bytes: &[u8],
+    undo: Result<UndoTarget, NoUndo>,
+) -> (Mode, Option<String>, Option<NoUndo>) {
+    if asked == Mode::List {
+        return (Mode::List, None, None);
+    }
+    if !is_pdf {
+        return (Mode::List, None, Some(NoUndo::NotPdf));
+    }
+    let target = match undo {
+        Ok(target) => target,
+        Err(reason) => return (Mode::List, None, Some(reason)),
+    };
+    let pdf = match source {
+        ResolvedSource::Files(rel) => Some(markup_rounds::PdfBefore { rel, bytes }),
+        ResolvedSource::Outbox(_) => None,
+    };
+    match markup_rounds::begin(target.state_dir, root, target.owner, pdf) {
+        Ok(id) => (Mode::Apply, Some(id), None),
+        Err(reason) => (Mode::List, None, Some(reason)),
+    }
 }
 
 /// The largest layer PNG the desktop viewer may hand over, and all of one
@@ -419,6 +637,9 @@ pub struct LocalPage {
     pub size: [f64; 2],
     pub marks: Vec<Mark>,
     pub layer_png: Vec<u8>,
+    /// `layer_png` is the page with its marks drawn on, not the marks alone.
+    pub composed: bool,
+    pub anchors: Vec<Anchor>,
 }
 
 /// Whether `bytes` is a PNG of sane size: the signature, then the `IHDR`
@@ -478,18 +699,61 @@ pub fn resolve_local_source(root: &Path, path: &Path) -> Result<ResolvedSource, 
 /// The desktop viewer's Submit (`commands::pdf_markup`): the phone's submit
 /// over a project path instead of a sealed token. Everything — path, marks,
 /// layer PNGs, the source being a readable PDF — is checked before the first
-/// write; then the layers go into the inbox (`<stem>-p<n>-layer.png`) and the
+/// write; then the pages go into the inbox (`<stem>-p<n>-marked.png`, or
+/// `-layer.png` for marks alone) and the
 /// one bake path makes the marked copy and the prompt. The prompt has no
 /// `tabtivity-send` line: the viewer reloads the file from disk. The
 /// instruction is the desktop's own setting (`Settings::pdf_markup_instruction`,
 /// passed in by the viewer, bounded like the phone's), `DEFAULT_INSTRUCTION`
-/// when unset. PDFs only — the desktop marks no pictures.
-pub fn submit_local(root: &Path, path: &Path, pages: Vec<LocalPage>, instruction: Option<String>) -> Result<Submitted, MarkupError> {
+/// when unset; `ask` is its dial (`Settings::pdf_markup_ask`). PDFs only —
+/// the desktop marks no pictures. Always a `list` round
+/// (`submit_local_with_undo` takes the **Apply marks directly** switch).
+pub fn submit_local(
+    root: &Path,
+    path: &Path,
+    pages: Vec<LocalPage>,
+    instruction: Option<String>,
+    ask: Option<u8>,
+    round: Option<String>,
+) -> Result<Submitted, MarkupError> {
+    let list = UndoRequest { mode: Mode::List, target: Err(NoUndo::Failed) };
+    submit_local_with_undo(root, path, pages, instruction, ask, round, list)
+}
+
+/// What a desktop Submit asks of its undo: the mode its switch asked for and
+/// where the snapshot goes — or why there can be none (a remote project).
+pub struct UndoRequest<'a> {
+    pub mode: Mode,
+    pub target: Result<UndoTarget<'a>, NoUndo>,
+}
+
+/// `submit_local` with the **Apply marks directly** switch: an `apply`
+/// round's snapshot is taken after the layers and the marked copy are in the
+/// inbox, before the prompt is built (`bake_and_prompt`).
+pub fn submit_local_with_undo(
+    root: &Path,
+    path: &Path,
+    pages: Vec<LocalPage>,
+    instruction: Option<String>,
+    ask: Option<u8>,
+    round: Option<String>,
+    undo: UndoRequest,
+) -> Result<Submitted, MarkupError> {
     let source = resolve_local_source(root, path)?;
     let placeholder = format!("{}/layer.png", inbox::INBOX_DIR);
     let (marks, layers): (Vec<MarkupPage>, Vec<Vec<u8>>) = pages
         .into_iter()
-        .map(|page| (MarkupPage { n: page.n, size: page.size, marks: page.marks, layer: placeholder.clone() }, page.layer_png))
+        .map(|page| {
+            let marks = MarkupPage {
+                n: page.n,
+                size: page.size,
+                marks: page.marks,
+                layer: placeholder.clone(),
+                composed: page.composed,
+                anchors: page.anchors,
+            };
+            (marks, page.layer_png)
+        })
         .unzip();
     let mut request = MarkupRequest {
         // Never read: `bake_and_prompt` works from `source` resolved above.
@@ -497,6 +761,9 @@ pub fn submit_local(root: &Path, path: &Path, pages: Vec<LocalPage>, instruction
         pages: marks,
         picture: None,
         instruction,
+        ask,
+        round,
+        mode: undo.mode,
     };
     validate_body(&request)?;
     let mut total = 0usize;
@@ -514,11 +781,12 @@ pub fn submit_local(root: &Path, path: &Path, pages: Vec<LocalPage>, instruction
     }
     let stem = source.stem();
     for (page, png) in request.pages.iter_mut().zip(&layers) {
-        let stored = inbox::store(root, &format!("{stem}-p{}-layer.png", page.n), png).map_err(MarkupError::Inbox)?;
+        let kind = if page.composed { "marked" } else { "layer" };
+        let stored = inbox::store(root, &format!("{stem}-p{}-{kind}.png", page.n), png).map_err(MarkupError::Inbox)?;
         page.layer = stored.reference;
     }
     layers_present(root, &request)?;
-    bake_and_prompt(root, &source, &request, false, bytes, kind)
+    bake_and_prompt(root, &source, &request, false, bytes, kind, undo.target)
 }
 
 /// What the prompt is built from.
@@ -529,87 +797,240 @@ pub struct Prompt<'a> {
     /// Why there is no marked copy of a PDF.
     pub failure: Option<&'a str>,
     pub pages: &'a [MarkupPage],
+    /// Each mark's source line by `(page, mark index)` (`source_lines`).
+    pub sources: &'a BTreeMap<(u32, usize), String>,
     /// The phone's instruction; `None` or blank is `DEFAULT_INSTRUCTION`.
     pub instruction: Option<&'a str>,
+    /// The Submit's round id (`MarkupRequest::round`): marks get references.
+    pub round: Option<&'a str>,
+    /// The asking dial's stop (`ask_line`); `None` is `DEFAULT_ASK`.
+    pub ask: Option<u8>,
     pub send_back: bool,
+}
+
+/// What one mark says in the prompt's list: its kind, the page's words it is
+/// on and the source line they came from — `None` for a stroke nothing is
+/// known about, which the page's picture shows anyway.
+///
+/// `index` is the mark's place in its page's `marks`, given when the Submit
+/// has a round: the line then names it `p<page> m<index + 1>` for `markup_done`.
+fn mark_line(n: Option<u32>, index: Option<usize>, mark: &Mark, anchor: Option<&Anchor>, source: Option<&String>) -> Option<String> {
+    let words = anchor.map(|a| format!("\"{}\"", a.words));
+    let what = match mark {
+        Mark::Text { text, .. } => {
+            let text = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
+            match anchor {
+                // Nothing known of where it sits: the typed words alone.
+                None if source.is_none() => format!("\"{text}\""),
+                None => format!("note \"{text}\""),
+                Some(a) => format!("note \"{text}\" {} {}", if a.how == How::On { "on" } else { "beside" }, words.unwrap_or_default()),
+            }
+        }
+        Mark::Box { .. } => match words {
+            Some(words) => format!("highlight on {words}"),
+            None if source.is_some() => "highlight".into(),
+            None => return None,
+        },
+        Mark::Ink { .. } => match (anchor, words) {
+            (Some(a), Some(words)) => format!(
+                "{} {words}",
+                match a.how {
+                    How::Through => "line through",
+                    How::Under => "line under",
+                    How::Around => "circled",
+                    How::At => "mark at",
+                    How::On | How::Beside => "pen on",
+                }
+            ),
+            _ if source.is_some() => "pen mark".into(),
+            _ => return None,
+        },
+    };
+    let context = anchor.filter(|a| !a.line.is_empty()).map(|a| format!(" in \"{}\"", a.line)).unwrap_or_default();
+    let source = source.map(|s| format!(" — `{s}`")).unwrap_or_default();
+    let label = [n.map(|n| format!("p{n}")), index.map(|i| format!("m{}", i + 1))].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    let label = if label.is_empty() { label } else { format!("{label}: ") };
+    Some(format!("- {label}{what}{context}{source}"))
 }
 
 /// The chat message: deterministic, English (it is read by the agent, not
 /// shown as interface text), naming files by `@` project-relative references.
+///
+/// Built so a plain correction is quick: each marked page as a picture with
+/// the marks drawn on it, then every mark with the page's own words it is on
+/// and, for a TeX build, the source line — the agent can go straight to the
+/// line instead of reading pictures and the whole PDF first. The marked copy
+/// is named without `@` then, so it is not read unless needed.
 pub fn prompt(parts: &Prompt) -> String {
     let what = if parts.picture { "picture" } else { "PDF" };
-    let mut lines = vec![format!("I marked these changes by hand on `{}`.", parts.source)];
-    match (parts.marked, parts.failure) {
-        (Some(marked), _) if parts.picture => {
-            lines.push("The picture with my marks drawn on it:".into());
-            lines.push(format!("@{marked}"));
-        }
-        (Some(marked), _) => {
-            lines.push("Marked copy with my handwriting and marks as annotations:".into());
-            lines.push(format!("@{marked}"));
-        }
-        (None, Some(failure)) => lines.push(format!("(No marked copy: {failure}.)")),
-        (None, None) => {}
-    }
     let mut pages: Vec<&MarkupPage> = parts.pages.iter().collect();
     pages.sort_by_key(|page| page.n);
-    lines.push(if parts.picture {
+    let composed = !parts.picture && pages.iter().all(|page| page.composed);
+    let some_composed = !parts.picture && pages.iter().any(|page| page.composed);
+
+    let mut head = vec![format!("I marked these changes by hand on `{}`.", parts.source)];
+    let mut copy = Vec::new();
+    match (parts.marked, parts.failure) {
+        (Some(marked), _) if parts.picture => {
+            head.push("The picture with my marks drawn on it:".into());
+            head.push(format!("@{marked}"));
+        }
+        (Some(marked), _) if composed => {
+            copy.push(format!("The marked copy, every mark a PDF annotation, if you need it: `{marked}`"));
+        }
+        (Some(marked), _) => {
+            head.push("Marked copy with my handwriting and marks as annotations:".into());
+            head.push(format!("@{marked}"));
+        }
+        (None, Some(failure)) => head.push(format!("(No marked copy: {failure}.)")),
+        (None, None) => {}
+    }
+    head.push(if parts.picture {
         "My markup layer alone, the size of the picture:".into()
+    } else if composed {
+        "Each marked page, with my marks drawn on it:".into()
+    } else if some_composed {
+        "Each marked page, with my marks drawn on it (marks only where the page could not be drawn):".into()
     } else {
         "My markup layers, one per page, each the size of that page:".into()
     });
     let layers: Vec<String> = pages
         .iter()
-        .map(|page| if parts.picture { format!("@{}", page.layer) } else { format!("Page {}: @{}", page.n, page.layer) })
+        .map(|page| match () {
+            _ if parts.picture => format!("@{}", page.layer),
+            _ if some_composed && !page.composed => format!("Page {} (marks only): @{}", page.n, page.layer),
+            _ => format!("Page {}: @{}", page.n, page.layer),
+        })
         .collect();
-    let notes: Vec<String> = pages
+    let marks: Vec<String> = pages
         .iter()
         .flat_map(|page| {
-            page.marks.iter().filter_map(move |mark| match mark {
-                Mark::Text { text, .. } => {
-                    let text = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
-                    Some(if parts.picture { format!("- \"{text}\"") } else { format!("- p{}: \"{text}\"", page.n) })
-                }
-                _ => None,
+            page.marks.iter().enumerate().filter_map(move |(index, mark)| {
+                let anchor = page.anchors.iter().find(|a| a.mark == index);
+                let source = parts.sources.get(&(page.n, index));
+                mark_line((!parts.picture).then_some(page.n), parts.round.map(|_| index), mark, anchor, source)
             })
         })
         .collect();
+    // With nothing read off the page, the list is the typed notes it always was.
+    let notes_only = parts.sources.is_empty() && pages.iter().all(|page| page.anchors.is_empty());
+    let marks_head = if notes_only {
+        "My typed notes:"
+    } else if parts.sources.is_empty() {
+        "What each mark is on, in the page's own words:"
+    } else {
+        "What each mark is on, in the page's own words, and the source line SyncTeX gives for it:"
+    };
     let instruction = parts.instruction.map(str::trim).filter(|text| !text.is_empty());
-    let mut tail = vec![instruction.unwrap_or(DEFAULT_INSTRUCTION).to_string()];
+    let mut tail = vec![instruction.unwrap_or(DEFAULT_INSTRUCTION).to_string(), ask_line(parts.ask).to_string()];
+    if let Some(round) = parts.round.filter(|_| !marks.is_empty()) {
+        tail.push(tick_line(round));
+    }
     if parts.send_back {
         tail.push(format!("Once you have rebuilt the {what}, send it to me with `{SLUG}-send <file>`."));
     }
-    // The layer list and the notes share what the fixed lines leave of the
-    // budget; the notes are promised up to half of it, so a 300-page round
-    // cannot crowd every note out. Whole lines only, in page order.
+    // The page list and the marks share what the fixed lines leave of the
+    // budget; the marks are promised up to half of it, so a 300-page round
+    // cannot crowd every one out. Whole lines only, in page order.
     let cost = |lines: &[String]| lines.iter().map(|line| line.len() + 1).sum::<usize>();
-    let budget = MAX_PROMPT_BYTES.saturating_sub(cost(&lines) + cost(&tail) + PROMPT_OMISSION_RESERVE);
-    let notes_cost = if notes.is_empty() { 0 } else { "My typed notes:".len() + 1 + cost(&notes) };
-    let layers_budget = budget - notes_cost.min(budget / 2);
+    let budget = MAX_PROMPT_BYTES.saturating_sub(cost(&head) + cost(&copy) + cost(&tail) + PROMPT_OMISSION_RESERVE);
+    let marks_cost = if marks.is_empty() { 0 } else { marks_head.len() + 1 + cost(&marks) };
+    let layers_budget = budget - marks_cost.min(budget / 2);
     let shown_layers = fitting(&layers, layers_budget);
     let left = budget.saturating_sub(cost(&layers[..shown_layers]));
-    let shown_notes = fitting(&notes, left.saturating_sub("My typed notes:".len() + 1));
+    let shown_marks = fitting(&marks, left.saturating_sub(marks_head.len() + 1));
+    let mut lines = head;
     lines.extend_from_slice(&layers[..shown_layers]);
     if let (Some(first), Some(last)) = (pages.get(shown_layers), pages.last()) {
         let more = pages.len() - shown_layers;
+        let (noun, named) = if some_composed { ("pages", "marked") } else { ("layers", "layer") };
         lines.push(format!(
-            "(Pages {}–{}: {more} more layers, beside these in `{}/`, named `…-p<page>-layer.png`.)",
+            "(Pages {}–{}: {more} more {noun}, beside these in `{}/`, named `…-p<page>-{named}.png`.)",
             first.n,
             last.n,
             inbox::INBOX_DIR
         ));
     }
-    if !notes.is_empty() {
-        lines.push("My typed notes:".into());
-        lines.extend_from_slice(&notes[..shown_notes]);
-        let more = notes.len() - shown_notes;
+    if !marks.is_empty() {
+        lines.push(marks_head.into());
+        lines.extend_from_slice(&marks[..shown_marks]);
+        let more = marks.len() - shown_marks;
         if more > 0 {
-            let place = if parts.marked.is_some() && !parts.picture { "the marked copy" } else { "the layers" };
-            lines.push(format!("({more} more notes — read them in {place}.)"));
+            let place = if some_composed || parts.picture { "the pictures" } else if parts.marked.is_some() { "the marked copy" } else { "the layers" };
+            let noun = if notes_only { "notes" } else { "marks" };
+            lines.push(format!("({more} more {noun} — read them in {place}.)"));
         }
     }
+    lines.extend(copy);
     lines.extend(tail);
     lines.join("\n")
+}
+
+/// Marks whose source line is looked up, all pages together — more than a
+/// prompt has room to name.
+const MAX_SOURCE_LOOKUPS: usize = 400;
+
+/// The point of a mark SyncTeX is asked about: a stroke's or a box's middle,
+/// a note's first line — beside the line it is about, in a margin.
+fn probe(mark: &Mark) -> (f64, f64) {
+    match mark {
+        Mark::Ink { points, .. } => {
+            let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for [x, y, _] in points {
+                (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y));
+            }
+            ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        }
+        Mark::Box { rect: [x, y, w, h], .. } => (x + w / 2.0, y + h / 2.0),
+        Mark::Text { at: [x, y], size, .. } => (*x, y + size / 2.0),
+    }
+}
+
+/// Where each mark came from in the sources, by `(page, mark index)`, as the
+/// SyncTeX map beside a project PDF says: `path:line`, project-relative. Empty
+/// for an outbox copy (no map beside it), a PDF with no map or a map from an
+/// older build than the PDF. A source outside the project (a class file in
+/// the TeX tree) or one whose name could speak in the prompt is left out.
+/// Marks are in the page's displayed points from its top left, as reverse
+/// search clicks are (`commands::synctex`).
+fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> BTreeMap<(u32, usize), String> {
+    let mut found = BTreeMap::new();
+    let ResolvedSource::Files(rel) = source else {
+        return found;
+    };
+    let pdf = root.join(rel);
+    let status = crate::commands::synctex::status(&pdf);
+    if !status.has_map || status.pdf_newer_than_map {
+        return found;
+    }
+    let Ok(canonical_root) = root.canonicalize() else {
+        return found;
+    };
+    let mut points: BTreeMap<u32, Vec<(f64, f64)>> = BTreeMap::new();
+    let mut asked: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    let mut count = 0usize;
+    'pages: for page in pages {
+        for (index, mark) in page.marks.iter().enumerate() {
+            if count == MAX_SOURCE_LOOKUPS {
+                break 'pages;
+            }
+            count += 1;
+            points.entry(page.n).or_default().push(probe(mark));
+            asked.entry(page.n).or_default().push(index);
+        }
+    }
+    for (page, answers) in crate::commands::synctex::resolve_pages(&pdf, &points) {
+        for (index, answer) in asked.get(&page).into_iter().flatten().zip(answers) {
+            let Some((input, line)) = answer else { continue };
+            let Ok(inside) = Path::new(&input).strip_prefix(&canonical_root) else { continue };
+            let Some(name) = inside.to_str().map(|name| name.replace('\\', "/")) else { continue };
+            if name.is_empty() || name.chars().any(|c| c.is_control() || c == '`') {
+                continue;
+            }
+            found.insert((page, *index), format!("{name}:{line}"));
+        }
+    }
+    found
 }
 
 /// The longest a prompt may grow, in bytes. The phone's held prompts and the
@@ -645,11 +1066,11 @@ mod tests {
     }
 
     fn page(n: u32, layer: &str) -> MarkupPage {
-        MarkupPage { n, size: [600.0, 800.0], marks: vec![ink()], layer: layer.into() }
+        MarkupPage { n, size: [600.0, 800.0], marks: vec![ink()], layer: layer.into(), composed: false, anchors: vec![] }
     }
 
     fn request(source: MarkupSource, pages: Vec<MarkupPage>) -> MarkupRequest {
-        MarkupRequest { source, pages, picture: None, instruction: None }
+        MarkupRequest { source, pages, picture: None, instruction: None, ask: None, round: None, mode: Mode::List }
     }
 
     fn project() -> tempfile::TempDir {
@@ -823,7 +1244,7 @@ mod tests {
     #[test]
     fn the_prompt_is_deterministic_and_ordered() {
         let pages = vec![page(7, concat!(".", crate::app_slug!(), "/inbox/b.png")), page(3, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
-        let parts = Prompt { source: "docs/paper/draft.pdf", picture: false, marked: Some(concat!(".", crate::app_slug!(), "/inbox/m.pdf")), failure: None, pages: &pages, instruction: None, send_back: true };
+        let parts = Prompt { source: "docs/paper/draft.pdf", picture: false, marked: Some(concat!(".", crate::app_slug!(), "/inbox/m.pdf")), failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: None, send_back: true };
         let text = prompt(&parts);
         assert_eq!(text, prompt(&parts));
         assert_eq!(
@@ -834,20 +1255,109 @@ mod tests {
              My markup layers, one per page, each the size of that page:\n\
              Page 3: @.", crate::app_slug!(), "/inbox/a.png\n\
              Page 7: @.", crate::app_slug!(), "/inbox/b.png\n\
-             Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make. If a mark leaves you a choice, ask me with the `markup_ask` tool if you have it — give the page and the words the mark is on — rather than in prose.\n\
+             Read every mark (strike-throughs, insertions, circled parts, margin notes) and list the changes they ask for, and any mark you could not read. Do not change any file yet — not this one, not the sources it is built from, not any other file — until I tell you which changes to make.\n\
+             Ask me only about a mark you cannot read or that leaves a real choice where a wrong guess would change what the text says — with the `markup_ask` tool if you have it, giving the page and the words the mark is on. For every other mark, take the obvious reading and say which one you took.\n\
              Once you have rebuilt the PDF, send it to me with `", crate::app_slug!(), "-send <file>`.")
         );
     }
 
     #[test]
+    fn anchors_and_synctex_name_each_mark() {
+        let dir = project();
+        let root = &dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("docs/chapters")).unwrap();
+        fs::write(root.join("docs/draft.pdf"), markup_pdf::tests::classic_pdf(&[0], false)).unwrap();
+        for tex in ["docs/main.tex", "docs/chapters/intro.tex"] {
+            fs::write(root.join(tex), "x").unwrap();
+        }
+        // Two lines as `commands::synctex`'s fixture has them — main.tex:3 at
+        // y ≈ 134.8 bp, intro.tex:4 at y ≈ 201 bp — and a third from a class
+        // file outside the project, at y ≈ 300 bp.
+        let map = format!(
+            "SyncTeX Version:1\nInput:1:{r}/docs/main.tex\nInput:5:{r}/docs/chapters/intro.tex\nInput:6:/elsewhere/paper.cls\n\
+             Output:pdf\nMagnification:1000\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n[1,7:4736286,46220574:26673152,41484288,0\n\
+             (5,1:8799518,8865054:22609920,455111,0\nh1,3:8799518,8865054\nx1,3:11218261,8865054\nk5,1:31409438,8865054:16251655\n)\n\
+             (6,1:8799518,13224414:22609920,455111,0\nh5,4:8799518,13224414\nx5,4:10346127,13224414\nk6,1:31409438,13224414:16081655\n)\n\
+             (6,9:8799518,19735000:22609920,455111,0\nx6,9:8799518,19735000\n)\n}}1\nPostamble:\n",
+            r = root.display()
+        );
+        fs::write(root.join("docs/draft.synctex"), map).unwrap();
+        let strike = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[140.0, 131.0, 0.5], [190.0, 132.0, 0.5]] };
+        let note = Mark::Text { color: Color::Blue, at: [20.0, 195.0], size: 12.0, text: "cite Smith".into() };
+        let stray = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[150.0, 298.0, 0.5]] };
+        let mut page = page(1, &layer(root, "a-p1-marked.png"));
+        page.marks = vec![strike, note, stray];
+        page.composed = true;
+        page.anchors = vec![
+            Anchor { mark: 0, how: How::Through, words: "quick brown".into(), line: "The quick brown fox".into() },
+            Anchor { mark: 1, how: How::Beside, words: "as shown in [3]".into(), line: String::new() },
+        ];
+        let req = request(MarkupSource::Files("tok".into()), vec![page]);
+        assert_eq!(validate(&req), Ok(()));
+        let done = submit(root, &ResolvedSource::Files("docs/draft.pdf".into()), &req, false).unwrap();
+        let text = done.prompt;
+        assert!(text.contains(concat!("Each marked page, with my marks drawn on it:\nPage 1: @.", crate::app_slug!(), "/inbox/a-p1-marked.png\n")), "{text}");
+        assert!(text.contains("and the source line SyncTeX gives for it:\n"), "{text}");
+        assert!(text.contains("- p1: line through \"quick brown\" in \"The quick brown fox\" — `docs/main.tex:3`\n"), "{text}");
+        assert!(text.contains("- p1: note \"cite Smith\" beside \"as shown in [3]\" — `docs/chapters/intro.tex:4`\n"), "{text}");
+        // Nothing known of the third stroke but a file outside the project.
+        assert!(!text.contains("paper.cls") && !text.contains("pen mark"), "{text}");
+        // The marked copy is named, not attached: the pictures carry the marks.
+        let marked = done.marked.unwrap();
+        assert!(text.contains(&format!("if you need it: `{marked}`")) && !text.contains(&format!("@{marked}")), "{text}");
+        // An outbox copy has no map beside it: the words alone.
+        let outbox_lines = source_lines(root, &ResolvedSource::Outbox("20261001-090000-draft.pdf".into()), &req.pages);
+        assert!(outbox_lines.is_empty());
+    }
+
+    #[test]
+    fn anchors_are_bounded_one_line_and_one_per_mark() {
+        let anchored = |anchors: Vec<Anchor>| {
+            let mut page = page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"));
+            page.anchors = anchors;
+            validate(&request(MarkupSource::Files("t".into()), vec![page]))
+        };
+        let anchor = |mark: usize, words: &str, line: &str| Anchor { mark, how: How::On, words: words.into(), line: line.into() };
+        assert_eq!(anchored(vec![anchor(0, "teh", "")]), Ok(()));
+        assert_eq!(anchored(vec![anchor(1, "teh", "")]), Err(MarkupError::Invalid), "no mark 1");
+        assert_eq!(anchored(vec![anchor(0, "a", ""), anchor(0, "b", "")]), Err(MarkupError::Invalid));
+        assert_eq!(anchored(vec![anchor(0, " ", "")]), Err(MarkupError::Invalid));
+        assert_eq!(anchored(vec![anchor(0, "two\nlines", "")]), Err(MarkupError::Invalid));
+        assert_eq!(anchored(vec![anchor(0, "ok", "a\u{7}b")]), Err(MarkupError::Invalid));
+        assert_eq!(anchored(vec![anchor(0, &"w".repeat(MAX_ANCHOR_WORDS + 1), "")]), Err(MarkupError::Invalid));
+        assert_eq!(anchored(vec![anchor(0, "ok", &"l".repeat(MAX_ANCHOR_LINE + 1))]), Err(MarkupError::Invalid));
+        let wire = r#"{"n":1,"size":[600,800],"layer":"x","marks":[],"composed":true,"anchors":[{"mark":0,"how":"through","words":"a","line":"b"}]}"#;
+        let parsed: MarkupPage = serde_json::from_str(wire).unwrap();
+        assert!(parsed.composed && parsed.anchors[0].how == How::Through);
+        assert!(serde_json::from_str::<MarkupPage>(&wire.replace("through", "sideways")).is_err());
+    }
+
+    #[test]
     fn the_phone_instruction_replaces_the_default() {
         let pages = vec![page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
-        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, instruction: Some("  Fix only the typos.\nAsk me first.  "), send_back: false };
+        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: Some("  Fix only the typos.\nAsk me first.  "), ask: None, round: None, send_back: false };
         let text = prompt(&parts);
-        assert!(text.ends_with(concat!("Page 1: @.", crate::app_slug!(), "/inbox/a.png\nFix only the typos.\nAsk me first.")), "{text}");
+        assert!(text.ends_with(&format!("Page 1: @.{}/inbox/a.png\nFix only the typos.\nAsk me first.\n{}", crate::app_slug!(), ASK_LINES[2])), "{text}");
         assert!(!text.contains(DEFAULT_INSTRUCTION));
         parts.instruction = Some(" \n ");
-        assert!(prompt(&parts).ends_with(DEFAULT_INSTRUCTION));
+        assert!(prompt(&parts).ends_with(&format!("{DEFAULT_INSTRUCTION}\n{}", ASK_LINES[usize::from(DEFAULT_ASK)])));
+    }
+
+    #[test]
+    fn the_ask_dial_picks_its_line_after_the_instruction() {
+        let pages = vec![page(1, concat!(".", crate::app_slug!(), "/inbox/a.png"))];
+        for (stop, line) in ASK_LINES.iter().enumerate() {
+            let parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, round: None, ask: Some(stop as u8), send_back: true };
+            let text = prompt(&parts);
+            assert!(text.contains(&format!("{DEFAULT_INSTRUCTION}\n{line}\n")), "{text}");
+            assert_eq!(ASK_LINES.iter().filter(|other| text.contains(*other)).count(), 1, "one asking line per prompt");
+        }
+        assert!(!ASK_LINES[4].contains("markup_ask"), "never asking names no ask tool");
+        let mut req = request(MarkupSource::Outbox("20261001-090000-paper.pdf".into()), pages);
+        req.ask = Some(4);
+        assert_eq!(validate(&req), Ok(()));
+        req.ask = Some(5);
+        assert_eq!(validate(&req), Err(MarkupError::Invalid));
     }
 
     #[test]
@@ -864,7 +1374,12 @@ mod tests {
     #[test]
     fn the_phone_shows_the_same_default() {
         let phone = include_str!("../../../../mobile-web/src/markupInstruction.ts");
-        assert!(phone.contains(DEFAULT_INSTRUCTION), "markupInstruction.ts must hold DEFAULT_INSTRUCTION verbatim");
+        assert!(phone.contains(&format!("\"{DEFAULT_INSTRUCTION}\";")), "markupInstruction.ts must hold DEFAULT_INSTRUCTION verbatim");
+        assert!(
+            phone.contains(&format!("DEFAULT_MARKUP_APPLY_INSTRUCTION = \"{DEFAULT_APPLY_INSTRUCTION}\";")),
+            "markupInstruction.ts must hold DEFAULT_APPLY_INSTRUCTION verbatim"
+        );
+        assert!(phone.contains(&format!("DEFAULT_MARKUP_ASK = {DEFAULT_ASK};")), "markupInstruction.ts must hold DEFAULT_ASK");
     }
 
     #[test]
@@ -872,5 +1387,105 @@ mod tests {
         assert_eq!(ResolvedSource::Outbox("20261001-120000-20260930-110000-paper.pdf".into()).stem(), "paper");
         assert_eq!(ResolvedSource::Files("docs/paper/draft.v2.pdf".into()).stem(), "draft.v2");
         assert_eq!(ResolvedSource::Files("README".into()).stem(), "README");
+    }
+
+    /// Makes `root` a git work tree with everything in it committed.
+    fn git_repo(root: &Path) {
+        let commit = ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "i"];
+        for args in [&["init", "-q"][..], &["add", "-A"], &commit] {
+            let mut git = std::process::Command::new("git");
+            for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"] {
+                git.env_remove(name);
+            }
+            assert!(git.args(args).current_dir(root).output().unwrap().status.success(), "git {args:?}");
+        }
+    }
+
+    #[test]
+    fn an_apply_submit_snapshots_after_the_bake_and_can_be_undone() {
+        let dir = project();
+        let root = &dir.path().canonicalize().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let pdf = markup_pdf::tests::classic_pdf(&[0], false);
+        fs::write(root.join("docs/draft.pdf"), &pdf).unwrap();
+        fs::write(root.join("docs/draft.tex"), "teh cat\n").unwrap();
+        let p1 = layer(root, "a-p1-layer.png");
+        git_repo(root);
+        let mut req = request(MarkupSource::Files("tok".into()), vec![page(1, &p1)]);
+        req.mode = Mode::Apply;
+        let owner = markup_rounds::Owner::Phone { tab: "t".into(), project: "p".into() };
+        let target = || Ok(UndoTarget { state_dir: state.path(), owner: owner.clone() });
+        let source = ResolvedSource::Files("docs/draft.pdf".into());
+        let done = submit_with_undo(root, &source, &req, true, target()).unwrap();
+        assert_eq!((done.mode, done.no_undo), (Mode::Apply, None));
+        let id = done.undo.clone().expect("an undo snapshot");
+        assert!(done.prompt.contains(&format!("{DEFAULT_APPLY_INSTRUCTION}\n")), "{}", done.prompt);
+        assert!(!done.prompt.contains(DEFAULT_INSTRUCTION));
+        // The marked copy went into the inbox before the snapshot: an undo
+        // never takes it away.
+        assert!(done.marked.is_some());
+        let preview = markup_rounds::preview(state.path(), &id, &owner).unwrap();
+        assert!(preview.files.is_empty() && preview.more == 0, "{preview:?}");
+        // The agent's turn: the source fixed, the PDF rebuilt.
+        fs::write(root.join("docs/draft.tex"), "the cat\n").unwrap();
+        fs::write(root.join("docs/draft.pdf"), b"%PDF rebuilt").unwrap();
+        markup_rounds::settle(state.path(), &id, &owner).unwrap();
+        let undone = markup_rounds::undo(state.path(), &id, &owner).unwrap();
+        assert_eq!(undone.files.len(), 2, "{undone:?}");
+        assert_eq!(fs::read_to_string(root.join("docs/draft.tex")).unwrap(), "teh cat\n");
+        assert_eq!(fs::read(root.join("docs/draft.pdf")).unwrap(), pdf);
+
+        // The user's own instruction is sent as written in an apply round too.
+        req.instruction = Some("Only fix the typos.".into());
+        let own = submit_with_undo(root, &source, &req, true, target()).unwrap();
+        assert_eq!(own.mode, Mode::Apply);
+        assert!(own.prompt.contains("Only fix the typos.") && !own.prompt.contains(DEFAULT_APPLY_INSTRUCTION));
+    }
+
+    #[test]
+    fn an_apply_submit_without_a_snapshot_runs_as_list_and_says_why() {
+        let dir = project();
+        let root = &dir.path().canonicalize().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        fs::write(root.join("docs/draft.pdf"), markup_pdf::tests::classic_pdf(&[0], false)).unwrap();
+        let p1 = layer(root, "a-p1-layer.png");
+        let source = ResolvedSource::Files("docs/draft.pdf".into());
+        let owner = markup_rounds::Owner::Desktop { project: "p".into() };
+        let mut req = request(MarkupSource::Files("tok".into()), vec![page(1, &p1)]);
+        // Asked for list: no snapshot, no reason.
+        let listed = submit_with_undo(root, &source, &req, false, Ok(UndoTarget { state_dir: state.path(), owner: owner.clone() })).unwrap();
+        assert_eq!((listed.mode, listed.undo, listed.no_undo), (Mode::List, None, None));
+        req.mode = Mode::Apply;
+        // Not a git work tree.
+        let plain = submit_with_undo(root, &source, &req, false, Ok(UndoTarget { state_dir: state.path(), owner: owner.clone() })).unwrap();
+        assert_eq!((plain.mode, plain.undo.as_deref(), plain.no_undo), (Mode::List, None, Some(NoUndo::NotGit)));
+        assert!(plain.prompt.contains(DEFAULT_INSTRUCTION) && !plain.prompt.contains(DEFAULT_APPLY_INSTRUCTION));
+        // The caller's own refusal (a remote project).
+        let remote = submit_with_undo(root, &source, &req, false, Err(NoUndo::Remote)).unwrap();
+        assert_eq!((remote.mode, remote.no_undo), (Mode::List, Some(NoUndo::Remote)));
+        // A picture is never an apply round.
+        fs::write(root.join("docs/plot.png"), PNG).unwrap();
+        let mut picture = request(MarkupSource::Files("t".into()), vec![page(1, &layer(root, "a-plot-p1-layer.png"))]);
+        picture.picture = Some(layer(root, "a-plot-marked.png"));
+        picture.mode = Mode::Apply;
+        let target = Ok(UndoTarget { state_dir: state.path(), owner });
+        let shown = submit_with_undo(root, &ResolvedSource::Files("docs/plot.png".into()), &picture, false, target).unwrap();
+        assert_eq!((shown.mode, shown.no_undo), (Mode::List, Some(NoUndo::NotPdf)));
+        assert!(!state.path().join(markup_rounds::ROUNDS_DIR).exists() || fs::read_dir(state.path().join(markup_rounds::ROUNDS_DIR)).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn the_mode_is_optional_and_closed_on_the_wire() {
+        let body = |mode: &str| {
+            format!(
+                r#"{{"source":{{"files":"t"}},"pages":[{{"n":1,"size":[600,800],"layer":".{}/inbox/a.png","marks":[{{"kind":"box","color":"red","rect":[1,1,5,5]}}]}}]{mode}}}"#,
+                crate::app_slug!()
+            )
+        };
+        assert_eq!(serde_json::from_str::<MarkupRequest>(&body("")).unwrap().mode, Mode::List);
+        assert_eq!(serde_json::from_str::<MarkupRequest>(&body(r#","mode":"apply""#)).unwrap().mode, Mode::Apply);
+        assert_eq!(serde_json::from_str::<MarkupRequest>(&body(r#","mode":"list""#)).unwrap().mode, Mode::List);
+        assert!(serde_json::from_str::<MarkupRequest>(&body(r#","mode":"yes""#)).is_err());
+        assert_eq!(serde_json::to_value(Mode::Apply).unwrap(), serde_json::json!("apply"));
     }
 }

@@ -450,13 +450,37 @@ redraws the file as it is now, or the newer copy the agent sent, under the same
 layer: unsent marks stay, and the sent ones stay too, dimmed, so each change can
 be checked and its mark then erased by hand (the eraser and Clear page reach
 shown sent marks; ⋯ **Show sent marks** hides them). Nothing removes a mark
-automatically. The default prompt has the agent only list the changes; once it
-has, the pill offers **Make these changes**, which sends the go-ahead (edit the
-sources, rebuild, send the PDF back) — its wording is the second field of Home →
-This phone → **Mark up prompt**.
+automatically.
 
-When a mark leaves the agent a choice, a local Claude, Codex or MCP-enabled
-Vibe tab can ask with its `markup_ask` tool (`docs/context/markup_mcp.md`;
+**Apply marks directly, with an Undo** (`docs/pdf_markup_direct_apply_plan.md`;
+on by default — the phone's switch in Home → This phone → **Mark up prompt**,
+the desktop's in Settings → Agents → PDF markup). A Submit asks for an `apply`
+round: the desktop first takes a snapshot of the project's git work tree in its
+own state folder (never in the project or its `.git`), and the default prompt
+has the agent make the changes, rebuild and (phone) send the PDF back in one
+turn. Each time the round finishes the snapshot is settled; the pill then
+offers **Undo**, which lists the files the round changed and whether the PDF
+goes back, and on **Undo** puts them back as they were before the round —
+refusing, with nothing changed, when one of them was edited since ("Can't undo
+— `a.tex` changed since") — reloads the PDF under the marks and puts a short
+note into the agent's chat, without starting a new round. (A phone view of a
+copy the agent sent goes back to the copy the marks were drawn on, and Reload
+then passes over the copies the agent sent before the undo.) Where no snapshot can
+be taken — not a git repository, git missing or older than 2.40, too many
+changed or untracked files, a remote project, a picture — the pill says why in
+one line and the round runs list-first: the default prompt has the agent only
+list the changes, and the pill offers **Make these changes**, which sends the
+go-ahead (edit the sources, rebuild, send the PDF back) — its wording is the
+second field of Home → This phone → **Mark up prompt**. With the switch off
+every round is list-first. A custom Mark up prompt is sent as written in either
+mode; the field starts from the default of the current mode.
+
+How often the agent stops to ask about a mark is a five-stop slider beside the
+prompt — **Ask always**, **Ask often**, **Ask when unsure** (default: only
+unreadable marks and real choices), **Ask rarely**, **Never ask** — the
+phone's in Home → This phone → **Mark up prompt**, the desktop's in Settings →
+PDF markup. When a mark leaves the agent a choice it may ask about, a local
+Claude, Codex or MCP-enabled Vibe tab can ask with its `markup_ask` tool (`docs/context/markup_mcp.md`;
 on by default, Manage CLIs → Advanced). The questions show as a card in that
 tab's markup view, phone and desktop alike, each with a `?n` pin at the words
 it quotes. Several questions show one at a time, paged with ‹ ›. A tap only
@@ -548,10 +572,22 @@ Four that carry design decisions worth recording here:
   works. The strip stays open with the same rounds and pill as the phone; a
   recompile while marks are on the pages waits for **Reload PDF** rather than
   sliding new pages under them. Local projects in the main window only, on the
-  PDF as saved (no page edits pending), one pane per file. **Make these
-  changes** appears once the agent has listed them; both prompts — the one a
-  Submit ends with and that go-ahead — are the desktop's own, in Settings →
-  Agents → **PDF markup** (`pdf_markup_instruction`, `pdf_markup_apply`).
+  PDF as saved (no page edits pending), one pane per file. **Apply marks
+  directly** (`pdf_markup_direct`, on unset) works as on the phone: an `apply`
+  round backed by an undo snapshot, settled as it finishes
+  (`pdf_markup_undo_settle`), and the strip's **Undo** → a confirm dialog with
+  the files (`pdf_markup_undo_preview`) → `pdf_markup_undo`, a reload under the
+  marks and a note queued into the agent tab; without a snapshot the round is
+  list-first and **Make these changes** appears once the agent has listed them.
+  Both prompts — the one a Submit ends with and that go-ahead — are the
+  desktop's own, in Settings → Agents → **PDF markup** (`pdf_markup_instruction`,
+  `pdf_markup_apply`).
+  Its **Hand each Submit to a new subagent** switch (`pdf_markup_subagents`,
+  off; the phone's ⋯ **Each Submit to a new subagent**) starts every Submit's
+  prompt with `MARKUP_SUBAGENT_LINE` (`mobile-web/src/markupInstruction.ts`):
+  the tab's agent hands the round to a new background subagent and ends its
+  turn, so the next round goes in at once and rounds run side by side; answers
+  to that round's questions and **Make these changes** are passed on to it.
 - **Markdown** renders fenced `mermaid` code blocks and `$…$`/`$$…$$` math; KaTeX runs
   with `trust: false` and mermaid script-free.
 

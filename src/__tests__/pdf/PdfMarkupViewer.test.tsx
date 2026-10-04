@@ -96,6 +96,8 @@ import { setDetachedWindowContext, type DetachedWindowContext } from "../../stor
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { _clearMarkupClaimsForTest } from "../../lib/viewers/pdfMarkup";
+import { useSettingsStore } from "../../stores/settings";
+import type { Settings } from "../../types";
 import { EMPTY_LAYER, addMark } from "../../../mobile-web/src/markup/layer";
 
 const PATH = "/home/u/paper/paper.pdf";
@@ -231,8 +233,27 @@ describe("a new version of the PDF while marking", () => {
     return view;
   }
   const reloadOffered = () => screen.findByText("The PDF changed on disk — Reload to see it under your marks.", undefined, { timeout: 5_000 });
+  /** Settings → PDF markup: reload under the marks by hand only. */
+  const byHand = () => useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, pdf_markup_auto_reload: false } as Settings });
+  afterEach(() => useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, pdf_markup_auto_reload: undefined } as Settings }));
 
-  it("from the mtime poll: offers Reload, and Reload reads the file", async () => {
+  it.each([
+    ["the mtime poll", () => { io.mtime = 2_000; }],
+    ["a compile's re-read request", () => usePdfSyncStore.getState().applyReload(PATH)],
+    ["a SyncTeX reveal", () => usePdfSyncStore.getState().applyReveal(PATH, { page: 1, x: 10, y: 10, w: 10, h: 10 }, undefined, true)],
+  ])("loads the new pages under the marks on its own by default — %s", async (_name, change) => {
+    const { container } = await marking();
+    const before = io.reads;
+    act(() => change());
+    await waitFor(() => expect(io.reads).toBe(before + 1), { timeout: 5_000 });
+    expect(container.querySelectorAll(".file-viewer-pdf-markup-layer").length).toBe(2);
+    expect(screen.queryByText("The PDF changed on disk — Reload to see it under your marks.")).toBeNull();
+    // The strip says the new pages came by themselves.
+    expect(await screen.findByText(/The PDF changed on disk and was reloaded under your marks\./)).toBeTruthy();
+  });
+
+  it("from the mtime poll, with auto-reload off: offers Reload, and Reload reads the file", async () => {
+    byHand();
     await marking();
     const before = io.reads;
     io.mtime = 2_000;
@@ -240,9 +261,12 @@ describe("a new version of the PDF while marking", () => {
     expect(io.reads).toBe(before);
     fireEvent.click(screen.getByRole("button", { name: "Reload PDF" }));
     await waitFor(() => expect(io.reads).toBe(before + 1));
+    // A reload by hand needs no note.
+    expect(screen.queryByText(/was reloaded under your marks/)).toBeNull();
   });
 
-  it("from a compile's re-read request", async () => {
+  it("from a compile's re-read request, with auto-reload off", async () => {
+    byHand();
     await marking();
     const before = io.reads;
     act(() => usePdfSyncStore.getState().applyReload(PATH));
@@ -250,7 +274,8 @@ describe("a new version of the PDF while marking", () => {
     expect(io.reads).toBe(before);
   });
 
-  it("from a SyncTeX reveal after a compile", async () => {
+  it("from a SyncTeX reveal after a compile, with auto-reload off", async () => {
+    byHand();
     await marking();
     const before = io.reads;
     act(() => usePdfSyncStore.getState().applyReveal(PATH, { page: 1, x: 10, y: 10, w: 10, h: 10 }, undefined, true));

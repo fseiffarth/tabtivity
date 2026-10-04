@@ -12,7 +12,11 @@ import {
   type InkMark, type Layer, type TextMark,
 } from "../../../mobile-web/src/markup/layer";
 import { layerKey, loadLayer, moveLayer, saveLayer, SENT_LIMITS, withinLimits, type LayerBackend } from "../../../mobile-web/src/markup/store";
-import { canApply, CONFIRM_MS, followRound, nextCheck, SETTLE_MS, startRound, stepRound, type AgentSignal, type Round } from "../../../mobile-web/src/markup/submitState";
+import { canApply, canUndo, CONFIRM_MS, followRound, nextCheck, SETTLE_MS, startRound, stepRound, holdsUndo, undoneRound, undoSummary, type AgentSignal, type Round } from "../../../mobile-web/src/markup/submitState";
+import {
+  DEFAULT_MARKUP_APPLY_INSTRUCTION, DEFAULT_MARKUP_INSTRUCTION, defaultMarkupInstruction, markupUndoNote, readMarkupDirect, readMarkupInstruction, writeMarkupDirect, writeMarkupInstruction,
+} from "../../../mobile-web/src/markupInstruction";
+import { translate, type TranslationKey } from "../../lib/i18n";
 
 const SIZE: [number, number] = [612, 792];
 const ink = (points: [number, number, number][]): InkMark => ({ kind: "ink", color: "red", width: 2, points });
@@ -69,7 +73,10 @@ describe("markup rounds · layer", () => {
 
   it("lets the reader erase or clear shown sent marks by hand", () => {
     const layer = markSent(addMark(addMark(EMPTY_LAYER, 1, SIZE, ink([[10, 10, 0.5], [40, 40, 0.5]])), 1, SIZE, note("sent", [300, 300])));
-    const erased = eraseAt(layer, 1, 20, 20, 10, true);
+    // The rubbed half of the sent stroke goes; then all of it.
+    const halved = eraseAt(layer, 1, 40, 40, 10, true);
+    expect((halved.sent?.pages[1].marks[0] as InkMark).points[0]).toEqual([10, 10, 0.5]);
+    const erased = eraseAt(layer, 1, 25, 25, 20, true);
     expect(erased.sent?.pages[1].marks).toEqual([note("sent", [300, 300])]);
     expect(erased.sent?.rounds).toBe(1);
     expect(eraseAt(erased, 1, 310, 305, 4, true).sent).toEqual({ pages: {}, rounds: 1 });
@@ -236,5 +243,71 @@ describe("markup rounds · Make these changes", () => {
     expect(done.phase).toBe("finished");
     expect(done.applied).toBe(true);
     expect(canApply(done)).toBe(false);
+  });
+});
+
+describe("markup rounds · Undo (apply rounds)", () => {
+  const UNDO = { id: "0123456789abcdef0123456789abcdef", state: "ready" as const };
+  const finish = (round: Round) => stepRound(stepRound(stepRound(round, "working", 1), "idle", 2), "idle", 2 + SETTLE_MS);
+
+  it("offers Undo only on a round with an undo id, once it is done — and Make these changes never", () => {
+    const sent = startRound(false, 0, false, UNDO);
+    expect(sent.undo).toEqual(UNDO);
+    expect(canUndo(null)).toBe(false);
+    expect(canUndo(sent)).toBe(false);
+    expect(canUndo(stepRound(sent, "working", 1))).toBe(false);
+    const finished = finish(sent);
+    expect(finished.phase).toBe("finished");
+    // The undo travels with the round through every step.
+    expect(finished.undo).toEqual(UNDO);
+    expect(canUndo(finished)).toBe(true);
+    expect(canApply(finished)).toBe(false);
+    expect(canUndo(stepRound(sent, "idle", CONFIRM_MS))).toBe(true);
+    // A list round: Make these changes, no Undo.
+    expect(canUndo(finish(startRound(false, 0)))).toBe(false);
+    expect(canApply(finish(startRound(false, 0)))).toBe(true);
+    // Once it went through, neither.
+    const undone = undoneRound(finished, UNDO.id);
+    expect(undone.undo).toEqual({ ...UNDO, state: "done" });
+    expect(canUndo(undone)).toBe(false);
+    expect(canApply(undone)).toBe(false);
+    expect(undoneRound(undone, UNDO.id)).toBe(undone);
+    // A late answer for an earlier round's undo leaves a newer round's alone.
+    const newer = finish(startRound(false, 100, false, { id: "f".repeat(32), state: "ready" }));
+    expect(undoneRound(newer, UNDO.id)).toBe(newer);
+    expect(holdsUndo(newer, UNDO.id)).toBe(false);
+    expect(holdsUndo(finished, UNDO.id)).toBe(true);
+    expect(holdsUndo(null, UNDO.id)).toBe(false);
+    // An answered question restarts the round with its own undo.
+    expect(startRound(true, 50, false, finished.undo)).toMatchObject({ phase: "queued", undo: UNDO });
+  });
+
+  it("says what an undo puts back, and words the chat note", () => {
+    const t = (key: TranslationKey, vars?: Record<string, string | number>) => translate("en", key, vars);
+    expect(undoSummary({ files: [{ path: "a.tex" }, { path: "refs.bib" }], more: 0, pdf: "restored" }, t))
+      .toBe("Back as before: a.tex, refs.bib. The PDF goes back to before.");
+    expect(undoSummary({ files: [{ path: "a.tex" }], more: 2, pdf: "kept" }, t))
+      .toBe("Back as before: a.tex and 2 more. The PDF has changed since — it stays.");
+    expect(undoSummary({ files: [], more: 0, pdf: "none" }, t)).toBe("No file changed since the Submit.");
+    expect(markupUndoNote(["a.tex", "b.bib"], 0))
+      .toBe("I undid your edits from my last marks: `a.tex` and `b.bib` are back as they were before that round. Don't redo them; no need to reply.");
+    expect(markupUndoNote(["a.tex"], 0)).toContain("`a.tex` is back as it was before");
+    expect(markupUndoNote(["a.tex"], 1)).toContain("`a.tex` and 1 other file are back");
+  });
+
+  it("treats either mode's default instruction as none, and keeps Apply marks directly on unset", () => {
+    localStorage.clear();
+    expect(readMarkupDirect()).toBe(true);
+    expect(defaultMarkupInstruction(true)).toBe(DEFAULT_MARKUP_APPLY_INSTRUCTION);
+    expect(defaultMarkupInstruction(false)).toBe(DEFAULT_MARKUP_INSTRUCTION);
+    writeMarkupInstruction(DEFAULT_MARKUP_APPLY_INSTRUCTION);
+    expect(readMarkupInstruction()).toBeNull();
+    writeMarkupInstruction(` ${DEFAULT_MARKUP_INSTRUCTION}`);
+    expect(readMarkupInstruction()).toBeNull();
+    writeMarkupInstruction("Fix typos only.");
+    expect(readMarkupInstruction()).toBe("Fix typos only.");
+    writeMarkupDirect(false);
+    expect(readMarkupDirect()).toBe(false);
+    localStorage.clear();
   });
 });

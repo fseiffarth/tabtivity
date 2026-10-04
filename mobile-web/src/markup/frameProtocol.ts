@@ -7,8 +7,11 @@
  * as hostile too: a message counts only when it comes from that frame's
  * window, has one of these shapes, and every number is in range. Nothing
  * from the frame is ever inserted as HTML; a page arrives as an
- * `ImageBitmap` and is drawn onto a canvas.
+ * `ImageBitmap` and is drawn onto a canvas, and page text arrives as runs
+ * (strings and numbers) that only ever become a prompt's quoted words.
  */
+
+import type { TextRun } from "./findText";
 
 /** PWA → frame. `bytes` is transferred, not copied. */
 export type ToFrame =
@@ -17,7 +20,12 @@ export type ToFrame =
   | { type: "render"; n: number; width: number }
   /** Where `quote` sits on `page` — an agent's markup question's pin
    * (`findText.ts`). `id` pairs the answer with the ask. */
-  | { type: "findText"; id: number; page: number; quote: string };
+  | { type: "findText"; id: number; page: number; quote: string }
+  /** Submit's picture of page `n`, `width` device pixels wide, kept apart
+   * from the view's own pages (`snapshot`). */
+  | { type: "snapshot"; id: number; n: number; width: number }
+  /** Page `page`'s text runs, for the words each mark is on (`anchors.ts`). */
+  | { type: "text"; id: number; page: number };
 
 /** Frame → PWA. */
 export type FromFrame =
@@ -29,6 +37,11 @@ export type FromFrame =
   /** The boxes of a `findText` quote, page points from the top-left; empty
    * when it is not on the page. */
   | { type: "found"; id: number; page: number; rects: { x: number; y: number; w: number; h: number }[] }
+  /** A `snapshot`'s picture; none when the page could not be drawn. */
+  | { type: "snapshot"; id: number; n: number; bitmap?: ImageBitmap }
+  /** A `text` request's runs, page points from the top left; empty when the
+   * page's text could not be read. */
+  | { type: "text"; id: number; page: number; runs: TextRun[] }
   | { type: "failed"; code: FrameFailure; n?: number };
 
 export const FRAME_FAILURES = ["unreadable", "encrypted", "render", "unsupported"] as const;
@@ -44,6 +57,11 @@ export const MAX_RENDER_WIDTH = 2_048;
 export const MAX_FIND_QUOTE = 400;
 export const MAX_FOUND_RECTS = 32;
 export const MAX_FIND_ID = 1_000_000_000;
+/** The most text runs one page's answer may carry, the longest run, and
+ * all of one page's characters together. */
+export const MAX_TEXT_RUNS = 20_000;
+export const MAX_RUN_CHARS = 2_000;
+export const MAX_PAGE_CHARS = 400_000;
 
 const isCount = (value: unknown, max: number): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= max;
@@ -101,6 +119,30 @@ export function acceptFrameMessage(event: MessageEvent, frame: Window | null | u
       }
       return { type: "found", id: message.id, page: message.page, rects };
     }
+    case "snapshot": {
+      if (!isFindId(message.id) || !isCount(message.n, pages)) return null;
+      const bitmap = message.bitmap;
+      if (bitmap === undefined) return { type: "snapshot", id: message.id, n: message.n };
+      if (typeof ImageBitmap === "undefined" || !(bitmap instanceof ImageBitmap)) return null;
+      if (bitmap.width < 1 || bitmap.width > MAX_RENDER_WIDTH || bitmap.height < 1 || bitmap.height > MAX_RENDER_WIDTH * 4) return null;
+      return { type: "snapshot", id: message.id, n: message.n, bitmap };
+    }
+    case "text": {
+      const list = message.runs;
+      if (!isFindId(message.id) || !isCount(message.page, pages) || !Array.isArray(list) || list.length > MAX_TEXT_RUNS) return null;
+      const runs: TextRun[] = [];
+      let chars = 0;
+      for (const entry of list as unknown[]) {
+        if (!entry || typeof entry !== "object") return null;
+        const { str, x, y, w, h, eol } = entry as Record<string, unknown>;
+        if (typeof str !== "string" || str.length > MAX_RUN_CHARS || (eol !== undefined && typeof eol !== "boolean")) return null;
+        if (!isCoordinate(x) || !isCoordinate(y) || !isExtent(w) || !isExtent(h)) return null;
+        chars += str.length;
+        if (chars > MAX_PAGE_CHARS) return null;
+        runs.push({ str, x, y, w, h, ...(eol ? { eol: true } : {}) });
+      }
+      return { type: "text", id: message.id, page: message.page, runs };
+    }
     case "failed": {
       if (!FRAME_FAILURES.includes(message.code as FrameFailure)) return null;
       const n = message.n;
@@ -123,6 +165,12 @@ export function acceptToFrame(data: unknown): ToFrame | null {
   if (message.type === "findText" && isFindId(message.id) && isCount(message.page, MAX_FRAME_PAGES)
     && typeof message.quote === "string" && message.quote.trim() && message.quote.length <= MAX_FIND_QUOTE) {
     return { type: "findText", id: message.id, page: message.page, quote: message.quote };
+  }
+  if (message.type === "snapshot" && isFindId(message.id) && isCount(message.n, MAX_FRAME_PAGES) && isCount(message.width, MAX_RENDER_WIDTH)) {
+    return { type: "snapshot", id: message.id, n: message.n, width: message.width };
+  }
+  if (message.type === "text" && isFindId(message.id) && isCount(message.page, MAX_FRAME_PAGES)) {
+    return { type: "text", id: message.id, page: message.page };
   }
   return null;
 }

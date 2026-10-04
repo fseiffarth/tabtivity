@@ -74,6 +74,14 @@ describe("diskChangeAction — the three reload paths share it", () => {
     expect(diskChangeAction({ dirty: true, markupHolds: false })).toBe("stale");
     expect(diskChangeAction({ dirty: true, markupHolds: true })).toBe("stale");
   });
+
+  it("loads a changed PDF under the marks while the setting is on, unless a note or a Submit is open", () => {
+    expect(diskChangeAction({ dirty: false, markupHolds: true, autoReload: true })).toBe("underMarks");
+    expect(diskChangeAction({ dirty: false, markupHolds: true, autoReload: true, noteOpen: true })).toBe("markup");
+    expect(diskChangeAction({ dirty: false, markupHolds: true, autoReload: false })).toBe("markup");
+    expect(diskChangeAction({ dirty: true, markupHolds: true, autoReload: true })).toBe("stale");
+    expect(diskChangeAction({ dirty: false, markupHolds: false, autoReload: true })).toBe("reload");
+  });
 });
 
 describe("one marking viewer per file per window", () => {

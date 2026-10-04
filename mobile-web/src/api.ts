@@ -309,7 +309,9 @@ export type MobileMailView =
   | { view: "message"; message: MobileMailHeader; body: string; truncated: boolean; attachments: MobileMailAttachment[] };
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string) { super(code); }
+  /** `detail`: the refusal's whole body, for a route whose refusal carries
+   * more than its code (Mark up's `undo_conflict` names the files). */
+  constructor(public status: number, public code: string, public detail?: unknown) { super(code); }
 }
 
 /** Set by the app root. A session slides out after a quiet quarter hour and
@@ -471,7 +473,7 @@ export async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUE
     // Once: a 401 on the retry means the renewed session is refused too.
     if (!retried && await onUnauthorized?.()) return api<T>(path, init, timeoutMs, true);
   }
-  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed");
+  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   // A truncated body on a 200 used to become `{}` and reach callers as `T`,
   // which then read `undefined.map` and white-screened the whole app.
   if (body === undefined) throw new ApiError(response.status, "malformed_response");
@@ -1071,7 +1073,7 @@ async function postFile<T>(url: string, file: Blob, retried = false): Promise<[n
     body = undefined;
   }
   if (response.status === 401 && !retried && await onUnauthorized?.()) return postFile<T>(url, file, true);
-  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed");
+  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   return [response.status, body];
 }
 
@@ -1103,11 +1105,19 @@ export type MarkupSource = { files: string } | { outbox: string };
  * its layer PNG's inbox reference (`markup.rs`). */
 export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark[]; layer: string }
 /** `instruction` is the phone's own wording of what to do with the marks
- * (`markupInstruction.ts`), absent while the desktop's default stands. */
-export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string }
+ * (`markupInstruction.ts`), absent while the desktop's default stands; `ask`
+ * its asking dial (0–4), absent at the default stop; `mode` what **Apply
+ * marks directly** asks for (absent = `list`). */
+export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode }
+/** `apply`: the agent makes the changes and an undo snapshot backs them;
+ * `list`: it lists them first (**Make these changes**). */
+export type MarkupMode = "apply" | "list";
 /** The prompt to send into the chat, and the marked copy's reference when the
- * desktop could bake one. */
-export interface MarkupAnswer { prompt: string; marked?: string | null }
+ * desktop could bake one. `mode` is the one the round got — `apply` only with
+ * an `undo` snapshot id — and `noUndo` why an asked-for `apply` runs as
+ * `list` (`not_git`, `no_git`, `too_big`, `filtered`, `git_failed`, `remote`,
+ * `not_pdf`). An older desktop answers neither: a `list` round. */
+export interface MarkupAnswer { prompt: string; marked?: string | null; mode?: MarkupMode; undo?: string | null; noUndo?: string | null }
 /** A bake of a long PDF takes a while on the desktop (its own deadline is 20 s). */
 const MARKUP_TIMEOUT = 60_000;
 
@@ -1121,6 +1131,56 @@ export async function submitMarkup(tabId: string, body: MarkupBody): Promise<Mar
   );
   if (typeof answer.prompt !== "string" || !answer.prompt.trim()) throw new ApiError(200, "malformed_response");
   return answer;
+}
+
+/** One file an undo puts (or put) back, project-relative. */
+export interface MarkupUndoFile { path: string; change: "added" | "modified" | "deleted" | "changed" }
+/** What an undo would do (preview) or did: the files, how many more it did
+ * not name, and the PDF's fate — back to before, kept as it is (changed
+ * since), or not part of it. */
+export interface MarkupUndoChanges { files: MarkupUndoFile[]; more: number; pdf: "restored" | "kept" | "none" }
+
+function markupUndoPath(tabId: string, undoId: string): string {
+  return `/api/v1/tabs/${encodeURIComponent(tabId)}/markup/undo/${encodeURIComponent(undoId)}`;
+}
+
+/** The desktop's snapshot calls share one 30 s budget each
+ * (`markup_rounds::OPERATION_BUDGET`); the phone waits past it. */
+const MARKUP_UNDO_TIMEOUT = 40_000;
+
+function undoChanges(answer: Partial<MarkupUndoChanges> | null | undefined): MarkupUndoChanges {
+  const files = Array.isArray(answer?.files)
+    ? answer.files.filter((file): file is MarkupUndoFile => !!file && typeof file.path === "string")
+    : [];
+  const pdf = answer?.pdf === "restored" || answer?.pdf === "kept" ? answer.pdf : "none";
+  return { files, more: typeof answer?.more === "number" ? answer.more : 0, pdf };
+}
+
+/** `POST …/markup/undo/{id}/settle` — the round's after-snapshot, each time
+ * the round finishes (the last one wins). */
+export async function settleMarkupUndo(tabId: string, undoId: string): Promise<void> {
+  await api(`${markupUndoPath(tabId, undoId)}/settle`, { method: "POST" }, MARKUP_UNDO_TIMEOUT);
+}
+
+/** `GET …/markup/undo/{id}` — what an undo would put back. */
+export async function previewMarkupUndo(tabId: string, undoId: string): Promise<MarkupUndoChanges> {
+  return undoChanges(await api<Partial<MarkupUndoChanges>>(markupUndoPath(tabId, undoId), undefined, MARKUP_UNDO_TIMEOUT));
+}
+
+/** `POST …/markup/undo/{id}` — puts the round's changes back. Refused with
+ * `409 undo_conflict` (`markupUndoConflict` reads its files) and nothing
+ * changed, `410 undo_gone`, `404 round_not_found`, `500 undo_failed`. */
+export async function runMarkupUndo(tabId: string, undoId: string): Promise<MarkupUndoChanges> {
+  return undoChanges(await api<Partial<MarkupUndoChanges>>(markupUndoPath(tabId, undoId), { method: "POST" }, MARKUP_UNDO_TIMEOUT));
+}
+
+/** An `undo_conflict` refusal's files changed since the round, and how many
+ * more; `null` for any other failure. */
+export function markupUndoConflict(error: unknown): { files: string[]; more: number } | null {
+  if (!(error instanceof ApiError) || error.code !== "undo_conflict") return null;
+  const detail = error.detail as { files?: unknown; more?: unknown } | undefined;
+  const files = Array.isArray(detail?.files) ? detail.files.filter((file): file is string => typeof file === "string") : [];
+  return { files, more: typeof detail?.more === "number" ? detail.more : 0 };
 }
 
 /** One question of an agent's markup ask (`markup_ask`,

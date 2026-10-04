@@ -20,6 +20,10 @@ pub mod git_release;
 pub mod git_ci;
 pub mod help_mcp;
 pub mod markup_mcp;
+// The Undo of a PDF markup round that applied the marks directly: git-tree
+// snapshots of the work tree in the round's own object store under the state
+// dir, reverse-applied only when nothing changed since.
+pub mod markup_rounds;
 pub mod schedule_usage;
 // One agent CLI's own usage panel (Claude's `/usage`), read in print mode
 // without a tab: recipe table, envelope parsing, and the short-lived cache

@@ -27,9 +27,18 @@ import {
   DEFAULT_PDF_MARKUP_APPLY,
   markupErrorCode,
   markupReasonKey,
+  markupForSubagent,
+  markupUndoNote,
+  pdfMarkupAsk,
+  pdfMarkupInstruction,
   pdfMarkupPrompt,
+  pdfMarkupUndoFailure,
+  previewPdfMarkupUndo,
+  runPdfMarkupUndo,
+  settlePdfMarkupUndo,
   submitPdfMarkup,
   type PdfMarkupPage,
+  type PdfMarkupUndoChanges,
 } from "../../../lib/viewers/pdfMarkup";
 import {
   answerMarkupQuestions,
@@ -66,14 +75,18 @@ import {
   type MarkColor,
   type TextMark,
 } from "../../../../mobile-web/src/markup/layer";
-import { layerPng } from "../../../../mobile-web/src/markup/rasterize";
+import type { PDFDocumentProxy } from "pdfjs-dist";
+import { markupPagePicture } from "./markupPage";
 import { layerKey, loadLayer, saveLayer, stale, type Fingerprint } from "../../../../mobile-web/src/markup/store";
 import {
   canApply,
+  canUndo,
   followRound,
+  holdsUndo,
   nextCheck,
   startRound,
   stepRound,
+  undoneRound,
   type Round,
 } from "../../../../mobile-web/src/markup/submitState";
 
@@ -142,6 +155,22 @@ export type MarkupQuestions = {
 };
 export type QuestionFocus = { askId: string; index: number; on: "card" | "page"; nonce: number };
 
+/** The Undo of an `apply` round (`docs/pdf_markup_direct_apply_plan.md`):
+ *  offered on the pill once the round is done; `ask` reads what it would put
+ *  back for the confirm dialog (`preview`), `confirm` runs it and answers
+ *  whether it went through — the strip then reloads the PDF. `note` is how
+ *  the last try went; `noUndo` why an asked-for `apply` round runs as `list`. */
+export type MarkupRoundUndo = {
+  offered: boolean;
+  busy: boolean;
+  preview: PdfMarkupUndoChanges | null;
+  ask: () => Promise<void>;
+  confirm: () => Promise<boolean>;
+  cancel: () => void;
+  note: { text: string; alert: boolean } | null;
+  noUndo: string | null;
+};
+
 /** The layer's undo history and the strokes in flight on top of it. */
 export type MarkupEdit = {
   /** What is drawn: a gesture's scratch layer while one is in flight. */
@@ -173,6 +202,7 @@ export function usePdfMarkup({
   pageCount,
   docSize,
   docVersion,
+  doc = null,
 }: {
   /** The project the viewer is scoped to, when markup is offered at all. */
   projectId: string | null;
@@ -190,6 +220,9 @@ export function usePdfMarkup({
   docSize: number | null;
   /** Bumped by every load of the document — the fingerprint is read again. */
   docVersion: number;
+  /** The loaded document: Submit draws each marked page from it and reads
+   *  the words under each mark (`markupPage.ts`). */
+  doc?: PDFDocumentProxy | null;
 }) {
   const t = useT();
   const key = useMemo(() => (projectId ? layerKey(projectId, { files: path }) : null), [projectId, path]);
@@ -215,6 +248,10 @@ export function usePdfMarkup({
   const [pdfStale, setPdfStale] = useState(false);
   /** Reloaded since the agent last finished: Reload steps back to secondary. */
   const [reloaded, setReloaded] = useState(false);
+  /** The last load of new pages under the marks came by itself (Settings →
+   *  PDF markup → auto-reload), not by Reload PDF: the strip says so until
+   *  the next round goes out or the reader reloads by hand. */
+  const [autoReloaded, setAutoReloaded] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   /** The target's open asks, with the target and file they were listed for. */
   const [listed, setListed] = useState<{ key: string; asks: MarkupAsk[] } | null>(null);
@@ -222,6 +259,17 @@ export function usePdfMarkup({
   const [answering, setAnswering] = useState<string | null>(null);
   const [askFailure, setAskFailure] = useState<MarkupQuestions["failure"]>(null);
   const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
+  /** **Apply marks directly**: why an asked-for `apply` round runs as `list`,
+   *  what an undo would put back (the confirm dialog), how the last undo went. */
+  const [noUndo, setNoUndo] = useState<string | null>(null);
+  /** The preview carries the undo id it was read for: a new Submit meanwhile
+   *  replaces the round, never what the dialog's Undo runs. */
+  const [undoPreview, setUndoPreview] = useState<{ id: string; changes: PdfMarkupUndoChanges } | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
+  /** Set at once on a click, before the render that disables the button — a
+   *  double click sends one request. */
+  const undoBusyRef = useRef(false);
+  const [undoNote, setUndoNote] = useState<MarkupRoundUndo["note"]>(null);
 
   const skipSave = useRef(false);
   const pendingSave = useRef(false);
@@ -468,7 +516,8 @@ export function usePdfMarkup({
       setListed((now) => (now ? { ...now, asks: now.asks.filter((entry) => entry.id !== ask.id) } : now));
       setQuestionFocus(null);
       setReloaded(false);
-      setRound(startRound(queued, Date.now(), roundRef.current?.applied ?? false));
+      setAutoReloaded(false);
+      setRound(startRound(queued, Date.now(), roundRef.current?.applied ?? false, roundRef.current?.undo));
       setAnswering(null);
       return true;
     },
@@ -584,14 +633,32 @@ export function usePdfMarkup({
     setSending(true);
     setFailure(null);
     let prompt: string;
+    let undo: string | null = null;
+    let fellBack: string | null = null;
     try {
       const body: PdfMarkupPage[] = [];
       for (const n of pages) {
         const page = present.pages[n];
-        body.push({ n, size: page.size, marks: page.marks, layerPng: await blobBase64(await layerPng(page)) });
+        const picture = await markupPagePicture(doc, n, page);
+        body.push({
+          n,
+          size: page.size,
+          marks: page.marks,
+          layerPng: await blobBase64(picture.png),
+          ...(picture.composed ? { composed: true } : {}),
+          ...(picture.anchors.length ? { anchors: picture.anchors } : {}),
+        });
       }
-      const instruction = pdfMarkupPrompt(useSettingsStore.getState().settings?.pdf_markup_instruction);
-      prompt = (await submitPdfMarkup(projectId, path, body, instruction)).prompt;
+      const settings = useSettingsStore.getState().settings;
+      const instruction = pdfMarkupInstruction(settings?.pdf_markup_instruction);
+      const direct = settings?.pdf_markup_direct ?? true;
+      const answer = await submitPdfMarkup(projectId, path, body, instruction, pdfMarkupAsk(settings?.pdf_markup_ask), direct ? "apply" : "list");
+      prompt = answer.prompt;
+      // The mode the backend gave the round decides its follow-up — Undo or
+      // Make these changes — never the setting.
+      undo = answer.mode === "apply" && typeof answer.undo === "string" && answer.undo ? answer.undo : null;
+      fellBack = direct && !undo ? answer.noUndo ?? null : null;
+      if (settings?.pdf_markup_subagents) prompt = markupForSubagent(prompt);
     } catch (error) {
       setSending(false);
       setFailure(t("pdfMarkup.sendFailed", { reason: reason(error) }));
@@ -613,9 +680,111 @@ export function usePdfMarkup({
     setHistory((now) => startHistory(markSent(now.present, pages)));
     setShowSent(true);
     setReloaded(false);
-    setRound(startRound(queued, Date.now()));
+    setAutoReloaded(false);
+    setNoUndo(fellBack);
+    setUndoNote(null);
+    setUndoPreview(null);
+    setRound(startRound(queued, Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
     setSending(false);
-  }, [projectId, target, sending, note, history.present, pageCount, path, t]);
+  }, [projectId, target, sending, note, history.present, pageCount, path, doc, t]);
+
+  // An `apply` round's snapshot is settled each time the round finishes — a
+  // later turn (an answered question) moves it on, and the last one wins. A
+  // failure is quiet: the undo's preview settles again. Not held back in a
+  // hidden pane: the after-snapshot must be the agent's finish, and an edit
+  // the user makes meanwhile (another pane, an editor) would otherwise land in
+  // the round and be undone with it. One call per finish, never a poll.
+  const finishedAt = round?.phase === "finished" ? round.since : null;
+  const settleId = round?.undo?.state === "ready" ? round.undo.id : null;
+  useEffect(() => {
+    if (finishedAt === null || !settleId || !projectId) return;
+    void settlePdfMarkupUndo(projectId, settleId).catch(() => {});
+  }, [finishedAt, settleId, projectId]);
+
+  /** Why an undo call failed, as the strip's line: the files changed since
+   *  (nothing was changed), an undo the backend no longer holds (offered no
+   *  more), or a plain failure — which may have put some files back. */
+  const undoFailed = useCallback(
+    (error: unknown, step: "preview" | "undo", id: string) => {
+      const failure = pdfMarkupUndoFailure(error);
+      if (failure.code === "undo_conflict") {
+        const named = failure.files.map((path) => `\`${path}\``).join(", ") || "…";
+        const files = failure.more > 0 ? t("mobile.markup.undo.andMore", { files: named, count: failure.more }) : named;
+        setUndoNote({ text: t("mobile.markup.undo.conflict", { files }), alert: true });
+      } else if (failure.code === "undo_gone" || failure.code === "round_not_found") {
+        setRound((was) => was && undoneRound(was, id));
+        setUndoNote({ text: t("mobile.markup.undo.gone"), alert: true });
+      } else {
+        const reasonText = t(markupReasonKey(failure.code), { code: failure.code });
+        setUndoNote({
+          text: t(step === "preview" ? "mobile.markup.undo.previewFailed" : "mobile.markup.undo.failed", { reason: reasonText }),
+          alert: true,
+        });
+      }
+    },
+    [t],
+  );
+  const askUndo = useCallback(async () => {
+    const id = roundRef.current?.undo?.id;
+    if (!projectId || !id || undoBusyRef.current) return;
+    undoBusyRef.current = true;
+    setUndoNote(null);
+    setUndoBusy(true);
+    try {
+      const changes = await previewPdfMarkupUndo(projectId, id);
+      // Not when a new Submit replaced the round meanwhile.
+      if (holdsUndo(roundRef.current, id)) setUndoPreview({ id, changes });
+    } catch (error) {
+      if (holdsUndo(roundRef.current, id)) undoFailed(error, "preview", id);
+    }
+    undoBusyRef.current = false;
+    setUndoBusy(false);
+  }, [projectId, undoFailed]);
+  /** The dialog's **Undo**: the files go back and the agent is told — a note
+   *  queued as **Make these changes** queues its prompt, not a new round. The
+   *  sent marks stay: only the reader removes marks. */
+  const confirmUndo = useCallback(async () => {
+    const id = undoPreview?.id;
+    setUndoPreview(null);
+    if (!projectId || !id || undoBusyRef.current) return false;
+    undoBusyRef.current = true;
+    setUndoBusy(true);
+    let done: PdfMarkupUndoChanges;
+    try {
+      done = await runPdfMarkupUndo(projectId, id);
+    } catch (error) {
+      undoFailed(error, "undo", id);
+      undoBusyRef.current = false;
+      setUndoBusy(false);
+      return false;
+    }
+    setRound((was) => was && undoneRound(was, id));
+    // The files went back, whatever else happened since: the agent is told.
+    let told = false;
+    if (target) {
+      try {
+        const { id: scheduled } = await queuePromptForTab(projectId, target.scheduleTargetId, markupUndoNote(done.files.map((file) => file.path), done.more));
+        holdPhonePrompt(scheduled);
+        told = true;
+      } catch {
+        told = false;
+      }
+    }
+    setUndoNote(told ? { text: t("mobile.markup.undo.done"), alert: false } : { text: t("mobile.markup.undo.noteFailed"), alert: true });
+    undoBusyRef.current = false;
+    setUndoBusy(false);
+    return true;
+  }, [projectId, target, undoPreview, undoFailed, t]);
+  const roundUndo: MarkupRoundUndo = {
+    offered: canUndo(round) && asks.length === 0,
+    busy: undoBusy,
+    preview: undoPreview?.changes ?? null,
+    ask: askUndo,
+    confirm: confirmUndo,
+    cancel: () => setUndoPreview(null),
+    note: undoNote,
+    noUndo: round ? noUndo : null,
+  };
 
   /** **Make these changes**: the agent listed what the marks ask for (the
    *  default instruction edits nothing until told) — one click tells it to go
@@ -634,16 +803,21 @@ export function usePdfMarkup({
       return;
     }
     setReloaded(false);
+    setAutoReloaded(false);
+    // Why the Submit got no undo is past: this round makes the changes.
+    setNoUndo(null);
     setRound(startRound(queued, Date.now(), true));
   }, [projectId, target, sending, t]);
 
   /** About to load the file's new pages under the layer: the sent marks stay
    *  on show so the reader can check the agent's changes against them and
    *  erase them by hand; the record is stamped with the new file once its
-   *  fingerprint is read. */
-  const beforeReload = useCallback(() => {
+   *  fingerprint is read. `auto`: the viewer reloads on its own, not Reload
+   *  PDF. */
+  const beforeReload = useCallback((auto = false) => {
     setPdfStale(false);
     setReloaded(true);
+    setAutoReloaded(auto);
     reloadingRef.current = fingerprintRef.current;
     pendingSave.current = true;
   }, []);
@@ -672,6 +846,7 @@ export function usePdfMarkup({
      *  and asks nothing more. */
     canApply: target !== null && canApply(round) && asks.length === 0,
     apply,
+    roundUndo,
     hasUnsent: !isEmpty(history.present),
     sentShown,
     /** Marks are on the file, or a round is out: a new version waits for Reload. */
@@ -685,6 +860,7 @@ export function usePdfMarkup({
     askElsewhere,
     round,
     reloaded,
+    autoReloaded,
     stale: pdfStale,
     markStale: () => setPdfStale(true),
     clearStale: () => setPdfStale(false),

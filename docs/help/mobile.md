@@ -87,12 +87,41 @@ reopen, because the phone attaches to its terminal session.
 - A PDF or picture in an agent tab's viewer has **Mark up**: draw on it and
   **Submit** sends the marks to that tab. The view stays open — the sent marks
   dim, a pill says what the agent is doing, you can keep marking (the next
-  Submit sends only the new marks), and once the agent is done **Reload PDF**
-  shows the rebuilt file under your marks. The sent marks stay until you erase
-  them, so you can check each change. The agent first only lists the changes;
-  tap **Make these changes** to let it go ahead (both prompts: Home → This
-  phone → **Mark up prompt**). The desktop's PDF viewer has the same **Mark up**
-  for local projects, with its own prompts in Settings → Agents → **PDF markup**.
+  Submit sends only the new marks), and once the agent is done and the PDF
+  changed, the rebuilt file loads under your marks on its own (turn that off
+  in the palette's ⋯ → **Reload when the agent finishes**; then **Reload PDF**
+  does it). Each marked page goes to the agent as a picture with your marks
+  drawn on, together with the words each mark is on and — for a project PDF
+  built with SyncTeX — the source line they come from, so a plain correction
+  needs no hunting. The sent marks stay until you erase
+  them, so you can check each change. By default the agent makes the changes
+  at once, rebuilds and sends the PDF back; once it is done the pill offers
+  **Undo**, which lists the files it would put back and, on **Undo**, puts
+  them (and the PDF) back as they were before the round, reloads the PDF and
+  tells the agent — it refuses, changing nothing, when one of those files was
+  edited since. Where no undo can be kept (not a git repository, a remote
+  project, a picture, too many untracked files) the pill says so and the
+  agent first only lists the changes; tap **Make these changes** to let it go
+  ahead. Home → This phone → **Mark up prompt** has the **Apply marks
+  directly** switch (off: always list first), both prompts, and a slider for
+  how often it asks you about a mark, from **Ask always** to **Never ask**. A pen (Apple Pencil, a stylus) needs no
+  **Mark up** tap: touch a page with it and it starts marking, as in the
+  phone's own Markup and Notes; fingers still scroll. A PDF the agent sent
+  from inside the project opens as that project file while **Project files
+  on the phone** is on, so it shows the same marks wherever you open it —
+  the chat, the 🖼 gallery or the 📁 drawer. The palette's ⋯ has **Clear
+  page** and **Clear all marks** (Undo brings them back), and ↑ ↓ at the
+  right edge jump to the previous or next mark of a PDF. ⋯ → **Each Submit
+  to a new subagent** (off by default) has the agent pass every round to a
+  new subagent of its own and be free again at once, so rounds run side by
+  side instead of one after the other — for agents that can start subagents,
+  such as Claude Code; others do the round themselves. Home → This phone →
+  **PDFs open in** picks how a PDF opens: **Automatic** (marking once you draw
+  with a pen only, or while marks wait to be submitted; reading otherwise),
+  **Reading** or **Mark up**. The desktop's PDF viewer has the same **Mark up**
+  for local projects, with its own prompts in Settings → Agents → **PDF markup**
+  (and the switches for loading a rebuilt PDF under your marks by itself and
+  for handing each Submit to a new subagent).
   When a mark leaves the agent a choice it can ask you right there (see
   "The agent's questions about your marks" below).
 - **No shells on the phone** (under **Project access**, on by default) keeps

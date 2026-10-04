@@ -2404,6 +2404,7 @@ function PdfCanvas({
     pageCount: doc?.numPages ?? 0,
     docSize: docBytes,
     docVersion: loadedDiskVersion,
+    doc,
   });
   const markupRef = useRef(markup);
   markupRef.current = markup;
@@ -2463,15 +2464,24 @@ function PdfCanvas({
     setDiskVersion((v) => v + 1);
   }, [path, scope]);
   /** The one door for "the file changed on disk" — the mtime poll, a compile's
-   *  re-read request and a SyncTeX reveal after a compile (`diskChangeAction`). */
+   *  re-read request and a SyncTeX reveal after a compile (`diskChangeAction`).
+   *  While marking, the new pages load under the marks on their own unless
+   *  Settings → PDF markup turned that off, or a note or a Submit is under way. */
   const diskChanged = useCallback((reload: () => void) => {
     const action = diskChangeAction({
       dirty: dirtyRef.current,
       markupHolds: markupRef.current.holdsReload,
+      autoReload: useSettingsStore.getState().settings?.pdf_markup_auto_reload ?? true,
+      noteOpen: markupRef.current.edit.note !== null || markupRef.current.sending,
     });
     if (action === "stale") setStaleOnDisk(true);
     else if (action === "markup") markupRef.current.markStale();
-    else reload();
+    else if (action === "underMarks") {
+      // The caller's own reload, with the marks told first — as Reload PDF,
+      // but the strip says it happened by itself.
+      markupRef.current.beforeReload(true);
+      reload();
+    } else reload();
   }, []);
 
   // The path the currently-loaded document came from. A reload that keeps the

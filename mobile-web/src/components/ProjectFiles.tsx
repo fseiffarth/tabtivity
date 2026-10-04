@@ -116,8 +116,8 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
    * project screen's passes none (it has no chat). The drawer finds a
    * file's newest version itself (`refresh`). */
   markup?: Omit<MarkupTarget, "projectId" | "place" | "refresh">;
-  /** With no `markup`, Mark up's Submit opens a new agent tab and this
-   * shows it (`MarkupNewTab`). */
+  /** With no `markup`, Mark up's Submit opens a new agent tab, and the
+   * view's Open tab button shows it through this (`MarkupNewTab`). */
   showTab?: (tab: TabRow) => void;
 }) {
   const t = useT();

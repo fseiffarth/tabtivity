@@ -32,7 +32,7 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
 }));
 
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
-import { DEFAULT_MARKUP_INSTRUCTION, readMarkupInstruction, writeMarkupInstruction } from "../../../mobile-web/src/markupInstruction";
+import { DEFAULT_MARKUP_INSTRUCTION, readMarkupAsk, readMarkupInstruction, writeMarkupAsk, writeMarkupInstruction } from "../../../mobile-web/src/markupInstruction";
 import { writeMarkupOpen } from "../../../mobile-web/src/markupOpen";
 import { OutboxViewer, type MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
 import { NAMES, storageDashKey } from "../../lib/brand";
@@ -100,6 +100,8 @@ describe("MarkupView", () => {
       source: { outbox: PICTURE.name },
       pages: [{ n: 1, size: [800, 600], marks: LAYER.pages[1].marks, layer: `${NAMES.inboxDir}/2026-1-plot-p1-layer.png` }],
       picture: `${NAMES.inboxDir}/2026-2-plot-marked.png`,
+      // Apply marks directly is on unset.
+      mode: "apply",
     });
     // The view stays open; the marks are kept as sent, not cleared.
     await waitFor(() => {
@@ -129,6 +131,22 @@ describe("MarkupView", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalled());
     const body = JSON.parse(String(calls.find((call) => call.url.endsWith("/markup"))!.body));
     expect(body.instruction).toBe("Fix only the typos.\nAsk me first.");
+    expect(body).not.toHaveProperty("ask");
+  });
+
+  it("sends the asking dial's stop once it is off the default", async () => {
+    writeMarkupAsk(9);
+    expect(readMarkupAsk()).toBe(4);
+    const calls = desktop();
+    const onSend = vi.fn((): MarkupSend => "sent");
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} onClose={() => {}} />);
+    showPicture();
+    const submit = await screen.findByRole("button", { name: "Submit" }) as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    const body = JSON.parse(String(calls.find((call) => call.url.endsWith("/markup"))!.body));
+    expect(body.ask).toBe(4);
   });
 
   it("sends nothing and keeps the layer when an upload fails", async () => {

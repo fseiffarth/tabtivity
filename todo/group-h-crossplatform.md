@@ -3696,7 +3696,43 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — a quick text correction: page pictures, the words under each mark, SyncTeX lines (2026-10-04; untested ids `desktop.markup.anchors`, `mobile.markup.anchors`; ✅ automated: `MobileMarkupAnchors.test.ts`, `MobileMarkupRounds.test.tsx` (frame `snapshot`/`text`), `PdfMarkupSubmit.test.tsx`, Rust `anchors_and_synctex_name_each_mark`, `anchors_are_bounded_one_line_and_one_per_mark`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` — and `npm run mobile:bundle`): a LaTeX project built with SyncTeX (`latexmk -synctex=1`) and an agent tab → its PDF → **Mark up** → strike a word, underline one, circle one, a caret between two words, a highlighter box, a note in the margin → **Submit**. The prompt lists "Each marked page, with my marks drawn on it" (open one `-p<n>-marked.png`: the page with the marks on it), then one line per mark — "line through "…" in "…" — `chapters/intro.tex:42`", "line under", "circled", "mark at "the lazy"", "highlight on", "note "…" beside "…"" — with lines that point at the right `.tex` and line; the marked copy is only named (no `@`). The agent's list comes back noticeably quicker than before. A two-column page: a line's context holds no words of the other column. A PDF the agent sent to the phone (outbox copy): the words, no `.tex` lines. A scanned PDF with no text: pictures only, no mark lines.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — a rebuilt PDF loads under the marks on its own (2026-10-04; untested ids `desktop.markup.autoReload`, `mobile.markup.autoReload`; ✅ automated: `PdfMarkupCore.test.ts`, `PdfMarkupViewer.test.tsx` (three reload paths, on and off), `MobileMarkupRounds.test.tsx`; ⚠️ never run live; phone needs `npm run mobile:bundle`): desktop — Mark up, Submit, let the agent rebuild: the new pages appear under the marks by themselves at the same zoom and scroll, sent marks dimmed; while typing a note it waits and the strip offers **Reload PDF** instead. Settings → Agents → **PDF markup** → "Reload the PDF under your marks when it changes" off → back to the Reload offer. Phone — Submit, let the agent rebuild and finish: the view reloads by itself with "The agent's new PDF is loaded under your marks."; nothing happens when the PDF is unchanged; ⋯ → **Reload when the agent finishes** off → the pill offers **Reload PDF** as before, and the choice survives closing the view.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — subagent mode: each Submit goes to a new subagent (2026-10-04; untested ids `desktop.markup.subagents`, `mobile.markup.subagents`; ✅ automated: `PdfMarkupSubmit.test.tsx`, `MobileMarkupRounds.test.tsx`; ⚠️ never live; phone needs `npm run mobile:bundle`). Turn on Settings → Agents → PDF markup → **Hand each Submit to a new subagent** (phone: ⋯ → **Each Submit to a new subagent**), mark a PDF in a Claude tab and Submit: the agent starts a background subagent and ends its turn within seconds (pill goes done); mark more and Submit again at once — a second subagent starts while the first still works; both rounds' changes land without one undoing the other; answer a `markup_ask` card and press **Make these changes** — each reaches the round's subagent; with the switch off a Submit is handled by the tab's agent itself as before.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
   - [ ] 🖐️ Manual QA, iPad (Pencil), an Android pen phone and a pen-less phone — the pen switches Mark up on; PDFs open in (2026-10-04; untested ids `mobile.markup.penSwitch`, `mobile.markup.opensIn`; ⚠️ never run on a phone; `npm run mobile:bundle` first): open a PDF from an agent tab's chat or files drawer (reading, the ✕ and Save/Share in the head). On the iPad touch a page with the Pencil and write → the palette appears and the stroke you began is on the page (a Pencil tap leaves a dot); the page did not scroll under it; fingers still scroll and pinch; **Done** → reading again, the stroke on show. The Pencil on the grey gap between pages still scrolls. A PDF from the project screen's 🖼 / 📁 (no agent tab) behaves the same. A PDF that cannot be marked (no Mark up button): the Pencil scrolls as before. Android with an S Pen: the same (unknown whether Chrome lets the pen scroll the page first — note it). Pen-less phone: a finger only scrolls; Mark up still needs the tap. Home → This phone → **PDFs open in** reads Automatic. Automatic: on the iPad (after a Pencil stroke, pen-only) a PDF opens straight in Mark up; on the pen-less phone it opens reading, unless the PDF has marks not yet submitted → it opens in Mark up; after Submit it opens reading again. **Reading**: always reading, the pen still switches. **Mark up**: always marking, the ✕ still closes. The choice survives a reload of the PWA.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — **Apply marks directly** and **Undo** (2026-10-04; plan `docs/pdf_markup_direct_apply_plan.md`, handoff `docs/pdf_markup_direct_apply_handoff.md`; untested ids `mobile.markup.undo`, `desktop.markup.undo`; ✅ automated: `MobileMarkupRounds.test.tsx`, `MobileMarkupRoundsCore.test.ts`, `PdfMarkupSubmit.test.tsx`, `DesktopSettings.test.tsx`, Rust `services::markup_rounds` + host route test; ⚠️ never live; needs the rebuilt backend and phone bundle — `npm run backend:stale`). A LaTeX project in git: mark a typo and Submit → in one turn the agent edits the `.tex`, rebuilds (phone: and sends the PDF back); the pill says Agent finished and offers **Undo**, never Make these changes. **Undo** → a sheet (desktop: a dialog) lists the files and says the PDF goes back → **Undo** → the `.tex` and the PDF are back as before, the PDF reloads under the marks (which stay), a note "I undid your edits …" appears in the chat and no new round starts. Edit the `.tex` by hand after a round → **Undo** says "Can't undo — `….tex` changed since. Nothing was changed." and leaves the file alone. A folder that is not a git repository (phone: also a remote project or a picture) → the line "No undo here (…) — the agent lists the changes first." and **Make these changes** as before. Switch off (phone: Home → This phone → Mark up prompt → **Apply marks directly**; desktop: Settings → Agents → PDF markup) → list first as before; the Mark up prompt field starts from the list default while off and the apply default while on.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

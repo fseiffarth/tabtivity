@@ -1713,7 +1713,7 @@ pub(crate) mod tests {
     }
 
     fn page(n: u32, size: [f64; 2], marks: Vec<Mark>) -> MarkupPage {
-        MarkupPage { n, size, marks, layer: String::new() }
+        MarkupPage { n, size, marks, layer: String::new(), composed: false, anchors: vec![] }
     }
 
     fn ink() -> Mark {

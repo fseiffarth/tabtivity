@@ -31,7 +31,8 @@ export type MarkupTarget = {
 
 /** **Mark up** where no agent tab is open to send to (the project screen, a
  * shell tab): Submit opens a new tab of the desktop's default agent in
- * `projectId`, hands it the prompt, and `show`s it (`markup/newTab.ts`).
+ * `projectId` and hands it the prompt; the view stays open, and its Open tab
+ * button `show`s that tab (`markup/newTab.ts`).
  * `place` and `refresh` are a project file's, as in `MarkupTarget`. */
 export type MarkupNewTab = {
   projectId: string;

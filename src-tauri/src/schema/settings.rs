@@ -424,6 +424,29 @@ pub struct Settings {
     pub pdf_markup_instruction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_markup_apply: Option<String>,
+    /// How often a Submit lets the agent stop to ask about the marks, a stop
+    /// of `markup::ASK_LINES` (0 = about every mark … 4 = never); `None` =
+    /// `markup::DEFAULT_ASK`. The phone keeps its own (`markupInstruction.ts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_ask: Option<u8>,
+    /// Whether a marked PDF that changes on disk loads under the marks on its
+    /// own (`None` = on), rather than waiting for **Reload PDF**.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_auto_reload: Option<bool>,
+    /// Subagent mode: each Submit's prompt asks the tab's agent to hand the
+    /// round to a new subagent of its own (`MARKUP_SUBAGENT_LINE`,
+    /// `mobile-web/src/markupInstruction.ts`), so it is free for the next
+    /// round at once. `None` = off. The phone keeps its own (⋯ switch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_subagents: Option<bool>,
+    /// **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`):
+    /// a Submit asks `pdf_markup_submit` for `mode: "apply"` — the agent makes
+    /// the changes in one turn and the strip offers **Undo** — rather than
+    /// `list` (**Make these changes**). `None` = on, so a settings file from
+    /// before the switch gets it; the backend still falls back to `list` where
+    /// no undo snapshot can be taken. The phone keeps its own (`markupDirect`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_direct: Option<bool>,
     /// Built-in agent registry ids shown before a search in the compact Agents
     /// group of the + tab menu. Chosen through the 🧠 menu's "+ tab" chips.
     /// Unset is interpreted by the frontend as Claude/Codex/Gemini; an empty
@@ -1110,6 +1133,17 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    /// A settings file from before **Apply marks directly** parses with the
+    /// switch unset (= on) and writes nothing new back; a set one round-trips.
+    #[test]
+    fn the_markup_direct_switch_round_trips_old_files() {
+        let old: super::Settings = serde_json::from_str(r#"{"pdf_markup_ask":2}"#).unwrap();
+        assert_eq!(old.pdf_markup_direct, None);
+        assert!(serde_json::to_value(&old).unwrap().get("pdf_markup_direct").is_none());
+        let off: super::Settings = serde_json::from_str(r#"{"pdf_markup_direct":false}"#).unwrap();
+        assert_eq!(serde_json::to_value(&off).unwrap()["pdf_markup_direct"], serde_json::json!(false));
+    }
+
     /// The serde key is a literal in the attribute; this ties it to the brand
     /// module so the two cannot drift.
     #[test]

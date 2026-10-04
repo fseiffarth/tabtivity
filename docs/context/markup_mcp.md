@@ -11,10 +11,16 @@ words. A tap answers. On by default (`Settings::markup_mcp`, absent = on;
 switch in Manage CLIs → Advanced). Plan and phase notes:
 `docs/markup_questions_mcp_plan.md`, `docs/markup_questions_mcp_handoff.md`.
 
-`markup::DEFAULT_INSTRUCTION` (and its phone copy `markupInstruction.ts`)
-ends with one sentence pointing at the tool, "if you have it" — a remote tab
-or a switched-off setting has no tool, and the sentence then costs nothing. A
-phone or desktop with its own instruction keeps it unchanged.
+How often the agent may ask is the reader's dial, not the instruction:
+`markup::ASK_LINES` words five stops (ask about every mark … never ask,
+default `DEFAULT_ASK` = only unreadable marks and real choices), and the
+prompt puts the chosen line after the instruction — the phone's own
+(`markupInstruction.ts`, sent as `ask`) or the desktop's
+(`Settings::pdf_markup_ask`). Every stop but "never" points at the tool, "if
+you have it" — a remote tab or a switched-off setting has no tool, and the
+sentence then costs nothing. It used to be one fixed sentence in
+`DEFAULT_INSTRUCTION` ("if a mark leaves you a choice, ask"), and agents read
+it as a question per mark; the dial exists so a long markup is not a quiz.
 
 ## Why it is shaped this way
 
