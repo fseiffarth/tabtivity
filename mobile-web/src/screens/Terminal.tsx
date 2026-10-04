@@ -110,7 +110,7 @@ import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/ag
 import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../terminal/composer";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../terminal/commitPrompts";
 import { agentWork } from "../terminal/agentBusy";
-import { chatTurns, isPromptEcho } from "../terminal/chatTurns";
+import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
@@ -2110,7 +2110,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * the input box, or more history than a CLI's banner fills. */
   const promptOnScreen = useMemo(() => {
     const label = tab.agent_label ?? tab.label;
-    const echo = (line: ReadableLine) => isPromptEcho(line, label);
+    const echo = (line: ReadableLine) => isLiveEcho(line, label);
     return earlier.chunks.length > 0 || earlier.open.some(echo) || (altScreen && lines.some(echo))
       || liveScreen.slice(0, liveFrameStart).some(echo);
   }, [tab.agent_label, tab.label, earlier, altScreen, lines, liveScreen, liveFrameStart]);
@@ -3572,7 +3572,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     // either — only `liveQuestion` reads this, never the view.
     const screen = altScreen ? liveScreen.slice(0, inputFrameStart(liveScreen, agentLabel)) : painted;
     let start = 0;
-    screen.forEach((line, index) => { if (isPromptEcho(line, agentLabel)) start = index + 1; });
+    screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
     return screen.slice(start);
   }, [sessionShown, altScreen, liveScreen, painted, agentLabel]);
   /** The choice the session is waiting on, read off the live screen. On the

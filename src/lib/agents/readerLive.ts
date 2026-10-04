@@ -1,5 +1,5 @@
 import { agentWork, type WorkFacts } from "../../../mobile-web/src/terminal/agentBusy";
-import { isPromptEcho } from "../../../mobile-web/src/terminal/chatTurns";
+import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import {
@@ -67,7 +67,7 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // tail after the last echoed prompt is what the session draws now.
   const screen = lines.slice(0, inputFrameStart(lines, agentLabel));
   let start = 0;
-  screen.forEach((line, index) => { if (isPromptEcho(line, agentLabel)) start = index + 1; });
+  screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
   const tail = screen.slice(start);
   const question = tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null;
   if (question) {
