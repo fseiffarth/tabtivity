@@ -417,6 +417,9 @@ describe("RootOverlayHost", () => {
 describe("arrivals from root-mcp-changed", () => {
   const arrived = () => Object.keys(useArrivalsStore.getState().until).sort();
   const send = (payload: unknown) => act(async () => listeners.get("root-mcp-changed")?.({ payload }));
+  beforeEach(() => {
+    useCalendarStore.setState({ loaded: true });
+  });
 
   it("marks a new event, not an update of it, a delete, or a calendar", async () => {
     const uninstall = setCalendarWriteHandler(async () => {});
@@ -457,6 +460,15 @@ describe("arrivals from root-mcp-changed", () => {
     await send({ kind: "task", op: "upsert", row: { ...row, id: "t2", rank: 2048 }, local: true });
     await send({ kind: "task", op: "upsert", row: { ...row, rank: 4096 }, local: true });
     await send({ kind: "task", op: "upsert", row: { ...row, title: "Ship it" }, local: false });
+    expect(arrived()).toEqual([]);
+    uninstall();
+  });
+
+  it("marks nothing while the store has not loaded: it has no rows to tell new from updated", async () => {
+    const uninstall = setCalendarWriteHandler(async () => {});
+    useCalendarStore.setState({ loaded: false });
+    render(<RootOverlayHost />);
+    await send({ kind: "event", op: "upsert", row: { id: "e9", calendar_id: "default", title: "Old", start: "2026-09-18T14:00", end: "2026-09-18T15:00", all_day: false } });
     expect(arrived()).toEqual([]);
     uninstall();
   });

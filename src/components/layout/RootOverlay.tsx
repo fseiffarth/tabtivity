@@ -195,13 +195,15 @@ export function RootOverlayHost() {
         return;
       }
       // Read before the merge: only an id the store has never held flies in.
-      // An update, a board-only move (`local`) or a delete plays nothing.
+      // An update, a board-only move (`local`) or a delete plays nothing. A
+      // store that has not loaded yet holds no rows to compare against, so
+      // it marks nothing: every update would look new.
       if (payload.op === "delete") {
         justDeleted.set(payload.row.id, now);
       } else if (!payload.local && !justDeleted.delete(payload.row.id)) {
         const before = useCalendarStore.getState();
         const rows: { id: string }[] = payload.kind === "event" ? before.events : before.tasks;
-        if (!rows.some((r) => r.id === payload.row.id)) useArrivalsStore.getState().markArrived([payload.row.id]);
+        if (before.loaded && !rows.some((r) => r.id === payload.row.id)) useArrivalsStore.getState().markArrived([payload.row.id]);
       }
       useCalendarStore.setState((s) => {
         if (payload.kind === "event") {
