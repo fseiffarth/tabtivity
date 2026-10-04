@@ -212,13 +212,23 @@ describe("local models — the sheet", () => {
 
   it("reads the list again instead of failing when a load's answer missed the deadline", async () => {
     let started = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
     serve(
-      () => json(listOf([{ ...IDLE, state: started ? "loading" : "idle" }])),
+      async () => {
+        if (!started) return json(listOf([IDLE]));
+        await held;
+        return json(listOf([{ ...IDLE, state: "loading" }]));
+      },
       () => { started = true; return json({ error: "desktop_unavailable" }, 503); },
     );
     render(<LocalModelsSheet onClose={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Load llama3:latest" }));
     await waitFor(() => expect(gets()).toBe(2));
+    // While the read is on its way, the 503 says nothing of its own.
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 30); }); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    release();
     const card = screen.getByText("llama3:latest").closest("li") as HTMLElement;
     await waitFor(() => expect(card.textContent).toContain("Loading into memory…"));
     expect(screen.queryByRole("alert")).toBeNull();
