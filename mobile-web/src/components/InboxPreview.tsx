@@ -25,7 +25,7 @@ export function fileBadge(kind: string): string {
 }
 
 /** Whether the viewer can show `file` (else it is a download). */
-const viewable = (file: OutboxFile) => file.kind.startsWith("image/") || file.kind.startsWith("text/") || file.kind === "application/pdf";
+export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/") || file.kind.startsWith("text/") || file.kind === "application/pdf";
 
 /**
  * The files a prompt carried into the project inbox, drawn inside the
@@ -84,7 +84,7 @@ export function InboxAlbum({ tabId, leaves, files, onOpen, onSettle }: {
         <small>{sizeLabel(file.size)}</small>
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
-      return viewable(file)
+      return viewableFile(file)
         ? <button key={leaf} type="button" className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>
         : <a key={leaf} className="outbox-post-file" href={inboxFileUrl(tabId, file.name, true)} download={sentName(file)} aria-label={label}>{card}</a>;
     })}

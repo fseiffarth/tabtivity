@@ -80,6 +80,10 @@ reopen, because the phone attaches to its terminal session.
   real terminal. A shell tab has no conversation, so its switch reads
   **Reader** (the screen as text) and **Terminal**. The desktop offers the
   same chat on its agent tabs (help topic `agent-clis`).
+- Over the chat, **Files (n)** lists every file the conversation carried —
+  what the agent sent from this tab and what you sent with your prompts —
+  newest first, with who sent it; tap one to open it. It sits beside
+  **Subagents (n)**; one list opens at a time.
 - A PDF or picture in an agent tab's viewer has **Mark up**: draw on it and
   **Submit** sends the marks to that tab. The view stays open — the sent marks
   dim, a pill says what the agent is doing, you can keep marking (the next

@@ -3800,6 +3800,28 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31ca — The Focus chat lists every file it carried** (2026-10-04;
+  untested id `mobile.chat.sentIndex`). Needs the frozen dev build (the PWA is
+  baked in). In a Focus agent tab (Chat → Session) send a photo from the
+  phone, then ask the agent to `tabtivity-send` a file back: a **Files (2)**
+  chip appears in the strip over the chat (beside **Subagents (n)** when the
+  session has any). Tap it: one row per file, newest first — picture or
+  PDF/≡/↓ badge, the sent name (no stamps), **From the agent** / **From you**,
+  age and size; tap a row → it opens full screen; a binary saves instead.
+  Opening **Subagents** closes the file list and back. A file another tab
+  sent stays out of the list (gallery only); a chat with no files shows no
+  chip.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member

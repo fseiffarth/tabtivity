@@ -11,6 +11,7 @@ import { OutboxViewer, type MarkupNewTab, type MarkupSend, type MarkupTarget } f
 import type { AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
 import { OutboxPost } from "../components/OutboxPost";
+import { SentFilesIndex, sentFiles, type SentFile } from "../components/SentFilesIndex";
 import { ComposerThumb, InboxAlbum, leafName } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -958,7 +959,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     const stream = readableHost.current;
     const prompts = stream?.querySelectorAll<HTMLElement>("[data-prompt]") ?? [];
     const view = stream?.getBoundingClientRect();
-    const index = stream?.querySelector<HTMLElement>(":scope > .subagent-index");
+    const index = stream?.querySelector<HTMLElement>(":scope > .chat-index");
     const top = Math.max(view?.top ?? 0, index?.getBoundingClientRect().bottom ?? 0);
     const bottom = view?.bottom ?? 0;
     setPinnedTop(top - (view?.top ?? 0));
@@ -1192,6 +1193,9 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
    * outermost first; empty while the session itself is read. */
   const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>(() => subagent && tab.kind === "agent" ? [subagent] : []);
   const [subagentListOpen, setSubagentListOpen] = useState(false);
+  /** Whether the chat's file list is open. The strip holds one open list at
+   * a time: the subagents' or the files'. */
+  const [sentListOpen, setSentListOpen] = useState(false);
   const openStep = subagentPath[subagentPath.length - 1];
   /** The last read of a subagent's conversation, and whose it is — a read
    * that belongs to another subagent is never drawn under this one's bar. */
@@ -2158,11 +2162,14 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const chatPosts = useMemo(() => outboxPosts(sessionEntries, outbox.filter((file) => file.from_tab)), [sessionEntries, outbox]);
   /** What the phone sent into the inbox, as the chat's prompts and the
    * composer name it — described once by the desktop for their previews. */
+  const promptLeaves = useMemo(() => [...new Set(sessionEntries.flatMap((entry) => entry.kind === "prompt" ? inboxLeaves(entry.text) : []))], [sessionEntries]);
   const inboxNamed = useMemo(() => [...new Set([
-    ...sessionEntries.flatMap((entry) => entry.kind === "prompt" ? inboxLeaves(entry.text) : []),
+    ...promptLeaves,
     ...uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [leafOfReference(upload.reference)]),
-  ])], [sessionEntries, uploads]);
+  ])], [promptLeaves, uploads]);
   const inboxFiles = useInboxFiles(tab.id, inboxNamed);
+  /** Both directions' files, for the list beside the subagent index. */
+  const chatFiles = useMemo(() => sentFiles(outbox, promptLeaves, inboxFiles), [outbox, promptLeaves, inboxFiles]);
   /** The open subagent's conversation, once read. */
   const subToken = openStep?.token;
   const subTranscript = subRead && subRead.token === subToken ? subRead.transcript : null;
@@ -2174,7 +2181,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     pathTab.current = tab.id;
     setSubagentPath([]);
   }, [tab.id]);
-  useEffect(() => { setSubagentListOpen(false); }, [tab.id]);
+  useEffect(() => { setSubagentListOpen(false); setSentListOpen(false); }, [tab.id]);
   useEffect(() => { setSubagentNote(""); }, [tab.id, subToken]);
   useEffect(() => { setSubLimit(TRANSCRIPT_STEP); }, [subToken]);
   /** Reads the open subagent's conversation as the session itself is read: at
@@ -2394,6 +2401,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const renderPost = useCallback((post: ChatPost) => <OutboxPost scope={outboxScope} post={post} onOpen={openOutbox} onSettle={settlePost} />, [outboxScope, openOutbox, settlePost]);
   const chatInbox = useMemo<ChatInbox>(() => ({ tabId: tab.id, files: inboxFiles, onOpen: setInboxOpen, onSettle: settlePost }), [tab.id, inboxFiles, settlePost]);
   const inboxScope = useMemo(() => ({ inbox: tab.id }), [tab.id]);
+  /** A row of the chat's file list, opened in the viewer of its side. */
+  const openSentFile = useCallback(({ file, from }: SentFile) => (from === "agent" ? setOutboxOpen : setInboxOpen)(file), []);
   /** Removes one of the files the agent sent, from the tile's own confirm — the
    * same removal the project screen's shelf does, through this tab's scope. The
    * row goes now rather than at the next poll, and the sheet closes with the
@@ -3737,7 +3746,7 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     }
   };
   // New turns push the prompt up as surely as a scroll does.
-  useLayoutEffect(checkPinnedPrompt, [checkPinnedPrompt, view, sessionShown, sessionEntries, screenStream, openStep, subagentListOpen]);
+  useLayoutEffect(checkPinnedPrompt, [checkPinnedPrompt, view, sessionShown, sessionEntries, screenStream, openStep, subagentListOpen, sentListOpen]);
   const jumpToLatest = () => {
     const stream = readableHost.current;
     if (!stream) return;
@@ -4033,9 +4042,12 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);
             checkPinnedPrompt();
           }}>
-          {sessionShown && !openStep && (sessionAgents.length > 0 || agentsEarlier) &&
-            <nav className="subagent-index" aria-label={t("mobile.subagent.indexRegion")}>
-              <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => setSubagentListOpen((open) => !open)}>
+          {/* The sticky strip over the chat: the session's subagents and the
+              files it carried, each a chip that opens its list. */}
+          {sessionShown && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0) && <div className="chat-index">
+            {(sessionAgents.length > 0 || agentsEarlier) &&
+            <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
+              <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => { setSentListOpen(false); setSubagentListOpen((open) => !open); }}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v7a4 4 0 0 0 4 4h7m-3-3 3 3-3 3" /></svg>
                 <span>{t("mobile.subagent.index", { count: `${sessionAgents.length}${agentsEarlier ? "+" : ""}` })}{subagentUntested && <em> · {subagentUntested}</em>}</span>
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
@@ -4048,6 +4060,8 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
+            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} files={chatFiles} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openSentFile} />}
+          </div>}
           {sessionShown && openStep
             ? subagentView
             : sessionShown
