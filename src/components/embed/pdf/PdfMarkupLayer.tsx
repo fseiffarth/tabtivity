@@ -7,13 +7,14 @@
  * Mounted inside `PdfPageCanvas` like the blackout and copy surfaces, above
  * every other page layer while markup is on, so links, highlights, remarks and
  * the text layer take no pointer meanwhile. Mouse draws with the chosen tool;
- * a pen adds its pressure; touch draws too. Redrawn from the vectors on every
+ * a pen adds its pressure, and its eraser end erases; touch draws too. Redrawn from the vectors on every
  * zoom, so a mark stays sharp at any scale.
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useT } from "../../../lib/i18n";
 import {
   clampToPage,
+  eraseAlong,
   eraseAt,
   finishStroke,
   inkWidth,
@@ -21,6 +22,7 @@ import {
   noteAt,
   replaceMark,
   round,
+  stylusErases,
   type BoxMark,
   type InkMark,
   type Mark,
@@ -46,7 +48,7 @@ type Size = [number, number];
 type Gesture =
   | { kind: "ink"; pointerId: number; mark: InkMark; last: [number, number] }
   | { kind: "box"; pointerId: number; start: [number, number] }
-  | { kind: "erase"; pointerId: number; layer: MarkupEdit["base"] }
+  | { kind: "erase"; pointerId: number; layer: MarkupEdit["base"]; last: [number, number] }
   | {
       kind: "text";
       pointerId: number;
@@ -171,7 +173,8 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     event.pointerType === "pen" && event.pressure > 0 ? event.pressure : 0.5;
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (edit.busy || event.button !== 0) return;
+    // A pen's eraser end presses button 5.
+    if (edit.busy || (event.button !== 0 && !stylusErases(event))) return;
     if (edit.note) {
       // A click away from an open note keeps what was typed, as Done would.
       edit.saveNote(edit.note.text);
@@ -180,7 +183,11 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const at = toPage(event.clientX, event.clientY);
-    if (edit.tool === "ink") {
+    if (edit.tool === "eraser" || stylusErases(event)) {
+      const next = eraseAt(edit.base, n, at[0], at[1], ERASE_PX * unitsPerPixel(), edit.showSent);
+      gesture.current = { kind: "erase", pointerId: event.pointerId, layer: next, last: at };
+      if (next !== edit.base) edit.scratch(next);
+    } else if (edit.tool === "ink") {
       const pressure = pressureOf(event);
       const mark: InkMark = {
         kind: "ink",
@@ -192,10 +199,6 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       paintPiece(mark, at, at, pressure);
     } else if (edit.tool === "box") {
       gesture.current = { kind: "box", pointerId: event.pointerId, start: at };
-    } else if (edit.tool === "eraser") {
-      const next = eraseAt(edit.base, n, at[0], at[1], ERASE_PX * unitsPerPixel(), edit.showSent);
-      gesture.current = { kind: "erase", pointerId: event.pointerId, layer: next };
-      if (next !== edit.base) edit.scratch(next);
     } else {
       const index = noteAt(edit.base.pages[n], at[0], at[1]);
       const grabbed = index >= 0 ? (edit.base.pages[n].marks[index] as TextMark) : null;
@@ -229,7 +232,8 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       setPreview(boxOf(g.start, toPage(event.clientX, event.clientY), edit.color));
     } else if (g.kind === "erase") {
       const at = toPage(event.clientX, event.clientY);
-      const next = eraseAt(g.layer, n, at[0], at[1], ERASE_PX * unitsPerPixel(), edit.showSent);
+      const next = eraseAlong(g.layer, n, g.last, at, ERASE_PX * unitsPerPixel(), edit.showSent);
+      g.last = at;
       if (next !== g.layer) {
         g.layer = next;
         edit.scratch(next);

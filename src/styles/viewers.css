@@ -4474,6 +4474,11 @@
 .file-viewer-pdf-markup-layer.is-text {
   cursor: var(--cur-text, text);
 }
+/* The eraser's reach (`ERASE_PX`) as a ring, white under black so it shows on
+   any page. */
+.file-viewer-pdf-markup-layer.is-eraser {
+  cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><circle cx='11' cy='11' r='10' fill='none' stroke='white' stroke-width='2'/><circle cx='11' cy='11' r='10' fill='none' stroke='black' stroke-width='1'/></svg>") 11 11, var(--cur-crosshair, crosshair);
+}
 .file-viewer-pdf-markup-canvas {
   position: absolute;
   inset: 0;
@@ -4493,6 +4498,11 @@
 }
 /* The strip's tools and colours show which one is armed — the selected state
    of the generic toolbar button (`.toolbar-btn.active`). */
+/* An icon tool (the eraser) sits where a glyph would. */
+.file-viewer-pdf-markup-bar .file-viewer-zoom-btn > svg {
+  display: block;
+  margin: 0 auto;
+}
 .file-viewer-pdf-markup-bar .file-viewer-zoom-btn[aria-pressed="true"],
 .file-viewer-pdf-markup-status .file-viewer-zoom-btn.active,
 .file-viewer-pdf-markup-questions .file-viewer-zoom-btn.active {

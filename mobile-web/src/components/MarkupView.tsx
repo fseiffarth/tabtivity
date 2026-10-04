@@ -4,7 +4,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { ApiError, holdPrompt, MAX_INBOX_FILE, sentName, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure } from "../markup/frameProtocol";
 import {
-  addMark, canAdd, canReplace, clampToPage, clearPage, clearSent, commit, eraseAt, finishStroke, hasSent, inkWidth, isEmpty, MARK_COLORS, markedPages,
+  addMark, canAdd, canReplace, clampToPage, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markedPages,
   markSent, moveNote, noteAt, redo, replaceMark, round, startHistory, undo,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
 } from "../markup/layer";
@@ -19,6 +19,7 @@ import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
 import { MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
+import { EraserIcon } from "../markup/EraserIcon";
 
 type Tool = "ink" | "box" | "text" | "eraser";
 type Size = [number, number];
@@ -44,6 +45,8 @@ const RENDER_TIMEOUT = 20_000;
 const PEN_KEY = storageDashKey("markup-pen");
 /** How far a finger or pen travels on a note before it is a drag, not a tap. */
 const DRAG_SLOP = 8;
+/** The eraser's reach, CSS pixels. */
+const ERASE_PX = 12;
 /** How strongly the marks of earlier rounds show — sent, never sent again. */
 const SENT_ALPHA = 0.35;
 
@@ -207,7 +210,7 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
 type Gesture =
   | { kind: "ink"; n: number; pointerId: number; mark: InkMark; last: [number, number] }
   | { kind: "box"; n: number; pointerId: number; start: [number, number]; end: [number, number] }
-  | { kind: "erase"; n: number; pointerId: number }
+  | { kind: "erase"; n: number; pointerId: number; last: [number, number] }
   /** A tap places or edits a note; a drag from a note (`index`) moves it,
    * held where it was grabbed (`grab`, page units from its corner). */
   | { kind: "text"; n: number; pointerId: number; start: [number, number]; clientX: number; clientY: number; index: number; grab: [number, number]; moved: boolean };
@@ -732,16 +735,16 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const canvas = event.currentTarget;
     canvas.setPointerCapture?.(event.pointerId);
     const at = toPage(n, canvas, event.clientX, event.clientY);
-    if (tool === "ink") {
+    if (tool === "eraser" || stylusErases(event)) {
+      gesture.current = { kind: "erase", n, pointerId: event.pointerId, last: at };
+      scratchRef.current = eraseAt(history.present, n, at[0], at[1], ERASE_PX * unitsPerPixel(n, canvas), showSent);
+      setScratch(scratchRef.current);
+    } else if (tool === "ink") {
       const pressure = event.pointerType === "pen" && event.pressure > 0 ? event.pressure : 0.5;
       gesture.current = { kind: "ink", n, pointerId: event.pointerId, last: at, mark: { kind: "ink", color, width: round(Math.min(100, Math.max(0.1, size[0] / 350))), points: [[at[0], at[1], pressure]] } };
       paintPiece(n, at, at, pressure);
     } else if (tool === "box") {
       gesture.current = { kind: "box", n, pointerId: event.pointerId, start: at, end: at };
-    } else if (tool === "eraser") {
-      gesture.current = { kind: "erase", n, pointerId: event.pointerId };
-      scratchRef.current = eraseAt(history.present, n, at[0], at[1], 12 * unitsPerPixel(n, canvas), showSent);
-      setScratch(scratchRef.current);
     } else {
       const index = noteAt(history.present.pages[n], at[0], at[1]);
       const grabbed = index >= 0 ? (history.present.pages[n].marks[index] as TextMark) : null;
@@ -800,7 +803,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       setPreview({ n: g.n, mark: boxOf(g.start, g.end, color) });
     } else if (g.kind === "erase") {
       const at = toPage(g.n, canvas, event.clientX, event.clientY);
-      scratchRef.current = eraseAt(scratchRef.current ?? history.present, g.n, at[0], at[1], 12 * unitsPerPixel(g.n, canvas), showSent);
+      scratchRef.current = eraseAlong(scratchRef.current ?? history.present, g.n, g.last, at, ERASE_PX * unitsPerPixel(g.n, canvas), showSent);
+      g.last = at;
       setScratch(scratchRef.current);
     } else if (g.kind === "text" && g.index >= 0) {
       if (!g.moved && Math.hypot(event.clientX - g.clientX, event.clientY - g.clientY) < DRAG_SLOP) return;
@@ -1302,10 +1306,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         </button>}
       </div>}
       {!popover && tool === "text" && !note && <p className="markup-hint">{t("mobile.markup.textHint")}</p>}
+      {!popover && tool === "eraser" && <p className="markup-hint">{t("mobile.markup.eraserHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
       <div className="markup-toolbar" role="toolbar" aria-label={t("mobile.markup.tools")}>
         {(["ink", "box", "text", "eraser"] as Tool[]).map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
           onClick={() => pickTool(name)} aria-label={t(`mobile.markup.tool.${name}` as TranslationKey)} title={t(`mobile.markup.tool.${name}` as TranslationKey)}>
-          <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : name === "text" ? "T" : "⌫"}</span>
+          {name === "eraser" ? <EraserIcon /> : <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : "T"}</span>}
         </button>)}
         <button className="markup-color-well" aria-expanded={popover === "colors"} onClick={() => setPopover((open) => (open === "colors" ? null : "colors"))}
           aria-label={t("mobile.markup.colorOf", { color: t(`mobile.markup.color.${color}` as TranslationKey) })}>

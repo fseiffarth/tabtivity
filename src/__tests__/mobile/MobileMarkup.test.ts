@@ -9,8 +9,8 @@ import {
   acceptFrameMessage, acceptToFrame, MAX_RENDER_WIDTH,
 } from "../../../mobile-web/src/markup/frameProtocol";
 import {
-  addMark, canAdd, canReplace, clearPage, commit, EMPTY_LAYER, eraseAt, finishStroke, inkWidth, isEmpty, isLayer, LIMITS, markedPages,
-  moveNote, noteAt, redo, replaceMark, simplify, startHistory, undo, type InkMark, type Layer, type Mark, type TextMark,
+  addMark, canAdd, canReplace, clearPage, commit, cutStroke, EMPTY_LAYER, eraseAlong, eraseAt, finishStroke, inkWidth, isEmpty, isLayer, LIMITS, markedPages,
+  moveNote, noteAt, redo, replaceMark, simplify, startHistory, stylusErases, undo, type InkMark, type Layer, type Mark, type TextMark,
 } from "../../../mobile-web/src/markup/layer";
 import { drawPage, strokePieces, type Paint } from "../../../mobile-web/src/markup/rasterize";
 import { clearLayer, layerKey, loadLayer, saveLayer, stale, type LayerBackend } from "../../../mobile-web/src/markup/store";
@@ -48,15 +48,59 @@ describe("markup layer", () => {
     expect(simplify([[0, 0, 0.5], [50, 0, 0.5], [50, 50, 0.5]], 1)).toHaveLength(3);
   });
 
-  it("erases whole marks the eraser touches, and only those", () => {
+  it("erases the part of a stroke it rubs over, whole notes, and only those", () => {
     let layer: Layer = addMark(EMPTY_LAYER, 1, SIZE, ink([[10, 10, 0.5], [100, 10, 0.5]]));
     layer = addMark(layer, 1, SIZE, ink([[10, 200, 0.5], [100, 200, 0.5]], "blue"));
     layer = addMark(layer, 1, SIZE, { kind: "text", color: "black", at: [300, 300], size: 12, text: "note\nsecond line" });
+    // Reach 4 + half the stroke's widest (1.7), 2 above the line: cut ±5.34 around x = 55.
     const erased = eraseAt(layer, 1, 55, 12, 4);
-    expect(erased.pages[1].marks.map((m) => m.kind === "ink" ? m.color : m.kind)).toEqual(["blue", "text"]);
-    expect(eraseAt(erased, 1, 310, 315, 1).pages[1].marks).toHaveLength(1);
+    expect(erased.pages[1].marks.map((m) => m.kind === "ink" ? m.color : m.kind)).toEqual(["red", "red", "blue", "text"]);
+    expect((erased.pages[1].marks[0] as InkMark).points).toEqual([[10, 10, 0.5], [49.7, 10, 0.5]]);
+    expect((erased.pages[1].marks[1] as InkMark).points).toEqual([[60.3, 10, 0.5], [100, 10, 0.5]]);
+    expect(eraseAt(erased, 1, 310, 315, 1).pages[1].marks).toHaveLength(3);
     expect(eraseAt(layer, 1, 500, 500, 2)).toBe(layer);
     expect(replaceMark(layer, 1, 2, null).pages[1].marks).toHaveLength(2);
+  });
+
+  it("shortens a stroke at its end, takes one wholly under it, and dots", () => {
+    const stroke = ink([[0, 0, 0.2], [100, 0, 0.8]]);
+    // Rubbed at the end: the stroke stops at the reach, its pressure in between.
+    expect(cutStroke(stroke, 100, 0, 8.3)).toEqual([ink([[0, 0, 0.2], [90, 0, 0.74]])]);
+    expect(cutStroke(stroke, 50, 50, 4)).toBeNull();
+    expect(cutStroke(stroke, 50, 0, 60)).toEqual([]);
+    expect(cutStroke(ink([[5, 5, 0.5]]), 6, 6, 1)).toEqual([]);
+    expect(cutStroke(ink([[5, 5, 0.5]]), 50, 50, 1)).toBeNull();
+    // Boxes go whole, and a stroke grazed exactly at its reach is left alone.
+    const box = addMark(EMPTY_LAYER, 1, SIZE, { kind: "box", color: "yellow", rect: [0, 0, 100, 10] });
+    expect(eraseAt(box, 1, 50, 5, 1).pages).toEqual({});
+    expect(cutStroke(stroke, 50, 5.7, 4)).toBeNull();
+  });
+
+  it("drags the eraser through a stroke even between two far samples", () => {
+    // Two samples a page apart: the drag's own two points miss the ink at x = 300.
+    const layer = addMark(EMPTY_LAYER, 1, SIZE, ink([[0, 300, 0.5], [600, 300, 0.5]]));
+    const dragged = eraseAlong(layer, 1, [300, 100], [300, 500], 4);
+    const pieces = dragged.pages[1].marks as InkMark[];
+    expect(pieces).toHaveLength(2);
+    expect(pieces[0].points[1][0]).toBeLessThan(300);
+    expect(pieces[1].points[0][0]).toBeGreaterThan(300);
+    expect(eraseAlong(layer, 1, [10, 10], [10, 10], 4)).toBe(layer);
+  });
+
+  it("takes a whole stroke when cutting it would pass the ceilings", () => {
+    // The layer is at its mark ceiling; one stroke cut in two would pass it.
+    const stroke = addMark(EMPTY_LAYER, 1, SIZE, ink([[0, 300, 0.5], [600, 300, 0.5]]));
+    const layer: Layer = { ...stroke, pages: { ...stroke.pages, 2: { size: SIZE, marks: Array.from({ length: LIMITS.marks - 1 }, (): Mark => ink([[5, 5, 0.5]])) } } };
+    expect(eraseAt(layer, 1, 300, 300, 4).pages[1]).toBeUndefined();
+    // Shortened at its end, it stays one stroke and is cut.
+    expect((eraseAt(layer, 1, 600, 300, 4).pages[1].marks[0] as InkMark).points[1][0]).toBeCloseTo(594.3);
+  });
+
+  it("knows a pen's eraser end", () => {
+    expect(stylusErases({ pointerType: "pen", button: 5, buttons: 32 })).toBe(true);
+    expect(stylusErases({ pointerType: "pen", button: -1, buttons: 32 })).toBe(true);
+    expect(stylusErases({ pointerType: "pen", button: 0, buttons: 1 })).toBe(false);
+    expect(stylusErases({ pointerType: "mouse", button: 5, buttons: 32 })).toBe(false);
   });
 
   it("finds the topmost note under a point and moves it, kept on the page", () => {

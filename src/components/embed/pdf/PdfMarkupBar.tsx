@@ -6,19 +6,21 @@
  * (`file-viewer-pdf-copy-bar`), as the metadata panel is — no new chrome, and
  * nothing portaled.
  */
+import type { ReactNode } from "react";
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { MARK_COLORS, type MarkColor } from "../../../../mobile-web/src/markup/layer";
+import { EraserIcon } from "../../../../mobile-web/src/markup/EraserIcon";
 import { INK } from "../../../../mobile-web/src/markup/rasterize";
 import type { RoundPhase } from "../../../../mobile-web/src/markup/submitState";
 import { UntestedTag } from "../../common/UntestedTag";
 import { TabStatusMark } from "../../tabs/TabLocalityBadges";
 import type { MarkupTool, PdfMarkup } from "./usePdfMarkup";
 
-const TOOLS: { tool: MarkupTool; glyph: string; label: TranslationKey }[] = [
+const TOOLS: { tool: MarkupTool; glyph: ReactNode; label: TranslationKey }[] = [
   { tool: "ink", glyph: "✎", label: "mobile.markup.tool.ink" },
   { tool: "box", glyph: "▭", label: "mobile.markup.tool.box" },
   { tool: "text", glyph: "T", label: "mobile.markup.tool.text" },
-  { tool: "eraser", glyph: "⌫", label: "mobile.markup.tool.eraser" },
+  { tool: "eraser", glyph: <EraserIcon />, label: "mobile.markup.tool.eraser" },
 ];
 
 const COLOR_KEYS: Record<MarkColor, TranslationKey> = {
@@ -79,7 +81,8 @@ export function PdfMarkupBar({
     <>
       <div className="file-viewer-pdf-redact-bar file-viewer-pdf-markup-bar" role="group" aria-label={t("pdfMarkup.toggle")}>
         <span className="file-viewer-pdf-redact-hint">
-          {t(markup.tool === "text" ? "pdfMarkup.textHint" : "pdfMarkup.hint")}
+          {t(markup.tool === "text" ? "pdfMarkup.textHint" : markup.tool === "eraser" ? "pdfMarkup.eraserHint" : "pdfMarkup.hint")}
+          {markup.tool === "eraser" && <UntestedTag id="desktop.markup.eraser" />}
         </span>
         {TOOLS.map(({ tool, glyph, label }) => (
           <button

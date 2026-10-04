@@ -201,30 +201,145 @@ export function touches(mark: Mark, x: number, y: number, radius: number): boole
   return x >= bx - radius && x <= bx + bw + radius && y >= by - radius && y <= by + bh + radius;
 }
 
-/** The eraser: every whole mark on page `n` it touches goes — with
- * `sent`, the sent marks shown there too: they stay until the reader has
- * checked the agent's changes and erases them by hand, never automatically. */
+/** Where the segment `a`→`b` runs within `reach` of `(x, y)`, as the span of
+ * its parameter in [0, 1] — `null` when it stays outside or only grazes it. */
+function spanWithin(a: [number, number, number], b: [number, number, number], x: number, y: number, reach: number): [number, number] | null {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const fx = a[0] - x;
+  const fy = a[1] - y;
+  const qa = dx * dx + dy * dy;
+  const qc = fx * fx + fy * fy - reach * reach;
+  if (qa === 0) return qc < 0 ? [0, 1] : null;
+  const qb = 2 * (fx * dx + fy * dy);
+  const disc = qb * qb - 4 * qa * qc;
+  if (disc <= 0) return null;
+  const root = Math.sqrt(disc);
+  const t0 = (-qb - root) / (2 * qa);
+  const t1 = (-qb + root) / (2 * qa);
+  if (t1 <= 0 || t0 >= 1) return null;
+  return [Math.max(0, t0), Math.min(1, t1)];
+}
+
+function sampleAt(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
+  return [round(a[0] + (b[0] - a[0]) * t), round(a[1] + (b[1] - a[1]) * t), Math.round((a[2] + (b[2] - a[2]) * t) * 100) / 100];
+}
+
+/** The eraser rubbed across a pen stroke: the runs of it left outside its
+ * reach, each cut end on the reach's edge so the ink stops where the eraser
+ * began. `null` when the eraser misses it; `[]` when it took all of it. */
+export function cutStroke(mark: InkMark, x: number, y: number, radius: number): InkMark[] | null {
+  const reach = radius + inkWidth(mark.width, 1) / 2;
+  const points = mark.points;
+  if (points.length === 1) return Math.hypot(points[0][0] - x, points[0][1] - y) <= reach ? [] : null;
+  const runs: [number, number, number][][] = [];
+  let run: [number, number, number][] | null = Math.hypot(points[0][0] - x, points[0][1] - y) > reach ? [points[0]] : null;
+  let cut = run === null;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const span = spanWithin(a, b, x, y, reach);
+    if (!span) {
+      (run ??= [a]).push(b);
+      continue;
+    }
+    cut = true;
+    if (run) {
+      if (span[0] > 0) run.push(sampleAt(a, b, span[0]));
+      runs.push(run);
+      run = null;
+    }
+    if (span[1] < 1) run = [sampleAt(a, b, span[1]), b];
+  }
+  if (run) runs.push(run);
+  if (!cut) return null;
+  // A run the cut left a single point long is no ink to keep.
+  return runs
+    .filter((kept) => kept.some((p) => p[0] !== kept[0][0] || p[1] !== kept[0][1]))
+    .map((kept) => ({ ...mark, points: kept }));
+}
+
+/** One page's marks after the eraser at `(x, y)`: pen strokes lose the part
+ * under it (with `whole`, the whole stroke), boxes and notes go whole.
+ * `null` when it touched none. */
+function eraseMarks(marks: Mark[], x: number, y: number, radius: number, whole: boolean): Mark[] | null {
+  let changed = false;
+  const kept: Mark[] = [];
+  for (const mark of marks) {
+    if (mark.kind === "ink" && !whole) {
+      const runs = cutStroke(mark, x, y, radius);
+      if (runs) { kept.push(...runs); changed = true; } else kept.push(mark);
+    } else if (touches(mark, x, y, radius)) changed = true;
+    else kept.push(mark);
+  }
+  return changed ? kept : null;
+}
+
+/** The sent side's looser bound (`store.ts`): its marks never go out again
+ * and are never trimmed, so it only keeps the record finite. */
+export const SENT_LIMITS = { marks: LIMITS.marks * 4, points: LIMITS.points * 4 } as const;
+
+function within(pages: Record<number, PageLayer>, limits: { marks: number; points: number }): boolean {
+  const { marks, points } = markCount({ pages });
+  return marks <= limits.marks && points <= limits.points;
+}
+
+/** The eraser at `(x, y)` on page `n`: it takes the part of every pen stroke
+ * it rubs over — a stroke cut in the middle becomes two — and every box and
+ * note it touches whole. A cut that would pass the ceilings takes the whole
+ * stroke instead. With `sent`, the sent marks shown there too: they stay
+ * until the reader has checked the agent's changes and erases them by hand,
+ * never automatically. */
 export function eraseAt(layer: Layer, n: number, x: number, y: number, radius: number, sent = false): Layer {
   const page = layer.pages[n];
-  const marks = page?.marks.filter((mark) => !touches(mark, x, y, radius));
-  const next = page && marks && marks.length !== page.marks.length ? withPage(layer, n, { ...page, marks }) : layer;
-  return sent ? eraseSent(next, n, (mark) => touches(mark, x, y, radius)) : next;
+  let next = layer;
+  const cut = page && eraseMarks(page.marks, x, y, radius, false);
+  if (page && cut) {
+    next = withPage(layer, n, { ...page, marks: cut });
+    if (!within(next.pages, LIMITS)) next = withPage(layer, n, { ...page, marks: eraseMarks(page.marks, x, y, radius, true) ?? page.marks });
+  }
+  return sent ? eraseSent(next, n, (marks, whole) => eraseMarks(marks, x, y, radius, whole)) : next;
+}
+
+/** The eraser dragged from `from` to `to`: applied at steps of half its
+ * radius, so a quick swipe leaves no ink standing between two samples. */
+export function eraseAlong(layer: Layer, n: number, from: [number, number], to: [number, number], radius: number, sent = false): Layer {
+  const steps = Math.min(500, Math.max(1, Math.ceil(Math.hypot(to[0] - from[0], to[1] - from[1]) / Math.max(0.5, radius / 2))));
+  let next = layer;
+  for (let i = 1; i <= steps; i++) {
+    next = eraseAt(next, n, from[0] + ((to[0] - from[0]) * i) / steps, from[1] + ((to[1] - from[1]) * i) / steps, radius, sent);
+  }
+  return next;
+}
+
+/** Whether a pointer is a pen's eraser end — Windows Ink and Wacom report it
+ * as the pen with button 5, or bit 32 of `buttons` — which erases whatever
+ * tool is picked. */
+export function stylusErases(event: { pointerType: string; button: number; buttons: number }): boolean {
+  return event.pointerType === "pen" && (event.button === 5 || (event.buttons & 32) !== 0);
 }
 
 /** Clears page `n`'s unsent marks — with `sent`, its sent ones too. */
 export function clearPage(layer: Layer, n: number, sent = false): Layer {
   const next = layer.pages[n] ? withPage(layer, n, { ...layer.pages[n], marks: [] }) : layer;
-  return sent ? eraseSent(next, n, () => true) : next;
+  return sent ? eraseSent(next, n, (marks) => (marks.length ? [] : null)) : next;
 }
 
-function eraseSent(layer: Layer, n: number, hit: (mark: Mark) => boolean): Layer {
+/** Page `n`'s sent marks through `erase` — tried as cuts first, then whole
+ * when the cuts would pass `SENT_LIMITS`. */
+function eraseSent(layer: Layer, n: number, erase: (marks: Mark[], whole: boolean) => Mark[] | null): Layer {
   const page = layer.sent?.pages[n];
   if (!layer.sent || !page) return layer;
-  const marks = page.marks.filter((mark) => !hit(mark));
-  if (marks.length === page.marks.length) return layer;
-  const pages = { ...layer.sent.pages };
-  if (marks.length) pages[n] = { ...page, marks };
-  else delete pages[n];
+  const place = (marks: Mark[]) => {
+    const pages = { ...layer.sent!.pages };
+    if (marks.length) pages[n] = { ...page, marks };
+    else delete pages[n];
+    return pages;
+  };
+  const cut = erase(page.marks, false);
+  if (!cut) return layer;
+  let pages = place(cut);
+  if (!within(pages, SENT_LIMITS)) pages = place(erase(page.marks, true) ?? page.marks);
   return { ...layer, sent: { ...layer.sent, pages } };
 }
 

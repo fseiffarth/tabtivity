@@ -12,7 +12,7 @@
  * here resolves rather than throws.
  */
 
-import { isLayer, LIMITS, markCount, type Layer, type PageLayer } from "./layer";
+import { isLayer, LIMITS, markCount, SENT_LIMITS, type Layer, type PageLayer } from "./layer";
 import { LEGACY_NAMES, NAMES } from "../../../src/lib/brand";
 import { adoptLegacyDatabase, databaseHost, databasePort } from "../../../src/lib/brandMigration";
 
@@ -92,11 +92,12 @@ export function layerKey(projectId: string, source: { files: string } | { outbox
   return "files" in source ? `${projectId}:files:${source.files}` : `${projectId}:outbox:${source.outbox}`;
 }
 
+export { SENT_LIMITS };
+
 /** Whether a layer is one the desktop would accept — never store one it
  * would refuse at Submit. The sent marks never go out again and are never
  * trimmed (only the reader erases them), so they get a looser bound of their
- * own that only keeps the record finite. */
-export const SENT_LIMITS = { marks: LIMITS.marks * 4, points: LIMITS.points * 4 } as const;
+ * own (`SENT_LIMITS`) that only keeps the record finite. */
 export function withinLimits(layer: Layer): boolean {
   const bounded = (pages: Record<number, PageLayer>, limits: { marks: number; points: number }) => {
     const { marks, points } = markCount({ pages });

@@ -3687,6 +3687,15 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — the eraser takes part of a stroke (2026-10-04; untested ids `desktop.markup.eraser`, `mobile.markup.eraser`; ✅ automated: `MobileMarkup.test.ts` (cutStroke, eraseAlong, ceiling fallback, stylusErases), `MobileMarkupRoundsCore.test.ts`, `PdfMarkupLayer.test.tsx` (pen eraser end); ⚠️ never run live; phone needs `npm run mobile:bundle`): Mark up → the eraser button shows an eraser icon (no longer ⌫) and a hint while armed; on the desktop the cursor is a ring. Draw a long stroke, rub across its middle → only the rubbed part goes and two strokes are left; rub its end → it gets shorter. A fast swipe across several strokes cuts every one it crosses. A box or a note it touches goes whole. Undo puts the whole rub back in one step. Shown sent marks (Show sent marks on) are cut the same way; hidden ones are untouched. Submit after erasing → the baked `-marked.pdf` shows the cut strokes. Pen tablet with an eraser end (Wacom, Surface pen): with the pen tool armed, flip the pen → its eraser end erases; the tip still draws.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bu — A plain `opencode` tab's chat fills its facts and shows it working** (2026-10-01;
   ✅ code-complete, automated tests passing — `MobileOpenCodeMini.test.ts`

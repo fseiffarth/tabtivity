@@ -114,6 +114,16 @@ describe("PdfMarkupLayer", () => {
     expect(edit.commit).toHaveBeenCalledWith({ ...base, pages: {} });
   });
 
+  it("erases with a pen's eraser end whatever tool is armed", () => {
+    const base = addMark(EMPTY_LAYER, 1, SIZE, { kind: "box", color: "yellow", rect: [100, 100, 50, 50] });
+    const edit = stubEdit({ tool: "ink" }, base);
+    const { layer, at } = mount(1, edit);
+    fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "pen", button: 5, buttons: 32, ...at(120, 120) });
+    fireEvent.pointerUp(layer, { pointerId: 1, pointerType: "pen", ...at(120, 120) });
+    expect(edit.commit).toHaveBeenCalledWith({ ...base, pages: {} });
+    expect(edit.add).not.toHaveBeenCalled();
+  });
+
   it("draws nothing while a Submit uploads", () => {
     const edit = stubEdit({ busy: true });
     const { layer, at } = mount(1, edit);
