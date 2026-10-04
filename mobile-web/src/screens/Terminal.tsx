@@ -3537,7 +3537,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
    * composer: read on the markup views' own poll, only while the Focus chat
    * is on screen (no viewer over it) and on each agent edge. */
   const { asks: markupAsks } = useMarkupAsks(tab.kind === "agent" ? tab.id : undefined, undefined,
-    view === "focus" && !outboxOpen && !filesOpen && !gallery && !askedFile, markupAgent);
+    view === "focus" && !outboxOpen && !inboxOpen && !filesOpen && !gallery && !askedFile, markupAgent);
   const markupAsk = markupAsks.find((ask) => ask.questions.length > 0);
   /** The file it is about, if this tab's outbox has it — the newest copy. */
   const markupAskFile = markupAsk?.file_name ? outbox.find((file) => sentName(file) === markupAsk.file_name) : undefined;
