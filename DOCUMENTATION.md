@@ -604,6 +604,11 @@ per CLI which one their agents run on.
   Claude loses it within minutes, other agents already running keep it — to
   take it from them, revoke the key at the provider. Remote agents and Codex
   never get the administrator's key.
+- **Removing a user rotates nothing.** `user-remove` takes the account off
+  every key's list, but a copy of a directly delivered key the user saved
+  while they had it still works, and once they are off the list Tabtivity
+  treats such a copy as their own login. When you remove someone who used a
+  key, replace it on its card with a fresh one from the provider.
 - **Through the key broker (Claude).** On a Claude key's card the
   administrator can press **Deliver through the key broker**. Users on its
   list then never receive the key: each gets a token of their own, and the

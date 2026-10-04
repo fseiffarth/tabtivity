@@ -880,3 +880,34 @@ the desktop groundwork the hosted plan's P1 builds on.*
     detection beside the relay in the host process (`mobile_control`), with
     the window's copy standing down while a window runs. (Final review B3,
     2026-10-04.)
+
+2386. **Merge `develop` into `hosted`, then `hosted` into `develop`.**
+    `develop` has moved ~145 commits past the branch base `f3efd50b` and
+    already holds #2339 (root MCP lanes served from the Mobile host,
+    `55dec5b2`; the markup lane stays window-only) and the desktop agent API
+    keys (`b0143c80`: keychain key, loopback `api_proxy`, per-tab tokens,
+    monthly USD limit). At the merge: resolve the ~11 conflicts the final
+    review previewed (B14, `root_mcp.rs`, `terminal/mod.rs`, `tmux_local.rs`,
+    `commands/agents.rs`, `services/mod.rs`, docs); wire the root-MCP
+    local-model lane into `model_allowlist::check_model` (the `TODO(#2339)`
+    in `model_allowlist.rs`); give every new develop command a class row, the
+    `cfg_attr(feature = "desktop", tauri::command)` attribute and `Ctx`
+    (AGENTS.md); decide how the desktop `api_proxy` and the server keeper /
+    key broker (P3b, P5) relate — two key paths for the same CLIs must not
+    both apply on a server; renumber TODOs if `develop` reused 2350+. Run
+    every gate incl. the Windows/macOS all-targets checks before
+    `hosted` → `develop`. (Open points, 2026-10-05.)
+
+2387. **Decide `open_external_url` in the Connect window.** The final fix
+    round narrowed the Connect window to its socket bridge, clipboard,
+    notifications, window controls and opening a download, but kept
+    `open_external_url` so links in server content open in the system
+    browser (without it they fall back to `window.open`). It is a sixth
+    command class the user did not list. Keep it, or drop it and accept
+    that links may not open. (Open points, 2026-10-05.)
+
+2388. **Commit or ignore `src-tauri/gen/schemas/macOS-schema.json`.** The
+    macOS all-targets check generates it; the Linux and Windows schemas are
+    tracked, this one is not (left untracked in the `hosted` worktree).
+    Commit it beside them, or add it to `.gitignore` so cross-checks stop
+    leaving it behind. (Open points, 2026-10-05.)
