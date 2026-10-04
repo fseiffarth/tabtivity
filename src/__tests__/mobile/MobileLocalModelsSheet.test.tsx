@@ -41,6 +41,15 @@ function serve(get: () => Response | Promise<Response>, post?: (body: Record<str
   });
 }
 
+/** Fake time in steps, each answered before the next: a response body is
+ * read on the real event loop, so one long jump would skip the reads it
+ * should have scheduled. */
+async function tick(ms: number, step = 500) {
+  for (let spent = 0; spent < ms; spent += step) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(Math.min(step, ms - spent)); });
+  }
+}
+
 const gets = () => fetchMock.mock.calls.filter(([, init]) => ((init as RequestInit | undefined)?.method ?? "GET") === "GET").length;
 const posts = () => fetchMock.mock.calls
   .filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")
@@ -214,6 +223,44 @@ describe("local models — the sheet", () => {
     await waitFor(() => expect(card.textContent).toContain("Loading into memory…"));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(/Open .* on the desktop/)).toBeNull();
+  });
+
+  it("polls fast for 30 s after a write went unconfirmed, then slows down", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    serve(() => json(listOf([IDLE])), () => json({ error: "desktop_unavailable" }, 503));
+    render(<LocalModelsSheet onClose={() => {}} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(gets()).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Load llama3:latest" }));
+    await tick(100, 50);
+    expect(posts()).toHaveLength(1);
+    expect(gets()).toBe(2);
+    // The list stays idle, yet it is read every 2.5 s: the load may have started.
+    await tick(29_000);
+    expect(gets()).toBe(13);
+    await tick(2_000);
+    const settled = gets();
+    await tick(8_000);
+    expect(gets()).toBe(settled);
+    await tick(2_000);
+    expect(gets()).toBe(settled + 1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reads nothing more once closed while a write is on its way", async () => {
+    let answer!: (response: Response) => void;
+    const onChange = vi.fn();
+    serve(() => json(listOf([IDLE])), () => new Promise<Response>((resolve) => { answer = resolve; }));
+    const view = render(<LocalModelsSheet onClose={() => {}} onChange={onChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Load llama3:latest" }));
+    const before = gets();
+    view.unmount();
+    await act(async () => {
+      answer(json({ error: "desktop_unavailable" }, 503));
+      await new Promise((resolve) => { setTimeout(resolve, 30); });
+    });
+    expect(gets()).toBe(before);
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it("says to open the app only when the read also finds no window", async () => {

@@ -96,10 +96,26 @@ export function LocalModelsSheet({ onClose, onChange }: {
   /** Bumped when a list lands, to schedule the next read from then. */
   const [stamp, setStamp] = useState(0);
   const reading = useRef<AbortController | null>(null);
+  /** False once the sheet is closed: a write still on its way then reads
+   * nothing more. */
+  const alive = useRef(true);
   const changed = useRef(onChange);
   useEffect(() => { changed.current = onChange; });
+  // Before the first read's effect, so a remount (StrictMode) reads again.
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      reading.current?.abort();
+    };
+  }, []);
 
   const show = useCallback((next: LocalModelList | null, code: string | null) => {
+    // Home keeps its caption from a write answered after the sheet closed.
+    if (!alive.current) {
+      changed.current?.(next, code);
+      return;
+    }
     if (next) setList(next);
     setFailure(code);
     changed.current?.(next, code);
@@ -107,6 +123,7 @@ export function LocalModelsSheet({ onClose, onChange }: {
   }, []);
 
   const load = useCallback(async () => {
+    if (!alive.current) return;
     reading.current?.abort();
     const controller = new AbortController();
     reading.current = controller;
@@ -129,7 +146,6 @@ export function LocalModelsSheet({ onClose, onChange }: {
     if (visible) void load();
     else reading.current?.abort();
   }, [visible, load]);
-  useEffect(() => () => reading.current?.abort(), []);
 
   useEffect(() => {
     if (!settling) return;
