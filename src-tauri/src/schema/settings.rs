@@ -1471,6 +1471,9 @@ mod default_rule_tests {
         let s: Settings = serde_json::from_str(&format!(r#"{{"{key}":{{"enabled":true}}}}"#)).unwrap();
         assert!(s.app_mobile_host.as_ref().unwrap().local_models.is_none());
         let back = serde_json::to_value(&s).unwrap();
+        // Pin the object first: on a wrong key `back[key]` is `Null`, whose
+        // `.get` is `None` too, and the absence check would pass vacuously.
+        assert_eq!(back[key]["enabled"], serde_json::json!(true));
         assert!(back[key].get("local_models").is_none(), "absent stays absent");
 
         let s: Settings = serde_json::from_str(&format!(
@@ -1478,6 +1481,8 @@ mod default_rule_tests {
         ))
         .unwrap();
         assert_eq!(s.app_mobile_host.as_ref().unwrap().local_models, Some(false));
+        let written = serde_json::to_value(&s).unwrap();
+        assert_eq!(written[key]["local_models"], serde_json::json!(false), "written as false");
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.app_mobile_host.unwrap().local_models, Some(false));
     }
