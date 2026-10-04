@@ -1138,6 +1138,12 @@ span.files-close { background:transparent; }
 .files-list li > button:first-child { flex:1; width:auto; min-width:0; }
 .option-list .files-share { flex:0 0 auto; width:auto; gap:4px; padding:0 14px; color:#8fb8ff; font-size:.85rem; }
 .files-share-error { flex-basis:100%; margin:0; padding:0 14px 4px; color:#f2b8b5; font-size:.75rem; }
+/* Local models sheet: the files-list row with its trailing button (Load /
+   Unload as the files' Share), the model's facts in the option-row surface. */
+.local-models-list .local-model-info { display:grid; flex:1; gap:3px; min-width:0; padding:13px 14px; border-radius:13px; background:#1e2230; }
+.local-models-list .local-model-tabs { color:#8fb8ff; }
+.local-models-list .transcript-working-dots { vertical-align:middle; }
+.local-models-start { min-height:48px; }
 /* Select text (`MessageMenu`): the message again, as plain text the phone's
    own selection handles and callout work on — the bubble's hold is the menu,
    so it cannot be selected in place. */
