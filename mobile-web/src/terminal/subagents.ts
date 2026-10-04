@@ -22,7 +22,8 @@ export interface SubagentStep extends SubagentRef {
    * the bar's ‹ › step through without going back up. */
   siblings: SubagentRef[];
   /** Where the conversation it was opened from was scrolled to, put back on
-   * the way up. */
+   * the way up. Negative: opened from outside it (the tab card's subagent
+   * list), so the way up lands on its newest turn. */
   scrollTop: number;
 }
 

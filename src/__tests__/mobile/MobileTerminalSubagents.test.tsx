@@ -54,6 +54,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { SubagentsSheet } from "../../../mobile-web/src/screens/SubagentsSheet";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
 import { BRAND, storageKey } from "../../lib/brand";
@@ -289,7 +290,7 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     let indexHeight = 50;
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("readable-output")) return new DOMRect(0, 100, 400, 600);
-      if (this.classList.contains("subagent-index")) return new DOMRect(0, 100, 400, indexHeight);
+      if (this.classList.contains("chat-index")) return new DOMRect(0, 100, 400, indexHeight);
       return new DOMRect(0, this.dataset.prompt === "look around" ? 110 : 500, 300, 40);
     });
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -423,5 +424,57 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     await settle();
     expect(screen.queryByRole("navigation", { name: "Subagent" })).toBeNull();
     within(screen.getByTestId("session-transcript")).getByText("and the frontend?");
+  });
+});
+
+describe("a tab card's subagent pill opens a subagent directly", () => {
+  beforeEach(() => {
+    terminalState.lines = [];
+    terminalState.alternate = false;
+    FakeWebSocket.instances = [];
+    localStorage.clear();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("lists the session's subagents newest first and hands back the one picked", async () => {
+    const main = { ...MAIN, entries: MAIN.entries.map((entry) => (entry.subagent === "00000000000000b2" ? { ...entry, running: true } : entry)) };
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(jsonResponse(200, { transcript: main }))));
+    const onOpen = vi.fn();
+    render(<SubagentsSheet tab={{ ...TAB, agent_status: "working", agent_subagents: 1 }} onClose={() => {}} onOpen={onOpen} />);
+    await settle();
+    const dialog = screen.getByRole("dialog", { name: "Subagents of Claude" });
+    // Only the openable ones, newest first; the one at work says so.
+    const rows = within(dialog).getAllByRole("button").filter((button) => button.getAttribute("aria-label")?.includes(" · "));
+    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual(["general-purpose · Find the tests", "Explore · Map the backend"]);
+    expect(rows[0].textContent).toContain("at work");
+    expect(rows[1].textContent).not.toContain("at work");
+    fireEvent.click(rows[1]);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    const step = onOpen.mock.calls[0][0];
+    expect(step).toMatchObject({ token: "00000000000000a1", task: "Map the backend", role: "Explore", scrollTop: -1, at: "2026-09-24T10:00:02Z" });
+    expect(siblingPosition(step)).toEqual({ index: 0, count: 2 });
+  });
+
+  it("opens the session in Focus on that subagent, and back lands on the main chat", async () => {
+    // The reader's own choice is Terminal; the pick still reads in Focus and
+    // leaves that choice alone.
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "terminal");
+    vi.stubGlobal("fetch", subagentFetch());
+    const step = openSubagent([], { token: "00000000000000b2", task: "Find the tests", role: "general-purpose" }, MAIN.entries as TranscriptEntry[], -1)[0];
+    render(<Terminal tab={TAB} back={() => {}} subagent={step} />);
+    await settle();
+    within(screen.getByTestId("subagent-transcript")).getByText("Tests live beside the code.");
+    const bar = screen.getByRole("navigation", { name: "Subagent" });
+    within(bar).getByText("2 of 2");
+    fireEvent.click(within(bar).getByRole("button", { name: "Back to the main conversation" }));
+    await settle();
+    screen.getByTestId("session-transcript");
+    expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBe("terminal");
   });
 });

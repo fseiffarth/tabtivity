@@ -11,6 +11,7 @@ import { ColorSheet } from "./ColorSheet";
 import { NewTabSheet, type NewTabLaunch } from "./NewTabSheet";
 import { useProjectInbox } from "../components/ProjectInbox";
 import { PromptsSheet } from "./PromptsSheet";
+import { SubagentsSheet } from "./SubagentsSheet";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { AgentStatusMark } from "../components/AgentStatusPill";
@@ -24,6 +25,7 @@ import { GripHint } from "./Home";
 import { isUntested } from "../../../src/lib/untested";
 import { describeFailure } from "../connection";
 import { installFocusSwipe } from "../terminal/focusSwipe";
+import type { SubagentStep } from "../terminal/subagents";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -128,7 +130,7 @@ function withoutClosed(detail: ProjectDetail, closed: Map<string, number>): Proj
     : { ...detail, tabs: detail.tabs.filter((row) => !closed.has(row.id)) };
 }
 
-export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean }) => void }) {
+export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [creating, setCreating] = useState(false);
@@ -185,6 +187,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * colouring is how a row of look-alike sessions is told apart, which is as
    * true of five shells as of five agents. */
   const [colorTab, setColorTab] = useState<TabRow | null>(null);
+  /** The tab whose subagent pill was tapped: its subagents are listed. */
+  const [subagentsTab, setSubagentsTab] = useState<TabRow | null>(null);
   /** The tab whose ✕ was pressed. The sheet asks before anything is closed: the
    *  button sits a thumb-width from the one that opens the terminal, and the
    *  answer is worth reading — closing leaves the session running. */
@@ -520,9 +524,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {tab.agent_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
             {tab.agent_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             <AgentModeMarks tab={tab} />
-            <SubagentCount tab={tab} />
             {/* Which worktree the agent works in, when it is not the project folder. */}
             <WorktreeMark tab={tab} />
+            {/* A tap lists the session's subagents; picking one opens the
+                session on that subagent's own conversation. */}
+            <SubagentCount tab={tab} onOpen={tab.available && tab.kind === "agent" ? () => setSubagentsTab(tab) : undefined} />
             {/* How long the current turn has run, or the last one took. */}
             {tab.kind === "agent" && <TurnDuration tab={tab} />}
             {/* Scheduling lives out here beside the tab, not inside the
@@ -590,6 +596,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
     />}
+    {subagentsTab && <SubagentsSheet tab={subagentsTab} onClose={() => setSubagentsTab(null)} onOpen={(step) => { const row = subagentsTab; setSubagentsTab(null); terminal(row, { subagent: step }); }} />}
     {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={(tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); }} />}
     {colorTab && <ColorSheet
       tab={colorTab}

@@ -778,14 +778,17 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
 }
 
 /** `pickModel`: the tab card's model was tapped, so the session opens with its
- * model picker already up — once, as soon as the session has drawn. */
-export function Terminal({ tab, project, back, pickModel = false, signInTab: openedToSignIn = false, openTab }: {
+ * model picker already up — once, as soon as the session has drawn.
+ * `subagent`: one was picked off the tab card's subagent list, so the session
+ * opens in Focus on that subagent's own conversation. */
+export function Terminal({ tab, project, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
   project?: string;
   back: () => void;
   pickModel?: boolean;
+  subagent?: SubagentStep;
   /** The tab exists only to sign its CLI in (`src/lib/agents/signInLaunch.ts`):
    * the sign-in sheet is up from the start. The row says so too
    * (`TabRow.sign_in`), for a sign-in tab reached any other way. */
@@ -852,7 +855,10 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const [sendFailed, setSendFailed] = useState(false);
   /** `initialView`: the reader's choice for this agent, else Focus on an
    * agent tab and Terminal on a shell. */
-  const [view, setView] = useState<TerminalViewChoice>(() => initialView(tab));
+  // A subagent picked off the card is read in Focus, whatever the reader's
+  // choice — without making it their choice.
+  const subagentTab = useRef(subagent && tab.kind === "agent" ? tab.id : null);
+  const [view, setView] = useState<TerminalViewChoice>(() => subagentTab.current === tab.id ? "focus" : initialView(tab));
   /** Whether `view` is the reader's own choice. Only a default Focus falls
    * back to Terminal when the stored session does not read; a Focus the
    * reader picked stays, reading the screen instead. */
@@ -1184,7 +1190,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_STEP);
   /** The subagents walked into from the stored session (`subagents.ts`),
    * outermost first; empty while the session itself is read. */
-  const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>([]);
+  const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>(() => subagent && tab.kind === "agent" ? [subagent] : []);
   const [subagentListOpen, setSubagentListOpen] = useState(false);
   const openStep = subagentPath[subagentPath.length - 1];
   /** The last read of a subagent's conversation, and whose it is — a read
@@ -1231,7 +1237,7 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   const statusRef = useRef<SessionStatus | null>(null);
 
   useEffect(() => {
-    setView(initialView(tab));
+    setView(subagentTab.current === tab.id ? "focus" : initialView(tab));
     viewChosen.current = readTerminalView(viewAgentOf(tab)) !== null;
     // The draft is the tab's, not the screen's: this tab's own half-typed
     // message, which is nothing at all for most of them (`drafts.ts`).
@@ -2160,8 +2166,14 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   /** The open subagent's conversation, once read. */
   const subToken = openStep?.token;
   const subTranscript = subRead && subRead.token === subToken ? subRead.transcript : null;
-  // Another tab is another session, with subagents of its own.
-  useEffect(() => { setSubagentPath([]); }, [tab.id]);
+  // Another tab is another session, with subagents of its own. Not on the
+  // first run: a subagent picked off the card is open from the start.
+  const pathTab = useRef(tab.id);
+  useEffect(() => {
+    if (pathTab.current === tab.id) return;
+    pathTab.current = tab.id;
+    setSubagentPath([]);
+  }, [tab.id]);
   useEffect(() => { setSubagentListOpen(false); }, [tab.id]);
   useEffect(() => { setSubagentNote(""); }, [tab.id, subToken]);
   useEffect(() => { setSubLimit(TRANSCRIPT_STEP); }, [subToken]);
@@ -2221,9 +2233,11 @@ export function Terminal({ tab, project, back, pickModel = false, signInTab: ope
   /** Back up one level, to where that conversation was scrolled. */
   const subagentUp = () => {
     if (!openStep) return;
-    restoreScroll.current = openStep.scrollTop;
-    atBottomRef.current = false;
-    setAtBottom(false);
+    // Opened from outside the chat (the card's list): up lands on its newest turn.
+    const fromOutside = openStep.scrollTop < 0;
+    restoreScroll.current = fromOutside ? null : openStep.scrollTop;
+    atBottomRef.current = fromOutside;
+    setAtBottom(fromOutside);
     setSubagentPath((path) => path.slice(0, -1));
   };
   const subagentSibling = (delta: number) => {

@@ -211,10 +211,16 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 /* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
    lower-case words rather than a tag — it is a count, not a mode. */
 .agent-subagent-count { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 7px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 14%, transparent); color:#a99cff; font-size:.7rem; font-weight:700; line-height:1; white-space:nowrap; }
+/* On a project card the pill lists the subagents (`SubagentsSheet`): above
+   the card's stretched opener, like the model chip. */
+button.agent-subagent-count { position:relative; z-index:1; margin:0; font-family:inherit; }
+button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 30%, transparent); }
 .agent-turn-time { flex:0 0 auto; color:#a9b0c6; font-size:.72rem; font-weight:600; font-variant-numeric:tabular-nums; line-height:1; white-space:nowrap; }
 .agent-turn-time.running { color:#8fd3a8; }
 .agent-worktree { display:inline-block; flex:0 1 auto; min-width:0; max-width:100%; padding:3px 7px; border:1px solid #3e5a4f; border-radius:6px; background:#22332d; color:#9fd8bf; font-size:.7rem; font-weight:600; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .agent-worktree-branch { color:#7fae99; font-weight:500; }
+.subagents-sheet .subagent-index-list { max-height:none; padding-top:0; }
+.subagents-sheet .subagent-index-list small em { color:#a99cff; font-style:normal; }
 .card.in-plan,.project-screen .tab-card.in-plan { border-color:#7b6ee0; }
 .card.in-goal,.project-screen .tab-card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.tab-card.in-plan.has-tab-color,.card.in-goal.has-tab-color,.tab-card.in-goal.has-tab-color { border-left-color:var(--tab-color); }

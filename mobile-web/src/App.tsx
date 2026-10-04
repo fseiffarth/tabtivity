@@ -21,6 +21,7 @@ import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
 import { SECTION_GLYPH } from "./glyphs";
+import type { SubagentStep } from "./terminal/subagents";
 /** The bundle this phone is running, on every splash: a connect that hangs or
  * fails is exactly when the reader needs to know whether the phone picked up
  * the desktop's current bundle or is booting a stale one out of the cache. */
@@ -218,7 +219,7 @@ export function App() {
   const [, refreshTags] = useState(0);
   const [tab, setTab] = useState<Tab>("projects");
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
-  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean } | null>(null);
+  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** Why the last attempt failed, shown on the `unavailable` splash. */
   const [unavailable, setUnavailable] = useState<{ reason: UnavailableReason; detail?: string }>({ reason: "unreachable" });
@@ -484,7 +485,7 @@ export function App() {
     // (`onVisibility`) locked the app again seconds after it was unlocked.
   }, [reset, auth]);
 
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false) => setTerminal({ project, tab: next, pickModel, signIn });
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep) => setTerminal({ project, tab: next, pickModel, signIn, subagent });
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
@@ -540,6 +541,7 @@ export function App() {
     tab={terminal.tab}
     project={terminal.project}
     pickModel={terminal.pickModel}
+    subagent={terminal.subagent}
     signInTab={terminal.signIn}
     openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn)}
     back={() => setTerminal(null)}
@@ -549,7 +551,7 @@ export function App() {
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
           : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn)} />
+            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent)} />
             : <Home
               open={(id) => setProjectView({ kind: "project", id })}
               // Straight into the session, leaving the Projects tab on its

@@ -17,13 +17,18 @@ export function AgentModeMarks({ tab }: { tab: Pick<TabRow, "agent_plan" | "agen
 }
 
 /** How many subagents the tab's session has at work right now, as the
- *  desktop counts them off its transcript. Nothing while none are. */
-export function SubagentCount({ tab }: { tab: Pick<TabRow, "agent_subagents"> }) {
+ *  desktop counts them off its transcript. Nothing while none are. With
+ *  `onOpen` the pill is a button: a tap lists the session's subagents
+ *  (`SubagentsSheet`). */
+export function SubagentCount({ tab, onOpen }: { tab: Pick<TabRow, "agent_subagents" | "label">; onOpen?: () => void }) {
   const t = useT();
   const count = tab.agent_subagents ?? 0;
   if (count <= 0) return null;
+  const text = count === 1 ? t("mobile.project.subagentsOne") : t("mobile.project.subagents", { count });
   return <>
-    <small className="agent-subagent-count" title={t("mobile.project.subagentsTitle")}>{count === 1 ? t("mobile.project.subagentsOne") : t("mobile.project.subagents", { count })}</small>
+    {onOpen
+      ? <button type="button" className="agent-subagent-count" onClick={onOpen} aria-haspopup="dialog" aria-label={t("mobile.project.subagentsOpen", { label: tab.label })} title={t("mobile.project.subagentsOpen", { label: tab.label })}>{text}</button>
+      : <small className="agent-subagent-count" title={t("mobile.project.subagentsTitle")}>{text}</small>}
     {isUntested("mobile.project.subagentCount") && <span className="untested">{t("mobile.newTab.untested")}</span>}
   </>;
 }
