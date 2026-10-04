@@ -104,12 +104,13 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
 
     // Another tab's file stays in the gallery; this chat's two, newest first.
     const rows = within(index).getAllByRole("listitem");
-    expect(rows.map((row) => row.querySelector("strong")?.textContent)).toEqual(["board.md", "photo.jpg"]);
-    expect(rows[0].textContent).toContain("From the agent");
-    expect(rows[1].textContent).toContain("From you");
+    expect(rows.map((row) => row.querySelector(".sent-index-name")?.textContent)).toEqual(["board.md", "photo.jpg"]);
+    expect(rows[0].querySelector(".sent-index-from")?.textContent).toBe("Agent");
+    expect(rows[1].querySelector(".sent-index-from")?.textContent).toBe("You");
+    expect(within(rows[0]).getByRole("button").getAttribute("aria-label")).toContain("From the agent");
     expect(rows[1].querySelector("img")?.getAttribute("src")).toBe(`/api/v1/tabs/tab-7/inbox/${PHOTO}`);
 
-    fireEvent.click(within(rows[1]).getByRole("button", { name: "Open photo.jpg" }));
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Open photo.jpg · From you" }));
     expect(screen.getByRole("dialog", { name: "photo.jpg" })).toBeTruthy();
   });
 

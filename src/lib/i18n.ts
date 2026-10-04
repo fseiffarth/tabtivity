@@ -937,6 +937,8 @@ export const enSource = {
   "mobile.sentIndex.toggle": "Files ({count})",
   "mobile.sentIndex.fromAgent": "From the agent",
   "mobile.sentIndex.fromYou": "From you",
+  "mobile.sentIndex.tagAgent": "Agent",
+  "mobile.sentIndex.tagYou": "You",
   "mobile.subagent.earlier": "Find subagents in earlier turns",
   "mobile.outbox.count": "{count} files in the project's outbox",
   "mobile.outbox.galleryOpen": "Files from the agent ({count})",

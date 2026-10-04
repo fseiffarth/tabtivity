@@ -30,11 +30,11 @@ export function sentFiles(outbox: readonly OutboxFile[], leaves: readonly string
 }
 
 /**
- * The conversation's files as a list, beside the subagent index in the sticky
- * strip over the chat: shut, one chip with the count; open, a row per file —
- * its picture or badge, its name, who sent it, when and how big. A tap opens
- * the file full screen (the chat's own viewer for its side), or saves bytes
- * the phone cannot show. The pictures stay where they were sent in the chat;
+ * The conversation's files, beside the subagent index in the sticky strip over
+ * the chat: shut, one chip with the count; open, a grid of tiles the strip's
+ * full width — each file's picture or badge tagged with who sent it, its name,
+ * when and how big. A tap opens the file full screen (the chat's own viewer for
+ * its side), or saves bytes the phone cannot show. The pictures stay where they were sent in the chat;
  * this is the way to one without scrolling the conversation for it.
  */
 export function SentFilesIndex({ tabId, files, open, onToggle, onOpen }: {
@@ -61,15 +61,16 @@ export function SentFilesIndex({ tabId, files, open, onToggle, onOpen }: {
         const { file, from } = row;
         const name = sentName(file);
         const content = <>
-          {file.kind.startsWith("image/")
-            ? <img className="sent-index-thumb" src={urlOf(row)} alt="" loading="lazy" decoding="async" />
-            : <span className="sent-index-thumb" aria-hidden="true">{fileBadge(file.kind)}</span>}
-          <span className="sent-index-text">
-            <strong>{name}</strong>
-            <small><b className={from}>{t(from === "agent" ? "mobile.sentIndex.fromAgent" : "mobile.sentIndex.fromYou")}</b> · {ageLabel(Math.max(0, now - file.modified))} · {sizeLabel(file.size)}</small>
+          <span className="sent-index-thumb">
+            {file.kind.startsWith("image/")
+              ? <img src={urlOf(row)} alt="" loading="lazy" decoding="async" />
+              : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
+            <b className={`sent-index-from ${from}`}>{t(from === "agent" ? "mobile.sentIndex.tagAgent" : "mobile.sentIndex.tagYou")}</b>
           </span>
+          <span className="sent-index-name">{name}</span>
+          <small>{ageLabel(Math.max(0, now - file.modified))} · {sizeLabel(file.size)}</small>
         </>;
-        const label = t("mobile.outbox.open", { name });
+        const label = `${t("mobile.outbox.open", { name })} · ${t(from === "agent" ? "mobile.sentIndex.fromAgent" : "mobile.sentIndex.fromYou")}`;
         return <li key={`${from}:${file.name}`}>
           {viewableFile(file)
             ? <button type="button" onClick={() => onOpen(row)} aria-label={label} title={name}>{content}</button>

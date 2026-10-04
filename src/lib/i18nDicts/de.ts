@@ -869,6 +869,8 @@ export const dict: Dict = {
   "mobile.sentIndex.toggle": "Dateien ({count})",
   "mobile.sentIndex.fromAgent": "Vom Agenten",
   "mobile.sentIndex.fromYou": "Von dir",
+  "mobile.sentIndex.tagAgent": "Agent",
+  "mobile.sentIndex.tagYou": "Du",
   "mobile.subagent.earlier": "Subagents in früheren Nachrichten suchen",
   "mobile.outbox.count": "{count} Dateien im Projektausgang",
   "mobile.outbox.galleryOpen": "Dateien vom Agenten ({count})",
