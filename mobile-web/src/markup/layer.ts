@@ -24,7 +24,8 @@ export type Mark = InkMark | BoxMark | TextMark;
 export type PageLayer = { size: [number, number]; marks: Mark[] };
 /** The marks earlier Submits sent, drawn dimmed and never sent again
  * (`docs/pdf_markup_rounds_plan.md` §2.1), and how many rounds went out.
- * Only the reader removes them (eraser, Clear page, Clear sent marks). */
+ * Only the reader removes them (eraser, Clear page, Clear all marks, Clear
+ * sent marks). */
 export type SentLayer = { pages: Record<number, PageLayer>; rounds: number };
 /** Every marked page, by 1-based page number. `pages` holds only the marks
  * not yet sent — what notes, undo and Submit see — so sent marks never go
@@ -323,6 +324,45 @@ export function stylusErases(event: { pointerType: string; button: number; butto
 export function clearPage(layer: Layer, n: number, sent = false): Layer {
   const next = layer.pages[n] ? withPage(layer, n, { ...layer.pages[n], marks: [] }) : layer;
   return sent ? eraseSent(next, n, (marks) => (marks.length ? [] : null)) : next;
+}
+
+/** Clears every page's unsent marks — with `sent`, the sent ones too, as
+ * Clear page does for one page (**Clear all marks**). The layer itself when
+ * there is nothing to clear, so the history takes no empty step. */
+export function clearAll(layer: Layer, sent = false): Layer {
+  const pending = Object.keys(layer.pages).length > 0;
+  const dropSent = sent && layer.sent !== undefined && Object.keys(layer.sent.pages).length > 0;
+  if (!pending && !dropSent) return layer;
+  return dropSent ? { ...layer, pages: {}, sent: { ...layer.sent!, pages: {} } } : { ...layer, pages: {} };
+}
+
+/** Where one mark starts: its 1-based page and the top of its bounding box,
+ * in that page's own units (`PageLayer.size`). */
+export type MarkAnchor = { page: number; y: number };
+
+/** The top of a mark's bounding box. */
+function markTop(mark: Mark): number {
+  if (mark.kind === "ink") return mark.points.reduce((top, [, y]) => Math.min(top, y), Infinity);
+  if (mark.kind === "box") return Math.min(mark.rect[1], mark.rect[1] + mark.rect[3]);
+  return mark.at[1];
+}
+
+/** Every mark on show, in reading order — page by page, top to bottom — as
+ * the stops Previous / Next mark step through: the unsent marks always, the
+ * sent ones with `sent` (as the view shows them). */
+export function markAnchors(layer: Layer, sent = false): MarkAnchor[] {
+  const anchors: MarkAnchor[] = [];
+  const collect = (pages: Record<number, PageLayer>) => {
+    for (const [n, page] of Object.entries(pages)) {
+      for (const mark of page.marks) {
+        const y = markTop(mark);
+        if (Number.isFinite(y)) anchors.push({ page: Number(n), y });
+      }
+    }
+  };
+  collect(layer.pages);
+  if (sent && layer.sent) collect(layer.sent.pages);
+  return anchors.sort((a, b) => a.page - b.page || a.y - b.y);
 }
 
 /** Page `n`'s sent marks through `erase` — tried as cuts first, then whole

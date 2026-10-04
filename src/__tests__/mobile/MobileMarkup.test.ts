@@ -9,8 +9,8 @@ import {
   acceptFrameMessage, acceptToFrame, MAX_RENDER_WIDTH,
 } from "../../../mobile-web/src/markup/frameProtocol";
 import {
-  addMark, canAdd, canReplace, clearPage, commit, cutStroke, EMPTY_LAYER, eraseAlong, eraseAt, finishStroke, inkWidth, isEmpty, isLayer, LIMITS, markedPages,
-  moveNote, noteAt, redo, replaceMark, simplify, startHistory, stylusErases, undo, type InkMark, type Layer, type Mark, type TextMark,
+  addMark, canAdd, canReplace, clearAll, clearPage, commit, cutStroke, EMPTY_LAYER, eraseAlong, eraseAt, finishStroke, inkWidth, isEmpty, isLayer, LIMITS, markAnchors, markedPages,
+  markSent, moveNote, noteAt, redo, replaceMark, simplify, startHistory, stylusErases, undo, type InkMark, type Layer, type Mark, type TextMark,
 } from "../../../mobile-web/src/markup/layer";
 import { drawPage, strokePieces, type Paint } from "../../../mobile-web/src/markup/rasterize";
 import { clearLayer, layerKey, loadLayer, saveLayer, stale, type LayerBackend } from "../../../mobile-web/src/markup/store";
@@ -36,6 +36,36 @@ describe("markup layer", () => {
     history = commit(history, addMark(history.present, 2, SIZE, ink([[1, 1, 0.5]])));
     expect(history.future).toEqual([]);
     expect(isEmpty(EMPTY_LAYER)).toBe(true);
+  });
+
+  it("clears every page at once — the sent marks too only when asked — as one undoable step", () => {
+    let layer: Layer = addMark(EMPTY_LAYER, 1, SIZE, ink([[10, 10, 0.5], [20, 20, 0.5]]));
+    layer = markSent(layer);
+    layer = addMark(layer, 2, SIZE, { kind: "box", color: "yellow", rect: [5, 5, 50, 10] });
+    layer = addMark(layer, 4, SIZE, ink([[1, 1, 0.5]]));
+    const pending = clearAll(layer);
+    expect(markedPages(pending)).toEqual([]);
+    expect(pending.sent).toEqual(layer.sent);
+    const all = clearAll(layer, true);
+    expect(markedPages(all)).toEqual([]);
+    expect(all.sent?.pages).toEqual({});
+    // Nothing to clear: the same layer, so the history takes no empty step.
+    expect(clearAll(EMPTY_LAYER, true)).toBe(EMPTY_LAYER);
+    expect(clearAll(pending)).toBe(pending);
+    let history = commit(startHistory(), layer);
+    history = commit(history, clearAll(history.present, true));
+    expect(undo(history).present).toBe(layer);
+  });
+
+  it("lists every shown mark's top in reading order, sent ones only when shown", () => {
+    let layer: Layer = addMark(EMPTY_LAYER, 3, SIZE, ink([[10, 400, 0.5], [20, 380.5, 0.5], [30, 420, 0.5]]));
+    layer = markSent(layer);
+    layer = addMark(layer, 2, SIZE, { kind: "text", color: "black", at: [40, 600], size: 12, text: "late" });
+    layer = addMark(layer, 2, SIZE, { kind: "box", color: "yellow", rect: [5, 120, 50, -20] });
+    layer = addMark(layer, 3, SIZE, { kind: "text", color: "red", at: [5, 50], size: 12, text: "top" });
+    expect(markAnchors(layer)).toEqual([{ page: 2, y: 100 }, { page: 2, y: 600 }, { page: 3, y: 50 }]);
+    expect(markAnchors(layer, true)).toEqual([{ page: 2, y: 100 }, { page: 2, y: 600 }, { page: 3, y: 50 }, { page: 3, y: 380.5 }]);
+    expect(markAnchors(EMPTY_LAYER, true)).toEqual([]);
   });
 
   it("finishes a stroke on the page, rounded and simplified", () => {

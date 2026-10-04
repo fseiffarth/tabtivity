@@ -32,11 +32,11 @@ import {
   inboxFileUrl,
   listDesktopImages,
   listOutbox,
-  listProjectFiles,
   MAX_INBOX_FILE,
   openSignInTab,
   pickPhoneFiles,
   recoverSession,
+  refreshProjectFile,
   editHeldPrompt,
   holdPrompt,
   reportSentPrompt,
@@ -3618,12 +3618,11 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
   const markupAskRow = !markupAskFile && project ? markupAsk?.file_row : undefined;
   const askedScope = useMemo<ViewerScope | undefined>(() => (project ? { files: project } : undefined), [project]);
   /** Mark up's Reload for that file: its folder listed again, for a fresh row. */
-  const refreshAskedFile = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
-    if (!project || !askedFile) return null;
-    const fresh = await listProjectFiles(project, askedFile.folder);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
-    return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
-  }, [project, askedFile]);
+  const askedFolder = askedFile?.folder;
+  const refreshAskedFile = useMemo(
+    () => (project ? refreshProjectFile(project, askedFolder) : async () => null),
+    [project, askedFolder],
+  );
   const openAskedRow = (row: PhoneMarkupFile) => setAskedFile({
     file: { name: row.name, kind: row.kind, size: row.size, modified: row.modified, ref: row.token },
     place: row.place,

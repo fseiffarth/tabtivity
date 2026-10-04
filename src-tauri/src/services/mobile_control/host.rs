@@ -4152,7 +4152,8 @@ async fn outbox_list(
     };
     // Every file is listed — the gallery holds them all — but only what this
     // tab sent is marked `from_tab`, the files its chat shows.
-    outbox_listing(project.root.clone(), tab.session_id.clone()).await
+    let rows = row_seal(&state, project);
+    outbox_listing(project.root.clone(), tab.session_id.clone(), rows).await
 }
 
 /// `GET /api/v1/projects/{project_id}/outbox` — the same listing by the
@@ -4165,20 +4166,61 @@ async fn project_outbox_list(
     if let Err(error) = authenticate(&headers, &state) {
         return error;
     }
-    match project_drop_box_root(&state, &project_id) {
-        Ok(root) => outbox_listing(root, None).await,
-        Err(error) => error,
+    let catalog = match catalog(&state) {
+        Ok(catalog) => catalog,
+        Err(error) => return error,
+    };
+    let Some(project) = catalog.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    let rows = row_seal(&state, project);
+    outbox_listing(project.root.clone(), None, rows).await
+}
+
+/// One outbox file as a listing hands it to the phone: the file's own fields
+/// and, for a copy `tabtivity-send` made of a project file the files drawer
+/// would list, that file's sealed row — the phone opens the project file in
+/// its place, so its marks are the drawer's (one layer per project file, not
+/// one per copy). The path the copy recorded never crosses.
+#[derive(Serialize)]
+struct ListedOutboxFile {
+    #[serde(flatten)]
+    file: outbox::OutboxFile,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_row: Option<MobileMarkupFile>,
+}
+
+/// What a listing seals a copy's project file with — the project's raw id
+/// and the host key — or `None` unless the drawer is open (`files_open`) and
+/// the scope is a real project: the same gates as `markup_banner_files`.
+fn row_seal(state: &HostState, project: &super::discovery::ResolvedProject) -> Option<(String, Vec<u8>)> {
+    if project.public.kind != ScopeKind::Project || !files::files_open(&state.config.state_dir) {
+        return None;
     }
+    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    Some((project.raw_id.clone(), key))
 }
 
 async fn outbox_listing(
     root: PathBuf,
     tab: Option<String>,
+    rows: Option<(String, Vec<u8>)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    // A directory walk that opens every candidate: off the connection executor.
-    let listed = tokio::task::spawn_blocking(move || outbox::list_for(&root, tab.as_deref()))
-        .await
-        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    // A directory walk that opens every candidate, and each copy's project
+    // file proven and sealed: off the connection executor.
+    let listed = tokio::task::spawn_blocking(move || {
+        let files = outbox::list_for(&root, tab.as_deref())?;
+        Ok::<_, outbox::OutboxError>(files
+            .into_iter()
+            .map(|file| {
+                let file_row = rows.as_ref().zip(file.source.as_deref())
+                    .and_then(|((raw_id, key), rel)| file_row(&root, rel, key, raw_id));
+                ListedOutboxFile { file, file_row }
+            })
+            .collect::<Vec<_>>())
+    })
+    .await
+    .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
     match listed {
         Ok(files) => (StatusCode::OK, Json(json!({ "files": files }))),
         Err(error) => outbox_error(error),
@@ -4628,29 +4670,38 @@ async fn markup_banner_files(state: &HostState, tab_id: &str, raw_id: &str, path
     let root = project.root.clone();
     let raw_id = raw_id.to_string();
     let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
-    let outbox_dir = format!("{}/", outbox::OUTBOX_DIR);
     tokio::task::spawn_blocking(move || {
         paths
             .into_iter()
-            .map(|path| {
-                let rel = path.filter(|rel| !rel.starts_with(&outbox_dir))?;
-                let entry = files::entry(&root, &rel, &key, &raw_id)?;
-                let place = rel.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default();
-                let folder = (!place.is_empty()).then(|| files::seal(&key, &raw_id, &place));
-                Some(MobileMarkupFile {
-                    token: entry.token,
-                    name: entry.name,
-                    kind: entry.kind.to_string(),
-                    size: entry.size,
-                    modified: entry.modified,
-                    folder,
-                    place,
-                })
-            })
+            .map(|path| file_row(&root, &path?, &key, &raw_id))
             .collect()
     })
     .await
     .unwrap_or_default()
+}
+
+/// The project file at root-relative `rel` as the files drawer would row it
+/// (`files::entry`, which proves it: a regular file reached with no link on
+/// the way, nothing the browser hides), sealed with its folder's token and
+/// the folder trail the phone keys its markup layer by. `None` for anything
+/// the drawer would not list, and for the outbox — a copy there is the
+/// gallery's, not a project file.
+fn file_row(root: &std::path::Path, rel: &str, key: &[u8], raw_id: &str) -> Option<MobileMarkupFile> {
+    if rel.starts_with(&format!("{}/", outbox::OUTBOX_DIR)) {
+        return None;
+    }
+    let entry = files::entry(root, rel, key, raw_id)?;
+    let place = rel.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default();
+    let folder = (!place.is_empty()).then(|| files::seal(key, raw_id, &place));
+    Some(MobileMarkupFile {
+        token: entry.token,
+        name: entry.name,
+        kind: entry.kind.to_string(),
+        size: entry.size,
+        modified: entry.modified,
+        folder,
+        place,
+    })
 }
 
 /// `POST /api/v1/tabs/{tab_id}/markup/answer` — `{ ask_id, answers: [{
@@ -7892,6 +7943,59 @@ mod tests {
             .send(get_as(&format!("{list}/plot.png"), "not-a-session"))
             .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A copy `tabtivity-send` made of a project file carries that file's
+    /// sealed row — only with the drawer on, and only for a file the drawer
+    /// would list — so the phone marks up the project file, not the copy.
+    #[tokio::test]
+    async fn an_outbox_copy_carries_its_project_files_row_while_the_drawer_is_on() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(37)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().unwrap().to_string();
+        let routes = [format!("/api/v1/tabs/{tab_id}/outbox"), format!("/api/v1/projects/{project_id}/outbox")];
+
+        std::fs::create_dir_all(host.root.join("docs/paper")).unwrap();
+        std::fs::write(host.root.join("docs/paper/draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        let dir = host.root.join(outbox::OUTBOX_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("20261004-120000-draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        std::fs::write(dir.join(".20261004-120000-draft.pdf.src"), "docs/paper/draft.pdf").unwrap();
+        // Its project file gone: no row.
+        std::fs::write(dir.join("20261004-120001-gone.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        std::fs::write(dir.join(".20261004-120001-gone.pdf.src"), "docs/gone.pdf").unwrap();
+        let row_of = |body: &str, name: &str| {
+            json(body)["files"].as_array().unwrap().iter().find(|file| file["name"] == name).unwrap().get("file_row").cloned()
+        };
+
+        // Drawer off: the listing as before, no row and no path.
+        for route in &routes {
+            let (status, _, body) = host.send(get_as(route, &cookie)).await;
+            assert_eq!(status, StatusCode::OK, "answered: {body}");
+            assert_eq!(row_of(&body, "20261004-120000-draft.pdf"), None, "{body}");
+            assert!(!body.contains("docs/") && !body.contains("source"), "{body}");
+        }
+
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let key = host.state.auth.lock().unwrap().host_key().to_vec();
+        for route in &routes {
+            let (status, _, body) = host.send(get_as(route, &cookie)).await;
+            assert_eq!(status, StatusCode::OK, "answered: {body}");
+            let row = row_of(&body, "20261004-120000-draft.pdf").expect("a row");
+            assert_eq!(row["name"], "draft.pdf", "{body}");
+            assert_eq!(row["place"], "docs/paper");
+            assert_eq!(row["kind"], "application/pdf");
+            assert_eq!(files::unseal(&key, RAW_PROJECT, row["token"].as_str().unwrap()).as_deref(), Some("docs/paper/draft.pdf"));
+            assert_eq!(files::unseal(&key, RAW_PROJECT, row["folder"].as_str().unwrap()).as_deref(), Some("docs/paper"));
+            assert_eq!(row_of(&body, "20261004-120001-gone.pdf"), None, "{body}");
+            assert!(!body.contains("\"source\"") && !body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+        }
     }
 
     #[tokio::test]

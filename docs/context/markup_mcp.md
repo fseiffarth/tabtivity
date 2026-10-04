@@ -96,7 +96,12 @@ phone or desktop with its own instruction keeps it unchanged.
   token, the folder trail of names — `files::entry`, no link on the way). Its markup view sends its own source (`?source=files:<token>`
   or `outbox:<leaf>`), which the sidecar resolves through
   `markup::validate_source` (the file browser's gates, then unseal) before
-  asking the window. Answers are shaped in the sidecar before the window is
+  asking the window. An outbox *copy* of a project file reaches the view as
+  that file: `tabtivity-send` records where it copied from (`.<leaf>.src`,
+  `outbox.rs`), the outbox listing turns that into the same sealed `file_row`
+  (`host.rs` `file_row`, same gates), and `OutboxViewer` opens the project
+  file in its place — one phone-side layer per project file (`files:` key),
+  wherever it is opened from, so its asks use `files:<token>` too. Answers are shaped in the sidecar before the window is
   asked (16 KiB body, ≤ 6 indices each < 6, Other… ≤ 500, no control
   characters).
 - **Headless: `desktop_unavailable`.** The asks live in the window's

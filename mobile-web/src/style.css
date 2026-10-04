@@ -1568,6 +1568,9 @@ span.files-close { background:transparent; }
 .markup-toolbar > button[aria-expanded="true"] { background:#2b3043; }
 .markup-color-well span { display:block; width:24px; height:24px; border-radius:50%; box-shadow:0 0 0 2px #e6e9f2; }
 .markup-toolbar-rule { flex:0 0 auto; width:1px; height:24px; margin:0 3px; background:#34384a; }
+/* Previous / Next mark: the toolbar's look stood on end, at the palette's
+   right edge (reading too, where it is the palette's only part). */
+.markup-toolbar.markup-jump { align-self:flex-end; flex-direction:column; border-radius:24px; }
 .markup-popover { border-radius:16px; padding:6px; }
 .markup-colors { display:flex; gap:10px; padding:6px 10px; border-radius:999px; }
 .markup-color { width:32px; height:32px; padding:0; border:2px solid transparent; border-radius:50%; }

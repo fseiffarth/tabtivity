@@ -5,9 +5,12 @@
  * and keeps the layer; one that succeeds keeps the view open, the round's
  * marks kept as sent. A note dragged with the note tool moves. And the
  * viewer offers Mark up only where there is a chat to send to — on a PDF
- * switched on and off in the same view.
+ * switched on and off in the same view, by the pen without a tap, and opened
+ * in the mode this phone chose. ⋯ Clear all marks is one undoable step, ↑ ↓
+ * step from mark to mark, and an outbox copy of a project file opens that
+ * file's own layer (`docs/mobile_markup_shared_layer_plan.md`).
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMPTY_LAYER, addMark, type Layer } from "../../../mobile-web/src/markup/layer";
@@ -16,6 +19,7 @@ const store = vi.hoisted(() => ({
   loadLayer: vi.fn(),
   saveLayer: vi.fn(async () => true),
   clearLayer: vi.fn(async () => true),
+  moveLayer: vi.fn(async () => true),
 }));
 vi.mock("../../../mobile-web/src/markup/store", async (original) => ({
   ...(await original<typeof import("../../../mobile-web/src/markup/store")>()),
@@ -168,6 +172,69 @@ describe("MarkupView", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("clears every page from ⋯ in one step that Undo brings back", async () => {
+    desktop();
+    const both = addMark(LAYER, 2, [800, 600], { kind: "box", color: "yellow", rect: [5, 5, 50, 10] });
+    store.loadLayer.mockResolvedValue({ layer: both, fingerprint: { size: PICTURE.size, modified: PICTURE.modified }, saved: 1 });
+    store.saveLayer.mockClear();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(false));
+    const lastSaved = () => {
+      const calls = store.saveLayer.mock.calls as unknown as [string, Layer][];
+      return calls[calls.length - 1]?.[1];
+    };
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: /Clear all marks/ }));
+    // The menu closes; every page is empty, saved as such.
+    expect(screen.queryByRole("button", { name: /Clear all marks/ })).toBeNull();
+    await waitFor(() => expect(lastSaved()?.pages).toEqual({}));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect((screen.getByRole("button", { name: /Clear all marks/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(lastSaved()).toEqual(both));
+  });
+
+  it("steps from mark to mark down and up a PDF's pages", async () => {
+    const PDF = { name: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000 };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([37, 80, 68, 70]), { status: 200 })));
+    const scrollTo = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: scrollTo });
+    // Two tall pages (600 × 1800): 336 CSS pixels wide here, 1008 high, the
+    // second from 1020. A stroke low on page 1, a box high on page 2.
+    let layer = addMark(EMPTY_LAYER, 1, [600, 1800], { kind: "ink", color: "red", width: 2, points: [[10, 900, 0.5], [40, 950, 0.5]] });
+    layer = addMark(layer, 2, [600, 1800], { kind: "box", color: "yellow", rect: [5, 300, 50, 10] });
+    store.loadLayer.mockResolvedValue({ layer, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
+    const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} reader={{ actions: null }} />);
+    const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
+    const say = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, origin: "null", source: frame }));
+    vi.spyOn(frame, "postMessage").mockImplementation(() => {});
+    act(() => { say({ type: "ready" }); say({ type: "meta", pages: [{ w: 600, h: 1800 }, { w: 600, h: 1800 }] }); });
+    const previous = await screen.findByRole("button", { name: "Previous mark" }) as HTMLButtonElement;
+    const next = screen.getByRole("button", { name: "Next mark" }) as HTMLButtonElement;
+    const scroller = container.querySelector(".markup-scroller") as HTMLDivElement;
+    const scrollAt = (top: number) => {
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, writable: true, value: top });
+      fireEvent.scroll(scroller);
+    };
+    // Each mark goes to a third of the way down the 640 pixel view.
+    const first = 900 * 336 / 600 - 640 / 3;
+    const second = 1020 + 300 * 336 / 600 - 640 / 3;
+    expect(previous.disabled).toBe(true);
+    fireEvent.click(next);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: first });
+    scrollAt(first);
+    expect(previous.disabled).toBe(true);
+    fireEvent.click(next);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: second });
+    scrollAt(second);
+    expect(next.disabled).toBe(true);
+    fireEvent.click(previous);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: first });
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  });
+
   it("keeps Submit off while nothing is marked", async () => {
     desktop();
     store.loadLayer.mockResolvedValue(null);
@@ -214,6 +281,45 @@ describe("OutboxViewer · Mark up", () => {
     expect(screen.getByRole("link", { name: "Save" })).toBeTruthy();
     expect(screen.getByRole("dialog")).toBe(view);
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("opens an outbox copy's project file, with its layer, and moves the copy's marks over once", async () => {
+    const calls = desktop();
+    writeMarkupOpen("reading");
+    const copy = { name: "20261004-120000-paper.pdf", original: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000,
+      file_row: { token: "sealed-file", name: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_780_000_000, folder: "sealed-folder", place: "docs" } };
+    const filesKey = "p1:files:docs/paper.pdf";
+    const copyKey = "p1:outbox:20261004-120000-paper.pdf";
+    store.loadLayer.mockImplementation(async (key: string) => (key === copyKey ? { layer: LAYER, fingerprint: { size: 9_000, modified: 1_790_000_000 }, saved: 1 } : null));
+    store.moveLayer.mockClear();
+    store.saveLayer.mockClear();
+    const markup = { tabId: "t1", projectId: "p1", onSend: (): MarkupSend => "sent" };
+    render(<OutboxViewer scope={{ tab: "t1" }} file={copy} onClose={() => {}} markup={markup} />);
+    // The project file's bytes, through the drawer's door — not the copy's.
+    await waitFor(() => expect(calls.some((call) => call.url === "/api/v1/projects/p1/files/raw?f=sealed-file")).toBe(true));
+    expect(calls.some((call) => call.url.includes("/outbox/"))).toBe(false);
+    // Same size: stamped with the project file, so it is not called changed.
+    await waitFor(() => expect(store.moveLayer).toHaveBeenCalledWith(copyKey, filesKey, { size: 9_000, modified: 1_780_000_000 }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Mark up paper.pdf" }).classList.contains("has-marks")).toBe(true));
+    expect(screen.queryByText(/changed since/)).toBeNull();
+    // Save still hands over the copy.
+    expect(screen.getByRole("link", { name: "Save" }).getAttribute("href")).toBe("/api/v1/tabs/t1/outbox/20261004-120000-paper.pdf?download=1");
+    cleanup();
+
+    // The project file has marks of its own: they win, nothing is merged.
+    store.loadLayer.mockImplementation(async () => ({ layer: LAYER, fingerprint: { size: 9_000, modified: 1_780_000_000 }, saved: 1 }));
+    store.moveLayer.mockClear();
+    render(<OutboxViewer scope={{ tab: "t1" }} file={copy} onClose={() => {}} markup={markup} />);
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalledWith(filesKey));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Mark up paper.pdf" }).classList.contains("has-marks")).toBe(true));
+    expect(store.moveLayer).not.toHaveBeenCalled();
+    cleanup();
+
+    // No project behind the tab: the copy as before.
+    store.loadLayer.mockClear();
+    render(<OutboxViewer scope={{ tab: "t1" }} file={copy} onClose={() => {}} markup={{ ...markup, projectId: "tab:t1" }} />);
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalledWith("tab:t1:outbox:20261004-120000-paper.pdf"));
+    store.loadLayer.mockReset();
   });
 
   it("draws a PDF inside the app, read only, with ✕ closing back to it", () => {

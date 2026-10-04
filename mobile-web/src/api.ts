@@ -915,6 +915,11 @@ export interface OutboxFile {
   /** What the file is fetched by when that is not its name: a project file's
    * sealed token (`ProjectFileEntry.token`). Outbox files have none. */
   ref?: string;
+  /** An outbox copy's project file — the one `tabtivity-send` copied — sealed
+   * as the files drawer rows it. Only while the drawer is switched on, and
+   * only for a file it would list: the viewer then reads and marks up that
+   * file itself, so its marks are the drawer's (`OutboxViewer`). */
+  file_row?: PhoneMarkupFile;
 }
 
 /** The name a file is shown, saved and shared as: an outbox leaf without the
@@ -1019,6 +1024,18 @@ export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: bo
 export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
   const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
+}
+
+/** Mark up's Reload for a project file opened by its sealed row rather than
+ * from the drawer (the Focus banner's question, an outbox copy's origin):
+ * its folder (`folder`, the row's token; none at the root) listed again, for
+ * the file's fresh token, size and time — `null` when it is gone. */
+export function refreshProjectFile(projectId: string, folder: string | undefined): (file: OutboxFile) => Promise<OutboxFile | null> {
+  return async (file) => {
+    const fresh = await listProjectFiles(projectId, folder);
+    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
+  };
 }
 
 /** `DELETE …/outbox/{name}` — drop one of those files. The sidecar deletes

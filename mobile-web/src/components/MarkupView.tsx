@@ -4,7 +4,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { ApiError, holdPrompt, MAX_INBOX_FILE, sentName, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure } from "../markup/frameProtocol";
 import {
-  addMark, canAdd, canReplace, clampToPage, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markedPages,
+  addMark, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markedPages,
   markSent, moveNote, noteAt, redo, replaceMark, round, startHistory, undo,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
 } from "../markup/layer";
@@ -50,6 +50,10 @@ const DRAG_SLOP = 8;
 const ERASE_PX = 12;
 /** How strongly the marks of earlier rounds show — sent, never sent again. */
 const SENT_ALPHA = 0.35;
+/** How far, CSS pixels, a mark must lie past where the view is for Previous /
+ * Next mark to go to it — so a repeated tap moves on rather than landing on
+ * the mark it just showed. */
+const JUMP_SLACK = 4;
 
 /** The round pill's words, by phase; `finished` takes the PDF check's. */
 const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
@@ -255,7 +259,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, onSend, newTab, agent = "idle", refresh, onClose, reader }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, onSend, newTab, agent = "idle", refresh, onClose, reader, adoptFrom }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -280,6 +284,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Opens reading: the head's actions (Save, Share), and what went wrong
    * with one of them. */
   reader?: { actions: ReactNode; alert?: string };
+  /** The layer key of the outbox copy this project file is shown in place of
+   * (`OutboxViewer`): marks drawn on the copy before the swap move over once,
+   * while the project file has none of its own — never merged into some. */
+  adoptFrom?: string;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
@@ -450,7 +458,19 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!canMark) return;
     if (movedTo.current === key) { movedTo.current = null; return; }
     let live = true;
-    void loadLayer(key).then((stored) => {
+    void loadLayer(key).then(async (stored) => {
+      if (stored === null && adoptFrom && adoptFrom !== key) {
+        // The copy's marks, once: moved under this file's key (`moveLayer`
+        // takes the record off the copy). Stamped with this file when the
+        // copy was the same size, else with the copy's — so a file that has
+        // changed since says so.
+        const copy = await loadLayer(adoptFrom);
+        if (copy && copy !== "unavailable" && (!isEmpty(copy.layer) || hasSent(copy.layer))) {
+          const now = fingerprintRef.current;
+          const fingerprint = copy.fingerprint.size === now.size ? now : copy.fingerprint;
+          if (await moveLayer(adoptFrom, key, fingerprint)) stored = { ...copy, fingerprint };
+        }
+      }
       if (!live) return;
       if (stored === "unavailable") setStorage("unsaved");
       else if (stored) {
@@ -465,7 +485,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       setLoaded(true);
     });
     return () => { live = false; };
-  }, [canMark, key]);
+  }, [canMark, key, adoptFrom]);
 
   // Saved as each change lands — never before the saved one was read.
   useEffect(() => {
@@ -1125,10 +1145,35 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     setReloading(false);
   };
 
+
+  /** Previous / Next mark (a PDF's): every mark on show as the scroll top
+   * that puts it on the reading line a third of the way down — the line
+   * `showPin` scrolls a question's words to — clamped to the pages' extent,
+   * so a mark the scroll cannot bring that far up still lands exactly. */
+  const markStops = useMemo(() => {
+    if (!isPdf || !sizes) return [];
+    const last = Math.max(0, contentHeight - viewHeight);
+    return markAnchors(layer, showSent).flatMap(({ page, y }) => {
+      const spot = places[page - 1];
+      const size = sizes[page - 1];
+      return spot && size ? [Math.min(last, Math.max(0, spot.top + y * cssWidth / size[0] - viewHeight / 3))] : [];
+    });
+  }, [isPdf, sizes, layer, showSent, places, cssWidth, contentHeight, viewHeight]);
+  const previousStop = [...markStops].reverse().find((top) => top < scrollTop - JUMP_SLACK);
+  const nextStop = markStops.find((top) => top > scrollTop + JUMP_SLACK);
+  const jumpShown = canMark && loaded && markStops.length > 0;
+  /** Scrolls exactly as `showPin` does. */
+  const jumpTo = (top: number | undefined) => {
+    const element = scroller.current;
+    if (top === undefined || !element) return;
+    if (typeof element.scrollTo === "function") element.scrollTo({ top });
+    else element.scrollTop = top;
+  };
   const empty = isEmpty(history.present);
   const untested = (reading && isUntested("mobile.outbox.pdf")) || (isPdf && isUntested("mobile.markup.frame"))
     || (canMark && (isUntested("mobile.markup") || isUntested("mobile.markup.send") || isUntested("mobile.markup.native")
-      || (reading && (isUntested("mobile.markup.penSwitch") || isUntested("mobile.markup.opensIn")))));
+      || (reading && (isUntested("mobile.markup.penSwitch") || isUntested("mobile.markup.opensIn")))))
+    || (adoptFrom !== undefined && isUntested("mobile.markup.sharedLayer")) || (jumpShown && isUntested("mobile.markup.jump"));
   const roundUntested = isUntested("mobile.markup.rounds");
   /** Reload is offered once anything went out from here, or was before. */
   const canReload = isPdf && canMark && (submitted !== null || sentShown);
@@ -1307,7 +1352,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         </div>
       </div>}
     </div>
-    {(marking || cardShown) && <div className="markup-palette">
+    {(marking || cardShown || jumpShown) && <div className="markup-palette">
+      {/* Previous / Next mark: a pair at the right edge, above the card and
+          the tools — the toolbar's own look, stood on end. */}
+      {jumpShown && <div className="markup-toolbar markup-jump" role="group" aria-label={t("mobile.markup.jump")}>
+        <button onClick={() => jumpTo(previousStop)} disabled={previousStop === undefined}
+          aria-label={t("mobile.markup.prevMark")} title={t("mobile.markup.prevMark")}><span aria-hidden="true">↑</span></button>
+        <button onClick={() => jumpTo(nextStop)} disabled={nextStop === undefined}
+          aria-label={t("mobile.markup.nextMark")} title={t("mobile.markup.nextMark")}><span aria-hidden="true">↓</span></button>
+      </div>}
       {cardShown && <MarkupQuestionsCard tabId={givenTabId} asks={asks} online={online} focus={questionFocus}
         onShowPin={isPdf ? showPin : undefined} onAnswered={questionsAnswered} onClosed={dropAsk} onRefresh={refreshAsks} onBusy={setQuestionBusy} />}
       {marking && <>
@@ -1319,6 +1372,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <button onClick={() => { setHistory((now) => commit(now, clearPage(now.present, current, showSent))); setPopover(null); }}
           disabled={!history.present.pages[current] && !(showSent && history.present.sent?.pages[current])}>
           <span aria-hidden="true">⌧</span>{t("mobile.markup.clearPage", { n: current })}
+        </button>
+        {/* Every page at once — one step, so Undo brings it all back. */}
+        <button onClick={() => { setHistory((now) => commit(now, clearAll(now.present, showSent))); setPopover(null); }}
+          disabled={isEmpty(history.present) && !(showSent && hasSent(history.present))}>
+          <span aria-hidden="true">⌧</span>{t("mobile.markup.clearAll")}
+          {isUntested("mobile.markup.clearAll") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </button>
         {penMode !== "none" && <button role="switch" aria-checked={penMode === "pen"} onClick={togglePenOnly}>
           <span aria-hidden="true">✎</span>{t("mobile.markup.penOnly")}<span className="markup-switch" aria-hidden="true" />

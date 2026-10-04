@@ -265,6 +265,7 @@ pub fn describe(root: &Path, names: &[&str]) -> Result<Vec<OutboxFile>, OutboxEr
                 size: meta.len(),
                 modified: meta.modified().map(outbox::unix_secs).unwrap_or(0),
                 from_tab: false,
+                source: None,
             })
         })
         .collect())

@@ -9,6 +9,11 @@
 //! `.<leaf>.tab`, holding the tab's `$TABTIVITY_TAB_UID`: that tab's chat shows
 //! the file, every other tab's gallery still lists it. The marker is hidden by
 //! the leaf alphabet and never crosses — the listing says only `from_tab`.
+//!
+//! A second marker, `.<leaf>.src`, holds the project-relative path of the file
+//! the leaf is a copy of. It never crosses either: the host turns it into the
+//! files drawer's sealed row (`host.rs` `file_row`), so the phone opens — and
+//! marks up — the project file itself rather than this copy.
 
 use std::{
     fs,
@@ -31,6 +36,8 @@ const MAX_NAME: usize = 120;
 pub const SNIFF_BYTES: usize = 4096;
 /// The longest tab id a sender marker may hold (a UUID is 36).
 const MAX_TAB_ID: u64 = 64;
+/// The longest project-relative path an origin marker may hold.
+const MAX_SOURCE: u64 = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OutboxFile {
@@ -48,6 +55,12 @@ pub struct OutboxFile {
     /// names that tab): the one chat that shows it. Absent when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub from_tab: bool,
+    /// The project-relative path `tabtivity-send` recorded the file was sent
+    /// from (`.<leaf>.src`), shape-checked only — `files::entry` proves it
+    /// before anything of it reaches the phone, and then only as a sealed
+    /// row. Never serialised: the raw path does not cross.
+    #[serde(skip)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -227,6 +240,28 @@ fn sender(dir: &Path, name: &str) -> Option<String> {
         .then(|| id.to_string())
 }
 
+/// The origin marker of leaf `name`: `.<name>.src`.
+fn source_name(name: &str) -> String {
+    format!(".{name}.src")
+}
+
+/// The project-relative path `tabtivity-send` recorded for `name`: read
+/// without following a link, bounded, one non-empty line, never a path into
+/// the outbox itself (a copy of a copy has no project file behind it). Only
+/// its shape is checked here; whoever uses it proves it against the tree.
+fn source(dir: &Path, name: &str) -> Option<String> {
+    let (file, meta) = open_regular(&dir.join(source_name(name)))?;
+    if meta.len() == 0 || meta.len() > MAX_SOURCE {
+        return None;
+    }
+    let mut rel = String::new();
+    file.take(MAX_SOURCE).read_to_string(&mut rel).ok()?;
+    let rel = rel.trim();
+    let outbox = format!("{OUTBOX_DIR}/");
+    (!rel.is_empty() && !rel.contains('\n') && !rel.starts_with('/') && !rel.starts_with(&outbox) && rel != OUTBOX_DIR)
+        .then(|| rel.to_string())
+}
+
 /// `name` without the `YYYYMMDD-HHMMSS-` stamps `tabtivity-send` and the phone
 /// inbox put in front of a leaf to keep it unique — a photo the phone sent and
 /// an agent sent back carries two. A leaf that is nothing but stamps stays.
@@ -280,6 +315,7 @@ pub fn list_for(root: &Path, tab: Option<&str>) -> Result<Vec<OutboxFile>, Outbo
         let from_tab = tab.is_some_and(|tab| sender(&dir, &name).as_deref() == Some(tab));
         images.push(OutboxFile {
             original: sent_name(&name).to_string(),
+            source: source(&dir, &name),
             name,
             kind,
             size: meta.len(),
@@ -344,9 +380,10 @@ pub fn remove(root: &Path, name: &str) -> Result<(), OutboxError> {
     // `dir` is canonical and `name` is a validated leaf, so this is the file
     // `probe` just held open; `remove_file` never follows a link.
     fs::remove_file(dir.join(name)).map_err(|e| OutboxError::Io(e.to_string()))?;
-    // Its sender marker goes with it, or a later file of the same leaf would
-    // inherit it.
+    // Its sender and origin markers go with it, or a later file of the same
+    // leaf would inherit them.
     let _ = fs::remove_file(dir.join(marker_name(name)));
+    let _ = fs::remove_file(dir.join(source_name(name)));
     Ok(())
 }
 
@@ -580,6 +617,47 @@ mod tests {
         touch(&box_dir, "plot.png", PNG, Duration::from_secs(1));
         std::os::unix::fs::symlink(outside.path().join("id"), box_dir.join(".plot.png.tab")).unwrap();
         assert!(!list_for(dir.path(), Some("aaaa-1")).unwrap()[0].from_tab);
+    }
+
+    #[test]
+    fn the_origin_marker_names_the_project_file_and_never_crosses() {
+        let dir = tempfile::tempdir().unwrap();
+        let box_dir = outbox(dir.path());
+        touch(&box_dir, "20261004-120000-paper.pdf", b"%PDF-1.7\n", Duration::from_secs(4));
+        fs::write(box_dir.join(".20261004-120000-paper.pdf.src"), "docs/paper/paper.pdf\n").unwrap();
+        touch(&box_dir, "plain.png", PNG, Duration::from_secs(3));
+        // A copy of a copy, a path from the root, a second line: no origin.
+        touch(&box_dir, "again.png", PNG, Duration::from_secs(2));
+        fs::write(box_dir.join(".again.png.src"), format!("{OUTBOX_DIR}/plain.png")).unwrap();
+        touch(&box_dir, "rooted.png", PNG, Duration::from_secs(1));
+        fs::write(box_dir.join(".rooted.png.src"), "/etc/passwd").unwrap();
+        touch(&box_dir, "lines.png", PNG, Duration::from_secs(0));
+        fs::write(box_dir.join(".lines.png.src"), "a.png\nb.png").unwrap();
+
+        let listed = list(dir.path()).unwrap();
+        let source = |name: &str| listed.iter().find(|f| f.name == name).unwrap().source.clone();
+        assert_eq!(source("20261004-120000-paper.pdf").as_deref(), Some("docs/paper/paper.pdf"));
+        for none in ["plain.png", "again.png", "rooted.png", "lines.png"] {
+            assert_eq!(source(none), None, "{none}");
+        }
+        let json = serde_json::to_string(&listed).unwrap();
+        assert!(!json.contains("docs/paper") && !json.contains("source"), "{json}");
+
+        // Deleting the file drops its origin marker too.
+        assert_eq!(remove(dir.path(), "20261004-120000-paper.pdf"), Ok(()));
+        assert!(!box_dir.join(".20261004-120000-paper.pdf.src").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_origin_marker_names_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("rel"), "docs/paper.pdf").unwrap();
+        let box_dir = outbox(dir.path());
+        touch(&box_dir, "paper.pdf", b"%PDF-1.7\n", Duration::from_secs(1));
+        std::os::unix::fs::symlink(outside.path().join("rel"), box_dir.join(".paper.pdf.src")).unwrap();
+        assert_eq!(list(dir.path()).unwrap()[0].source, None);
     }
 
     #[test]

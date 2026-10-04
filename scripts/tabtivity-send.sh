@@ -29,7 +29,7 @@ lock=$outbox/.send-lock
 mkdir "$lock" 2>/dev/null || fail 5 'Another send or clear is in progress; retry shortly.'
 stage=
 cleanup() {
-    if [ -n "$stage" ]; then rm -f "$stage/data" "$stage/tab"; rmdir "$stage"; fi
+    if [ -n "$stage" ]; then rm -f "$stage/data" "$stage/tab" "$stage/src"; rmdir "$stage"; fi
     rmdir "$lock"
 }
 trap cleanup 0
@@ -48,6 +48,21 @@ fi
 # Stage a bounded copy in a private directory. Only complete files become
 # visible; hard-link publication never overwrites, including concurrent sends.
 stage=$(mktemp -d "$outbox/.send-XXXXXXXX") || fail 3 'Cannot stage the file.'
+nl='
+'
+# Where a sent file lives in the project, root-relative, for its origin
+# marker: the phone then opens the project file itself, and its marks are the
+# files drawer's. Empty for a file outside the project, an outbox file sent
+# again, or a path the marker could not hold.
+origin_of() {
+    origin_dir=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 0
+    case "$origin_dir/" in "$root"/*) ;; *) return 0 ;; esac
+    origin_rel=${origin_dir#"$root"}
+    origin_rel=${origin_rel#/}
+    origin_rel=${origin_rel:+$origin_rel/}${1##*/}
+    case "$origin_rel" in .tabtivity/*|*"$nl"*) return 0 ;; esac
+    printf '%s' "$origin_rel"
+}
 send_one() {
     name=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | sed 's/^\.*//')
     [ -n "$name" ] || name=file
@@ -69,11 +84,12 @@ send_one() {
     stamp=$(date +%Y%m%d-%H%M%S)
     leaf=$stamp-$name
     n=0
-    # A leaf with neither a file nor a sender marker. The lock keeps other
-    # sends out, so the marker below is ours; it lands before the file does,
-    # so the phone never lists this file unclaimed.
+    # A leaf with neither a file nor a sender or origin marker. The lock keeps
+    # other sends out, so the markers below are ours; they land before the
+    # file does, so the phone never lists this file unclaimed.
     while [ -e "$outbox/$leaf" ] || [ -L "$outbox/$leaf" ] \
-        || [ -e "$outbox/.$leaf.tab" ] || [ -L "$outbox/.$leaf.tab" ]; do
+        || [ -e "$outbox/.$leaf.tab" ] || [ -L "$outbox/.$leaf.tab" ] \
+        || [ -e "$outbox/.$leaf.src" ] || [ -L "$outbox/.$leaf.src" ]; do
         n=$((n + 1))
         leaf=$stamp-${name%"$ext"}-$n$ext
     done
@@ -82,8 +98,18 @@ send_one() {
         marker=$outbox/.$leaf.tab
         printf '%s' "$tab" > "$stage/tab" && mv "$stage/tab" "$marker" || fail 4 'Cannot publish the file.'
     fi
+    # The project file this is a copy of (`origin_of`): `.<leaf>.src`.
+    origin=
+    if [ -n "${2:-}" ]; then
+        origin=$outbox/.$leaf.src
+        if ! { printf '%s' "$2" > "$stage/src" && mv "$stage/src" "$origin"; }; then
+            [ -z "$marker" ] || rm -f "$marker"
+            fail 4 'Cannot publish the file.'
+        fi
+    fi
     if ! link "$stage/data" "$outbox/$leaf" 2>/dev/null; then
         [ -z "$marker" ] || rm -f "$marker"
+        [ -z "$origin" ] || rm -f "$origin"
         fail 4 'Cannot publish the file.'
     fi
     magic=$(od -An -tx1 -N12 "$stage/data" | tr -d ' \n')
@@ -124,6 +150,6 @@ else
     for source in "$@"; do
         [ -f "$source" ] || fail 4 'Only regular files can be sent.'
         head -c 25165825 < "$source" > "$stage/data" || fail 4 'Cannot read the file.'
-        send_one "${source##*/}"
+        send_one "${source##*/}" "$(origin_of "$source")"
     done
 fi
