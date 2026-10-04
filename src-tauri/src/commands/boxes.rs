@@ -57,16 +57,29 @@ fn read_boxes_at(path: &Path) -> Result<BoxesList, String> {
 /// unchanged one keeps its own, a new one starts at 1 — whatever number the
 /// caller's copy carried. Every writer in this module goes through here, so
 /// the revisions move consistently.
-fn write_boxes(boxes: &BoxesList) -> Result<(), String> {
+fn write_boxes(boxes: &BoxesList) -> Result<BoxesList, String> {
     let path = boxes_path();
     let _lock = storage::FileLock::exclusive(&path).map_err(|e| e.to_string())?;
     let current = read_boxes_at(&path)?;
     write_boxes_stamped(&path, &current, boxes)
 }
 
-fn write_boxes_stamped(path: &Path, current: &BoxesList, boxes: &BoxesList) -> Result<(), String> {
+/// [`write_boxes`], answering box `box_id` as the file now holds it — its
+/// revision stamped. A command's answer is the copy the window's store keeps
+/// and later sends back whole through `save_boxes`; the pre-write copy's
+/// revision would get that save refused as stale.
+fn write_boxes_answering(boxes: &BoxesList, box_id: &str) -> Result<ProjectBox, String> {
+    write_boxes(boxes)?
+        .into_iter()
+        .find(|b| b.id == box_id)
+        .ok_or_else(|| format!("box '{box_id}' not found"))
+}
+
+/// Write `boxes` stamped against `current`, and answer what was written.
+fn write_boxes_stamped(path: &Path, current: &BoxesList, boxes: &BoxesList) -> Result<BoxesList, String> {
     let stamped = stamp_box_revs(current, boxes);
-    storage::write_json_atomic(path, &stamped).map_err(|e| e.to_string())
+    storage::write_json_atomic(path, &stamped).map_err(|e| e.to_string())?;
+    Ok(stamped)
 }
 
 fn stamp_box_revs(current: &BoxesList, next: &BoxesList) -> BoxesList {
@@ -104,7 +117,7 @@ fn save_boxes_at(path: &Path, boxes: &BoxesList) -> Result<(), String> {
             }
         }
     }
-    write_boxes_stamped(path, &current, boxes)
+    write_boxes_stamped(path, &current, boxes).map(|_| ())
 }
 
 /// Gap-spaced next position among boxes (mirrors `projects::next_position`).
@@ -573,9 +586,9 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
         app_mobile_devices: None,
         extra: Default::default(),
     };
-    boxes.push(new_box.clone());
-    write_boxes(&boxes)?;
-    Ok(new_box)
+    let id = new_box.id.clone();
+    boxes.push(new_box);
+    write_boxes_answering(&boxes, &id)
 }
 
 #[tauri::command]
@@ -589,9 +602,7 @@ pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
     // open) it stays authoritative; a later rename does not move it (documented
     // limitation — "rename + move folder" is a Phase 4 nicety).
     target.name = name;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
 #[tauri::command]
@@ -605,7 +616,7 @@ pub fn delete_box(box_id: String) -> Result<(), String> {
     // The box folder (if any) is intentionally NOT deleted — it may hold user
     // data placed there. Clearing each former member's `box_id` is done
     // frontend-side via `save_projects` (a required step of `deleteBox`).
-    write_boxes(&boxes)
+    write_boxes(&boxes).map(|_| ())
 }
 
 /// Add `project_id` to every box whose **name** matches one of `names`, and
@@ -665,9 +676,7 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
         .find(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.member_ids = member_ids;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
 /// Switch a box's Tabtivity Mobile reach (#31aa) — the box-scope twin of
@@ -709,9 +718,7 @@ pub fn set_box_mobile_access(
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.app_mobile_access = enabled;
     target.app_mobile_devices = devices;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
 // ── Box folder + relations (Phase 2 groundwork) ─────────────────────────────
@@ -825,9 +832,7 @@ pub fn set_box_relations(
         .find(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.relations = relations;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -898,6 +903,24 @@ mod tests {
         renamed[0].name = "Z2".into();
         save_boxes_at(&path, &renamed).unwrap();
         assert_eq!(read_boxes_at(&path).unwrap()[0].rev, 1);
+    }
+
+    /// A single-box command answers the box as written, revision stamped: the
+    /// window's store keeps that copy, so its next whole-list save must pass.
+    #[test]
+    fn a_write_answers_the_stamped_revisions_a_later_save_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        save_boxes_at(&path, &vec![mk_box("a", &[])]).unwrap();
+        let held = read_boxes_at(&path).unwrap();
+        let mut next = held.clone();
+        next[0].app_mobile_access = true;
+        let answered = write_boxes_stamped(&path, &held, &next).unwrap();
+        assert_eq!(answered, read_boxes_at(&path).unwrap());
+        assert_eq!(answered[0].rev, held[0].rev + 1);
+        let mut kept = answered.clone();
+        kept[0].name = "A2".into();
+        save_boxes_at(&path, &kept).expect("the answered copy is not stale");
     }
 
     #[test]

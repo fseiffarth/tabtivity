@@ -733,14 +733,7 @@ pub fn export_project_blocking(
         format: BUNDLE_FORMAT,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: storage::iso_now(),
-        entry: {
-            // Phone access stays on this machine (`mobile_keys`).
-            let mut entry = entry.clone();
-            for key in mobile_keys() {
-                entry.extra.remove(&key);
-            }
-            entry
-        },
+        entry: exported_entry(&entry),
         project: project_json,
         session,
         time_days,
@@ -941,6 +934,16 @@ fn mobile_keys() -> Vec<String> {
     ];
     keys.extend(crate::brand::PAIR.legacy(crate::brand::Name::MOBILE_ACCESS_KEY));
     keys
+}
+
+/// The registry entry as a bundle carries it: phone access stays on this
+/// machine ([`mobile_keys`]).
+fn exported_entry(entry: &ProjectEntry) -> ProjectEntry {
+    let mut entry = entry.clone();
+    for key in mobile_keys() {
+        entry.extra.remove(&key);
+    }
+    entry
 }
 
 /// Drop [`mobile_keys`] from an entry (or `project.json`) body.
@@ -1691,6 +1694,23 @@ mod tests {
         assert_eq!(entry, serde_json::json!({ "id": "p", "directory": "/d" }));
         drop_mobile_keys(&mut Value::Null);
         assert!(mobile_keys().iter().all(|key| key.contains("_mobile_")));
+    }
+
+    /// Nor does an exported one: the bundle's entry leaves both Mobile keys
+    /// behind and keeps the rest.
+    #[test]
+    fn exported_entries_carry_no_mobile_access() {
+        let entry = entry_with(
+            "p",
+            &[
+                ("directory", Value::String("/d".into())),
+                (crate::brand::MOBILE_ACCESS_KEY, Value::Bool(true)),
+                (crate::brand::MOBILE_DEVICES_KEY, serde_json::json!(["a".repeat(27)])),
+            ],
+        );
+        let exported = exported_entry(&entry);
+        assert_eq!(exported.extra.keys().collect::<Vec<_>>(), ["directory"]);
+        assert_eq!(entry.extra.len(), 3, "the registry's own entry is untouched");
     }
 
     fn entry_with(id: &str, extra: &[(&str, Value)]) -> ProjectEntry {

@@ -8805,6 +8805,40 @@ mod tests {
         assert_eq!(project_and_tab(&host, &other).await.0, project_id);
     }
 
+    /// The desktop's activity answer covers every scope; each phone gets only
+    /// the rows of the scopes it may reach — a working tab in a project open
+    /// to one phone is on that phone's list and not on the other's.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_activity_list_carries_a_scoped_projects_tabs_only_to_its_phones() {
+        let host = Fixture::with_project();
+        let (listed, listed_id) = host.pair_device(&signing_key(85)).await;
+        let (other, _) = host.pair_device(&signing_key(86)).await;
+        limit_to(&host, "projects.json", &[&listed_id]);
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let desktop = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let request: DesktopRequest = admin::read_frame(&mut stream).await.expect("request");
+                assert!(matches!(request, DesktopRequest::Activity { .. }), "unexpected request {request:?}");
+                let response: DesktopResponse = serde_json::from_value(json!({
+                    "status": "activity",
+                    "statuses": [{ "tmux_session": format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123"), "status": "working" }],
+                }))
+                .expect("activity");
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+            }
+        });
+        let (status, _, body) = host.send(get_as("/api/v1/activity", &listed)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["tabs"].as_array().expect("tabs").len(), 1, "{body}");
+        let (status, _, body) = host.send(get_as("/api/v1/activity", &other)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["tabs"], json!([]), "{body}");
+        desktop.await.expect("fake desktop");
+    }
+
     /// A box's own list scopes the box scope the same way.
     #[tokio::test]
     async fn a_box_open_to_one_phone_is_unlisted_for_the_other() {
