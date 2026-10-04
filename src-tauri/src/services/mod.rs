@@ -43,6 +43,8 @@ pub mod fence_scope;
 // with the host file by in-place writes — a file bind mount pins an inode, and
 // Claude rotates that file by rename.
 pub mod agent_auth;
+// Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
+pub mod agent_api_keys;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;

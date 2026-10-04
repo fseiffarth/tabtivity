@@ -171,7 +171,15 @@ and one reply out).
   global `update-environment` (fixed slots from 8630), so tmux copies them
   from the client's *environment* (0400) into the new session — and marks
   them removed for a tab that has none, so no tab inherits the token of the
-  tab that happened to start the tmux server.
+  tab that happened to start the tmux server. The same slots carry the other
+  per-tab secrets (`tmux_local::SECRET_ENV`): the schedule, git, help and
+  markup MCP tokens, `COPILOT_GITHUB_TOKEN`, and from 8636 the provider API
+  keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+  `MISTRAL_API_KEY`, `services::agent_api_keys`). Those stay set on the user's
+  default tmux server, so a later session there takes the variables from its
+  client or drops them. A provider key is never sent through a tmux < 3.2 at
+  all (`launch_prep` drops it). After a fenced command the pane's trailing
+  login shell — unfenced — starts with `env -u` over every one of them.
 - **Hidden from fenced project agents.** Bubblewrap gives each fenced agent its
   own pid namespace and `/proc`, so it cannot read the root agent's environment
   or argv.

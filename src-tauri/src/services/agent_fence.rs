@@ -1263,9 +1263,11 @@ pub fn wrap_pty_options_bwrap(
         return Err(fence_unavailable_message());
     }
     let bwrap = crate::paths::system_executable("bwrap").ok_or_else(fence_unavailable_message)?;
-    // Before `opts.cmd` becomes bwrap below.
+    // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let mounts = agent_state_mounts(scope_id, &opts.env);
     let support_mounts = mounts.clone();
     let mut extra_ro = configured_read_only_paths();
@@ -1317,6 +1319,9 @@ pub fn wrap_pty_options_bwrap(
     if copilot {
         crate::services::copilot_auth::inject_env(&mut opts.env);
     }
+    // A provider API key, for a CLI the user switched on (`agent_api_keys`).
+    // bwrap keeps the environment and the launcher `exec`s, so it reaches the CLI.
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, &mut opts.env);
     Ok(())
 }
 
@@ -1533,6 +1538,9 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
+    // Before `opts.args` becomes sandbox-exec's below.
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let inputs = sandbox_exec_inputs(opts, roots, scope_id, scope_home);
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1562,6 +1570,9 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
+    // A provider API key, for a CLI the user switched on (`agent_api_keys`).
+    // sandbox-exec passes the environment through.
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, &mut opts.env);
     Ok(())
 }
 

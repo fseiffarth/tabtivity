@@ -32,6 +32,64 @@ fn settings_agent_remote_control() -> bool {
         .unwrap_or(true)
 }
 
+/// The stored provider API keys for an unfenced local agent (the Host session,
+/// a fence-less platform), where `opts.cmd` is still the CLI. A fenced spawn
+/// gets them inside `agent_fence`'s wrap, which the shell-tab shim calls too.
+fn inject_api_keys(opts: &mut PtyOptions) {
+    let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
+    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, &mut opts.env);
+}
+
+/// An API key never rides a tmux argv. tmux older than 3.2 has no
+/// `new-session -e`, so a tmux-wrapped tab's secrets would be on the
+/// world-readable client argv (#864); a long-lived provider key is not
+/// accepted there. Drop every key variable the fence added (those not in
+/// `before`) — the CLI falls back to its own login. Names only in the log.
+#[cfg(unix)]
+fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions, before: &[&'static str]) {
+    if opts.tmux_session.is_none()
+        || !crate::services::tmux_local::tmux_available()
+        || crate::services::tmux_local::tmux_supports_session_env()
+    {
+        return;
+    }
+    let dropped = drop_added_api_keys(&mut opts.env, before);
+    if !dropped.is_empty() {
+        eprintln!(
+            "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
+            dropped.join(", "),
+            opts.id
+        );
+    }
+}
+
+/// Remove the provider key variables `env` has and `before` did not.
+#[cfg(any(unix, test))]
+fn drop_added_api_keys(
+    env: &mut std::collections::HashMap<String, String>,
+    before: &[&'static str],
+) -> Vec<&'static str> {
+    crate::services::agent_api_keys::ENV_VARS
+        .iter()
+        .copied()
+        .filter(|k| !before.contains(k) && env.remove(*k).is_some())
+        .collect()
+}
+
+/// Whether this `claude` spawn runs here, as a session, on the user's stored
+/// Anthropic key (`agent_api_keys`): Claude switched on in Manage CLIs → API
+/// keys, a key saved, and a local, non-container, non-local-model tab. Reads
+/// the keychain only when Claude is switched on.
+fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
+    if remote_agent_run || opts.sandbox || crate::services::agent_api_keys::is_local_model(opts) {
+        return false;
+    }
+    let settings: crate::schema::Settings =
+        storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
+    crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
+}
+
 /// Whether Claude agent tabs of `project_id` should spawn with
 /// `--remote-control` (O#59): a project's own override, from the
 /// `projects.json` entry's flattened `extra["remote_control"]` — like
@@ -499,12 +557,15 @@ pub async fn prepare(
     // the Claude phone app, and the root scope's rights must not be reachable
     // from a phone by any route (it is absent from Tabtivity Mobile's catalog too).
     // Nor for a subcommand (`claude auth login`, a sign-in tab), which refuses
-    // the session's flags.
+    // the session's flags. Nor for a local tab that gets the user's Anthropic
+    // API key (`agent_api_keys`): Claude refuses Remote Control under API-key
+    // auth and shows a failure notice instead.
     if opts.cmd == "claude"
         && !root_agent
         && !crate::services::agent_fence::runs_subcommand(&opts.args)
         && resolve_agent_remote_control(opts.project_id.as_deref())
         && !opts.args.iter().any(|a| a == "--remote-control")
+        && !local_claude_keyed(&opts, remote_agent_run)
     {
         opts.args.push("--remote-control".to_string());
     }
@@ -634,6 +695,14 @@ pub async fn prepare(
     // paths the fence argv bound when fenced, everything when the agent runs
     // unfenced (it already reads everything).
     let mut root_projects = crate::services::root_mcp::ProjectsGrant::All;
+    // The key variables the tab brought itself, so the tmux < 3.2 rule below
+    // drops only what the fence added.
+    #[cfg(unix)]
+    let keys_before: Vec<&'static str> = crate::services::agent_api_keys::ENV_VARS
+        .iter()
+        .copied()
+        .filter(|k| opts.env.contains_key(*k))
+        .collect();
     if let Some(roots) = fence_roots.as_deref() {
         let decision = crate::services::agent_fence::decide(
             &opts,
@@ -681,6 +750,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                inject_api_keys(&mut opts);
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
             }
             // No fence on this platform (Windows): the same Tabtivity-owned home
@@ -694,6 +764,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                inject_api_keys(&mut opts);
             }
             // Fail closed on a fence-less platform too: the tab that asked
             // shows the acceptance prompt and retries once it is given.
@@ -721,6 +792,7 @@ pub async fn prepare(
     crate::brand::PAIR.export_both(&mut opts.env);
     #[cfg(unix)]
     if opts.tmux_session.is_some() && opts.cmd != "ssh" && opts.cmd != "docker" {
+        drop_api_keys_for_old_tmux(&mut opts, &keys_before);
         crate::services::tmux_local::wrap_pty_options_local(&mut opts);
     }
 
@@ -752,6 +824,20 @@ mod tests {
     use std::path::Path;
 
     // ── vm_spawn_refusal: the VM tier's no-local-fallback guard ────────────
+
+    #[test]
+    fn old_tmux_drops_only_the_keys_the_fence_added() {
+        use crate::services::agent_api_keys::{ANTHROPIC_ENV, GEMINI_ENV, OPENAI_ENV};
+        let mut env: HashMap<String, String> = HashMap::from([
+            (ANTHROPIC_ENV.to_string(), "sk-test-added-fake".to_string()),
+            (GEMINI_ENV.to_string(), "users-own-test-value".to_string()),
+            ("PATH".to_string(), "/bin".to_string()),
+        ]);
+        let dropped = drop_added_api_keys(&mut env, &[GEMINI_ENV]);
+        assert_eq!(dropped, vec![ANTHROPIC_ENV]);
+        assert!(!env.contains_key(ANTHROPIC_ENV) && !env.contains_key(OPENAI_ENV));
+        assert!(env.contains_key(GEMINI_ENV) && env.contains_key("PATH"));
+    }
 
     #[test]
     fn non_vm_projects_spawn_freely() {

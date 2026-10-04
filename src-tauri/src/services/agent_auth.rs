@@ -498,6 +498,10 @@ pub struct LoginStatus {
     /// This CLI keeps its login somewhere Tabtivity cannot share (a keyring, a
     /// database mixed with other state): one login per scope.
     pub shared: bool,
+    /// The CLI is switched on for a stored provider API key and one of its
+    /// providers has one (`services::agent_api_keys`). Filled by the
+    /// `agent_logins` command, never here: this module stays keyring-free.
+    pub api_key: bool,
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
@@ -524,6 +528,7 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
                 importable,
                 blocked,
                 shared: !paths.is_empty(),
+                api_key: false,
             }
         })
         .collect()
