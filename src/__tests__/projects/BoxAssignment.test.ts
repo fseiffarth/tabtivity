@@ -211,3 +211,92 @@ describe("boxes store — createBox / renameBox", () => {
     expect(invoke).toHaveBeenCalledWith("rename_box", { boxId: "boxA", name: "Renamed" });
   });
 });
+
+/**
+ * The store keeps each box's revision in step with the file. A whole-list
+ * `save_boxes` is refused for a box whose revision moved on, and every write
+ * stamps a new one on the boxes it changed — so a store that never took the
+ * stamped numbers back had its SECOND box edit of a window session refused as
+ * stale. A fake backend here does the compare-and-swap the real one does.
+ */
+describe("boxes store — revisions follow the backend's writes", () => {
+  function fakeBackend(initial: ProjectBox[]) {
+    const disk = new Map(initial.map((b) => [b.id, { ...b }]));
+    const strip = ({ rev: _rev, ...rest }: ProjectBox) => JSON.stringify(rest);
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "save_boxes") {
+        const incoming = (args?.boxes ?? []) as ProjectBox[];
+        for (const b of incoming) {
+          const held = disk.get(b.id);
+          if (held && (held.rev ?? 0) !== (b.rev ?? 0)) {
+            return Promise.reject("boxes changed on disk since they were loaded; reload and apply the edit again");
+          }
+        }
+        const written = incoming.map((b) => {
+          const held = disk.get(b.id);
+          const rev = held && strip(held) === strip(b) ? held.rev : (held?.rev ?? 0) + 1;
+          return { ...b, rev };
+        });
+        disk.clear();
+        for (const b of written) disk.set(b.id, b);
+        return Promise.resolve(written);
+      }
+      if (cmd === "ensure_box_folder") {
+        const id = args?.boxId as string;
+        const held = disk.get(id)!;
+        if (!held.folder) disk.set(id, { ...held, folder: `/boxes/${id}`, rev: (held.rev ?? 0) + 1 });
+        return Promise.resolve(disk.get(id));
+      }
+      return Promise.resolve(undefined);
+    });
+    return disk;
+  }
+
+  it("lands a second edit after the first one's save", async () => {
+    const disk = fakeBackend([{ ...box("boxA", []), rev: 1 }]);
+    useBoxesStore.setState({ boxes: [{ ...box("boxA", []), rev: 1 }] });
+
+    await useBoxesStore.getState().addToBox("p1", "boxA");
+    expect(useBoxesStore.getState().boxes[0].rev).toBe(2);
+    // Before the fix this one was refused as stale.
+    await useBoxesStore.getState().setBoxColor("boxA", "#336699");
+    await useBoxesStore.getState().removeFromBox("p1", "boxA");
+
+    expect(disk.get("boxA")).toMatchObject({ member_ids: [], color: "#336699", rev: 4 });
+    expect(useBoxesStore.getState().boxes[0].rev).toBe(4);
+  });
+
+  it("adopts the revision a first open stamps when it resolves the box folder", async () => {
+    const disk = fakeBackend([{ ...box("boxA", []), rev: 1 }]);
+    useBoxesStore.setState({ boxes: [{ ...box("boxA", []), rev: 1 }] });
+
+    await useBoxesStore.getState().openBox("boxA");
+    expect(useBoxesStore.getState().boxes[0]).toMatchObject({ folder: "/boxes/boxA", rev: 2 });
+    await useBoxesStore.getState().setBoxPillHidden("boxA", true);
+
+    expect(disk.get("boxA")).toMatchObject({ hide_pill: true, folder: "/boxes/boxA", rev: 3 });
+  });
+
+  it("takes back only the revision, so an edit made while a save was in flight survives", async () => {
+    fakeBackend([{ ...box("boxA", []), rev: 1 }, { ...box("boxB", []), rev: 1 }]);
+    useBoxesStore.setState({
+      boxes: [{ ...box("boxA", []), rev: 1 }, { ...box("boxB", []), rev: 1 }],
+    });
+
+    const saving = useBoxesStore.getState().addToBox("p1", "boxA");
+    useBoxesStore.setState((s) => ({
+      boxes: s.boxes.map((b) => (b.id === "boxB" ? { ...b, name: "renamed meanwhile" } : b)),
+    }));
+    await saving;
+
+    const [a, b] = useBoxesStore.getState().boxes;
+    expect(a).toMatchObject({ member_ids: ["p1"], rev: 2 });
+    expect(b).toMatchObject({ name: "renamed meanwhile", rev: 1 });
+  });
+
+  it("keeps working against a backend that answers nothing", async () => {
+    useBoxesStore.setState({ boxes: [{ ...box("boxA", []), rev: 1 }] });
+    await useBoxesStore.getState().addToBox("p1", "boxA");
+    expect(useBoxesStore.getState().boxes[0]).toMatchObject({ member_ids: ["p1"], rev: 1 });
+  });
+});
