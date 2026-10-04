@@ -48,7 +48,10 @@ Tailscale command.
    the Serve mapping before it starts the host.
 5. **Choose what the phone may open.** Under **Project access**, switch on the
    projects and boxes the phone may reach. All start off. Only local,
-   non-container projects are eligible.
+   non-container projects are eligible. A switch turned on reaches **all
+   phones**, including ones you pair later; to limit it, press the
+   **All phones ▾** button beside it and pick **Only these phones**, then tick
+   the phones. The side panel's phone button opens the same choice.
 6. **Open it on the phone.** Press **Show install QR**: a root terminal checks
    the Serve mapping again and shows the `https://…ts.net` address as a QR
    code. Scan it with the phone (Tailscale must be connected there).
@@ -64,6 +67,21 @@ they attach through tmux, which Windows does not have.
 
 An agent tab that was already running becomes reachable after its next normal
 reopen, because the phone attaches to its terminal session.
+
+### Which phones see a project
+
+With two or more phones paired, a project or box can be limited to some of
+them. A phone left off the list does not see the project at all: not in its
+list, not by an old link or notice (it reads "no longer shared"), and it gets
+no notifications for its agents. Taking a phone off while it has one of the
+project's terminals open closes that terminal within a few seconds. Prompts
+it already queued and schedules it made are not cancelled.
+
+A box's own list decides which phones see the tabs opened in the box, in
+member folders too; a member's list is about the member's own tabs.
+
+At least one phone stays ticked; to reach no phone, turn the project's access
+off.
 
 ## Using it
 
@@ -223,3 +241,9 @@ mobile host**) does it by hand; either appears only while the server is behind.
 The header's Mobile button shows the host status. **Revoke** drops one device;
 **Lock down** forgets every paired device and stops the host. Also remove the
 device from your Tailscale machines.
+
+A phone paired again counts as a new phone: projects limited to **Only these
+phones** do not include it until you tick it again. After **Lock down** (or
+**Forget all devices**) every such project reaches no phone and shows
+**No phones ▾** in Mobile settings until you pick its phones again; projects
+set to **All phones** reach the newly paired phones as before.

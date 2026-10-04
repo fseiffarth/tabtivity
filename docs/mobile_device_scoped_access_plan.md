@@ -7,7 +7,9 @@ every request, so a phone that is not on the list can neither list nor open the
 project, and gets no agent push for it.
 
 Status: plan (2026-10-04), reviewed against the code the same day (see
-"Review notes" at the end). Not built.
+"Review notes" at the end). Built on branch `mobile-device-access` — P1
+backend and P2 desktop UI + docs — not live-verified (QA 31cb). Design as
+built: `docs/context/mobile_access.md`.
 
 ## 1. Model
 

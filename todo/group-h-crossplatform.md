@@ -3769,6 +3769,47 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cb — Mobile access per phone: a project or box reaches only the
+  phones picked for it** (2026-10-04; ✅ code-complete and automated tests
+  passing, ⚠️ live QA pending — and a rebuild + restart first: the sidecar,
+  two commands and a new one changed; untested id `mobile.phonePicker`;
+  design `docs/context/mobile_access.md`, plan
+  `docs/mobile_device_scoped_access_plan.md`). The side panel's phone button
+  opens a picker — All phones / Only these phones (checklist of the paired
+  phones) / Turn off — and Settings → Mobile shows "All phones ▾" / "N phones
+  ▾" / "No phones ▾" beside each enabled project and box, opening the same
+  picker. The sidecar filters every phone route, the terminal re-check and
+  agent pushes by the list. Locked by `MobileProjectAccess.test.tsx`,
+  `MobileBoxAccess.test.tsx` and the `discovery.rs` / `host.rs` / `push.rs` /
+  `commands::projects` tests.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — pair two phones (A, B). Limit a project to A: B's
+    Projects list drops it within a poll, an old link or notice on B says it
+    is no longer shared, and an agent turn in it notifies A only. Open one
+    of its terminals on A, then switch the list to B only (tick B, untick
+    A): A's terminal closes within ~5 s ("access … withdrawn"). Same for a box
+    from Settings → Mobile. Revoke B while a project lists only B: the row
+    reads "No phones ▾" (amber) and no phone sees it; All phones in the
+    picker brings it back to both.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31cc — To-do board project names per phone** (2026-10-04; follow-up
+  of 31cb, out of its scope). The phone's to-do board lists every registry
+  project's name in its project picker and on card tags, Mobile switch or
+  not (`MobileBridgeHost` `todoBoard` → `publicProjects`, headless
+  `headless::project_names`), and cards carry their project's opaque id. A
+  phone limited away from a project still reads its name there. Decide
+  whether the board should hide projects the phone cannot reach (switch off
+  or not on its list), then filter both the desktop answer and the headless
+  one per device (`Catalog::for_device` already knows the set).
+
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member
