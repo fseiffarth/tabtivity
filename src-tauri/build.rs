@@ -73,46 +73,12 @@ fn collect(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) {
     }
 }
 
-/// The non-English dictionary chunks vite emits for `src/lib/i18n.ts`'s
-/// `dictLoaders` (`/assets/de-<hash>.js` and siblings, ~0.5 MB each).
-///
-/// The phone can never request one, so they are not baked in. The only trigger
-/// for a dictionary load is `ensureDict(cachedLang())`, `cachedLang()` reads the
-/// `tabtivity-lang` localStorage key, and that key is written only by
-/// `applyLanguage` — desktop code the PWA never imports (it takes `useT` and
-/// `TranslationKey` from i18n, nothing else) — on the desktop webview's own
-/// origin, not the sidecar's. So on the phone the language is always `en`.
-/// Were one ever requested, the sidecar answers a missing `/assets/` path with a
-/// 404 and `ensureDict` falls back to English. **If the phone gains a language
-/// switcher, delete this filter.**
-///
-/// The match is exact — a two-letter language, a dash, an 8-character rollup
-/// hash, `.js`, directly under `/assets/` — so a vite hash-length change makes
-/// it match nothing and bake everything in, the harmless direction.
-fn is_unreachable_dict_chunk(name: &str) -> bool {
-    let Some(file) = name.strip_prefix("/assets/") else {
-        return false;
-    };
-    ["de", "es", "fr", "it"].iter().any(|lang| {
-        file.strip_prefix(lang)
-            .and_then(|rest| rest.strip_prefix('-'))
-            .and_then(|rest| rest.strip_suffix(".js"))
-            .is_some_and(|hash| {
-                hash.len() == 8
-                    && hash
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            })
-    })
-}
-
 fn generate_mobile_assets() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let dist = manifest.join("../mobile-dist");
     println!("cargo:rerun-if-changed={}", dist.display());
     let mut assets = Vec::new();
     collect(&dist, &dist, &mut assets);
-    assets.retain(|(name, _)| !is_unreachable_dict_chunk(name));
     if !assets.iter().any(|(name, _)| name == "/index.html") {
         assets.push(("/index.html".into(), concat!("<!doctype html><title>", crate::app_name!(), " Mobile</title><main>Mobile assets are not built. Run npm run mobile:build.</main>").as_bytes().to_vec()));
     }

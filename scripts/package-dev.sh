@@ -67,14 +67,6 @@ publish_live_pwa() {
   mkdir -p "$tmp"
   cp -a "$src/." "$tmp/"
 
-  # The non-English dictionary chunks the phone can never request. Dropping them
-  # keeps the published set identical to the embedded one, which build.rs filters
-  # the same way (is_unreachable_dict_chunk) — a bundle that answers 200 through
-  # the overlay and 404 through the binary is a difference that only shows up on
-  # one of them. If the phone ever gains a language switcher, delete both.
-  find "$tmp/assets" -maxdepth 1 -regextype posix-extended \
-    -regex '.*/(de|es|fr|it)-[A-Za-z0-9_-]{8}\.js' -delete 2>/dev/null || true
-
   # The stamp is the whole contract: `built` is what stops an overlay from
   # shadowing a NEWER binary, and `entry` is what lets the loader refuse half a
   # bundle rather than serve a shell pointing at a script it does not have.
