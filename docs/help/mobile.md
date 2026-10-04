@@ -214,8 +214,10 @@ collapsed — tap one to open it.
 
 ## Git on the phone
 
-Tap a project's name on the phone and choose **⎇ Git** to see its git state,
-read-only — nothing is checked out, switched or created from there:
+Tap a project's name on the phone and choose **⎇ Git** to see its git state —
+or, on the start page, tap the coloured git mark in a project's row ("not
+pushed", "not committed", …). It is read-only — nothing is checked out,
+switched or created from there:
 
 - The branch the project folder has checked out (or the commit it is
   detached at), its upstream, and how far it is ahead (↑) or behind (↓) as of

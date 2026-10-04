@@ -523,7 +523,7 @@ export const UNTESTED = {
   "mobile.newTab.local": { area: "mobile", what: "NewTabSheet · Local model group: start Mistral / Claude Code / Codex / OpenCode / Droid on the desktop's local model; the tab is listed and reattaches after a desktop restart (#31bl)" },
   "mobile.project.sendFile": { area: "mobile", what: "NewTabSheet · ＋ → Send a file from this phone into the project's inbox (.tabtivity/inbox/), with a Copy of its @reference" },
   "mobile.project.reorder": { area: "mobile", what: "Project · Drag to reorder the desktop's tabs" },
-  "mobile.project.git": { area: "mobile", what: "Home · The desktop pill's git dot on the phone: a coloured \"unstaged changes / not committed / not pushed\" in each project row's caption, and only there (the project screen shows none)" },
+  "mobile.project.git": { area: "mobile", what: "Home · The desktop pill's git dot on the phone: a coloured \"unstaged changes / not committed / not pushed\" in each project row's caption, and only there (the project screen shows none); tapping it opens that project's ⎇ Git sheet instead of the project" },
   "mobile.project.modelTap": { area: "mobile", what: "Project · Tap a tab card's model to open the session with its model picker up", tested: "2026-09-23" },
   "mobile.indDevices": { area: "mobile", what: "Header phone menu · Paired devices: each with a connected-now lamp or its last connection, and Disconnect → Disconnect? (unpairs it; the phone is signed out within seconds)" },
   "mobile.indDeviceAccess": { area: "mobile", what: "Header phone menu · Paired devices: each phone's Access button opens its own dialog with the To-do / Calendar / Mail buttons and its project/box list (Disconnect / Add project ▾), the same block as under its Settings → Mobile row" },

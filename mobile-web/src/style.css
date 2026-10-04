@@ -162,6 +162,9 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .git-mark.git-unpushed { color:#3fb950; }
 .git-mark.git-broken { color:#8b949e; }
 .git-mark.git-broken > i { background:none; border:1px dashed currentColor; box-sizing:border-box; }
+/* On a start-page row the mark opens the ⎇ Git sheet: a taller touch target
+   that leaves the caption's line height alone. */
+.home-project-card .git-mark { padding:8px 0; margin:-8px 0; }
 .tab-card-foot { display:flex; align-items:center; gap:8px; min-height:56px; padding:8px 14px 9px 10px; border-top:1px solid #303549; }
 .tab-card-when { min-width:0; flex:1 1 auto; color:#a9b0c6; font-size:.78rem; line-height:1.3; }
 .tab-card .agent-status { padding:5px 9px; border-radius:999px; font-size:.72rem; line-height:1; white-space:nowrap; }
