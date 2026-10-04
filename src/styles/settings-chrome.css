@@ -4087,3 +4087,9 @@ label.settings-toggle-card-row {
 .mobile-device-add {
   align-self: flex-start;
 }
+
+/* The same block alone in the header menu's `PairedDeviceDialog`: no row above
+   it to sit under, so no indent. */
+.settings-dialog .dialog-scroll > .mobile-device-access {
+  padding-left: 0;
+}
