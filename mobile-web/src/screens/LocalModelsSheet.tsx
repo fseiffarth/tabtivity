@@ -275,6 +275,10 @@ export function LocalModelsSection() {
   const [failure, setFailure] = useState<string | null>(null);
   const [hidden, setHidden] = useState(true);
   const [open, setOpen] = useState(false);
+  /** The read on its way. Each new read (the page coming back into view, or
+   * the sheet reporting a fresher list) aborts it, so an older answer that
+   * lands late cannot overwrite a newer one. */
+  const reading = useRef<AbortController | null>(null);
 
   const take = useCallback((next: LocalModelList | null, code: string | null) => {
     setList(next);
@@ -283,10 +287,12 @@ export function LocalModelsSection() {
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
     const read = () => {
+      reading.current?.abort();
+      const controller = new AbortController();
+      reading.current = controller;
       getLocalModels(controller.signal).then(
-        (next) => take(next, null),
+        (next) => { if (!controller.signal.aborted) take(next, null); },
         (reason: unknown) => {
           if (controller.signal.aborted) return;
           const code = codeOf(reason);
@@ -300,7 +306,7 @@ export function LocalModelsSection() {
     const onVisible = () => { if (document.visibilityState === "visible") read(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      controller.abort();
+      reading.current?.abort();
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [take]);
@@ -308,6 +314,9 @@ export function LocalModelsSection() {
   // The sheet keeps the caption current while it is open; a row it found
   // switched off stays until the sheet is closed, so the dialog keeps a place.
   const fromSheet = useCallback((next: LocalModelList | null, code: string | null) => {
+    // The sheet's list is the one shown; a Home read still out would land
+    // over it.
+    reading.current?.abort();
     if (next) setList(next);
     setFailure(code);
   }, []);

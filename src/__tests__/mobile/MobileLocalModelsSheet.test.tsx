@@ -407,6 +407,25 @@ describe("local models — the Home row", () => {
     expect(screen.getByRole("heading", { name: "Local models" })).toBeTruthy();
   });
 
+  it("keeps the newer list when an older read lands after it", async () => {
+    let releaseFirst: (response: Response) => void = () => {};
+    let call = 0;
+    serve(() => {
+      call += 1;
+      if (call === 1) return new Promise<Response>((resolve) => { releaseFirst = resolve; });
+      return json(listOf([LOADED, IDLE]));
+    });
+    render(<LocalModelsSection />);
+    await waitFor(() => expect(gets()).toBe(1));
+    // The page flips back into view before the first read answers.
+    await act(async () => { fireEvent(document, new Event("visibilitychange")); });
+    const button = await screen.findByRole("button", { name: /Ollama models on the desktop/ });
+    await waitFor(() => expect(button.textContent).toContain("1 loaded · 2 installed"));
+    await act(async () => { releaseFirst(json(listOf([LOADED, IDLE, CLOUD]))); });
+    await act(async () => {});
+    expect(button.textContent).toContain("1 loaded · 2 installed");
+  });
+
   it("captions the row with the counts and opens the sheet", async () => {
     serve(() => json(listOf([LOADED, IDLE, CLOUD])));
     render(<LocalModelsSection />);
