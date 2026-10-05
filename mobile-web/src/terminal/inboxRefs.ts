@@ -9,8 +9,8 @@ import { describeInbox, type OutboxFile } from "../api";
  * desktop handed the phone when the file landed — the phone never composes
  * one). A message shows them as pictures rather than as references: the
  * composer as thumbnails beside the draft, the chat inside the prompt's
- * bubble. An older build's `@.eldrun/inbox/<leaf>` reads the same — the
- * project folder moved and kept its leaves.
+ * bubble. An older build's reference under the app's former folder name
+ * reads the same — the project folder moved and kept its leaves.
  *
  * A reference stands as a whole word: an `@` at the start or after a space,
  * the inbox folder, a leaf of the inbox's own alphabet (`inbox::safe_name`).

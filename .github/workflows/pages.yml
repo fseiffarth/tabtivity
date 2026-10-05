@@ -31,7 +31,7 @@ jobs:
       - name: Copy images into the site
         run: |
           mkdir -p site/assets
-          cp screenshots/eldrun-current.png screenshots/eldrun-functionality.svg site/assets/
+          cp screenshots/eldrun-current.png screenshots/tabtivity-functionality.svg site/assets/
           cp src/assets/logo.svg src/assets/logo-white.svg \
              src/assets/logo-wordmark.svg src/assets/logo-wordmark-white.svg site/assets/
 
