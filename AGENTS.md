@@ -24,7 +24,8 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Gates
 
-Run before calling work done; all are CI gates and all sit at zero warnings:
+Run before calling work done; all are CI gates and all sit at zero warnings
+except `npm run lint` (see below):
 
 ```
 npm run build        # the ONLY type-check (tsc + both bundles); vitest/eslint don't type-check
@@ -36,6 +37,10 @@ scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
 CI clippy is latest stable; a stale local toolchain can pass what CI fails.
+`npm run lint` fails only on errors. Its `react-hooks/exhaustive-deps`
+warnings are advisory and mostly deliberate omissions (mount-only effects,
+timer `tick`s): don't add a dependency just to silence one, since that can
+restart a terminal or refetch on every render. Add no new warnings; no new `any`.
 `cargo fmt` is not enforced. Without the RTK hook, keep output short:
 `cargo test -q`, `npm test -- --reporter=dot`, `npm run build 2>&1 | tail -40`. `git diff --check` for whitespace. If a gate's
 tool is unavailable, say so — never skip silently.

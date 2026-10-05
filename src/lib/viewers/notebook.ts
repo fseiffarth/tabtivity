@@ -53,6 +53,14 @@ function joinSource(src: unknown): string {
   return typeof src === "string" ? src : "";
 }
 
+/** A parsed JSON object whose fields are still unchecked. */
+type JsonObject = Record<string, unknown>;
+
+/** `v` as a JSON object, or `undefined` when it isn't one. */
+function asObject(v: unknown): JsonObject | undefined {
+  return v && typeof v === "object" ? (v as JsonObject) : undefined;
+}
+
 /**
  * Classify a single nbformat output object into zero or more render blocks:
  *  - `stream`        → one text block from `out.text` (ANSI-stripped).
@@ -62,14 +70,15 @@ function joinSource(src: unknown): string {
  *    (ANSI-stripped — tracebacks carry colour codes).
  *  - anything else   → no blocks.
  */
-export function outputToBlocks(out: any): NbOutput[] {
-  if (!out || typeof out !== "object") return [];
+export function outputToBlocks(output: unknown): NbOutput[] {
+  const out = asObject(output);
+  if (!out) return [];
   switch (out.output_type) {
     case "stream":
       return [{ kind: "text", text: stripAnsi(joinSource(out.text)) }];
     case "execute_result":
     case "display_data": {
-      const data = out.data ?? {};
+      const data = asObject(out.data) ?? {};
       const png = data["image/png"];
       if (typeof png === "string" && png) {
         // nbformat stores image/png base64 either as one string or split lines.
@@ -105,32 +114,36 @@ export function outputToBlocks(out: any): NbOutput[] {
  *    silently lost; all other cell types are dropped.
  */
 export function parseNotebook(json: string | object): ParsedNotebook {
-  let nb: any;
+  let parsed: unknown;
   if (typeof json === "string") {
     try {
-      nb = JSON.parse(json);
+      parsed = JSON.parse(json);
     } catch {
       return { language: "python", cells: [] };
     }
   } else {
-    nb = json;
+    parsed = json;
   }
-  if (!nb || typeof nb !== "object") return { language: "python", cells: [] };
+  const nb = asObject(parsed);
+  if (!nb) return { language: "python", cells: [] };
 
-  const meta = nb.metadata ?? {};
+  const meta = asObject(nb.metadata) ?? {};
+  const kernelLang = asObject(meta.kernelspec)?.language;
+  const infoName = asObject(meta.language_info)?.name;
   const language =
-    (meta.kernelspec && typeof meta.kernelspec.language === "string" && meta.kernelspec.language) ||
-    (meta.language_info && typeof meta.language_info.name === "string" && meta.language_info.name) ||
+    (typeof kernelLang === "string" && kernelLang) ||
+    (typeof infoName === "string" && infoName) ||
     "python";
 
-  const rawCells = Array.isArray(nb.cells) ? nb.cells : [];
+  const rawCells: unknown[] = Array.isArray(nb.cells) ? nb.cells : [];
   const cells: NbCell[] = [];
-  for (const cell of rawCells) {
-    if (!cell || typeof cell !== "object") continue;
+  for (const rawCell of rawCells) {
+    const cell = asObject(rawCell);
+    if (!cell) continue;
     const source = joinSource(cell.source);
     if (cell.cell_type === "code") {
-      const rawOutputs = Array.isArray(cell.outputs) ? cell.outputs : [];
-      const outputs = rawOutputs.flatMap((o: any) => outputToBlocks(o));
+      const rawOutputs: unknown[] = Array.isArray(cell.outputs) ? cell.outputs : [];
+      const outputs = rawOutputs.flatMap(outputToBlocks);
       cells.push({ type: "code", source, outputs });
     } else if (cell.cell_type === "markdown") {
       cells.push({ type: "markdown", source });
