@@ -171,6 +171,13 @@ function parseRefs(refs: string): string[] {
 
 // ── Commit graph layout ─────────────────────────────────────────────────────
 
+/** Joins two comma-separated lane name lists, keeping order, dropping repeats. */
+function joinNames(a: string | null, b: string[]): string | null {
+  const out = a ? a.split(", ") : [];
+  for (const n of b) if (!out.includes(n)) out.push(n);
+  return out.length ? out.join(", ") : null;
+}
+
 const LANE_PALETTE = [
   "#58a6ff", "#3fb950", "#e3b341", "#bc8cff",
   "#39c5cf", "#f0883e", "#db61a2", "#f85149",
@@ -185,6 +192,11 @@ interface RowLayout {
   topToDot: boolean;    // a lane arrives from above directly into the dot
   trunk: boolean;       // first parent continues straight down from the dot
   branches: number[];   // parent lane indices (≠ col) leaving the dot downward
+  /** Branch names each lane carries entering this row (null: no ref names it
+   *  in the loaded history, e.g. a merged-and-deleted branch). */
+  laneNames: (string | null)[];
+  dotName: string | null;           // this commit's lane, incl. its own refs; also the trunk's
+  branchNames: (string | null)[];   // parallel to `branches`
 }
 
 /**
@@ -196,6 +208,11 @@ interface RowLayout {
  */
 function computeGraph(commits: GitCommit[]): RowLayout[] {
   const lanes: (string | null)[] = []; // hash each column is currently waiting for
+  // Branch names per lane: a lane is named by the branch refs of the commits
+  // on it, and the names flow down its first-parent line. A tip further down
+  // the same line (`main` behind `feature`), or a first parent that is already
+  // another lane's, joins that lane's name list from there on.
+  const names: (string | null)[] = [];
   const indexOf = (h: string) => lanes.findIndex((l) => l === h);
   const alloc = (h: string) => {
     const empty = lanes.findIndex((l) => l === null);
@@ -211,7 +228,13 @@ function computeGraph(commits: GitCommit[]): RowLayout[] {
   for (const commit of commits) {
     let col = indexOf(commit.hash);
     const topToDot = col !== -1;
-    if (col === -1) col = alloc(commit.hash);
+    if (col === -1) {
+      col = alloc(commit.hash);
+      names[col] = null;
+    }
+    const laneNames = lanes.map((_, i) => names[i] ?? null);
+    const own = parseRefs(commit.refs).filter((r) => !r.startsWith("tag: "));
+    const dotName = joinNames(laneNames[col], own);
 
     const merges: number[] = [];
     const verticals: number[] = [];
@@ -225,24 +248,40 @@ function computeGraph(commits: GitCommit[]): RowLayout[] {
 
     const beforeLen = lanes.length;
     for (let i = 0; i < lanes.length; i++) {
-      if (lanes[i] === commit.hash) lanes[i] = null;
+      if (lanes[i] === commit.hash) {
+        lanes[i] = null;
+        names[i] = null;
+      }
     }
 
     let trunk = false;
     const branches: number[] = [];
+    const branchNames: (string | null)[] = [];
     commit.parents.forEach((parent, idx) => {
       const existing = indexOf(parent);
       if (idx === 0 && existing === -1) {
         lanes[col] = parent; // first parent continues this commit's column
+        names[col] = dotName;
         trunk = true;
       } else if (existing !== -1) {
         branches.push(existing); // parent already tracked → connect to its lane
+        if (idx === 0) {
+          // This commit's own line runs into that lane, so it carries both.
+          names[existing] = joinNames(names[existing], dotName ? dotName.split(", ") : []);
+          branchNames.push(dotName);
+        } else {
+          branchNames.push(names[existing] ?? null);
+        }
       } else {
-        branches.push(alloc(parent));
+        const j = alloc(parent);
+        names[j] = null; // a merged-in side line: named only if a ref sits on it
+        branches.push(j);
+        branchNames.push(null);
       }
     });
 
     while (lanes.length > 0 && lanes[lanes.length - 1] === null) lanes.pop();
+    names.length = lanes.length;
 
     rows.push({
       col,
@@ -252,6 +291,9 @@ function computeGraph(commits: GitCommit[]): RowLayout[] {
       topToDot,
       trunk,
       branches,
+      laneNames,
+      dotName,
+      branchNames,
     });
   }
   return rows;
@@ -260,6 +302,21 @@ function computeGraph(commits: GitCommit[]): RowLayout[] {
 const LANE_W = 14;
 const GRAPH_ROW_H = 22;
 const cx = (col: number) => col * LANE_W + LANE_W / 2;
+
+/**
+ * One graph line. Hovering it names the branch its lane carries: the 1.5px
+ * stroke is too thin to aim at, so a wider transparent copy takes the hover,
+ * and its `<title>` outranks the row's subject tooltip.
+ */
+function GraphEdge({ d, color, name }: { d: string; color: string; name: string | null }) {
+  return (
+    <g>
+      {name && <title>{name}</title>}
+      <path d={d} fill="none" stroke={color} strokeWidth={1.5} />
+      {name && <path d={d} fill="none" stroke="transparent" strokeWidth={6} pointerEvents="stroke" />}
+    </g>
+  );
+}
 
 function CommitGraphCell({
   row,
@@ -282,38 +339,39 @@ function CommitGraphCell({
   return (
     <svg className="git-graph-cell" width={width} height={height} style={{ flexShrink: 0 }} aria-hidden>
       {row.verticals.map((i) => (
-        <line key={`v${i}`} x1={x(i)} y1={0} x2={x(i)} y2={height} stroke={laneColor(i)} strokeWidth={1.5} />
+        <GraphEdge key={`v${i}`} d={`M ${x(i)} 0 V ${height}`} color={laneColor(i)} name={row.laneNames[i]} />
       ))}
       {row.topToDot && (
-        <line x1={dotX} y1={0} x2={dotX} y2={mid} stroke={laneColor(row.col)} strokeWidth={1.5} />
+        <GraphEdge d={`M ${dotX} 0 V ${mid}`} color={laneColor(row.col)} name={row.dotName} />
       )}
       {row.merges.map((i) => (
-        <path
+        <GraphEdge
           key={`m${i}`}
           d={`M ${x(i)} 0 C ${x(i)} ${mid} ${dotX} 0 ${dotX} ${mid}`}
-          fill="none"
-          stroke={laneColor(i)}
-          strokeWidth={1.5}
+          color={laneColor(i)}
+          name={row.laneNames[i]}
         />
       ))}
       {row.trunk && (
-        <line x1={dotX} y1={mid} x2={dotX} y2={height} stroke={laneColor(row.col)} strokeWidth={1.5} />
+        <GraphEdge d={`M ${dotX} ${mid} V ${height}`} color={laneColor(row.col)} name={row.dotName} />
       )}
-      {row.branches.map((j) => (
-        <path
+      {row.branches.map((j, k) => (
+        <GraphEdge
           key={`b${j}`}
           d={`M ${dotX} ${mid} C ${dotX} ${height} ${x(j)} ${mid} ${x(j)} ${height}`}
-          fill="none"
-          stroke={laneColor(j)}
-          strokeWidth={1.5}
+          color={laneColor(j)}
+          name={row.branchNames[k]}
         />
       ))}
-      {/* Branch tips get a hollow ring in their lane color so the heads stand
-          out from ordinary commits along the same lane. */}
-      {tip && (
-        <circle cx={dotX} cy={mid} r={head ? 7 : 6} fill="none" stroke={laneColor(row.col)} strokeWidth={1.5} />
-      )}
-      <circle cx={dotX} cy={mid} r={head ? 4.5 : 3.5} fill={laneColor(row.col)} stroke="var(--bg-panel)" strokeWidth={head ? 1.5 : 1} />
+      <g>
+        {row.dotName && <title>{row.dotName}</title>}
+        {/* Branch tips get a hollow ring in their lane color so the heads stand
+            out from ordinary commits along the same lane. */}
+        {tip && (
+          <circle cx={dotX} cy={mid} r={head ? 7 : 6} fill="none" stroke={laneColor(row.col)} strokeWidth={1.5} />
+        )}
+        <circle cx={dotX} cy={mid} r={head ? 4.5 : 3.5} fill={laneColor(row.col)} stroke="var(--bg-panel)" strokeWidth={head ? 1.5 : 1} />
+      </g>
     </svg>
   );
 }
