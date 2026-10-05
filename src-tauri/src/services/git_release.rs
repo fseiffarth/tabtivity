@@ -12,10 +12,16 @@
 //! one refspec `<tag object>:refs/tags/T` — the object checked to peel to the
 //! tip, not the local tag by name: no `+`, no `--tags`, no delete, and an
 //! existing remote tag is refused rather than moved.
+//!
+//! On GitHub the tip's CI must also have passed first (`git_ci::tip_ci`):
+//! while the branch push's workflow runs are queued, running or red, a
+//! release is refused (`ci_pending` / `ci_failed`), so a tag never names a
+//! commit CI rejected. CI that cannot be read does not gate.
 use std::path::Path;
 
 use serde::Serialize;
 
+use super::git_ci::{self, TipCi};
 use super::git_push_mcp::{
     classify_remote_error, clean_output, git, join_streams, ls_remote_raw, repo_rewrites_urls, run_capped, validate_sha, Category,
     Failure, TRANSPORT_TIMEOUT,
@@ -152,8 +158,9 @@ fn local_target(dir: &Path, need_token: bool, token: Option<&str>) -> Result<(St
 }
 
 /// Decide a release of the checked-out branch's tip as `tag`: the tip must be
-/// exactly what the remote branch holds, and `tag` must be new on the remote
-/// (and locally, unless it already names the tip). `need_token` refuses an
+/// exactly what the remote branch holds, its GitHub CI (if any) must have
+/// passed, and `tag` must be new on the remote (and locally, unless it
+/// already names the tip). `need_token` refuses an
 /// https remote without a stored token (the agent lane, which never falls back
 /// to the user's own credential helpers).
 pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origins: &[String]) -> Result<ReleasePlan, Failure> {
@@ -182,6 +189,12 @@ pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origin
     };
     if remote_sha != head {
         return Err(Failure::new(Category::NotPushed, format!("'{branch}' is not in sync with the remote ({} here, {} there); push or pull first, then release.", &head[..7.min(head.len())], &remote_sha[..7.min(remote_sha.len())])));
+    }
+    let api_token = token.filter(|_| origins.iter().any(|o| o == "https://github.com"));
+    match git_ci::tip_ci(&url, &branch, &head, api_token) {
+        TipCi::Pending(names) => return Err(Failure::new(Category::CiPending, format!("CI is still running on {} ({}); release once it has passed.", &head[..7.min(head.len())], names.join(", ")))),
+        TipCi::Failed(names) => return Err(Failure::new(Category::CiFailed, format!("CI did not pass on {} ({}); fix it and push, then release.", &head[..7.min(head.len())], names.join(", ")))),
+        TipCi::Green | TipCi::Unknown => {}
     }
     Ok(ReleasePlan { tag: tag.to_string(), branch, remote, url, head, subject })
 }

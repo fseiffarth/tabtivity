@@ -164,7 +164,12 @@ tip (`stale_approval` otherwise), so a tag re-pointed before the transport
 is not what leaves. Refused unless the tip is exactly the remote branch's SHA
 (`not_pushed`) — a tag can never publish commits the branch push (and its
 privacy scan) did not — and unless `T` is new on the remote (`tag_exists`;
-never moved). A local tag already on the tip is reused; one this call made is
+never moved). On a github.com remote the tip's CI must also have passed
+(`git_ci::tip_ci`): the latest run of each workflow the branch push started
+on that commit; any still queued/running → `ci_pending`, any finished
+without passing → `ci_failed`. No runs (no CI for that branch) passes, and
+CI that can't be read (no access, offline) doesn't gate — this repo's
+`release.yml` re-checks server-side and deletes a tag whose CI failed. A local tag already on the tip is reused; one this call made is
 deleted again when the push fails. The suggested name is `v<version>` from
 the first of `package.json`, `src-tauri/tauri.conf.json`, `tauri.conf.json`,
 `Cargo.toml`, `pyproject.toml` at the tip, unless that tag already names

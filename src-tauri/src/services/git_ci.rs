@@ -10,7 +10,8 @@
 //! working in. The stored token is offered to the API only when github.com is
 //! one of the project's token origins; without one, a public repo still
 //! answers its runs, and anything else says where to add a token. Nothing here
-//! writes: no re-run, no cancel, no dispatch.
+//! writes: no re-run, no cancel, no dispatch. `tip_ci` is the same read for
+//! the Release gate (`git_release::plan`).
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -295,6 +296,56 @@ pub fn run(dir: &Path, project: &str, id: u64) -> Result<Value, Failure> {
     })?
 }
 
+// ── Release gate ────────────────────────────────────────────────────────────
+
+/// What GitHub Actions says about a commit a release would tag
+/// (`git_release::plan`): a tag goes out only once the branch push's CI has
+/// passed. `Unknown` (not GitHub, no access, offline) does not gate — the
+/// repo's own release workflow is the server-side check.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TipCi {
+    Green,
+    /// Workflow names still queued or running.
+    Pending(Vec<String>),
+    /// Workflow names that did not pass (failed, cancelled, timed out, …).
+    Failed(Vec<String>),
+    Unknown,
+}
+
+/// The verdict over a `/actions/runs` answer: the latest run of each workflow
+/// that the push of `branch` started on `sha`. A commit no workflow ran on is
+/// green — the project has no CI for that branch.
+pub fn tip_verdict(body: &Value, branch: &str, sha: &str) -> TipCi {
+    let mut latest: HashMap<u64, &Value> = HashMap::new();
+    for run in body["workflow_runs"].as_array().into_iter().flatten() {
+        if run["head_sha"].as_str() != Some(sha) || run["head_branch"].as_str() != Some(branch) || run["event"].as_str() != Some("push") { continue; }
+        let (Some(workflow), Some(id)) = (run["workflow_id"].as_u64(), run["id"].as_u64()) else { continue };
+        if latest.get(&workflow).and_then(|r| r["id"].as_u64()).is_none_or(|seen| id > seen) {
+            latest.insert(workflow, run);
+        }
+    }
+    let name = |run: &Value| short(&run["name"], None).as_str().unwrap_or("?").to_string();
+    let mut pending: Vec<String> = latest.values().filter(|r| r["status"].as_str() != Some("completed")).map(|r| name(r)).collect();
+    let mut failing: Vec<String> = latest.values()
+        .filter(|r| r["status"].as_str() == Some("completed") && !matches!(r["conclusion"].as_str(), Some("success" | "skipped" | "neutral")))
+        .map(|r| name(r)).collect();
+    pending.sort();
+    failing.sort();
+    if !failing.is_empty() { TipCi::Failed(failing) } else if !pending.is_empty() { TipCi::Pending(pending) } else { TipCi::Green }
+}
+
+/// [`tip_verdict`] for `sha` on `branch` of the GitHub repo at `url`, asked
+/// with `token` (already filtered to github.com by the caller).
+pub fn tip_ci(url: &str, branch: &str, sha: &str, token: Option<&str>) -> TipCi {
+    let Some((owner, repo)) = github_repo(url) else { return TipCi::Unknown };
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) { return TipCi::Unknown; }
+    let path = format!("/repos/{owner}/{repo}/actions/runs?head_sha={sha}&event=push&per_page=100");
+    match block_on(async { get_json(&client()?, &path, token).await }) {
+        Ok(Ok(body)) => tip_verdict(&body, branch, sha),
+        _ => TipCi::Unknown,
+    }
+}
+
 /// Open code-scanning alerts (CodeQL and other SARIF uploads), optionally for
 /// one ref, most severe first as GitHub sorts them.
 pub fn security_alerts(dir: &Path, project: &str, reference: Option<&str>, limit: Option<u64>) -> Result<Value, Failure> {
@@ -376,6 +427,37 @@ mod tests {
     fn refs_are_plain() {
         assert!(validate_ref("develop").is_ok() && validate_ref("v0.1.86").is_ok() && validate_ref("feature/x").is_ok());
         for bad in ["", "-x", "a&b=c", "a b", "a?b", "a#b"] { assert!(validate_ref(bad).is_err(), "{bad}"); }
+    }
+
+    #[test]
+    fn release_gate_reads_the_latest_push_run_of_each_workflow() {
+        let sha = "a".repeat(40);
+        let run = |id: u64, workflow: u64, name: &str, branch: &str, event: &str, status: &str, conclusion: Value| json!({
+            "id": id, "workflow_id": workflow, "name": name, "head_branch": branch, "head_sha": sha,
+            "event": event, "status": status, "conclusion": conclusion,
+        });
+        let body = |runs: Vec<Value>| json!({"workflow_runs": runs});
+        assert_eq!(tip_verdict(&body(vec![]), "develop", &sha), TipCi::Green, "no CI on the branch");
+        let green = body(vec![
+            run(1, 10, "ci-cd", "develop", "push", "completed", json!("failure")),
+            run(5, 10, "ci-cd", "develop", "push", "completed", json!("success")),
+            run(2, 20, "security", "develop", "push", "completed", json!("skipped")),
+            run(3, 30, "ci-cd", "v1", "push", "completed", json!("failure")),
+            run(4, 40, "pr", "develop", "pull_request", "completed", json!("failure")),
+        ]);
+        assert_eq!(tip_verdict(&green, "develop", &sha), TipCi::Green, "an older attempt, a tag push and a PR run don't count");
+        let pending = body(vec![
+            run(1, 10, "ci-cd", "develop", "push", "in_progress", Value::Null),
+            run(2, 20, "security", "develop", "push", "completed", json!("success")),
+        ]);
+        assert_eq!(tip_verdict(&pending, "develop", &sha), TipCi::Pending(vec!["ci-cd".into()]));
+        let failed = body(vec![
+            run(1, 10, "ci-cd", "develop", "push", "in_progress", Value::Null),
+            run(2, 20, "security", "develop", "push", "completed", json!("cancelled")),
+        ]);
+        assert_eq!(tip_verdict(&failed, "develop", &sha), TipCi::Failed(vec!["security".into()]), "a failure outranks a run still going");
+        assert_eq!(tip_verdict(&failed, "develop", &"b".repeat(40)), TipCi::Green, "another commit's runs");
+        assert_eq!(tip_ci("file:///tmp/r", "develop", &sha, None), TipCi::Unknown, "not GitHub: no request");
     }
 
     #[test]

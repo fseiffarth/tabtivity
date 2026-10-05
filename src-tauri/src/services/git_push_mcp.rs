@@ -127,6 +127,9 @@ pub enum Category {
     PreflightFailed, PreflightTimeout, UrlUnconfirmed, UrlRewritten, StaleApproval, Dismissed, Expired,
     RateLimited, PendingLimit, AuthFailed, Network, RemoteRejected, TransportFailed, FenceUnavailable,
     NotLocal, Busy, NotFound, InvalidArguments, NotPushed, TagExists, NotGithub, NotAvailable,
+    /// A release whose commit's GitHub Actions runs are still going, or did
+    /// not pass (`git_ci::tip_ci`): a tag goes out only after green CI.
+    CiPending, CiFailed,
     /// The tab was started by the Mobile host with no window open, whose lane
     /// never reads the stored token (`docs/headless_mcp_plan.md`).
     WindowRequired,
@@ -147,6 +150,7 @@ impl Category {
             Category::NotFound => "not_found", Category::InvalidArguments => "invalid_arguments",
             Category::NotPushed => "not_pushed", Category::TagExists => "tag_exists",
             Category::NotGithub => "not_github", Category::NotAvailable => "not_available",
+            Category::CiPending => "ci_pending", Category::CiFailed => "ci_failed",
             Category::WindowRequired => "window_required",
         }
     }
@@ -1034,7 +1038,7 @@ pub fn tools() -> Value {
          }),json!([]))},
         {"name":"git_push_cancel","description":"Withdraw one of this tab's own pending push or release requests. A request already running or decided cannot be withdrawn.",
          "inputSchema":object(json!({"id":{"type":"string","maxLength":64,"description":"The request id git_push, git_release or git_push_status returned."}}),json!(["id"]))},
-        {"name":"git_release","description":concat!("Ask ", crate::app_name!(), " to tag a release: an annotated tag on the checked-out branch's tip, pushed as that one tag. The tip must already be on the remote (git_push first, and wait until git_push_status says pushed). The tag must be new on the remote. Always staged: the user presses Release on the card; poll git_push_status for the outcome. Counts against the push budget."),
+        {"name":"git_release","description":concat!("Ask ", crate::app_name!(), " to tag a release: an annotated tag on the checked-out branch's tip, pushed as that one tag. The tip must already be on the remote (git_push first, and wait until git_push_status says pushed), and on GitHub its CI must have passed (ci_pending / ci_failed otherwise; ci_runs shows it). The tag must be new on the remote. Always staged: the user presses Release on the card; poll git_push_status for the outcome. Counts against the push budget."),
          "inputSchema":object(json!({
             "tag":{"type":"string","maxLength":100,"description":"The tag, e.g. v1.2.3. Optional; defaults to v<version> from package.json / tauri.conf.json / Cargo.toml / pyproject.toml at the tip, else the latest v* tag counted up."},
             "note":{"type":"string","maxLength":NOTE_MAX,"description":"One line for the user's approval card. Optional."}
