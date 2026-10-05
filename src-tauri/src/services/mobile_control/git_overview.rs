@@ -767,6 +767,7 @@ mod tests {
         // Through a symlink, as macOS's `/var` → `/private/var` would be.
         let real = tmp.path().join("real");
         std::fs::create_dir_all(&real).expect("real dir");
+        #[cfg(unix)]
         let link = tmp.path().join("link");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real, &link).expect("symlink");

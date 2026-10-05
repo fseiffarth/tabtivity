@@ -776,6 +776,13 @@ impl Snapshot<'_> {
         let mut copied = self.untracked()?;
         copied.extend(redo.iter().cloned());
         self.within(&copied, MAX_COPIED_FILES, MAX_COPIED_BYTES)?;
+        // An entry whose stat no longer matches — smudged because the repo's
+        // git wrote the index in the same second as the edit, or the file
+        // touched since — would be re-read by `add -A` and its blob copied in
+        // although the bytes are the index's. A refresh re-stats those it
+        // finds unchanged and writes no object; best effort, as `add -A`
+        // stays correct without it.
+        let _ = output_of(self.writing(&["update-index", "-q", "--ignore-missing", "--refresh"]), LIST_LIMIT);
         if !redo.is_empty() {
             let mut names = Vec::new();
             for name in &redo {
@@ -1849,7 +1856,9 @@ mod tests {
     /// nothing converts *now*: added under `core.autocrlf=input`, the setting
     /// gone since. The snapshot hashes the bytes, so the undo still puts the
     /// CRLF file back as it was — and copies only that file into the round,
-    /// not the forty unchanged ones.
+    /// not the forty unchanged ones, even when their index entries no longer
+    /// match their stat (committed in the same second as written, then
+    /// touched: CI's git smudged them and `add -A` copied all 46 in).
     #[test]
     fn a_seeded_snapshot_holds_the_bytes_and_copies_only_what_differs() {
         let (_tmp, root, state) = repo_with("input");
@@ -1860,6 +1869,10 @@ mod tests {
         git(&root, &["add", "-A"]);
         git(&root, &["commit", "-q", "-m", "chapters"]);
         git(&root, &["config", "core.autocrlf", "false"]);
+        let earlier = std::time::SystemTime::now() - Duration::from_secs(60);
+        for entry in fs::read_dir(&root).unwrap().flatten().filter(|e| e.file_type().unwrap().is_file()) {
+            fs::File::options().write(true).open(entry.path()).unwrap().set_modified(earlier).unwrap();
+        }
         let id = begin(&state, &root, phone(), None).unwrap();
         assert!(record(&state, &id).objects.is_some());
         // win.tex's raw blob and the trees — nothing of the unchanged files.
