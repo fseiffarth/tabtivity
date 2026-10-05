@@ -4606,6 +4606,8 @@ export const enSource = {
   "terminal.reader.modelWaiting": "Waiting for the session's model picker…",
   "terminal.reader.mode": "Mode",
   "terminal.reader.modeTitle": "Permission mode",
+  "terminal.reader.permissionsHint": "Choose permissions — opens the session's own /permissions picker",
+  "terminal.reader.permissionsWaiting": "Waiting for the session's permission picker…",
   "terminal.reader.modeHint": "Choose the permission mode — switched with Shift+Tab until the session shows it",
   "terminal.reader.modeCycle": "Switch the mode (Shift+Tab)",
   "terminal.reader.modeClose": "Close the mode list (Esc)",

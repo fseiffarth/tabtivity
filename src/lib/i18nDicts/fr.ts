@@ -4460,6 +4460,8 @@ export const dict: Dict = {
   "terminal.reader.modelWaiting": "En attente du sélecteur de modèle de la session…",
   "terminal.reader.mode": "Mode",
   "terminal.reader.modeTitle": "Mode d'autorisation",
+  "terminal.reader.permissionsHint": "Choisir les autorisations — ouvre le sélecteur /permissions de la session",
+  "terminal.reader.permissionsWaiting": "En attente du sélecteur d'autorisations de la session…",
   "terminal.reader.modeHint": "Choisir le mode d'autorisation — basculé avec Maj+Tab jusqu'à ce que la session l'affiche",
   "terminal.reader.modeCycle": "Changer de mode (Maj+Tab)",
   "terminal.reader.modeClose": "Fermer la liste des modes (Échap)",

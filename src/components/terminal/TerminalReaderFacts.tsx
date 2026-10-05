@@ -7,7 +7,7 @@ import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInpu
 import { shortPath } from "../../lib/agents/agentReader";
 import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
-import { isClaudeCommand } from "../../lib/terminal/terminalControl";
+import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
@@ -71,7 +71,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   onEffortPicked: (effort: string) => void;
   visible: boolean;
   typeKeys: (keys: string[]) => Promise<void>;
-  /** Whether the model list is up: the Reader then leaves the picker out of
+  /** Whether a session picker is up: the Reader then leaves it out of
    * its own answer buttons. */
   onPicking: (picking: boolean) => void;
   statusOpen: boolean;
@@ -117,8 +117,12 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     return () => clearInterval(clock);
   }, [visible]);
 
-  // --- The model picker ------------------------------------------------------
+  // --- The session's model / permission picker -------------------------------
   const [picking, setPicking] = useState(false);
+  const [pickerCommand, setPickerCommand] = useState<"/model" | "/permissions">("/model");
+  const permissionPicking = picking && pickerCommand === "/permissions";
+  const modelPicking = picking && !permissionPicking;
+  const codex = isCodexCommand(tab.cmd);
   const [picker, setPicker] = useState<SelectPrompt | null>(null);
   const [answered, setAnswered] = useState<SelectStep | null>(null);
   const sawPicker = useRef(false);
@@ -173,18 +177,19 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     return () => clearTimeout(never);
   }, [picking, step, picker, answered, finish]);
 
-  const openPicker = () => {
+  const openPicker = (command: "/model" | "/permissions" = "/model") => {
     if (picking) return;
     onStatusClose();
     closeModes();
     closeEffort();
+    setPickerCommand(command);
     sawPicker.current = false;
     setAnswered(null);
     setPicker(null);
     const sent = isOpenCodeTab(agentLabel)
       ? typeKeys(OPENCODE_MODEL_KEYS)
       : tab.scheduleTargetId
-        ? submitScheduledAgentCommand(tab.scheduleTargetId, "/model")
+        ? submitScheduledAgentCommand(tab.scheduleTargetId, command)
         : Promise.reject(new Error("no agent input"));
     setPicking(true);
     void sent.catch(finish);
@@ -224,6 +229,11 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setModeOpen(false);
   };
   const openModes = () => {
+    if (codex) {
+      if (permissionPicking) close();
+      else openPicker("/permissions");
+      return;
+    }
     onStatusClose();
     if (modeOpen) {
       closeModes();
@@ -356,12 +366,12 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         <div
           className="terminal-reader-picker"
           role="dialog"
-          aria-label={shownStep?.title ?? t("terminal.reader.modelTitle")}
+          aria-label={shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } }}
         >
           <div className="terminal-reader-picker-head">
-            <strong>{shownStep?.title ?? t("terminal.reader.modelTitle")}</strong>
-            <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t("terminal.reader.modelClose")} title={t("terminal.reader.modelClose")}>✕</button>
+            <strong>{shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}</strong>
+            <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")} title={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")}>✕</button>
           </div>
           {shownStep ? (
             <div className="terminal-reader-options">
@@ -382,7 +392,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
               ))}
             </div>
           ) : (
-            <small className="terminal-reader-question-more">{t("terminal.reader.modelWaiting")}</small>
+            <small className="terminal-reader-question-more">{t(permissionPicking ? "terminal.reader.permissionsWaiting" : "terminal.reader.modelWaiting")}</small>
           )}
           {step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
         </div>
@@ -458,10 +468,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         <button
           type="button"
           className="terminal-reader-fact-model"
-          onClick={picking ? close : openPicker}
-          disabled={!picking && (!!live.working || !!live.question)}
+          onClick={() => modelPicking ? close() : openPicker()}
+          disabled={!modelPicking && (!!live.working || !!live.question || picking)}
           aria-haspopup="dialog"
-          aria-expanded={picking}
+          aria-expanded={modelPicking}
           title={t("terminal.reader.modelHint")}
         >
           {modelLabel ?? t("terminal.reader.model")}
@@ -470,10 +480,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
-            onClick={claude ? openEffort : picking ? close : openEffort}
-            disabled={claude ? !effortOpen && (!!live.question || picking) : !picking && (!!live.working || !!live.question)}
+            onClick={claude ? openEffort : modelPicking ? close : openEffort}
+            disabled={claude ? !effortOpen && (!!live.question || picking) : !modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"
-            aria-expanded={claude ? effortOpen : picking}
+            aria-expanded={claude ? effortOpen : modelPicking}
             title={t(claude ? "terminal.reader.effortHint" : "terminal.reader.effortModelHint")}
           >
             {effortLabel ? t("terminal.reader.effort", { effort: effortLabel }) : t("terminal.reader.effortUnknown")}
@@ -485,12 +495,13 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             type="button"
             className={status?.mode === "plan" ? "terminal-reader-fact-model plan" : "terminal-reader-fact-model"}
             onClick={openModes}
-            disabled={!modeOpen && (!!live.question || picking)}
-            aria-haspopup={modes.length > 0 || fixedMode ? "dialog" : undefined}
-            aria-expanded={modes.length > 0 || fixedMode ? modeOpen : undefined}
-            title={t(modes.length > 0 || fixedMode ? "terminal.reader.modeHint" : "terminal.reader.modeCycle")}
+            disabled={codex ? !permissionPicking && (!!live.working || !!live.question || picking) : !modeOpen && (!!live.question || picking)}
+            aria-haspopup={codex || modes.length > 0 || fixedMode ? "dialog" : undefined}
+            aria-expanded={codex ? permissionPicking : modes.length > 0 || fixedMode ? modeOpen : undefined}
+            title={t(codex ? "terminal.reader.permissionsHint" : modes.length > 0 || fixedMode ? "terminal.reader.modeHint" : "terminal.reader.modeCycle")}
           >
             {modeLabel ?? t("terminal.reader.mode")}
+            {codex && <UntestedTag id="terminal.reader.permissionsPick" />}
           </button>
         )}
         <UntestedTag id="terminal.reader.facts" />

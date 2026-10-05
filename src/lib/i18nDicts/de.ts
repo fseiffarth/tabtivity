@@ -4467,6 +4467,8 @@ export const dict: Dict = {
   "terminal.reader.modelWaiting": "Warte auf die Modellauswahl der Sitzung…",
   "terminal.reader.mode": "Modus",
   "terminal.reader.modeTitle": "Berechtigungsmodus",
+  "terminal.reader.permissionsHint": "Berechtigungen wählen — öffnet die /permissions-Auswahl der Sitzung",
+  "terminal.reader.permissionsWaiting": "Warten auf die Berechtigungsauswahl der Sitzung…",
   "terminal.reader.modeHint": "Berechtigungsmodus wählen — per Umschalt+Tab umgeschaltet, bis die Sitzung ihn zeigt",
   "terminal.reader.modeCycle": "Modus wechseln (Umschalt+Tab)",
   "terminal.reader.modeClose": "Modusliste schließen (Esc)",

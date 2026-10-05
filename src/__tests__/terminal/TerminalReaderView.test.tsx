@@ -672,6 +672,67 @@ describe("the Reader's live rows", () => {
     expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
   });
 
+  it("chooses Codex permissions from its native picker and follows the Full Access confirmation", async () => {
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const rows = ["›", "gpt-6 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const chip = screen.getByTitle("Choose permissions — opens the session's own /permissions picker");
+    await act(async () => { fireEvent.click(chip); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/permissions");
+    expect(written).toEqual([]);
+    expect(screen.getByRole("dialog", { name: "Permission mode" }).textContent).toContain("Waiting for the session's permission picker");
+    rows.splice(0, rows.length, "Update Model Permissions", "",
+      "› 1. Ask for approval (current)   Ask before running commands outside the workspace.",
+      "  2. Approve for me   Review risky actions automatically.",
+      "  3. Full Access   Allow unrestricted access.",
+      "  4. Read Only   Only read files.", "", "Press enter to confirm or esc to go back");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+    const list = screen.getByRole("dialog", { name: "Update Model Permissions" });
+    expect(within(list).getByRole("button", { name: /Approve for me/ })).toBeTruthy();
+    expect(within(list).queryByRole("button", { name: /Plan/ })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(list).getByRole("button", { name: /Full Access/ }));
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(written).toEqual(["\u001b[B", "\u001b[B", "\r"]);
+    rows.splice(0, rows.length, "Enable full access?", "",
+      "› 1. Yes, enable full access", "  2. No, go back", "", "Press enter to confirm or esc to go back");
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    const confirmation = screen.getByRole("dialog", { name: "Enable full access?" });
+    await act(async () => { fireEvent.click(within(confirmation).getByRole("button", { name: /Yes, enable/ })); });
+    expect(written[written.length - 1]).toBe("\r");
+    rows.splice(0, rows.length, "• Permissions updated to Full Access", "›", "gpt-6 · 85% context left");
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(chip.textContent).toContain("Full access");
+  });
+
+  it("closes Codex's permission picker with Esc and does not open it during a turn", async () => {
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const rows = ["›", "gpt-6 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const chip = screen.getByTitle("Choose permissions — opens the session's own /permissions picker");
+    await act(async () => { fireEvent.click(chip); });
+    rows.splice(0, rows.length, "Update Model Permissions", "", "› 1. Ask for approval", "  2. Read Only", "", "Press enter to confirm or esc to go back");
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await act(async () => { fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" }); });
+    expect(written).toEqual(["\u001b"]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    rows.splice(0, rows.length, "› fix it", "Working (9s · esc to interrupt)", "›", "gpt-6 · 85% context left");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect((chip as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(chip);
+    expect(submitCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the session's own /model picker as a list and answers it there", async () => {
     submitCommand.mockClear();
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
