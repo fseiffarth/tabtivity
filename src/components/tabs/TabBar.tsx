@@ -96,6 +96,7 @@ import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
+import { observeStripResize } from "../../lib/observeStripResize";
 
 /** Default fly-out card size when no live pane thumbnail is available (group
  *  detach via the bar drag carries no preview). */
@@ -385,11 +386,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     updateScrollState();
     const onScroll = () => updateScrollState();
     el.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(() => updateScrollState());
-    ro.observe(el);
+    // Children too: a tab growing inside a capped strip changes no strip box.
+    const stopResize = observeStripResize(el, updateScrollState);
     return () => {
       el.removeEventListener("scroll", onScroll);
-      ro.disconnect();
+      stopResize();
     };
   }, [updateScrollState]);
 

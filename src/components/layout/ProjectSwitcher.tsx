@@ -28,6 +28,7 @@ import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../
 import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
+import { observeStripResize } from "../../lib/observeStripResize";
 
 // Re-exported for tests and any external callers that imported these scaffold
 // helpers from ProjectSwitcher before the dialog was extracted (the public
@@ -417,16 +418,14 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     update();
     el.addEventListener("scroll", update, { passive: true });
     el.addEventListener("wheel", onWheel, { passive: false });
-    // ResizeObserver is absent in jsdom (tests); guard so the effect no-ops it
-    // there while the scroll/wheel/resize listeners still wire up.
-    const ro =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
-    ro?.observe(el);
+    // The row and each pill (a pill widening in a capped row resizes no row
+    // box); a no-op in jsdom, where the scroll/wheel/resize listeners still wire up.
+    const stopResize = observeStripResize(el, update);
     window.addEventListener("resize", update);
     return () => {
       el.removeEventListener("scroll", update);
       el.removeEventListener("wheel", onWheel);
-      ro?.disconnect();
+      stopResize();
       window.removeEventListener("resize", update);
     };
     // Re-run when the rendered bucket shape changes (count alone misses a
