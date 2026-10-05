@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SessionTranscript } from "../../mobile-web/src/api";
 import type { TabEntry } from "../stores/tabs";
+import { noteBackgroundWork } from "../stores/activity";
 import { readerRequest } from "./agents/agentReader";
 
 /**
@@ -41,9 +42,14 @@ async function recount(ptyId: string, scope: string, tab: TabEntry, known: Count
   counted.set(ptyId, entry);
   const read = await invoke<SessionTranscript>("agent_tab_transcript", args).catch(() => null);
   entry.reading = false;
-  if (!read || read.unchanged) return;
-  entry.count = read.available ? read.runningAgents ?? 0 : 0;
-  entry.version = read.version;
+  if (!read) return;
+  if (!read.unchanged) {
+    entry.count = read.available ? read.runningAgents ?? 0 : 0;
+    entry.version = read.version;
+  }
+  // A subagent at work after the Stop keeps the turn open for when it wakes
+  // the agent (`noteBackgroundWork`); stamped with when the read began.
+  if (entry.count > 0) noteBackgroundWork(ptyId, now);
 }
 
 export function clearMobileSubagentCountsForTest(): void {

@@ -8,6 +8,7 @@ import {
   _clearPtyActivityForTest,
   agentTurnStartedAt,
   noteAgentTurn,
+  noteBackgroundWork,
   noteUserInput,
   useActivityStore,
 } from "../../stores/activity";
@@ -64,6 +65,51 @@ describe("agentTurnStartedAt", () => {
     noteAgentTurn(PTY, "working");
     expect(agentTurnStartedAt(PTY)).toBe(start + 20_000);
   });
+
+  it("carries the turn on when the agent wakes on a background shell it left running", () => {
+    noteAgentTurn(PTY, "working");
+    const start = Date.now();
+    vi.advanceTimersByTime(10_000);
+    noteAgentTurn(PTY, "done", true); // Stop with a shell still running
+    vi.advanceTimersByTime(60_000);
+    noteAgentTurn(PTY, "done", false); // the shell exits
+    vi.advanceTimersByTime(1_000);
+    noteAgentTurn(PTY, "working"); // Claude wakes on its result
+    expect(agentTurnStartedAt(PTY)).toBe(start);
+  });
+
+  it("carries the turn on when a subagent seen after the Stop wakes the agent", () => {
+    noteAgentTurn(PTY, "working");
+    const start = Date.now();
+    vi.advanceTimersByTime(10_000);
+    noteAgentTurn(PTY, "done");
+    vi.advanceTimersByTime(5_000);
+    noteBackgroundWork(PTY); // the phone bridge counted a subagent at work
+    vi.advanceTimersByTime(60_000);
+    noteAgentTurn(PTY, "working");
+    expect(agentTurnStartedAt(PTY)).toBe(start);
+  });
+
+  it("starts a new turn for a prompt typed after the Stop, background work or not", () => {
+    noteAgentTurn(PTY, "working");
+    vi.advanceTimersByTime(10_000);
+    noteAgentTurn(PTY, "done", true);
+    vi.advanceTimersByTime(5_000);
+    noteUserInput(PTY);
+    noteAgentTurn(PTY, "working");
+    expect(agentTurnStartedAt(PTY)).toBe(Date.now());
+  });
+
+  it("starts a new turn when nothing was left running at the Stop", () => {
+    noteAgentTurn(PTY, "working");
+    const start = Date.now();
+    noteBackgroundWork(PTY); // a subagent inside the turn, done before the Stop
+    vi.advanceTimersByTime(10_000);
+    noteAgentTurn(PTY, "done");
+    vi.advanceTimersByTime(600_000);
+    noteAgentTurn(PTY, "working"); // a scheduled wakeup
+    expect(agentTurnStartedAt(PTY)).toBe(start + 610_000);
+  });
 });
 
 describe("turnDuration", () => {
@@ -73,6 +119,8 @@ describe("turnDuration", () => {
 
   it("measures a finished turn up to its finish", () => {
     expect(turnDuration({ agent_status: "done", turn_started_at: 1_000, working_at: 60_000, done_at: 61_000 })).toEqual({ ms: 60_000, running: false, end: 61_000 });
+    // Stopped with subagents still at work: the turn runs on to the desktop's now.
+    expect(turnDuration({ agent_status: "done", agent_subagents: 2, turn_started_at: 1_000, working_at: 300_000, done_at: 61_000 })).toEqual({ ms: 299_000, running: true, end: 300_000 });
     expect(turnDuration({ turn_started_at: 1_000, done_at: 721_000 })).toEqual({ ms: 720_000, running: false, end: 721_000 });
   });
 

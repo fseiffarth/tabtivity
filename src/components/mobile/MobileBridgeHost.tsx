@@ -591,7 +591,8 @@ function projectAgentStatuses(projectId: string): AgentTabStatus[] {
     withModeMarks(row, ptyId);
     const subagents = mobileSubagentCount(projectId, tab);
     if (subagents) row.subagents = subagents;
-    const workingAt = status === "working" ? Date.now() : activity.lastWorkingByTab[ptyId];
+    // Subagents at work past the Stop keep the turn going (`turnDuration`).
+    const workingAt = status === "working" || subagents ? Date.now() : activity.lastWorkingByTab[ptyId];
     if (workingAt !== undefined) row.working_at = workingAt;
     const doneAt = activity.lastDoneByTab[ptyId];
     if (doneAt !== undefined) row.done_at = doneAt;
@@ -618,7 +619,7 @@ function projectAgentTimings(projectId: string): AgentTabTiming[] {
     // A background subagent works on after the turn is over.
     const subagents = mobileSubagentCount(projectId, tab);
     if (subagents) row.subagents = subagents;
-    const workingAt = activity.lastWorkingByTab[ptyId];
+    const workingAt = subagents ? Date.now() : activity.lastWorkingByTab[ptyId];
     if (workingAt !== undefined) row.working_at = workingAt;
     const doneAt = activity.lastDoneByTab[ptyId];
     if (doneAt !== undefined) row.done_at = doneAt;

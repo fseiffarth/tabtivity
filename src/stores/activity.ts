@@ -103,7 +103,7 @@ const tailByPty: Record<string, string> = {};
 /// Absent for a tab whose agent fires no hooks, or once a verdict was retired.
 const turnByPty: Record<string, { state: AgentTurnState; at: number; job: boolean }> = {};
 // Automation must not inherit the UI's silence fallback or unread state.
-const deliveryTurns: Record<string, { state: AgentTurnState; at: number; startedAt?: number; job: boolean }> = {};
+const deliveryTurns: Record<string, { state: AgentTurnState; at: number; startedAt?: number; stoppedAt?: number; job: boolean }> = {};
 const seenAtByPty: Record<string, number> = {};
 const bellByPty: Record<string, number> = {};
 const proposalByPty: Record<string, number> = {};
@@ -146,10 +146,31 @@ const workAtByPty: Record<string, number> = {};
 /// Read by the phone bridge (`agentTurnStartedAt`), which shows how long a tab
 /// has been — or was — at work on it.
 const turnStartByPty: Record<string, number> = {};
+/// When work the agent left running past its Stop — a background shell (the
+/// hook's `job`) or a subagent (`noteBackgroundWork`) — was last seen alive.
+/// Claude wakes itself when that work finishes; a `working` with this stamp
+/// after the Stop and no input since carries on the turn instead of opening one
+/// from zero (`wokenByBackground`).
+const backgroundAtByPty: Record<string, number> = {};
 
 /** When the tab's current or last turn began, if this session saw one begin. */
 export function agentTurnStartedAt(ptyId: string): number | undefined {
   return turnStartByPty[ptyId];
+}
+
+/** Record that the tab's session had work of its own at `at` — a subagent still
+ *  running, as the phone bridge counts them (`mobileSubagentCount`). */
+export function noteBackgroundWork(ptyId: string, at = Date.now()): void {
+  if ((backgroundAtByPty[ptyId] ?? 0) < at) backgroundAtByPty[ptyId] = at;
+}
+
+/** Whether a `working` after a Stop is the agent woken by the work it left
+ *  running (a subagent or background shell finished) rather than a new prompt:
+ *  that work was seen alive after the Stop, and nobody typed since. */
+function wokenByBackground(ptyId: string, prev: (typeof deliveryTurns)[string] | undefined): boolean {
+  if (prev?.state !== "done" || interruptedByPty[ptyId] !== undefined) return false;
+  const stoppedAt = prev.stoppedAt ?? prev.at;
+  return (backgroundAtByPty[ptyId] ?? 0) >= stoppedAt && (inputByPty[ptyId] ?? 0) <= stoppedAt;
 }
 
 /// Memo for the decision-prompt test, keyed by PTY id and validated against the
@@ -189,6 +210,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   busySinceMarkByPty,
   workAtByPty,
   turnStartByPty,
+  backgroundAtByPty,
 ];
 
 /// Braille pattern cells (U+2800–U+28FF), which an agent TUI paints as
@@ -282,12 +304,20 @@ export function noteAgentTurn(ptyId: string, state: AgentTurnState, job = false)
   // one. The previous verdict is the raw hook history (`deliveryTurns`, which
   // answering a prompt does not retire), read before it is overwritten and
   // before the interrupted mark is cleared below.
+  // So does one that wakes the agent on the work it left running past its Stop:
+  // the turn was waiting on that work, not over (`wokenByBackground`).
+  const prevTurn = deliveryTurns[ptyId];
   if (state === "working") {
-    const prev = deliveryTurns[ptyId]?.state;
-    const resumes = (prev === "working" || prev === "decision") && interruptedByPty[ptyId] === undefined;
+    const prev = prevTurn?.state;
+    const resumes =
+      ((prev === "working" || prev === "decision") && interruptedByPty[ptyId] === undefined) ||
+      wokenByBackground(ptyId, prevTurn);
     if (!resumes || turnStartByPty[ptyId] === undefined) turnStartByPty[ptyId] = at;
   }
-  deliveryTurns[ptyId] = { state, at, job, startedAt: state === "working" ? at : deliveryTurns[ptyId]?.startedAt };
+  if (state === "done" && job) noteBackgroundWork(ptyId, at);
+  // A job's end re-reports `done`; the Stop is the first of the run.
+  const stoppedAt = state === "done" ? (prevTurn?.state === "done" ? prevTurn.stoppedAt ?? prevTurn.at : at) : undefined;
+  deliveryTurns[ptyId] = { state, at, job, stoppedAt, startedAt: state === "working" ? at : prevTurn?.startedAt };
   // A new turn (or prompt) ends the interrupted mark, and so does the session
   // ending. A `done` does not: after an interrupt Claude's only hook is the
   // idle notice a minute later, which says nothing about the turn that was cut.

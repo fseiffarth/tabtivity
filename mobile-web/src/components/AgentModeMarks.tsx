@@ -35,16 +35,19 @@ export function SubagentCount({ tab, onOpen }: { tab: Pick<TabRow, "agent_subage
 }
 
 /** How long the tab has been at work on its current turn, or was on its last
- *  one: `running` while the turn is not over (working, or paused on a
- *  question). Every number is the desktop's own clock — for a working tab
- *  `working_at` is the desktop's "now" — so the phone's clock never enters it.
- *  Nothing where the end is unknown: an interrupted turn fires no finish.
- *  `end` is when the turn stopped, or the desktop's now while it runs. */
-export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at">): { ms: number; running: boolean; end: number } | undefined {
+ *  one: `running` while the turn is not over (working, paused on a question,
+ *  or stopped with subagents still at work — they wake it when they finish).
+ *  Every number is the desktop's own clock — for a working tab, or one with
+ *  subagents at work, `working_at` is the desktop's "now" — so the phone's
+ *  clock never enters it. Nothing where the end is unknown: an interrupted
+ *  turn fires no finish. `end` is when the turn stopped, or the desktop's now
+ *  while it runs. */
+export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">): { ms: number; running: boolean; end: number } | undefined {
   const start = tab.turn_started_at;
   if (start === undefined) return undefined;
-  const running = tab.agent_status === "working" || tab.agent_status === "question";
-  const end = tab.agent_status === "working"
+  const working = tab.agent_status === "working" || (tab.agent_subagents ?? 0) > 0;
+  const running = working || tab.agent_status === "question";
+  const end = working
     ? tab.working_at
     : [tab.done_at, tab.working_at].find((at) => at !== undefined && at >= start);
   if (end === undefined || end < start) return undefined;
@@ -65,7 +68,7 @@ export function formatTurnDuration(ms: number, t: ReturnType<typeof useT>): stri
  *  gave no reading. The age is the phone's clock against the desktop's
  *  stamp — a rough one, as on the Activity list, which says it on its own
  *  line and so passes `finished={false}`. */
-export function TurnDuration({ tab, finished = true }: { tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at">; finished?: boolean }) {
+export function TurnDuration({ tab, finished = true }: { tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">; finished?: boolean }) {
   const t = useT();
   const turn = turnDuration(tab);
   if (!turn) return null;
