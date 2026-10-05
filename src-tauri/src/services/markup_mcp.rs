@@ -659,6 +659,11 @@ pub fn resolve_file(root: &Path, file: &str, prove: bool) -> Result<String, Stri
         return Err("not a project path".into());
     }
     let path = Path::new(file);
+    // Checked as written: joined onto a Windows `\\?\` root, a `..` is folded
+    // away before any component check could refuse it.
+    if !path.is_absolute() && file.split('/').any(|segment| matches!(segment, "" | "." | "..")) {
+        return Err("not a project path".into());
+    }
     let absolute = if path.is_absolute() { path.to_path_buf() } else { root.join(path) };
     let source = markup::resolve_local_source(root, &absolute).map_err(|e| e.code().to_string())?;
     let rel = match &source {
