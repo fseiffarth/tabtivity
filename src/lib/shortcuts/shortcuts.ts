@@ -306,7 +306,10 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   // they work from a focused terminal. Ctrl+Shift+N and +M are no terminal or
   // editor chord here; Ctrl+1–9 shadows only the legacy control codes some
   // terminals put on Ctrl+2–8, and is matched by physical key (`chordMatches`)
-  // so it works on layouts whose digit row types symbols.
+  // so it works on layouts whose digit row types symbols. While a mail /
+  // calendar / to-do overlay is in front, Ctrl+1–9 dock that slot's root agent
+  // in the overlay rather than open a tab hidden under it
+  // (`requestOverlayAgent`).
   {
     action: "newShellTab",
     labelKey: "shortcut.newShellTab",

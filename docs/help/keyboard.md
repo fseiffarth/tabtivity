@@ -63,6 +63,11 @@ To choose which agent each number opens, reorder them with ↑/↓ in
 its chord there. Once you have moved one, the list order is the numbering —
 Ctrl+1 is the top agent rather than the default one.
 
+Inside the mail, calendar or to-do window, Ctrl+1 … Ctrl+9 open no tab in the
+pane underneath: they dock that number's root-console agent in a column beside
+the app, numbered as the root console's `+` menu numbers them (only agents with
+the **Root** chip). See `mail-calendar`.
+
 ## Tabtivity navigation
 
 Press **Shift+Space**. A legend appears at the bottom and the app answers

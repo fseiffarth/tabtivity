@@ -75,6 +75,8 @@ vi.mock("../../stores/boxes", () => ({
     sel({ load: vi.fn().mockResolvedValue(undefined) }),
   ),
   BOX_SCOPE_PREFIX: "box:",
+  // The app overlays' docked-agent hook reads the root "+" menu's data.
+  boxMembersOfScope: () => [],
 }));
 vi.mock("../../stores/timer", () => ({
   useTimerStore: vi.fn((sel: (s: object) => unknown) =>

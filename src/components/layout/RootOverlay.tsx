@@ -1,6 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   clampRootOverlayFrame,
@@ -13,6 +12,7 @@ import {
 import { useProjectsStore } from "../../stores/projects";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { useCalendarStore } from "../../stores/calendar/calendar";
+import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
 import { useSettingsStore } from "../../stores/settings";
 import {
   DEFAULT_MIN_SUBWINDOW_PX,
@@ -50,7 +50,7 @@ import { StarIcon } from "./StarIcon";
 import { RootReviewStrip } from "./RootReviewStrip";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
-import { MailIcon, WarningIcon } from "../common/icons/Icon";
+import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -63,21 +63,6 @@ type RootMcpChange = (
   /** Board-only fields changed (a move's column/rank): merge, push nothing. */
   local?: boolean;
 };
-
-interface RootMcpStatus {
-  running: boolean;
-  tools: string[];
-  /** At least one mail account is open to a contained reader agent. */
-  mail_open?: boolean;
-  /** With `mail_open`: the widest per-account scope — a few marked messages,
-   *  or a whole account. */
-  mail_scope?: "marked" | "all";
-  /** Root agents run fenced, so the staged-write review cannot be bypassed. */
-  review_enforced?: boolean;
-  /** A root agent started now could read the projects (the fence switch is
-   *  on, or it runs unfenced) — what a mail draft's `attach` needs. */
-  projects_readable?: boolean;
-}
 
 /** A rect relative to the overlay's pane region. */
 interface Rect {
@@ -184,13 +169,21 @@ export function RootOverlayHost() {
   }, [rootTabs, rootLayout, activeScope]);
 
   useEffect(() => {
+    // Ids an agent deleted moments ago: a move to another calendar arrives as
+    // a delete and an upsert of the same id, and that is an update, not an
+    // arrival. Pruned on every event, so it holds a few ids at most.
+    const justDeleted = new Map<string, number>();
     const unlisten = listen<RootMcpChange>("root-mcp-changed", ({ payload }) => {
       const upsert = <T extends { id: string }>(rows: T[], row: T) =>
         rows.some((r) => r.id === row.id)
           ? rows.map((r) => (r.id === row.id ? row : r))
           : [...rows, row];
+      const now = Date.now();
+      for (const [id, at] of justDeleted) if (now - at > ARRIVAL_MS) justDeleted.delete(id);
       // A mail draft lives in the mail store, not the calendar: re-read the
       // list. It opens nothing and steals no focus; the row shows its mark.
+      // No arrival here: an agent draft always lands unfiled, in the approvals
+      // list, and reaches "Drafted by agents" only through the user's ✓.
       if (payload.kind === "draft") {
         void useMailStore.getState().loadAgentDrafts();
         return;
@@ -200,6 +193,17 @@ export function RootOverlayHost() {
         const row = payload.row;
         useCalendarStore.setState((s) => ({ calendars: payload.op === "delete" ? s.calendars.filter((c) => c.id !== row.id) : upsert(s.calendars, row) }));
         return;
+      }
+      // Read before the merge: only an id the store has never held flies in.
+      // An update, a board-only move (`local`) or a delete plays nothing. A
+      // store that has not loaded yet holds no rows to compare against, so
+      // it marks nothing: every update would look new.
+      if (payload.op === "delete") {
+        justDeleted.set(payload.row.id, now);
+      } else if (!payload.local && !justDeleted.delete(payload.row.id)) {
+        const before = useCalendarStore.getState();
+        const rows: { id: string }[] = payload.kind === "event" ? before.events : before.tasks;
+        if (before.loaded && !rows.some((r) => r.id === payload.row.id)) useArrivalsStore.getState().markArrived([payload.row.id]);
       }
       useCalendarStore.setState((s) => {
         if (payload.kind === "event") {
@@ -283,7 +287,9 @@ function RootOverlay() {
     null,
   );
   const [manageAgents, setManageAgents] = useState(false);
-  const [status, setStatus] = useState<RootMcpStatus | null>(null);
+  // The ⚿ badge's reading (`root_mcp_status`, once per mount) — also what
+  // tells the proposals panel whether the review gate is only advisory.
+  const rights = useRootMcpRights();
   const [drag, setDrag] = useState<OverlayDrag | null>(null);
   const [groupRects, setGroupRects] = useState<Record<string, Rect>>({});
   // The frame while a move/resize drag is in flight — local, so a gesture costs
@@ -318,7 +324,6 @@ function RootOverlay() {
   const soleGroupId = split ? null : (allGroups(layout)[0]?.id ?? EMPTY_GROUP_ID);
 
   useEffect(() => {
-    invoke<RootMcpStatus>("root_mcp_status").then(setStatus).catch(() => setStatus(null));
     void useMailStore.getState().loadAgentDrafts();
   }, []);
 
@@ -635,19 +640,7 @@ function RootOverlay() {
     [addMenu],
   );
 
-  // The global switch is the settings store's, so the badge follows a flip made
-  // in Settings at once; `running` is the listener's and only a restart moves it.
-  const toolsEnabled = useSettingsStore((s) => s.settings?.root_mcp ?? true);
-  const localOnly = useSettingsStore((s) => s.settings?.root_mcp_local_only ?? false);
-  const toolsOn = toolsEnabled && !!status?.running;
-  // `=== false`: a backend that predates the field says nothing, which is not
-  // a claim that the gate is off.
-  const reviewAdvisory = toolsOn && status?.review_enforced === false;
-  const agentsWithTools = !toolsEnabled
-    ? t("rootConsole.rightsDisabled")
-    : status?.running
-      ? t(localOnly ? "rootConsole.rightsLocalOnly" : "rootConsole.rightsOn")
-      : t("rootConsole.rightsOff");
+  const reviewAdvisory = rights.reviewAdvisory;
   const groupOfKey = useMemo(() => {
     const map = new Map<string, { groupId: string; active: boolean }>();
     for (const g of groups) {
@@ -796,19 +789,7 @@ function RootOverlay() {
                 tools' own state; the ✓ button beside it is that door now, and
                 the panel hangs from the button that counts it. Switching the
                 tools on and off stays in Settings, where it always was. */}
-            <span
-              className={`root-overlay-rights status${toolsOn ? " on" : ""}${toolsEnabled ? "" : " off"}`}
-              title={`${agentsWithTools}${
-                toolsOn ? `\n${status?.tools.join(", ")}` : ""
-              }\n${t("rootConsole.rightsInSettings")}\n${t("rootConsole.noPhone")}${
-                status?.mail_open
-                  ? `\n${t(status.mail_scope === "all" ? "rootConsole.mailOpenAll" : "rootConsole.mailOpen")}`
-                  : ""
-              }${reviewAdvisory ? `\n${t("rootConsole.reviewAdvisory")}` : ""}`}
-            >
-              {t("rootConsole.rightsBadge")}{reviewAdvisory && <> <WarningIcon /></>}
-              {status?.mail_open && <> <MailIcon />{status.mail_scope === "all" && <MailIcon />}</>}
-            </span>
+            <RootRightsBadge rights={rights} />
             <button
               type="button"
               ref={approvalsRef}

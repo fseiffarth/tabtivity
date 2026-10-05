@@ -40,6 +40,7 @@ import {
 } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
@@ -101,6 +102,9 @@ function CenterPanelImpl() {
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const windowFocused = useWindowFocused();
   const rootConsoleOpen = useRootOverlayStore((st) => st.open);
+  // Root tab keys an app overlay's docked agent column is drawing right now
+  // (`OverlayAgentColumn`); their copy here stands down, like the root console.
+  const overlayAgentShown = useOverlayAgentStore((st) => st.shownKeys);
   const layout = useTabsStore((s) => s.layout);
   const layoutByScope = useTabsStore((s) => s.layoutByScope);
   const setScope = useTabsStore((s) => s.setScope);
@@ -1176,10 +1180,14 @@ function CenterPanelImpl() {
           const visible =
             isCurrentScope &&
             // The root console shows the root scope's tabs itself (attach-only
-            // views of these panes). With no project open the root scope is
-            // also what THIS panel shows, and two visible views of one PTY
-            // would take turns resizing it — so the panel's copy stands down.
+            // views of these panes), and an app overlay's docked agent column
+            // shows one root tab the same way. With no project open the root
+            // scope is also what THIS panel shows, and two visible views of one
+            // PTY would take turns resizing it — so the panel's copy stands
+            // down: the whole root scope while the console is up, the docked
+            // key while a column draws it. The slot is left empty meanwhile.
             !(rootConsoleOpen && scopeKey === ROOT_SCOPE) &&
+            !(scopeKey === ROOT_SCOPE && overlayAgentShown.has(tab.key)) &&
             groupId != null &&
             activeKeyOfGroup.get(groupId) === tab.key &&
             (!fsActive || groupId === fullscreenGroupId);

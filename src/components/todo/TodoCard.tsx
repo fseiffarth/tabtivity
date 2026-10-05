@@ -28,6 +28,7 @@ import { resolveRemarkAbsPath } from "../../lib/projects/projectRemarks";
 import { jumpToSource } from "../embed/FileViewerPane";
 import { basename } from "../../lib/paths";
 import { ClockIcon, MailIcon, PinIcon } from "../common/icons/Icon";
+import { useArrived } from "../../stores/calendar/arrivals";
 
 interface Props {
   task: CalendarTask;
@@ -72,6 +73,7 @@ const MAX_TAG_CHIPS = 3;
  */
 export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: Props) {
   const t = useT();
+  const arrived = useArrived(task.id);
   const use24h = useUse24h();
   const projects = useProjectsStore((s) => s.projects);
   const [editing, setEditing] = useState(false);
@@ -191,7 +193,8 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
       className={
         "todo-card" +
         (done ? " todo-card-done" : "") +
-        (overdue ? " todo-card-overdue" : "")
+        (overdue ? " todo-card-overdue" : "") +
+        (arrived ? " arrived" : "")
       }
       data-task-id={task.id}
       onPointerDown={(e) => {

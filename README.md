@@ -626,7 +626,9 @@ follows debug mode, so they are all on in a development build.
   week's time and usage. **Mail tools are next**. The tools live on a loopback endpoint behind a per-run bearer token
   that is never written to disk, and **no project's agents ever get them**. One
   switch in Settings turns it all off without a restart: new root agents are
-  handed nothing and the ones already running are refused.
+  handed nothing and the ones already running are refused. Inside the mail,
+  calendar or board window, `Ctrl+1`–`9` (or its ✦ button) dock such a root
+  agent in a column beside the app, so you watch its entries land as you ask.
 - **Daily recap**: a private, local-only summary of your day — which agents and
   models you used, prompts asked, shell commands, file churn, commits, and time
   per project. It opens once on the first launch of each day. Nothing leaves the

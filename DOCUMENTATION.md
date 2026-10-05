@@ -181,7 +181,10 @@ Some surfaces are **overlays over the whole window** rather than tabs — mail
 (`PresentationOverlay`) — opened from their header indicator or the `+` menu.
 Mail is the settled example: it was built as a tab *and* an overlay, and the tab
 was retired (`RETIRED_TAB_CMDS`) because the mail store is global, so a
-project-scoped tab could only ever show the same mailbox.
+project-scoped tab could only ever show the same mailbox. The mail, calendar
+and board overlays can dock a root-console agent in a right-hand column
+(`OverlayAgentColumn`, Ctrl+1–9 or the title bar's ✦): an attach-only view of a
+root tab, so its MCP writes land beside the prompt (`docs/context/root_console.md`).
 
 ### Header Bar
 
