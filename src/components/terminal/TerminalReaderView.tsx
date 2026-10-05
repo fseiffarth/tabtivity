@@ -35,10 +35,10 @@ import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
-import { commandArgsInline, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import type { AskedQuestion, RunningShell } from "../../../mobile-web/src/api";
 
@@ -432,9 +432,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSending(true);
     setSendError("");
     try {
+      // A prefix the CLI's popup completes (`/clea`) runs that command.
+      const command = completedSlashCommand(text, cli, usedSlash) ?? text;
       // A new conversation goes in as the Clear key's does, so the window
       // knows of it at once: Codex's hook says so only with the next prompt.
-      if (isNewConversationCommand(text)) {
+      if (isNewConversationCommand(command)) {
         if (!(await clearAgentTab(scope, current))) {
           // Codex refuses one mid-turn, and says so only in its terminal.
           const busy = agentFamily(agentTabLabel(current)) === "codex" && !!useActivityStore.getState().busyByTab[ptyId];
@@ -467,7 +469,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         await sendSteeringPrompt(current, text);
       }
       // Offered again by the `/` menu, newest first.
-      rememberSlashCommand(cli, text);
+      rememberSlashCommand(cli, command);
       setUsedSlash(readSlashCommands(cli));
       setDraft("");
       historyAt.current = null;
@@ -651,11 +653,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   /** The Changes panel beside the chat (the prompt strip's Diffs switch). */
   const changesOpen = useReaderChangesOpen(tab?.cmd ?? "");
   const changesWidth = useAgentReaderStore((state) => state.changesWidth);
-  /** The reasoning effort the busy row last named: Claude Code prints it only
-   * there, so the facts row keeps it once the turn is over. */
+  /** The reasoning effort last seen: Claude Code prints it only on its busy
+   * row, so the facts row also takes the one its transcript records (every
+   * answer, and a `/effort`'s confirmation) and the one just picked there —
+   * whichever changed last. */
   const [seenEffort, setSeenEffort] = useState<string | undefined>();
   const workingEffort = live.working?.effort;
   useEffect(() => { if (workingEffort) setSeenEffort(workingEffort); }, [workingEffort]);
+  const recordedEffort = transcript?.available ? transcript.effort : undefined;
+  useEffect(() => { if (recordedEffort) setSeenEffort(recordedEffort); }, [recordedEffort]);
 
   // The live screen: read on the pane's output (settled), and on a slow
   // clock for the busy row's timer and a terminal not created yet.
@@ -839,9 +845,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     if (pending.length === 0) return;
     const now = Date.now();
     const waitingSince = (item: PendingPrompt) => Math.max(item.sentAt, workingSeenAt.current);
-    const recorded = (item: PendingPrompt) => entries.some((entry) =>
-      entry.kind === "prompt" && entry.text.trim() === item.text.trim()
-      && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
+    // A bare `/prefix` is recorded as the command the CLI's popup completed
+    // it to (`/clea` → `/clear`).
+    const recorded = (item: PendingPrompt) => {
+      const sent = item.text.trim();
+      const prefix = /^\/[\w-]+$/u.test(sent) ? sent : null;
+      return entries.some((entry) =>
+        entry.kind === "prompt"
+        && (entry.text.trim() === sent || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix)))
+        && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
+    };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
     if (left.length !== pending.length) {
       setPending(left);
@@ -1171,6 +1184,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           visible={visible}
           path={tab.cwd || cwd}
           effort={seenEffort}
+          onEffortPicked={setSeenEffort}
           typeKeys={typeIntoPane}
           onPicking={setPicking}
           statusOpen={statusOpen}

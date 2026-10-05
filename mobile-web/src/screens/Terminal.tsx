@@ -128,7 +128,7 @@ import { SignInSheet } from "./SignInSheet";
 import { copiedSignIn, hasSignInTab, osc52Text, readHiddenSignIn, readSignedOut, readSignIn, signInAlternate, signInCommand, signInDone, type SignIn } from "../terminal/signIn";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
-import { draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
+import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashCli, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../slashCommands";
 import {
   onDeviceSpeechAsked,
   prepareOnDeviceSpeech,
@@ -2645,8 +2645,10 @@ export function Terminal({ tab, project, back, pickModel = false, subagent, sign
     setLastSent(text);
     setEditNote("");
     if (id === undefined) {
-      if (CLEAR_COMMAND.test(text)) startedOver();
-      rememberSlashCommand(slashCliKey, text);
+      // A prefix the CLI's popup completes (`/clea`) runs that command.
+      const command = completedSlashCommand(text, slashCliKey, usedSlash) ?? text;
+      if (CLEAR_COMMAND.test(command)) startedOver();
+      rememberSlashCommand(slashCliKey, command);
       setUsedSlash(readSlashCommands(slashCliKey));
     } else {
       // The new chat has a prompt now: resuming the old one would leave it.

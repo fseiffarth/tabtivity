@@ -201,6 +201,26 @@ export function slashCatalog(cli: string): readonly CatalogEntry[] {
 }
 
 /**
+ * The command a bare `/prefix` runs once the CLI's own popup completes it at
+ * Enter (`/clea` → `/clear`): the one command — built in, or sent to this CLI
+ * before — whose name starts with it. The draft itself when it is a whole
+ * command or not a bare `/word`; null when no known command, or more than one,
+ * continues it — the popup's pick is then not known here.
+ */
+export function completedSlashCommand(draft: string, cli: string, used: readonly string[]): string | null {
+  const typed = draft.trim();
+  if (!/^\/[\w-]+$/u.test(typed)) return typed;
+  const prefix = typed.toLowerCase();
+  const names = new Set([
+    ...slashCatalog(cli).map((entry) => entry.command),
+    ...used.map((line) => line.split(" ")[0].toLowerCase()),
+  ]);
+  if (names.has(prefix)) return typed;
+  const matches = [...names].filter((name) => name.startsWith(prefix));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
  * The whole store, or `{}`. Anything not written in this shape is read as
  * absent: a stored line is text the composer offers to send to an agent, so a
  * bad value must mean "nothing was kept", never an odd line in the menu.

@@ -142,12 +142,39 @@ describe("the agent pane's Reader", () => {
     expect(clearAgentTab).toHaveBeenCalledWith("p", expect.objectContaining({ key: "agent-1" }));
     expect(sendSteeringPrompt).not.toHaveBeenCalled();
     expect((box as HTMLTextAreaElement).value).toBe("");
+    // A prefix the CLI's popup completes to `/clear` is that clear too.
+    clearAgentTab.mockClear();
+    fireEvent.change(box, { target: { value: "/clea" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(clearAgentTab).toHaveBeenCalledTimes(1);
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
     // Refused (Codex mid-turn, a pane not ready): the text stays, with why.
     clearAgentTab.mockResolvedValue(false);
     fireEvent.change(box, { target: { value: "/new" } });
     await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
     expect(screen.getByRole("alert").textContent).toMatch(/Not sent/);
     expect((box as HTMLTextAreaElement).value).toBe("/new");
+  });
+
+  it("lets a sent command prefix go once the command it completed to is recorded", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    sendSteeringPrompt.mockImplementation((_tab: TabEntry, text: string) => { noteSentPrompt("st-1", text); return Promise.resolve(); });
+    reader(host);
+    await screen.findByText("fix the parser");
+    // `/com` continues `/compact` and `/context`: it goes as typed.
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: "/com" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.anything(), "/com");
+    expect(host.querySelector(".terminal-reader-turn.pending")?.textContent).toContain("/com");
+    const compacted = {
+      ...transcript,
+      version: "v2",
+      entries: [...transcript.entries, { kind: "prompt", text: "/compact", at: new Date(Date.now() + 1000).toISOString() }],
+    };
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? compacted : []));
+    await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
   });
 
   it("keeps the text and says why when the prompt did not go in", async () => {
