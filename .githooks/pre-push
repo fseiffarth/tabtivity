@@ -6,8 +6,9 @@
 #      and personal data first — running it before the bump means a hit aborts
 #      the push without leaving a stray version-bump commit behind.
 #   2. Auto-bump the patch version on every push of a branch, so each pushed
-#      build is a distinct version. Releases stay manual (they are cut by
-#      pushing a v* tag, which this hook deliberately skips).
+#      build is a distinct version. Releases stay manual: release.yml cuts
+#      one from a commit whose ci-cd run passed — dispatched, or on a pushed
+#      v* tag, which this hook deliberately doesn't bump.
 #
 # git can't add a commit to a push that is already in flight, so this hook:
 #   1. bumps package.json / Cargo.toml / tauri.conf.json / Cargo.lock,

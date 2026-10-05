@@ -1,11 +1,11 @@
 # Release signing — setting the `RELEASE_SIGNING_KEY` secret
 
-The release job signs `SHA256SUMS` with an ECDSA P-256 key and the in-app
+The release workflow (`.github/workflows/release.yml`) signs `SHA256SUMS` with an ECDSA P-256 key and the in-app
 updater installs nothing whose hash isn't in that signed list (#160,
 `services::app_update`). The public half is compiled in from
 `src-tauri/release-signing.pub.pem`; the private half lives only in the
 `RELEASE_SIGNING_KEY` repository secret (plus your offline copy). Without the
-secret the release job fails before publishing, and the pre-push hook warns on
+secret the release workflow fails before publishing, and the pre-push hook warns on
 every push and refuses a `v*` tag push.
 
 ## Step by step
@@ -67,9 +67,32 @@ Run these in your own terminal, not in a fenced agent tab — the fence hides
    shred -u ~/.config/tabtivity-release-signing/release-signing.key.pem
    ```
 
-6. **Push as usual.** The first `v*` tag after this runs the "Sign release
+6. **Push as usual.** The first release after this runs the "Sign release
    checksums" step, which verifies its own signature against the committed
    public key — a wrong secret fails there, not in users' updaters.
+
+## How a release is cut
+
+A release only ever ships a commit `ci-cd.yml` passed on a branch push, and
+`release.yml` never rebuilds: it signs and publishes the bundles that green
+run built (its `package*` artifacts). `ci-cd.yml` itself no longer runs on
+tags. Two ways in:
+
+- **Actions → release → Run workflow** on a branch: releases its tip as
+  `v<package.json version>`. The workflow waits for the tip's ci-cd run,
+  and creates the annotated tag itself only once that run is green and the
+  checksums are signed — the tag never precedes CI.
+- **Push a `v*` tag** (the git bar's Release button, or `git push`): the tag
+  must equal `v<package.json version>` at its commit. The workflow waits for
+  that commit's ci-cd run; if it did not pass, or anything fails before the
+  Release is published, it **deletes the tag again**, so every `v*` tag on
+  GitHub has a Release and the name can be pushed again after a fix. The
+  Release button already refuses while the tip's CI is running or red
+  (`ci_pending` / `ci_failed`, `docs/context/git_push_mcp.md`).
+
+All four bundles (AppImage, deb, exe, dmg) must be there; artifacts expire
+after GitHub's retention (90 days by default) — re-run ci-cd on the commit
+to release an older one.
 
 ## Rotating or losing the key
 
@@ -78,4 +101,5 @@ therefore has to ship in a release signed with the **old** key; a lost old key
 means every user updates once by hand. Keep the offline copy.
 
 The hook's escape hatch, `TABTIVITY_SKIP_SIGNING_CHECK=1 git push …`, only lets a
-tag through — the release job still refuses to publish unsigned.
+tag through — the release workflow still refuses to publish unsigned (and
+deletes the tag again).

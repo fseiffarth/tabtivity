@@ -1,0 +1,254 @@
+name: release
+
+# A release is cut only from a commit ci-cd.yml already passed on a branch
+# push, and nothing is rebuilt: the signed assets are the bundles that very
+# run built and tested. Two ways in:
+#
+#   - Actions → release → Run workflow on a branch: releases that branch's
+#     tip as v<package.json version>. The annotated tag is created here, after
+#     every check below passed and right before the Release is published.
+#   - Pushing a v* tag (the app's Release button, which already refuses while
+#     CI is running or red, or a plain `git push`): waits for the tagged
+#     commit's ci-cd run. If it did not pass, or anything below fails before
+#     the Release is out, the tag is deleted again — a v* tag on GitHub always
+#     has a Release behind it, and the same name can be pushed again.
+#
+# A tag this workflow creates with GITHUB_TOKEN starts no workflow run, so a
+# dispatch never triggers itself a second time through the tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    # Waiting for ci-cd (about an hour when it has just started) is most of it.
+    timeout-minutes: 150
+    permissions:
+      contents: write   # the tag and the Release
+      actions: read     # the ci-cd run and its artifacts
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+
+    steps:
+      # package.json names the version; the public key checks the signature.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            package.json
+            src-tauri/release-signing.pub.pem
+          sparse-checkout-cone-mode: false
+
+      - name: Decide the tag
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          want="v$(node -p "require('./package.json').version")"
+          if [ "$EVENT_NAME" = push ]; then
+            # The asset names carry package.json's version; a tag saying
+            # anything else would publish them under the wrong name.
+            if [ "$REF_NAME" != "$want" ]; then
+              echo "::error::The tag $REF_NAME does not match package.json at ${SHA::7} ($want); push $want instead."
+              exit 1
+            fi
+            tag="$REF_NAME"
+          else
+            if [ "$REF_TYPE" != branch ]; then
+              echo "::error::Run this workflow on a branch; it releases that branch's tip."
+              exit 1
+            fi
+            if gh api "repos/$GH_REPO/git/ref/tags/$want" >/dev/null 2>&1; then
+              echo "::error::$want already exists. Push the bump commit first (every branch push bumps the version), then run this again."
+              exit 1
+            fi
+            tag="$want"
+          fi
+          echo "Releasing ${SHA} as $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The newest ci-cd run of this commit that a branch push started (old
+      # runs on v* tags don't count). Green → release it; still going → wait;
+      # finished and none green → refuse. A commit pushed seconds ago may
+      # have no run yet, so a missing run is waited for a little too.
+      - name: Wait for the commit's ci-cd run to pass
+        id: ci
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 130 * 60))
+          appear_deadline=$((SECONDS + 10 * 60))
+          while :; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::ci-cd is still running on ${SHA::7} after two hours; run this again once it has finished."
+              exit 1
+            fi
+            # A failed read is retried, never taken for a verdict: failing
+            # here would delete a pushed tag over an API blip.
+            if ! runs="$(gh api "repos/$GH_REPO/actions/workflows/ci-cd.yml/runs?head_sha=$SHA&event=push&per_page=50" \
+              --jq '[.workflow_runs[] | select((.head_branch // "") | test("^v[0-9]") | not)
+                     | {id, status, conclusion, branch: .head_branch, url: .html_url}]')"; then
+              echo "Could not read the ci-cd runs; trying again in a minute."
+              sleep 60
+              continue
+            fi
+            green="$(jq -r '[.[] | select(.status == "completed" and .conclusion == "success")] | max_by(.id) | .id // empty' <<<"$runs")"
+            if [ -n "$green" ]; then
+              echo "ci-cd run $green passed on ${SHA::7}."
+              echo "run_id=$green" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            total="$(jq length <<<"$runs")"
+            going="$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")"
+            if [ "$total" -gt 0 ] && [ "$going" -eq 0 ]; then
+              jq -r '.[] | "  \(.branch): \(.conclusion) \(.url)"' <<<"$runs"
+              echo "::error::ci-cd did not pass on ${SHA::7}; nothing is released. Fix it, push, and release the new commit."
+              exit 1
+            fi
+            if [ "$total" -eq 0 ] && [ "$SECONDS" -ge "$appear_deadline" ]; then
+              echo "::error::No branch push ran ci-cd on ${SHA::7}. Release a commit that is on a pushed branch."
+              exit 1
+            fi
+            echo "Waiting for ci-cd on ${SHA::7} ($going running, $total runs)…"
+            sleep 60
+          done
+
+      - name: Download the bundles that run built
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+          pattern: tabtivity-${{ github.sha }}-*
+          path: release-assets
+
+      - name: Build release notes
+        env:
+          RELEASE_TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          {
+            printf 'Tabtivity %s — alpha / preview build.\n\n' "$RELEASE_TAG"
+            printf 'Built from commit `%s`.\n\n' "$SHA"
+            printf 'Artifacts:\n'
+            printf -- '- Linux: `.AppImage` (portable) and `.deb`\n'
+            printf -- '- Windows: NSIS `.exe` installer\n'
+            printf -- '- macOS: universal Intel/Apple Silicon `.dmg` (unsigned — right-click → Open, or run '
+            printf '`xattr -dr com.apple.quarantine /Applications/Tabtivity.app`)\n'
+
+            # Until the cleanup release (the one that drops the old-name
+            # lookups): what an upgrade across the rename does and asks for.
+            printf '\nTabtivity was called Eldrun before. Upgrading from an Eldrun build:\n'
+            printf -- '- your state is moved to the new name on the first start (projects stay where they are); '
+            printf 'close the old window before installing, and update all machines that sync with each other together\n'
+            printf -- '- agents may ask once more for permission to use the app'"'"'s tools, and Codex to trust its session hook\n'
+            printf -- '- `eldrun-send` keeps working for one release as an alias of `tabtivity-send`\n'
+            printf -- '- macOS: delete the old `Eldrun.app` yourself; a pinned launcher of the old entry has to be pinned again\n'
+            printf '\nThis is an early alpha; expect rough edges.\n'
+          } > release-body.md
+
+      # The in-app updater installs nothing unless its SHA-256 is in this
+      # signed list (#160, services::app_update). No secret → no release. The
+      # signature is verified against the key the updater has compiled in, so
+      # a wrong secret fails here instead of in users' updaters.
+      - name: Sign release checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is not set; refusing to publish an unsigned release"
+            exit 1
+          fi
+          # A green ci-cd run built every platform; all of them ship.
+          for ext in AppImage deb exe dmg; do
+            if [ -z "$(find release-assets -type f -name "*.$ext" -print -quit)" ]; then
+              echo "::error::The ci-cd run has no .$ext bundle (expired artifacts? re-run ci-cd on this commit)"
+              exit 1
+            fi
+          done
+          key="$RUNNER_TEMP/release-signing.key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          find release-assets -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' \) \
+            | sort | while read -r f; do
+                printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
+              done > SHA256SUMS
+          test -s SHA256SUMS
+          if [ "$(cut -d' ' -f3 SHA256SUMS | sort | uniq -d)" != "" ]; then
+            echo "::error::two release assets share a name"
+            exit 1
+          fi
+          cat SHA256SUMS
+          openssl dgst -sha256 -sign "$key" -out SHA256SUMS.sig SHA256SUMS
+          openssl dgst -sha256 -verify src-tauri/release-signing.pub.pem \
+            -signature SHA256SUMS.sig SHA256SUMS
+
+      # Dispatch only: the tag is made last, once everything above passed.
+      - name: Create the tag
+        id: tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/$GH_REPO/git/tags" -f tag="$TAG" -f message="$TAG" -f object="$SHA" -f type=commit --jq .sha)"
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$object" >/dev/null
+          echo "created=1" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ steps.decide.outputs.tag }}
+          name: ${{ steps.decide.outputs.tag }}
+          # Publish as a full release so the newest tag becomes GitHub's
+          # "Latest" — a pre-release never does, which left the releases page
+          # with no latest build and the README's /releases/latest link stale.
+          # The notes still say alpha; this flag is about discoverability.
+          prerelease: false
+          body_path: release-body.md
+          fail_on_unmatched_files: true
+          # Recursive globs: each artifact lands in its own folder, with the
+          # bundle nested under the path it was uploaded from.
+          files: |
+            release-assets/**/*.AppImage
+            release-assets/**/*.deb
+            release-assets/**/*.exe
+            release-assets/**/*.dmg
+            SHA256SUMS
+            SHA256SUMS.sig
+
+      # Nothing was published: take the tag back — the pushed one, or the one
+      # this run created — so no v* tag names a commit without a Release. A
+      # tag that has a Release after all, or now names another commit, stays.
+      - name: Remove the tag again
+        if: >-
+          (failure() || cancelled()) &&
+          (github.event_name == 'push' || steps.tag.outputs.created == '1')
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || steps.decide.outputs.tag }}
+        run: |
+          set -uo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::$TAG has a Release (perhaps a partial one); the tag is kept. Check it by hand."
+            exit 0
+          fi
+          at="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha 2>/dev/null || true)"
+          if [ "$at" != "$SHA" ]; then
+            echo "$TAG no longer names ${SHA::7}; left alone."
+            exit 0
+          fi
+          gh api -X DELETE "repos/$GH_REPO/git/refs/tags/$TAG"
+          echo "::error::No Release was published, so $TAG was deleted again. Fix the cause and release again."
