@@ -222,6 +222,12 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .agent-turn-time.running { color:#8fd3a8; }
 .agent-worktree { display:inline-block; flex:0 1 auto; min-width:0; max-width:100%; padding:3px 7px; border:1px solid #3e5a4f; border-radius:6px; background:#22332d; color:#9fd8bf; font-size:.7rem; font-weight:600; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .agent-worktree-branch { color:#7fae99; font-weight:500; }
+/* A subagent's worktree: dashed, so it reads as the session's helpers' and not the tab's own. */
+.agent-worktree.subagent { border-style:dashed; }
+.agent-worktree-count { font-weight:500; }
+.transcript-agent-worktree { display:flex; align-items:center; gap:4px; min-width:0; }
+.transcript-agent-body small.agent-worktree, .subagent-index-list small.agent-worktree { justify-self:start; color:#9fd8bf; font-size:.68rem; text-transform:none; letter-spacing:0; }
+.subagent-index-list .agent-worktree span { font-size:inherit; line-height:inherit; }
 .subagents-sheet .subagent-index-list { max-height:none; padding-top:0; }
 .subagents-sheet .subagent-index-list small em { color:#a99cff; font-style:normal; }
 .card.in-plan,.project-screen .tab-card.in-plan { border-color:#7b6ee0; }

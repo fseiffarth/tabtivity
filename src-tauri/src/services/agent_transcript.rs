@@ -118,6 +118,12 @@ pub struct TranscriptEntry {
     /// plain text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskedQuestion>,
+    /// On an `agent` entry: the folder the subagent works in — the worktree
+    /// Claude made for it (`isolation: "worktree"`, named in its `.meta.json`),
+    /// else the session's own folder when it was spawned. A path, so the
+    /// phone's API turns it into a worktree name and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// One question the agent asked, as answered.
@@ -203,6 +209,17 @@ pub struct AgentTranscript {
     /// line is not something that crosses to the browser.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<RunningShell>,
+    /// The folder the newest record says the agent works in — Claude's `cwd`,
+    /// which follows a worktree it entered and its shell's `cd`; Codex's turn
+    /// context. A path, so the phone's API turns it into a worktree name and
+    /// drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// The folder of each subagent at work right now ([`TranscriptEntry::cwd`]
+    /// of the `running` entries, the cut-off ones included) — what the
+    /// phone's tab cards name their worktrees by. Paths, as `cwd`.
+    #[serde(default, rename = "runningCwds", skip_serializing_if = "Vec::is_empty")]
+    pub running_cwds: Vec<String>,
 }
 
 /// A shell command the agent started and is waiting on.
@@ -355,6 +372,64 @@ pub fn running_subagents(cmd: &str, project_id: Option<&str>, launch_id: &str) -
 /// was counted at, and the count.
 static RUNNING_COUNTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (String, u32)>>> =
     std::sync::LazyLock::new(Default::default);
+
+/// Where a tab's agent works and where its subagents at work do
+/// ([`AgentTranscript::cwd`], [`AgentTranscript::running_cwds`]) — paths,
+/// which the phone's tab cards name by worktree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveFolders {
+    pub cwd: Option<String>,
+    pub subagents: Vec<String>,
+}
+
+/// How long a tab's [`live_folders`] answer stands: the project screen polls
+/// every 1.5 s, and a session at work moves its file on every record.
+const FOLDERS_FLOOR: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// [`LiveFolders`] of the Claude or Codex tab launched with `launch_id`,
+/// window or not. Read at most once per [`FOLDERS_FLOOR`] per tab, and only
+/// stat-checked while its transcript sits still. Empty for any other CLI and
+/// a tab with no transcript yet — its card falls back to where it launched.
+pub fn live_folders(cmd: &str, project_id: Option<&str>, launch_id: &str) -> LiveFolders {
+    if !matches!(cmd, "claude" | "codex") {
+        return LiveFolders::default();
+    }
+    let read_folders = || FOLDERS_READ.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let known = read_folders().get(launch_id).cloned();
+    let now = std::time::Instant::now();
+    if let Some((_, at, folders)) = &known {
+        if now.duration_since(*at) < FOLDERS_FLOOR {
+            return folders.clone();
+        }
+    }
+    let version = known.as_ref().map(|(version, _, _)| version.as_str());
+    let read = agent_session_transcript(cmd, project_id, None, None, launch_id, None, version, 1);
+    let folders = if read.unchanged {
+        known.map(|(_, _, folders)| folders).unwrap_or_default()
+    } else if read.available {
+        LiveFolders { cwd: read.cwd, subagents: read.running_cwds }
+    } else {
+        LiveFolders::default()
+    };
+    let mut seen = read_folders();
+    if seen.len() >= BACKGROUND_SEEN_MAX && !seen.contains_key(launch_id) {
+        seen.clear();
+    }
+    match read.version {
+        Some(version) if read.available => {
+            seen.insert(launch_id.to_string(), (version, now, folders.clone()));
+        }
+        _ => {
+            seen.remove(launch_id);
+        }
+    }
+    folders
+}
+
+/// Each tab's last [`live_folders`] answer: the transcript version, when it
+/// was read, and the folders.
+type FoldersRead = std::collections::HashMap<String, (String, std::time::Instant, LiveFolders)>;
+static FOLDERS_READ: std::sync::LazyLock<std::sync::Mutex<FoldersRead>> = std::sync::LazyLock::new(Default::default);
 
 /// The handle a subagent's entry carries: a digest of the id its CLI gave it,
 /// so no id of the CLI's — a resume handle — crosses to the phone, and a
@@ -694,10 +769,16 @@ fn read_transcript_in(
             if !calls.is_empty() || (truncated && !sidechain) {
                 let spawned = claude_spawned(folder);
                 for (index, call) in calls {
-                    entries[index].subagent = spawned.get(&call).map(|id| subagent_token(id));
+                    let Some(spawn) = spawned.get(&call) else {
+                        continue;
+                    };
+                    entries[index].subagent = Some(subagent_token(&spawn.id));
+                    if spawn.worktree.is_some() {
+                        entries[index].cwd = spawn.worktree.clone();
+                    }
                 }
                 if !sidechain {
-                    spawned_tokens = spawned.values().map(|id| subagent_token(id)).collect();
+                    spawned_tokens = spawned.values().map(|spawn| subagent_token(&spawn.id)).collect();
                 }
             }
         }
@@ -713,6 +794,8 @@ fn read_transcript_in(
         }
     }
     let running_agents = running_agents(&entries);
+    let running_cwds = running_cwds(&entries);
+    let cwd = newest_cwd(&text, kind, sidechain);
     if entries.len() > limit {
         let drop = entries.len() - limit;
         entries.drain(..drop);
@@ -732,6 +815,43 @@ fn read_transcript_in(
         model,
         tokens,
         shells,
+        cwd,
+        running_cwds,
+    })
+}
+
+/// The folder of each of `entries`' subagents still at work, in order — one
+/// per subagent, so a card can say how many share a worktree.
+pub(crate) fn running_cwds(entries: &[TranscriptEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.kind == "agent" && entry.running)
+        .filter_map(|entry| entry.cwd.clone())
+        .collect()
+}
+
+/// The folder the newest record of `text` names ([`AgentTranscript::cwd`]):
+/// Claude's `cwd` on a record of the session's own — a subagent's record in
+/// the session's file is its folder, not the session's — and Codex's
+/// `turn_context` (or, before the first turn, `session_meta`).
+fn newest_cwd(text: &str, kind: TranscriptKind, sidechain: bool) -> Option<String> {
+    text.lines().rev().filter(|line| line.contains("\"cwd\"")).find_map(|line| {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        let cwd = match kind {
+            TranscriptKind::Claude => {
+                if !sidechain && value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+                    return None;
+                }
+                value.get("cwd")
+            }
+            TranscriptKind::Codex => {
+                if !matches!(value.get("type").and_then(Value::as_str), Some("turn_context" | "session_meta")) {
+                    return None;
+                }
+                value.pointer("/payload/cwd")
+            }
+        };
+        cwd.and_then(Value::as_str).filter(|cwd| !cwd.is_empty()).map(str::to_string)
     })
 }
 
@@ -827,9 +947,16 @@ fn newest_tokens(lines: &[&str], kind: TranscriptKind) -> Option<u64> {
     })
 }
 
+/// A subagent in a Claude session's folder: the agent id its file is named
+/// by, and the worktree Claude made for it, when it made one.
+struct ClaudeSpawn {
+    id: String,
+    worktree: Option<String>,
+}
+
 /// The subagents in a Claude session's `folder`, by the tool call that
-/// spawned each: `toolu_…` → the agent id its file is named by.
-fn claude_spawned(folder: &Path) -> std::collections::HashMap<String, String> {
+/// spawned each: `toolu_…` → its [`ClaudeSpawn`].
+fn claude_spawned(folder: &Path) -> std::collections::HashMap<String, ClaudeSpawn> {
     let mut spawned = std::collections::HashMap::new();
     let Ok(entries) = std::fs::read_dir(folder) else {
         return spawned;
@@ -846,12 +973,12 @@ fn claude_spawned(folder: &Path) -> std::collections::HashMap<String, String> {
         if std::fs::metadata(&path).map_or(true, |meta| meta.len() > 64 * 1024) {
             continue;
         }
-        let call = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|meta| meta.get("toolUseId").and_then(Value::as_str).map(str::to_string));
-        if let Some(call) = call {
-            spawned.insert(call, id.to_string());
+        let Some(meta) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()) else {
+            continue;
+        };
+        let text = |key: &str| meta.get(key).and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string);
+        if let Some(call) = text("toolUseId") {
+            spawned.insert(call, ClaudeSpawn { id: id.to_string(), worktree: text("worktreePath") });
         }
     }
     spawned
@@ -1060,7 +1187,10 @@ fn parse_entries<'a>(
                     asked.insert(call, (questions, at.clone()));
                 }
                 Record::Spawn { call, task, kind } => {
-                    if let Some(entry) = agent_entry(&task, kind.as_deref(), at.clone()) {
+                    if let Some(mut entry) = agent_entry(&task, kind.as_deref(), at.clone()) {
+                        // Where the session was when it spawned it; a
+                        // worktree of its own replaces this once matched.
+                        entry.cwd = value.get("cwd").and_then(Value::as_str).filter(|cwd| !cwd.is_empty()).map(str::to_string);
                         calls.push((entries.len(), call));
                         entries.push(entry);
                     }
@@ -1929,6 +2059,54 @@ mod tests {
             vec![("prompt", "long task"), ("agent", "Dig deeper"), ("answer", "The backend is in src-tauri.")]
         );
         assert!(claude_subagent_file(&folder, &subagent_token("elsewhere")).is_none());
+    }
+
+    #[test]
+    fn the_folders_follow_the_session_and_a_subagents_own_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("s.jsonl");
+        std::fs::write(
+            &main,
+            concat!(
+                "{\"type\":\"user\",\"cwd\":\"/p\",\"timestamp\":\"2026-10-05T10:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"split it\"}}\n",
+                "{\"type\":\"assistant\",\"cwd\":\"/p\",\"timestamp\":\"2026-10-05T10:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_A\",\"name\":\"Agent\",\"input\":{\"description\":\"Fix in isolation\",\"isolation\":\"worktree\"}}]}}\n",
+                "{\"type\":\"assistant\",\"cwd\":\"/p/.claude/worktrees/fix\",\"timestamp\":\"2026-10-05T10:00:02Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_B\",\"name\":\"Agent\",\"input\":{\"description\":\"Scout here\"}}]}}\n",
+                // A subagent's record inline in the session's file is its folder, not the session's.
+                "{\"type\":\"assistant\",\"isSidechain\":true,\"cwd\":\"/elsewhere\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"inline\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let folder = dir.path().join("s").join("subagents");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("agent-a1b2.meta.json"),
+            r#"{"agentType":"general-purpose","toolUseId":"toolu_A","worktreePath":"/p/.claude/worktrees/agent-a1b2","spawnedWithWorktree":true}"#,
+        )
+        .unwrap();
+        let spawns = Spawns::Claude(&folder);
+        let read = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, DEFAULT_LIMIT).unwrap();
+        // The session moved into a worktree after the first spawn.
+        assert_eq!(read.cwd.as_deref(), Some("/p/.claude/worktrees/fix"));
+        // The isolated one is in the worktree Claude made for it; the other
+        // where the session was when it spawned it.
+        assert_eq!(read.entries[1].cwd.as_deref(), Some("/p/.claude/worktrees/agent-a1b2"));
+        assert_eq!(read.entries[2].cwd.as_deref(), Some("/p/.claude/worktrees/fix"));
+        assert_eq!(read.running_cwds, vec!["/p/.claude/worktrees/agent-a1b2".to_string(), "/p/.claude/worktrees/fix".to_string()]);
+        // Read with a limit of one, the running ones' folders still come.
+        let cut = read_transcript_in(&main, TranscriptKind::Claude, &spawns, false, None, 1).unwrap();
+        assert_eq!(cut.running_cwds.len(), 2);
+
+        let codex = dir.path().join("r.jsonl");
+        std::fs::write(
+            &codex,
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/p\"}}\n",
+                "{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/p/wt\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        assert_eq!(read_transcript(&codex, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap().cwd.as_deref(), Some("/p/wt"));
     }
 
     #[test]

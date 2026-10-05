@@ -1,4 +1,4 @@
-import type { TabRow } from "../api";
+import type { TabRow, TabWorktree } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ageLabel } from "../terminal/fileLabels";
@@ -84,23 +84,52 @@ export function TurnDuration({ tab, finished = true }: { tab: Pick<TabRow, "agen
   </>;
 }
 
-/** The linked worktree the tab's agent works in — "⎇ fix-login", its branch
- *  beside it where that is named differently. Nothing for the project
+/** The linked worktree the tab's agent works in now — "⎇ fix-login", its
+ *  branch beside it where that is named differently. Nothing for the project
  *  folder's own checkout, which is where a tab runs unless it says. */
 export function WorktreeMark({ tab }: { tab: Pick<TabRow, "worktree"> }) {
   const t = useT();
-  const worktree = tab.worktree;
-  if (!worktree) return null;
-  const branch = worktree.branch && worktree.branch !== worktree.label ? worktree.branch : undefined;
-  const title = worktree.branch
-    ? t("mobile.project.worktreeTitle", { label: worktree.label, branch: worktree.branch })
-    : t("mobile.project.worktreeDetachedTitle", { label: worktree.label });
+  if (!tab.worktree) return null;
   return <>
-    <small className="agent-worktree" title={title}>
-      <span aria-hidden="true">⎇</span> {worktree.label}{branch && <span className="agent-worktree-branch"> · {branch}</span>}
-    </small>
+    <WorktreeChip worktree={tab.worktree} title={worktreeTitle(t, tab.worktree)} />
     {isUntested("mobile.project.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}
   </>;
+}
+
+/** The other linked worktrees the tab's subagents at work run in — "↳ ⎇
+ *  agent-a1b2 ×2" — so a card says where its whole session is working. */
+export function SubagentWorktreeMarks({ tab }: { tab: Pick<TabRow, "subagent_worktrees"> }) {
+  const t = useT();
+  const rows = tab.subagent_worktrees ?? [];
+  if (rows.length === 0) return null;
+  return <>
+    {rows.map((row) => <WorktreeChip
+      key={`${row.label}\n${row.branch ?? ""}`}
+      worktree={row}
+      count={row.count}
+      title={t(row.branch ? "mobile.project.subagentWorktreeTitle" : "mobile.project.subagentWorktreeDetachedTitle", { label: row.label, branch: row.branch ?? "", count: row.count })}
+    />)}
+    {isUntested("mobile.project.subagentWorktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </>;
+}
+
+/** What a worktree chip says on hover: its folder, and its branch or that it
+ *  has none checked out. */
+export function worktreeTitle(t: ReturnType<typeof useT>, worktree: TabWorktree): string {
+  return worktree.branch
+    ? t("mobile.project.worktreeTitle", { label: worktree.label, branch: worktree.branch })
+    : t("mobile.project.worktreeDetachedTitle", { label: worktree.label });
+}
+
+/** One worktree as a chip: "⎇ label · branch" (the branch only where it is
+ *  named differently), headed "↳" with "×n" for subagents' (`count`). */
+export function WorktreeChip({ worktree, title, count }: { worktree: TabWorktree; title: string; count?: number }) {
+  const branch = worktree.branch && worktree.branch !== worktree.label ? worktree.branch : undefined;
+  return <small className={count === undefined ? "agent-worktree" : "agent-worktree subagent"} title={title}>
+    {count !== undefined && <span aria-hidden="true">↳ </span>}
+    <span aria-hidden="true">⎇</span> {worktree.label}{branch && <span className="agent-worktree-branch"> · {branch}</span>}
+    {count !== undefined && count > 1 && <span className="agent-worktree-count"> ×{count}</span>}
+  </small>;
 }
 
 /** The card class that tints a tab's border for the mode it is in — plan

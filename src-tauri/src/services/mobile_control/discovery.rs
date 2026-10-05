@@ -269,6 +269,11 @@ pub struct PublicTab {
     /// filled by the project route; absent for the project folder's checkout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<super::git_overview::TabWorktree>,
+    /// The other linked worktrees its subagents at work run in, with how many
+    /// of them each (`git_overview::subagent_worktrees`), filled by the
+    /// project route.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subagent_worktrees: Vec<super::git_overview::SubagentWorktree>,
 }
 
 #[derive(Debug, Clone)]
@@ -1046,6 +1051,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         sign_in: false,
         turn_started_at: None,
         worktree: None,
+        subagent_worktrees: Vec::new(),
     };
     ResolvedProject {
         public: PublicProject {
@@ -1170,6 +1176,7 @@ fn resolve_scope(
                 .map(str::to_string),
             sign_in: agent && tab.sign_in,
             worktree: None,
+            subagent_worktrees: Vec::new(),
         };
         tabs.push(ResolvedTab {
             public,

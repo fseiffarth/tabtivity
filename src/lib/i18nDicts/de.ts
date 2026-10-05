@@ -4922,6 +4922,8 @@ export const dict: Dict = {
   "mobile.project.durationHours": "{hours} h {mins} min",
   "mobile.project.worktreeTitle": "Arbeitet im Worktree {label} auf Branch {branch}",
   "mobile.project.worktreeDetachedTitle": "Arbeitet im Worktree {label} (losgelöster HEAD)",
+  "mobile.project.subagentWorktreeTitle": "Subagenten bei der Arbeit im Worktree {label} auf Branch {branch}: {count}",
+  "mobile.project.subagentWorktreeDetachedTitle": "Subagenten bei der Arbeit im Worktree {label} (losgelöster HEAD): {count}",
   "mobile.subagentSheet.title": "Subagenten von {label}",
   "mobile.subagentSheet.loading": "Sitzung wird gelesen…",
   "mobile.subagentSheet.none": "Noch lässt sich keiner der Subagenten dieser Sitzung öffnen.",

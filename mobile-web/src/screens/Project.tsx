@@ -15,7 +15,7 @@ import { SubagentsSheet } from "./SubagentsSheet";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { AgentStatusMark } from "../components/AgentStatusPill";
-import { AgentModeMarks, SubagentCount, TurnDuration, WorktreeMark, agentModeClass } from "../components/AgentModeMarks";
+import { AgentModeMarks, SubagentCount, SubagentWorktreeMarks, TurnDuration, WorktreeMark, agentModeClass } from "../components/AgentModeMarks";
 import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupNewTab } from "../components/OutboxViewer";
 import { FileGlyph, ProjectFiles, asViewerFile } from "../components/ProjectFiles";
@@ -547,8 +547,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {tab.agent_model && <button className="tab-card-model" disabled={!tab.available} onClick={() => terminal(tab, { pickModel: true })} aria-haspopup="dialog" aria-label={t("mobile.project.changeModelOf", { label: tab.label })} title={t("mobile.project.changeModel")}>{tab.agent_model}</button>}
             {tab.agent_model && isUntested("mobile.project.modelTap") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             <AgentModeMarks tab={tab} />
-            {/* Which worktree the agent works in, when it is not the project folder. */}
+            {/* Which worktree the agent works in now, when it is not the
+                project folder — and the others its subagents at work are in. */}
             <WorktreeMark tab={tab} />
+            <SubagentWorktreeMarks tab={tab} />
             {/* A tap lists the session's subagents; picking one opens the
                 session on that subagent's own conversation. */}
             <SubagentCount tab={tab} onOpen={tab.available && tab.kind === "agent" ? () => setSubagentsTab(tab) : undefined} />

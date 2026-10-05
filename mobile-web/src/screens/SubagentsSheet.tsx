@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getTranscript, type TabRow, type TranscriptEntry } from "../api";
 import { openSubagent, subagentAtWork, subagentsIn, type SubagentStep } from "../terminal/subagents";
+import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 
@@ -72,6 +73,7 @@ export function SubagentsSheet({ tab, onClose, onOpen }: {
           {refs.map((ref, index) => ({ ref, index })).reverse().map(({ ref, index }) => <button type="button" key={`${ref.token}:${index}`} aria-label={`${ref.role ?? t("mobile.subagent.region")} · ${ref.task}`} onClick={() => onOpen(openSubagent([], ref, entries, -1)[0])}>
             <small>{ref.role ?? t("mobile.subagent.region")}{subagentAtWork(ref, busy) && <em> · {t("mobile.subagentSheet.atWork")}</em>}</small>
             <span>{ref.task}</span>
+            {ref.worktree && <WorktreeChip worktree={ref.worktree} title={worktreeTitle(t, ref.worktree)} />}
           </button>)}
         </div>}
     </section>

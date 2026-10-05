@@ -1,6 +1,7 @@
 import { NAMES } from "../../../src/lib/brand";
 import { translate, useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
+import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
@@ -526,12 +527,18 @@ function SubagentCard({ turn, label, untested, time, onOpen }: {
   time?: ReactNode;
   onOpen?: (turn: TranscriptTurn) => void;
 }) {
+  const t = useT();
   const openable = !!turn.subagent && !!onOpen;
   return <button type="button" className="transcript-agent" disabled={!openable} aria-label={`${label}: ${turn.role ? `${turn.role} · ` : ""}${turn.text}`} onClick={() => onOpen?.(turn)}>
     <svg className="transcript-agent-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v7a4 4 0 0 0 4 4h7m-3-3 3 3-3 3" /></svg>
     <span className="transcript-agent-body">
       <small>{turn.role ?? label}{untested && <em> · {untested}</em>}</small>
       <span>{turn.text}{turn.cut && "…"}</span>
+      {/* Where it works, when that is a worktree and not the project folder. */}
+      {turn.worktree && <span className="transcript-agent-worktree">
+        <WorktreeChip worktree={turn.worktree} title={worktreeTitle(t, turn.worktree)} />
+        {isUntested("mobile.project.subagentWorktree") && <em className="untested">{t("mobile.newTab.untested")}</em>}
+      </span>}
       {time}
     </span>
     {turn.finished && <AgentStatusMark status="done" />}

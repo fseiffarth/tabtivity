@@ -185,6 +185,42 @@ pub struct TabWorktree {
     pub branch: Option<String>,
 }
 
+/// A linked worktree some of a tab's subagents at work run in, other than the
+/// worktree its own agent is in, and how many of them do — named as
+/// [`TabWorktree`], never by path.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SubagentWorktree {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub count: u32,
+}
+
+/// The worktrees a tab's subagents at work run in (`subagents`, each as
+/// [`tab_worktrees`] named its folder), each once with how many of them do,
+/// in first-seen order — leaving out the project folder's checkout and `own`,
+/// the worktree the tab's agent is in, which its card already names.
+pub fn subagent_worktrees(own: Option<&TabWorktree>, subagents: impl IntoIterator<Item = Option<TabWorktree>>) -> Vec<SubagentWorktree> {
+    let mut rows: Vec<SubagentWorktree> = Vec::new();
+    for worktree in subagents.into_iter().flatten() {
+        if own == Some(&worktree) {
+            continue;
+        }
+        match rows.iter_mut().find(|row| row.label == worktree.label && row.branch == worktree.branch) {
+            Some(row) => row.count = row.count.saturating_add(1),
+            None => rows.push(SubagentWorktree { label: worktree.label, branch: worktree.branch, count: 1 }),
+        }
+    }
+    rows
+}
+
+/// Whether `cwd` is in no linked worktree of `spots` — the project folder's
+/// checkout, or a worktree made since the spots were listed.
+pub fn unplaced(spots: &[WorktreeSpot], cwd: &str) -> bool {
+    let of = worktree_matcher(spots.iter().map(|spot| spot.path.as_str()));
+    of(cwd).is_none_or(|at| spots[at].tab.is_none())
+}
+
 /// One worktree of a project, kept between the project screen's polls: its
 /// folder (host-side only) and what a tab in it wears — `None` for the
 /// project folder's own checkout.
@@ -225,9 +261,12 @@ pub fn tab_worktrees(spots: &[WorktreeSpot], cwds: &[&str]) -> Vec<Option<TabWor
 pub const SPOT_TTL: Duration = Duration::from_secs(30);
 
 /// The host's worktree spots, per raw project id, each standing for [`SPOT_TTL`].
+/// Beside them, the folders that already had the list taken again because
+/// they were in no linked worktree of it ([`SpotCache::first_miss`]).
 #[derive(Debug, Default)]
 pub struct SpotCache {
     entries: HashMap<String, (Instant, Vec<WorktreeSpot>)>,
+    missed: HashMap<String, std::collections::HashSet<String>>,
 }
 
 impl SpotCache {
@@ -240,7 +279,23 @@ impl SpotCache {
 
     pub fn set(&mut self, raw_id: &str, spots: Vec<WorktreeSpot>, now: Instant) {
         self.entries.retain(|_, (at, _)| now.duration_since(*at) < SPOT_TTL);
+        let entries = &self.entries;
+        self.missed.retain(|id, _| entries.contains_key(id));
         self.entries.insert(raw_id.to_string(), (now, spots));
+    }
+
+    /// Whether any of `cwds` — folders in no linked worktree of the cached
+    /// list — is new since the list was last taken on its own clock: a
+    /// worktree an agent or a subagent just made is listed at once, not
+    /// [`SPOT_TTL`] later, while a folder that is in none (the project
+    /// folder's own subfolders) costs one extra listing per [`SPOT_TTL`].
+    pub fn first_miss(&mut self, raw_id: &str, cwds: &[&str]) -> bool {
+        let missed = self.missed.entry(raw_id.to_string()).or_default();
+        let mut new = false;
+        for cwd in cwds {
+            new |= missed.insert((*cwd).to_string());
+        }
+        new
     }
 }
 
@@ -616,6 +671,40 @@ mod tests {
         let inside = format!("{linked}/src");
         let cwds = [inside.as_str(), root, "/work/proj/docs", "/elsewhere", ""];
         assert_eq!(tab_worktrees(&spots, &cwds), [Some(fix), None, None, None, None]);
+    }
+
+    #[test]
+    fn subagent_worktrees_count_each_other_worktree_once() {
+        let fix = TabWorktree { label: "fix".into(), branch: Some("fix".into()) };
+        let agent = TabWorktree { label: "agent-a1".into(), branch: Some("worktree-agent-a1".into()) };
+        let rows = subagent_worktrees(Some(&fix), [Some(agent.clone()), None, Some(fix.clone()), Some(agent.clone())]);
+        // The tab's own worktree and the project folder are its card's already.
+        assert_eq!(rows, [SubagentWorktree { label: agent.label.clone(), branch: agent.branch.clone(), count: 2 }]);
+        let rows = subagent_worktrees(None, [Some(fix.clone())]);
+        assert_eq!(rows[0].label, "fix");
+        assert_eq!(serde_json::to_value(&rows[0]).unwrap(), serde_json::json!({ "label": "fix", "branch": "fix", "count": 1 }));
+    }
+
+    #[test]
+    fn a_folder_in_no_listed_worktree_retakes_the_list_once() {
+        let root = "/work/proj";
+        let spots = [
+            WorktreeSpot { path: root.into(), tab: None },
+            WorktreeSpot { path: format!("{root}/wt/fix"), tab: Some(TabWorktree { label: "fix".into(), branch: None }) },
+        ];
+        assert!(unplaced(&spots, "/work/proj/wt/new"));
+        assert!(unplaced(&spots, "/elsewhere"));
+        assert!(!unplaced(&spots, "/work/proj/wt/fix/src"));
+        let mut cache = SpotCache::default();
+        let now = Instant::now();
+        cache.set("p", spots.to_vec(), now);
+        assert!(cache.first_miss("p", &["/work/proj/wt/new"]));
+        // Taken again, the folder is still in none: not again until the list expires.
+        cache.set("p", spots.to_vec(), now);
+        assert!(!cache.first_miss("p", &["/work/proj/wt/new"]));
+        assert!(cache.first_miss("p", &["/work/proj/wt/newer"]));
+        cache.set("p", spots.to_vec(), now + SPOT_TTL + Duration::from_secs(1));
+        assert!(cache.first_miss("p", &["/work/proj/wt/new"]));
     }
 
     #[test]

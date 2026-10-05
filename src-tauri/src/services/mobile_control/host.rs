@@ -1125,8 +1125,9 @@ async fn project(
         }
     }
     if project.public.kind == ScopeKind::Project {
-        for (tab, worktree) in tabs.iter_mut().zip(project_tab_worktrees(&state, project).await) {
+        for (tab, (worktree, subagents)) in tabs.iter_mut().zip(project_tab_worktrees(&state, project).await) {
             tab.worktree = worktree;
+            tab.subagent_worktrees = subagents;
         }
     }
     (
@@ -1454,44 +1455,109 @@ async fn reopen_tab(
     answer_created(&state, &phone, &project_id, response).await
 }
 
-/// The linked worktree each of the project's tabs runs in, in tab order, for
-/// its card. Only agent tabs are named, and git is asked only when one of them
-/// runs outside the project folder — a tab there is in its own checkout by
-/// definition — so a project without worktrees never spawns git on the
-/// screen's poll. The list is one hardened `git worktree list`, cached per
-/// project for `git_overview::SPOT_TTL`.
-async fn project_tab_worktrees(state: &HostState, project: &super::discovery::ResolvedProject) -> Vec<Option<git_overview::TabWorktree>> {
-    let cwds: Vec<&str> = project
+/// The linked worktree each of the project's tabs works in, in tab order, for
+/// its card — and the worktrees its subagents at work are in, other than that
+/// one. Only agent tabs are named: where the agent is now and where its
+/// subagents are come off its transcript (`agent_transcript::live_folders`,
+/// window or not); a tab with none yet is where it launched. Git is asked only
+/// when one of those folders is outside the project folder — a tab there is in
+/// its own checkout by definition — so a project without worktrees never
+/// spawns git on the screen's poll.
+async fn project_tab_worktrees(
+    state: &HostState,
+    project: &super::discovery::ResolvedProject,
+) -> Vec<(Option<git_overview::TabWorktree>, Vec<git_overview::SubagentWorktree>)> {
+    let tabs: Vec<(bool, Option<String>, String, String)> = project
         .tabs
         .iter()
-        .map(|tab| if tab.public.kind == "agent" { tab.cwd.as_str() } else { "" })
+        .map(|tab| {
+            let session = tab.session_id.clone().filter(|id| !id.is_empty() && !tab.local_model);
+            (tab.public.kind == "agent", session, tab.cmd.clone(), tab.cwd.clone())
+        })
         .collect();
-    let elsewhere = |cwd: &&str| !cwd.is_empty() && std::path::Path::new(cwd) != project.root;
-    if !cwds.iter().any(elsewhere) {
-        return vec![None; cwds.len()];
+    let launched: Vec<(String, Vec<String>)> =
+        tabs.iter().map(|(agent, _, _, cwd)| (if *agent { cwd.clone() } else { String::new() }, Vec::new())).collect();
+    let raw_id = project.raw_id.clone();
+    let folders = tokio::task::spawn_blocking(move || {
+        tabs.into_iter()
+            .map(|(agent, session, cmd, cwd)| {
+                if !agent {
+                    return (String::new(), Vec::new());
+                }
+                let live = session
+                    .map(|uid| crate::services::agent_transcript::live_folders(&cmd, Some(&raw_id), &uid))
+                    .unwrap_or_default();
+                (live.cwd.unwrap_or(cwd), live.subagents)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or(launched);
+    let all: Vec<&str> = folders
+        .iter()
+        .flat_map(|(cwd, subagents)| std::iter::once(cwd.as_str()).chain(subagents.iter().map(String::as_str)))
+        .collect();
+    let spots = worktree_spots_for(state, project, &all).await;
+    let Some(spots) = spots else {
+        return vec![(None, Vec::new()); folders.len()];
+    };
+    let mut named = git_overview::tab_worktrees(&spots, &all).into_iter();
+    folders
+        .iter()
+        .map(|(_, subagents)| {
+            let own = named.next().flatten();
+            let others = git_overview::subagent_worktrees(own.as_ref(), named.by_ref().take(subagents.len()));
+            (own, others)
+        })
+        .collect()
+}
+
+/// The project's worktrees as tab spots, for naming `cwds` — `None` when
+/// none of them is outside the project folder, without asking git. The list
+/// is one hardened `git worktree list`, cached per project for
+/// `git_overview::SPOT_TTL`, and taken again at once when a folder is in no
+/// worktree of the cached one (`SpotCache::first_miss`): a subagent's new
+/// worktree is named on the next poll.
+async fn worktree_spots_for(
+    state: &HostState,
+    project: &super::discovery::ResolvedProject,
+    cwds: &[&str],
+) -> Option<Vec<git_overview::WorktreeSpot>> {
+    let elsewhere: Vec<&str> = cwds
+        .iter()
+        .copied()
+        .filter(|cwd| !cwd.is_empty() && std::path::Path::new(cwd) != project.root)
+        .collect();
+    if elsewhere.is_empty() {
+        return None;
     }
     let cached = state
         .worktree_spots
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(&project.raw_id, Instant::now());
-    let spots = match cached {
-        Some(spots) => spots,
-        None => {
-            let root = project.root.clone();
-            let spots = tokio::task::spawn_blocking(move || git_overview::worktree_spots(&root))
-                .await
-                .unwrap_or_default();
-            state
+    if let Some(spots) = cached {
+        let unplaced: Vec<&str> = elsewhere.iter().copied().filter(|cwd| git_overview::unplaced(&spots, cwd)).collect();
+        let retry = !unplaced.is_empty()
+            && state
                 .worktree_spots
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .set(&project.raw_id, spots.clone(), Instant::now());
-            spots
+                .first_miss(&project.raw_id, &unplaced);
+        if !retry {
+            return Some(spots);
         }
-    };
-    let elsewhere_cwds: Vec<&str> = cwds.iter().map(|cwd| if elsewhere(cwd) { *cwd } else { "" }).collect();
-    git_overview::tab_worktrees(&spots, &elsewhere_cwds)
+    }
+    let root = project.root.clone();
+    let spots = tokio::task::spawn_blocking(move || git_overview::worktree_spots(&root))
+        .await
+        .unwrap_or_default();
+    state
+        .worktree_spots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set(&project.raw_id, spots.clone(), Instant::now());
+    Some(spots)
 }
 
 /// `GET /api/v1/projects/{project_id}/git` — the project's worktrees, branches
@@ -3402,15 +3468,16 @@ async fn agent_transcript(
         })
         .await
         .unwrap_or_else(|_| crate::services::agent_transcript::AgentTranscript::unavailable("read_failed"));
+        let transcript = phone_transcript(&state, &phone, &tab_id, transcript).await;
         return (
             StatusCode::OK,
-            Json(json!({ "transcript": phone_transcript(transcript), "desktop_available": false })),
+            Json(json!({ "transcript": transcript, "desktop_available": false })),
         );
     }
     match response {
         Ok(DesktopResponse::AgentTranscript { transcript }) => (
             StatusCode::OK,
-            Json(json!({ "transcript": phone_transcript(transcript) })),
+            Json(json!({ "transcript": phone_transcript(&state, &phone, &tab_id, transcript).await })),
         ),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "tab_not_found" {
@@ -3425,13 +3492,42 @@ async fn agent_transcript(
 }
 
 /// A transcript as the phone may see it: the shell commands the desktop
-/// Reader shows beside its working row are command lines, which never cross
-/// the browser API.
-fn phone_transcript(
+/// Reader shows beside its working row are command lines, and the folders the
+/// agent and its subagents work in are paths, neither of which crosses the
+/// browser API. A subagent's folder in a linked worktree of the tab's project
+/// crosses as that worktree's name and branch instead (`worktree` on its
+/// `agent` entry), as the tab cards name it.
+async fn phone_transcript(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
-) -> crate::services::agent_transcript::AgentTranscript {
+) -> serde_json::Value {
     transcript.shells.clear();
-    transcript
+    transcript.cwd = None;
+    transcript.running_cwds.clear();
+    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
+    let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))
+        .then(|| catalog(state, phone).ok())
+        .flatten()
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, _)| project.clone()))
+        .filter(|project| project.public.kind == ScopeKind::Project);
+    if let Some(project) = project {
+        let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
+        if let Some(spots) = worktree_spots_for(state, &project, &all).await {
+            named = git_overview::tab_worktrees(&spots, &all);
+        }
+    }
+    let mut value = json!(transcript);
+    if let Some(entries) = value.get_mut("entries").and_then(serde_json::Value::as_array_mut) {
+        for (entry, worktree) in entries.iter_mut().zip(named) {
+            if let Some(worktree) = worktree {
+                entry["worktree"] = json!(worktree);
+            }
+        }
+    }
+    value
 }
 
 async fn schedule_mutation(

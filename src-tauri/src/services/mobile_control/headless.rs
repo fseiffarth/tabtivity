@@ -1666,6 +1666,7 @@ mod tests {
                 color: None,
                 sign_in: false,
                 worktree: None,
+                subagent_worktrees: Vec::new(),
             },
             tmux_name: concat!(crate::app_slug!(), "-x").into(),
             session_id: session_id.map(str::to_string),

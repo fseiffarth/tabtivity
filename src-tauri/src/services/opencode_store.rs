@@ -128,6 +128,8 @@ pub fn session_transcript(
         model: None,
         tokens: None,
         shells: Vec::new(),
+        cwd: None,
+        running_cwds: Vec::new(),
     })
 }
 

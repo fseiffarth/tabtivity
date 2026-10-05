@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from "../api";
+import type { TabWorktree, TranscriptEntry } from "../api";
 
 /** A subagent the Reader can open: the handle on its `agent` entry
  * (`getTranscript`'s `subagent`) and what that entry says about it. */
@@ -14,6 +14,8 @@ export interface SubagentRef {
   background?: boolean;
   /** When it was spawned: its entry's own stamp (`at`). */
   at?: string;
+  /** The linked worktree it works in (`worktree`). */
+  worktree?: TabWorktree;
 }
 
 /** One conversation the Reader has walked into from the stored session. */
@@ -32,7 +34,7 @@ export interface SubagentStep extends SubagentRef {
  * stepped to. */
 export function subagentsIn(entries: readonly TranscriptEntry[]): SubagentRef[] {
   return entries.flatMap((entry) => entry.kind === "agent" && entry.subagent
-    ? [{ token: entry.subagent, task: entry.text, role: entry.role, ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.at ? { at: entry.at } : {}) }]
+    ? [{ token: entry.subagent, task: entry.text, role: entry.role, ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.at ? { at: entry.at } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) }]
     : []);
 }
 

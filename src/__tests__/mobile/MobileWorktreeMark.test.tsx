@@ -5,7 +5,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { WorktreeMark } from "../../../mobile-web/src/components/AgentModeMarks";
+import { SubagentWorktreeMarks, WorktreeMark } from "../../../mobile-web/src/components/AgentModeMarks";
+import { transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { subagentsIn } from "../../../mobile-web/src/terminal/subagents";
 
 describe("WorktreeMark", () => {
   it("names the worktree and a differently named branch", () => {
@@ -28,5 +30,30 @@ describe("WorktreeMark", () => {
   it("shows nothing for a tab in the project folder", () => {
     const { container } = render(<WorktreeMark tab={{}} />);
     expect(container.querySelector(".agent-worktree")).toBeNull();
+  });
+});
+
+describe("SubagentWorktreeMarks", () => {
+  it("names each other worktree the subagents at work are in, with how many", () => {
+    const { container } = render(<SubagentWorktreeMarks tab={{ subagent_worktrees: [
+      { label: "agent-a1b2", branch: "worktree-agent-a1b2", count: 2 },
+      { label: "fix", count: 1 },
+    ] }} />);
+    const marks = [...container.querySelectorAll(".agent-worktree.subagent")];
+    expect(marks.map((mark) => mark.textContent)).toEqual(["↳ ⎇ agent-a1b2 · worktree-agent-a1b2 ×2", "↳ ⎇ fix"]);
+    expect(marks[0].getAttribute("title")).toBe("Subagents at work in worktree agent-a1b2 on branch worktree-agent-a1b2: 2");
+    expect(marks[1].getAttribute("title")).toBe("Subagents at work in worktree fix (detached HEAD): 1");
+  });
+
+  it("shows nothing while no subagent is in another worktree", () => {
+    const { container } = render(<SubagentWorktreeMarks tab={{}} />);
+    expect(container.querySelector(".agent-worktree")).toBeNull();
+  });
+
+  it("carries a subagent entry's worktree to its chat card and its Subagents row", () => {
+    const worktree = { label: "agent-a1b2", branch: "worktree-agent-a1b2" };
+    const entries = [{ kind: "agent" as const, text: "Fix it", subagent: "0123456789abcdef", worktree }];
+    expect(transcriptTurns(entries)[0].worktree).toEqual(worktree);
+    expect(subagentsIn(entries)[0].worktree).toEqual(worktree);
   });
 });

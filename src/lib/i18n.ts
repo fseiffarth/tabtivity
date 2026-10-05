@@ -120,6 +120,8 @@ export const enSource = {
   "mobile.project.durationHours": "{hours}h {mins}m",
   "mobile.project.worktreeTitle": "Works in worktree {label} on branch {branch}",
   "mobile.project.worktreeDetachedTitle": "Works in worktree {label} (detached HEAD)",
+  "mobile.project.subagentWorktreeTitle": "Subagents at work in worktree {label} on branch {branch}: {count}",
+  "mobile.project.subagentWorktreeDetachedTitle": "Subagents at work in worktree {label} (detached HEAD): {count}",
   "mobile.subagentSheet.title": "Subagents of {label}",
   "mobile.subagentSheet.loading": "Reading the session…",
   "mobile.subagentSheet.none": "None of this session's subagents can be opened yet.",
