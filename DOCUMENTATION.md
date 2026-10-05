@@ -513,7 +513,14 @@ picks (or **Other…** takes typed words); **Send answers** sends them into the
 tab as the next prompt and closes the card everywhere, and **Answer in chat
 instead** closes it unanswered. The phone's chat shows a one-line banner while
 a question is open; on the desktop, with marking off, the **Mark up** button is
-underlined and opens on the asking tab.
+underlined and opens on the asking tab. The same tabs tick off the marks they handled
+with `markup_done` (each Submit carries a round id the prompt names its marks
+under): every ticked sent mark gets a green ✓ at its top-right corner, phone
+and desktop alike, while sent marks show, and the status line says **n done ·
+Approve all**. A tap or click on a ✓ approves that mark — it leaves the layer,
+undoably; nothing removes a mark without it. On the phone a fresh ✓ ignores
+taps for a moment, so a pen mid-stroke cannot approve. Ticks die with the
+agent's session (at most a day) and with an undone apply round; the marks stay.
 
 **Local models from the phone** (`docs/mobile_local_model_control_plan.md`).
 Home → **Local models** lists the Ollama models installed on the desktop —

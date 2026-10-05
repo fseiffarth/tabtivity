@@ -1649,6 +1649,14 @@ span.files-close { background:transparent; }
 .markup-questions p[role="alert"] { margin:0; color:#f2b8b5; font-size:.8rem; }
 .markup-pin { position:absolute; z-index:1; display:grid; place-items:center; min-width:26px; height:24px; padding:0 6px; border:0; border-radius:12px 12px 12px 3px; background:#ffd36b; color:#1b1f2b; font:700 .74rem/1 Inter,ui-sans-serif,system-ui,sans-serif; box-shadow:0 1px 3px rgba(0,0,0,.45); }
 .markup-pin-hit { position:absolute; z-index:1; border-radius:2px; background:rgba(255,211,107,.38); pointer-events:none; }
+/* The agent's ticks (`markup_done`): a ✓ pin in the finished colour at a
+   ticked sent mark's top-right corner — the question pin's static shadow, no
+   animation. A tap approves the mark; "n done · Approve all" sits under the
+   round's pill in its look. */
+.markup-pin.is-tick { width:26px; min-width:26px; height:26px; padding:0; border-radius:50%; background:#91e6a9; color:#0f2a18; font-size:.9rem; }
+.markup-pin.is-tick:disabled { opacity:.5; }
+.markup-ticks .markup-round-words { color:#91e6a9; font-weight:600; }
+.markup-ticks .markup-approve-all { margin-left:auto; min-height:32px; }
 .outbox-text-body { overflow:auto; padding:12px; }
 .outbox-text-body pre { margin:0 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.8rem; }
 .outbox-viewer:has(> [role=alert]) { grid-template-rows:auto auto minmax(0,1fr); }

@@ -857,6 +857,18 @@ pub struct MobileMarkupAsk {
     pub questions: Vec<MobileMarkupQuestion>,
 }
 
+/// A mark the agent ticked off with `markup_done` (`services::markup_mcp`):
+/// the round id the phone minted for that Submit and the mark's 1-based page
+/// and number in it. The phone maps it onto the mark it sent; no id or path
+/// of the window's crosses. The sidecar re-checks the bounds
+/// (`host.rs` `valid_tick`); fields it does not know are dropped in decoding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupTick {
+    pub round: String,
+    pub page: u32,
+    pub mark: u32,
+}
+
 /// A project file an ask is about, sealed as the files drawer seals its rows
 /// (`files::entry`): its token, its folder's token (none at the root) and
 /// the folder trail of names the phone keys its markup layer by.
@@ -1785,11 +1797,14 @@ pub enum DesktopResponse {
         attachment: MobileInboxAttachment,
     },
     /// Answers [`DesktopRequest::MarkupQuestions`]: the tab's open asks for
-    /// the file shown (at most one today). A markup answer or dismissal is
-    /// acknowledged with `Seen`.
+    /// the file shown (at most one today) and the marks its agent ticked off
+    /// (`markup_done`; absent from an older window). A markup answer or
+    /// dismissal is acknowledged with `Seen`.
     MarkupQuestions {
         #[serde(default)]
         asks: Vec<MobileMarkupAsk>,
+        #[serde(default)]
+        ticks: Vec<MobileMarkupTick>,
     },
     /// Answers [`DesktopRequest::LocalModels`] and a successful
     /// [`DesktopRequest::LocalModelMutate`]. `server` is `running`,
@@ -2410,8 +2425,23 @@ mod tests {
         assert!(reencoded["asks"][0].get("file").is_none(), "{reencoded}");
         assert_eq!(reencoded["asks"][0]["questions"][0]["multi_select"], true);
         assert_eq!(reencoded["asks"][0]["questions"][0]["page"], 3);
+        assert_eq!(reencoded["ticks"], serde_json::json!([]), "a window without ticks answers none");
         let empty: DesktopResponse = serde_json::from_value(serde_json::json!({ "status": "markup_questions" })).expect("no asks");
-        assert!(matches!(empty, DesktopResponse::MarkupQuestions { ref asks } if asks.is_empty()));
+        assert!(matches!(empty, DesktopResponse::MarkupQuestions { ref asks, ref ticks } if asks.is_empty() && ticks.is_empty()));
+        // Ticks cross as round, page and mark only.
+        let ticked: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "markup_questions",
+            "ticks": [{ "round": "k3x9a0b1", "page": 2, "mark": 4, "file": "docs/paper/draft.pdf" }],
+        }))
+        .expect("decode ticks");
+        assert_eq!(
+            serde_json::to_value(&ticked).expect("re-encode ticks")["ticks"],
+            serde_json::json!([{ "round": "k3x9a0b1", "page": 2, "mark": 4 }])
+        );
+        for bad in [serde_json::json!({ "round": "r", "page": -1, "mark": 1 }), serde_json::json!({ "round": "r", "page": 1 })] {
+            let hostile = serde_json::json!({ "status": "markup_questions", "ticks": [bad] });
+            assert!(serde_json::from_value::<DesktopResponse>(hostile).is_err());
+        }
     }
 
     #[test]

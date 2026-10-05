@@ -4630,6 +4630,21 @@
   flex: none;
   box-shadow: none;
 }
+/* A tick's ✓ (`PdfMarkupTicks`): the same pin at a sent mark's top-right
+   corner, in the success colour — the agent says it handled the mark; a click
+   approves and removes it. */
+.file-viewer-pdf-question-pin.is-tick {
+  border-color: color-mix(in srgb, var(--success) 70%, #000);
+  background: var(--success);
+}
+.file-viewer-pdf-question-pin.is-tick:hover,
+.file-viewer-pdf-question-pin.is-tick:focus-visible {
+  background: color-mix(in srgb, var(--success) 80%, #fff);
+}
+.file-viewer-pdf-question-pin.is-tick:disabled {
+  cursor: var(--cur-default, default);
+  opacity: 0.6;
+}
 
 .file-viewer-pdf-copy-bar {
   display: flex;

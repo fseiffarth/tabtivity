@@ -317,7 +317,8 @@ pub enum Caller {
     Helper,
     /// A local project-agent tab's markup identity (`services::markup_mcp`),
     /// bound at spawn to its project and schedule target: served
-    /// `markup_ask` / `markup_withdraw` on `/mcp/markup` and nothing else.
+    /// `markup_ask` / `markup_withdraw` / `markup_done` on `/mcp/markup` and
+    /// nothing else.
     Marker,
 }
 

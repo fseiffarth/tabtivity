@@ -116,6 +116,7 @@ import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
 import { PdfMarkupBar } from "./PdfMarkupBar";
 import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
+import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
 import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
 import {
@@ -475,6 +476,7 @@ function PdfPageCanvas({
   onCopySelection,
   markup,
   questionPins,
+  tickBadges,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -595,6 +597,13 @@ function PdfPageCanvas({
     pins: readonly QuestionPin[];
     focus: QuestionFocus | null;
     onPick: (pin: QuestionPin) => void;
+  } | null;
+  /** The agent's ticks on this sheet's sent marks (`PdfMarkupTicks`), over the
+   *  markup layer: a click approves and removes that mark. */
+  tickBadges?: {
+    badges: readonly TickBadge[];
+    disabled: boolean;
+    onApprove: (index: number, mark: TickBadge["mark"]) => void;
   } | null;
 }) {
   const t = useT();
@@ -1344,6 +1353,15 @@ function PdfPageCanvas({
           remarks included, which it leaves visible but out of reach. */}
       {markup && cssSize && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
+      )}
+      {tickBadges && tickBadges.badges.length > 0 && cssSize && (
+        <PdfTickBadges
+          badges={tickBadges.badges}
+          size={[cssSize.w, cssSize.h]}
+          scale={scale}
+          disabled={tickBadges.disabled}
+          onApprove={tickBadges.onApprove}
+        />
       )}
       {questionPins && questionPins.pins.length > 0 && (
         <PdfQuestionPins
@@ -2415,6 +2433,12 @@ function PdfCanvas({
     [questionPins],
   );
   const showQuestion = markup.questions.show;
+  // The agent's ticks (`markup_done`): a ✓ on each ticked sent mark.
+  const tickBadges = useMemo(
+    () => tickBadgesByPage(markup.edit.base, markup.ticks.marks),
+    [markup.edit.base, markup.ticks.marks],
+  );
+  const approveTick = markup.ticks.approve;
   const pickQuestionPin = useCallback((pin: QuestionPin) => showQuestion(pin.askId, pin.index, "card"), [showQuestion]);
   const holder = markup.key ? markupHolder(markup.key) : undefined;
   const gate = markupGate({ ...gateInput, claimedElsewhere: holder !== undefined && holder !== markupOwner });
@@ -4915,6 +4939,11 @@ function PdfCanvas({
                     questionPins={
                       marking && ref.src === SELF && questionPins.has(i + 1)
                         ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
+                        : null
+                    }
+                    tickBadges={
+                      marking && ref.src === SELF && tickBadges.has(i + 1)
+                        ? { badges: tickBadges.get(i + 1)!, disabled: markup.sending, onApprove: (index, mark) => approveTick(i + 1, index, mark) }
                         : null
                     }
                   />

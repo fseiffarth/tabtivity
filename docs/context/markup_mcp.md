@@ -2,9 +2,11 @@
 
 An MCP server, `tabtivity-markup` (`services::markup_mcp`, route
 `/mcp/markup`, `Caller::Marker`), that lets a local agent tab ask the reader
-about their PDF marks. Two tools: `markup_ask` (1–4 questions, 2–6 options
-each, an optional `file`, and per question an optional `page` + `quote`) and
-`markup_withdraw { id }`. The questions show as a card in that tab's markup
+about their PDF marks and tick off the ones it has handled. Three tools:
+`markup_ask` (1–4 questions, 2–6 options each, an optional `file`, and per
+question an optional `page` + `quote`), `markup_withdraw { id }` and
+`markup_done { file, round, marks: [{ page, mark }] }` (see **Ticks** below;
+plan `docs/markup_tick_approve_plan.md`). The questions show as a card in that tab's markup
 view — the desktop's `PdfMarkupQuestions` under `PdfMarkupBar`, the phone's
 `MarkupQuestionsCard` in `MarkupView` — with a numbered pin at the quoted
 words. A tap answers. On by default (`Settings::markup_mcp`, absent = on;
@@ -113,6 +115,102 @@ it as a question per mark; the dial exists so a long markup is not a quiz.
 - **Headless: `desktop_unavailable`.** The asks live in the window's
   process; with no window there is no listener and no ask. The three phone
   routes answer `503 desktop_unavailable`, which the phone reads as "no card".
+
+## Ticks (`markup_done`)
+
+The reader wants to see which marks the agent has dealt with and clear them
+with one tap. A Submit that carries a round id (`markup::valid_round`, minted
+by the view) gets a prompt that names every listed mark `p<page> m<mark>`
+(`mark` = index into that page's submitted marks + 1; a picture's marks
+`m<mark>` alone, which the line tells the agent are page 1) and a line
+pointing at `markup_done` "if you have it". Marks the prompt does not list
+(a stroke nothing is known about) get no reference and so no tick. The agent calls `markup_done { file, round,
+marks }` after making a mark's change; the views show a ✓ on each ticked mark
+and the reader's tap approves it, which removes the mark. Nothing is removed
+without that tap — the rounds plan's "never delete or hide markers
+automatically" rule stands.
+
+- **Mapped client-side, by round id + page + mark index.** The host stores
+  only `(round, page, mark)` per file — it never sees a mark's shape (the
+  layer lives in the phone's IndexedDB or the desktop's layer store) and marks
+  carry no ids (they would cost the prompt budget). Each view keeps a log of
+  what each round sent, page by page in submitted order, and maps a tick to
+  the mark equal to `log[round].pages[page][mark - 1]` in its sent layer. A
+  tick that matches nothing (erased, approved, an undone round, older than the
+  log) is dropped by the view; a tick can never reach an unsent mark. The
+  round id is what makes `m3` stable: the same page's `m3` in another round is
+  another mark.
+- **Bound to a file, always.** `file` is required and resolved exactly as
+  `markup_ask`'s (`resolve_file`, proven to exist); reads match with
+  `same_file`, so the outbox copy and the project file share their ticks. A
+  view of a file outside the project (`Shown::Elsewhere`) gets none.
+- **Memory only, like the asks.** Records `{ session, project, target, file,
+  round, page, mark, created }` under `(project, scheduleTargetId)`; pruned at
+  24 h, when the ticking session dies (`sweep()`, as asks), and past 5 000
+  (the oldest of the tab holding the most go first, so one tab ticking in
+  bulk cannot push another's out). A tick already there (same target, round, page, mark,
+  `same_file`) is a no-op; `{ status: "ticked", count }` counts the new ones
+  and `markup-mcp-changed` rings only when some landed (or some were pruned).
+- **Bounds and budget.** 1–200 marks per call, duplicates collapse, page
+  1..=`MAX_PAGE`, mark 1..=`MAX_MARK` (`markup::MAX_MARKS`, no page holds
+  more). Its own 60 calls per tab per rolling hour, apart from the asks'
+  20. Refusals as `markup_ask`'s: `invalid`, `file_not_found`, `budget`,
+  `off` (the switch covers all three tools).
+- **Read side.** `markup_mcp::ticks(project, target, Shown) → [{ round, page,
+  mark }]` (no session, project, file or path). Desktop:
+  `markup_mcp_ticks({ projectId, scheduleTargetId, path? })` (TS
+  `listMarkupTicks`, `lib/viewers/markupQuestions.ts`). Phone: `GET
+  /markup/questions` answers `ticks` beside `asks`; the window's bridge
+  (`MobileBridgeHost` `markupQuestionsFor`) fills them, a window without the
+  command answers none, and the sidecar drops any tick outside the bounds
+  (`host.rs` `valid_tick`). Headless: `desktop_unavailable`, as for the asks.
+- **The log and the mapping** live in the shared core
+  (`mobile-web/src/markup/layer.ts`): `mintRound`, `markSent(.., roundId)`
+  (logs each moved page's `marks` — the same array the Submit body sent —
+  as `SentLayer.log`, newest `MAX_LOGGED_ROUNDS` = 6, trimmed further so the
+  log never passes `SENT_LIMITS`), `tickedMarks` (the logged mark by
+  reference on the sent side; by equality only when none of that round's
+  marks on the page is still the same object — a record rebuilt from a copy
+  — and never onto a mark another logged round holds, so an approved mark's
+  identical twin never inherits its ✓),
+  `approveMark(s)`, `forgetRound`; `clearSent` / Clear all marks drop the
+  log. A page rescaled by a later round (rebuilt PDF, new size) rescales the
+  log's marks with it (same objects), so ticks still match. IndexedDB's
+  structured clone keeps the log's marks shared with the sent side, and
+  `withinLimits` does not count the log; a record whose log is unreadable
+  loads without it (marks kept). Records from before ticks have no log.
+- **Desktop** (`usePdfMarkup.ts`, `PdfMarkupTicks.tsx`): Submit mints the
+  round and passes it to `pdf_markup_submit`; ticks are read with the asks'
+  triggers (`markup-mcp-changed`, pane visible, Mark up on) from **every**
+  agent tab of the project — the round id already ties a tick to one
+  Submit's marks, so a tick still shows after the reader picks another tab;
+  a rejecting command (stale backend) counts as no ticks. A ✓ (the question
+  pin in the success colour) sits at each ticked sent mark's top-right
+  corner while sent marks are shown; its click is an ordinary undoable edit
+  that removes only the very mark object the badge was drawn for (badges are
+  keyed by mark identity and a double click's second click is ignored, so
+  neither focus + Enter nor a click on a badge sliding into place takes
+  another mark); the strip's status line shows **n done · Approve all**. A
+  successful Undo of an `apply` round forgets that round from the log in the
+  whole edit history — its ticks then show nothing, the marks stay.
+- **Phone** (`MarkupView.tsx`, `api.ts` `readMarkupQuestions`,
+  `markup/questions.ts`): Submit sends `round` in the `/markup` body and logs
+  the marks only when every sent page's `marks` array is still the one the
+  body carried (as the desktop). The ticks ride the questions poll (3 s while
+  the view is up, never hidden, on agent edges) for the view's own tab and
+  file; the Focus banner's request (no `source`) keeps none, an older
+  sidecar's missing `ticks` reads as none, malformed rows are dropped. The ✓
+  is the question pin (`markup-pin is-tick`) centred on `markBox`'s top-right
+  corner, kept on the page, PDFs and pictures alike, while sent marks show.
+  A tap approves exactly the badge's mark object (identity in the updater,
+  then still ticked), never while a stroke is under way or a Submit goes
+  out, never within `ARRIVAL_GUARD_MS` of that badge appearing (a pen
+  mid-stroke), never as a double tap's second click or within 350 ms of the
+  last approve; **Approve all** waits out the newest badge's guard.
+  **n done · Approve all** is its own `markup-round` row under the pill.
+  Unlike the desktop it reads only the view's own tab — the Focus chat's,
+  or the tab this view's new-tab Submit opened; a PDF reopened from the
+  file browser has no tab yet and shows no ✓ (the asks have the same reach).
 
 ## Known limits
 

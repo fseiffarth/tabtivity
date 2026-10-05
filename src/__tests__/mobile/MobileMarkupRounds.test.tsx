@@ -137,7 +137,7 @@ describe("MarkupView · rounds", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("Round 2"));
 
     const [, second] = markupBodies(calls);
-    expect(Object.keys(second).sort()).toEqual(["mode", "pages", "picture", "source"]);
+    expect(Object.keys(second).sort()).toEqual(["mode", "pages", "picture", "round", "source"]);
     // Apply marks directly is on unset: each Submit asks for an apply round.
     expect(second.mode).toBe("apply");
     expect(second.pages).toHaveLength(1);
@@ -171,7 +171,7 @@ describe("MarkupView · rounds", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalledWith(markupForSubagent("Round 1")));
     expect(markupForSubagent("Round 1").startsWith(`${MARKUP_SUBAGENT_LINE}\n\n`)).toBe(true);
     // The wrapper is the viewer's: the desktop's request is unchanged.
-    expect(Object.keys(markupBodies(calls)[0]).sort()).toEqual(["mode", "pages", "picture", "source"]);
+    expect(Object.keys(markupBodies(calls)[0]).sort()).toEqual(["mode", "pages", "picture", "round", "source"]);
   });
 
   it("shows what the agent does with the round, in a pill that follows it", async () => {

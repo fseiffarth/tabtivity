@@ -145,20 +145,26 @@ export type PdfMarkupResult = { prompt: string; marked: string | null; mode?: Pd
  * Bakes the marked copy of `path` into the project's `.tabtivity/inbox/` and
  * answers the prompt to queue (`commands/pdf_markup.rs`). Rejects with the
  * backend's plain code string (see `markupReasonKey`). `mode` is what
- * Settings → PDF markup → Apply marks directly asks for.
+ * Settings → PDF markup → Apply marks directly asks for. `round` (`mintRound`)
+ * names the Submit, so the prompt numbers its marks and the agent can tick
+ * them off (`markup_done`, `docs/markup_tick_approve_plan.md`).
  */
-export function submitPdfMarkup(projectId: string, path: string, pages: PdfMarkupPage[], instruction?: string | null, ask?: number | null, mode?: PdfMarkupMode): Promise<PdfMarkupResult> {
-  return invoke<PdfMarkupResult>("pdf_markup_submit", { projectId, path, pages, ...(instruction ? { instruction } : {}), ...(ask != null ? { ask } : {}), ...(mode ? { mode } : {}) });
+export function submitPdfMarkup(projectId: string, path: string, pages: PdfMarkupPage[], instruction?: string | null, ask?: number | null, mode?: PdfMarkupMode, round?: string): Promise<PdfMarkupResult> {
+  return invoke<PdfMarkupResult>("pdf_markup_submit", { projectId, path, pages, ...(instruction ? { instruction } : {}), ...(ask != null ? { ask } : {}), ...(round ? { round } : {}), ...(mode ? { mode } : {}) });
 }
 
 // ── The undo of an `apply` round (`docs/pdf_markup_direct_apply_plan.md`) ──
 
 /** What an undo would do (preview) or did: the project-relative files, how
- *  many more it did not name, and the PDF's fate. */
+ *  many more it did not name, and the PDF's fate; `outside` the files changed
+ *  elsewhere in the repo (named from its top) that the undo leaves alone, and
+ *  how many more (absent from an older backend). */
 export type PdfMarkupUndoChanges = {
   files: { path: string; change: "added" | "modified" | "deleted" | "changed" }[];
   more: number;
   pdf: "restored" | "kept" | "none";
+  outside?: string[];
+  outsideMore?: number;
 };
 /** How the undo commands refuse: the phone's error codes (`undo_conflict`
  *  with the files changed since, `undo_gone`, `round_not_found`,

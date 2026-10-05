@@ -10,7 +10,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::services::markup_mcp::{self, Answer, AskView, Shown};
+use crate::services::markup_mcp::{self, Answer, AskView, Shown, TickView};
 
 /// Called once from the listener's start (`commands::root_mcp::start`).
 pub fn install_change_hook(app: &AppHandle) {
@@ -35,19 +35,39 @@ fn shown_rel(project_id: &str, path: &str) -> Option<String> {
     markup_mcp::resolve_file(&root, path, false).ok()
 }
 
+/// Run `read` with the [`Shown`] a view's `path` names: absent or blank is
+/// every file, one that does not resolve under the project is
+/// [`Shown::Elsewhere`]. Blocking (it may look at the project folder).
+fn with_shown<T>(project_id: &str, path: Option<&str>, read: impl FnOnce(Shown) -> T) -> T {
+    let shown = path.map(str::trim).filter(|p| !p.is_empty()).map(|p| shown_rel(project_id, p));
+    read(match &shown {
+        None => Shown::All,
+        Some(Some(rel)) => Shown::File(rel),
+        Some(None) => Shown::Elsewhere,
+    })
+}
+
 /// `markup_mcp_list({ projectId, scheduleTargetId, path? })` → the open asks
 /// (`[{ id, file, fileName, createdAt, questions }]`; at most one per tab).
 #[tauri::command]
 pub async fn markup_mcp_list(project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<AskView>, String> {
     valid_target(&project_id, &schedule_target_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let shown = path.as_deref().map(str::trim).filter(|p| !p.is_empty()).map(|p| shown_rel(&project_id, p));
-        let shown = match &shown {
-            None => Shown::All,
-            Some(Some(rel)) => Shown::File(rel),
-            Some(None) => Shown::Elsewhere,
-        };
-        markup_mcp::list(&project_id, &schedule_target_id, shown)
+        with_shown(&project_id, path.as_deref(), |shown| markup_mcp::list(&project_id, &schedule_target_id, shown))
+    })
+    .await
+    .map_err(|_| "markup_failed".to_string())
+}
+
+/// `markup_mcp_ticks({ projectId, scheduleTargetId, path? })` → the marks
+/// the tab's agent ticked off with `markup_done` for the file `path` shows
+/// (`[{ round, page, mark }]`, oldest first; every file's without `path`).
+/// The view maps each onto the mark it sent in that round.
+#[tauri::command]
+pub async fn markup_mcp_ticks(project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<TickView>, String> {
+    valid_target(&project_id, &schedule_target_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        with_shown(&project_id, path.as_deref(), |shown| markup_mcp::ticks(&project_id, &schedule_target_id, shown))
     })
     .await
     .map_err(|_| "markup_failed".to_string())
@@ -111,5 +131,20 @@ mod tests {
         assert_eq!(markup_mcp_dismiss("p".into(), "t".into(), "ask-none".into()), Ok(()));
         assert_eq!(markup_mcp_reopen("p".into(), "t".into(), "ask-none".into(), "r".into()), Err("gone".into()));
         assert_eq!(markup_mcp_reopen("p".into(), "".into(), "ask-none".into(), "r".into()), Err("invalid_target".into()));
+    }
+
+    #[test]
+    fn ticks_are_read_per_target_and_refuse_a_bad_one() {
+        let run = |project: &str, target: &str, path: Option<&str>| {
+            tauri::async_runtime::block_on(markup_mcp_ticks(project.into(), target.into(), path.map(str::to_string)))
+        };
+        assert_eq!(run("", "t", None), Err("invalid_target".into()));
+        assert_eq!(run("p", "a\nb", None), Err("invalid_target".into()));
+        assert_eq!(run("p-cmd-ticks", "t-cmd-ticks", None), Ok(vec![]));
+        assert_eq!(run("p-cmd-ticks", "t-cmd-ticks", Some("  ")), Ok(vec![]), "blank is every file");
+        // (A path is resolved under `projects.json`'s folder, which a unit
+        // test does not read; `markup_mcp::ticks` is tested per `Shown`.)
+        assert!(with_shown("p-cmd-ticks", Some(" "), |shown| shown == Shown::All));
+        assert!(with_shown("p-cmd-ticks", None, |shown| shown == Shown::All));
     }
 }

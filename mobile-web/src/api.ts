@@ -1,5 +1,5 @@
 import { translate, useI18nStore } from "../../src/lib/i18n";
-import type { Mark } from "./markup/layer";
+import type { Mark, MarkTick } from "./markup/layer";
 
 /** One row of the phone's list. `kind` says whether it is a project or a box
  * (#31aa) — a box is a scope of its own on the desktop, always "active" here,
@@ -1131,8 +1131,10 @@ export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark
 /** `instruction` is the phone's own wording of what to do with the marks
  * (`markupInstruction.ts`), absent while the desktop's default stands; `ask`
  * its asking dial (0–4), absent at the default stop; `mode` what **Apply
- * marks directly** asks for (absent = `list`). */
-export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode }
+ * marks directly** asks for (absent = `list`); `round` this Submit's id
+ * (`mintRound`), which the prompt names its marks under for the agent's
+ * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`). */
+export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string }
 /** `apply`: the agent makes the changes and an undo snapshot backs them;
  * `list`: it lists them first (**Make these changes**). */
 export type MarkupMode = "apply" | "list";
@@ -1244,11 +1246,33 @@ function markupBase(tabId: string): string {
  * open one (the Focus banner). `503 desktop_unavailable` with the window
  * closed: there is then no ask to show. A malformed answer reads as none. */
 export async function listMarkupQuestions(tabId: string, source?: MarkupSource, signal?: AbortSignal): Promise<PhoneMarkupAsk[]> {
+  return (await readMarkupQuestions(tabId, source, signal)).asks;
+}
+
+/** A positive whole number, as a tick's page and mark are. */
+const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value > 0;
+
+/** The same route read whole: the open asks and — for the file a markup view
+ * shows (`source`) — the agent's ticks (`markup_done`): which marks of which
+ * Submit's round it says it handled, `{ round, page, mark }` with `mark`
+ * 1-based into that round's page as sent. The view maps them to its own sent
+ * marks (`tickedMarks`). Without a source (the Focus banner) the ticks are
+ * every file's and mean nothing there: none are kept. An older sidecar sends
+ * no `ticks`: none. A malformed tick is dropped, extra keys too. */
+export async function readMarkupQuestions(tabId: string, source?: MarkupSource, signal?: AbortSignal): Promise<{ asks: PhoneMarkupAsk[]; ticks: MarkTick[] }> {
   const query = !source ? "" : `?source=${encodeURIComponent("files" in source ? `files:${source.files}` : `outbox:${source.outbox}`)}`;
-  const { asks } = await api<{ asks?: unknown }>(`${markupBase(tabId)}/questions${query}`, { signal });
-  if (!Array.isArray(asks)) return [];
-  return asks.filter((ask): ask is PhoneMarkupAsk => !!ask && typeof ask === "object"
+  const { asks, ticks } = await api<{ asks?: unknown; ticks?: unknown }>(`${markupBase(tabId)}/questions${query}`, { signal });
+  const shown = !Array.isArray(asks) ? [] : asks.filter((ask): ask is PhoneMarkupAsk => !!ask && typeof ask === "object"
     && typeof (ask as PhoneMarkupAsk).id === "string" && Array.isArray((ask as PhoneMarkupAsk).questions));
+  const ticked: MarkTick[] = [];
+  if (source && Array.isArray(ticks)) {
+    for (const tick of ticks) {
+      if (!tick || typeof tick !== "object") continue;
+      const { round, page, mark } = tick as Record<string, unknown>;
+      if (typeof round === "string" && round && positiveInteger(page) && positiveInteger(mark)) ticked.push({ round, page, mark });
+    }
+  }
+  return { asks: shown, ticks: ticked };
 }
 
 /** `POST /api/v1/tabs/{id}/markup/answer` — one answer per question, in

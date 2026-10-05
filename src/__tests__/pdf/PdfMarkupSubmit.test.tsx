@@ -124,6 +124,8 @@ describe("desktop markup Submit", () => {
       projectId: "p1",
       path: PATH,
       pages: [{ n: 1, size: SIZE, marks: [STROKE], layerPng: btoa("png") }],
+      // A fresh round id, for the agent's ticks (`markup_done`).
+      round: expect.stringMatching(/^[a-z0-9]{8}$/),
       // Apply marks directly is on unset.
       mode: "apply",
     });
@@ -131,7 +133,10 @@ describe("desktop markup Submit", () => {
     // Queued first, held second — the hold names the schedule just made.
     expect(mocks.queuePromptForTab.mock.invocationCallOrder[0]).toBeLessThan(mocks.holdPhonePrompt.mock.invocationCallOrder[0]);
     // The round's marks moved to the sent side and the record keeps them.
-    await waitFor(() => expect(lastSaved()).toEqual({ pages: {}, sent: { pages: LAYER.pages, rounds: 1 } }));
+    await waitFor(() => expect(lastSaved()).toEqual({
+      pages: {},
+      sent: { pages: LAYER.pages, rounds: 1, log: [{ id: call[1].round, pages: { 1: [STROKE] } }] },
+    }));
     expect(screen.getByText("Sent — waiting for the agent")).toBeTruthy();
     expect(submitButton().disabled).toBe(true);
   });
@@ -165,7 +170,7 @@ describe("desktop markup Submit", () => {
     await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
     expect(mocks.queuePromptForTab).toHaveBeenCalledWith("p1", "s1", `${MARKUP_SUBAGENT_LINE}\n\nLook at the marked copy.`);
     const call = mocks.invoke.mock.calls.find(([command]) => command === "pdf_markup_submit")!;
-    expect(Object.keys(call[1]).sort()).toEqual(["mode", "pages", "path", "projectId"]);
+    expect(Object.keys(call[1]).sort()).toEqual(["mode", "pages", "path", "projectId", "round"]);
   });
 
   it("offers Make these changes once the agent is done, queues the follow-up and offers it once", async () => {

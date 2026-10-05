@@ -71,6 +71,7 @@ describe("Mobile bridge — the agent's markup questions", () => {
           { question: "Which spelling?", options: [{ label: "colour" }, { label: "color" }], multiSelect: true },
         ],
       }],
+      markup_mcp_ticks: () => [{ round: "k3x9a0b1", page: 2, mark: 1 }, { round: "k3x9a0b1", page: 0, mark: 1 }],
       markup_mcp_answer: () => ({ prompt: PROMPT, receipt: "rcpt-1" }),
       markup_mcp_reopen: () => null,
       markup_mcp_dismiss: () => null,
@@ -111,6 +112,7 @@ describe("Mobile bridge — the agent's markup questions", () => {
     const answer = await ask({ type: "markup_questions", request_id: "q1", project_id: project.id, tmux_session: TMUX, path: `${NAMES.outboxDir}/20261003-101500-draft.pdf` });
     expect(answer).toEqual({
       status: "markup_questions",
+      ticks: [{ round: "k3x9a0b1", page: 2, mark: 1 }],
       asks: [{
         id: ASK,
         file_name: "draft.pdf",
@@ -122,6 +124,7 @@ describe("Mobile bridge — the agent's markup questions", () => {
     });
     expect(JSON.stringify(answer)).not.toContain("docs/paper");
     expect(called("markup_mcp_list")[0]).toEqual({ projectId: project.id, scheduleTargetId: "target-1", path: `${NAMES.outboxDir}/20261003-101500-draft.pdf` });
+    expect(called("markup_mcp_ticks")[0]).toEqual({ projectId: project.id, scheduleTargetId: "target-1", path: `${NAMES.outboxDir}/20261003-101500-draft.pdf` });
 
     // No path: every open ask of the tab (the Focus banner). Its path goes to
     // the sidecar, which seals it into a files row and never passes it on.
@@ -134,6 +137,12 @@ describe("Mobile bridge — the agent's markup questions", () => {
     expect(await ask({ type: "markup_questions", request_id: "q4", project_id: "p-other", tmux_session: TMUX }))
       .toMatchObject({ status: "error", code: "project_ineligible" });
     expect(called("markup_mcp_list")).toHaveLength(0);
+  });
+
+  it("still lists the asks when this backend cannot list ticks", async () => {
+    handlers.markup_mcp_ticks = () => { throw "Command markup_mcp_ticks not found"; };
+    const answer = await ask({ type: "markup_questions", request_id: "q5", project_id: project.id, tmux_session: TMUX, path: "docs/paper/draft.pdf" });
+    expect(answer).toMatchObject({ status: "markup_questions", ticks: [], asks: [{ id: ASK }] });
   });
 
   it("answers through the desktop and delivers the prompt as a phone hold", async () => {

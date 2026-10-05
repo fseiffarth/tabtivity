@@ -1439,6 +1439,7 @@ pub fn run() {
             commands::root_mcp::git_push_mcp_decide,
             commands::root_mcp::git_push_mcp_clear,
             commands::markup_mcp::markup_mcp_list,
+            commands::markup_mcp::markup_mcp_ticks,
             commands::markup_mcp::markup_mcp_answer,
             commands::markup_mcp::markup_mcp_dismiss,
             commands::markup_mcp::markup_mcp_reopen,

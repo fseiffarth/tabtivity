@@ -15,6 +15,7 @@ import { undoSummary, type RoundPhase } from "../../../../mobile-web/src/markup/
 import { ConfirmDialog } from "../../common/PromptDialogs";
 import { UntestedTag } from "../../common/UntestedTag";
 import { TabStatusMark } from "../../tabs/TabLocalityBadges";
+import { PdfTicksStatus } from "./PdfMarkupTicks";
 import type { MarkupTool, PdfMarkup } from "./usePdfMarkup";
 
 const TOOLS: { tool: MarkupTool; glyph: ReactNode; label: TranslationKey }[] = [
@@ -213,7 +214,7 @@ export function PdfMarkupBar({
         </button>
       </div>
       {(round || markup.stale || markup.autoReloaded || busy || markup.failure || markup.storage === "unsaved" || markup.changed
-        || markup.leftOut > 0 || markup.limitHit || markup.askElsewhere || roundUndo.note) && (
+        || markup.leftOut > 0 || markup.limitHit || markup.askElsewhere || roundUndo.note || markup.ticks.marks.length > 0) && (
         <div className="file-viewer-pdf-copy-bar file-viewer-pdf-markup-status" role="status" aria-live="polite">
           {round && roundWords && (
             <span className="file-viewer-pdf-markup-round">
@@ -221,6 +222,7 @@ export function PdfMarkupBar({
               <span>{roundWords}</span>
             </span>
           )}
+          <PdfTicksStatus count={markup.ticks.marks.length} disabled={busy} onApproveAll={markup.ticks.approveAll} />
           {markup.stale && !(round?.phase === "finished") && <span>{t("pdfMarkup.stale")}</span>}
           {markup.autoReloaded && !markup.stale && (
             <span className="file-viewer-pdf-markup-auto-reloaded">

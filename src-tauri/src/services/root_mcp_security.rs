@@ -297,7 +297,7 @@ pub struct ToolPolicy {
     /// other class: the help tools set it and nothing else.
     help: bool,
     /// Served to [`Caller::Marker`] (`services::markup_mcp`) — and then to
-    /// no other class: the two markup tools set it and nothing else.
+    /// no other class: the three markup tools set it and nothing else.
     marker: bool,
 }
 impl ToolPolicy {
@@ -350,10 +350,11 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         | crate::brand::HELP_TOOL_STATUS => {
             return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false });
         }
-        // The markup questions (`services::markup_mcp`): they only put a card
-        // in front of the user, served to the markup identity alone on
-        // `/mcp/markup` — never to a root or reader tab through `/mcp`.
-        "markup_ask" | "markup_withdraw" => {
+        // The markup questions and ticks (`services::markup_mcp`): they only
+        // put a card or a tick in front of the user, served to the markup
+        // identity alone on `/mcp/markup` — never to a root or reader tab
+        // through `/mcp`.
+        "markup_ask" | "markup_withdraw" | "markup_done" => {
             return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true });
         }
         "mail_draft_create" => ("mail", true, false, true, true),

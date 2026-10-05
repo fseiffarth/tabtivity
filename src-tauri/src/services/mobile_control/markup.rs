@@ -109,10 +109,13 @@ pub fn valid_round(round: &str) -> bool {
 
 /// The line that tells the agent how to tick off the marks it has handled,
 /// so the reader can approve each and see it go (`markup_done`); "if you
-/// have it" covers remote tabs and the switch being off.
-fn tick_line(round: &str) -> String {
+/// have it" covers remote tabs and the switch being off. A picture's marks
+/// are named `m<mark>` alone (`mark_line`), and `markup_done` takes them as
+/// page 1 — said here, or the agent has no page to give.
+fn tick_line(round: &str, picture: bool) -> String {
+    let reference = if picture { "`m<mark>`, all on page 1" } else { "`p<page> m<mark>`" };
     format!(
-        "This is markup round `{round}`; each mark above has its reference (`p<page> m<mark>`). Once you have made the change a mark asks for, tick it off with the `markup_done` tool if you have it (this round, the file, each mark's page and mark number), so I can approve it and clear it from the page."
+        "This is markup round `{round}`; each mark above has its reference ({reference}). Once you have made the change a mark asks for, tick it off with the `markup_done` tool if you have it (this round, the file, each mark's page and mark number), so I can approve it and clear it from the page."
     )
 }
 
@@ -916,7 +919,7 @@ pub fn prompt(parts: &Prompt) -> String {
     let instruction = parts.instruction.map(str::trim).filter(|text| !text.is_empty());
     let mut tail = vec![instruction.unwrap_or(DEFAULT_INSTRUCTION).to_string(), ask_line(parts.ask).to_string()];
     if let Some(round) = parts.round.filter(|_| !marks.is_empty()) {
-        tail.push(tick_line(round));
+        tail.push(tick_line(round, parts.picture));
     }
     if parts.send_back {
         tail.push(format!("Once you have rebuilt the {what}, send it to me with `{SLUG}-send <file>`."));
@@ -1251,6 +1254,34 @@ mod tests {
              Ask me only about a mark you cannot read or that leaves a real choice where a wrong guess would change what the text says — with the `markup_ask` tool if you have it, giving the page and the words the mark is on. For every other mark, take the obvious reading and say which one you took.\n\
              Once you have rebuilt the PDF, send it to me with `", crate::app_slug!(), "-send <file>`.")
         );
+    }
+
+    #[test]
+    fn a_round_names_each_listed_mark_by_its_index_for_markup_done() {
+        let note = |text: &str| Mark::Text { color: Color::Black, at: [10.0, 10.0], size: 12.0, text: text.into() };
+        let mut third = page(3, concat!(".", crate::app_slug!(), "/inbox/a.png"));
+        third.marks = vec![note("one"), ink(), note("two")];
+        let mut seventh = page(7, concat!(".", crate::app_slug!(), "/inbox/b.png"));
+        seventh.marks = vec![note("three")];
+        let pages = vec![seventh, third];
+        let mut parts = Prompt { source: "a.pdf", picture: false, marked: None, failure: None, pages: &pages, sources: &Default::default(), instruction: None, ask: None, round: Some("abc123"), send_back: false };
+        let text = prompt(&parts);
+        // The unread stroke is not listed, yet keeps its place in the count:
+        // the views map `m<n>` to index n − 1 of the page's submitted marks.
+        assert!(text.contains("- p3 m1: \"one\"\n- p3 m3: \"two\"\n- p7 m1: \"three\"\n"), "{text}");
+        assert!(text.contains("This is markup round `abc123`; each mark above has its reference (`p<page> m<mark>`)."), "{text}");
+        // A picture's marks carry no page; the agent is told they are page 1.
+        let mut picture = page(1, concat!(".", crate::app_slug!(), "/inbox/c.png"));
+        picture.marks = vec![note("four")];
+        let pictures = vec![picture];
+        parts.pages = &pictures;
+        parts.picture = true;
+        let text = prompt(&parts);
+        assert!(text.contains("- m1: \"four\"\n") && text.contains("(`m<mark>`, all on page 1)"), "{text}");
+        // No round: no references and no tick line.
+        parts.round = None;
+        let text = prompt(&parts);
+        assert!(text.contains("- \"four\"\n") && !text.contains("markup_done"), "{text}");
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! **The markup questions MCP** — `markup_ask` / `markup_withdraw`, served
-//! to a local project-agent tab as the server `<slug>-markup` on
-//! `/mcp/markup` (`Caller::Marker`). Plan: `docs/markup_questions_mcp_plan.md`.
+//! **The markup questions MCP** — `markup_ask` / `markup_withdraw` /
+//! `markup_done`, served to a local project-agent tab as the server
+//! `<slug>-markup` on `/mcp/markup` (`Caller::Marker`). Plans:
+//! `docs/markup_questions_mcp_plan.md`, `docs/markup_tick_approve_plan.md`.
 //!
 //! An agent reading a PDF markup round asks the user about an ambiguous mark;
 //! the questions show up as choosable options inside that tab's markup view
@@ -24,10 +25,15 @@
 //! `projects.json` records, never the in-folder `project.json`, and stored
 //! project-relative.
 //!
+//! `markup_done` ticks the marks the agent has handled: memory-only records
+//! of `(round, page, mark)` per file, pruned like the asks, which the views
+//! map back onto the marks they sent in that round ([`ticks`]). The reader
+//! approves each tick; nothing here removes a mark.
+//!
 //! `AppHandle`-free: the window learns of changes through a hook the command
 //! layer installs ([`set_change_hook`], `commands::markup_mcp`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -39,7 +45,8 @@ use super::mobile_control::{files, markup, outbox};
 use super::root_mcp::{Caller, Session};
 
 pub const SERVER_NAME: &str = concat!(crate::app_slug!(), "-markup");
-/// Rung (no payload) whenever an ask opens, closes or expires.
+/// Rung (no payload) whenever an ask opens, closes or expires, and whenever
+/// a tick lands or goes.
 pub const CHANGED_EVENT: &str = "markup-mcp-changed";
 /// The agent CLIs named the server on their own command line
 /// (`root_mcp::apply_markup_to_spawn_with`); tool-tagged local Vibe models get
@@ -48,10 +55,11 @@ pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
 
 pub const TOOL_ASK: &str = "markup_ask";
 pub const TOOL_WITHDRAW: &str = "markup_withdraw";
+pub const TOOL_DONE: &str = "markup_done";
 /// The tools, in the order `tools/list` gives them.
-pub const TOOLS: &[&str] = &[TOOL_ASK, TOOL_WITHDRAW];
+pub const TOOLS: &[&str] = &[TOOL_ASK, TOOL_WITHDRAW, TOOL_DONE];
 
-pub const INSTRUCTIONS: &str = concat!("Questions about the user's PDF markup, shown inside ", crate::app_name!(), "'s markup view of this tab. When a mark leaves you a choice the markup prompt says to ask about, call markup_ask with up to four questions, each with 2–6 options, the 1-based page and a short quote of the page's own words the mark is on; the user taps an answer beside the PDF. markup_ask returns at once — the user's answer arrives as your next prompt, so end your turn after asking. A new ask replaces this tab's open one; markup_withdraw takes one back. Every refusal is a normal result with a fixed `category` and a `message`. Budget: twenty asks per tab per hour.");
+pub const INSTRUCTIONS: &str = concat!("Questions about the user's PDF markup, shown inside ", crate::app_name!(), "'s markup view of this tab, and ticks for the marks you have handled. When a mark leaves you a choice the markup prompt says to ask about, call markup_ask with up to four questions, each with 2–6 options, the 1-based page and a short quote of the page's own words the mark is on; the user taps an answer beside the PDF. markup_ask returns at once — the user's answer arrives as your next prompt, so end your turn after asking. A new ask replaces this tab's open one; markup_withdraw takes one back. When the markup prompt names a round and gives its marks references (`p<page> m<mark>`), call markup_done after you have made the change a mark asks for, with the file, the round and each handled mark's page and mark number; the user sees a tick on each and approves it. Every refusal is a normal result with a fixed `category` and a `message`. Budget: twenty asks and sixty markup_done calls per tab per hour.");
 
 /// Bounds, in characters after cleaning (`file` in bytes).
 pub const MAX_QUESTIONS: usize = 4;
@@ -73,6 +81,15 @@ pub const ASKS_PER_HOUR: usize = 20;
 pub const RETENTION: Duration = Duration::from_secs(24 * 3600);
 /// Records kept at most; the oldest closed ones go first.
 const MAX_RECORDS: usize = 1000;
+/// Marks one `markup_done` call may tick.
+pub const MAX_TICK_MARKS: usize = 200;
+/// The highest mark number a tick may name: a Submit carries at most
+/// `markup::MAX_MARKS` marks, so no page holds more.
+pub const MAX_MARK: u32 = markup::MAX_MARKS as u32;
+/// `markup_done` calls per tab per rolling hour, counted apart from the asks.
+pub const TICK_CALLS_PER_HOUR: usize = 60;
+/// Ticks kept at most; the oldest go first.
+const MAX_TICKS: usize = 5000;
 /// A question's text in the answer prompt when the whole would not fit.
 const CLIPPED_QUESTION_CHARS: usize = 120;
 
@@ -158,10 +175,13 @@ fn prune(list: &mut Vec<Ask>) -> bool {
     list.iter().filter(|a| a.state == State::Open).count() != open_before
 }
 
-/// Prune now and ring the hook when an open ask went — after a tab's token
-/// was revoked (PTY exit, MCP session access). Whether anything changed.
+/// Prune now and ring the hook when an open ask or a tick went — after a
+/// tab's token was revoked (PTY exit, MCP session access). Whether anything
+/// changed.
 pub fn sweep() -> bool {
-    let gone = prune(&mut store().lock().unwrap_or_else(|p| p.into_inner()));
+    let asks_gone = prune(&mut store().lock().unwrap_or_else(|p| p.into_inner()));
+    let ticks_gone = prune_ticks(&mut tick_store().lock().unwrap_or_else(|p| p.into_inner()));
+    let gone = asks_gone || ticks_gone;
     if gone { changed(); }
     gone
 }
@@ -215,6 +235,91 @@ pub fn list(project: &str, target: &str, shown: Shown) -> Vec<AskView> {
         .map(view)
         .collect();
     drop(asks);
+    if gone { changed(); }
+    out
+}
+
+// ── Ticks ───────────────────────────────────────────────────────────────────
+
+/// One mark the agent says it has handled (`markup_done`): page and mark
+/// number as the markup prompt of `round` named it (`p<page> m<mark>`). The
+/// views map it back onto their own sent marks by round id; nothing here
+/// knows what the mark looks like.
+#[derive(Clone, Debug)]
+struct Tick {
+    /// The `Session::id` that ticked; the tick dies with it.
+    session: String,
+    project: String,
+    target: String,
+    /// Project-relative, as resolved at tick time.
+    file: String,
+    round: String,
+    page: u32,
+    mark: u32,
+    created: Instant,
+}
+
+/// A tick as the views get it: no session, tab, project id or path — the
+/// filter by file is done here, like [`list`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TickView {
+    pub round: String,
+    /// 1-based.
+    pub page: u32,
+    /// 1-based: the mark's index into that page's submitted marks, plus one.
+    pub mark: u32,
+}
+
+fn tick_store() -> &'static Mutex<Vec<Tick>> {
+    static TICKS: OnceLock<Mutex<Vec<Tick>>> = OnceLock::new();
+    TICKS.get_or_init(Default::default)
+}
+
+/// Drop day-old ticks and every tick whose session no longer holds a token;
+/// cap the store. Past the cap the oldest ticks of whichever tab holds the
+/// most go first, so one tab ticking in bulk cannot push another tab's ticks
+/// out. Whether any went (the views change).
+fn prune_ticks(list: &mut Vec<Tick>) -> bool {
+    let before = list.len();
+    list.retain(|t| t.created.elapsed() < RETENTION && super::root_mcp::session_alive(&t.session));
+    if list.len() > MAX_TICKS {
+        let mut held: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for t in list.iter() { *held.entry((t.project.clone(), t.target.clone())).or_default() += 1; }
+        let mut cut: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for _ in MAX_TICKS..list.len() {
+            let Some((key, n)) = held.iter_mut().max_by_key(|(_, n)| **n) else { break };
+            *n -= 1;
+            *cut.entry(key.clone()).or_default() += 1;
+        }
+        // In store order, which is tick order: each tab's oldest go.
+        list.retain(|t| match cut.get_mut(&(t.project.clone(), t.target.clone())) {
+            Some(n) if *n > 0 => { *n -= 1; false }
+            _ => true,
+        });
+    }
+    list.len() != before
+}
+
+/// The ticks of one tab's target for the view showing `shown`, oldest first.
+/// Every tick names a file, so a view of a file outside the project gets none.
+pub fn ticks(project: &str, target: &str, shown: Shown) -> Vec<TickView> {
+    let mut list = tick_store().lock().unwrap_or_else(|p| p.into_inner());
+    let gone = prune_ticks(&mut list);
+    let out = list.iter()
+        .filter(|t| t.project == project && t.target == target)
+        .filter(|t| match shown {
+            Shown::All => true,
+            Shown::File(shown) => same_file(&t.file, shown),
+            Shown::Elsewhere => false,
+        })
+        .map(|t| TickView { round: t.round.clone(), page: t.page, mark: t.mark })
+        .fold(Vec::new(), |mut out: Vec<TickView>, tick| {
+            // The project file and its outbox copy may both carry one.
+            if !out.contains(&tick) { out.push(tick); }
+            out
+        });
+    drop(list);
     if gone { changed(); }
     out
 }
@@ -455,6 +560,40 @@ struct OptionArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WithdrawArgs { id: String }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DoneArgs {
+    file: String,
+    round: String,
+    marks: Vec<MarkRef>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarkRef { page: u32, mark: u32 }
+
+/// A validated `markup_done`: the raw `file`, the round and the marks, in
+/// first-named order with duplicates collapsed.
+struct ParsedDone { file: String, round: String, marks: Vec<(u32, u32)> }
+
+fn parse_done(args: &Value) -> Result<ParsedDone, String> {
+    let args: DoneArgs = serde_json::from_value(args.clone()).map_err(|e| format!("invalid arguments: {e}"))?;
+    let file = args.file.trim().to_string();
+    if file.is_empty() { return Err("`file` is empty".into()); }
+    if file.len() > MAX_FILE_BYTES { return Err(format!("`file` is longer than {MAX_FILE_BYTES} bytes")); }
+    if !markup::valid_round(&args.round) {
+        return Err(format!("`round` is the id the markup prompt names (1–{} lowercase letters and digits)", markup::MAX_ROUND_CHARS));
+    }
+    if args.marks.is_empty() || args.marks.len() > MAX_TICK_MARKS {
+        return Err(format!("tick 1–{MAX_TICK_MARKS} marks per call"));
+    }
+    let mut marks: Vec<(u32, u32)> = Vec::with_capacity(args.marks.len());
+    for m in args.marks {
+        if m.page == 0 || m.page > MAX_PAGE { return Err(format!("`page` is 1-based, at most {MAX_PAGE}")); }
+        if m.mark == 0 || m.mark > MAX_MARK { return Err(format!("`mark` is 1-based, at most {MAX_MARK}")); }
+        if !marks.contains(&(m.page, m.mark)) { marks.push((m.page, m.mark)); }
+    }
+    Ok(ParsedDone { file, round: args.round, marks })
+}
 
 /// A required text: cleaned, non-empty, at most `max` characters.
 fn required(field: &str, text: &str, max: usize) -> Result<String, String> {
@@ -542,15 +681,23 @@ fn rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
     static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
-/// [`ASKS_PER_HOUR`] per tab, rolling; a refused call takes nothing.
-fn admit_rate(tab: &str) -> bool {
-    let mut map = rates().lock().unwrap_or_else(|p| p.into_inner());
+fn tick_rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
+    static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+    RATES.get_or_init(Default::default)
+}
+/// `limit` calls per tab in `rates`, rolling; a refused call takes nothing.
+fn admit_in(rates: &Mutex<HashMap<String, VecDeque<Instant>>>, tab: &str, limit: usize) -> bool {
+    let mut map = rates.lock().unwrap_or_else(|p| p.into_inner());
     map.retain(|_, calls| { calls.retain(|at| at.elapsed() < Duration::from_secs(3600)); !calls.is_empty() });
     let calls = map.entry(tab.to_string()).or_default();
-    if calls.len() >= ASKS_PER_HOUR { return false; }
+    if calls.len() >= limit { return false; }
     calls.push_back(Instant::now());
     true
 }
+/// [`ASKS_PER_HOUR`] `markup_ask` calls per tab.
+fn admit_rate(tab: &str) -> bool { admit_in(rates(), tab, ASKS_PER_HOUR) }
+/// [`TICK_CALLS_PER_HOUR`] `markup_done` calls per tab, apart from the asks.
+fn admit_tick(tab: &str) -> bool { admit_in(tick_rates(), tab, TICK_CALLS_PER_HOUR) }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────
 
@@ -609,13 +756,23 @@ pub fn tools() -> Value {
         {"name": TOOL_WITHDRAW,
          "description": "Take back this tab's open markup_ask (it disappears from the markup view). `not_open` when it was already answered, replaced or dismissed.",
          "inputSchema": object(json!({"id":{"type":"string","maxLength":64,"description":"The id markup_ask returned."}}), json!(["id"])),
+         "annotations": {"idempotentHint": true}},
+        {"name": TOOL_DONE,
+         "description": concat!("Tick off PDF marks you have handled. Call it after you have made the change a mark asks for, with the file, the markup round and each mark's reference from the markup prompt (`p<page> m<mark>` → page, mark). The user sees a tick on each mark in ", crate::app_name!(), "'s markup view and approves it, which clears the mark. Ticking a mark again changes nothing. Budget: sixty calls per hour."),
+         "inputSchema": object(json!({
+            "file": {"type":"string","maxLength":MAX_FILE_BYTES,"description":"The marked file as the markup prompt named it (the path in backticks on its first line)."},
+            "round": {"type":"string","maxLength":markup::MAX_ROUND_CHARS,"description":"The markup round the prompt names (`This is markup round …`)."},
+            "marks": {"type":"array","minItems":1,"maxItems":MAX_TICK_MARKS,"items":object(json!({
+                "page": {"type":"integer","minimum":1,"maximum":MAX_PAGE,"description":"The page of the reference, `p<page>`; 1 for a picture's marks (named `m<mark>` alone)."},
+                "mark": {"type":"integer","minimum":1,"maximum":MAX_MARK,"description":"The mark number of the reference, `m<mark>`."}
+            }), json!(["page", "mark"]))}
+         }), json!(["file", "round", "marks"])),
          "annotations": {"idempotentHint": true}}
     ])
 }
 
-/// What a `markup_ask` / `markup_withdraw` call needs that is not in the
-/// message: the switch and the project folder (resolved only when a `file`
-/// asks for it).
+/// What a markup tool call needs that is not in the message: the switch and
+/// the project folder (resolved only when a `file` asks for it).
 pub struct Context<'a> {
     pub enabled: bool,
     pub root: &'a dyn Fn() -> Option<PathBuf>,
@@ -662,6 +819,43 @@ fn call_ask(session: &Session, project: &str, target: &str, ctx: &Context, args:
         "message": "Shown beside the PDF in the user's markup view. Their answer arrives as your next prompt — end your turn now."});
     if let Some(old) = replaced { value["replaced"] = json!(old); }
     value
+}
+
+/// `markup_done`: record the ticks, ring the views when any is new. Checked
+/// in the order of `markup_ask`: the switch, the arguments, the budget, the
+/// file.
+fn call_done(session: &Session, project: &str, target: &str, ctx: &Context, args: &Value) -> Value {
+    if !ctx.enabled {
+        return refused(OFF, concat!("Markup ticks are switched off in ", crate::app_name!(), "'s Settings → Manage CLIs. Say in the chat which marks you handled instead."));
+    }
+    let parsed = match parse_done(args) { Ok(p) => p, Err(e) => return refused(INVALID, e) };
+    if !admit_tick(&session.identity.tab) {
+        let mut value = refused(BUDGET, format!("At most {TICK_CALLS_PER_HOUR} markup_done calls per tab per hour. Tick several marks per call, or say in the chat which marks you handled."));
+        value["retryAfterSecs"] = json!(3600);
+        return value;
+    }
+    let Some(root) = (ctx.root)() else { return refused(FILE_NOT_FOUND, "This project's folder is not available on this machine, so marks cannot be ticked here.") };
+    let file = match resolve_file(&root, &parsed.file, true) {
+        Ok(rel) => rel,
+        Err(_) => return refused(FILE_NOT_FOUND, "No such file in this project. Give `file` as the markup prompt named it (the path in backticks on its first line)."),
+    };
+    let mut list = tick_store().lock().unwrap_or_else(|p| p.into_inner());
+    let pruned = prune_ticks(&mut list);
+    let mut count = 0usize;
+    for (page, mark) in parsed.marks {
+        let known = list.iter().any(|t| t.project == project && t.target == target && t.round == parsed.round
+            && t.page == page && t.mark == mark && same_file(&t.file, &file));
+        if known { continue; }
+        list.push(Tick {
+            session: session.id.clone(), project: project.to_string(), target: target.to_string(), file: file.clone(),
+            round: parsed.round.clone(), page, mark, created: Instant::now(),
+        });
+        count += 1;
+    }
+    prune_ticks(&mut list);
+    drop(list);
+    if pruned || count > 0 { changed(); }
+    json!({"status": "ticked", "count": count})
 }
 
 fn call_withdraw(project: &str, target: &str, args: &Value) -> Value {
@@ -734,6 +928,7 @@ pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<
             }
             let value = match name {
                 TOOL_ASK => call_ask(session, project, target, ctx, &args),
+                TOOL_DONE => call_done(session, project, target, ctx, &args),
                 _ => call_withdraw(project, target, &args),
             };
             ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}))
@@ -1095,10 +1290,182 @@ mod tests {
         assert!(audit(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":[q("a?", &["x","y"])]}}})));
         assert!(audit(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":TOOL_WITHDRAW,"arguments":{"id":"ask-0"}}})));
         assert!(audit(json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":[]}}})), "a refused call");
+        assert!(audit(json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":TOOL_DONE,"arguments":{"file":"x.pdf","round":"r1","marks":[{"page":1,"mark":1}]}}})));
         assert!(audit(json!({"jsonrpc":"2.0","id":5,"method":"resources/list"})), "an unknown method");
         assert!(audit(json!({"jsonrpc":"1.0","id":6,"method":"ping"})), "a malformed request");
         root_mcp::revoke_tab(&s.identity.tab);
         assert!(audit(json!({"jsonrpc":"2.0","id":7,"method":"initialize"})), "a closed tab's handshake is a refusal");
+    }
+
+    /// A project folder with `docs/draft.pdf` and an outbox copy of it.
+    fn pdf_root() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/draft.pdf"), b"%PDF-1.4\n").unwrap();
+        std::fs::write(root.join("docs/other.pdf"), b"%PDF-1.4\n").unwrap();
+        std::fs::create_dir_all(root.join(outbox::OUTBOX_DIR)).unwrap();
+        std::fs::write(root.join(outbox::OUTBOX_DIR).join("20261004-120000-draft.pdf"), b"%PDF-1.4\n").unwrap();
+        (dir, root)
+    }
+
+    fn done(file: &str, round: &str, marks: &[(u32, u32)]) -> Value {
+        json!({"file": file, "round": round, "marks": marks.iter().map(|(p, m)| json!({"page": p, "mark": m})).collect::<Vec<_>>()})
+    }
+
+    fn tv(round: &str, page: u32, mark: u32) -> TickView { TickView { round: round.into(), page, mark } }
+
+    #[test]
+    fn done_validates_before_anything_is_stored_and_off_refuses() {
+        let (_dir, root) = pdf_root();
+        let (s, project, target) = tab("done-bounds");
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        let many: Vec<(u32, u32)> = (1..=MAX_TICK_MARKS as u32 + 1).map(|m| (1, m)).collect();
+        let refusals = [
+            json!({}),
+            json!({"round": "r1", "marks": [{"page": 1, "mark": 1}]}),
+            json!({"file": "docs/draft.pdf", "marks": [{"page": 1, "mark": 1}]}),
+            json!({"file": "docs/draft.pdf", "round": "r1"}),
+            done("  ", "r1", &[(1, 1)]),
+            done(&"x".repeat(MAX_FILE_BYTES + 1), "r1", &[(1, 1)]),
+            done("docs/draft.pdf", "", &[(1, 1)]),
+            done("docs/draft.pdf", "R1", &[(1, 1)]),
+            done("docs/draft.pdf", "r-1", &[(1, 1)]),
+            done("docs/draft.pdf", &"r".repeat(markup::MAX_ROUND_CHARS + 1), &[(1, 1)]),
+            done("docs/draft.pdf", "r1", &[]),
+            done("docs/draft.pdf", "r1", &many),
+            done("docs/draft.pdf", "r1", &[(0, 1)]),
+            done("docs/draft.pdf", "r1", &[(MAX_PAGE + 1, 1)]),
+            done("docs/draft.pdf", "r1", &[(1, 0)]),
+            done("docs/draft.pdf", "r1", &[(1, MAX_MARK + 1)]),
+            json!({"file": "docs/draft.pdf", "round": "r1", "marks": [{"page": -1, "mark": 1}]}),
+            json!({"file": "docs/draft.pdf", "round": "r1", "marks": [{"page": 1, "mark": 1.5}]}),
+            json!({"file": "docs/draft.pdf", "round": "r1", "marks": [{"page": 1, "mark": 1, "note": "x"}]}),
+            json!({"file": "docs/draft.pdf", "round": "r1", "marks": [{"page": 1, "mark": 1}], "extra": true}),
+        ];
+        for args in refusals {
+            let out = call(&s, TOOL_DONE, args.clone(), &ctx);
+            assert_eq!((out["status"].as_str(), out["category"].as_str()), (Some("refused"), Some(INVALID)), "{args}: {out}");
+        }
+        assert!(ticks(&project, &target, Shown::All).is_empty());
+        let off = Context { enabled: false, root: &find };
+        assert_eq!(call(&s, TOOL_DONE, done("docs/draft.pdf", "r1", &[(1, 1)]), &off)["category"], OFF);
+        assert!(ticks(&project, &target, Shown::All).is_empty());
+        // At the bounds.
+        let full: Vec<(u32, u32)> = (1..=MAX_TICK_MARKS as u32).map(|m| (MAX_PAGE, MAX_MARK + 1 - m)).collect();
+        let out = call(&s, TOOL_DONE, done("docs/draft.pdf", &"r".repeat(markup::MAX_ROUND_CHARS), &full), &ctx);
+        assert_eq!((out["status"].as_str(), out["count"].as_u64()), (Some("ticked"), Some(MAX_TICK_MARKS as u64)));
+        root_mcp::revoke_tab(&s.identity.tab);
+    }
+
+    #[test]
+    fn done_binds_ticks_to_a_project_file_and_collapses_repeats() {
+        let (_dir, root) = pdf_root();
+        let (s, project, target) = tab("done-files");
+        let (other, other_project, other_target) = tab("done-files-other");
+        let root_for = root.clone();
+        let find = move || Some(root_for.clone());
+        let ctx = Context { enabled: true, root: &find };
+        for bad in ["docs/missing.pdf", "../draft.pdf", ".env", "/etc/passwd"] {
+            assert_eq!(call(&s, TOOL_DONE, done(bad, "r1", &[(1, 1)]), &ctx)["category"], FILE_NOT_FOUND, "{bad}");
+        }
+        assert_eq!(call(&s, TOOL_DONE, done("docs/draft.pdf", "r1", &[(1, 1)]), &Context { enabled: true, root: &|| None })["category"],
+            FILE_NOT_FOUND, "no local folder");
+        // Duplicates in one call collapse; a repeat call ticks nothing new.
+        let out = call(&s, TOOL_DONE, done("./docs/draft.pdf", "r1", &[(1, 2), (1, 1), (1, 2), (3, 1)]), &ctx);
+        assert_eq!((out["status"].as_str(), out["count"].as_u64()), (Some("ticked"), Some(3)));
+        let abs = root.join("docs/draft.pdf").to_string_lossy().to_string();
+        assert_eq!(call(&s, TOOL_DONE, done(&abs, "r1", &[(1, 1), (3, 1)]), &ctx)["count"], 0, "an absolute path is the same file");
+        let outboxed = format!("{}/20261004-120000-draft.pdf", outbox::OUTBOX_DIR);
+        assert_eq!(call(&s, TOOL_DONE, done(&outboxed, "r1", &[(1, 1)]), &ctx)["count"], 0, "the outbox copy is the same file");
+        assert_eq!(call(&s, TOOL_DONE, done("docs/draft.pdf", "r2", &[(1, 1)]), &ctx)["count"], 1, "another round");
+        assert_eq!(call(&s, TOOL_DONE, done("docs/other.pdf", "r9", &[(2, 4)]), &ctx)["count"], 1);
+        call(&other, TOOL_DONE, done("docs/draft.pdf", "r7", &[(5, 5)]), &ctx);
+        // Read back per file, in tick order, with no ids or paths.
+        let mine = ticks(&project, &target, Shown::File("docs/draft.pdf"));
+        assert_eq!(mine, vec![tv("r1", 1, 2), tv("r1", 1, 1), tv("r1", 3, 1), tv("r2", 1, 1)]);
+        assert_eq!(serde_json::to_value(&mine[0]).unwrap(), json!({"round": "r1", "page": 1, "mark": 2}));
+        assert_eq!(ticks(&project, &target, Shown::File(&outboxed)), mine, "the outbox copy's view gets them too");
+        assert_eq!(ticks(&project, &target, Shown::File("docs/other.pdf")), vec![tv("r9", 2, 4)]);
+        assert!(ticks(&project, &target, Shown::File("docs/nope.pdf")).is_empty());
+        assert!(ticks(&project, &target, Shown::Elsewhere).is_empty(), "every tick names a file");
+        assert_eq!(ticks(&project, &target, Shown::All).len(), 5);
+        assert_eq!(ticks(&other_project, &other_target, Shown::All), vec![tv("r7", 5, 5)], "per target");
+        assert!(ticks(&project, &other_target, Shown::All).is_empty());
+        assert!(ticks(&other_project, &target, Shown::All).is_empty());
+        // A tick does not touch the asks.
+        assert!(list(&project, &target, Shown::All).is_empty());
+        root_mcp::revoke_tab(&s.identity.tab);
+        root_mcp::revoke_tab(&other.identity.tab);
+    }
+
+    #[test]
+    fn done_has_its_own_budget() {
+        let (_dir, root) = pdf_root();
+        let (s, project, target) = tab("done-budget");
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        // Invalid calls and asks cost nothing here.
+        for _ in 0..3 { assert_eq!(call(&s, TOOL_DONE, done("docs/draft.pdf", "r1", &[]), &ctx)["category"], INVALID); }
+        let ask = || call(&s, TOOL_ASK, json!({"questions": [q("a?", &["x", "y"])]}), &ctx);
+        let half = ASKS_PER_HOUR / 2;
+        for _ in 0..half { assert_eq!(ask()["status"], "shown"); }
+        for n in 0..TICK_CALLS_PER_HOUR as u32 {
+            assert_eq!(call(&s, TOOL_DONE, done("docs/draft.pdf", "r1", &[(1, n + 1)]), &ctx)["status"], "ticked");
+        }
+        let out = call(&s, TOOL_DONE, done("docs/draft.pdf", "r1", &[(2, 1)]), &ctx);
+        assert_eq!((out["category"].as_str(), out["retryAfterSecs"].as_u64()), (Some(BUDGET), Some(3600)));
+        assert_eq!(ticks(&project, &target, Shown::All).len(), TICK_CALLS_PER_HOUR, "a refused call ticks nothing");
+        // The ticks spent nothing of the asks' budget.
+        for _ in half..ASKS_PER_HOUR { assert_eq!(ask()["status"], "shown"); }
+        assert_eq!(ask()["category"], BUDGET);
+        let reply = json!({"result": {"isError": false, "structuredContent": out}});
+        assert_eq!(refusal_reason(&reply), Some(BUDGET));
+        root_mcp::revoke_tab(&s.identity.tab);
+    }
+
+    #[test]
+    fn ticks_go_with_their_session_after_a_day_and_past_the_cap() {
+        let (_dir, root) = pdf_root();
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        let (s, project, target) = tab("done-prune");
+        call(&s, TOOL_DONE, done("docs/draft.pdf", "r1", &[(1, 1)]), &ctx);
+        assert_eq!(ticks(&project, &target, Shown::All).len(), 1);
+        root_mcp::revoke_tab(&s.identity.tab);
+        // (Whether this `sweep` or a parallel test's prune took it, it is gone.)
+        sweep();
+        assert!(!tick_store().lock().unwrap_or_else(|p| p.into_inner()).iter().any(|t| t.session == s.id), "the closed tab's tick went");
+        assert!(ticks(&project, &target, Shown::All).is_empty());
+        let (s2, ..) = tab("done-prune");
+        assert!(ticks(&project, &target, Shown::All).is_empty(), "a respawn does not inherit them");
+        call(&s2, TOOL_DONE, done("docs/draft.pdf", "r1", &[(1, 1)]), &ctx);
+        {
+            let mut list = tick_store().lock().unwrap();
+            for t in list.iter_mut().filter(|t| t.project == project) {
+                t.created = Instant::now().checked_sub(RETENTION + Duration::from_secs(1)).unwrap();
+            }
+        }
+        assert!(ticks(&project, &target, Shown::All).is_empty(), "a day old");
+        // The cap drops the oldest (on a list of its own: the store is shared).
+        let tick = |mark: u32| Tick { session: s2.id.clone(), project: project.clone(), target: target.clone(),
+            file: "docs/draft.pdf".into(), round: "r1".into(), page: 1, mark, created: Instant::now() };
+        let mut list: Vec<Tick> = (1..=MAX_TICKS as u32 + 3).map(tick).collect();
+        assert!(prune_ticks(&mut list));
+        assert_eq!((list.len(), list[0].mark), (MAX_TICKS, 4));
+        assert!(!prune_ticks(&mut list), "nothing more to drop");
+        // Past the cap, the tab holding the most loses its oldest first: a
+        // tab ticking in bulk does not push an older tab's ticks out.
+        let (flood, ..) = tab("done-prune-flood");
+        let mut list: Vec<Tick> = (1..=10).map(tick).collect();
+        list.extend((1..=MAX_TICKS as u32 - 7).map(|mark| Tick { session: flood.id.clone(), target: "t-flood".into(), ..tick(mark) }));
+        assert!(prune_ticks(&mut list));
+        assert_eq!(list.len(), MAX_TICKS);
+        assert_eq!(list.iter().filter(|t| t.target == target).count(), 10, "the quiet tab keeps all of its ticks");
+        assert_eq!(list.iter().find(|t| t.target == "t-flood").map(|t| t.mark), Some(4), "the flooding tab's oldest went");
+        root_mcp::revoke_tab(&flood.identity.tab);
+        root_mcp::revoke_tab(&s2.identity.tab);
     }
 
     #[test]

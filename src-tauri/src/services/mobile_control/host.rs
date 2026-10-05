@@ -39,7 +39,7 @@ use super::{
     limits,
     protocol::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
-        LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobilePromptInput, MobileSchedule,
+        LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation,
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
@@ -5000,6 +5000,14 @@ fn valid_ask_id(id: &str) -> bool {
             .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// A tick as `services::markup_mcp` records it: a round id a view minted
+/// (`markup::valid_round`) and a 1-based page and mark within its bounds.
+fn valid_tick(tick: &MobileMarkupTick) -> bool {
+    markup::valid_round(&tick.round)
+        && (1..=crate::services::markup_mcp::MAX_PAGE).contains(&tick.page)
+        && (1..=crate::services::markup_mcp::MAX_MARK).contains(&tick.mark)
+}
+
 /// A refusal as a route answers it.
 type ApiRefusal = (StatusCode, Json<serde_json::Value>);
 
@@ -5096,7 +5104,10 @@ async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<Deskt
 /// `GET /api/v1/tabs/{tab_id}/markup/questions[?source=…]` — the agent tab's
 /// open markup question (`services::markup_mcp`) for the phone's markup card,
 /// or every open one for the Focus banner. Each ask carries its random id,
-/// its questions and its file's leaf name — never a path.
+/// its questions and its file's leaf name — never a path. Beside them,
+/// `ticks: [{ round, page, mark }]`: the marks the agent ticked off with
+/// `markup_done` for the same file (every file's for the banner), which the
+/// phone maps onto the marks it sent in that round.
 async fn markup_questions(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5115,7 +5126,8 @@ async fn markup_questions(
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
     match markup_call(&state, request).await {
-        Ok(DesktopResponse::MarkupQuestions { asks }) => {
+        Ok(DesktopResponse::MarkupQuestions { asks, ticks }) => {
+            let ticks: Vec<_> = ticks.into_iter().filter(valid_tick).collect();
             let mut asks: Vec<_> = asks.into_iter().filter(|ask| valid_ask_id(&ask.id)).collect();
             // The path never crosses; for the Focus banner (no source) a
             // project file the drawer could open is handed over as its row.
@@ -5133,7 +5145,7 @@ async fn markup_questions(
                     ask.file_row = row;
                 }
             }
-            (StatusCode::OK, Json(json!({ "asks": asks })))
+            (StatusCode::OK, Json(json!({ "asks": asks, "ticks": ticks })))
         }
         Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
         Err(error) => error,
@@ -9356,6 +9368,13 @@ mod tests {
                               "questions": [{ "question": "Figure or paragraph?", "options": [{ "label": "Figure" }, { "label": "Paragraph" }], "page": 2, "quote": "Figure 2" }] },
                             { "id": "not-an-ask-id", "questions": [] },
                         ],
+                        "ticks": [
+                            { "round": "k3x9a0b1", "page": 2, "mark": 1, "file": "docs/paper/draft.pdf" },
+                            { "round": "k3x9a0b1", "page": 3, "mark": 2 },
+                            { "round": "NOT-A-ROUND", "page": 1, "mark": 1 },
+                            { "round": "k3x9a0b1", "page": 0, "mark": 1 },
+                            { "round": "k3x9a0b1", "page": 1, "mark": 0 },
+                        ],
                     }))
                     .expect("asks"),
                     DesktopRequest::MarkupAnswer { .. } if answered == 3 => DesktopResponse::Error { code: "superseded".into(), message: "replaced".into() },
@@ -9374,6 +9393,11 @@ mod tests {
         assert_eq!(asks.as_array().unwrap().len(), 1, "the malformed id is dropped: {body}");
         assert_eq!(asks[0]["file_name"], "draft.pdf");
         assert_eq!(asks[0]["questions"][0]["page"], 2);
+        assert_eq!(
+            json(&body)["ticks"],
+            json!([{ "round": "k3x9a0b1", "page": 2, "mark": 1 }, { "round": "k3x9a0b1", "page": 3, "mark": 2 }]),
+            "malformed ticks are dropped, nothing but round, page and mark crosses"
+        );
         assert!(!body.contains("docs/") && !body.contains("\"file\"") && !body.contains(RAW_PROJECT), "{body}");
         // The Focus banner, drawer off: no row, and still no path.
         let (status, _, body) = host.send(get_as(&questions, &cookie)).await;

@@ -41,6 +41,26 @@ export async function listMarkupQuestions(projectId: string, scheduleTargetId: s
   return Array.isArray(rows) ? rows : [];
 }
 
+/** A mark the tab's agent ticked off with `markup_done`
+ * (`services::markup_mcp::TickView`): the round id the view minted for that
+ * Submit, and the mark's 1-based page and 1-based number among that page's
+ * submitted marks. The view maps it onto the mark it sent. */
+export type MarkupTick = { round: string; page: number; mark: number };
+
+const positive = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 1;
+
+/** The marks the tab's agent ticked off for the PDF at `path` (absolute, or
+ * project-relative from the phone's bridge), oldest first; every file's
+ * without one. Rejects as `invoke` does (e.g. a backend without the command). */
+export async function listMarkupTicks(projectId: string, scheduleTargetId: string, path?: string): Promise<MarkupTick[]> {
+  const rows = await invoke<unknown>("markup_mcp_ticks", { projectId, scheduleTargetId, path });
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((row): row is MarkupTick => typeof row === "object" && row !== null
+      && typeof (row as MarkupTick).round === "string" && positive((row as MarkupTick).page) && positive((row as MarkupTick).mark))
+    .map(({ round, page, mark }) => ({ round, page, mark }));
+}
+
 /** Closes the ask and answers the prompt to queue, with the receipt that
  * reopens it should queueing fail. */
 export function answerMarkupQuestions(projectId: string, scheduleTargetId: string, askId: string, answers: MarkupAnswer[]): Promise<MarkupAnswered> {

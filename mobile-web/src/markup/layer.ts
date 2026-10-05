@@ -22,11 +22,19 @@ export type Mark = InkMark | BoxMark | TextMark;
 
 /** One page's marks and the size they are measured in. */
 export type PageLayer = { size: [number, number]; marks: Mark[] };
+/** One Submit's marks exactly as it sent them, page by page in the order of
+ * that page's `marks` in the request — what the agent's ticks
+ * (`markup_done`: round id, page, 1-based mark) index into
+ * (`docs/markup_tick_approve_plan.md` §3). The marks are the sent side's own
+ * objects, shared, not copies. */
+export type SentRound = { id: string; pages: Record<number, Mark[]> };
 /** The marks earlier Submits sent, drawn dimmed and never sent again
  * (`docs/pdf_markup_rounds_plan.md` §2.1), and how many rounds went out.
  * Only the reader removes them (eraser, Clear page, Clear all marks, Clear
- * sent marks). */
-export type SentLayer = { pages: Record<number, PageLayer>; rounds: number };
+ * sent marks, approving a ticked mark). `log`: the newest rounds that went
+ * out with a round id (`MAX_LOGGED_ROUNDS`), oldest first — absent from
+ * records written before ticks. */
+export type SentLayer = { pages: Record<number, PageLayer>; rounds: number; log?: SentRound[] };
 /** Every marked page, by 1-based page number. `pages` holds only the marks
  * not yet sent — what notes, undo and Submit see — so sent marks never go
  * out twice; the eraser and Clear page reach them only when asked. No flag rides on a mark: the
@@ -333,7 +341,8 @@ export function clearAll(layer: Layer, sent = false): Layer {
   const pending = Object.keys(layer.pages).length > 0;
   const dropSent = sent && layer.sent !== undefined && Object.keys(layer.sent.pages).length > 0;
   if (!pending && !dropSent) return layer;
-  return dropSent ? { ...layer, pages: {}, sent: { ...layer.sent!, pages: {} } } : { ...layer, pages: {} };
+  // No sent mark is left for a logged round to name: the log goes too.
+  return dropSent ? { ...layer, pages: {}, sent: { pages: {}, rounds: layer.sent!.rounds } } : { ...layer, pages: {} };
 }
 
 /** Where one mark starts: its 1-based page and the top of its bounding box,
@@ -404,24 +413,53 @@ function sameSize(a: [number, number], b: [number, number]): boolean {
   return a[0] === b[0] && a[1] === b[1];
 }
 
+/** How many Submits' marks the log keeps for the agent's ticks: an older
+ * round's ticks find nothing and show no badge (the marks stay). */
+export const MAX_LOGGED_ROUNDS = 6;
+
 /** A Submit went out: the unsent marks of `only` (every marked page when
  * left out) join the sent ones and leave `pages`; marks on other pages stay
  * unsent. Sent marks are never dropped here — the reader checks the agent's
  * changes against them and erases them by hand. A page whose size changed
  * since its earlier round (a rebuilt PDF) carries its older marks over,
- * scaled to the new size. */
-export function markSent(layer: Layer, only?: readonly number[]): Layer {
+ * scaled to the new size — and the log's marks of that page with them, the
+ * same objects where the sent side still holds them, so a tick still finds
+ * its mark. With `roundId` the round is logged: each moved page's `marks`
+ * as they are here, which must be the order the Submit sent them in. */
+export function markSent(layer: Layer, only?: readonly number[], roundId?: string): Layer {
   const moving = (only ?? markedPages(layer)).filter((n) => (layer.pages[n]?.marks.length ?? 0) > 0);
   if (!moving.length) return layer;
   const rest = { ...layer.pages };
   const merged = { ...(layer.sent?.pages ?? {}) };
+  let log = layer.sent?.log ?? [];
   for (const n of moving) {
     const now = layer.pages[n];
     delete rest[n];
     const before = merged[n];
-    merged[n] = before ? { size: now.size, marks: [...scaleMarks(before, now.size), ...now.marks] } : now;
+    if (!before) {
+      merged[n] = now;
+      continue;
+    }
+    const scaled = scaleMarks(before, now.size);
+    if (scaled !== before.marks) log = rescaleLog(log, n, before, scaled, now.size);
+    merged[n] = { size: now.size, marks: [...scaled, ...now.marks] };
   }
-  return { pages: rest, sent: { pages: merged, rounds: (layer.sent?.rounds ?? 0) + 1 } };
+  if (roundId) {
+    const pages: Record<number, Mark[]> = {};
+    for (const n of moving) pages[n] = layer.pages[n].marks;
+    log = trimLog([...log.filter((entry) => entry.id !== roundId), { id: roundId, pages }]);
+  }
+  const sent: SentLayer = { pages: merged, rounds: (layer.sent?.rounds ?? 0) + 1 };
+  if (log.length) sent.log = log;
+  return { pages: rest, sent };
+}
+
+/** A mark in another page size's units. */
+function scaleMark(mark: Mark, sx: number, sy: number): Mark {
+  const s = Math.min(sx, sy);
+  if (mark.kind === "ink") return { ...mark, width: round(mark.width * s), points: mark.points.map(([x, y, p]) => [round(x * sx), round(y * sy), p]) };
+  if (mark.kind === "box") return { ...mark, rect: [round(mark.rect[0] * sx), round(mark.rect[1] * sy), round(mark.rect[2] * sx), round(mark.rect[3] * sy)] };
+  return { ...mark, at: [round(mark.at[0] * sx), round(mark.at[1] * sy)], size: round(mark.size * s) };
 }
 
 /** A page's marks in another page size's units. */
@@ -429,15 +467,186 @@ function scaleMarks(page: PageLayer, size: [number, number]): Mark[] {
   if (sameSize(page.size, size)) return page.marks;
   const sx = size[0] / page.size[0];
   const sy = size[1] / page.size[1];
-  const s = Math.min(sx, sy);
-  return page.marks.map((mark): Mark => {
-    if (mark.kind === "ink") return { ...mark, width: round(mark.width * s), points: mark.points.map(([x, y, p]) => [round(x * sx), round(y * sy), p]) };
-    if (mark.kind === "box") return { ...mark, rect: [round(mark.rect[0] * sx), round(mark.rect[1] * sy), round(mark.rect[2] * sx), round(mark.rect[3] * sy)] };
-    return { ...mark, at: [round(mark.at[0] * sx), round(mark.at[1] * sy)], size: round(mark.size * s) };
+  return page.marks.map((mark) => scaleMark(mark, sx, sy));
+}
+
+/** Page `n` of every logged round in the new size's units: a mark the sent
+ * side still holds becomes its scaled object; one already erased or approved
+ * is scaled alike (it matches nothing either way). */
+function rescaleLog(log: SentRound[], n: number, before: PageLayer, scaled: Mark[], size: [number, number]): SentRound[] {
+  const sx = size[0] / before.size[0];
+  const sy = size[1] / before.size[1];
+  const to = new Map<Mark, Mark>(before.marks.map((mark, i) => [mark, scaled[i]]));
+  return log.map((entry) => {
+    const marks = entry.pages[n];
+    if (!marks) return entry;
+    return { ...entry, pages: { ...entry.pages, [n]: marks.map((mark) => to.get(mark) ?? scaleMark(mark, sx, sy)) } };
   });
 }
 
-/** The sent marks gone for good; the unsent ones stay. */
+/** The newest `MAX_LOGGED_ROUNDS` rounds, and fewer while their marks
+ * together pass `SENT_LIMITS` — so the log never outgrows the sent side's
+ * own bound, even where it holds marks the sent side has lost. */
+function trimLog(log: SentRound[]): SentRound[] {
+  let kept = log.slice(-MAX_LOGGED_ROUNDS);
+  const size = (entries: SentRound[]) => {
+    let marks = 0;
+    let points = 0;
+    for (const entry of entries) {
+      for (const page of Object.values(entry.pages)) {
+        marks += page.length;
+        for (const mark of page) if (mark.kind === "ink") points += mark.points.length;
+      }
+    }
+    return marks <= SENT_LIMITS.marks && points <= SENT_LIMITS.points;
+  };
+  while (kept.length > 1 && !size(kept)) kept = kept.slice(1);
+  return kept;
+}
+
+/** A logged round forgotten — its Submit's changes were undone, so the
+ * agent's ticks for it mean nothing any more. The marks stay. */
+export function forgetRound(layer: Layer, roundId: string): Layer {
+  const log = layer.sent?.log;
+  if (!log?.some((entry) => entry.id === roundId)) return layer;
+  const kept = log.filter((entry) => entry.id !== roundId);
+  const sent: SentLayer = { pages: layer.sent!.pages, rounds: layer.sent!.rounds };
+  if (kept.length) sent.log = kept;
+  return { ...layer, sent };
+}
+
+/** A round id for a Submit: 8 random `[a-z0-9]`, which the backend's
+ * `markup::valid_round` takes (1–16 of them). */
+export function mintRound(): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  while (id.length < 8) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    // 252 = 7 × 36: the bytes past it would favour the first letters.
+    for (const byte of bytes) if (byte < 252 && id.length < 8) id += alphabet[byte % 36];
+  }
+  return id;
+}
+
+/** The agent's tick of one mark (`markup_done`): the Submit's round id, the
+ * page and the 1-based place of the mark in that page's submitted marks. */
+export type MarkTick = { round: string; page: number; mark: number };
+/** A ticked mark as it stands on the sent side: `layer.sent.pages[page].marks[index]`. */
+export type TickedMark = { page: number; index: number; round: string };
+
+function sameMark(a: Mark, b: Mark): boolean {
+  if (a.kind !== b.kind || a.color !== b.color) return false;
+  if (a.kind === "ink") {
+    const other = b as InkMark;
+    return a.width === other.width && a.points.length === other.points.length
+      && a.points.every((p, i) => p[0] === other.points[i][0] && p[1] === other.points[i][1] && p[2] === other.points[i][2]);
+  }
+  if (a.kind === "box") return a.rect.every((v, i) => v === (b as BoxMark).rect[i]);
+  const other = b as TextMark;
+  return a.size === other.size && a.text === other.text && a.at[0] === other.at[0] && a.at[1] === other.at[1];
+}
+
+/** The sent marks the agent ticked off: each tick's logged mark found on the
+ * sent side — the same object, or, where none of that round's marks on the
+ * page is (a record rebuilt from a copy), an equal one not yet claimed and
+ * not any logged round's own object.
+ * Ticks naming a round no longer logged, a mark past the round's page, or a
+ * mark erased, cut or approved since find nothing and are dropped. Only
+ * sent marks are ever matched, each once; in page and mark order. */
+export function tickedMarks(layer: Layer, ticks: readonly MarkTick[]): TickedMark[] {
+  const sent = layer.sent;
+  if (!sent?.log?.length || !ticks.length) return [];
+  const rounds = new Map(sent.log.map((entry) => [entry.id, entry]));
+  const where = new Map<number, Map<Mark, number>>();
+  const indexOf = (page: number) => {
+    let found = where.get(page);
+    if (!found) {
+      found = new Map((sent.pages[page]?.marks ?? []).map((mark, i) => [mark, i]));
+      where.set(page, found);
+    }
+    return found;
+  };
+  const shared = new Map<string, boolean>();
+  // A sent mark some logged round holds by reference is that round's: never
+  // another round's equal twin (after its own twin was approved or erased).
+  let claimed: Set<Mark> | null = null;
+  const loggedObjects = () => (claimed ??= new Set(sent.log!.flatMap((entry) => Object.values(entry.pages).flat())));
+  const taken = new Set<string>();
+  const out: TickedMark[] = [];
+  for (const tick of ticks) {
+    const logged = rounds.get(tick.round)?.pages[tick.page];
+    const mark = logged?.[tick.mark - 1];
+    const marks = sent.pages[tick.page]?.marks;
+    if (!logged || !mark || !marks) continue;
+    const byRef = indexOf(tick.page);
+    let index = byRef.get(mark) ?? -1;
+    if (index < 0) {
+      // Equality only for a round whose marks are no longer the sent side's
+      // objects at all: where any still is, a miss means this one is gone —
+      // an approved mark's twin must not take its badge.
+      const key = `${tick.round}\n${tick.page}`;
+      let linked = shared.get(key);
+      if (linked === undefined) {
+        linked = logged.some((entry) => byRef.has(entry));
+        shared.set(key, linked);
+      }
+      if (!linked) {
+        const own = loggedObjects();
+        index = marks.findIndex((entry, i) => !taken.has(`${tick.page}:${i}`) && !own.has(entry) && sameMark(entry, mark));
+      }
+    }
+    if (index < 0 || taken.has(`${tick.page}:${index}`)) continue;
+    taken.add(`${tick.page}:${index}`);
+    out.push({ page: tick.page, index, round: tick.round });
+  }
+  return out.sort((a, b) => a.page - b.page || a.index - b.index);
+}
+
+/** The reader approved ticked marks: those sent marks go, nothing else
+ * changes. Indices are `layer.sent.pages[page].marks` positions. */
+export function approveMarks(layer: Layer, marks: readonly { page: number; index: number }[]): Layer {
+  const sent = layer.sent;
+  if (!sent || !marks.length) return layer;
+  const drop = new Map<number, Set<number>>();
+  for (const { page, index } of marks) {
+    if (!sent.pages[page] || index < 0 || index >= sent.pages[page].marks.length) continue;
+    if (!drop.has(page)) drop.set(page, new Set());
+    drop.get(page)!.add(index);
+  }
+  if (!drop.size) return layer;
+  const pages = { ...sent.pages };
+  for (const [page, indices] of drop) {
+    const kept = pages[page].marks.filter((_, i) => !indices.has(i));
+    if (kept.length) pages[page] = { ...pages[page], marks: kept };
+    else delete pages[page];
+  }
+  return { ...layer, sent: { ...sent, pages } };
+}
+
+/** One ticked mark approved (`approveMarks`). */
+export function approveMark(layer: Layer, page: number, index: number): Layer {
+  return approveMarks(layer, [{ page, index }]);
+}
+
+/** A mark's bounding box `[x, y, width, height]` in its page's units — a
+ * stroke's with half its widest line around it. */
+export function markBox(mark: Mark): [number, number, number, number] {
+  if (mark.kind === "box") {
+    const [x, y, w, h] = mark.rect;
+    return [Math.min(x, x + w), Math.min(y, y + h), Math.abs(w), Math.abs(h)];
+  }
+  if (mark.kind === "text") return textBox(mark);
+  const half = inkWidth(mark.width, 1) / 2;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of mark.points) {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  return [x0 - half, y0 - half, x1 - x0 + 2 * half, y1 - y0 + 2 * half];
+}
+
+/** The sent marks gone for good, and the round log with them; the unsent
+ * ones stay. */
 export function clearSent(layer: Layer): Layer {
   return layer.sent ? { pages: layer.pages } : layer;
 }
@@ -477,27 +686,44 @@ export function isLayer(value: unknown): value is Layer {
   const sent = (value as { sent?: unknown }).sent;
   if (sent === undefined) return true;
   if (!sent || typeof sent !== "object") return false;
-  const { pages, rounds } = sent as { pages?: unknown; rounds?: unknown };
-  return typeof rounds === "number" && Number.isInteger(rounds) && rounds >= 0 && validPages(pages);
+  const { pages, rounds, log } = sent as { pages?: unknown; rounds?: unknown; log?: unknown };
+  if (!(typeof rounds === "number" && Number.isInteger(rounds) && rounds >= 0 && validPages(pages))) return false;
+  // A record from before ticks has no `log`.
+  return log === undefined || validLog(log);
+}
+
+/** A round id as the backend takes it (`markup::valid_round`). */
+const ROUND_ID = /^[a-z0-9]{1,16}$/;
+
+function validLog(log: unknown): boolean {
+  if (!Array.isArray(log)) return false;
+  return log.every((entry: unknown) => {
+    if (!entry || typeof entry !== "object") return false;
+    const { id, pages } = entry as { id?: unknown; pages?: unknown };
+    if (typeof id !== "string" || !ROUND_ID.test(id) || !pages || typeof pages !== "object") return false;
+    return Object.entries(pages as Record<string, unknown>).every(([n, marks]) => /^[1-9]\d*$/.test(n) && Array.isArray(marks) && marks.every(validMark));
+  });
 }
 
 function validPages(pages: unknown): boolean {
   if (!pages || typeof pages !== "object") return false;
   const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
-  const color = (v: unknown) => MARK_COLORS.includes(v as MarkColor);
   return Object.entries(pages as Record<string, unknown>).every(([n, page]) => {
     if (!/^[1-9]\d*$/.test(n) || !page || typeof page !== "object") return false;
     const { size, marks } = page as { size?: unknown; marks?: unknown };
     if (!Array.isArray(size) || size.length !== 2 || !size.every(num) || !Array.isArray(marks)) return false;
-    return marks.every((mark: unknown) => {
-      if (!mark || typeof mark !== "object") return false;
-      const m = mark as Record<string, unknown>;
-      if (!color(m.color)) return false;
-      if (m.kind === "ink") return num(m.width) && Array.isArray(m.points) && m.points.length > 0
-        && m.points.every((p: unknown) => Array.isArray(p) && p.length === 3 && p.every(num));
-      if (m.kind === "box") return Array.isArray(m.rect) && m.rect.length === 4 && m.rect.every(num);
-      if (m.kind === "text") return Array.isArray(m.at) && m.at.length === 2 && m.at.every(num) && num(m.size) && typeof m.text === "string";
-      return false;
-    });
+    return marks.every(validMark);
   });
+}
+
+function validMark(mark: unknown): boolean {
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  if (!mark || typeof mark !== "object") return false;
+  const m = mark as Record<string, unknown>;
+  if (!MARK_COLORS.includes(m.color as MarkColor)) return false;
+  if (m.kind === "ink") return num(m.width) && Array.isArray(m.points) && m.points.length > 0
+    && m.points.every((p: unknown) => Array.isArray(p) && p.length === 3 && p.every(num));
+  if (m.kind === "box") return Array.isArray(m.rect) && m.rect.length === 4 && m.rect.every(num);
+  if (m.kind === "text") return Array.isArray(m.at) && m.at.length === 2 && m.at.every(num) && num(m.size) && typeof m.text === "string";
+  return false;
 }

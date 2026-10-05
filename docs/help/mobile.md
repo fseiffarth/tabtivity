@@ -1,7 +1,7 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, files, browse, project files, read-only, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, files, browse, project files, read-only, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
 ---
 
 Tabtivity Mobile is a small companion web app for your phone. It shows the
@@ -188,6 +188,26 @@ container tabs don't have the tool. It is on by default; turn it off in
 Settings → Agents → Manage CLIs, under Advanced: **Let project agents ask
 about your PDF marks** (new tabs no longer get the tool; tabs already open
 are told it is off when they ask).
+
+## Marks the agent has done
+
+The same tabs can tick off the marks they have handled (their `markup_done`
+tool), after making the change a mark asks for. Each ticked mark you sent gets
+a green **✓** at its top-right corner, on the desktop (while **Mark up** is on)
+and on the phone, and a line under the round's status says **n done ·
+Approve all**. Tap (or click) a **✓** to approve that mark: it leaves your
+marks. **Approve all** approves every ticked one. Nothing is removed without
+that tap — a tick only offers it — and **Undo** brings an approved mark back.
+
+- The badges show only while **Show sent marks** is on.
+- On the phone a **✓** that just appeared ignores taps for a moment, so a pen
+  stroke on its way can't approve it; a double tap approves one mark.
+- Ticks last as long as the agent's session, at most a day: when they go,
+  the **✓** goes, never the mark. Undoing a round's changes clears its ticks.
+- Each device shows the **✓**s for the marks it sent itself. On the phone
+  they show in the markup view of the agent's own chat (or while the view
+  still follows the tab its Submit opened); a PDF opened again from the
+  file browser shows none — open it from that agent's chat.
 
 ## Project files on the phone
 

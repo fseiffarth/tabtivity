@@ -18,7 +18,7 @@ import { agentTabState, agentTurnStartedAt, lastTabReadAt, noteUserInput, useAct
 import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
-import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, reopenMarkupQuestions, type MarkupAnswer } from "../../lib/viewers/markupQuestions";
+import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
@@ -306,7 +306,7 @@ type DesktopResponse =
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
   | { status: "attached"; attachment: InboxAttachment }
-  | { status: "markup_questions"; asks: MobileMarkupAsk[] }
+  | { status: "markup_questions"; asks: MobileMarkupAsk[]; ticks: MarkupTick[] }
   | ({ status: "local_models" } & MobileLocalModelList)
   | { status: "error"; code: string; message: string };
 
@@ -2147,14 +2147,20 @@ function markupTarget(projectId: string, tmuxSession: string): { projectId: stri
  * the project-relative file its view shows, resolved by the sidecar) or, with
  * no path, for its Focus banner. The file goes as its leaf name; for the
  * banner also as its path, which only the sidecar reads (it hands the phone a
- * sealed files row instead). */
+ * sealed files row instead). Beside them the marks the agent ticked off with
+ * `markup_done` for the same file — none when this backend cannot list them
+ * (a window running an older build). */
 async function markupQuestionsFor(projectId: string, tmuxSession: string, path: string | undefined): Promise<DesktopResponse> {
   const key = markupTarget(projectId, tmuxSession);
   if ("status" in key) return key;
-  if (!mobileScope(projectId)?.project) return { status: "markup_questions", asks: [] };
-  const asks = await listMarkupQuestions(key.projectId, key.target, path);
+  if (!mobileScope(projectId)?.project) return { status: "markup_questions", asks: [], ticks: [] };
+  const [asks, ticks] = await Promise.all([
+    listMarkupQuestions(key.projectId, key.target, path),
+    listMarkupTicks(key.projectId, key.target, path).catch((): MarkupTick[] => []),
+  ]);
   return {
     status: "markup_questions",
+    ticks,
     asks: asks.map((ask) => ({
       id: ask.id,
       ...(ask.fileName ? { file_name: ask.fileName } : {}),

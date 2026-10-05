@@ -38,6 +38,7 @@ import { ARRIVAL_GUARD_MS, PdfMarkupQuestions, PdfQuestionPins } from "../../com
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import {
   answersOf,
+  listMarkupTicks,
   NO_PICK,
   pagePins,
   quoteRects,
@@ -469,5 +470,24 @@ describe("card picks", () => {
     expect(answersOf([single], [{ ...other, other: " x " }])).toEqual([{ options: [], other: "x" }]);
     expect(answersOf([single, multi], [toggleOption(single, NO_PICK, 0)])).toBeNull();
     expect(answersOf([multi], [{ options: [1], other: "also" }])).toEqual([{ options: [1], other: "also" }]);
+  });
+});
+
+describe("markup ticks", () => {
+  it("lists the target's ticks for a file, keeping only well-formed rows", async () => {
+    mocks.invoke.mockImplementationOnce(async () => [
+      { round: "k3x9a0b1", page: 2, mark: 1 },
+      { round: "k3x9a0b1", page: 0, mark: 1 },
+      { round: "k3x9a0b1", page: 1, mark: 1.5 },
+      { round: 7, page: 1, mark: 1 },
+      null,
+      { round: "k3x9a0b1", page: 3, mark: 4, file: "docs/draft.pdf" },
+    ]);
+    expect(await listMarkupTicks("p1", "s1", PATH)).toEqual([{ round: "k3x9a0b1", page: 2, mark: 1 }, { round: "k3x9a0b1", page: 3, mark: 4 }]);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("markup_mcp_ticks", { projectId: "p1", scheduleTargetId: "s1", path: PATH });
+    mocks.invoke.mockImplementationOnce(async () => null);
+    expect(await listMarkupTicks("p1", "s1")).toEqual([]);
+    mocks.invoke.mockImplementationOnce(async () => { throw "Command markup_mcp_ticks not found"; });
+    await expect(listMarkupTicks("p1", "s1")).rejects.toBe("Command markup_mcp_ticks not found");
   });
 });

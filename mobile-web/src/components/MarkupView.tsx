@@ -7,8 +7,8 @@ import { anchorsFor, type Anchor } from "../markup/anchors";
 import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
 import {
-  addMark, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markedPages,
-  markSent, moveNote, noteAt, redo, replaceMark, round, startHistory, undo,
+  addMark, approveMark, approveMarks, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markBox, markedPages,
+  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickedMarks, undo,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
@@ -22,7 +22,7 @@ import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
-import { MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
+import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
 import { EraserIcon } from "../markup/EraserIcon";
 import { OptionSheet } from "./OptionSheet";
 
@@ -58,6 +58,25 @@ const SENT_ALPHA = 0.35;
  * Next mark to go to it — so a repeated tap moves on rather than landing on
  * the mark it just showed. */
 const JUMP_SLACK = 4;
+/** A ✓ badge's size, CSS pixels. */
+const TICK_BADGE = 26;
+/** How soon after one approve a second tap is taken: a double tap must not
+ * take whichever badge lies under the finger next. */
+const TICK_REPEAT_MS = 350;
+
+/** A ✓ badge's React key: its mark's identity, not its index — an approved
+ * mark's badge goes with it, so a second tap never lands on the next mark
+ * that slides into its index (as the desktop's `PdfMarkupTicks`). */
+const tickIds = new WeakMap<Mark, number>();
+let nextTickId = 0;
+function tickKey(mark: Mark): number {
+  let id = tickIds.get(mark);
+  if (id === undefined) {
+    id = ++nextTickId;
+    tickIds.set(mark, id);
+  }
+  return id;
+}
 
 /** The round pill's words, by phase; `finished` takes the PDF check's. */
 const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
@@ -396,7 +415,18 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const askTab = onSend !== undefined ? givenTabId : openedTab?.id ?? "";
   const asksOn = askTab !== "";
   const [questionBusy, setQuestionBusy] = useState(false);
-  const { asks, refresh: refreshAsks, drop: dropAsk } = useMarkupAsks(asksOn ? askTab : undefined, source, asksOn, agent, questionBusy);
+  const { asks, ticks, refresh: refreshAsks, drop: dropAsk } = useMarkupAsks(asksOn ? askTab : undefined, source, asksOn, agent, questionBusy);
+  const ticksRef = useRef(ticks);
+  ticksRef.current = ticks;
+  /** Which Submit's round id an `apply` round's undo id belongs to: an undone
+   * round leaves the log, so its ticks badge nothing. Only the newest
+   * round's undo can run (`holdsUndo`), so each Submit starts it afresh. */
+  const undoRounds = useRef(new Map<string, string>());
+  /** When each shown ✓ badge first appeared (`ARRIVAL_GUARD_MS`), and the
+   * newest of them; when the last approve was taken. */
+  const tickSeen = useRef(new Map<Mark, number>());
+  const tickArrived = useRef(0);
+  const lastApprove = useRef(0);
   /** Where each question's quote was found on its page (`findText`), by
    * `page\nquote`; absent while the frame has not answered. */
   const [found, setFound] = useState<Record<string, { x: number; y: number; w: number; h: number }[]>>({});
@@ -1104,6 +1134,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const ask = readMarkupAsk();
     const direct = readMarkupDirect();
     let answer: Awaited<ReturnType<typeof submitMarkup>>;
+    // This Submit's id: the prompt names its marks under it, and the agent's
+    // ticks (`markup_done`) come back with it.
+    const roundId = mintRound();
+    const present = history.present;
     try {
       answer = await submitMarkup(tabId, {
         source,
@@ -1116,6 +1150,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         ...(instruction ? { instruction } : {}),
         ...(ask !== DEFAULT_MARKUP_ASK ? { ask } : {}),
         mode: direct ? "apply" : "list",
+        round: roundId,
       });
       prompt = answer.prompt;
       if (subagents) prompt = markupForSubagent(prompt);
@@ -1146,14 +1181,21 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     }
     // The round's marks go to the sent side — dimmed, never sent again, past
     // undo — and the view stays open for the next round; the save effect
-    // keeps the record.
-    setHistory((now) => startHistory(markSent(now.present, marked)));
+    // keeps the record. The round is logged with the marks as the request
+    // listed them, which the agent's ticks index — unless a page changed
+    // meanwhile (then its ticks would point at the wrong marks: none kept).
+    setHistory((now) => {
+      const asSent = marked.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
+      return startHistory(markSent(now.present, marked, asSent ? roundId : undefined));
+    });
     setShowSent(true);
     setCheck(null);
     setReloadNote(null);
     // The mode the desktop gave the round decides its follow-up — Undo or
     // Make these changes — never this phone's switch.
     const undo = answer.mode === "apply" && typeof answer.undo === "string" && answer.undo ? answer.undo : null;
+    undoRounds.current.clear();
+    if (undo) undoRounds.current.set(undo, roundId);
     undoTab.current = tabId;
     roundFile.current = fileRef.current;
     setNoUndo(direct && !undo ? answer.noUndo ?? null : null);
@@ -1235,6 +1277,13 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       return;
     }
     setSubmitted((was) => was && undoneRound(was, id));
+    // Its ticks mean nothing now: the round leaves the log (the marks stay).
+    const undoneId = undoRounds.current.get(id);
+    if (undoneId) {
+      undoRounds.current.delete(id);
+      const forget = (entry: Layer) => forgetRound(entry, undoneId);
+      setHistory((now) => ({ past: now.past.map(forget), present: forget(now.present), future: now.future.map(forget) }));
+    }
     // The files went back, whatever else happened since: the agent is told.
     const told = await sendNote(markupUndoNote(done.files.map((file) => file.path), done.more));
     setUndoNote(told ? { text: t("mobile.markup.undo.done"), alert: false } : { text: t("mobile.markup.undo.noteFailed"), alert: true });
@@ -1530,6 +1579,87 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </Fragment>;
     });
   };
+  // --- The agent's ticks: a ✓ on each sent mark it says it handled ----------
+  /** The ticked sent marks (`markup_done`, `docs/markup_tick_approve_plan.md`
+   * §4), while the sent marks show. A tap on a badge approves its mark — it
+   * leaves the layer, undoably — and nothing else ever removes one: ticks
+   * that vanish (the agent's session ended, a day passed) take the badge
+   * only. */
+  const ticked = useMemo(
+    () => (canMark && showSent ? tickedMarks(history.present, ticks) : []),
+    [canMark, showSent, history.present, ticks],
+  );
+  const tickBadges = useMemo(() => {
+    const byPage = new Map<number, { index: number; mark: Mark; box: [number, number, number, number] }[]>();
+    for (const { page, index } of ticked) {
+      const mark = history.present.sent?.pages[page]?.marks[index];
+      if (!mark) continue;
+      const list = byPage.get(page) ?? [];
+      list.push({ index, mark, box: markBox(mark) });
+      byPage.set(page, list);
+    }
+    return byPage;
+  }, [ticked, history.present]);
+  // Each badge's arrival, before paint: a pen or finger already on its way
+  // down where one appears must not approve it. A badge that went and comes
+  // back arrives anew.
+  useLayoutEffect(() => {
+    const now = Date.now();
+    const next = new Map<Mark, number>();
+    for (const badges of tickBadges.values()) {
+      for (const { mark } of badges) {
+        const seen = tickSeen.current.get(mark);
+        next.set(mark, seen ?? now);
+        if (seen === undefined) tickArrived.current = now;
+      }
+    }
+    tickSeen.current = next;
+  }, [tickBadges]);
+  /** Whether a tap may approve now: not while a Submit goes out or a stroke
+   * is under way, not in the moment after `mark` (or, for Approve all, any
+   * badge) appeared, and not as the second tap of a double one. */
+  const approvable = (mark: Mark | null): boolean => {
+    if (sending !== null || gesture.current) return false;
+    const now = Date.now();
+    const arrived = mark ? tickSeen.current.get(mark) : tickArrived.current;
+    if (arrived === undefined || now - arrived < ARRIVAL_GUARD_MS || now - lastApprove.current < TICK_REPEAT_MS) return false;
+    lastApprove.current = now;
+    return true;
+  };
+  /** Approves the mark the badge was drawn for — only while it is still that
+   * mark and still ticked in the layer the change lands on. */
+  const approveTicked = (page: number, index: number, mark: Mark) => {
+    if (!approvable(mark)) return;
+    setHistory((now) => {
+      if (now.present.sent?.pages[page]?.marks[index] !== mark) return now;
+      const still = tickedMarks(now.present, ticksRef.current).some((entry) => entry.page === page && entry.index === index);
+      return still ? commit(now, approveMark(now.present, page, index)) : now;
+    });
+  };
+  const approveAllTicked = () => {
+    if (!approvable(null)) return;
+    setHistory((now) => {
+      const marks = tickedMarks(now.present, ticksRef.current);
+      return marks.length ? commit(now, approveMarks(now.present, marks)) : now;
+    });
+  };
+  /** One page's ✓ badges, centred on each ticked mark's top-right corner and
+   * kept on the page — placed as the question pins are. */
+  const tickLayer = (n: number, size: Size) => {
+    const badges = tickBadges.get(n);
+    if (!badges?.length) return null;
+    const scale = cssWidth / size[0];
+    const maxLeft = Math.max(0, cssWidth - TICK_BADGE);
+    const maxTop = Math.max(0, size[1] * scale - TICK_BADGE);
+    return badges.map(({ index, mark, box }) => {
+      const [x, y, w] = box;
+      const left = Math.min(maxLeft, Math.max(0, (x + w) * scale - TICK_BADGE / 2));
+      const top = Math.min(maxTop, Math.max(0, y * scale - TICK_BADGE / 2));
+      return <button key={`${tickKey(mark)}:${index}`} className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
+        aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
+        onClick={(event) => { if (event.detail <= 1) approveTicked(n, index, mark); }}>✓</button>;
+    });
+  };
   const register = useCallback((n: number, canvas: HTMLCanvasElement | null) => {
     if (canvas) overlays.current.set(n, canvas);
     else overlays.current.delete(n);
@@ -1588,6 +1718,13 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {pillReload && <button className={reloadPrimary ? "markup-submit markup-reload" : "outbox-action markup-reload"} disabled={reloading || sending !== null}
           onClick={() => void reload()}>{t("mobile.markup.reload")}</button>}
       </div>}
+      {ticked.length > 0 && <div className="markup-round markup-ticks" role="status">
+        <span className="agent-status done" aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH.done}</span></span>
+        <span className="markup-round-words">{t("mobile.markup.ticks.done", { count: ticked.length })}</span>
+        {isUntested("mobile.markup.ticks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        <button className="outbox-action markup-approve-all" disabled={sending !== null} onClick={approveAllTicked}
+          title={t("mobile.markup.ticks.approveAllTitle")}>{t("mobile.markup.ticks.approveAll")}</button>
+      </div>}
       {noUndo && submitted && <p role="status">{t("mobile.markup.noUndo", { reason: t(NO_UNDO_KEYS[noUndo] ?? "mobile.markup.noUndo.other") })}</p>}
       {undoNote && <p role={undoNote.alert ? "alert" : "status"}>{undoNote.text}</p>}
       {reloadNote && <p role="status">{t(reloadNote)}</p>}
@@ -1621,6 +1758,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
                 {!pictures[n] && <span className="markup-page-note">{t(pageFailures.has(n) ? "mobile.markup.pageFailed" : "mobile.markup.pageLoading", { n })}</span>}
                 {layerCanvas(n, size)}
               </>}
+              {tickLayer(n, size)}
               {pinLayer(n, size)}
               {noteEditor(n, size)}
             </div>;
@@ -1637,6 +1775,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             }}
             onError={() => setFailure("picture")} />
           {sizes && layerCanvas(1, sizes[0])}
+          {sizes && tickLayer(1, sizes[0])}
           {sizes && noteEditor(1, sizes[0])}
         </div>
       </div>}

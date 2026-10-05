@@ -16,6 +16,13 @@
  * `markup-mcp-changed` while the pane is on screen and once more when it shows
  * again. An answer goes out the Submit's way; when it cannot be queued the ask
  * is reopened with the answer's receipt, so the card stays and a retry works.
+ *
+ * Each Submit carries a fresh round id (`mintRound`) and logs its marks as
+ * sent (`SentLayer.log`), so the agent's ticks (`markup_done`,
+ * `docs/markup_tick_approve_plan.md` §3) — read for every agent tab of the
+ * project on the asks' triggers — map onto sent marks; the viewer shows a ✓
+ * on each, and only the reader's click (one, or Approve all) removes a mark.
+ * An undone `apply` round is forgotten from the log: its ticks show nothing.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -44,11 +51,13 @@ import {
   answerMarkupQuestions,
   dismissMarkupQuestions,
   listMarkupQuestions,
+  listMarkupTicks,
   MARKUP_MCP_CHANGED,
   questionReasonKey,
   reopenMarkupQuestions,
   type MarkupAnswer,
   type MarkupAsk,
+  type MarkupTick,
 } from "../../../lib/viewers/markupQuestions";
 import { useSettingsStore } from "../../../stores/settings";
 import { agentTabStateOf, lastTabReadAt, useActivityStore } from "../../../stores/activity";
@@ -56,24 +65,30 @@ import { queuePromptForTab } from "../../../stores/agents/agentPrompts";
 import { useTabsStore, type TabEntry } from "../../../stores/tabs";
 import {
   addMark,
+  approveMark,
+  approveMarks,
   canAdd,
   canReplace,
   clearPage as clearLayerPage,
   clearSent as clearLayerSent,
   commit,
+  forgetRound,
   hasSent,
   isEmpty,
   markedPages,
   markSent,
+  mintRound,
   redo as redoHistory,
   replaceMark,
   startHistory,
+  tickedMarks,
   undo as undoHistory,
   type History,
   type Layer,
   type Mark,
   type MarkColor,
   type TextMark,
+  type TickedMark,
 } from "../../../../mobile-web/src/markup/layer";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { markupPagePicture } from "./markupPage";
@@ -169,6 +184,15 @@ export type MarkupRoundUndo = {
   cancel: () => void;
   note: { text: string; alert: boolean } | null;
   noUndo: string | null;
+};
+
+/** The sent marks the agent ticked off (`markup_done`), while marking with
+ *  sent marks shown: `approve` removes one (an undoable edit) — `mark` is the
+ *  object its badge was drawn for — `approveAll` every one listed. */
+export type MarkupTicks = {
+  marks: TickedMark[];
+  approve: (page: number, index: number, mark: Mark) => void;
+  approveAll: () => void;
 };
 
 /** The layer's undo history and the strokes in flight on top of it. */
@@ -270,6 +294,11 @@ export function usePdfMarkup({
    *  double click sends one request. */
   const undoBusyRef = useRef(false);
   const [undoNote, setUndoNote] = useState<MarkupRoundUndo["note"]>(null);
+  /** The agent's ticks for this file, with the tabs and file they were read for. */
+  const [tickList, setTickList] = useState<{ key: string; ticks: MarkupTick[] } | null>(null);
+  /** Which Submit's round id an `apply` round's undo id belongs to: an undone
+   *  round is forgotten from the log. */
+  const undoRounds = useRef(new Map<string, string>());
 
   const skipSave = useRef(false);
   const pendingSave = useRef(false);
@@ -397,7 +426,7 @@ export function usePdfMarkup({
   const idleIds = useMemo(() => (idleIdList ? idleIdList.split("\n") : []), [idleIdList]);
   const idleKey = projectId && idleIds.length ? `${projectId}\n${idleIds.join("\n")}\n${path}` : null;
   const [waiting, setWaiting] = useState<{ key: string; target: string | null } | null>(null);
-  const listening = asksKey !== null || idleKey !== null;
+  const listening = asksKey !== null || idleKey !== null || (active && projectId !== null && targets.length > 0);
   useEffect(() => {
     if (!listening) return;
     let live = true;
@@ -445,6 +474,30 @@ export function usePdfMarkup({
       live = false;
     };
   }, [idleKey, idleIds, projectId, path, visible, asksChanged]);
+  // The agent's ticks (`markup_done`), read on the asks' triggers while
+  // marking — from every agent tab of the project: a round id names one
+  // Submit, so a tick finds only that Submit's marks, whichever tab it went to.
+  // A backend without the command (a hot-reloaded window over an older one)
+  // has no ticks.
+  const tickIdList = active && projectId ? targets.map((entry) => entry.scheduleTargetId).join("\n") : "";
+  const ticksKey = tickIdList ? `${projectId}\n${tickIdList}\n${path}` : null;
+  useEffect(() => {
+    if (!ticksKey || !projectId || !visible) return;
+    let live = true;
+    const key = ticksKey;
+    void Promise.all(
+      tickIdList.split("\n").map((id) => listMarkupTicks(projectId, id, path).catch((): MarkupTick[] => [])),
+    ).then((found) => {
+      if (live) setTickList({ key, ticks: found.flat() });
+    });
+    return () => {
+      live = false;
+    };
+  }, [ticksKey, tickIdList, projectId, path, visible, asksChanged]);
+  const ticks = useMemo(() => (tickList && tickList.key === ticksKey ? tickList.ticks : []), [tickList, ticksKey]);
+  const ticksRef = useRef(ticks);
+  ticksRef.current = ticks;
+
   /** An agent tab other than the chosen one (any, while marking is off)
    *  with an open ask for this file. */
   const askOther = waiting && waiting.key === idleKey ? waiting.target : null;
@@ -635,6 +688,7 @@ export function usePdfMarkup({
     let prompt: string;
     let undo: string | null = null;
     let fellBack: string | null = null;
+    const roundId = mintRound();
     try {
       const body: PdfMarkupPage[] = [];
       for (const n of pages) {
@@ -652,7 +706,7 @@ export function usePdfMarkup({
       const settings = useSettingsStore.getState().settings;
       const instruction = pdfMarkupInstruction(settings?.pdf_markup_instruction);
       const direct = settings?.pdf_markup_direct ?? true;
-      const answer = await submitPdfMarkup(projectId, path, body, instruction, pdfMarkupAsk(settings?.pdf_markup_ask), direct ? "apply" : "list");
+      const answer = await submitPdfMarkup(projectId, path, body, instruction, pdfMarkupAsk(settings?.pdf_markup_ask), direct ? "apply" : "list", roundId);
       prompt = answer.prompt;
       // The mode the backend gave the round decides its follow-up — Undo or
       // Make these changes — never the setting.
@@ -675,9 +729,17 @@ export function usePdfMarkup({
       return;
     }
     // The round's marks go to the sent side — dimmed, never sent again, past
-    // undo — and marking goes on for the next round.
+    // undo — and marking goes on for the next round. The round is logged with
+    // the marks as the request listed them, which the agent's ticks index —
+    // unless a page changed meanwhile (drawing waits, but not every path).
     setScratchLayer(null);
-    setHistory((now) => startHistory(markSent(now.present, pages)));
+    setHistory((now) => {
+      const asSent = pages.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
+      return startHistory(markSent(now.present, pages, asSent ? roundId : undefined));
+    });
+    // Only the newest round's undo can run (`holdsUndo`): older ids are dead.
+    undoRounds.current.clear();
+    if (undo) undoRounds.current.set(undo, roundId);
     setShowSent(true);
     setReloaded(false);
     setAutoReloaded(false);
@@ -759,6 +821,13 @@ export function usePdfMarkup({
       return false;
     }
     setRound((was) => was && undoneRound(was, id));
+    // Its ticks mean nothing now: the round leaves the log (the marks stay).
+    const undoneId = undoRounds.current.get(id);
+    if (undoneId) {
+      undoRounds.current.delete(id);
+      const forget = (entry: Layer) => forgetRound(entry, undoneId);
+      setHistory((now) => ({ past: now.past.map(forget), present: forget(now.present), future: now.future.map(forget) }));
+    }
     // The files went back, whatever else happened since: the agent is told.
     let told = false;
     if (target) {
@@ -822,6 +891,26 @@ export function usePdfMarkup({
     pendingSave.current = true;
   }, []);
 
+  // ── The agent's ticks: a ✓ on each ticked sent mark, while it shows ──────
+  const ticked = useMemo(
+    () => (active && showSent ? tickedMarks(history.present, ticks) : []),
+    [active, showSent, history.present, ticks],
+  );
+  /** Approves the mark the badge was drawn for, only while it is still that
+   *  mark and still ticked in the layer the change lands on — a second click
+   *  on a gone badge removes nothing else. */
+  const approveTicked = useCallback((page: number, index: number, shown: Mark) => {
+    setHistory((now) => {
+      if (now.present.sent?.pages[page]?.marks[index] !== shown) return now;
+      const still = tickedMarks(now.present, ticksRef.current).some((entry) => entry.page === page && entry.index === index);
+      return still ? commit(now, approveMark(now.present, page, index)) : now;
+    });
+  }, []);
+  const approveAllTicked = useCallback(() => {
+    setHistory((now) => commit(now, approveMarks(now.present, tickedMarks(now.present, ticksRef.current))));
+  }, []);
+  const tickState: MarkupTicks = { marks: ticked, approve: approveTicked, approveAll: approveAllTicked };
+
   const hasMarks = !isEmpty(history.present) || sentShown;
   return {
     key,
@@ -856,6 +945,7 @@ export function usePdfMarkup({
     chooseTarget: setChosen,
     agent,
     questions,
+    ticks: tickState,
     askWaiting,
     askElsewhere,
     round,

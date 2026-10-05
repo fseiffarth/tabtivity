@@ -102,13 +102,15 @@ describe("MarkupView", () => {
       picture: `${NAMES.inboxDir}/2026-2-plot-marked.png`,
       // Apply marks directly is on unset.
       mode: "apply",
+      // The round the agent's ticks come back under (`mintRound`).
+      round: expect.stringMatching(/^[a-z0-9]{8}$/),
     });
     // The view stays open; the marks are kept as sent, not cleared.
     await waitFor(() => {
       const calls = store.saveLayer.mock.calls as unknown as [string, Layer][];
       const saved = calls[calls.length - 1];
       expect(saved?.[0]).toBe("p1:outbox:20261001-120000-plot.png");
-      expect(saved?.[1]).toEqual({ pages: {}, sent: { pages: LAYER.pages, rounds: 1 } });
+      expect(saved?.[1]).toEqual({ pages: {}, sent: { pages: LAYER.pages, rounds: 1, log: [{ id: body.round, pages: { 1: LAYER.pages[1].marks } }] } });
     });
     expect(store.clearLayer).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
