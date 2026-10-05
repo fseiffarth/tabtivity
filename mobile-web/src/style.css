@@ -391,6 +391,10 @@ small { color:#9498aa; }
 .tab-card.home-project-card { --oct-edge:#3b4055; --oct-face:linear-gradient(115deg,rgba(54,49,85,.42),rgba(54,49,85,0) 38%),#1c1f2b; }
 .tab-card.home-project-card:focus-within { --oct-edge:#8d80ee; }
 .home-project-card .card { min-height:62px; }
+/* A row's agent tabs by state: the tab cards' status pills, a size down so
+   three of them and the tab count fit one phone-width row. */
+.home-project-card .card-trailing { gap:6px; }
+.home-project-card .agent-status.home-agent-count { padding:4px 7px; font-variant-numeric:tabular-nums; }
 .home-project-card .count { border-radius:8px; background:#38305f; color:#ebe6ff; font-variant-numeric:tabular-nums; }
 @media (max-width:380px) {
   .home-brand strong { font-size:.9rem; }

@@ -58,6 +58,22 @@ describe("Mobile home — project list states", () => {
     expect(screen.getByText("Paper").parentElement?.textContent).toContain("box");
   });
 
+  it("counts a row's working, waiting and done agent tabs beside its open tabs", async () => {
+    answer([
+      { id: "p1", label: "Alpha", status: "active", live_sessions: 5, agents: { working: 2, question: 1, done: 0 } },
+      { id: "p2", label: "Beta", status: "active", live_sessions: 1 },
+    ]);
+    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    expect(screen.getByRole("img", { name: "Working: 2" }).textContent).toContain("2");
+    expect(screen.getByRole("img", { name: "Waiting on a decision: 1" })).toBeTruthy();
+    // A state with no tab is left out, and so is a row with no agent at work.
+    expect(screen.queryByRole("img", { name: /^Done/ })).toBeNull();
+    expect(screen.getAllByRole("img", { name: /^(Working|Waiting|Done)/ })).toHaveLength(2);
+    expect(screen.getByLabelText("Open tabs: 5").textContent).toBe("5");
+    expect(screen.getByLabelText("Open tabs: 1").textContent).toBe("1");
+  });
+
   it("explains an empty active list and points at search", async () => {
     answer([]);
     render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);

@@ -170,6 +170,36 @@ pub struct PublicProject {
     /// clean, not a repo, never probed, or the desktop is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<&'static str>,
+    /// How many of the project's agent tabs are working, waiting on a
+    /// decision, or done right now, filled in per request from the same
+    /// readings the activity list uses. Absent when none is in any of the three.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<AgentCounts>,
+}
+
+/// A project row's agent tabs by state, for the phone's project list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct AgentCounts {
+    pub working: usize,
+    pub question: usize,
+    pub done: usize,
+}
+
+impl AgentCounts {
+    /// Counts one tab's agent status; the states the row does not show are
+    /// skipped.
+    pub fn add(&mut self, status: &str) {
+        match status {
+            "working" => self.working += 1,
+            "question" => self.question += 1,
+            "done" => self.done += 1,
+            _ => {}
+        }
+    }
+
+    pub fn any(&self) -> bool {
+        self.working + self.question + self.done > 0
+    }
 }
 
 /// The one-line schedule summary the desktop's Agents view puts under an agent
@@ -1063,6 +1093,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             last_activity: None,
             pending_reviews: None,
             git: None,
+            agents: None,
         },
         raw_id: "raw-p".into(),
         root: PathBuf::from("/"),
@@ -1200,6 +1231,7 @@ fn resolve_scope(
         pending_reviews: (source.kind == ScopeKind::Root)
             .then(|| crate::services::root_mcp_review::pending_count(state_dir)),
         git: None,
+        agents: None,
     };
     Some(ResolvedProject {
         public,
@@ -1280,6 +1312,21 @@ mod tests {
 
     use crate::brand::SLUG;
     use super::*;
+
+    #[test]
+    fn agent_counts_keep_working_question_and_done_and_skip_the_rest() {
+        let mut counts = AgentCounts::default();
+        assert!(!counts.any());
+        for status in ["working", "question", "done", "done", "interrupted", "bogus"] {
+            counts.add(status);
+        }
+        assert_eq!(counts, AgentCounts { working: 1, question: 1, done: 2 });
+        assert!(counts.any());
+        assert_eq!(
+            serde_json::to_value(counts).unwrap(),
+            serde_json::json!({ "working": 1, "question": 1, "done": 2 })
+        );
+    }
 
     #[test]
     fn tmux_ls_runs_through_app_path() {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts, type ProjectRow, type TabPlace } from "../api";
+import { api, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
 import { classifyUnavailable, describeFailure, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
 import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../projectOrder";
@@ -17,6 +17,7 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { LocalModelsSection } from "./LocalModelsSheet";
 import { GitMark } from "../components/GitMark";
+import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { GitSheet } from "./GitSheet";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -34,6 +35,24 @@ type Translate = (key: TranslationKey, vars?: Record<string, string | number>) =
 export function GripHint({ text }: { text: string }) {
   const [before, after = ""] = text.split("{grip}");
   return <>{before}<span aria-hidden="true">⠿</span>{after}</>;
+}
+
+/** A project row's agent tabs by state — working, waiting on a decision,
+ * done — as the tab cards' own status pills, glyph and number; a state with
+ * none is left out. The glyph is decoration, so each pill's name is its
+ * sentence. `tagged` carries the untested pill (one row wears it). */
+const COUNTED_STATES = ["working", "question", "done"] as const;
+const AGENT_COUNT_WORD: Record<(typeof COUNTED_STATES)[number], TranslationKey> = {
+  working: "mobile.home.agentsWorking",
+  question: "mobile.home.agentsQuestion",
+  done: "mobile.home.agentsDone",
+};
+function AgentCounts({ counts, tagged }: { counts: AgentCountsRow; tagged: boolean }) {
+  const t = useT();
+  return <>{tagged && isUntested("mobile.home.agentCounts") && <span className="untested">{t("mobile.newTab.untested")}</span>}{COUNTED_STATES.filter((state) => counts[state] > 0).map((state) => {
+    const word = t(AGENT_COUNT_WORD[state], { count: counts[state] });
+    return <small key={state} className={`agent-status home-agent-count ${state}`} role="img" aria-label={word} title={word}><span className="agent-status-glyph" aria-hidden="true">{AGENT_STATUS_GLYPH[state]}</span>{counts[state]}</small>;
+  })}</>;
 }
 
 const ALERT_ICON: Record<MobileAlertItem["kind"], string> = {
@@ -275,6 +294,7 @@ export function Home({ open, openTab, todo, mail }: {
    * the host's as the fallback; a search result is not arranged at all — it is
    * an answer to a query, and the best match belongs at the top of it. */
   const listed = view === "search" ? rows : arrangeProjects(rows, (project) => project.id, order);
+  const firstCounted = listed.find((project) => project.agents)?.id;
   /** One row cannot be rearranged, and neither can a search result. */
   const canReorder = view === "active" && listed.length > 1;
   /** Move one project beside another and remember it. Nothing is sent anywhere:
@@ -341,7 +361,7 @@ export function Home({ open, openTab, todo, mail }: {
             // of the one button rather than a button of its own.
             if (project.git && (event.target as Element).closest(".git-mark")) setGitFor(project);
             else open(project.id);
-          }}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="count">{project.live_sessions}</span></button>
+          }}><span><strong>{project.label}</strong><small>{scopeCaption(project)}{project.git && <GitMark state={project.git} />}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
           {canReorder && <button
             className="tab-card-grip"
             aria-label={t("mobile.home.move", { label: project.label })}

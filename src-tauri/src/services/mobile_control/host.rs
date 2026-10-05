@@ -28,7 +28,7 @@ use super::{
     alarms,
     auth::AuthStore,
     config::{verify_tailscale_serve, HostConfig},
-    discovery::{shells_open, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{shells_open, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     git_overview,
     headless,
@@ -821,7 +821,7 @@ async fn projects(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(catalog) = catalog(&state, &phone) else {
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let q = query.q.unwrap_or_default();
@@ -833,9 +833,9 @@ async fn projects(
     if view != "active" && view != "search" {
         return api_error(StatusCode::BAD_REQUEST, "invalid_view");
     }
-    let listed = catalog
+    let listed = catalog_snapshot
         .projects
-        .into_iter()
+        .iter()
         .filter(|p| {
             if view == "search" {
                 !q.is_empty() && p.public.label.to_lowercase().contains(&q)
@@ -846,6 +846,17 @@ async fn projects(
             }
         })
         .collect::<Vec<_>>();
+    // Each row's agent tabs by state, from the readings the activity list
+    // uses. Tmux session names are unique server-wide, so one map serves all.
+    let agent_statuses = if listed.iter().any(|p| p.tabs.iter().any(|t| t.public.kind == "agent")) {
+        let (_, statuses, _) = activity_readings(&state, &catalog_snapshot).await;
+        statuses
+            .into_iter()
+            .map(|status| (status.tmux_session, status.status))
+            .collect::<HashMap<_, _>>()
+    } else {
+        HashMap::new()
+    };
     // Each row's git dot, from the desktop's own pills. Only asked when a
     // project is listed; a closed or older desktop leaves every row without one.
     let git = if listed.iter().any(|p| p.public.kind == ScopeKind::Project) {
@@ -874,10 +885,17 @@ async fn projects(
     let mut rows = listed
         .into_iter()
         .map(|p| {
-            let mut public = p.public;
+            let mut public = p.public.clone();
             if public.kind == ScopeKind::Project {
                 public.git = git.get(&p.raw_id).copied();
             }
+            let mut agents = AgentCounts::default();
+            for tab in p.tabs.iter().filter(|t| t.public.kind == "agent") {
+                if let Some(status) = agent_statuses.get(&tab.tmux_name) {
+                    agents.add(status);
+                }
+            }
+            public.agents = agents.any().then_some(agents);
             public
         })
         .collect::<Vec<_>>();
@@ -915,6 +933,25 @@ fn activity_rank(status: &str) -> u8 {
     }
 }
 
+/// Every agent tab's status and prompt rows in one desktop round trip, and
+/// whether the desktop answered. Without a window they come from the hooks'
+/// turn records and the tabs' transcripts (headless owner plan, H1b).
+async fn activity_readings(
+    state: &HostState,
+    catalog_snapshot: &Catalog,
+) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
+        Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
+        response if desktop_down(&response) => {
+            let readings = headless::activity(&state.config.state_dir, catalog_snapshot);
+            (false, readings.statuses, readings.prompts)
+        }
+        _ => (false, vec![], vec![]),
+    }
+}
+
 /// `GET /api/v1/activity` — every agent tab the desktop reports as working,
 /// waiting on a decision, or done, across every project this phone may reach,
 /// in one flat list. One desktop round trip serves the whole list: a per-project
@@ -927,23 +964,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
     let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    let (desktop_available, statuses, prompts) = match admin::desktop_call(
-        &desktop_socket,
-        &DesktopRequest::Activity { request_id },
-    )
-    .await
-    {
-        Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
-        // No window: the hooks' turn records and the tabs' transcripts
-        // (headless owner plan, H1b).
-        response if desktop_down(&response) => {
-            let readings = headless::activity(&state.config.state_dir, &catalog_snapshot);
-            (false, readings.statuses, readings.prompts)
-        }
-        _ => (false, vec![], vec![]),
-    };
+    let (desktop_available, statuses, prompts) = activity_readings(&state, &catalog_snapshot).await;
     // Tmux session names are unique across the whole server, so one map covers
     // every project's tabs.
     let statuses = statuses
@@ -2919,8 +2940,9 @@ async fn edit_held_prompt(
             tmux_session: tab.tmux_name.clone(),
             held_id: held_id.clone(),
             message: message.clone(),
+            device_id: Some(phone.device_id().to_string()),
         },
-        || headless::edit_held_prompt(&state_dir, &project_id, &tab, &held_id, &message).map(|()| held_id.clone()),
+        || headless::edit_held_prompt(&state_dir, &project_id, &tab, &held_id, &message, Some(phone.device_id())).map(|()| held_id.clone()),
     )
     .await
 }
@@ -7632,6 +7654,8 @@ mod tests {
                 updated_at: "2026-09-24T08:00:00Z".into(),
                 tags: vec!["review".into()],
                 target: Some("raw-schedule-target-id".into()),
+                // The phone that wrote it never crosses the browser API.
+                phone_device: Some("device-that-wrote-it".into()),
             }],
         }));
         assert_eq!(status, StatusCode::OK);
@@ -9983,10 +10007,16 @@ mod tests {
         let socket = host.state.config.control_dir.join("desktop-control.sock");
         let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
         let desktop = tokio::spawn(async move {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (mut stream, _) = listener.accept().await.expect("accept");
                 let request: DesktopRequest = admin::read_frame(&mut stream).await.expect("request");
                 let response = match request {
+                    // The list row's agent counts come from the activity readings.
+                    DesktopRequest::Activity { .. } => serde_json::from_value(json!({
+                        "status": "activity",
+                        "statuses": [{ "tmux_session": format!("{}-{RAW_PROJECT}--agent-abcdef123", crate::brand::SLUG), "status": "question" }],
+                    }))
+                    .expect("activity"),
                     DesktopRequest::GitStates { .. } => DesktopResponse::GitStates {
                         states: vec![
                             ProjectGitState { project_id: RAW_PROJECT.into(), state: "unpushed".into() },
@@ -10007,6 +10037,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "answered: {body}");
         let row = &json(&body)["projects"][0];
         assert_eq!(row["git"], "unpushed", "{body}");
+        assert_eq!(row["agents"], json!({ "working": 0, "question": 1, "done": 0 }), "{body}");
         assert!(!body.contains(RAW_PROJECT) && !body.contains("not-listed"), "{body}");
 
         let opaque = row["id"].as_str().unwrap().to_string();
