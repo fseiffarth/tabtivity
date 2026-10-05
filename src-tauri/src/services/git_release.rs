@@ -9,15 +9,16 @@
 //! branch push did not (the privacy scan runs on branch pushes, not tags). The
 //! tag is annotated, never signed (a repo's `tag.gpgSign` + `gpg.program`
 //! would run a program), and goes out through the hooks-off transport with the
-//! one refspec `refs/tags/T:refs/tags/T`: no `+`, no `--tags`, no delete, and
-//! an existing remote tag is refused rather than moved.
+//! one refspec `<tag object>:refs/tags/T` — the object checked to peel to the
+//! tip, not the local tag by name: no `+`, no `--tags`, no delete, and an
+//! existing remote tag is refused rather than moved.
 use std::path::Path;
 
 use serde::Serialize;
 
 use super::git_push_mcp::{
-    classify_remote_error, clean_output, git, join_streams, ls_remote_raw, repo_rewrites_urls, run_capped, Category, Failure,
-    TRANSPORT_TIMEOUT,
+    classify_remote_error, clean_output, git, join_streams, ls_remote_raw, repo_rewrites_urls, run_capped, validate_sha, Category,
+    Failure, TRANSPORT_TIMEOUT,
 };
 use crate::commands::git::{hardened_git_command_in, push_transport_command};
 
@@ -212,6 +213,19 @@ pub fn preview(dir: &Path, token: Option<&str>, origins: &[String]) -> Preview {
     out
 }
 
+/// `<tag object>:refs/tags/T`: the local tag's object as read now, checked
+/// to peel to the plan's tip. Pushing that object (not the name) means a tag
+/// re-pointed after this read cannot be what leaves.
+fn pinned_tag_refspec(dir: &Path, plan: &ReleasePlan) -> Result<String, Failure> {
+    let object = git(dir, &["rev-parse", "-q", "--verify", &format!("refs/tags/{}", plan.tag)]).ok().filter(|o| validate_sha(o).is_ok())
+        .ok_or_else(|| Failure::new(Category::TransportFailed, "The tag vanished before it could be pushed; nothing was pushed."))?;
+    let peeled = git(dir, &["rev-parse", "-q", "--verify", &format!("{object}^{{commit}}")]).unwrap_or_default();
+    if peeled != plan.head {
+        return Err(Failure::new(Category::StaleApproval, format!("The local tag '{}' no longer points at {}; nothing was pushed.", plan.tag, &plan.head[..7.min(plan.head.len())])));
+    }
+    Ok(format!("{object}:refs/tags/{}", plan.tag))
+}
+
 /// Create the annotated tag (unless it already names the tip) and push it.
 /// A tag this call created is removed again when the push fails, so a retry
 /// starts clean. Returns the push's cleaned output.
@@ -220,36 +234,41 @@ pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, token: Option<&str
     let created = local_tag_commit(dir, &plan.tag).is_none();
     if created {
         let message = if message.trim().is_empty() { plan.tag.as_str() } else { message };
-        let out = hardened_git_command_in(dir, &["-c", "tag.gpgSign=false", "-c", "tag.forceSignAnnotated=false", "tag", "-a", &plan.tag, "-m", message, &plan.head])
-            .output().map_err(|e| Failure::new(Category::TransportFailed, e.to_string()))?;
+        let out = crate::services::git_bounded::output(hardened_git_command_in(dir, &["-c", "tag.gpgSign=false", "-c", "tag.forceSignAnnotated=false", "tag", "-a", &plan.tag, "-m", message, &plan.head]))
+            .map_err(|e| Failure::new(Category::TransportFailed, e))?;
         if !out.status.success() {
             return Err(Failure::new(Category::TransportFailed, "git could not create the tag; read its output.")
                 .with_output(clean_output(&String::from_utf8_lossy(&out.stderr), None)));
         }
     }
-    let refspec = format!("refs/tags/{t}:refs/tags/{t}", t = plan.tag);
-    let cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
-    let result = match run_capped(cmd, None, TRANSPORT_TIMEOUT) {
-        Err(None) => Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
-        Err(Some(e)) => Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
-        Ok(ran) => {
-            let output = clean_output(&join_streams(&ran.stdout, &ran.stderr), token);
-            if ran.success {
-                Ok(output)
-            } else {
-                let category = classify_remote_error(&format!("{}\n{}", ran.stdout, ran.stderr));
-                let message = match category {
-                    Category::AuthFailed => "The remote refused the credentials; check the token in Settings → Git Hosting.",
-                    Category::Network => "The remote could not be reached; try again later.",
-                    Category::RemoteRejected => "The remote rejected the tag (a server-side rule); read its output.",
-                    _ => "Pushing the tag failed; read its output.",
-                };
-                Err(Failure::new(category, message).with_output(output))
+    // Push the tag object read and checked here, never `refs/tags/T` by name:
+    // the fenced agent can write `.git` refs and re-point the local tag at an
+    // unpushed commit between this check and the transport.
+    let result = pinned_tag_refspec(dir, plan).and_then(|refspec| {
+        let cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
+        super::git_push_mcp::before_transport();
+        match run_capped(cmd, None, TRANSPORT_TIMEOUT) {
+            Err(None) => Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
+            Err(Some(e)) => Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
+            Ok(ran) => {
+                let output = clean_output(&join_streams(&ran.stdout, &ran.stderr), token);
+                if ran.success {
+                    Ok(output)
+                } else {
+                    let category = classify_remote_error(&format!("{}\n{}", ran.stdout, ran.stderr));
+                    let message = match category {
+                        Category::AuthFailed => "The remote refused the credentials; check the token in Settings → Git Hosting.",
+                        Category::Network => "The remote could not be reached; try again later.",
+                        Category::RemoteRejected => "The remote rejected the tag (a server-side rule); read its output.",
+                        _ => "Pushing the tag failed; read its output.",
+                    };
+                    Err(Failure::new(category, message).with_output(output))
+                }
             }
         }
-    };
+    });
     if result.is_err() && created {
-        let _ = hardened_git_command_in(dir, &["tag", "-d", &plan.tag]).output();
+        let _ = crate::services::git_bounded::output(hardened_git_command_in(dir, &["tag", "-d", &plan.tag]));
     }
     result
 }
@@ -345,6 +364,39 @@ mod tests {
         let preview = preview(&work, None, &[]);
         assert_eq!(preview.category, Some(Category::NotPushed));
         assert!(super::plan(&work, "+v1", false, None, &[]).is_err());
+    }
+
+    #[test]
+    fn a_tag_re_pointed_before_the_transport_is_not_what_leaves() {
+        let (_root, remote, work) = pair("0.1.86");
+        let head = sh(&work, &["rev-parse", "HEAD"]);
+        std::fs::write(work.join("c.txt"), "c\n").unwrap();
+        sh(&work, &["add", "c.txt"]);
+        sh(&work, &["commit", "-q", "-m", "unpushed"]);
+        let unpushed = sh(&work, &["rev-parse", "HEAD"]);
+        sh(&work, &["reset", "-q", "--hard", &head]);
+        let plan = plan(&work, "v0.1.86", false, None, &[]).unwrap();
+        // The agent re-points the local tag at an unpushed commit after the
+        // tag was created and checked, right before the transport.
+        let w = work.clone();
+        let other = unpushed.clone();
+        super::super::git_push_mcp::BEFORE_TRANSPORT.with(|slot| *slot.borrow_mut() = Some(Box::new(move || {
+            sh(&w, &["tag", "-f", "-a", "v0.1.86", "-m", "moved", &other]);
+        })));
+        release(&work, &plan, "", None, &[]).unwrap();
+        assert_eq!(sh(&remote, &["rev-parse", "refs/tags/v0.1.86^{commit}"]), head, "the checked tag object left");
+        let missing = Command::new("git").args(["cat-file", "-e", &unpushed]).current_dir(&remote).output().unwrap();
+        assert!(!missing.status.success(), "the unpushed commit never reached the remote");
+        // A local tag already re-pointed when Release runs is refused.
+        sh(&work, &["tag", "-f", "-a", "v0.1.87", "-m", "x", &unpushed]);
+        let stale = ReleasePlan { tag: "v0.1.87".into(), ..plan.clone() };
+        assert_eq!(release(&work, &stale, "", None, &[]).unwrap_err().category, Category::StaleApproval);
+        assert!(sh(&remote, &["tag", "-l", "v0.1.87"]).is_empty());
+        assert_eq!(pinned_tag_refspec(&work, &plan).unwrap_err().category, Category::StaleApproval, "the moved v0.1.86");
+        sh(&work, &["tag", "-f", "-a", "v0.1.86", "-m", "back", &head]);
+        let pinned = pinned_tag_refspec(&work, &plan).unwrap();
+        let object = sh(&work, &["rev-parse", "refs/tags/v0.1.86"]);
+        assert_eq!(pinned, format!("{object}:refs/tags/v0.1.86"), "the object, not the name");
     }
 
     #[test]

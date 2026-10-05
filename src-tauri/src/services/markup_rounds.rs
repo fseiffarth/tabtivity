@@ -4,9 +4,18 @@
 //! A Submit in `apply` mode first takes a snapshot of the project's git work
 //! tree ([`begin`]); once the agent's turn has finished the round is settled
 //! ([`settle`]: a second snapshot), and **Undo** ([`undo`]) writes every file
-//! that differs between the two back as the first snapshot holds it —
-//! refusing, and changing nothing, when one of them is not exactly as the
-//! round left it (edited, removed or back again since).
+//! *inside the project folder* that differs between the two back as the
+//! first snapshot holds it — refusing, and changing nothing, when one of them
+//! is not exactly as the round left it (edited, removed or back again since).
+//!
+//! **Only the project's files.** The project folder may be a subfolder of a
+//! larger repo. The snapshots still cover the whole work tree, so that the
+//! files changed elsewhere in it during the round (a sibling project, the
+//! repo's top) can be *named*: preview and undo list them as `outside`
+//! (top-relative, bounded) and the undo leaves them as they are. What the
+//! user or another tab changed inside the project between Submit and settle
+//! is still put back with the round's own edits — a snapshot cannot tell
+//! them apart (the preview names every file first).
 //!
 //! Both snapshots are ordinary git trees, written into the round's own object
 //! store under the state dir, never into the project:
@@ -284,11 +293,33 @@ pub enum PdfFate {
 /// A round's changes: what an undo would put back, or did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Changes {
+    /// The project folder's changed files — the only ones an undo touches.
     pub files: Vec<Changed>,
-    /// Changed files not named: past [`MAX_LISTED`], outside the project
-    /// folder, or named so they could speak in a chat note.
+    /// The project's changed files not named: past [`MAX_LISTED`], or named
+    /// so they could speak in a chat note.
     pub more: usize,
+    /// Files changed in the same work tree but outside the project folder,
+    /// named relative to the work tree's top (at most [`MAX_LISTED`]): an
+    /// undo leaves them as they are — and a file the round moved *into* the
+    /// project from outside it (its only copy now), named the same way. Not
+    /// sent when empty; never sent to a phone ([`Changes::outside_counted`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub outside: Vec<String>,
+    /// The ones outside not named (past the cap, or unspeakable names).
+    #[serde(rename = "outsideMore")]
+    pub outside_more: usize,
     pub pdf: PdfFate,
+}
+
+impl Changes {
+    /// The phone's view: the names outside the project folder only counted.
+    /// A phone may be scoped to this one project, and those names can be a
+    /// sibling project's.
+    pub fn outside_counted(mut self) -> Self {
+        self.outside_more += self.outside.len();
+        self.outside.clear();
+        self
+    }
 }
 
 /// `round.json`.
@@ -407,6 +438,9 @@ fn run(mut cmd: Command, stdin: Option<Vec<u8>>, limit: usize) -> Result<Output,
             Ok(Some(status)) => break Some(status),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             _ => {
+                // The whole subtree, so no descendant keeps the pipes the
+                // readers below are joined on (#2349).
+                crate::terminal::reap_child_subtree(child.id(), crate::terminal::ReapMode::Immediate);
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -500,17 +534,24 @@ fn names_conversion(text: &str) -> bool {
     })
 }
 
-/// Whether the regular file at `path` names a conversion; a file too large
-/// to read counts as one.
-fn file_names_conversion(path: &Path) -> bool {
-    let Ok(meta) = std::fs::symlink_metadata(path) else { return false };
-    if !meta.is_file() {
-        return false;
+/// Whether the git dir's `info/attributes` names a conversion; a file too
+/// large to read counts as one, and so does one that cannot be vetted — a
+/// linked `info` or `attributes` (git follows it), a FIFO, a folder. Opened
+/// by handle, never through a link and never blocking (#2347: `info/` is
+/// writable inside the fence).
+fn info_attributes_name_conversion(common_dir: &Path) -> bool {
+    use std::io::Read;
+    let file = match crate::services::git_guard::open_info_file(common_dir, "attributes") {
+        Ok(Some(file)) => file,
+        Ok(None) => return false,
+        Err(_) => return true,
+    };
+    let mut bytes = Vec::new();
+    match file.take(MAX_ATTRIBUTE_BYTES + 1).read_to_end(&mut bytes) {
+        Ok(_) if bytes.len() as u64 > MAX_ATTRIBUTE_BYTES => true,
+        Ok(_) => names_conversion(&String::from_utf8_lossy(&bytes)),
+        Err(_) => true,
     }
-    if meta.len() > MAX_ATTRIBUTE_BYTES {
-        return true;
-    }
-    std::fs::read(path).is_ok_and(|bytes| names_conversion(&String::from_utf8_lossy(&bytes)))
 }
 
 /// Where the project folder's repo is.
@@ -1211,14 +1252,15 @@ impl Staged {
 }
 
 /// Removes what the round added at `rel`, and the folders above it that this
-/// leaves empty, up to `top`.
-fn remove_added(top: &Path, rel: &str) -> bool {
+/// leaves empty, up to `top` — never the first `keep` folders below it (the
+/// project folder and those above it).
+fn remove_added(top: &Path, rel: &str, keep: usize) -> bool {
     let Some((chain, leaf)) = walk(top, rel, false) else { return false };
     if !chain.last().is_some_and(|folder| folder.remove(leaf.as_ref(), false)) {
         return false;
     }
     let names: Vec<&str> = rel.split('/').collect();
-    for depth in (1..chain.len()).rev() {
+    for depth in (keep + 1..chain.len()).rev() {
         if !chain[depth - 1].remove(names[depth - 1].as_ref(), true) {
             break;
         }
@@ -1241,7 +1283,7 @@ pub fn begin(state_dir: &Path, root: &Path, owner: Owner, pdf: Option<PdfBefore>
     let _budget = Budget::start();
     let located = locate(root)?;
     // `info/attributes` outranks every switch the snapshot sets.
-    if file_names_conversion(&located.common_dir.join("info").join("attributes")) {
+    if info_attributes_name_conversion(&located.common_dir) {
         return Err(NoUndo::Filtered);
     }
     let id = new_id().ok_or(NoUndo::Failed)?;
@@ -1367,12 +1409,49 @@ fn speakable(name: &str) -> bool {
     !name.is_empty() && !name.chars().any(|c| c.is_control() || c == '`')
 }
 
-/// `entries` as the project-relative list the phone and the viewer show.
-fn listed(prefix: &str, entries: &[Entry]) -> (Vec<Changed>, usize) {
+/// Whether a changed path (relative to the work tree's top) lies inside the
+/// project folder, whose `prefix` is empty (the top) or ends in `/`.
+fn in_project(prefix: &str, path: &str) -> bool {
+    path.starts_with(prefix)
+}
+
+/// Files the round added inside the project folder with the very bytes of a
+/// file it removed outside it — a move in. An undo leaves them: it never puts
+/// the outside one back, so removing this one would lose the only copy.
+fn moved_in<'a>(prefix: &str, entries: &'a [Entry]) -> HashSet<&'a str> {
+    let gone_outside: HashSet<&str> = entries
+        .iter()
+        .filter(|e| !in_project(prefix, &e.path) && e.mode_after == 0 && e.mode_before != MODE_GITLINK)
+        .map(|e| e.before.as_str())
+        .collect();
+    entries
+        .iter()
+        .filter(|e| in_project(prefix, &e.path) && e.mode_before == 0 && e.mode_after != MODE_GITLINK)
+        .filter(|e| gone_outside.contains(e.after.as_str()))
+        .map(|e| e.path.as_str())
+        .collect()
+}
+
+/// `entries` as the lists the phone and the viewer show: the project's files
+/// (project-relative), and the names outside the project folder
+/// (top-relative) that an undo leaves alone.
+fn listed(prefix: &str, entries: &[Entry], pdf: PdfFate) -> Changes {
     let mut files = Vec::new();
     let mut more = 0usize;
+    let mut outside = Vec::new();
+    let mut outside_more = 0usize;
+    let kept = moved_in(prefix, entries);
     for entry in entries {
-        match entry.path.strip_prefix(prefix).filter(|rel| speakable(rel)) {
+        let rel = entry.path.strip_prefix(prefix).filter(|_| !kept.contains(entry.path.as_str()));
+        let Some(rel) = rel else {
+            if outside.len() < MAX_LISTED && speakable(&entry.path) {
+                outside.push(entry.path.clone());
+            } else {
+                outside_more += 1;
+            }
+            continue;
+        };
+        match Some(rel).filter(|rel| speakable(rel)) {
             Some(rel) if files.len() < MAX_LISTED => files.push(Changed {
                 path: rel.to_string(),
                 change: match entry.status {
@@ -1385,7 +1464,7 @@ fn listed(prefix: &str, entries: &[Entry]) -> (Vec<Changed>, usize) {
             _ => more += 1,
         }
     }
-    (files, more)
+    Changes { files, more, outside, outside_more, pdf }
 }
 
 /// Project-relative names of conflicting files, at most [`MAX_LISTED`], and
@@ -1456,17 +1535,20 @@ pub fn preview(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, Rou
     }
     let after = record.tree_after.clone().ok_or(RoundError::Failed)?;
     let entries = snapshot_of(&dir, &record).entries(&record.tree_before, &after)?;
-    let (files, more) = listed(&record.prefix, &entries);
-    Ok(Changes { files, more, pdf: pdf_fate(&dir, &record, &entries) })
+    Ok(listed(&record.prefix, &entries, pdf_fate(&dir, &record, &entries)))
 }
 
-/// Puts every file the round changed back as it was before it, byte for
-/// byte, and the kept PDF when it has not changed since. All or nothing: when
-/// a changed file is not as the round left it — edited, removed or back again
-/// since, or reached through a symlink — `Conflict`, and nothing is touched.
-/// Every write is staged before the first change (a staging failure is
-/// `Failed` with nothing changed), and all of them go through folders
-/// reached without following a link ([`walk`]). Submodules are never touched.
+/// Puts every file the round changed **inside the project folder** back as
+/// it was before it, byte for byte, and the kept PDF when it has not changed
+/// since. Files changed elsewhere in the same work tree (a sibling project,
+/// the repo's top) are left as they are and named in the answer's `outside`,
+/// and so is a file the round moved into the project from there
+/// ([`moved_in`]). All or nothing: when a project file is not as the round left it — edited,
+/// removed or back again since, or reached through a symlink — `Conflict`,
+/// and nothing is touched. Every write is staged before the first change (a
+/// staging failure is `Failed` with nothing changed), and all of them go
+/// through folders reached without following a link ([`walk`]). Submodules
+/// are never touched.
 pub fn undo(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundError> {
     let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let _budget = Budget::start();
@@ -1475,8 +1557,14 @@ pub fn undo(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundE
     let snapshot = snapshot_of(&dir, &record);
     let entries = snapshot.entries(&record.tree_before, &after)?;
     let fate = pdf_fate(&dir, &record, &entries);
-    let touched: Vec<&Entry> =
-        entries.iter().filter(|e| e.mode_before != MODE_GITLINK && e.mode_after != MODE_GITLINK).collect();
+    let kept = moved_in(&record.prefix, &entries);
+    let touched: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| in_project(&record.prefix, &e.path) && !kept.contains(e.path.as_str()))
+        .filter(|e| e.mode_before != MODE_GITLINK && e.mode_after != MODE_GITLINK)
+        .collect();
+    // The project folder and the folders above it stay, however empty.
+    let keep_depth = record.prefix.matches('/').count();
     let mut oids: HashSet<&str> = HashSet::new();
     for entry in &touched {
         if entry.mode_before != 0 {
@@ -1527,7 +1615,7 @@ pub fn undo(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundE
     // made again), and the staged ones are put in place.
     let mut whole = true;
     for entry in touched.iter().filter(|entry| entry.mode_before == 0) {
-        whole &= remove_added(top, &entry.path);
+        whole &= remove_added(top, &entry.path, keep_depth);
     }
     for entry in later {
         let written = blobs.get(&entry.before).is_some_and(|blob| {
@@ -1564,8 +1652,7 @@ pub fn undo(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundE
     }
     record.undone = true;
     let _ = save(&dir, &record);
-    let (files, more) = listed(&record.prefix, &entries);
-    Ok(Changes { files, more, pdf })
+    Ok(listed(&record.prefix, &entries, pdf))
 }
 
 /// Drops rounds older than [`KEEP_FOR`] and all but the newest
@@ -2071,6 +2158,21 @@ mod tests {
         assert_eq!(begin(&state, &root, phone(), None), Err(NoUndo::Filtered));
         fs::write(root.join(".git/info/attributes"), "*.tex diff=tex\n*.bin -text\n").unwrap();
         assert!(begin(&state, &root, phone(), None).is_ok());
+        // A link or FIFO there cannot be vetted (git follows the link): no
+        // undo, and the FIFO never blocks the read (#2347).
+        #[cfg(unix)]
+        {
+            let attributes = root.join(".git/info/attributes");
+            fs::remove_file(&attributes).unwrap();
+            let plain = root.join("plain-attributes");
+            fs::write(&plain, "*.tex diff=tex\n").unwrap();
+            std::os::unix::fs::symlink(&plain, &attributes).unwrap();
+            assert_eq!(begin(&state, &root, phone(), None), Err(NoUndo::Filtered));
+            fs::remove_file(&attributes).unwrap();
+            let c = std::ffi::CString::new(attributes.to_string_lossy().into_owned()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+            assert_eq!(begin(&state, &root, phone(), None), Err(NoUndo::Filtered));
+        }
     }
 
     #[test]
@@ -2106,24 +2208,117 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_project_below_the_repo_top_names_only_its_own_files() {
-        let (_tmp, top, state) = repo();
+    /// A repo whose top holds `main.tex` (from [`repo`]), a sibling folder
+    /// `other/` and the project folder `paper/`, all committed.
+    fn repo_with_paper() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let (tmp, top, state) = repo();
         let root = top.join("paper");
         fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(top.join("other")).unwrap();
         fs::write(root.join("draft.tex"), "a\n").unwrap();
+        fs::write(top.join("other").join("notes.tex"), "notes\n").unwrap();
         git(&top, &["add", "-A"]);
         git(&top, &["commit", "-q", "-m", "paper"]);
+        (tmp, top, root, state)
+    }
+
+    #[test]
+    fn a_project_below_the_repo_top_undoes_only_its_own_files_and_names_the_rest() {
+        let (_tmp, top, root, state) = repo_with_paper();
+        let owner = Owner::Desktop { project: "p".into() };
+        let id = begin(&state, &root, owner.clone(), None).unwrap();
+        // The round: inside the project an edit and a file in a new folder;
+        // outside it an edit at the top, an edit and a new file in a sibling.
+        fs::write(root.join("draft.tex"), "b\n").unwrap();
+        fs::create_dir_all(root.join("fig")).unwrap();
+        fs::write(root.join("fig").join("new.tex"), "n\n").unwrap();
+        fs::write(top.join("main.tex"), "outside\n").unwrap();
+        fs::write(top.join("other").join("notes.tex"), "sibling edit\n").unwrap();
+        fs::write(top.join("other").join("added.tex"), "sibling new\n").unwrap();
+        settle(&state, &id, &owner).unwrap();
+        let outside: Vec<String> = vec!["main.tex".into(), "other/added.tex".into(), "other/notes.tex".into()];
+        let preview = preview(&state, &id, &owner).unwrap();
+        assert_eq!(
+            preview.files,
+            vec![
+                Changed { path: "draft.tex".into(), change: "modified" },
+                Changed { path: "fig/new.tex".into(), change: "added" },
+            ]
+        );
+        assert_eq!((preview.more, &preview.outside, preview.outside_more), (0, &outside, 0));
+        // Changed again outside since the settle: not the undo's business.
+        fs::write(top.join("other").join("notes.tex"), "sibling edit, twice\n").unwrap();
+        let done = undo(&state, &id, &owner).unwrap();
+        assert_eq!((done.files.len(), &done.outside, done.outside_more), (2, &outside, 0));
+        assert_eq!(fs::read_to_string(root.join("draft.tex")).unwrap(), "a\n");
+        assert!(!root.join("fig").exists(), "the folder the round added goes with its file");
+        assert_eq!(fs::read_to_string(top.join("main.tex")).unwrap(), "outside\n");
+        assert_eq!(fs::read_to_string(top.join("other").join("notes.tex")).unwrap(), "sibling edit, twice\n");
+        assert_eq!(fs::read_to_string(top.join("other").join("added.tex")).unwrap(), "sibling new\n");
+        // The wire's names.
+        let wire = serde_json::to_value(&done).unwrap();
+        assert_eq!(wire["outside"], serde_json::json!(outside));
+        assert_eq!(wire["outsideMore"], serde_json::json!(0));
+    }
+
+    #[test]
+    fn a_change_outside_the_project_neither_conflicts_nor_is_listed_past_the_cap() {
+        let (_tmp, top, root, state) = repo_with_paper();
         let owner = Owner::Desktop { project: "p".into() };
         let id = begin(&state, &root, owner.clone(), None).unwrap();
         fs::write(root.join("draft.tex"), "b\n").unwrap();
-        fs::write(top.join("main.tex"), "outside\n").unwrap();
+        for n in 0..MAX_LISTED + 5 {
+            fs::write(top.join("other").join(format!("n{n:03}.tex")), "x\n").unwrap();
+        }
+        fs::write(top.join("other").join("bad`name.tex"), "x\n").unwrap();
         settle(&state, &id, &owner).unwrap();
-        let preview = preview(&state, &id, &owner).unwrap();
-        assert_eq!(preview.files, vec![Changed { path: "draft.tex".into(), change: "modified" }]);
-        assert_eq!(preview.more, 1, "the change outside the project folder is counted, not named");
-        undo(&state, &id, &owner).unwrap();
-        assert_eq!(fs::read_to_string(top.join("main.tex")).unwrap(), MAIN);
+        // Removed since the settle — would be a conflict inside the project.
+        fs::remove_file(top.join("other").join("n000.tex")).unwrap();
+        let done = undo(&state, &id, &owner).unwrap();
+        assert_eq!(done.files, vec![Changed { path: "draft.tex".into(), change: "modified" }]);
+        assert_eq!((done.outside.len(), done.outside_more), (MAX_LISTED, 6), "past the cap, and the unspeakable name");
+        assert!(done.outside.iter().all(|name| name.starts_with("other/n")));
+        assert_eq!(fs::read_to_string(root.join("draft.tex")).unwrap(), "a\n");
+        assert!(top.join("other").join("n001.tex").exists());
+    }
+
+    #[test]
+    fn an_empty_project_folder_stays_after_its_only_file_is_undone() {
+        let (_tmp, top, state) = repo();
+        let root = top.join("empty");
+        fs::create_dir_all(&root).unwrap();
+        let owner = Owner::Desktop { project: "p".into() };
+        let id = begin(&state, &root, owner.clone(), None).unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("a.tex"), "a\n").unwrap();
+        settle(&state, &id, &owner).unwrap();
+        let done = undo(&state, &id, &owner).unwrap();
+        assert_eq!(done.files, vec![Changed { path: "sub/a.tex".into(), change: "added" }]);
+        assert!(!root.join("sub").exists());
+        assert!(root.is_dir(), "the project folder itself is never removed");
+    }
+
+    #[test]
+    fn a_file_moved_into_the_project_stays_and_its_names_reach_no_phone() {
+        let (_tmp, top, root, state) = repo_with_paper();
+        let owner = Owner::Desktop { project: "p".into() };
+        let id = begin(&state, &root, owner.clone(), None).unwrap();
+        // Moved in from the sibling (its only copy now), and one moved out.
+        fs::rename(top.join("other").join("notes.tex"), root.join("notes.tex")).unwrap();
+        fs::rename(root.join("draft.tex"), top.join("other").join("draft.tex")).unwrap();
+        settle(&state, &id, &owner).unwrap();
+        let done = undo(&state, &id, &owner).unwrap();
+        assert_eq!(done.files, vec![Changed { path: "draft.tex".into(), change: "deleted" }]);
+        assert_eq!(done.outside, vec!["other/draft.tex", "other/notes.tex", "paper/notes.tex"]);
+        assert_eq!(fs::read_to_string(root.join("notes.tex")).unwrap(), "notes\n", "never the last copy removed");
+        assert_eq!(fs::read_to_string(root.join("draft.tex")).unwrap(), "a\n");
+        assert!(!top.join("other").join("notes.tex").exists(), "nothing written outside");
+        assert!(top.join("other").join("draft.tex").exists());
+        // The phone gets the count only.
+        let phone = serde_json::to_value(done.outside_counted()).unwrap();
+        assert!(phone.get("outside").is_none(), "no names outside the project to a phone: {phone}");
+        assert_eq!(phone["outsideMore"], serde_json::json!(3));
+        assert!(!phone.to_string().contains("other/"));
     }
 
     #[test]

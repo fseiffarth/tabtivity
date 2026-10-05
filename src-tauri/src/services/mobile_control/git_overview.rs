@@ -387,9 +387,11 @@ fn probeable(wt: &Worktree) -> bool {
 /// project dot's full ladder, which costs more spawns per row. `None` when
 /// git could not answer.
 fn linked_dot(wt: &Worktree, branches: &[GitBranch]) -> Option<Option<&'static str>> {
-    let out = crate::commands::git::hardened_git_command_in(&wt.path, &["status", "--porcelain"])
-        .output()
-        .ok()?;
+    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(
+        &wt.path,
+        &["status", "--porcelain"],
+    ))
+    .ok()?;
     if !out.status.success() {
         return None;
     }

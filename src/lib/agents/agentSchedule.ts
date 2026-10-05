@@ -31,6 +31,9 @@ export interface ScheduledAgentPrompt {
    *  composer's prefix chips and its `/model` pick. See `lib/agents/agentPrefaces`. */
   preface?: string[];
   last?: ScheduleLastRun;
+  /** The paired phone that made this rule (#2348): revoking it, or narrowing
+   *  its Mobile access, cancels the rule. Desktop and agent rules have none. */
+  phone_device?: string;
 }
 
 export function isAgentProposal(schedule: ScheduledAgentPrompt): boolean {

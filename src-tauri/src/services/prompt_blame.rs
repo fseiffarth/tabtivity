@@ -44,9 +44,7 @@ fn local_repo_dir(project_id: &str) -> Option<PathBuf> {
 }
 
 fn git_stdout(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = crate::commands::git::hardened_git_command_in(dir, args)
-        .output()
-        .ok()?;
+    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(dir, args)).ok()?;
     out.status.success().then_some(out.stdout)
 }
 

@@ -482,8 +482,11 @@ own state folder (never in the project or its `.git`), and the default prompt
 has the agent make the changes, rebuild and (phone) send the PDF back in one
 turn. Each time the round finishes the snapshot is settled; the pill then
 offers **Undo**, which lists the files the round changed and whether the PDF
-goes back, and on **Undo** puts them back as they were before the round —
-refusing, with nothing changed, when one of them was edited since ("Can't undo
+goes back, and on **Undo** puts them back as they were before the round (only
+files inside the project folder; files changed elsewhere in the same repository
+are left as they are — named in the desktop's dialog, only counted on the phone,
+which may be scoped to this one project — and so is a file the round moved into
+the project from there) — refusing, with nothing changed, when one of them was edited since ("Can't undo
 — `a.tex` changed since") — reloads the PDF under the marks and puts a short
 note into the agent's chat, without starting a new round. (A phone view of a
 copy the agent sent goes back to the copy the marks were drawn on, and Reload

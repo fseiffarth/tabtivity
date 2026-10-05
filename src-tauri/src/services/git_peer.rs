@@ -247,9 +247,10 @@ impl Peer {
             // Hardened, hooks off: lockstep runs `status`/`checkout`/`merge`/
             // `commit` in the background, in a tree a fenced agent can write — its
             // `.git/config` and `.git/hooks/` included.
-            Peer::Local(dir) => crate::commands::git::hookless_git_command_in(dir, args)
-                .output()
-                .map_err(|e| e.to_string()),
+            // Bounded (#2349): a FIFO the agent planted must not hang lockstep.
+            Peer::Local(dir) => {
+                crate::services::git_bounded::output(crate::commands::git::hookless_git_command_in(dir, args))
+            }
             Peer::Remote(spec) => {
                 let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
                 ssh_exec::run_git_remote(spec, &owned)

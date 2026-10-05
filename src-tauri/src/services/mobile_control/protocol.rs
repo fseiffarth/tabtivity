@@ -1003,6 +1003,11 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
         action: ScheduleMutation,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// Rename one agent tab. The label is the only thing the phone supplies;
     /// the tab is named by the same `project_id` + `tmux_session` pair the
@@ -1065,6 +1070,11 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
         action: PromptMutation,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// The phone put this agent tab on screen (or took it off again). Nothing
     /// is read back: it stamps the desktop's "this output has been seen" mark
@@ -1109,6 +1119,11 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
         message: String,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// Rewrite a prompt `HoldPrompt` holds. Refused with `held_gone` once the
     /// scheduler delivered it (or it is no longer this tab's), `held_busy`
@@ -1203,6 +1218,11 @@ pub enum DesktopRequest {
         tmux_session: String,
         ask_id: String,
         answers: Vec<MobileMarkupAnswer>,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// **Answer in chat instead**: close the ask without an answer. Answered
     /// `Seen`; idempotent.
@@ -2186,9 +2206,15 @@ mod tests {
             project_id: "raw-project".into(),
             tmux_session: "raw-tmux".into(),
             message: "and the lint".into(),
+            device_id: Some("device-1".into()),
         })
         .expect("serialize hold");
         assert_eq!(hold["type"], "hold_prompt");
+        assert_eq!(hold["device_id"], "device-1");
+        // An older sidecar names no phone; the request still parses.
+        let mut older = hold.clone();
+        older.as_object_mut().unwrap().remove("device_id");
+        assert!(matches!(serde_json::from_value::<DesktopRequest>(older), Ok(DesktopRequest::HoldPrompt { device_id: None, .. })));
         let answer = serde_json::to_value(DesktopResponse::Held { held_id: "held-1".into() })
             .expect("serialize held answer");
         assert_eq!(answer["status"], "held");
@@ -2330,6 +2356,7 @@ mod tests {
                 MobileMarkupAnswer { options: vec![1], other: None },
                 MobileMarkupAnswer { options: vec![], other: Some("colour".into()) },
             ],
+            device_id: None,
         };
         assert!(answer.is_mutation());
         assert_eq!(answer.response_timeout(), std::time::Duration::from_secs(10));
@@ -2424,6 +2451,7 @@ mod tests {
                     },
                 },
             },
+            device_id: Some("device-1".into()),
         };
         let value = serde_json::to_value(&request).expect("serialize schedule mutation");
         assert_eq!(value["type"], "schedule_mutate");
@@ -2454,6 +2482,7 @@ mod tests {
                 prompt_id: "prompt-1".into(),
                 tmux_session: "raw-tmux".into(),
             },
+            device_id: Some("device-1".into()),
         };
         let value = serde_json::to_value(&request).expect("serialize prompt mutation");
         assert_eq!(value["type"], "prompt_mutate");
@@ -2472,6 +2501,7 @@ mod tests {
                     message: "Review the build".into(),
                 },
             },
+            device_id: None,
         })
         .expect("serialize create");
         create["action"]["prompt"]["id"] = "phone-picked".into();

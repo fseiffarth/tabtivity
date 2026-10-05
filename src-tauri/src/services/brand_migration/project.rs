@@ -43,7 +43,7 @@ impl ProjectReport {
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<std::process::Output> {
-    crate::commands::git::hookless_git_command_in(root, args).output().ok()
+    crate::services::git_bounded::output(crate::commands::git::hookless_git_command_in(root, args)).ok()
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
@@ -104,8 +104,8 @@ fn needs_work(pair: &Pair, root: &Path) -> bool {
                     || std::fs::read_to_string(git_dir.join("packed-refs"))
                         .is_ok_and(|refs| refs.contains(&format!(" {ns}/")))
             }) || old_rule.is_some_and(|rule| {
-                std::fs::read_to_string(git_dir.join("info").join("exclude"))
-                    .is_ok_and(|rules| rules.lines().any(|line| line.trim() == rule))
+                crate::services::git_guard::read_info_exclude(&git_dir)
+                    .is_ok_and(|rules| rules.is_some_and(|rules| rules.lines().any(|line| line.trim() == rule)))
             }) || gitignore_names_old_folder_only(pair, root, &git_dir)
         }
         _ => false,
@@ -182,28 +182,40 @@ fn repair_worktrees(pair: &Pair, root: &Path, report: &mut ProjectReport) {
 
 /// Replace the app's old rule in `info/exclude` by the current one. A repo
 /// that never had the rule gets none here (the worktree code adds it when it
-/// first needs it).
+/// first needs it). `info/` is writable inside the fence, so a linked `info`
+/// or `exclude` (or a FIFO there) is left alone, never followed (#2347).
 fn update_exclude(pair: &Pair, git_dir: &Path, report: &mut ProjectReport) {
     let Some(old_rule) = pair.legacy(Name::PROJECT_DIR_EXCLUDE_RULE) else { return };
     let new_rule = pair.cur(Name::PROJECT_DIR_EXCLUDE_RULE);
-    let file = git_dir.join("info").join("exclude");
-    let Ok(text) = std::fs::read_to_string(&file) else { return };
-    if !text.lines().any(|line| line.trim() == old_rule) {
-        return;
-    }
-    let has_new = text.lines().any(|line| line.trim() == new_rule);
-    let mut out = String::with_capacity(text.len());
-    for line in text.split_inclusive('\n') {
-        if line.trim() == old_rule {
-            if !has_new {
-                out.push_str(&line.replace(&old_rule, &new_rule));
-            }
-        } else {
-            out.push_str(line);
+    // Only an exclude file that is there (and plain) is ever rewritten.
+    match crate::services::git_guard::read_info_exclude(git_dir) {
+        Ok(Some(_)) => {}
+        Ok(None) => return,
+        Err(why) => {
+            report.left.push(format!("info/exclude left alone: {why}"));
+            return;
         }
     }
-    if std::fs::write(&file, out).is_ok() {
-        report.exclude_updated = true;
+    let edited = crate::services::git_guard::edit_info_exclude(git_dir, |text| {
+        if !text.lines().any(|line| line.trim() == old_rule) {
+            return None;
+        }
+        let has_new = text.lines().any(|line| line.trim() == new_rule);
+        let mut out = String::with_capacity(text.len());
+        for line in text.split_inclusive('\n') {
+            if line.trim() == old_rule {
+                if !has_new {
+                    out.push_str(&line.replace(&old_rule, &new_rule));
+                }
+            } else {
+                out.push_str(line);
+            }
+        }
+        Some(out)
+    });
+    match edited {
+        Ok(written) => report.exclude_updated |= written,
+        Err(why) => report.left.push(format!("info/exclude left alone: {why}")),
     }
 }
 
@@ -226,7 +238,10 @@ fn gitignore_names_old_folder_only(pair: &Pair, root: &Path, git_dir: &Path) -> 
         return false;
     }
     let gitignore = std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
-    let exclude = std::fs::read_to_string(git_dir.join("info").join("exclude")).unwrap_or_default();
+    let exclude = crate::services::git_guard::read_info_exclude(git_dir)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     names_dir(&gitignore, &old_dir) && !names_dir(&gitignore, &new_dir) && !names_dir(&exclude, &new_dir)
 }
 
@@ -251,16 +266,22 @@ fn exclude_folder_ignored_under_old_name(pair: &Pair, root: &Path, git_dir: &Pat
         return;
     }
     let rule = pair.cur(Name::PROJECT_DIR_EXCLUDE_RULE);
-    let info = git_dir.join("info");
-    let file = info.join("exclude");
-    let mut rules = std::fs::read_to_string(&file).unwrap_or_default();
-    if !rules.is_empty() && !rules.ends_with('\n') {
+    // A linked `info` or `exclude` is refused, never appended through (#2347).
+    let edited = crate::services::git_guard::edit_info_exclude(git_dir, |rules| {
+        if rules.lines().any(|line| line.trim() == rule) {
+            return None;
+        }
+        let mut rules = rules.to_string();
+        if !rules.is_empty() && !rules.ends_with('\n') {
+            rules.push('\n');
+        }
+        rules.push_str(&rule);
         rules.push('\n');
-    }
-    rules.push_str(&rule);
-    rules.push('\n');
-    if std::fs::create_dir_all(&info).is_ok() && std::fs::write(&file, rules).is_ok() {
-        report.exclude_updated = true;
+        Some(rules)
+    });
+    match edited {
+        Ok(written) => report.exclude_updated |= written,
+        Err(why) => report.left.push(format!("info/exclude left alone: {why}")),
     }
 }
 
@@ -334,17 +355,27 @@ fi
 rm -f '{old_bundle}'
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 exclude="$(git rev-parse --git-common-dir)/info/exclude"
-if [ -f "$exclude" ] && grep -qxF '{old_rule}' "$exclude"; then
-  if grep -qxF '{new_rule}' "$exclude"; then
-    grep -vxF '{old_rule}' "$exclude" > "$exclude.tmp$$" || true
-  else
-    sed 's|^{old_rule}$|{new_rule}|' "$exclude" > "$exclude.tmp$$"
+info="${{exclude%/*}}"
+plain() {{
+  [ ! -L "$info" ] && [ ! -L "$exclude" ] && {{ [ ! -e "$info" ] || [ -d "$info" ]; }} \
+    && {{ [ ! -e "$exclude" ] || [ -f "$exclude" ]; }}
+}}
+if plain && [ -f "$exclude" ] && grep -qxF '{old_rule}' "$exclude"; then
+  if tmp="$(mktemp "$exclude.XXXXXX")"; then
+    # The rewrite keeps the file's mode, not mktemp's 0600 (GNU/busybox
+    # `stat -c`, BSD `stat -f`; neither → 0600).
+    mode="$(stat -c %a "$exclude" 2>/dev/null || stat -f %Lp "$exclude" 2>/dev/null)" || mode=
+    if grep -qxF '{new_rule}' "$exclude"; then
+      grep -vxF '{old_rule}' "$exclude" > "$tmp"; [ $? -le 1 ]
+    else
+      sed 's|^{old_rule}$|{new_rule}|' "$exclude" > "$tmp"
+    fi && {{ [ -z "$mode" ] || chmod "$mode" "$tmp"; }} \
+      && plain && mv "$tmp" "$exclude" && echo exclude || rm -f "$tmp"
   fi
-  mv "$exclude.tmp$$" "$exclude" && echo exclude
 fi
 if [ -d '{new_dir}' ] && git check-ignore -q -- '{old_dir}/'; then
   git check-ignore -q -- '{new_dir}/'
-  if [ $? -eq 1 ] && mkdir -p "${{exclude%/*}}"; then
+  if [ $? -eq 1 ] && plain && mkdir -p "$info" && plain; then
     {{ [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude")" ] && echo; printf '%s\n' '{new_rule}'; }} >> "$exclude" && echo exclude
   fi
 fi
@@ -730,6 +761,103 @@ mod tests {
         let rules = std::fs::read_to_string(root.join(".git").join("info").join("exclude")).expect("exclude");
         assert_eq!(rules, format!("*.tmp\n{}\n", RENAMED.cur(Name::PROJECT_DIR_EXCLUDE_RULE)));
         assert_eq!(run_script(), "");
+    }
+
+    /// A rewritten `info/exclude` keeps its permission bits, locally (handle
+    /// write, #2347) and in the remote script (`mktemp` would leave `0600`).
+    #[cfg(unix)]
+    #[test]
+    fn a_rewritten_exclude_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let old_rule = LEGACY.name(Name::PROJECT_DIR_EXCLUDE_RULE);
+        let new_rule = RENAMED.cur(Name::PROJECT_DIR_EXCLUDE_RULE);
+        for remote in [false, true] {
+            let machine = Machine::new();
+            let root = machine.home.join("alpha");
+            seed_gitignored_repo(&root, &LEGACY);
+            let exclude = root.join(".git").join("info").join("exclude");
+            write(&exclude, &format!("*.tmp\n{old_rule}\n"));
+            std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o640)).expect("chmod");
+            if remote {
+                let script = remote_script(&RENAMED).expect("a script when renamed");
+                let out = std::process::Command::new("sh")
+                    .args(["-c", &script])
+                    .current_dir(&root)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                    .output()
+                    .expect("sh runs");
+                let said = String::from_utf8_lossy(&out.stdout);
+                assert!(out.status.success() && said.contains("exclude"), "{said}");
+            } else {
+                assert!(migrate_project(&RENAMED, &root).exclude_updated);
+            }
+            let rules = std::fs::read_to_string(&exclude).expect("exclude");
+            assert!(rules.lines().any(|l| l == new_rule) && !rules.lines().any(|l| l == old_rule), "{rules}");
+            let mode = std::fs::metadata(&exclude).expect("exclude").permissions().mode() & 0o7777;
+            assert_eq!(mode, 0o640, "remote: {remote}");
+            let info = std::fs::read_dir(root.join(".git").join("info")).expect("ls").count();
+            assert_eq!(info, 1, "no temporary left in info/");
+        }
+    }
+
+    /// #2347: `info/` is writable inside the fence. A linked `info/exclude`
+    /// or `info/` is left alone — by the launch sweep and by the remote
+    /// script — and what it points at is never written.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_exclude_or_info_is_never_written_through() {
+        let run_script = |root: &Path| {
+            let script = remote_script(&RENAMED).expect("a script when renamed");
+            let out = std::process::Command::new("sh")
+                .args(["-c", &script])
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("sh runs");
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let old_rule = LEGACY.name(Name::PROJECT_DIR_EXCLUDE_RULE);
+        for remote in [false, true] {
+            for link_info in [false, true] {
+                let machine = Machine::new();
+                let root = machine.home.join("alpha");
+                // Both the rule rewrite (old rule in the file) and the append
+                // (the `.gitignore` named the old folder) would run.
+                seed_gitignored_repo(&root, &LEGACY);
+                let info = root.join(".git").join("info");
+                let profile = machine.home.join(".profile");
+                let victim_text = format!("export PATH\n{old_rule}\n");
+                if link_info {
+                    let elsewhere = machine.home.join("elsewhere");
+                    write(&elsewhere.join("exclude"), &victim_text);
+                    std::fs::remove_dir_all(&info).expect("rm info");
+                    std::os::unix::fs::symlink(&elsewhere, &info).expect("symlink");
+                } else {
+                    write(&profile, &victim_text);
+                    let _ = std::fs::remove_file(info.join("exclude"));
+                    std::os::unix::fs::symlink(&profile, info.join("exclude")).expect("symlink");
+                }
+                let victim = if link_info { machine.home.join("elsewhere").join("exclude") } else { profile };
+                if remote {
+                    let said = run_script(&root);
+                    assert!(said.contains("renamed") && !said.contains("exclude"), "{said}");
+                } else {
+                    let report = migrate_project(&RENAMED, &root);
+                    assert!(report.folder_renamed && !report.exclude_updated, "{report:?}");
+                    assert!(report.left.iter().any(|l| l.contains("info/exclude left alone")), "{report:?}");
+                }
+                assert_eq!(std::fs::read_to_string(&victim).expect("victim"), victim_text);
+                let linked = if link_info { info.clone() } else { info.join("exclude") };
+                assert!(std::fs::symlink_metadata(&linked).expect("link").file_type().is_symlink());
+                if link_info {
+                    let left = std::fs::read_dir(machine.home.join("elsewhere")).expect("ls").count();
+                    assert_eq!(left, 1, "nothing created beside the link's target");
+                }
+            }
+        }
     }
 
     /// The remote side runs the shell twin over SSH; here it runs in a local

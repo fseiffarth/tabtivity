@@ -1164,6 +1164,205 @@ Evidence and the focused fixes are in
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+### Threat-model recheck follow-ups (2026-10-04)
+
+Found by the four-way re-read of the code since `e5ad85b5` (gaps 8–14 in
+`docs/threat_model.md`). Code-read findings, none reproduced; #2342, #2344
+and #2346 were spot-checked against the source.
+
+2342. **Gemini Search grounding is not metered by the API spending limit.**
+    `services/api_prices.rs` lists grounding fees as "not priced". A keyed
+    Gemini tab — or injected code in its fence, which holds the proxy token —
+    can send tiny `generateContent` calls with a `googleSearch` tool. Each
+    query costs a grounding fee, but the ledger counts tokens only, so the
+    monthly limit never trips. Charge `groundingMetadata.webSearchQueries`
+    per query, or strip or refuse grounding tools in `services::api_proxy`.
+    (Threat model gap 8.)
+    - **Fixed 2026-10-04 (not live).** `api_meter` counts each candidate's
+      `groundingMetadata.webSearchQueries` (plain, JSON-array and SSE answers;
+      keyed hash per query, max over responses, so repeats are not doubled),
+      metadata without queries (Maps) as one; `api_prices` charges $14/1,000
+      queries (Gemini 3.x) or $35/1,000 grounded prompts (2.5), unknown models
+      $35/1,000 per query, free allowances not deducted; kept in the ledger's
+      `web_searches`. A cut-off or unreadable answer whose body may ground
+      (`may_ground`: a Search/Maps tool key anywhere, or unparseable) counts
+      at least 10 queries. Unit tests in `api_meter`/`api_prices`.
+2343. **The API spending limit can be overshot by 64 requests in flight.**
+    The budget check in `services::api_proxy` runs before a request and reads
+    only finished answers. One hijacked tab can keep 64 large requests open
+    (HTTP/1, 64 sockets) and spend a few hundred dollars past the limit. Add a
+    per-grant concurrency cap, or reserve each request's estimated cost
+    before it is forwarded. (Gap 9.)
+    - **Fixed 2026-10-04 (not live).** After the body is read, the proxy
+      reserves the request's worst case (`Meter::worst_case`: `max_tokens` or
+      the provider's output cap × output rate, body bytes/3 as 1-hour cache
+      writes, 10 grounding queries if a Gemini body may ground) through
+      `api_usage::Book::reserve`; spent + held + it past the limit → 429
+      (`WouldPass`, same shapes, no retry). The `Reservation` sits in
+      `Metered` and drops after the actual charge, or on connect error,
+      upstream failure or client hang-up — never leaks. Memory-only, in
+      micro-dollars; ledger file unchanged. Overshoot is now only what an
+      answer costs past its reservation (e.g. Anthropic web searches).
+      Near the limit ordinary turns are refused. Tests: `api_usage`
+      (reserve/release), `api_proxy` e2e (third concurrent request refused;
+      released on success, client hang-up, upstream break, connect error).
+2344. **An approved agent push can send commits the user did not see.**
+    `git_push_mcp::approve` checks `refs/heads/<b> == head`, then waits on
+    `ls_remote` (up to 120 s), then pushes the refspec built by `refspec()`
+    (`refs/heads/<b>:refs/heads/<b>`). `.git` refs stay writable in the fence,
+    so the agent can move the branch to another fast-forward in that window.
+    Push `<approved sha>:refs/heads/<b>` instead. (Gap 10.)
+    - **Fixed 2026-10-04 (not live).** `git_push_mcp::refspec(sha, branch)`
+      builds `<sha>:refs/heads/<b>` (full hex only); the transport pushes the
+      approved card's SHA, or the one Apply's plan validated. A branch moved
+      before the click stays `stale_approval`; a move after the check no
+      longer matters. A `pre-push` hook that adds commits runs once more on
+      the new tip so its stdin line names the pushed SHA (adding commits again
+      → `preflight_failed`). `git_release` pushes the tag object it checked
+      to peel to the tip (`<object>:refs/tags/<t>`), not the tag by name.
+      Tests: refspec shape, moved branch during approval and during Apply
+      (bare remote never gets the new commit), hook re-run, re-pointed tag.
+2345. **Markup Undo reverts the whole work tree, not only the round.**
+    `services::markup_rounds` puts back every change between Submit and the
+    last settle, so your own edits, another tab's agent and sibling projects in
+    the same repo are reverted too. Files outside the project are only counted,
+    not named, and nothing goes through `services::local_loss`. The phone can
+    settle late. A phone scoped to project A can revert edits in project B.
+    Limit Undo to the project prefix, and name and confirm anything else.
+    (Gap 11.)
+    - **Fixed 2026-10-04 (not live).** `markup_rounds::undo` conflict-checks
+      and writes only paths under the project folder's prefix; changes
+      elsewhere in the work tree are left alone and named top-relative in the
+      preview and the result (`outside` ≤ 50 + `outsideMore`), shown in the
+      confirm dialog on desktop and phone (`undoSummary`). The snapshots still
+      cover the whole tree, which naming those needs. Emptied folders are
+      removed only below the project folder. Still inherent: edits by you or
+      another tab *inside* the project between Submit and settle go back with
+      the round (the dialog names them first). Tests: sibling folder and top
+      file survive Undo and are named, project files restored, outside
+      conflicts ignored, cap + count, empty project folder kept.
+      Review: the phone route sends the outside files as a count only
+      (`Changes::outside_counted`; a phone may be scoped to the project and
+      the names can be a sibling's); a file moved into the project from
+      outside is kept, not removed (its original is not put back).
+2346. **The phone's drop-box reads open the folder by path.**
+    `mobile_control::outbox::drop_dir` proves the inbox/outbox folder with
+    `canonicalize`, then `probe_as` opens `dir.join(leaf)` by path. Only the
+    leaf is `O_NOFOLLOW`. A fenced agent swapping `.tabtivity` for a symlink
+    chain can make the unfenced sidecar serve a host file to the paired phone.
+    Open through held directory handles, as `files.rs` does. (Gap 12.)
+    - **Fixed 2026-10-04 (not live).** `files::ProjectDir` gained
+      `open_root`/`lookup_dir`/`create_dir` (`mkdirat`)/`create_file`
+      (`O_CREAT|O_EXCL|O_NOFOLLOW`)/`remove_file` (`unlinkat`); `outbox::drop_dir`
+      returns the held folder and every listing, read, probe, delete, sender
+      and origin marker (`.<leaf>.tab`/`.src`) and the old-name send marker
+      works relative to it; `inbox::store` (phone uploads, markup Submit's
+      marked copy and page PNGs) makes and walks `.tabtivity/inbox` the same
+      way; `markup::inbox_png` goes through `inbox::kind`. A `.tabtivity`,
+      `inbox` or `outbox` link is now refused even when it points inside the
+      project. Windows: same operations through `NtCreateFile` relative to the
+      held handle (`files_windows.rs`); clippy-checked for
+      `x86_64-pc-windows-msvc`, never run there. Tests: linked/file
+      `.tabtivity`, linked `outbox`/`inbox` (out of and into the project)
+      refused for list/read/delete/write; `.tabtivity` swapped for a link
+      after the walk — listing, reads, delete and a create stay in the held
+      folder.
+2347. **`.git/info/exclude` is written through a symlink.** `git_guard` does not
+    cover `.git/info/`. The launch rename sweep (`brand_migration::project`)
+    and the project-open `update_exclude` append or rewrite it with
+    `std::fs::write`, which follows a planted symlink, e.g. into `~/.profile`.
+    The remote script's `>>` does the same on the host. The content is fixed,
+    so the risk is corruption, not code execution. Refuse a non-regular
+    `info/exclude` (`symlink_metadata` / `O_NOFOLLOW`). (Gap 13.)
+    - **Fixed 2026-10-04 (not live).** `git_guard` gained
+      `read_info_exclude`/`edit_info_exclude`/`open_info_file`, built on
+      `home_io::HomeFile`: `info` opened `O_DIRECTORY|O_NOFOLLOW` relative to
+      the git dir, the file `O_NOFOLLOW|O_NONBLOCK` and checked regular on the
+      opened inode, a write landing as an exclusive temporary in the held
+      `info` renamed over the name. A linked/non-folder `info` or a
+      linked/non-regular/non-UTF-8 `exclude` is refused and left as it is.
+      Used by `brand_migration::project` (`update_exclude`,
+      `exclude_folder_ignored_under_old_name`, `needs_work`), the worktree
+      `exclude_app_dir`, and `markup_rounds`' `info/attributes` check (a link
+      or FIFO there now means no undo, and never blocks). Both remote scripts
+      test `[ -L ]`/`[ -d ]`/`[ -f ]` on `info` and `exclude` first; the
+      rename script's rewrite uses `mktemp` instead of `exclude.tmp$$`.
+      `info/` is **not** made read-only in the fence: `git sparse-checkout`
+      fails outright and every repack (auto-gc) errors on `info/refs`
+      (verified, git 2.53). Windows: path-based `symlink_metadata` checks
+      behind the same API, unverified. Tests: linked `exclude`, linked `info`,
+      FIFO/folder `exclude` refused with targets unchanged; a plain one
+      appended once (local and both remote scripts).
+2348. **A revoked phone's held prompts and schedules still fire.** Revoke, a
+    narrowed access list or Lock down does not cancel the prompts that phone
+    held (`mobile_control/host.rs` hold routes) or the schedules it made
+    (`scheduler.rs`). They are typed into agent tabs, headless ones too.
+    Cancel or flag them on revoke and narrowing. (Gap 14.)
+    - **Fixed 2026-10-04 (not live).** Every rule a phone makes records it:
+      `ScheduledAgentPrompt::phone_device` (the paired device id; optional,
+      kept across edits, absent = unknown origin and left alone). Stamped
+      headless in `headless::{schedule_mutate,prompt_mutate,hold_prompt}` and
+      in the window from a new `device_id` on `ScheduleMutate`,
+      `PromptMutate`, `HoldPrompt`, `MarkupAnswer` (`MobileBridgeHost` →
+      `queuePromptForTab`/`sendCollectedPrompt`). `mobile_control::phone_origin`
+      cancels a rule whose phone is unpaired or whose scope no longer reaches
+      it (`discovery::ScopeAccess`, extracted from the catalog's own rule):
+      after admin revoke/forget-all (sidecar), in the window's `mobile_admin`
+      and `set_{project,box}_mobile_access`, at sidecar scheduler start, and
+      in `agent_tasks` claim (fire-time backstop for both owners:
+      `ClaimOutcome::Cancelled` removes the rule instead of typing it; an
+      unreadable access holds it back). Cancelled rules leave the lists; one
+      log line per pass. No UI added (revoke has no toast). Tests:
+      `phone_origin` (revoke, Lock down, narrowing, claim backstop, old rules
+      still fire, unreadable access), `admin` forget-all, `headless` stamping,
+      `protocol` field, `MobileSchedulePreface.test.tsx`.
+
+2349. **A FIFO in a repo hangs Tabtivity's git calls.** A named pipe at
+    `.git/info/exclude` or an in-tree `.gitignore` makes `git status` block
+    forever (git 2.53; `timeout 3` exits 124). Found by the #2347 reviewer.
+    `commands::git::run_git` has no timeout, so a fenced agent can plant one
+    and hang the file-tree / dirty-poll / usage-recap git calls (and any
+    window command waiting on them). Put a bounded timeout (kill the whole
+    child) on background and window-path git calls, and/or refuse a non-regular
+    `info/exclude`, `.gitignore`, `.gitattributes` before running git.
+    (Threat model gap 15.)
+    - **Fixed 2026-10-04 (not live).** Reproduced (git 2.53): a FIFO
+      `info/exclude`, `info/attributes`, top-level or nested `.gitignore` /
+      `.gitattributes`, `config`, `HEAD`, `index` or `packed-refs` hangs
+      `status`; `.gitattributes` also hangs `diff`; `rev-parse` hangs only on
+      `config`/`HEAD`. New `services::git_bounded`: a pre-check `stat`s the
+      fixed-name files (top-level `.gitignore`/`.gitattributes`, the git and
+      common dir's `info/exclude`, `info/attributes`, `config`, `HEAD`,
+      `index`, `packed-refs`, `commondir`) and refuses a FIFO/socket/device
+      (logged once per file; a link to `/dev/null` is fine); every run is
+      spawned in its own process group and stopped at a ceiling (the subtree
+      killed, the child reaped) with a clear error, never an empty "clean"
+      output: 2 min for reads and ref verbs, 10 min for index verbs
+      (`add`, `commit`, …) and unlisted ones, 1 h for transport/maintenance,
+      work-tree writes (`checkout`, `reset`, `merge`, `worktree`, …: an LFS
+      smudge may download) and hooks-live calls.
+      Wired into `run_git`/`run_git_hooked` (local half), the config
+      sanitizer, the push/release lanes' local reads, `git_peer`, the usage
+      recap, the file-size breakdown, the phone's git overview and file
+      browser (stdin + output cap), `prompt_blame`, `brand_migration`,
+      `exec_trust`, worktree repair, the scaffold commit, `git_pull`'s
+      viewer merge; `markup_rounds` (already bounded) now reaps the subtree.
+      `.git` pointer and `commondir` are read non-blocking, regular files only.
+      Fail closed where "no answer" meant "safe": `exec_trust` turns an
+      unreadable repo into a subject (asks), `repo_rewrites_urls` counts it
+      as a rewrite. Polls stay independent (tokio blocking pool; the dirty
+      poll dedups in flight). Left: user-initiated push/fetch/clone keep their
+      own handling; a killed write verb can leave `index.lock`.
+      Tests: `git_bounded` (6), `commands::git::a_fifo_ignore_file_makes_the_status_polls_fail_fast_not_hang`,
+      `exec_trust::an_unreadable_repo_is_a_subject_not_nothing`, the push
+      lane's rewrite test.
+    - **Review 2026-10-05 (not live).** The switcher's dirty dot now drops an
+      errored probe (no entry) instead of writing "clean", and re-runs the old
+      two-command spelling only for a backend missing `git_dirty_probe`
+      (`stores/gitDirty.ts`, test in `GitDirtyState.test.ts`). Bounded too:
+      the provider sniff (`detect_git_providers`) and `git_init`'s Publish
+      branch checks. Work-tree writes moved to the 1 h ceiling.
+
 ### Safe for everyone — non-expert users (2026-09-24)
 
 Plan: `docs/safe_for_everyone_plan.md`. Goal: every "⚠️ yours" row in

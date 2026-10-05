@@ -1207,10 +1207,11 @@ pub struct UnsyncedReport {
 
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
 fn git_in(dir: &Path, args: &[&str]) -> String {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .args(args)
         .current_dir(dir)
-        .output()
+        .bounded_output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -1674,10 +1675,10 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
 /// Runs through the hardened git command like every local git spawn.
 fn repair_moved_worktrees(repo: &Path, old: &str, new: &str) -> Result<(), String> {
     let moved = moved_linked_worktrees(repo, old, new);
+    use crate::services::git_bounded::BoundedOutput;
     let out = crate::commands::git::hardened_git_command_in(repo, &["worktree", "repair"])
         .args(&moved)
-        .output()
-        .map_err(|e| e.to_string())?;
+        .bounded_output()?;
     if out.status.success() {
         Ok(())
     } else {
@@ -2115,6 +2116,7 @@ fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Optio
 /// omitted, every phone.
 #[tauri::command]
 pub fn set_project_mobile_access(
+    app: tauri::AppHandle,
     project_id: String,
     enabled: bool,
     devices: Option<Vec<String>>,
@@ -2169,6 +2171,8 @@ pub fn set_project_mobile_access(
         apply_mobile_access(project, enabled, devices.as_deref());
         Ok(())
     })?;
+    // A phone this leaves out loses what it scheduled or held here.
+    crate::commands::agent_tasks::cancel_lost_phone_rules(&app, "after a project's Mobile access changed");
     Ok(MobileAccessState { enabled, devices })
 }
 
@@ -3195,10 +3199,11 @@ fn git_scaffold_commit(dir: &Path) {
     // Hardened, hooks off: "extend to remote" seeds this commit in an existing
     // local repo, whose `.git/config` and hooks a fenced agent may have written.
     use crate::commands::git::hookless_git_command_in;
-    let _ = hookless_git_command_in(dir, &["add", "-A"]).output();
+    use crate::services::git_bounded::BoundedOutput;
+    let _ = hookless_git_command_in(dir, &["add", "-A"]).bounded_output();
     const MSG: &str = concat!("Initial ", crate::app_name!(), " scaffold");
     let committed = hookless_git_command_in(dir, &["commit", "-m", MSG])
-        .output()
+        .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !committed {
@@ -3214,7 +3219,7 @@ fn git_scaffold_commit(dir: &Path) {
                 MSG,
             ],
         )
-        .output();
+        .bounded_output();
     }
 }
 
@@ -3223,10 +3228,11 @@ fn git_scaffold_commit(dir: &Path) {
 /// initial commit before lockstep pairing. A missing/erroring git returns `false`
 /// (don't force a commit when we can't tell), never a wipe.
 fn git_head_unborn(dir: &Path) -> bool {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .current_dir(dir)
-        .output()
+        .bounded_output()
         .map(|o| !o.status.success())
         .unwrap_or(false)
 }

@@ -130,16 +130,29 @@ export function nextCheck(round: Round, agent: AgentSignal, now: number): number
 }
 
 /** What an undo would put back, as the confirm dialog says it on both hosts:
- * the files (project-relative), how many more were not named, and the PDF's
- * fate. */
+ * the files (project-relative), how many more were not named, the PDF's
+ * fate, and the files changed outside the project folder, which the undo
+ * leaves as they are: named from the repo's top on the desktop, only counted
+ * on the phone (`outsideMore` alone; an older backend sends neither). */
 export function undoSummary(
-  changes: { files: readonly { path: string }[]; more: number; pdf: "restored" | "kept" | "none" },
+  changes: {
+    files: readonly { path: string }[];
+    more: number;
+    pdf: "restored" | "kept" | "none";
+    outside?: readonly string[];
+    outsideMore?: number;
+  },
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
 ): string {
   const named = changes.files.map((file) => file.path).join(", ");
+  const outsideNamed = (changes.outside ?? []).join(", ");
+  const outsideMore = changes.outsideMore ?? 0;
+  const outside = !outsideNamed
+    ? outsideMore === 0 ? "" : t(outsideMore === 1 ? "mobile.markup.undo.outsideOne" : "mobile.markup.undo.outsideCount", { count: outsideMore })
+    : t("mobile.markup.undo.outside", { files: outsideMore > 0 ? t("mobile.markup.undo.andMore", { files: outsideNamed, count: outsideMore }) : outsideNamed });
   const files = !named && changes.more === 0
-    ? t("mobile.markup.undo.noFiles")
+    ? t(outside ? "mobile.markup.undo.noProjectFiles" : "mobile.markup.undo.noFiles")
     : t("mobile.markup.undo.files", { files: changes.more > 0 ? t("mobile.markup.undo.andMore", { files: named || "…", count: changes.more }) : named });
   const pdf = changes.pdf === "restored" ? t("mobile.markup.undo.pdfRestored") : changes.pdf === "kept" ? t("mobile.markup.undo.pdfKept") : "";
-  return pdf ? `${files} ${pdf}` : files;
+  return [files, pdf, outside].filter(Boolean).join(" ");
 }

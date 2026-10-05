@@ -289,6 +289,16 @@ describe("markup rounds · Undo (apply rounds)", () => {
     expect(undoSummary({ files: [{ path: "a.tex" }], more: 2, pdf: "kept" }, t))
       .toBe("Back as before: a.tex and 2 more. The PDF has changed since — it stays.");
     expect(undoSummary({ files: [], more: 0, pdf: "none" }, t)).toBe("No file changed since the Submit.");
+    // Changes outside the project folder are named, and left alone.
+    expect(undoSummary({ files: [{ path: "a.tex" }], more: 0, pdf: "none", outside: ["other/b.tex", "main.tex"], outsideMore: 0 }, t))
+      .toBe("Back as before: a.tex. Outside this project, left as they are: other/b.tex, main.tex.");
+    expect(undoSummary({ files: [], more: 0, pdf: "none", outside: ["other/b.tex"], outsideMore: 3 }, t))
+      .toBe("No file in this project changed since the Submit. Outside this project, left as they are: other/b.tex and 3 more.");
+    // The phone gets a count only.
+    expect(undoSummary({ files: [{ path: "a.tex" }], more: 0, pdf: "none", outsideMore: 3 }, t))
+      .toBe("Back as before: a.tex. 3 files outside this project stay as they are.");
+    expect(undoSummary({ files: [], more: 0, pdf: "none", outsideMore: 1 }, t))
+      .toBe("No file in this project changed since the Submit. 1 file outside this project stays as it is.");
     expect(markupUndoNote(["a.tex", "b.bib"], 0))
       .toBe("I undid your edits from my last marks: `a.tex` and `b.bib` are back as they were before that round. Don't redo them; no need to reply.");
     expect(markupUndoNote(["a.tex"], 0)).toContain("`a.tex` is back as it was before");

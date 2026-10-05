@@ -319,9 +319,7 @@ pub struct ResolvedProject {
 impl ResolvedProject {
     /// Whether the phone paired as `device_id` may see this scope at all.
     pub fn reaches(&self, device_id: &str) -> bool {
-        self.devices
-            .as_ref()
-            .is_none_or(|devices| devices.iter().any(|id| id == device_id))
+        device_listed(self.devices.as_deref(), device_id)
     }
 }
 
@@ -830,91 +828,7 @@ impl Catalog {
         root: &RootEnv,
         live: &HashMap<String, LiveTmux>,
     ) -> Result<Self, String> {
-        let bytes =
-            fs::read(state_dir.join("projects.json")).map_err(|e| format!("read projects: {e}"))?;
-        let projects: Vec<ProjectRecord> =
-            serde_json::from_slice(&bytes).map_err(|e| format!("parse projects: {e}"))?;
-        // Boxes are optional: no file, or one this build cannot read, costs the
-        // boxes and never the projects — a corrupt `boxes.json` must not take
-        // the whole catalog with it (see the session-file rule below).
-        let boxes: Vec<BoxRecord> = fs::read(state_dir.join("boxes.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let mut sources = Vec::new();
-        if root_open(state_dir, root) {
-            sources.push(ScopeSource {
-                raw_id: ROOT_SCOPE_ID.into(),
-                label: "Root".into(),
-                status: "active".into(),
-                kind: ScopeKind::Root,
-                roots: vec![root.dir.clone()],
-                // Root has its own switch and gate; per-phone root is out of
-                // scope (docs/mobile_device_scoped_access_plan.md).
-                devices: None,
-            });
-        }
-        for project in &projects {
-            if !project.app_mobile_access || !mobile_local(project) {
-                continue;
-            }
-            // Root is listed above, by its own switch and gate, and is not a
-            // project: this refuses a hand-edited record that would borrow its
-            // session directory — and walk past that gate — by taking its id.
-            if is_root_scope_id(&project.id) {
-                continue;
-            }
-            let Some(root_raw) = project.directory.as_deref() else {
-                continue;
-            };
-            sources.push(ScopeSource {
-                raw_id: project.id.clone(),
-                label: project.name.clone(),
-                status: project.status.clone(),
-                kind: ScopeKind::Project,
-                roots: vec![PathBuf::from(root_raw)],
-                devices: project.app_mobile_devices.clone(),
-            });
-        }
-        for b in &boxes {
-            // A box never opened on the desktop has no folder and so no tabs;
-            // the desktop's switch resolves the folder on enable, so this only
-            // skips a bit hand-edited onto a folder-less record.
-            if !b.app_mobile_access {
-                continue;
-            }
-            let Some(folder) = b.folder.as_deref() else {
-                continue;
-            };
-            let mut roots = vec![PathBuf::from(folder)];
-            for id in &b.member_ids {
-                let Some(member) = projects.iter().find(|p| &p.id == id) else {
-                    continue;
-                };
-                // A member's own Mobile switch is not consulted: the box's
-                // switch is the consent, and what it covers is the box's tabs
-                // — which run locally, in the folder or a local member's root.
-                // A remote/VM/container member contributes no root at all.
-                if !mobile_local(member) {
-                    continue;
-                }
-                if let Some(dir) = member.directory.as_deref() {
-                    roots.push(PathBuf::from(dir));
-                }
-            }
-            sources.push(ScopeSource {
-                raw_id: format!("box:{}", b.id),
-                label: b.name.clone(),
-                // A box has no status of its own; listing it is what the
-                // switch means, so it is always in the phone's active list.
-                status: "active".into(),
-                kind: ScopeKind::Box,
-                roots,
-                // The box's own list; a member's list, like its switch, is
-                // not consulted.
-                devices: b.app_mobile_devices.clone(),
-            });
-        }
+        let sources = scope_sources(state_dir, root)?;
         let shells = shells_open(state_dir);
         let resolved = sources
             .into_iter()
@@ -922,7 +836,163 @@ impl Catalog {
             .collect();
         Ok(Self { projects: resolved })
     }
+}
 
+/// Every scope a phone may be shown and the per-phone list of each, read
+/// from the state dir as the catalog reads it — before any session file or
+/// tmux row. The one place the opt-in rule lives: `Catalog::load_with` and
+/// [`ScopeAccess`] both start here.
+fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, String> {
+    let bytes =
+        fs::read(state_dir.join("projects.json")).map_err(|e| format!("read projects: {e}"))?;
+    let projects: Vec<ProjectRecord> =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse projects: {e}"))?;
+    // Boxes are optional: no file, or one this build cannot read, costs the
+    // boxes and never the projects — a corrupt `boxes.json` must not take
+    // the whole catalog with it (see the session-file rule below).
+    let boxes: Vec<BoxRecord> = fs::read(state_dir.join("boxes.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let mut sources = Vec::new();
+    if root_open(state_dir, root) {
+        sources.push(ScopeSource {
+            raw_id: ROOT_SCOPE_ID.into(),
+            label: "Root".into(),
+            status: "active".into(),
+            kind: ScopeKind::Root,
+            roots: vec![root.dir.clone()],
+            // Root has its own switch and gate; per-phone root is out of
+            // scope (docs/mobile_device_scoped_access_plan.md).
+            devices: None,
+        });
+    }
+    for project in &projects {
+        if !project.app_mobile_access || !mobile_local(project) {
+            continue;
+        }
+        // Root is listed above, by its own switch and gate, and is not a
+        // project: this refuses a hand-edited record that would borrow its
+        // session directory — and walk past that gate — by taking its id.
+        if is_root_scope_id(&project.id) {
+            continue;
+        }
+        let Some(root_raw) = project.directory.as_deref() else {
+            continue;
+        };
+        sources.push(ScopeSource {
+            raw_id: project.id.clone(),
+            label: project.name.clone(),
+            status: project.status.clone(),
+            kind: ScopeKind::Project,
+            roots: vec![PathBuf::from(root_raw)],
+            devices: project.app_mobile_devices.clone(),
+        });
+    }
+    for b in &boxes {
+        // A box never opened on the desktop has no folder and so no tabs;
+        // the desktop's switch resolves the folder on enable, so this only
+        // skips a bit hand-edited onto a folder-less record.
+        if !b.app_mobile_access {
+            continue;
+        }
+        let Some(folder) = b.folder.as_deref() else {
+            continue;
+        };
+        let mut roots = vec![PathBuf::from(folder)];
+        for id in &b.member_ids {
+            let Some(member) = projects.iter().find(|p| &p.id == id) else {
+                continue;
+            };
+            // A member's own Mobile switch is not consulted: the box's
+            // switch is the consent, and what it covers is the box's tabs
+            // — which run locally, in the folder or a local member's root.
+            // A remote/VM/container member contributes no root at all.
+            if !mobile_local(member) {
+                continue;
+            }
+            if let Some(dir) = member.directory.as_deref() {
+                roots.push(PathBuf::from(dir));
+            }
+        }
+        sources.push(ScopeSource {
+            raw_id: format!("box:{}", b.id),
+            label: b.name.clone(),
+            // A box has no status of its own; listing it is what the
+            // switch means, so it is always in the phone's active list.
+            status: "active".into(),
+            kind: ScopeKind::Box,
+            roots,
+            // The box's own list; a member's list, like its switch, is
+            // not consulted.
+            devices: b.app_mobile_devices.clone(),
+        });
+    }
+    Ok(sources)
+}
+
+/// Whether a scope's per-phone list (`None`: every phone) names `device_id`.
+fn device_listed(devices: Option<&[String]>, device_id: &str) -> bool {
+    devices.is_none_or(|devices| devices.iter().any(|id| id == device_id))
+}
+
+/// Which phones may reach which scope, by raw scope id, without resolving a
+/// tab: the catalog's own opt-in rule ([`scope_sources`]) and per-phone
+/// list ([`ResolvedProject::reaches`]). What a phone-made prompt or schedule
+/// is checked against before it is typed (`phone_origin`), so an access a
+/// phone lost also stops what it left behind.
+pub struct ScopeAccess {
+    scopes: HashMap<String, Option<Vec<String>>>,
+    /// `boxes.json` / `settings.json` is there but cannot be read. The
+    /// catalog lists no box (no root) then, which is right for what it
+    /// shows; for a rule that answer would *remove*, it is unknown instead.
+    boxes_unread: bool,
+    root_unread: bool,
+}
+
+/// Whether `path` exists but does not parse as `T` — a missing file is a
+/// plain "none".
+fn present_but_unreadable<T: serde::de::DeserializeOwned>(path: &Path) -> bool {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice::<T>(&bytes).is_err(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+impl ScopeAccess {
+    pub fn load(state_dir: &Path) -> Result<Self, String> {
+        Self::load_with(state_dir, &RootEnv::live())
+    }
+
+    fn load_with(state_dir: &Path, root: &RootEnv) -> Result<Self, String> {
+        Ok(Self {
+            scopes: scope_sources(state_dir, root)?
+                .into_iter()
+                .map(|source| (source.raw_id, source.devices))
+                .collect(),
+            boxes_unread: present_but_unreadable::<Vec<BoxRecord>>(&state_dir.join("boxes.json")),
+            root_unread: present_but_unreadable::<Value>(&state_dir.join("settings.json")),
+        })
+    }
+
+    /// Whether the phone paired as `device_id` reaches the scope `raw_id`. A
+    /// scope no longer opted in reaches no phone. `Err` for a box or root
+    /// whose file cannot be read right now: not known, so not "no".
+    pub fn reaches(&self, raw_id: &str, device_id: &str) -> Result<bool, String> {
+        if let Some(devices) = self.scopes.get(raw_id) {
+            return Ok(device_listed(devices.as_deref(), device_id));
+        }
+        if self.boxes_unread && raw_id.starts_with("box:") {
+            return Err("boxes.json cannot be read".into());
+        }
+        if self.root_unread && is_root_scope_id(raw_id) {
+            return Err("settings.json cannot be read".into());
+        }
+        Ok(false)
+    }
+}
+
+impl Catalog {
     /// This snapshot as the phone paired as `device_id` sees it: every scope
     /// whose per-phone list leaves that phone out is gone, so `project`, `tab`
     /// and `grants` answer for it exactly as for an unknown id. The cache stays

@@ -109,4 +109,30 @@ describe("useGitDirtyStore.refresh", () => {
     expect(mockInvoke).toHaveBeenCalledTimes(2);
     expect(useGitDirtyStore.getState().byId.p1).toBe("clean");
   });
+
+  it("drops the reading when the probe fails, never writing it as clean (#2349)", async () => {
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValueOnce({
+      status: { staged: 0, unstaged: 1, untracked: 0, has_remote: false, is_repo: true },
+      unpushed: 0,
+    });
+    const refresh = useGitDirtyStore.getState().refresh;
+    await refresh("p2", "/p2");
+    expect(useGitDirtyStore.getState().byId.p2).toBe("dirty");
+
+    // A refused / timed-out git: no old-spelling retry, and no "clean".
+    mockInvoke.mockRejectedValueOnce("git status timed out after 120 s and was stopped.");
+    await refresh("p2", "/p2");
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    expect(useGitDirtyStore.getState().byId).not.toHaveProperty("p2");
+
+    // An outdated backend without the combined command still gets the fallback.
+    mockInvoke
+      .mockRejectedValueOnce("command git_dirty_probe not found")
+      .mockResolvedValueOnce({ staged: 1, unstaged: 0, untracked: 0, has_remote: false, is_repo: true })
+      .mockResolvedValueOnce([]);
+    await refresh("p2", "/p2");
+    expect(mockInvoke).toHaveBeenCalledTimes(5);
+    expect(useGitDirtyStore.getState().byId.p2).toBe("staged");
+  });
 });

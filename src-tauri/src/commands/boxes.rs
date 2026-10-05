@@ -695,6 +695,7 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
 /// every phone. Turning it off drops the list with the switch.
 #[tauri::command]
 pub fn set_box_mobile_access(
+    app: tauri::AppHandle,
     box_id: String,
     enabled: bool,
     devices: Option<Vec<String>>,
@@ -722,7 +723,10 @@ pub fn set_box_mobile_access(
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.app_mobile_access = enabled;
     target.app_mobile_devices = devices;
-    write_boxes_answering(&boxes, &box_id)
+    let written = write_boxes_answering(&boxes, &box_id)?;
+    // A phone this leaves out loses what it scheduled or held here.
+    crate::commands::agent_tasks::cancel_lost_phone_rules(&app, "after a box's Mobile access changed");
+    Ok(written)
 }
 
 // ── Box folder + relations (Phase 2 groundwork) ─────────────────────────────

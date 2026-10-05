@@ -192,9 +192,10 @@ fn git_stats_blocking(project_dir: &str, since: &str) -> Result<GitStats, String
     // The recap runs this unattended, in a directory a project container mounts
     // writable — so the repo's own config is untrusted (`commands::git`,
     // Group O #151); `hardened_git_command_in` sanitizes it first.
-    let out = crate::commands::git::hardened_git_command_in(project_dir, &args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(
+        project_dir,
+        &args,
+    ))?;
 
     // A repo with no commits yet exits non-zero; that is "nothing today", not an
     // error worth failing the whole recap over.
@@ -206,11 +207,9 @@ fn git_stats_blocking(project_dir: &str, since: &str) -> Result<GitStats, String
 
 /// The repo's configured author email, or `None` when unset.
 fn git_user_email(project_dir: &str) -> Option<String> {
-    let out = crate::paths::command_no_window("git")
-        .args(["config", "user.email"])
-        .current_dir(project_dir)
-        .output()
-        .ok()?;
+    let mut cmd = crate::paths::command_no_window("git");
+    cmd.args(["config", "user.email"]).current_dir(project_dir);
+    let out = crate::services::git_bounded::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }

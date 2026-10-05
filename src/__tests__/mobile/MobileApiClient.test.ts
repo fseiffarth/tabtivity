@@ -5,6 +5,8 @@ import {
   createSchedule,
   deleteSchedule,
   getSchedules,
+  previewMarkupUndo,
+  runMarkupUndo,
   setUnauthorizedHandler,
   updateSchedule,
 } from "../../../mobile-web/src/api";
@@ -129,5 +131,19 @@ describe(`${BRAND.display} Mobile API client`, () => {
       ["/api/v1/tabs/tab%20opaque/schedules/schedule%2F1", "DELETE"],
     ]);
     for (const [, init] of fetchMock.mock.calls) expect(init?.credentials).toBe("same-origin");
+  });
+
+  it("reads an undo's files outside the project as a count only, from any desktop", async () => {
+    const files = [{ path: "a.tex", change: "modified" }];
+    // The desktop sends a count; names, were any sent, are only counted.
+    respondWith(JSON.stringify({ files, more: 0, pdf: "none", outsideMore: 2 }), { status: 200 });
+    await expect(previewMarkupUndo("t1", "u1")).resolves.toEqual({ files, more: 0, pdf: "none", outsideMore: 2 });
+    respondWith(JSON.stringify({ files, more: 0, pdf: "none", outside: ["other/b.tex"], outsideMore: 1 }), { status: 200 });
+    const done = await runMarkupUndo("t1", "u1");
+    expect(done).toEqual({ files, more: 0, pdf: "none", outsideMore: 2 });
+    expect(JSON.stringify(done)).not.toContain("other/");
+    // An older desktop sends neither.
+    respondWith(JSON.stringify({ files, more: 0, pdf: "kept" }), { status: 200 });
+    await expect(previewMarkupUndo("t1", "u1")).resolves.toEqual({ files, more: 0, pdf: "kept", outsideMore: 0 });
   });
 });

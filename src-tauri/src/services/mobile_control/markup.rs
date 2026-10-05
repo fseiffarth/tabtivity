@@ -438,18 +438,10 @@ impl ResolvedSource {
 }
 
 /// Whether `reference` names a PNG this project's inbox holds — a regular,
-/// non-symlink file in an inbox that resolves below the root.
+/// non-symlink file in the inbox, reached through held folders with no link
+/// on the way (`inbox::kind`).
 fn inbox_png(root: &Path, reference: &str) -> bool {
-    let Some(leaf) = inbox_leaf(reference) else {
-        return false;
-    };
-    let (Ok(canonical_root), Ok(dir)) = (root.canonicalize(), root.join(inbox::INBOX_DIR).canonicalize()) else {
-        return false;
-    };
-    if !dir.starts_with(&canonical_root) {
-        return false;
-    }
-    outbox::open_sniffed(&dir.join(leaf)).is_some_and(|(_, _, kind)| kind == "image/png")
+    inbox_leaf(reference).and_then(|leaf| inbox::kind(root, leaf)) == Some("image/png")
 }
 
 /// What one submit produced.

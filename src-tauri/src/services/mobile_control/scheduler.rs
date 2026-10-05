@@ -689,6 +689,11 @@ pub async fn run(
     holds: Arc<PhoneHolds>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
+    // What a phone revoked or narrowed while this host was down left behind
+    // goes now (#2348); the claim's own check stops anything later.
+    if let Err(error) = super::phone_origin::sweep_in(&state_dir, "when the host started") {
+        eprintln!("{}: scheduler: phone prompts and schedules not checked: {error}", crate::brand::MOBILE_HOST_BIN);
+    }
     let runner: Arc<dyn Runner> = Arc::new(TmuxRunner::new(&state_dir, None));
     let ctx = Context::new(state_dir, runner, launch).with_holds(holds.clone());
     let mut interval = tokio::time::interval(TICK);
@@ -737,6 +742,7 @@ mod tests {
             preface: vec![],
             last: None,
             origin: None,
+            phone_device: None,
         }
     }
 

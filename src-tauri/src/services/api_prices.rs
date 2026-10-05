@@ -13,12 +13,21 @@
 //!   standard pricing for 4.6 and later only.
 //! - Gemini: <https://ai.google.dev/gemini-api/docs/pricing> ("Last updated
 //!   2026-10-01 UTC"; paid tier, Standard — not batch, flex or priority).
+//!   Grounding with Google Search, read off the same page on 2026-10-04:
+//!   Gemini 3.x "$14 per 1,000 [search] requests", Gemini 2.5 "$35 / 1,000
+//!   grounded prompts"; Google Maps grounding the same or less ($14 per 1,000
+//!   queries, $25 per 1,000 grounded prompts). The free allowances (5,000 a
+//!   month for 3.x, 1,500 a day for 2.5) are not deducted — an overcount. An
+//!   unknown model pays $35 per 1,000 for *every* query, the dearest reading
+//!   of both units ([`GROUNDING_CEILING_USD`]). The search queries are counted
+//!   by `api_meter` from `groundingMetadata.webSearchQueries`, as Anthropic
+//!   web search is from `server_tool_use`, and kept in the ledger's
+//!   `web_searches`.
 //!
-//! Not priced (the ledger undercounts these): Gemini's Google Search grounding
-//! fees (not in `usageMetadata`), Gemini context-cache storage per hour (the
-//! explicit cache API is not forwarded), Anthropic code execution hours (free
-//! beside web search/fetch, otherwise a free monthly allowance), Anthropic
-//! refusal-fallback repricing. A vendor price change needs this table edited.
+//! Not priced (the ledger undercounts these): Gemini context-cache storage
+//! per hour (the explicit cache API is not forwarded), Anthropic code
+//! execution hours (free beside web search/fetch, otherwise a free monthly
+//! allowance), Anthropic refusal-fallback repricing. A vendor price change needs this table edited.
 //!
 //! **An unknown model** is priced at its provider's most expensive known rate
 //! for each kind of token ([`fallback`]: the maximum over the table's current
@@ -42,6 +51,14 @@ pub const LONG_CONTEXT: u64 = 200_000;
 
 /// Anthropic web search: $10 per 1,000 searches.
 const WEB_SEARCH_USD: f64 = 10.0 / 1000.0;
+/// Gemini 3.x Google Search grounding: $14 per 1,000 search queries.
+const GROUNDING_QUERY_USD: f64 = 14.0 / 1000.0;
+/// Gemini 2.5 Google Search grounding: $35 per 1,000 grounded prompts.
+const GROUNDING_PROMPT_USD: f64 = 35.0 / 1000.0;
+/// What an unknown Gemini model pays per search query: the highest
+/// documented grounding rate ($35 per 1,000), applied per query rather than
+/// per prompt — a conservative ceiling over both units.
+pub const GROUNDING_CEILING_USD: f64 = GROUNDING_PROMPT_USD;
 /// Anthropic fast mode (`usage.speed == "fast"`): Opus 5.5 $8/$40 over
 /// $4/$20, Opus 5 and 4.8 $10/$50 over $5/$25 — twice the rate, cache
 /// multipliers on top.
@@ -103,6 +120,16 @@ const ANTHROPIC: &[(&str, AnthropicRates)] = &[
     ("claude-3-5-haiku", AnthropicRates { retired: true, ..anthropic(0.80, 1.0, 1.60, 0.08, 4.0) }),
 ];
 
+/// How a Gemini model's Google Search (or Maps) grounding is billed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Grounding {
+    /// USD per search query the model ran (Gemini 3.x).
+    PerQuery(f64),
+    /// USD per answer that was grounded at all, however many queries
+    /// (Gemini 2.5: "grounded prompts").
+    PerPrompt(f64),
+}
+
 /// One Gemini model's rates, USD per million tokens.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeminiRates {
@@ -124,10 +151,27 @@ pub struct GeminiRates {
     /// their image-output rate for every output token (an overcount for
     /// text parts).
     pub media: bool,
+    /// Search grounding (not doubled by [`GeminiRates::doubles_from`]: the
+    /// page schedules the token rates only).
+    pub grounding: Grounding,
 }
 
 const fn gemini(input: f64, output: f64, cache_read: f64) -> GeminiRates {
-    GeminiRates { input, output, cache_read, audio_input: None, long: None, doubles_from: None, media: false }
+    GeminiRates {
+        input,
+        output,
+        cache_read,
+        audio_input: None,
+        long: None,
+        doubles_from: None,
+        media: false,
+        grounding: Grounding::PerQuery(GROUNDING_QUERY_USD),
+    }
+}
+
+/// A Gemini 2.5 model: grounding per grounded prompt.
+const fn gemini_2_5(r: GeminiRates) -> GeminiRates {
+    GeminiRates { grounding: Grounding::PerPrompt(GROUNDING_PROMPT_USD), ..r }
 }
 
 const fn gemini_media(input: f64, output: f64) -> GeminiRates {
@@ -150,19 +194,19 @@ const GEMINI: &[(&str, GeminiRates)] = &[
     ("gemini-3.1-pro-preview", PRO_3_1),
     ("gemini-3.1-pro-preview-customtools", PRO_3_1),
     ("gemini-3-flash-preview", GeminiRates { audio_input: Some(1.0), ..gemini(0.50, 3.0, 0.05) }),
-    ("gemini-2.5-pro", GeminiRates { long: Some((2.50, 15.0, 0.25)), ..gemini(1.25, 10.0, 0.125) }),
-    ("gemini-2.5-flash", GeminiRates { audio_input: Some(1.0), ..gemini(0.30, 2.50, 0.03) }),
-    ("gemini-2.5-flash-lite", GeminiRates { audio_input: Some(0.30), ..gemini(0.10, 0.40, 0.01) }),
+    ("gemini-2.5-pro", gemini_2_5(GeminiRates { long: Some((2.50, 15.0, 0.25)), ..gemini(1.25, 10.0, 0.125) })),
+    ("gemini-2.5-flash", gemini_2_5(GeminiRates { audio_input: Some(1.0), ..gemini(0.30, 2.50, 0.03) })),
+    ("gemini-2.5-flash-lite", gemini_2_5(GeminiRates { audio_input: Some(0.30), ..gemini(0.10, 0.40, 0.01) })),
     ("gemini-3.1-flash-image", gemini_media(0.50, 60.0)),
     ("gemini-3.1-flash-lite-image", gemini_media(0.25, 30.0)),
     ("gemini-3-pro-image", gemini_media(2.0, 120.0)),
     // $0.039 per image at 1,290 tokens an image.
-    ("gemini-2.5-flash-image", gemini_media(0.30, 30.24)),
+    ("gemini-2.5-flash-image", gemini_2_5(gemini_media(0.30, 30.24))),
     ("gemini-3.8-flash-tts", GeminiRates { doubles_from: Some("2027-01"), ..gemini_media(0.50, 9.0) }),
     ("gemini-3.8-flash-lite-tts", GeminiRates { doubles_from: Some("2027-01"), ..gemini_media(0.50, 6.0) }),
     ("gemini-3.1-flash-tts-preview", gemini_media(1.0, 20.0)),
-    ("gemini-2.5-flash-preview-tts", gemini_media(0.50, 10.0)),
-    ("gemini-2.5-pro-preview-tts", gemini_media(1.0, 20.0)),
+    ("gemini-2.5-flash-preview-tts", gemini_2_5(gemini_media(0.50, 10.0))),
+    ("gemini-2.5-pro-preview-tts", gemini_2_5(gemini_media(1.0, 20.0))),
     ("gemini-embedding-2", gemini_media(0.20, 0.0)),
 ];
 
@@ -263,6 +307,7 @@ fn in_month(r: GeminiRates, month: &str) -> GeminiRates {
             long: r.long.map(|(i, o, c)| (i * 2.0, o * 2.0, c * 2.0)),
             doubles_from: None,
             media: r.media,
+            grounding: r.grounding,
         },
         _ => r,
     }
@@ -298,6 +343,7 @@ fn gemini_fallback(month: &str) -> GeminiRates {
         long: None,
         doubles_from: None,
         media: false,
+        grounding: Grounding::PerQuery(GROUNDING_CEILING_USD),
     }
 }
 
@@ -344,6 +390,12 @@ pub struct GeminiUsage {
     pub tool_use_prompt_token_count: u64,
     /// `promptTokensDetails` entries with `modality == "AUDIO"`.
     pub audio_prompt_tokens: u64,
+    /// Google Search queries the answer ran (`groundingMetadata.webSearchQueries`,
+    /// counted by `api_meter`).
+    pub search_queries: u64,
+    /// The answer was grounded (search queries, or grounding metadata
+    /// without any — Maps grounding, a per-prompt bill).
+    pub grounded: bool,
 }
 
 /// What one answer cost, by the table.
@@ -411,11 +463,19 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
     let text = (uncached - audio).saturating_add(u.tool_use_prompt_token_count);
     let audio_rate = r.audio_input.unwrap_or(input_rate).max(input_rate);
     let output = u.candidates_token_count.saturating_add(u.thoughts_token_count);
+    // Grounding metadata without a query still is one grounded prompt.
+    let searches = if u.grounded { u.search_queries.max(1) } else { u.search_queries };
+    let grounding = match r.grounding {
+        Grounding::PerQuery(usd) => searches as f64 * usd,
+        Grounding::PerPrompt(usd) if searches > 0 => usd,
+        Grounding::PerPrompt(_) => 0.0,
+    };
     let usd = (text as f64 * input_rate
         + audio as f64 * audio_rate
         + cached as f64 * cache_rate
         + output as f64 * output_rate)
-        * PER_TOKEN;
+        * PER_TOKEN
+        + grounding;
     Charge {
         model: model.to_string(),
         known,
@@ -423,7 +483,7 @@ pub fn price_gemini(model: &str, u: &GeminiUsage, month: &str) -> Charge {
         output,
         cache_write: 0,
         cache_read: cached,
-        web_searches: 0,
+        web_searches: searches,
         usd,
     }
 }
@@ -542,6 +602,31 @@ mod tests {
         let u = GeminiUsage { prompt_token_count: 1_000_000, audio_prompt_tokens: 400_000, tool_use_prompt_token_count: 100_000, ..Default::default() };
         let c = price_gemini("gemini-2.5-flash", &u, "2026-10");
         assert!(close(c.usd, 700_000.0 * 0.30 / 1e6 + 400_000.0 * 1.0 / 1e6));
+    }
+
+    #[test]
+    fn gemini_grounding_is_priced_per_query_or_per_prompt() {
+        let u = GeminiUsage { prompt_token_count: 1_000_000, search_queries: 3, grounded: true, ..Default::default() };
+        // Gemini 3.x: $14 per 1,000 queries, recorded as web searches.
+        let c = price_gemini("gemini-3.5-flash", &u, "2026-10");
+        assert!(close(c.usd, 1.50 + 3.0 * 0.014), "{}", c.usd);
+        assert_eq!(c.web_searches, 3);
+        // Not doubled with the promotional token rates.
+        let c = price_gemini("gemini-3.8-flash", &u, "2027-01");
+        assert!(close(c.usd, 1.50 + 3.0 * 0.014), "{}", c.usd);
+        // Gemini 2.5: $35 per grounded prompt, however many queries.
+        assert!(close(price_gemini("gemini-2.5-flash", &u, "2026-10").usd, 0.30 + 0.035));
+        // An unknown model: $35 per 1,000 for every query.
+        let c = price_gemini("gemini-9-ultra", &u, "2026-10");
+        assert!(close(c.usd, 4.0 + 3.0 * 0.035), "{}", c.usd);
+        // Grounded without a query (Maps): one.
+        let u = GeminiUsage { grounded: true, ..Default::default() };
+        let c = price_gemini("gemini-3.5-flash", &u, "2026-10");
+        assert!(close(c.usd, 0.014));
+        assert_eq!(c.web_searches, 1);
+        assert!(close(price_gemini("gemini-2.5-pro", &u, "2026-10").usd, 0.035));
+        // Not grounded: nothing.
+        assert_eq!(price_gemini("gemini-2.5-pro", &GeminiUsage::default(), "2026-10").usd, 0.0);
     }
 
     #[test]

@@ -24,9 +24,20 @@
 //! ([`limit_for`]). Saving a key requires one (`agent_api_key_set`); a key
 //! saved before limits existed has none, and its provider is refused until
 //! one is set ([`Verdict::NoLimit`]). Once spent ≥ limit
-//! ([`Verdict::Reached`]) the proxy refuses new billed requests; answers
-//! already streaming finish, so the month can overshoot by what the turns in
-//! flight at that moment cost.
+//! ([`Verdict::Reached`]) the proxy refuses new billed requests.
+//!
+//! **Requests in flight count** (gap 9): before forwarding, the proxy
+//! reserves each billed request's worst-case cost (`api_meter::Meter::
+//! worst_case`) with [`Book::reserve`], refused when spent + every reservation
+//! held + this one would pass the limit. The [`Reservation`] is released when
+//! it drops — after the answer's actual cost is recorded, or when the request
+//! fails or its client leaves — so none can leak. Reservations live in memory
+//! only (in micro-dollars, so release is exact); the file never holds them.
+//! An answer can still cost more than its reservation (Anthropic web
+//! searches, more grounding queries than the estimate, input the body only
+//! points to — a document URL, a Gemini file URI or cached content — or that
+//! server tools add during the turn, since input is reserved by the body's
+//! size): the month can overshoot by that difference, not by whole turns.
 //!
 //! `AppHandle`-free.
 
@@ -230,6 +241,50 @@ struct BookState {
     loaded: bool,
     dirty: bool,
     flush_scheduled: bool,
+    /// Micro-dollars held by requests in flight, per provider
+    /// ([`Provider::ALL`] order).
+    reserved: [u64; 2],
+}
+
+fn slot(provider: Provider) -> usize {
+    match provider {
+        Provider::Anthropic => 0,
+        Provider::Gemini => 1,
+    }
+}
+
+const MICROS: f64 = 1_000_000.0;
+
+/// `usd` in whole micro-dollars, rounded up; a value that is not a number
+/// holds everything.
+fn micros(usd: f64) -> u64 {
+    if usd.is_nan() {
+        return u64::MAX;
+    }
+    // `as` saturates: negative → 0, huge → `u64::MAX`.
+    (usd * MICROS).ceil() as u64
+}
+
+/// One billed request's hold on the monthly limit while it is in flight
+/// ([`Book::reserve`]); released when dropped.
+pub struct Reservation {
+    book: Arc<Book>,
+    provider: Provider,
+    micros: u64,
+}
+
+impl Reservation {
+    pub fn usd(&self) -> f64 {
+        self.micros as f64 / MICROS
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let mut s = lock(&self.book.state);
+        let held = &mut s.reserved[slot(self.provider)];
+        *held = held.saturating_sub(self.micros);
+    }
 }
 
 /// The ledger of one process. [`book`] is the app's; tests make their own.
@@ -253,7 +308,13 @@ impl Book {
     pub fn new(path: Option<PathBuf>) -> Self {
         Book {
             path,
-            state: Mutex::new(BookState { ledger: Ledger::default(), loaded: false, dirty: false, flush_scheduled: false }),
+            state: Mutex::new(BookState {
+                ledger: Ledger::default(),
+                loaded: false,
+                dirty: false,
+                flush_scheduled: false,
+                reserved: [0; 2],
+            }),
             writing: Mutex::new(()),
             closing: std::sync::atomic::AtomicBool::new(false),
         }
@@ -278,6 +339,49 @@ impl Book {
 
     pub fn spent(&self, provider: Provider, now: DateTime<Utc>) -> f64 {
         self.with(now, |s| s.ledger.spent(provider))
+    }
+
+    /// What requests in flight for `provider` hold right now, USD.
+    pub fn reserved(&self, provider: Provider) -> f64 {
+        lock(&self.state).reserved[slot(provider)] as f64 / MICROS
+    }
+
+    /// Whether a billed request for `provider` may start under `limit`:
+    /// [`Verdict::Open`] while spent + what requests in flight hold stays
+    /// below it. `Reached` carries what was spent (without reservations).
+    pub fn verdict(&self, provider: Provider, limit: Option<f64>, now: DateTime<Utc>) -> Verdict {
+        self.with(now, |s| Self::check(s, provider, None, limit))
+    }
+
+    /// Hold `usd` (a request's worst-case cost) against `provider`'s
+    /// `limit` until the returned [`Reservation`] drops. Refused — `Err` with
+    /// the verdict — without a valid limit, once spent + held ≥ limit, or
+    /// when spent + held + `usd` would pass it.
+    pub fn reserve(self: &Arc<Self>, provider: Provider, usd: f64, limit: Option<f64>, now: DateTime<Utc>) -> Result<Reservation, Verdict> {
+        let want = micros(usd);
+        self.with(now, |s| {
+            match Self::check(s, provider, Some(want), limit) {
+                Verdict::Open => {}
+                refused => return Err(refused),
+            }
+            let held = &mut s.reserved[slot(provider)];
+            *held = held.saturating_add(want);
+            Ok(Reservation { book: Arc::clone(self), provider, micros: want })
+        })
+    }
+
+    fn check(s: &BookState, provider: Provider, want: Option<u64>, limit: Option<f64>) -> Verdict {
+        let spent = s.ledger.spent(provider);
+        let held = s.reserved[slot(provider)] as f64 / MICROS;
+        match Verdict::of(spent + held, limit) {
+            Verdict::Open => {}
+            Verdict::Reached { limit, .. } => return Verdict::Reached { spent, limit },
+            Verdict::NoLimit => return Verdict::NoLimit,
+        }
+        match (want, limit) {
+            (Some(want), Some(limit)) if spent + held + want as f64 / MICROS > limit => Verdict::Reached { spent, limit },
+            _ => Verdict::Open,
+        }
     }
 
     /// A copy of the ledger as of `now`.
@@ -597,5 +701,42 @@ mod tests {
         let limits = limits_in(&s);
         assert_eq!(limits.len(), 1);
         assert_eq!(limits["anthropic"], 20.0);
+    }
+
+    #[test]
+    fn reservations_count_against_the_limit_until_they_drop() {
+        let book = Arc::new(Book::new(None));
+        let now = at(2026, 10, 4);
+        book.record(Provider::Anthropic, &charge("claude-opus-5-5", 1.0, true), now);
+        let a = book.reserve(Provider::Anthropic, 0.75, Some(2.0), now).unwrap();
+        assert!((a.usd() - 0.75).abs() < 1e-12);
+        // 1 spent + 0.75 held + 0.5 would pass 2.
+        assert_eq!(
+            book.reserve(Provider::Anthropic, 0.5, Some(2.0), now).err(),
+            Some(Verdict::Reached { spent: 1.0, limit: 2.0 })
+        );
+        let b = book.reserve(Provider::Anthropic, 0.25, Some(2.0), now).unwrap();
+        // Held to the limit: nothing more starts, not even a free one.
+        assert_eq!(book.verdict(Provider::Anthropic, Some(2.0), now), Verdict::Reached { spent: 1.0, limit: 2.0 });
+        assert!(book.reserve(Provider::Anthropic, 0.0, Some(2.0), now).is_err());
+        // The other provider is not held.
+        assert_eq!(book.verdict(Provider::Gemini, Some(2.0), now), Verdict::Open);
+        drop(a);
+        assert!((book.reserved(Provider::Anthropic) - 0.25).abs() < 1e-12);
+        assert_eq!(book.verdict(Provider::Anthropic, Some(2.0), now), Verdict::Open);
+        drop(b);
+        assert_eq!(book.reserved(Provider::Anthropic), 0.0, "released exactly");
+        // No limit, or a spent limit, refuses as before.
+        assert_eq!(book.reserve(Provider::Anthropic, 0.1, None, now).err(), Some(Verdict::NoLimit));
+        assert_eq!(
+            book.reserve(Provider::Anthropic, 0.1, Some(1.0), now).err(),
+            Some(Verdict::Reached { spent: 1.0, limit: 1.0 })
+        );
+        // A cost that is not a number holds everything.
+        assert!(book.reserve(Provider::Anthropic, f64::NAN, Some(1e6), now).is_err());
+        assert_eq!(book.reserved(Provider::Anthropic), 0.0);
+        // Never written: the file's shape is unchanged.
+        let json = serde_json::to_value(book.snapshot(now)).unwrap();
+        assert!(!json.to_string().contains("reserv"));
     }
 }

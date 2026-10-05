@@ -459,13 +459,24 @@ the restart is shown, never silent. Enforcement sits after the key check and
 before the body is read: spent ≥ limit, or no limit set (a key saved before
 limits existed), answers 429 in the provider's shape (`rate_limit_error` /
 `RESOURCE_EXHAUSTED`, `x-should-retry: false`) naming the app's budget and
-Manage CLIs. Answers in flight finish: the overshoot is bounded by the turns
-running at the moment the limit is crossed, stated in the UI. The limit is
-read from `settings.json` per request (re-parsed when its mtime or size
-changes, and at least every 10 s), so raising it takes effect at once; the
-verdict is taken again after the body is read. Not metered: Gemini Search
-grounding fees, spend outside Tabtivity — the help recommends a provider-side
-limit too.
+Manage CLIs. Requests in flight count (gap 9, 2026-10-04, not live): after
+the body is read each billed request reserves its worst case
+(`api_meter::Meter::worst_case` — whole output cap, input bytes/3 as 1-hour
+cache writes, ten grounding queries if a Gemini body may ground) in
+`api_usage::Book::reserve`; spent + held + this one past the limit answers
+429 (same shapes, a "could cost more than is left" message). The
+`Reservation` drops after the actual charge, or with the meter on a connect
+error, an upstream failure or a client that leaves — it never outlives the
+request; reservations are memory-only (micro-dollars), the ledger file is
+unchanged. The overshoot is now only what an answer costs past its
+reservation. The limit is read from `settings.json` per request (re-parsed
+when its mtime or size changes, and at least every 10 s), so raising it takes
+effect at once. Gemini Search/Maps grounding is metered (gap 8): the meter
+counts `candidates[i].groundingMetadata.webSearchQueries` (keyed hash per
+query and candidate, max over responses), priced per query ($14/1,000, 3.x)
+or per grounded prompt ($35/1,000, 2.5), unknown models $35/1,000 per query;
+an unsettled answer whose body may ground counts at least ten. Not metered:
+spend outside Tabtivity — the help recommends a provider-side limit too.
 
 Composition is explicit:
 

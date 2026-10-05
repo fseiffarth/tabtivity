@@ -190,6 +190,9 @@ pub(crate) fn validate_preface(preface: Vec<String>) -> Result<Vec<String>, Stri
 
 fn validate_prompt(mut prompt: ScheduledAgentPrompt) -> Result<ScheduledAgentPrompt, String> {
     validate_id("schedule id", &prompt.id)?;
+    if let Some(device) = &prompt.phone_device {
+        validate_id("phone device", device)?;
+    }
     validate_rule(&prompt.rule)?;
     prompt.preface = validate_preface(std::mem::take(&mut prompt.preface))?;
     prompt.message = sanitize_message(&prompt.message);
@@ -354,6 +357,9 @@ pub(crate) fn apply_upsert(
             let mut next = prompt;
             next.last = target.schedules[index].last.clone();
             next.origin = target.schedules[index].origin.clone();
+            // So is the phone that made it: an edit from anywhere neither
+            // adopts nor disowns a phone's rule.
+            next.phone_device = target.schedules[index].phone_device.clone();
             let next = validate_prompt(next)?;
             target.schedules[index] = next;
         }
@@ -490,12 +496,23 @@ pub fn delete_target(project_id: &str, target_id: &str) -> Result<(), String> {
     write(&file)
 }
 
+/// What a claim came to. `Cancelled`: the rule was a phone's that no longer
+/// reaches its scope (revoked, Lock down, or its access narrowed), and it was
+/// taken out instead of claimed — the fire-time backstop of
+/// `mobile_control::phone_origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    Claimed,
+    Refused,
+    Cancelled,
+}
+
 pub fn claim(
     project_id: &str,
     target_id: &str,
     schedule_id: &str,
     occurrence: &str,
-) -> Result<bool, String> {
+) -> Result<ClaimOutcome, String> {
     let _guard = lock();
     claim_locked(&path(), project_id, target_id, schedule_id, occurrence, chrono::Local::now())
 }
@@ -514,7 +531,7 @@ pub fn claim_in(
     now: chrono::DateTime<chrono::Local>,
 ) -> Result<bool, String> {
     let _lock = file_lock(path);
-    claim_locked(path, project_id, target_id, schedule_id, occurrence, now)
+    claim_locked(path, project_id, target_id, schedule_id, occurrence, now).map(|outcome| outcome == ClaimOutcome::Claimed)
 }
 
 fn claim_locked(
@@ -524,7 +541,7 @@ fn claim_locked(
     schedule_id: &str,
     occurrence: &str,
     now: chrono::DateTime<chrono::Local>,
-) -> Result<bool, String> {
+) -> Result<ClaimOutcome, String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
     validate_id("schedule id", schedule_id)?;
@@ -537,11 +554,36 @@ fn claim_locked(
         .get_mut(project_id)
         .and_then(|project| project.get_mut(target_id))
     else {
-        return Ok(false);
+        return Ok(ClaimOutcome::Refused);
     };
     let Some(prompt) = target.schedules.iter().find(|item| item.id == schedule_id) else {
-        return Ok(false);
+        return Ok(ClaimOutcome::Refused);
     };
+    // A phone's rule goes in only while that phone still reaches the scope,
+    // whichever owner fires it and whatever happened while it was down.
+    if let Some(device) = prompt.phone_device.as_deref() {
+        let state_dir = path.parent().unwrap_or(std::path::Path::new("."));
+        match super::mobile_control::phone_origin::reaches(state_dir, device, project_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                let cancelled = CancelledRule {
+                    project_id: project_id.to_string(),
+                    target_id: target_id.to_string(),
+                    schedule_id: schedule_id.to_string(),
+                };
+                apply_delete(&mut file, project_id, target_id, schedule_id, false)?;
+                write_at(path, &file)?;
+                super::mobile_control::phone_origin::log_cancelled(std::slice::from_ref(&cancelled), "at fire time");
+                return Ok(ClaimOutcome::Cancelled);
+            }
+            Err(why) => {
+                // Unknown is not "still allowed": not typed, and kept for a
+                // check that can answer.
+                eprintln!("{}: a phone's scheduled prompt '{schedule_id}' was held back: its phone's access could not be read: {why}", crate::app_slug!());
+                return Ok(ClaimOutcome::Refused);
+            }
+        }
+    }
     if !prompt.enabled
         || prompt
             .last
@@ -552,14 +594,82 @@ fn claim_locked(
             .get(schedule_id)
             .is_some_and(|value| value == occurrence)
     {
-        return Ok(false);
+        return Ok(ClaimOutcome::Refused);
     }
-    if !reserve_agent_delivery(target, schedule_id, occurrence, now) { return Ok(false); }
+    if !reserve_agent_delivery(target, schedule_id, occurrence, now) { return Ok(ClaimOutcome::Refused); }
     target
         .claims
         .insert(schedule_id.to_string(), occurrence.to_string());
     write_at(path, &file)?;
-    Ok(true)
+    Ok(ClaimOutcome::Claimed)
+}
+
+/// A phone's rule taken out because its phone no longer reaches its scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelledRule {
+    pub project_id: String,
+    pub target_id: String,
+    pub schedule_id: String,
+}
+
+/// Take out every phone-made rule `reaches(device, project_id)` says no to
+/// (`Ok(false)`), with any claim on it. A rule with no phone, or one whose
+/// answer is unknown (`Err`), stays. The window's half of `path`, under
+/// the in-process lock too.
+pub fn cancel_phone_rules(
+    path: &std::path::Path,
+    reaches: impl Fn(&str, &str) -> Result<bool, String>,
+) -> Result<Vec<CancelledRule>, String> {
+    // Mutex first, then the file — the order `lock()` takes them in. A
+    // struct literal evaluates its fields as written, so naming the file lock
+    // first inverted it: a claim holding the mutex and this holding the file
+    // lock waited on each other for good.
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let _guard = Guard { _file: file_lock(path), _mutex: mutex };
+    cancel_phone_rules_locked(path, reaches)
+}
+
+/// [`cancel_phone_rules`] on `path` by a process that shares the file — the
+/// Mobile sidecar — under the file's lock alone.
+pub fn cancel_phone_rules_in(
+    path: &std::path::Path,
+    reaches: impl Fn(&str, &str) -> Result<bool, String>,
+) -> Result<Vec<CancelledRule>, String> {
+    let _lock = file_lock(path);
+    cancel_phone_rules_locked(path, reaches)
+}
+
+fn cancel_phone_rules_locked(
+    path: &std::path::Path,
+    reaches: impl Fn(&str, &str) -> Result<bool, String>,
+) -> Result<Vec<CancelledRule>, String> {
+    let mut file = read_at(path)?;
+    let mut cancelled = Vec::new();
+    for (project_id, project) in &mut file.projects {
+        for (target_id, target) in project.iter_mut() {
+            let lost: Vec<String> = target
+                .schedules
+                .iter()
+                .filter(|rule| rule.phone_device.as_deref().is_some_and(|device| reaches(device, project_id) == Ok(false)))
+                .map(|rule| rule.id.clone())
+                .collect();
+            for schedule_id in lost {
+                target.schedules.retain(|rule| rule.id != schedule_id);
+                target.claims.remove(&schedule_id);
+                cancelled.push(CancelledRule {
+                    project_id: project_id.clone(),
+                    target_id: target_id.clone(),
+                    schedule_id,
+                });
+            }
+        }
+    }
+    if cancelled.is_empty() {
+        return Ok(cancelled);
+    }
+    prune_empty(&mut file);
+    write_at(path, &file)?;
+    Ok(cancelled)
 }
 
 pub fn complete(
@@ -775,6 +885,7 @@ mod tests {
             preface: Vec::new(),
             last: None,
             origin: None,
+            phone_device: None,
         }
     }
 
@@ -811,6 +922,34 @@ mod tests {
 
     fn snapshot(file: &AgentTasksFile) -> String {
         serde_json::to_string(file).unwrap()
+    }
+
+    /// The window's phone sweep takes the in-process mutex before the file
+    /// lock, as `lock()` (every claim) does: waiting on the mutex, it must
+    /// not already hold the file — or a claim holding the mutex deadlocks
+    /// waiting for it.
+    #[test]
+    fn the_phone_sweep_waits_for_the_mutex_before_taking_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_path(dir.path());
+        write_at(&path, &AgentTasksFile::default()).unwrap();
+        let held = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let sweeping = {
+            let path = path.clone();
+            std::thread::spawn(move || cancel_phone_rules(&path, |_, _| Ok(true)).map(|cancelled| cancelled.len()))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path.with_file_name(format!("{FILE_NAME}.lock")))
+            .unwrap();
+        let free = lock_file.try_lock().is_ok();
+        let _ = lock_file.unlock();
+        drop(held);
+        assert_eq!(sweeping.join().unwrap(), Ok(0));
+        assert!(free, "the sweep held the file lock while waiting for the mutex");
     }
 
     #[test]

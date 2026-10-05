@@ -46,6 +46,15 @@ pub struct ScheduledAgentPrompt {
     pub last: Option<AgentScheduleLastRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ScheduleOrigin>,
+    /// The paired phone that made this rule — a schedule it created, a
+    /// collected prompt it sent, a prompt it held — by the device id the
+    /// sidecar knows it as (never a secret). A rule whose phone is revoked, or
+    /// no longer reaches the scope, is cancelled rather than typed
+    /// (`mobile_control::phone_origin`). Absent on every rule the desktop or
+    /// an agent made, and on phone rules written before it existed: those
+    /// are of unknown origin and left alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone_device: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -141,7 +141,7 @@ fn apply_create(file: &mut AgentTasksFile, session: &Session, args: Create, leve
     let id = format!("agent-{}", super::root_mcp::mint_token().ok_or("entropy unavailable")?);
     let enabled = level == Level::Apply && !recurring;
     let row = ScheduledAgentPrompt { id: id.clone(), enabled, message, rule, preface: vec![], last: None,
-        origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery }) };
+        origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery }), phone_device: None };
     agent_tasks::apply_upsert(file, project, &binding.target, row, None)?;
     Ok(json!({"id":id, "state":if enabled {"scheduled"} else {"proposed"}, "fires_at":fires_at.to_rfc3339()}))
 }

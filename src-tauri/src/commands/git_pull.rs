@@ -521,9 +521,7 @@ fn git_merge_sides_blocking(path: String) -> Result<MergeSides, String> {
     while !probe.is_dir() {
         probe = probe.parent().ok_or("no existing parent directory")?.to_path_buf();
     }
-    let top = hardened_git_command_in(&probe, &["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let top = crate::services::git_bounded::output(hardened_git_command_in(&probe, &["rev-parse", "--show-toplevel"]))?;
     if !top.status.success() {
         return Err(err_of(&top));
     }

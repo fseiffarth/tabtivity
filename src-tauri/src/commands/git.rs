@@ -339,7 +339,8 @@ fn repo_config_files(project_dir: &Path) -> Vec<PathBuf> {
     };
     let mut dirs = vec![git_dir.path.clone()];
     if !git_dir.main {
-        if let Ok(common) = std::fs::read_to_string(git_dir.path.join("commondir")) {
+        // Regular files only: a FIFO here would block before git even ran (#2349).
+        if let Some(common) = crate::services::git_bounded::read_small_regular(&git_dir.path.join("commondir")) {
             let common = common.trim();
             if !common.is_empty() {
                 dirs.push(git_dir.path.join(common)); // an absolute path replaces the base
@@ -370,7 +371,7 @@ fn discover_git_dir(project_dir: &Path) -> Option<GitDir> {
             return Some(GitDir { path: dot_git, main });
         }
         if dot_git.is_file() {
-            let text = std::fs::read_to_string(&dot_git).ok()?;
+            let text = crate::services::git_bounded::read_small_regular(&dot_git)?;
             let target = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
             return (!target.is_empty()).then(|| GitDir { path: dir.join(target), main: false });
         }
@@ -410,17 +411,17 @@ fn sanitize_git_config_file(config_path: &Path) {
     if !config_path.is_file() {
         return;
     }
-    let Ok(listed) = crate::paths::command_no_window("git")
-        .args([
-            "config",
-            "--file",
-            config_path_str,
-            "--name-only",
-            "--list",
-            "--no-includes",
-        ])
-        .output()
-    else {
+    let mut list = crate::paths::command_no_window("git");
+    list.args([
+        "config",
+        "--file",
+        config_path_str,
+        "--name-only",
+        "--list",
+        "--no-includes",
+    ]);
+    let read = crate::services::git_bounded::READ_TIMEOUT;
+    let Ok(listed) = crate::services::git_bounded::output_within(list, read) else {
         return;
     };
     if !listed.status.success() {
@@ -436,9 +437,9 @@ fn sanitize_git_config_file(config_path: &Path) {
         if !is_denylisted_config_key(&key) {
             continue;
         }
-        let _ = crate::paths::command_no_window("git")
-            .args(["config", "--file", config_path_str, "--unset-all", &key])
-            .output();
+        let mut unset = crate::paths::command_no_window("git");
+        unset.args(["config", "--file", config_path_str, "--unset-all", &key]);
+        let _ = crate::services::git_bounded::output_within(unset, read);
     }
 }
 
@@ -535,9 +536,11 @@ fn run_git_as(
             let args = git_args(args, hooks);
             crate::services::ssh_exec::run_git_remote(&t.spec, &args)
         }
-        None => git_command_in(Path::new(project_dir), args, hooks)
-            .output()
-            .map_err(|e| e.to_string()),
+        // Bounded (#2349): a FIFO ignore/attributes file must not hang git.
+        None => crate::services::git_bounded::output_within(
+            git_command_in(Path::new(project_dir), args, hooks),
+            crate::services::git_bounded::timeout_for(args, hooks == Hooks::Live),
+        ),
     }
 }
 
@@ -838,10 +841,9 @@ fn git_repo_root_blocking(project_dir: String, rel_path: String) -> Result<Optio
     // `--show-toplevel` prints the absolute root of the innermost repo enclosing
     // `dir`. Any failure (not a repo, missing dir) maps to `None`, not an error,
     // so the UI treats it as "no repo here" rather than flashing a banner.
-    let out = crate::paths::command_no_window("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(&dir)
-        .output();
+    let mut cmd = crate::paths::command_no_window("git");
+    cmd.args(["rev-parse", "--show-toplevel"]).current_dir(&dir);
+    let out = crate::services::git_bounded::output(cmd);
     match out {
         Ok(o) if o.status.success() => {
             let top = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -1688,6 +1690,9 @@ pub(crate) fn push_transport_command(
         cmd.env(crate::app_env!("GIT_TOKEN"), tok);
     }
     cmd.env("GIT_TERMINAL_PROMPT", "0");
+    // A `refs/replace` graft would otherwise pass push's fast-forward check
+    // for a commit that rewrites the remote branch.
+    cmd.env("GIT_NO_REPLACE_OBJECTS", "1");
     cmd
 }
 
@@ -1696,7 +1701,7 @@ pub(crate) fn push_transport_command(
 /// the repo), if an executable `pre-push` sits there. The lookup
 /// `services::exec_trust` fingerprints against. Neither query runs a hook.
 pub(crate) fn resolve_pre_push_hook(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let out = hooked_git_command_in(dir, &["rev-parse", "--git-path", "hooks"]).output().ok()?;
+    let out = crate::services::git_bounded::output(hooked_git_command_in(dir, &["rev-parse", "--git-path", "hooks"])).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -3170,33 +3175,46 @@ fn exclude_app_dir(ctx: &WorktreeCtx) {
             } else {
                 Path::new(&ctx.cwd).join(git_dir)
             };
-            let info = git_dir.join("info");
-            let file = info.join("exclude");
-            let existing = std::fs::read_to_string(&file).unwrap_or_default();
-            if existing.lines().any(|l| l.trim() == RULE) {
-                return;
-            }
-            let _ = std::fs::create_dir_all(&info);
-            let mut next = existing;
-            if !next.is_empty() && !next.ends_with('\n') {
+            // `info/` is writable inside the fence, so `info` or `exclude` may be
+            // a planted link or FIFO: refused, never followed (#2347).
+            let added = crate::services::git_guard::edit_info_exclude(&git_dir, |existing| {
+                if existing.lines().any(|l| l.trim() == RULE) {
+                    return None;
+                }
+                let mut next = existing.to_string();
+                if !next.is_empty() && !next.ends_with('\n') {
+                    next.push('\n');
+                }
+                next.push_str(RULE);
                 next.push('\n');
+                Some(next)
+            });
+            if let Err(why) = added {
+                eprintln!("git worktree: {RULE} not added to info/exclude: {why}");
             }
-            next.push_str(RULE);
-            next.push('\n');
-            let _ = std::fs::write(&file, next);
         }
         Some(t) => {
-            // One round trip, nothing interpolated: `run_remote_script` supplies the
-            // `cd <remote_path> &&` itself, already shell-quoted.
-            let script = format!(
-                "d=$(git rev-parse --git-common-dir 2>/dev/null) && \
-                 mkdir -p \"$d/info\" && \
-                 {{ grep -qxF '{RULE}' \"$d/info/exclude\" 2>/dev/null || \
-                   printf '{RULE}\\n' >> \"$d/info/exclude\"; }}"
-            );
-            let _ = crate::services::ssh_exec::run_remote_script(&t.spec, &script);
+            let _ = crate::services::ssh_exec::run_remote_script(&t.spec, &remote_exclude_script());
         }
     }
+}
+
+/// [`exclude_app_dir`]'s remote half, as one shell round trip. Nothing is
+/// interpolated: `run_remote_script` supplies the `cd <remote_path> &&`
+/// itself, already shell-quoted. A linked `info` or `exclude`, or one that is
+/// not a folder / regular file, is left alone rather than appended through
+/// (#2347).
+fn remote_exclude_script() -> String {
+    const RULE: &str = crate::brand::PROJECT_DIR_EXCLUDE_RULE;
+    format!(
+        "d=$(git rev-parse --git-common-dir 2>/dev/null) && \
+         [ ! -L \"$d/info\" ] && mkdir -p \"$d/info\" && \
+         [ -d \"$d/info\" ] && [ ! -L \"$d/info\" ] && \
+         [ ! -L \"$d/info/exclude\" ] && \
+         {{ [ ! -e \"$d/info/exclude\" ] || [ -f \"$d/info/exclude\" ]; }} && \
+         {{ grep -qxF '{RULE}' \"$d/info/exclude\" 2>/dev/null || \
+           printf '{RULE}\\n' >> \"$d/info/exclude\"; }}"
+    )
 }
 
 /// Removes the worktree at `path`.
@@ -3408,9 +3426,11 @@ fn detect_git_providers_blocking() -> Result<HashMap<String, DetectedOrigin>, St
         if !Path::new(&dir).join(".git").exists() {
             continue;
         }
-        let output = crate::paths::command_no_window("git")
-            .args(["-C", &dir, "remote", "get-url", "origin"])
-            .output();
+        // Bounded (#2349), in the folder rather than `-C` so the FIFO pre-check
+        // sees it: one hung `config` read must not hold the whole sweep.
+        let mut cmd = crate::paths::command_no_window("git");
+        cmd.args(["remote", "get-url", "origin"]).current_dir(&dir);
+        let output = crate::services::git_bounded::output_within(cmd, std::time::Duration::from_secs(15));
         let Ok(output) = output else { continue };
         if !output.status.success() {
             continue;
@@ -3454,6 +3474,52 @@ mod tests {
         run(&["init"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test User"]);
+    }
+
+    /// #2347: the remote exclude script appends the rule once to a plain
+    /// `info/exclude`, and leaves a linked `exclude` or `info/` — and what
+    /// they point at — alone.
+    #[cfg(unix)]
+    #[test]
+    fn the_remote_exclude_script_appends_once_and_never_through_a_link() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping the_remote_exclude_script_appends_once_and_never_through_a_link");
+            return;
+        }
+        const RULE: &str = crate::brand::PROJECT_DIR_EXCLUDE_RULE;
+        let run_script = |dir: &Path| {
+            let out = std::process::Command::new("sh")
+                .args(["-c", &remote_exclude_script()])
+                .current_dir(dir)
+                .output()
+                .expect("sh runs");
+            out.status.success()
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("plain");
+        fs::create_dir_all(&dir).expect("mkdir");
+        init_repo(&dir);
+        let exclude = dir.join(".git").join("info").join("exclude");
+        fs::write(&exclude, "*.log").expect("write");
+        assert!(run_script(&dir));
+        assert!(run_script(&dir));
+        let text = fs::read_to_string(&exclude).expect("exclude");
+        assert_eq!(text.lines().filter(|l| *l == RULE).count(), 1, "{text}");
+        assert!(text.starts_with("*.log"), "{text}");
+
+        let victim = tmp.path().join("profile");
+        fs::write(&victim, "export PATH\n").expect("write");
+        fs::remove_file(&exclude).expect("rm");
+        std::os::unix::fs::symlink(&victim, &exclude).expect("symlink");
+        assert!(!run_script(&dir));
+        assert_eq!(fs::read_to_string(&victim).expect("victim"), "export PATH\n");
+
+        let elsewhere = tmp.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).expect("mkdir");
+        fs::remove_dir_all(dir.join(".git").join("info")).expect("rm info");
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".git").join("info")).expect("symlink");
+        assert!(!run_script(&dir));
+        assert_eq!(fs::read_dir(&elsewhere).expect("ls").count(), 0);
     }
 
     #[test]
@@ -5246,5 +5312,59 @@ filename note.txt
         let _ = run_git(None, dir, &["status", "--porcelain"]);
         let _ = run_git(None, dir, &["diff"]);
         assert!(!marker.exists(), "implicit bare repo: clean filter ran through run_git");
+    }
+
+    /// #2349: a FIFO `info/exclude` (pre-checked) and a FIFO nested
+    /// `.gitignore` (timed out) make the background status probes answer an
+    /// error quickly — never a hang, never a fake clean status — and leave no
+    /// git behind; a normal repo still reads.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fifo_ignore_file_makes_the_status_polls_fail_fast_not_hang() {
+        use crate::services::git_bounded::{LAST_PID, TEST_TIMEOUT};
+        use std::time::{Duration, Instant};
+        if !git_available() {
+            return;
+        }
+        let mkfifo = |p: &Path| {
+            let _ = fs::remove_file(p);
+            let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: a valid NUL-terminated path.
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo {}", p.display());
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("repo");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        init_repo(&dir);
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        fs::write(dir.join("sub/b.txt"), "b").unwrap();
+        assert!(plain_git(&dir, &["add", "."]).status.success());
+        assert!(plain_git(&dir, &["commit", "-qm", "i"]).status.success());
+        let d = dir.to_string_lossy().into_owned();
+
+        let status = git_status_probe(d.clone(), false).expect("a normal repo reads");
+        assert!(status.is_repo && status.untracked == 0 && status.unstaged == 0);
+
+        let exclude = dir.join(".git/info/exclude");
+        mkfifo(&exclude);
+        let started = Instant::now();
+        let err = git_status_probe(d.clone(), false).err().expect("a FIFO exclude must not read as clean");
+        assert!(err.contains("named pipe"), "{err}");
+        assert!(git_file_statuses_blocking(d.clone(), String::new()).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+        fs::remove_file(&exclude).unwrap();
+
+        mkfifo(&dir.join("sub/.gitignore"));
+        TEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(700))));
+        let started = Instant::now();
+        let err = git_status_probe(d.clone(), false);
+        let pid = LAST_PID.with(|p| p.get()).expect("git spawned");
+        let listing = git_file_statuses_blocking(d.clone(), "sub".into());
+        TEST_TIMEOUT.with(|t| t.set(None));
+        let err = err.err().expect("a FIFO nested .gitignore must not read as clean");
+        assert!(err.contains("timed out"), "{err}");
+        assert!(listing.expect_err("the tree's status").contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert!(!Path::new(&format!("/proc/{pid}")).exists(), "git {pid} left behind");
     }
 }

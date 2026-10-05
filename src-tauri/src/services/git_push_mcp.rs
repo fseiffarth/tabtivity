@@ -252,11 +252,31 @@ pub fn validate_branch(name: &str) -> Result<(), String> {
     if bad { Err(format!("'{name}' is not a plain branch name")) } else { Ok(()) }
 }
 
-/// The one refspec shape this lane pushes: no `+`, no tags, no delete.
-pub fn refspec(branch: &str) -> Result<String, String> {
-    validate_branch(branch)?;
-    Ok(format!("refs/heads/{branch}:refs/heads/{branch}"))
+/// A full object name as git prints it: 40 (SHA-1) or 64 (SHA-256) lowercase
+/// hex digits. Nothing a refspec could read as a ref name or an operator.
+pub(crate) fn validate_sha(sha: &str) -> Result<(), String> {
+    let ok = matches!(sha.len(), 40 | 64) && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if ok { Ok(()) } else { Err(format!("'{sha}' is not a full commit id")) }
 }
+
+/// The one refspec shape this lane pushes: the approved commit itself onto
+/// the branch — `<sha>:refs/heads/<branch>`, never the local branch by name,
+/// which the fenced agent can move between the approval and the transport.
+/// No `+`, no tags, no delete.
+pub fn refspec(sha: &str, branch: &str) -> Result<String, String> {
+    validate_sha(sha)?;
+    validate_branch(branch)?;
+    Ok(format!("{sha}:refs/heads/{branch}"))
+}
+
+/// Test seam: runs right before the transport starts, so a test can move
+/// refs where the fenced agent could. A no-op outside tests.
+pub(crate) fn before_transport() {
+    #[cfg(test)]
+    BEFORE_TRANSPORT.with(|slot| if let Some(f) = slot.borrow_mut().take() { f() });
+}
+#[cfg(test)]
+thread_local! { pub(crate) static BEFORE_TRANSPORT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
 
 /// Whether `branch` may never be pushed: the remote's default branch (falling
 /// back to `main`/`master` when the remote did not say) or a listed one.
@@ -269,6 +289,8 @@ pub fn is_protected(branch: &str, default_branch: Option<&str>, policy: &Project
 }
 
 // ── Running processes with a cap ────────────────────────────────────────────
+
+use crate::services::git_bounded::BoundedOutput;
 
 pub(crate) struct Ran { pub success: bool, pub code: Option<i32>, pub stdout: String, pub stderr: String }
 
@@ -308,8 +330,18 @@ pub(crate) fn run_capped(mut cmd: std::process::Command, stdin: Option<&[u8]>, t
     }
 }
 
+/// The hardened git command for this lane, with replace refs ignored:
+/// `refs/replace/*` is writable in the fence and changes what `log` and
+/// `merge-base` see but not what `pack-objects` sends, so a graft could hide
+/// a commit from the card or fake a fast-forward.
+pub(crate) fn lane_git_command<S: AsRef<str>>(dir: &Path, args: &[S]) -> std::process::Command {
+    let mut cmd = hardened_git_command_in(dir, args);
+    cmd.env("GIT_NO_REPLACE_OBJECTS", "1");
+    cmd
+}
+
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = hardened_git_command_in(dir, args).output().map_err(|e| e.to_string())?;
+    let out = crate::services::git_bounded::output(lane_git_command(dir, args))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     } else {
@@ -378,10 +410,14 @@ fn allowed_branches(dir: &Path, policy: &ProjectPolicy) -> Vec<String> {
 
 /// A repo-scope `url.<base>.insteadOf` / `pushInsteadOf` would rewrite even
 /// the URL passed on the command line, so the destination could not be pinned.
+/// A query git refused or that timed out (#2349: a FIFO it reads) counts as a
+/// rewrite: unknown fails closed.
 pub(crate) fn repo_rewrites_urls(dir: &Path) -> bool {
     ["--local", "--worktree"].iter().any(|scope| {
-        hardened_git_command_in(dir, &["config", scope, "--name-only", "--get-regexp", r"^url\..*\.(push)?insteadof$"])
-            .output().is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+        match crate::services::git_bounded::output(hardened_git_command_in(dir, &["config", scope, "--name-only", "--get-regexp", r"^url\..*\.(push)?insteadof$"])) {
+            Ok(o) => o.status.success() && !o.stdout.is_empty(),
+            Err(_) => true,
+        }
     })
 }
 
@@ -493,7 +529,7 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
     if remote_sha == head {
         return Err(Failure::new(Category::NothingToPush, format!("'{branch}' is already up to date with the remote.")));
     }
-    let ff = hardened_git_command_in(dir, &["merge-base", "--is-ancestor", &remote_sha, &head]).output().is_ok_and(|o| o.status.success());
+    let ff = lane_git_command(dir, &["merge-base", "--is-ancestor", &remote_sha, &head]).bounded_output().is_ok_and(|o| o.status.success());
     if !ff {
         return Err(Failure::new(Category::Diverged, format!("The remote '{branch}' has commits this branch does not have; pull or rebase first, then ask again.")));
     }
@@ -528,28 +564,45 @@ fn preflight_command(tab: &str, hook: &Path, dir: &Path, remote: &str, url: &str
     }
     cmd.env(crate::app_env!("PUSH_PREFLIGHT"), "1");
     cmd.env("GIT_TERMINAL_PROMPT", "0");
+    // The hook's scan sees the commits that are sent, not a graft over them.
+    cmd.env("GIT_NO_REPLACE_OBJECTS", "1");
     Ok(cmd)
 }
 
 /// Run the resolved `pre-push` (if any) and pick up what it committed. The
 /// returned plan has the post-preflight SHA, commit list and diffstat.
+///
+/// The hook's stdin line names the SHA the transport will push. When the
+/// hook adds commits (a version bump), the branch's new tip is not what that
+/// line named, so the hook runs once more on the new tip: whatever it checks
+/// (a privacy scan) then covers every commit that leaves, including any that
+/// landed on the branch while it ran. A hook that still adds commits on that
+/// second run is refused rather than run again.
 fn preflight(dir: &Path, tab: &str, mut plan: Plan) -> Result<(Plan, String), Failure> {
     let Some(hook) = resolve_pre_push_hook(dir) else { return Ok((plan, String::new())) };
-    let cmd = preflight_command(tab, &hook, dir, &plan.remote, &plan.url)?;
-    let line = format!("refs/heads/{b} {h} refs/heads/{b} {r}\n", b = plan.branch, h = plan.head, r = plan.remote_sha);
-    let ran = match run_capped(cmd, Some(line.as_bytes()), PREFLIGHT_TIMEOUT) {
-        Ok(ran) => ran,
-        Err(None) => return Err(Failure::new(Category::PreflightTimeout, "The pre-push hook did not finish within five minutes and was stopped; nothing was pushed.")),
-        Err(Some(e)) => return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook could not be started: {e}"))),
-    };
-    let output = clean_output(&join_streams(&ran.stdout, &ran.stderr), None);
-    if !ran.success {
-        return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook exited with status {}; nothing was pushed. Fix what its output reports and ask again.", ran.code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into()))).with_output(output));
-    }
-    // The hook may have committed (a version bump): re-resolve and re-check.
-    let head = git(dir, &["rev-parse", "--verify", &format!("refs/heads/{}^{{commit}}", plan.branch)]).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
-    if head != plan.head {
-        let ff = hardened_git_command_in(dir, &["merge-base", "--is-ancestor", &plan.head, &head]).output().is_ok_and(|o| o.status.success());
+    let mut outputs: Vec<String> = Vec::new();
+    for round in 0..2 {
+        let cmd = preflight_command(tab, &hook, dir, &plan.remote, &plan.url)?;
+        let line = format!("refs/heads/{b} {h} refs/heads/{b} {r}\n", b = plan.branch, h = plan.head, r = plan.remote_sha);
+        let ran = match run_capped(cmd, Some(line.as_bytes()), PREFLIGHT_TIMEOUT) {
+            Ok(ran) => ran,
+            Err(None) => return Err(Failure::new(Category::PreflightTimeout, "The pre-push hook did not finish within five minutes and was stopped; nothing was pushed.")),
+            Err(Some(e)) => return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook could not be started: {e}"))),
+        };
+        outputs.push(join_streams(&ran.stdout, &ran.stderr));
+        let output = clean_output(&outputs.join("\n"), None);
+        if !ran.success {
+            return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook exited with status {}; nothing was pushed. Fix what its output reports and ask again.", ran.code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into()))).with_output(output));
+        }
+        // The hook may have committed (a version bump): re-resolve and re-check.
+        let head = git(dir, &["rev-parse", "--verify", &format!("refs/heads/{}^{{commit}}", plan.branch)]).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
+        if head == plan.head {
+            return Ok((plan, output));
+        }
+        if round == 1 {
+            return Err(Failure::new(Category::PreflightFailed, "The pre-push hook added commits again when run on its own commits; nothing was pushed.").with_output(output));
+        }
+        let ff = lane_git_command(dir, &["merge-base", "--is-ancestor", &plan.head, &head]).bounded_output().is_ok_and(|o| o.status.success());
         if !ff {
             return Err(Failure::new(Category::PreflightFailed, "The pre-push hook rewrote the branch instead of adding to it; nothing was pushed.").with_output(output));
         }
@@ -558,7 +611,7 @@ fn preflight(dir: &Path, tab: &str, mut plan: Plan) -> Result<(Plan, String), Fa
         plan.commits = commits;
         plan.diffstat = diffstat;
     }
-    Ok((plan, output))
+    unreachable!("the second round always returns")
 }
 
 pub(crate) fn join_streams(stdout: &str, stderr: &str) -> String {
@@ -572,8 +625,12 @@ pub(crate) fn join_streams(stdout: &str, stderr: &str) -> String {
 // ── Transport ───────────────────────────────────────────────────────────────
 
 fn transport(dir: &Path, plan: &Plan, token: Option<&str>, origins: &[String]) -> Result<String, Failure> {
-    let refspec = refspec(&plan.branch).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
+    // The plan's SHA, not the branch name: what was validated (Apply) or
+    // shown on the approved card (Propose) is what leaves, wherever the
+    // branch points by now.
+    let refspec = refspec(&plan.head, &plan.branch).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
     let cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
+    before_transport();
     let ran = match run_capped(cmd, None, TRANSPORT_TIMEOUT) {
         Ok(ran) => ran,
         Err(None) => return Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
@@ -821,8 +878,11 @@ fn push_now(id: &str, plan: &Plan, token: Option<&str>, origins: &[String]) {
 }
 
 /// The user pressed Push (or Dismiss) on the card. Approval binds the
-/// post-preflight SHA: a branch that moved since is a stale approval. The
-/// first push to a URL records it as confirmed.
+/// post-preflight SHA: a branch that moved since is a stale approval (the
+/// card no longer describes the branch, so the user decides again), and
+/// the transport pushes that SHA itself, so a move after this check — while
+/// the remote is queried — changes nothing that leaves. The first push to a
+/// URL records it as confirmed.
 pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
     let p = get(id).ok_or("proposal not found")?;
     if p.status != Status::Pending { return Err("this proposal is no longer pending".into()); }
@@ -854,7 +914,7 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
     let Some(live_remote) = view.sha else {
         return fail(id, Failure::new(Category::RemoteBranchMissing, "The remote branch disappeared in the meantime.")).ok_or("proposal not found".into());
     };
-    if live_remote != remote_sha && !hardened_git_command_in(&p.dir, &["merge-base", "--is-ancestor", &live_remote, &head]).output().is_ok_and(|o| o.status.success()) {
+    if live_remote != remote_sha && !lane_git_command(&p.dir, &["merge-base", "--is-ancestor", &live_remote, &head]).bounded_output().is_ok_and(|o| o.status.success()) {
         return fail(id, Failure::new(Category::Diverged, "The remote moved in the meantime; pull or rebase first, then ask again.")).ok_or("proposal not found".into());
     }
     update(id, |p| { p.status = Status::Running; p.needs_url_confirm = false; });
@@ -907,7 +967,8 @@ fn run_release(id: String, requested: Option<String>) {
 }
 
 /// The user pressed Release: re-decide against the live remote, bind to the
-/// proposed tip, then tag and push the one tag.
+/// proposed tip, then tag and push the one tag (`git_release::release` pins
+/// the tag object it verified, so a local tag moved meanwhile is not sent).
 fn decide_release(p: Proposal) -> Result<Proposal, String> {
     let (Some(tag), Some(head)) = (p.tag.clone(), p.head.clone()) else { return Err("incomplete proposal".into()) };
     let (token, origins) = creds(&p.project);
@@ -1298,14 +1359,21 @@ mod tests {
     fn propose_policy() -> ProjectPolicy { ProjectPolicy { level: Some(Level::Propose), protected: vec![], confirmed_url: None } }
 
     #[test]
-    fn refspec_is_one_branch_fast_forward_only() {
-        assert_eq!(refspec("develop").unwrap(), "refs/heads/develop:refs/heads/develop");
-        assert_eq!(refspec("feature/x").unwrap(), "refs/heads/feature/x:refs/heads/feature/x");
+    fn refspec_is_the_approved_sha_onto_one_branch_fast_forward_only() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(refspec(sha, "develop").unwrap(), format!("{sha}:refs/heads/develop"));
+        assert_eq!(refspec(sha, "feature/x").unwrap(), format!("{sha}:refs/heads/feature/x"));
+        let sha256 = "a".repeat(64);
+        assert_eq!(refspec(&sha256, "develop").unwrap(), format!("{sha256}:refs/heads/develop"));
         for bad in ["", "+develop", "develop:main", "refs/tags/v1", "v1..v2", "-f", "a b", "a~1", "x.lock", "a@{1}", "*"] {
-            assert!(refspec(bad).is_err(), "{bad:?}");
+            assert!(refspec(sha, bad).is_err(), "{bad:?}");
         }
-        let spec = refspec("develop").unwrap();
-        assert!(!spec.starts_with('+') && !spec.contains("tags") && !spec.starts_with(':'));
+        // Never a name, a short id, an operator or anything but full hex.
+        for bad in ["", "develop", "refs/heads/develop", "HEAD", "0123456", &format!("+{}", &sha[1..]), &sha.to_uppercase(), &format!("{sha}0"), &format!("{}:", &sha[..39]), &format!("{}~", &sha[..39])] {
+            assert!(refspec(bad, "develop").is_err(), "{bad:?}");
+        }
+        let spec = refspec(sha, "develop").unwrap();
+        assert!(!spec.starts_with('+') && !spec.contains("tags") && !spec.starts_with(':') && !spec.starts_with("refs/"));
     }
 
     #[test]
@@ -1323,7 +1391,8 @@ mod tests {
     #[test]
     fn transport_argv_is_hookless_scoped_and_explicit() {
         let dir = tempfile::tempdir().unwrap();
-        let cmd = push_transport_command(dir.path(), "https://github.com/o/r.git", "refs/heads/develop:refs/heads/develop", Some("zzsecretzz"), &["https://github.com".into()]);
+        let spec = refspec("0123456789abcdef0123456789abcdef01234567", "develop").unwrap();
+        let cmd = push_transport_command(dir.path(), "https://github.com/o/r.git", &spec, Some("zzsecretzz"), &["https://github.com".into()]);
         let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         let joined = args.join(" ");
         assert!(args.windows(2).any(|w| w == ["-c", "core.hooksPath="]), "{joined}");
@@ -1332,7 +1401,7 @@ mod tests {
         assert_eq!(args.iter().filter(|a| a.starts_with("credential.") && a.contains(".helper=!")).count(), 1);
         assert!(args.iter().any(|a| a.starts_with("credential.https://github.com.helper=!")));
         let push = args.iter().position(|a| a == "push").unwrap();
-        assert_eq!(&args[push..], &["push", "--no-verify", "--porcelain", "--", "https://github.com/o/r.git", "refs/heads/develop:refs/heads/develop"]);
+        assert_eq!(&args[push..], &["push", "--no-verify", "--porcelain", "--", "https://github.com/o/r.git", spec.as_str()]);
         assert!(!joined.contains("zzsecretzz"), "the token is never in argv");
         let env: Vec<(String, Option<String>)> = cmd.get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
         assert!(env.contains(&(crate::app_env!("GIT_TOKEN").into(), Some("zzsecretzz".into()))));
@@ -1531,6 +1600,19 @@ mod tests {
         sh(&work, &["config", "url.https://evil.invalid/.insteadOf", "file://"]);
         assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::UrlRewritten);
         sh(&work, &["config", "--unset", "url.https://evil.invalid/.insteadOf"]);
+        // #2349: a config read git refuses (a FIFO it would block on) is not
+        // "no rewrite" — unknown fails closed.
+        #[cfg(unix)]
+        {
+            let fifo = work.join(".git/info/exclude");
+            let _ = std::fs::remove_file(&fifo);
+            let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: a valid NUL-terminated path.
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+            assert!(repo_rewrites_urls(&work));
+            std::fs::remove_file(&fifo).unwrap();
+            assert!(!repo_rewrites_urls(&work));
+        }
         // The remote moved: diverged.
         let other = _root.path().join("other");
         sh(_root.path(), &["clone", "-q", "-b", "develop", &format!("file://{}", _remote.display()), other.to_str().unwrap()]);
@@ -1571,7 +1653,9 @@ mod tests {
         let hooks = work.join(".githooks");
         std::fs::create_dir_all(&hooks).unwrap();
         let hook = hooks.join("pre-push");
-        std::fs::write(&hook, concat!("#!/bin/sh\nset -e\nread line\nprintf '%s\\n' \"$1 $2\" \"$line\" \"pf=${", crate::app_upper!(), "_PUSH_PREFLIGHT:-unset}\" \"tok=${", crate::app_upper!(), "_GIT_TOKEN:-unset}\" > \"$(git rev-parse --show-toplevel)/seen.txt\"\necho bumped > bump.txt\ngit add bump.txt seen.txt\ngit -c user.name=h -c user.email=h@example.invalid commit -q -m bump\necho 'hook says hi'\nexit ${HOOK_EXIT:-0}\n")).unwrap();
+        // Bumps once, like this repo's hook: a second run on its own commit
+        // adds nothing. Every run appends what it saw.
+        std::fs::write(&hook, concat!("#!/bin/sh\nset -e\nread line\nprintf '%s\\n' \"$1 $2\" \"$line\" \"pf=${", crate::app_upper!(), "_PUSH_PREFLIGHT:-unset}\" \"tok=${", crate::app_upper!(), "_GIT_TOKEN:-unset}\" >> \"$(git rev-parse --git-dir)/seen.txt\"\nif [ ! -e bump.txt ] || [ -n \"${HOOK_ALWAYS:-}\" ]; then date +%s%N >> bump.txt; git add bump.txt; git -c user.name=h -c user.email=h@example.invalid commit -q -m bump; fi\necho 'hook says hi'\nexit ${HOOK_EXIT:-0}\n")).unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
         sh(&work, &["config", "core.hooksPath", ".githooks"]);
         assert_eq!(resolve_pre_push_hook(&work).unwrap(), hook);
@@ -1581,13 +1665,27 @@ mod tests {
         let (after, output) = preflight(&work, "tab:not-fenced", before.clone()).unwrap();
         std::env::remove_var(crate::app_env!("GIT_TOKEN"));
         assert!(output.contains("hook says hi"), "{output}");
-        let seen = std::fs::read_to_string(work.join("seen.txt")).unwrap();
+        let seen_file = work.join(".git").join("seen.txt");
+        let seen = std::fs::read_to_string(&seen_file).unwrap();
         assert!(seen.contains(&format!("origin file://{}", remote.display())), "{seen}");
         assert!(seen.contains(&format!("refs/heads/develop {} refs/heads/develop {}", before.head, before.remote_sha)), "{seen}");
-        assert!(seen.contains("pf=1") && seen.contains("tok=unset"), "{seen}");
+        assert!(seen.contains("pf=1") && seen.contains("tok=unset") && !seen.contains("tok=leak"), "{seen}");
         assert_ne!(after.head, before.head, "the hook's commit is the new head");
         assert_eq!(after.commits.len(), 2);
         assert_eq!(after.head, sh(&work, &["rev-parse", "HEAD"]));
+        // The hook ran again on its own commit: its last stdin line names
+        // the SHA the transport pushes.
+        let lines: Vec<&str> = seen.lines().filter(|l| l.starts_with("refs/heads/")).collect();
+        assert_eq!(lines, [format!("refs/heads/develop {} refs/heads/develop {}", before.head, before.remote_sha), format!("refs/heads/develop {} refs/heads/develop {}", after.head, before.remote_sha)], "{seen}");
+        assert_eq!(output.matches("hook says hi").count(), 2, "{output}");
+        // A hook that adds a commit on every run is refused, not chased.
+        std::fs::remove_file(&seen_file).unwrap();
+        std::env::set_var("HOOK_ALWAYS", "1");
+        let failure = preflight(&work, "tab:not-fenced", plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        std::env::remove_var("HOOK_ALWAYS");
+        assert_eq!(failure.category, Category::PreflightFailed);
+        assert!(failure.message.contains("again"), "{}", failure.message);
+        assert_eq!(std::fs::read_to_string(&seen_file).unwrap().lines().filter(|l| l.starts_with("refs/heads/")).count(), 2, "run twice, never a third time");
         // Exit 1 refuses with the output.
         std::env::set_var("HOOK_EXIT", "1");
         let failure = preflight(&work, "tab:not-fenced", plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
@@ -1650,6 +1748,74 @@ mod tests {
         assert_eq!((pushed.status, pushed.category), (Status::Pushed, None), "{}", pushed.message);
         assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), head);
         assert!(pushed.state.remote_sha.as_deref() == Some(head.as_str()));
+    }
+
+    #[test]
+    fn a_branch_moved_after_approval_never_sends_the_new_commit() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let approved = commit(&work, "b.txt");
+        let remote_sha = sh(&work, &["rev-parse", "origin/develop"]);
+        let s = session("tab:moved", &work);
+        let id = test_proposal(&s, &work);
+        let plan = Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: approved.clone(),
+            remote_sha: remote_sha.clone(), default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false };
+        set_pending(&id, &plan);
+        // The approval check passes; the agent then fast-forwards the branch
+        // while the remote is queried, right before the transport.
+        let w = work.clone();
+        let unseen = Arc::new(Mutex::new(String::new()));
+        let slot = unseen.clone();
+        BEFORE_TRANSPORT.with(|b| *b.borrow_mut() = Some(Box::new(move || { *slot.lock().unwrap() = commit(&w, "unseen.txt"); })));
+        let pushed = decide(&id, true).unwrap();
+        let unseen = unseen.lock().unwrap().clone();
+        assert_eq!(unseen.len(), 40, "the branch really moved");
+        assert_eq!(sh(&work, &["rev-parse", "refs/heads/develop"]), unseen);
+        assert_eq!((pushed.status, pushed.category), (Status::Pushed, None), "{}", pushed.message);
+        assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), approved, "the card's SHA landed");
+        let has = |sha: &str| Command::new("git").args(["cat-file", "-e", sha]).current_dir(&remote).output().unwrap().status.success();
+        assert!(!has(&unseen), "the commit the card did not list never reached the remote");
+
+        // Apply (no card): the transport sends the SHA its plan validated,
+        // not wherever the branch points by then.
+        let validated = commit(&work, "c.txt");
+        let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
+        let p = super::plan(&work, &policy, None, None, &[]).unwrap();
+        assert_eq!(p.head, validated);
+        let later = commit(&work, "later.txt");
+        transport(&work, &p, None, &[]).unwrap();
+        assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), validated);
+        assert!(!has(&later));
+    }
+
+    #[test]
+    fn a_replace_graft_neither_hides_a_commit_nor_fakes_a_fast_forward() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let base = sh(&work, &["rev-parse", "origin/develop"]);
+        commit(&work, "hidden.txt");
+        let tip = commit(&work, "tip.txt");
+        // `refs/replace` is writable in the fence; plain git now skips the
+        // hidden commit, while pack-objects would still send it.
+        sh(&work, &["replace", "--graft", &tip, &base]);
+        assert_eq!(sh(&work, &["log", "--format=%H", &format!("{base}..{tip}")]), tip);
+        let p = super::plan(&work, &propose_policy(), None, None, &[]).unwrap();
+        assert_eq!(p.commits.len(), 2, "the card lists the hidden commit: {:?}", p.commits);
+        assert!(p.commits.iter().any(|c| c.ends_with("hidden.txt")), "{:?}", p.commits);
+        sh(&work, &["replace", "-d", &tip]);
+
+        // A graft making a diverged tip look like a fast-forward of the remote.
+        sh(&work, &["reset", "-q", "--hard", &base]);
+        let theirs = commit(&work, "theirs.txt");
+        sh(&work, &["push", "-q", "origin", "develop"]);
+        sh(&work, &["reset", "-q", "--hard", &base]);
+        let ours = commit(&work, "ours.txt");
+        sh(&work, &["replace", "--graft", &ours, &theirs]);
+        assert_eq!(super::plan(&work, &propose_policy(), None, None, &[]).unwrap_err().category, Category::Diverged);
+        let forced = Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: ours,
+            remote_sha: theirs.clone(), default_branch: Some("main".into()), commits: vec![], diffstat: String::new(), needs_url_confirm: false };
+        assert!(transport(&work, &forced, None, &[]).is_err(), "the transport refuses the non-fast-forward too");
+        assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), theirs);
     }
 
     #[test]

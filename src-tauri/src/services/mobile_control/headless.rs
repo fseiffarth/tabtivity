@@ -1095,12 +1095,14 @@ pub fn attach_desktop_image(state_dir: &Path, root: &Path, image_id: &str) -> Re
 /// writes it — a create gets a fresh id, an update keeps the stored prefix
 /// commands the phone never sees, a delete is plain. Answers the tab's rows
 /// as `schedules` does. `Err("schedule_not_found")` for an update of a rule
-/// that is gone.
+/// that is gone. `phone` is the paired device asking: a rule it creates
+/// carries it (`phone_origin`); an update keeps the stored one.
 pub fn schedule_mutate(
     state_dir: &Path,
     project_id: &str,
     schedule_target_id: &str,
     action: ScheduleMutation,
+    phone: Option<&str>,
     now: DateTime<Local>,
 ) -> Result<TabSchedules, String> {
     let path = agent_tasks::file_path(state_dir);
@@ -1117,6 +1119,7 @@ pub fn schedule_mutate(
                 preface: Vec::new(),
                 last: None,
                 origin: None,
+                phone_device: phone.map(str::to_string),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1133,6 +1136,7 @@ pub fn schedule_mutate(
                 preface: existing.preface,
                 last: None,
                 origin: None,
+                phone_device: None,
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1155,12 +1159,14 @@ pub struct SendTarget {
 /// prompt's id (finished one-time rules pruned first at the tab's cap, the
 /// id re-minted when a recurring rule holds it), then the prompt retired to
 /// the history — and the sidecar's own scheduler delivers it at the next
-/// idle point. Answers the project's remaining prompts.
+/// idle point. Answers the project's remaining prompts. A send's rule
+/// carries `phone`, the paired device that sent it (`phone_origin`).
 pub fn prompt_mutate(
     state_dir: &Path,
     project_id: &str,
     action: PromptMutation,
     target: Option<SendTarget>,
+    phone: Option<&str>,
     now: DateTime<Local>,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     match action {
@@ -1181,7 +1187,7 @@ pub fn prompt_mutate(
                 .into_iter()
                 .find(|row| row.id == prompt_id)
                 .ok_or_else(|| "prompt_not_found".to_string())?;
-            queue_prompt(state_dir, project_id, &target.schedule_target_id, &prompt.message, Some(&prompt.id), now)?;
+            queue_prompt(state_dir, project_id, &target.schedule_target_id, &prompt.message, Some(&prompt.id), phone, now)?;
             agent_prompts::archive_at(
                 state_dir,
                 project_id,
@@ -1205,12 +1211,14 @@ pub fn prompt_mutate(
 /// `queuePromptForTab`: a one-time rule at this machine's current minute —
 /// finished one-time rules pruned first at the tab's cap, `id` re-minted
 /// when a recurring rule holds it (or none was given). Returns the rule's id.
+/// `phone`: the paired device the prompt came from.
 fn queue_prompt(
     state_dir: &Path,
     project_id: &str,
     target_id: &str,
     message: &str,
     id: Option<&str>,
+    phone: Option<&str>,
     now: DateTime<Local>,
 ) -> Result<String, String> {
     let path = agent_tasks::file_path(state_dir);
@@ -1233,6 +1241,7 @@ fn queue_prompt(
         preface: Vec::new(),
         last: None,
         origin: None,
+        phone_device: phone.map(str::to_string),
     };
     agent_tasks::upsert_in(&path, project_id, target_id, rule, None)?;
     Ok(id)
@@ -1262,11 +1271,12 @@ fn held_words(message: &str) -> Result<&str, String> {
 /// `HoldPrompt` with no window (`holdTabPrompt`): the phone sent `message`
 /// while the agent worked; it is queued as a send-now rule on the tab's
 /// binding, which the caller marks as a phone hold so the scheduler types it
-/// at once. Returns the rule's id, which the phone edits it by.
-pub fn hold_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str, now: DateTime<Local>) -> Result<String, String> {
+/// at once. Returns the rule's id, which the phone edits it by. The rule
+/// carries `phone`, the paired device that held it (`phone_origin`).
+pub fn hold_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str, phone: Option<&str>, now: DateTime<Local>) -> Result<String, String> {
     let target = tab.schedule_target_id.as_deref().filter(|id| !id.is_empty()).ok_or_else(|| "tab_not_found".to_string())?;
     let text = held_words(message)?;
-    queue_prompt(state_dir, project_id, target, text, None, now)
+    queue_prompt(state_dir, project_id, target, text, None, phone, now)
 }
 
 /// `EditHeldPrompt` with no window (`editHeldTabPrompt`): new words for a
@@ -1562,12 +1572,12 @@ mod tests {
     fn a_held_phone_prompt_is_a_send_now_rule_edited_only_while_it_waits() {
         let dir = tempfile::tempdir().unwrap();
         let mut gemini = tab("gemini", None);
-        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "go on", Local::now()).unwrap_err(), "tab_not_found", "an unbound tab");
+        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "go on", None, Local::now()).unwrap_err(), "tab_not_found", "an unbound tab");
         gemini.schedule_target_id = Some("target-gemini".into());
-        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "/clear", Local::now()).unwrap_err(), "invalid_prompt");
-        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "   ", Local::now()).unwrap_err(), "invalid_prompt");
+        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "/clear", None, Local::now()).unwrap_err(), "invalid_prompt");
+        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "   ", None, Local::now()).unwrap_err(), "invalid_prompt");
 
-        let id = hold_prompt(dir.path(), "p1", &gemini, " then the docs ", Local::now()).unwrap();
+        let id = hold_prompt(dir.path(), "p1", &gemini, " then the docs ", None, Local::now()).unwrap();
         assert_eq!(id.len(), 36, "a UUID the phone can name back: {id}");
         let rules = agent_tasks::list_at(dir.path(), "p1", "target-gemini").unwrap();
         assert_eq!(rules.len(), 1);
@@ -1590,6 +1600,45 @@ mod tests {
         agent_tasks::complete_in(&path, "p1", "target-gemini", &id, &key, crate::schema::agent_tasks::AgentScheduleResult::Delivered).unwrap();
         assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, &id, "x").unwrap_err(), "held_gone");
         assert_eq!(agent_tasks::list_at(dir.path(), "p1", "target-gemini").unwrap()[0].message, "then the tests");
+    }
+
+    /// Every rule a phone makes with no window names that phone — a held
+    /// prompt, a created schedule, a sent collected prompt — and an edit or
+    /// update keeps it (#2348: what a revoke or narrowing cancels).
+    #[test]
+    fn a_rule_a_phone_makes_with_no_window_names_the_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut gemini = tab("gemini", None);
+        gemini.schedule_target_id = Some("target-gemini".into());
+        let phone = Some("phone-1");
+        let device = |id: &str| {
+            agent_tasks::list_at(dir.path(), "p1", "target-gemini")
+                .unwrap()
+                .into_iter()
+                .find(|rule| rule.id == id)
+                .and_then(|rule| rule.phone_device)
+        };
+
+        let held = hold_prompt(dir.path(), "p1", &gemini, "then the docs", phone, Local::now()).unwrap();
+        assert_eq!(device(&held).as_deref(), phone);
+        edit_held_prompt(dir.path(), "p1", &gemini, &held, "then the tests").unwrap();
+        assert_eq!(device(&held).as_deref(), phone);
+
+        let input = |message: &str| super::super::protocol::MobileScheduleInput {
+            enabled: true,
+            message: message.into(),
+            rule: AgentScheduleRule::Daily { time: "09:00".into() },
+        };
+        let listed = schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Create { schedule: input("daily") }, phone, Local::now()).unwrap();
+        let daily = listed.schedules.iter().find(|rule| rule.message == "daily").unwrap().id.clone();
+        assert_eq!(device(&daily).as_deref(), phone);
+        schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Update { schedule_id: daily.clone(), schedule: input("daily, later") }, Some("phone-2"), Local::now()).unwrap();
+        assert_eq!(device(&daily).as_deref(), phone, "an update by another phone does not re-own it");
+
+        agent_prompts::upsert_at(dir.path(), "p1", ProjectAgentPromptInput { id: "collected".into(), message: "sweep the logs".into(), tags: None, target: None }).unwrap();
+        let target = SendTarget { schedule_target_id: "target-gemini".into(), label: "Gemini".into(), session_id: None, agent: "gemini".into() };
+        prompt_mutate(dir.path(), "p1", PromptMutation::Send { prompt_id: "collected".into(), tmux_session: "s".into() }, Some(target), phone, Local::now()).unwrap();
+        assert_eq!(device("collected").as_deref(), phone);
     }
 
     use chrono::TimeZone;

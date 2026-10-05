@@ -141,12 +141,19 @@ pub fn send_alias_cmd(pair: &Pair) -> Option<String> {
 /// Count and remove the note the old-named send command left in `outbox`.
 /// Called where an outbox is listed; a no-op while the name is unchanged.
 pub fn take_send_alias_marker(pair: &Pair, outbox: &std::path::Path) {
-    if pair.legacy(Name::SEND_CLI).is_none() {
-        return;
-    }
-    let marker = outbox.join(SEND_ALIAS_MARKER);
-    // A plain file only: the outbox is the agent's to fill.
-    if std::fs::symlink_metadata(&marker).is_ok_and(|meta| meta.is_file()) && std::fs::remove_file(&marker).is_ok() {
+    take_send_alias_marker_with(pair, |name| {
+        let marker = outbox.join(name);
+        // A plain file only: the outbox is the agent's to fill.
+        std::fs::symlink_metadata(&marker).is_ok_and(|meta| meta.is_file()) && std::fs::remove_file(&marker).is_ok()
+    });
+}
+
+/// [`take_send_alias_marker`] for an outbox reached some other way:
+/// `remove` deletes the leaf it is given if it is a plain file there and says
+/// whether it did (the phone's outbox listing does so through its held
+/// folder, `mobile_control::outbox`).
+pub fn take_send_alias_marker_with(pair: &Pair, remove: impl FnOnce(&str) -> bool) {
+    if pair.legacy(Name::SEND_CLI).is_some() && remove(SEND_ALIAS_MARKER) {
         crate::brand::legacy_hit("send-cli");
     }
 }

@@ -85,7 +85,8 @@ shared tree; not run live.
     outside it (project below the repo top), and names with control
     characters or a backtick (could speak in the chat note) are counted in
     `more`, not named. The undo still reverts them (whole work tree, plan
-    §2.2).
+    §2.2). *(Superseded 2026-10-04, #2345: changes outside the project are
+    named in `outside` and left alone; only the project folder is undone.)*
 14. **Submodules** (gitlink entries) are listed but never touched by undo.
 
 ### Wire shapes for Phase 2
@@ -171,6 +172,8 @@ otherwise `apply` → `DEFAULT_APPLY_INSTRUCTION`, `list` → `DEFAULT_INSTRUCTI
   check) answers `undo_failed` with some files already back.
 - The round's diff covers the whole work tree during the round — another
   tab's edits included (plan §2.2); the UI must show the preview first.
+  *(2026-10-04, #2345: only inside the project folder now — the rest is
+  named and left alone.)*
 - Phase 2 must also: treat `DEFAULT_MARKUP_APPLY_INSTRUCTION` like
   `DEFAULT_MARKUP_INSTRUCTION` in `readMarkupInstruction` (a stored default
   is "no instruction"); add `pdf_markup_direct?: boolean` to

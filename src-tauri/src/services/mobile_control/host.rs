@@ -2808,8 +2808,9 @@ async fn hold_prompt(
             project_id: project_id.clone(),
             tmux_session: tab.tmux_name.clone(),
             message: message.clone(),
+            device_id: Some(phone.device_id().to_string()),
         },
-        || headless::hold_prompt(&state_dir, &project_id, &tab, &message, chrono::Local::now()),
+        || headless::hold_prompt(&state_dir, &project_id, &tab, &message, Some(phone.device_id()), chrono::Local::now()),
     )
     .await;
     (if status == StatusCode::OK { StatusCode::CREATED } else { status }, body)
@@ -3452,6 +3453,7 @@ async fn schedule_mutation(
             project_id: project_id.clone(),
             tmux_session: tab.tmux_name.clone(),
             action: action.clone(),
+            device_id: Some(phone.device_id().to_string()),
         },
     )
     .await;
@@ -3461,7 +3463,7 @@ async fn schedule_mutation(
         let Some(target) = tab.schedule_target_id.as_deref() else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
-        return match headless::schedule_mutate(&state.config.state_dir, &project_id, target, action, chrono::Local::now()) {
+        return match headless::schedule_mutate(&state.config.state_dir, &project_id, target, action, Some(phone.device_id()), chrono::Local::now()) {
             Ok(listed) => {
                 poke_window(state, Some(&project_id), &["schedules"]);
                 (
@@ -3665,6 +3667,7 @@ async fn prompt_mutation(
             request_id,
             project_id: project_id.clone(),
             action: action.clone(),
+            device_id: Some(phone.device_id().to_string()),
         },
     )
     .await;
@@ -3698,7 +3701,7 @@ async fn prompt_mutation(
             }
             _ => None,
         };
-        return match headless::prompt_mutate(&state.config.state_dir, &project_id, action, target, chrono::Local::now()) {
+        return match headless::prompt_mutate(&state.config.state_dir, &project_id, action, target, Some(phone.device_id()), chrono::Local::now()) {
             Ok(prompts) => {
                 poke_window(state, Some(&project_id), &["prompts", "schedules"]);
                 (
@@ -4837,8 +4840,10 @@ async fn markup_undo_settle(
 }
 
 /// `GET /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files: [{ path,
-/// change }], more, pdf }` — what an undo would put back, project-relative
-/// (settles first when the round has not).
+/// change }], more, pdf, outsideMore }` — what an undo would put back,
+/// project-relative (settles first when the round has not). Files changed
+/// outside the project folder are only counted (`outsideMore`): a phone may
+/// be scoped to this project, and those names can be a sibling's.
 async fn markup_undo_preview(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -4848,12 +4853,16 @@ async fn markup_undo_preview(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    markup_undo_call(&state, &phone, &tab_id, undo_id, markup_rounds::preview).await
+    let preview = |dir: &std::path::Path, id: &str, owner: &markup_rounds::Owner| {
+        markup_rounds::preview(dir, id, owner).map(markup_rounds::Changes::outside_counted)
+    };
+    markup_undo_call(&state, &phone, &tab_id, undo_id, preview).await
 }
 
-/// `POST /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files, more, pdf }`
-/// — puts the round's changes back, or 409 `undo_conflict` with the files
-/// changed since and nothing touched.
+/// `POST /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files, more, pdf,
+/// outsideMore }` — puts the round's changes back, or 409 `undo_conflict`
+/// with the files changed since and nothing touched. Outside the project
+/// folder: a count only, as the preview.
 async fn markup_undo(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -4866,7 +4875,10 @@ async fn markup_undo(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    markup_undo_call(&state, &phone, &tab_id, undo_id, markup_rounds::undo).await
+    let undo = |dir: &std::path::Path, id: &str, owner: &markup_rounds::Owner| {
+        markup_rounds::undo(dir, id, owner).map(markup_rounds::Changes::outside_counted)
+    };
+    markup_undo_call(&state, &phone, &tab_id, undo_id, undo).await
 }
 
 // ── Markup questions (`services::markup_mcp`, the phone's half) ──────────────
@@ -5139,6 +5151,7 @@ async fn markup_answer(
         tmux_session: tab.tmux_name.clone(),
         ask_id: request.ask_id,
         answers: request.answers,
+        device_id: Some(phone.device_id().to_string()),
     };
     match markup_call(&state, request).await {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "answered": true }))),
@@ -5690,6 +5703,7 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         origin: admin_origin,
         shutdown: shutdown_tx.clone(),
         agent_tab: Some(Arc::new(move |tmux: &str| agent_tab_ref(&lookup_state, tmux))),
+        state_dir: Some(state_dir.clone()),
     };
     tokio::spawn(async move {
         let _ = admin::serve(&admin_path, admin_context).await;
@@ -7480,6 +7494,8 @@ mod tests {
                     at: "2026-09-23T08:00:00Z".into(),
                     from_delivery: None,
                 }),
+                // The phone that made a rule never crosses the browser API.
+                phone_device: Some("device-that-made-it".into()),
             }],
             time_zone: "Europe/Berlin".into(),
             next_runs: Default::default(),

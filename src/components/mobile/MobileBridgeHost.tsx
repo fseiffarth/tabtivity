@@ -259,26 +259,26 @@ type DesktopRequest =
   | { type: "mail_mark"; request_id: string; folder_id: string; message_id: string; offset: number; action: MailMarkAction }
   | { type: "mail_reply"; request_id: string; folder_id: string; message_id: string; offset: number; body: string }
   | { type: "schedules"; request_id: string; project_id: string; tmux_session: string }
-  | { type: "schedule_mutate"; request_id: string; project_id: string; tmux_session: string; action: ScheduleMutation }
+  | { type: "schedule_mutate"; request_id: string; project_id: string; tmux_session: string; action: ScheduleMutation; device_id?: string }
   | { type: "rename_tab"; request_id: string; project_id: string; tmux_session: string; label: string }
   | { type: "color_tab"; request_id: string; project_id: string; tmux_session: string; color?: string | null }
   | { type: "reorder_tab"; request_id: string; project_id: string; tmux_session: string; anchor_tmux_session: string; place: "before" | "after" }
   | { type: "close_tab"; request_id: string; project_id: string; tmux_session: string }
   | { type: "reopen_tab"; request_id: string; project_id: string; closed_id?: string | null }
   | { type: "prompts"; request_id: string; project_id: string }
-  | { type: "prompt_mutate"; request_id: string; project_id: string; action: PromptMutation }
+  | { type: "prompt_mutate"; request_id: string; project_id: string; action: PromptMutation; device_id?: string }
   | { type: "agent_status"; request_id: string; project_id: string; tmux_session: string; refresh: boolean }
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string }
-  | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string }
+  | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
   | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string }
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
   | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
   | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
-  | { type: "markup_answer"; request_id: string; project_id: string; tmux_session: string; ask_id: string; answers: MobileMarkupAnswer[] }
+  | { type: "markup_answer"; request_id: string; project_id: string; tmux_session: string; ask_id: string; answers: MobileMarkupAnswer[]; device_id?: string }
   | { type: "markup_dismiss"; request_id: string; project_id: string; tmux_session: string; ask_id: string }
   | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] }
   | { type: "local_models"; request_id: string }
@@ -1254,6 +1254,7 @@ async function mutateSchedule(
   projectId: string,
   tmuxSession: string,
   action: ScheduleMutation,
+  phoneDevice?: string,
 ): Promise<DesktopResponse> {
   const target = scheduleTarget(projectId, tmuxSession);
   if (!target) return { status: "error", code: "tab_not_found", message: "Agent tab is unavailable" };
@@ -1283,6 +1284,9 @@ async function mutateSchedule(
         id: action.type === "create" ? crypto.randomUUID() : action.schedule_id,
         ...action.schedule,
         ...(existing ? { preface: existing.preface ?? [] } : {}),
+        // The phone a new rule came from, so revoking it or narrowing its
+        // access cancels the rule (#2348); an update keeps the stored one.
+        ...(action.type === "create" && phoneDevice ? { phone_device: phoneDevice } : {}),
       },
     });
     void persistScopeLayout(projectId);
@@ -1301,7 +1305,7 @@ async function promptsFor(projectId: string): Promise<DesktopResponse> {
   return { status: "prompts", prompts };
 }
 
-async function mutatePrompt(projectId: string, action: PromptMutation): Promise<DesktopResponse> {
+async function mutatePrompt(projectId: string, action: PromptMutation, phoneDevice?: string): Promise<DesktopResponse> {
   const store = useAgentPromptsStore.getState();
   if (action.type === "delete") {
     await store.remove(projectId, action.prompt_id);
@@ -1324,6 +1328,8 @@ async function mutatePrompt(projectId: string, action: PromptMutation): Promise<
         agent: tab.cmd,
       },
       prompt,
+      undefined,
+      { phoneDevice },
     );
     void persistScopeLayout(projectId);
   } else {
@@ -2106,7 +2112,7 @@ async function recordTabPrompt(projectId: string, tmuxSession: string, message: 
  * the pane can't take it does it wait, and the phone can still rewrite it
  * (`editHeldTabPrompt`). The delivery records the prompt in the history, so
  * nothing is recorded here. */
-async function holdTabPrompt(projectId: string, tmuxSession: string, message: string): Promise<DesktopResponse> {
+async function holdTabPrompt(projectId: string, tmuxSession: string, message: string, phoneDevice?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
@@ -2116,7 +2122,7 @@ async function holdTabPrompt(projectId: string, tmuxSession: string, message: st
   const text = message.trim();
   // A command is the CLI's own and never waits: the phone types those.
   if (!text || isSessionCommand(text)) return { status: "error", code: "invalid_prompt", message: "Only prompts are held" };
-  const { id } = await queuePromptForTab(scope.id, tab.scheduleTargetId, text);
+  const { id } = await queuePromptForTab(scope.id, tab.scheduleTargetId, text, { phoneDevice });
   holdPhonePrompt(id);
   return { status: "held", held_id: id };
 }
@@ -2170,7 +2176,7 @@ async function markupQuestionsFor(projectId: string, tmuxSession: string, path: 
  * scheduler types into the CLI's queue at once. Should that fail, the ask is
  * reopened with the answer's receipt, exactly as the desktop card does, so
  * the phone's card stays and a retry is not refused as `answered`. */
-async function answerMarkupFromPhone(projectId: string, tmuxSession: string, askId: string, answers: MobileMarkupAnswer[]): Promise<DesktopResponse> {
+async function answerMarkupFromPhone(projectId: string, tmuxSession: string, askId: string, answers: MobileMarkupAnswer[], phoneDevice?: string): Promise<DesktopResponse> {
   const key = markupTarget(projectId, tmuxSession);
   if ("status" in key) return key;
   const shaped: MarkupAnswer[] = answers.map((answer) => (typeof answer.other === "string"
@@ -2185,7 +2191,7 @@ async function answerMarkupFromPhone(projectId: string, tmuxSession: string, ask
     throw cause;
   }
   try {
-    const { id } = await queuePromptForTab(key.projectId, key.target, taken.prompt);
+    const { id } = await queuePromptForTab(key.projectId, key.target, taken.prompt, { phoneDevice });
     holdPhonePrompt(id);
   } catch {
     try {
@@ -2453,21 +2459,21 @@ async function handleRequest(
     case "color_tab": return colorMobileTab(request.project_id, request.tmux_session, request.color);
     case "reorder_tab": return reorderMobileTab(request.project_id, request.tmux_session, request.anchor_tmux_session, request.place);
     case "schedules": return schedulesFor(request.project_id, request.tmux_session);
-    case "schedule_mutate": return mutateSchedule(request.project_id, request.tmux_session, request.action);
+    case "schedule_mutate": return mutateSchedule(request.project_id, request.tmux_session, request.action, request.device_id);
     case "prompts": return promptsFor(request.project_id);
-    case "prompt_mutate": return mutatePrompt(request.project_id, request.action);
+    case "prompt_mutate": return mutatePrompt(request.project_id, request.action, request.device_id);
     case "agent_status": return agentStatusFor(request.project_id, request.tmux_session, request.refresh);
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
     case "tab_input": return markTabInput(request.project_id, request.tmux_session);
     case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message);
-    case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message);
+    case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
     case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message);
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
     case "desktop_images": return desktopImagesFor(request.project_id);
     case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);
     case "markup_questions": return markupQuestionsFor(request.project_id, request.tmux_session, request.path ?? undefined);
-    case "markup_answer": return answerMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id, request.answers);
+    case "markup_answer": return answerMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id, request.answers, request.device_id);
     case "markup_dismiss": return dismissMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id);
     case "refresh": return refreshSlices(request.project_id, request.slices);
     // Both check the host-wide switch first (`lib/mobileLocalModels`).

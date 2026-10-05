@@ -1156,8 +1156,10 @@ export async function submitMarkup(tabId: string, body: MarkupBody): Promise<Mar
 export interface MarkupUndoFile { path: string; change: "added" | "modified" | "deleted" | "changed" }
 /** What an undo would do (preview) or did: the files, how many more it did
  * not name, and the PDF's fate — back to before, kept as it is (changed
- * since), or not part of it. */
-export interface MarkupUndoChanges { files: MarkupUndoFile[]; more: number; pdf: "restored" | "kept" | "none" }
+ * since), or not part of it. `outsideMore`: how many files changed
+ * elsewhere in the repo, which the undo leaves alone — counted, never named
+ * to a phone (a sibling project's names). */
+export interface MarkupUndoChanges { files: MarkupUndoFile[]; more: number; pdf: "restored" | "kept" | "none"; outsideMore: number }
 
 function markupUndoPath(tabId: string, undoId: string): string {
   return `/api/v1/tabs/${encodeURIComponent(tabId)}/markup/undo/${encodeURIComponent(undoId)}`;
@@ -1172,7 +1174,12 @@ function undoChanges(answer: Partial<MarkupUndoChanges> | null | undefined): Mar
     ? answer.files.filter((file): file is MarkupUndoFile => !!file && typeof file.path === "string")
     : [];
   const pdf = answer?.pdf === "restored" || answer?.pdf === "kept" ? answer.pdf : "none";
-  return { files, more: typeof answer?.more === "number" ? answer.more : 0, pdf };
+  // An older desktop sends no `outsideMore`; names outside the project, were
+  // any sent, are only counted.
+  const named = (answer as { outside?: unknown } | null | undefined)?.outside;
+  const outsideMore = (Array.isArray(named) ? named.length : 0)
+    + (typeof answer?.outsideMore === "number" && answer.outsideMore > 0 ? answer.outsideMore : 0);
+  return { files, more: typeof answer?.more === "number" ? answer.more : 0, pdf, outsideMore };
 }
 
 /** `POST …/markup/undo/{id}/settle` — the round's after-snapshot, each time

@@ -292,7 +292,9 @@ export async function queuePromptForTab(
   projectId: string,
   scheduleTargetId: string,
   message: string,
-  options: { preface?: string[]; now?: Date; id?: string } = {},
+  /** `phoneDevice`: the paired phone the prompt came from, which the rule
+   * names so a revoke or a narrowed access cancels it (#2348). */
+  options: { preface?: string[]; now?: Date; id?: string; phoneDevice?: string } = {},
 ): Promise<{ pruned: number; id: string }> {
   const now = options.now ?? new Date();
   const schedules = useAgentSchedulesStore.getState();
@@ -306,10 +308,11 @@ export async function queuePromptForTab(
   const id = options.id !== undefined && !clash ? options.id : crypto.randomUUID();
   const prune = schedulesToPruneForSend(existing);
   for (const pruned of prune) await schedules.remove(projectId, scheduleTargetId, pruned);
+  const rule = buildSendNowSchedule(message, now, id, options.preface);
   await schedules.upsert(
     projectId,
     scheduleTargetId,
-    buildSendNowSchedule(message, now, id, options.preface),
+    options.phoneDevice ? { ...rule, phone_device: options.phoneDevice } : rule,
   );
   return { pruned: prune.length, id };
 }
@@ -327,6 +330,7 @@ export async function sendCollectedPrompt(
   target: { scheduleTargetId: string; label: string; sessionId?: string; agent?: string },
   prompt: { id: string; message: string },
   preface?: string[],
+  options: { phoneDevice?: string } = {},
 ): Promise<{ pruned: number }> {
   // The queued schedule carries the PROMPT's id, which is the id its history
   // entry is written under. When the scheduler delivers it, the record it
@@ -335,6 +339,7 @@ export async function sendCollectedPrompt(
   const result = await queuePromptForTab(projectId, target.scheduleTargetId, prompt.message, {
     preface,
     id: prompt.id,
+    phoneDevice: options.phoneDevice,
   });
   await useAgentPromptsStore
     .getState()

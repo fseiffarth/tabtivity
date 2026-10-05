@@ -101,6 +101,8 @@ pub mod codex_bind;
 pub mod codex_store;
 pub mod copilot;
 pub mod git_credentials;
+// Bounded local git runs: FIFO pre-check + timeout that reaps the subtree (#2349).
+pub mod git_bounded;
 // The `.git` control files a sandbox keeps its occupant from writing (#158).
 pub mod git_guard;
 // The default branch (`main`) for repositories Tabtivity creates, and the

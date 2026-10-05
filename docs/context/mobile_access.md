@@ -48,9 +48,12 @@ phones, and a notice no eligible phone wants spends neither budget nor
 cooldown. `agent_tab_ref` (the push lookup, not a phone request) is the one
 unfiltered catalog read.
 
-The desktop does not know which phone asked and must not need to: it only
-ever sees raw ids the sidecar mapped, and `mobileScope` repeats the switch and
-trust tiers only.
+The desktop never decides access by which phone asked: it only ever sees raw
+ids the sidecar mapped, and `mobileScope` repeats the switch and trust tiers
+only. The one exception is bookkeeping, not access: a request that makes a
+rule in `agent_tasks.json` (`ScheduleMutate`, `PromptMutate` send,
+`HoldPrompt`, `MarkupAnswer`) carries the asking phone's `device_id`, and the
+rule records it as `phone_device` (see *What a phone leaves behind*).
 
 ## Writing the list
 
@@ -71,17 +74,56 @@ trust tiers only.
   new id** and is not on any old list. **Lock down / Forget all** clears every
   device, so every scope with a list reaches no phone until re-picked; the UI
   shows such a scope as "No phones" in the warning tone.
-- Narrowing does not cancel prompts a phone already held or schedules it made
-  (same as switching access off).
+- Narrowing (or switching access off) cancels the prompts that phone held and
+  the schedules it made in the scopes it lost — see below.
 - Project export and import drop both keys (`project_transfer.md`): a bundle
   never opens a project to the importing machine's phones, nor carries foreign
   device ids.
+
+## What a phone leaves behind (#2348)
+
+Every rule a phone makes — a schedule, a sent collected prompt, a held
+prompt, a markup answer — names it (`ScheduledAgentPrompt::phone_device`, the
+paired device id; window path via the request's `device_id`, headless path
+directly). `services::mobile_control::phone_origin` cancels a rule whose
+phone is unpaired or whose scope no longer reaches it (`discovery::ScopeAccess`,
+the catalog's own rule):
+
+- eagerly — the sidecar's admin plane after Revoke / Forget all, the window's
+  `mobile_admin` (which also reloads the schedule lists) and its
+  `set_project_mobile_access` / `set_box_mobile_access`, and the sidecar's
+  scheduler at start;
+- at fire time — `agent_tasks` claim, which both owners take before typing:
+  such a rule is removed instead of claimed (`ClaimOutcome::Cancelled`). This
+  covers a change made while the other owner was down, root access turned
+  off, or a hand edit.
+
+A rule with no `phone_device` (desktop, agent, or written before the field)
+is left alone. An access that cannot be read (`devices.json`,
+`projects.json`, or for a box or root rule `boxes.json` / `settings.json`)
+holds the rule back, neither typed nor removed. Cancelled rules simply leave the schedule lists and the
+held-prompt chip; each pass logs one line. A sent collected prompt's history
+row keeps saying *queued*.
 
 ## Known gaps
 
 - **Downgrade.** An older build ignores the list, so after a downgrade every
   project with the switch on reaches every phone again. Accepted, as for any
-  new opt-in field.
+  new opt-in field. Rules carrying `phone_device` make `agent_tasks.json`
+  unreadable to a build older than #2348 (`deny_unknown_fields`), as `origin`
+  did before it — it refuses the file rather than rewriting it, so nothing is
+  lost, but its schedules stop until the phone rules are gone. The sidecar can run ahead of the window (its copy is
+  replaced at a launch or by Update host; a failed update keeps the newer
+  one): a window older than #2348 drops a request carrying `device_id`
+  unparsed (`DesktopRequest` denies unknown fields), so `admin::desktop_call`
+  asks once more without it when the window accepted and then dropped the
+  connection — the older window makes the rule unstamped, as before, instead
+  of the sidecar taking the headless path with the window open.
+- **A phone's edit of someone else's rule.** An update keeps the rule's
+  origin, so a desktop or agent schedule a phone rewrote (words, time) stays
+  of desktop origin and survives that phone's revoke. Collected prompts a
+  phone wrote are sent later by the desktop unstamped too. Open: whether an
+  edit from a phone should adopt the rule.
 - **To-do board names.** The board's project picker and card tags list every
   registry project to every phone, switch or not (`MobileBridgeHost`
   `todoBoard` → `publicProjects`, headless `project_names`). Not a secret

@@ -114,6 +114,13 @@ pub fn hidden(name: &str) -> bool {
 /// A leaf the browser lists and resolves. The same test both ways, so nothing
 /// is listed that could not be opened again.
 fn valid_segment(name: &str) -> bool {
+    plain_segment(name) && !hidden(name)
+}
+
+/// One name inside a held folder, hidden or not: never a path, never `.` or
+/// `..`. What every handle-relative open checks, so no caller can turn the
+/// single name into a walk (the drop boxes live under the hidden `.tabtivity`).
+fn plain_segment(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_NAME
         && name != "."
@@ -122,7 +129,6 @@ fn valid_segment(name: &str) -> bool {
         // A Windows name holding `\` is a path, and one holding `:` names an
         // alternate data stream of another file.
         && !(cfg!(windows) && name.contains(['\\', ':']))
-        && !hidden(name)
 }
 
 fn valid_rel(rel: &str) -> bool {
@@ -215,21 +221,21 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// the way swapped for a link mid-request changes nothing — the walk already
 /// holds the real one. Windows uses the same boundary through native
 /// handle-relative opens and handle-based directory enumeration.
+///
+/// The phone's drop boxes (`outbox.rs`, `inbox.rs`) walk, list, read, create
+/// and delete through the same handles ([`ProjectDir::open_root`],
+/// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
+/// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]).
 #[cfg(unix)]
-struct ProjectDir(fs::File);
+pub(super) struct ProjectDir(fs::File);
 
 #[cfg(unix)]
 impl ProjectDir {
     fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
-        let root = canonical_root(root)?;
+        let mut dir = Self::open_root(root)?;
         if !valid_rel(rel) {
             return Err(FilesError::NotFound);
         }
-        let mut dir = fs::File::open(&root)
-            .ok()
-            .filter(|dir| dir.metadata().is_ok_and(|meta| meta.is_dir()))
-            .map(Self)
-            .ok_or(FilesError::Unavailable)?;
         if !rel.is_empty() {
             for name in rel.split('/') {
                 dir = dir.child_dir(name).ok_or(FilesError::NotFound)?;
@@ -238,30 +244,95 @@ impl ProjectDir {
         Ok(dir)
     }
 
+    /// The project root itself, held open — the one folder opened by path.
+    pub(super) fn open_root(root: &Path) -> Result<Self, FilesError> {
+        let root = canonical_root(root)?;
+        fs::File::open(&root)
+            .ok()
+            .filter(|dir| dir.metadata().is_ok_and(|meta| meta.is_dir()))
+            .map(Self)
+            .ok_or(FilesError::Unavailable)
+    }
+
     /// `name` in this folder, opened without following a link at it.
     fn open_at(&self, name: &str, directory: bool) -> Option<fs::File> {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        let name = std::ffi::CString::new(name).ok()?;
-        // Non-blocking, so a FIFO swapped in is refused below, not waited on.
         let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
         if directory {
             flags |= libc::O_DIRECTORY;
         }
+        // Non-blocking, so a FIFO swapped in is refused below, not waited on.
+        self.openat(name, flags, 0).ok()
+    }
+
+    /// `openat` relative to this folder, for one [`plain_segment`] name.
+    fn openat(&self, name: &str, flags: libc::c_int, mode: libc::c_uint) -> std::io::Result<fs::File> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
-        let fd = unsafe { libc::openat(self.0.as_raw_fd(), name.as_ptr(), flags) };
+        let fd = unsafe { libc::openat(self.0.as_raw_fd(), name.as_ptr(), flags, mode) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         // SAFETY: `fd` was just opened and nothing else owns it.
-        (fd >= 0).then(|| unsafe { fs::File::from_raw_fd(fd) })
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
     }
 
     fn child_dir(&self, name: &str) -> Option<Self> {
         self.open_at(name, true).map(Self)
     }
 
+    /// The folder `name` in this one: `Ok(None)` when nothing has that name,
+    /// `Err(())` when something does but is not a plain folder (a link, a
+    /// file) — never followed either way.
+    pub(super) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        match self.openat(name, flags, 0) {
+            Ok(dir) => Ok(Some(Self(dir))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Creates the folder `name` here unless something already has that name
+    /// (`mkdirat` never follows a link at it). Open it with [`Self::lookup_dir`],
+    /// which refuses a link standing there.
+    pub(super) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c_name = segment_cstr(name)?;
+        // SAFETY: a live directory descriptor and a NUL-terminated name.
+        if unsafe { libc::mkdirat(self.0.as_raw_fd(), c_name.as_ptr(), 0o777) } == 0 {
+            return Ok(());
+        }
+        match std::io::Error::last_os_error() {
+            error if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            error => Err(error),
+        }
+    }
+
+    /// A new regular file `name` here, for writing: never an existing name
+    /// (`AlreadyExists`), never through a link (`O_EXCL` does not follow one).
+    pub(super) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
+        let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        self.openat(name, flags, 0o666)
+    }
+
+    /// Unlinks `name` in this folder — a link itself, never what it points at.
+    pub(super) fn remove_file(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c_name = segment_cstr(name)?;
+        // SAFETY: a live directory descriptor and a NUL-terminated name.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), c_name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
     fn child_dir_meta(&self, name: &str) -> Option<fs::Metadata> {
         self.child_dir(name)?.0.metadata().ok()
     }
 
-    fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
+    pub(super) fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
         let file = self.open_at(name, false)?;
         let meta = file.metadata().ok()?;
         meta.is_file().then_some((file, meta))
@@ -269,7 +340,7 @@ impl ProjectDir {
 
     /// The folders and regular files in this folder, named, `true` for a
     /// folder. Links and anything else are left out without being followed.
-    fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
+    pub(super) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
         use std::os::fd::AsRawFd;
         let os_error = || FilesError::Io(std::io::Error::last_os_error().to_string());
         // SAFETY: `fdopendir` takes ownership of a descriptor of its own.
@@ -318,7 +389,7 @@ impl ProjectDir {
     /// `fstatat` without following a link; `None` for anything else.
     fn kind_of(&self, name: &str) -> Option<bool> {
         use std::os::fd::AsRawFd;
-        let c_name = std::ffi::CString::new(name).ok()?;
+        let c_name = segment_cstr(name).ok()?;
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: a live directory descriptor, a NUL-terminated name, and room for the result.
         let found = unsafe {
@@ -337,11 +408,21 @@ impl ProjectDir {
     }
 }
 
+/// One [`plain_segment`] as the C string `openat` and friends take; anything
+/// else is refused before a system call sees it.
+#[cfg(unix)]
+fn segment_cstr(name: &str) -> std::io::Result<std::ffi::CString> {
+    plain_segment(name)
+        .then(|| std::ffi::CString::new(name).ok())
+        .flatten()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
 #[cfg(windows)]
 #[path = "files_windows.rs"]
 mod windows;
 #[cfg(windows)]
-use windows::ProjectDir;
+pub(super) use windows::ProjectDir;
 
 fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
@@ -354,8 +435,6 @@ fn child(rel: &str, name: &str) -> String {
 /// ignored itself, not when something inside it is. No repo, no git, or any
 /// other failure is no names: a display hint, never a gate.
 fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<String> {
-    use std::io::Write;
-    use std::process::Stdio;
     if found.is_empty() {
         return HashSet::new();
     }
@@ -367,23 +446,15 @@ fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<St
         input.extend_from_slice(child(rel, name).as_bytes());
         input.push(0);
     }
-    let Ok(mut git) = crate::commands::git::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return HashSet::new();
-    };
-    // Fed from a thread: git answers while it reads, so a full pipe either
-    // way would stall both ends.
-    let feeder = git.stdin.take().map(|mut stdin| std::thread::spawn(move || stdin.write_all(&input)));
-    let out = git.wait_with_output();
-    if let Some(feeder) = feeder {
-        let _ = feeder.join();
-    }
+    // Fed from a thread (git answers while it reads, so a full pipe either
+    // way would stall both ends), and bounded (#2349): a FIFO `.gitignore`
+    // must not hang the phone's listing.
+    let ran = crate::services::git_bounded::run(
+        &mut crate::commands::git::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"]),
+        crate::services::git_bounded::Opts { stdin: Some(input), ..Default::default() },
+    );
     // Exit 0: some are ignored; 1: none; 128: not a repo, or git refused.
-    let Ok(out) = out.map_err(drop).and_then(|out| if out.status.success() { Ok(out) } else { Err(()) }) else {
+    let Some(out) = ran.ok().map(|r| r.output).filter(|out| out.status.success()) else {
         return HashSet::new();
     };
     let prefix = if rel.is_empty() { "./".to_string() } else { format!("./{rel}/") };
@@ -542,24 +613,18 @@ fn rank(name: &str, words: &[String]) -> Option<u8> {
 /// a repo, git fails, or lists nothing. The `bool` is whether the listing
 /// was cut at [`MAX_LISTING_BYTES`].
 fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
-    use std::process::Stdio;
-    let mut git = crate::commands::git::hardened_git_command_in(
-        root,
-        &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    // Bounded (#2349): stopped at the cap, or at the timeout when a FIFO
+    // ignore file blocks it.
+    let ran = crate::services::git_bounded::run(
+        &mut crate::commands::git::hardened_git_command_in(
+            root,
+            &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        ),
+        crate::services::git_bounded::Opts { stdout_cap: Some(MAX_LISTING_BYTES), ..Default::default() },
     )
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null())
-    .spawn()
     .ok()?;
-    let mut out = Vec::new();
-    let read = git.stdout.take()?.take(MAX_LISTING_BYTES).read_to_end(&mut out);
-    let cut = out.len() as u64 >= MAX_LISTING_BYTES;
-    if cut {
-        let _ = git.kill();
-    }
-    let status = git.wait().ok()?;
-    if read.is_err() || (!cut && !status.success()) {
+    let (out, cut) = (ran.output.stdout, ran.cut);
+    if !cut && !ran.output.status.success() {
         return None;
     }
     let mut paths: Vec<String> = out

@@ -43,7 +43,7 @@ const stored = {
   preface: ["/clear", "/model opus"],
 };
 
-async function ask(action: Record<string, unknown>) {
+async function ask(action: Record<string, unknown>, deviceId?: string) {
   const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   await act(async () => {
@@ -53,6 +53,7 @@ async function ask(action: Record<string, unknown>) {
       project_id: project.id,
       tmux_session: tmuxSession,
       action,
+      ...(deviceId ? { device_id: deviceId } : {}),
     } });
     await vi.waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "mobile_desktop_respond")).toBe(true));
   });
@@ -109,5 +110,18 @@ describe("Mobile bridge — editing a schedule with desktop prefix commands", ()
       scheduleTargetId,
       schedule: { id: stored.id, enabled, message, preface: stored.preface },
     });
+  });
+
+  // #2348: a rule a phone creates names that phone, so revoking it or
+  // narrowing its access cancels the rule; an update leaves the stored one be.
+  it("names the phone on a rule it creates, and only then", async () => {
+    await ask({ type: "create", schedule: { enabled: true, message: "Nightly review", rule: stored.rule } }, "device-1");
+    const created = vi.mocked(invoke).mock.calls.find(([command]) => command === "agent_schedule_upsert");
+    expect((created?.[1] as { schedule: Record<string, unknown> }).schedule).toMatchObject({ message: "Nightly review", phone_device: "device-1" });
+
+    vi.mocked(invoke).mockClear();
+    await ask({ type: "update", schedule_id: stored.id, schedule: { enabled: true, message: "Edited", rule: stored.rule } }, "device-2");
+    const updated = vi.mocked(invoke).mock.calls.find(([command]) => command === "agent_schedule_upsert");
+    expect((updated?.[1] as { schedule: Record<string, unknown> }).schedule).not.toHaveProperty("phone_device");
   });
 });

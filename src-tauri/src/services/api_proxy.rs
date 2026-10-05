@@ -423,21 +423,37 @@ impl Budget {
         Budget { book: super::api_usage::book(), limits: Limits::Settings }
     }
 
-    fn verdict(&self, provider: Provider) -> super::api_usage::Verdict {
-        let limit = match &self.limits {
+    fn limit(&self, provider: Provider) -> Option<f64> {
+        match &self.limits {
             Limits::Settings => super::api_usage::limit_for(provider),
             #[cfg(test)]
             Limits::Fixed(l) => *l,
-        };
-        super::api_usage::Verdict::of(self.book.spent(provider, chrono::Utc::now()), limit)
+        }
     }
 
-    /// Why a billed request for `provider` is refused now, if it is.
+    /// Why a billed request for `provider` is refused now, if it is: no
+    /// limit, or spent + what requests in flight hold reached it.
     fn refusal(&self, provider: Provider) -> Option<Refusal> {
-        match self.verdict(provider) {
+        let verdict = self.book.verdict(provider, self.limit(provider), chrono::Utc::now());
+        Self::refusal_for(verdict)
+    }
+
+    /// Hold `usd`, the request's worst-case cost, against the limit while
+    /// it is in flight (gap 9).
+    fn reserve(&self, provider: Provider, usd: f64) -> Result<super::api_usage::Reservation, Refusal> {
+        self.book
+            .reserve(provider, usd, self.limit(provider), chrono::Utc::now())
+            .map_err(|verdict| Self::refusal_for(verdict).unwrap_or(Refusal::WouldPass))
+    }
+
+    fn refusal_for(verdict: super::api_usage::Verdict) -> Option<Refusal> {
+        match verdict {
             super::api_usage::Verdict::Open => None,
             super::api_usage::Verdict::NoLimit => Some(Refusal::NoBudget),
-            super::api_usage::Verdict::Reached { .. } => Some(Refusal::BudgetReached),
+            // Spent alone reached it: the plain message. Otherwise requests
+            // in flight, or this one's worst case, would pass it.
+            super::api_usage::Verdict::Reached { spent, limit } if spent >= limit => Some(Refusal::BudgetReached),
+            super::api_usage::Verdict::Reached { .. } => Some(Refusal::WouldPass),
         }
     }
 }
@@ -749,6 +765,9 @@ enum Refusal {
     Busy,
     /// This month's spending limit for the provider is reached (C3).
     BudgetReached,
+    /// Not reached yet, but what requests in flight hold plus this request's
+    /// worst-case cost would pass it (gap 9).
+    WouldPass,
     /// A key is saved but no monthly limit (a key from before limits
     /// existed): refused until one is set.
     NoBudget,
@@ -765,7 +784,7 @@ impl Refusal {
             Refusal::BadBody => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
             Refusal::Busy => StatusCode::SERVICE_UNAVAILABLE,
-            Refusal::BudgetReached | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
+            Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -779,6 +798,20 @@ impl Refusal {
                 _ => concat!(
                     crate::app_name!(),
                     " monthly API budget for Anthropic reached — raise it in Manage CLIs → API keys, or wait for next month"
+                ),
+            },
+            Refusal::WouldPass => match provider {
+                Some(Provider::Gemini) => concat!(
+                    crate::app_name!(),
+                    " monthly API budget for Google Gemini: this request could cost more than is left of it",
+                    " (requests still in flight count until they end) — wait for them, raise it in Manage CLIs → API keys,",
+                    " or wait for next month"
+                ),
+                _ => concat!(
+                    crate::app_name!(),
+                    " monthly API budget for Anthropic: this request could cost more than is left of it",
+                    " (requests still in flight count until they end) — wait for them, raise it in Manage CLIs → API keys,",
+                    " or wait for next month"
                 ),
             },
             Refusal::NoBudget => match provider {
@@ -829,7 +862,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::TooLarge | Refusal::BadBody => "INVALID_ARGUMENT",
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
                 Refusal::Upstream | Refusal::Busy => "UNAVAILABLE",
-                Refusal::BudgetReached | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
+                Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "RESOURCE_EXHAUSTED",
             } }
         }),
         // Anthropic's shape; also for a path naming no provider.
@@ -842,7 +875,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
                 Refusal::TooLarge => "request_too_large",
                 Refusal::BodyTimeout | Refusal::BadBody => "invalid_request_error",
                 Refusal::Upstream | Refusal::Busy => "api_error",
-                Refusal::BudgetReached | Refusal::NoBudget => "rate_limit_error",
+                Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
         }),
     };
@@ -1003,6 +1036,11 @@ const DROP_REQUEST: &[&str] = &[
     "x-http-method-override",
     "x-http-method",
     "x-method-override",
+    // Google trims the answer to these fields: a mask without
+    // `groundingMetadata` (or with part of `usageMetadata`) would leave a
+    // complete answer the meter reads as cheaper than it was. (The `fields`
+    // query parameter is not on the query allowlist.)
+    "x-goog-fieldmask",
 ];
 
 /// Response headers never passed back: hop-by-hop ones and cookies.
@@ -1090,12 +1128,17 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         Ok(Err(refusal)) => return refuse(Some(provider), refusal),
         Ok(Ok(read)) => read,
     };
+    // Hold the request's worst-case cost against the limit until its answer
+    // is charged (gap 9): checked against what was spent and what every
+    // other request in flight holds — also answers that ended while the body
+    // was read.
+    let mut reservation = None;
     if let Some(meter) = meter.as_mut() {
         meter.request(&body);
-        // Once more: answers that ended while the body was read may have
-        // reached the limit.
-        if let Some(refusal) = state.budget.refusal(provider) {
-            return refuse(Some(provider), refusal);
+        let worst = meter.worst_case(&super::api_usage::month_of(chrono::Utc::now()));
+        match state.budget.reserve(provider, worst) {
+            Ok(held) => reservation = Some(held),
+            Err(refusal) => return refuse(Some(provider), refusal),
         }
     }
     let url = format!("{}{}{}", state.upstream.base(provider), rest, forwarded_query(provider, query));
@@ -1107,15 +1150,21 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));
     // From here a billed request is charged however it ends — also when the
     // client leaves before the answer begins (this future is dropped then).
-    let mut metered = Pending(meter.map(|meter| Metered { meter, book: state.budget.book.clone(), started: Instant::now() }));
+    let mut metered = Pending(meter.map(|meter| Metered {
+        meter,
+        book: state.budget.book.clone(),
+        started: Instant::now(),
+        reservation,
+    }));
     let upstream = state.client.request(parts.method, url).headers(headers).body(body).send().await;
     // The body has been sent (or never will be): its bytes leave the budget.
     drop(held);
     let upstream = match upstream {
         Ok(upstream) => upstream,
         Err(e) => {
-            // No connection: nothing reached the provider. Any later failure
-            // may follow a request the provider took, so it is charged.
+            // No connection: nothing reached the provider (dropping the meter
+            // releases its reservation). Any later failure may follow a
+            // request the provider took, so it is charged.
             if e.is_connect() {
                 metered.0 = None;
             }
@@ -1192,23 +1241,28 @@ enum StreamEnd {
     Aborted,
 }
 
-/// A billed answer's meter, the ledger it is charged to, and when its
-/// request was sent.
+/// A billed answer's meter, the ledger it is charged to, when its request
+/// was sent, and its hold on the limit while in flight — released when this
+/// drops, settled or not, so no path leaks it.
 struct Metered {
     meter: super::api_meter::Meter,
     book: Arc<super::api_usage::Book>,
     started: Instant,
+    reservation: Option<super::api_usage::Reservation>,
 }
 
 impl Metered {
     /// Charge what the answer reported — and, unless it ended `complete`
-    /// with its final count, the estimate on top (`api_meter`).
-    fn settle(self, complete: bool) {
+    /// with its final count, the estimate on top (`api_meter`); then release
+    /// the reservation (after the charge, so the request never counts as
+    /// neither).
+    fn settle(mut self, complete: bool) {
         let now = chrono::Utc::now();
         let end = super::api_meter::End { complete, elapsed: self.started.elapsed() };
         if let Some(charge) = self.meter.charge(&super::api_usage::month_of(now), end) {
             self.book.record(self.meter.provider(), &charge, now);
         }
+        drop(self.reservation.take());
     }
 }
 
@@ -1433,6 +1487,7 @@ mod tests {
             ("x-http-method-override", "DELETE"),
             ("x-http-method", "DELETE"),
             ("x-method-override", "DELETE"),
+            ("x-goog-fieldmask", "candidates.content,usageMetadata.promptTokenCount"),
             ("origin", "https://example.org"),
             ("te", "trailers"),
             ("transfer-encoding", "chunked"),
@@ -2196,5 +2251,98 @@ mod tests {
         assert_eq!(m.output, 100, "time-bounded, capped at the request's max_tokens");
         assert!(!m.unknown);
         on_tab_gone("e2e:left");
+    }
+
+    /// Waits up to 5 s for `provider`'s reservations to come to `usd`.
+    async fn reserved_comes_to(book: &super::super::api_usage::Book, provider: Provider, usd: f64) -> f64 {
+        for _ in 0..100 {
+            if (book.reserved(provider) - usd).abs() < 1e-9 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        book.reserved(provider)
+    }
+
+    #[tokio::test]
+    async fn requests_in_flight_hold_the_limit_until_they_end_however_they_end() {
+        let seen = Arc::new(Seen::default());
+        // The stub sends `message_start` and holds the rest until released.
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let upstream = stub_upstream(seen.clone(), release.clone()).await;
+        let body = r#"{"model":"claude-opus-5-5","max_tokens":40000,"stream":true}"#;
+        let worst = {
+            let mut m = super::super::api_meter::Meter::new(Provider::Anthropic, super::super::api_meter::Billing::Usage { model: None });
+            m.request(body.as_bytes());
+            m.worst_case(&super::super::api_usage::month_of(chrono::Utc::now()))
+        };
+        // Room for two worst cases, not three.
+        let held_one = (worst * 1e6).ceil() / 1e6;
+        let budget = test_budget(Some(worst * 2.5));
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:inflight", None)).unwrap();
+        let url = format!("{}/v1/messages", base_url_on(port, Provider::Anthropic));
+        let c = plain_client();
+        let send = || c.post(&url).header("x-api-key", token.clone()).body(body).send();
+        let mut a = send().await.unwrap();
+        let mut b = send().await.unwrap();
+        assert!(a.chunk().await.unwrap().is_some() && b.chunk().await.unwrap().is_some());
+        assert!((book.reserved(Provider::Anthropic) - 2.0 * held_one).abs() < 1e-9);
+        // A third is refused before the provider sees it, though nothing is
+        // spent yet.
+        let r = send().await.unwrap();
+        assert_eq!(r.status(), 429);
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["type"], "rate_limit_error");
+        let message = json["error"]["message"].as_str().unwrap();
+        assert!(message.starts_with(crate::app_name!()) && message.contains("in flight"), "{message}");
+        assert_eq!(seen.hits.load(Ordering::SeqCst), 2);
+        assert_eq!(book.spent(Provider::Anthropic, chrono::Utc::now()), 0.0);
+
+        // One ends cleanly: its hold is released and its real cost charged.
+        release.add_permits(1);
+        assert!((reserved_comes_to(&book, Provider::Anthropic, held_one).await - held_one).abs() < 1e-9);
+        let models = charged(&book, Provider::Anthropic).await;
+        assert_eq!(models["claude-stub"].requests, 1);
+        assert_eq!((models["claude-stub"].input, models["claude-stub"].output), (5, 3));
+
+        // Now one more fits; its client hangs up: released too.
+        let mut d = send().await.unwrap();
+        assert_eq!(d.status(), 200);
+        assert!(d.chunk().await.unwrap().is_some());
+        assert!((book.reserved(Provider::Anthropic) - 2.0 * held_one).abs() < 1e-9);
+        drop(d);
+        assert!((reserved_comes_to(&book, Provider::Anthropic, held_one).await - held_one).abs() < 1e-9);
+
+        // The provider breaks the last one off: released.
+        release.close();
+        assert_eq!(reserved_comes_to(&book, Provider::Anthropic, 0.0).await, 0.0);
+        // Both read to their end (one completed, one broke off).
+        let _ = a.bytes().await;
+        let _ = b.bytes().await;
+        assert_eq!(book.snapshot(chrono::Utc::now()).providers["anthropic"].models["claude-stub"].requests, 3);
+        on_tab_gone("e2e:inflight");
+
+        // A provider that cannot be reached: nothing charged, nothing held.
+        let dead = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let dead_addr = dead.local_addr().unwrap();
+        drop(dead);
+        let budget = test_budget(Some(20.0));
+        let book = budget.book.clone();
+        let (port, _) = proxy_with(format!("http://{dead_addr}"), Some(FAKE_KEY), |s| s.budget = budget).await;
+        let token = issue_grant(grant(Provider::Anthropic, "e2e:inflight-dead", None)).unwrap();
+        let r = plain_client()
+            .post(format!("{}/v1/messages", base_url_on(port, Provider::Anthropic)))
+            .header("x-api-key", token)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 502);
+        assert_eq!(book.reserved(Provider::Anthropic), 0.0);
+        assert_eq!(book.spent(Provider::Anthropic, chrono::Utc::now()), 0.0);
+        on_tab_gone("e2e:inflight-dead");
     }
 }

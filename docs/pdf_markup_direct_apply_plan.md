@@ -87,7 +87,9 @@ A new AppHandle-free service `src-tauri/src/services/markup_rounds.rs`
   --no-textconv` on diffs, `core.fsmonitor=false`, and a timeout (20 s per
   call; over it → no undo). Locate the repo with `rev-parse --show-toplevel
   --git-dir --git-common-dir` from the project root; the snapshot covers the
-  whole work tree (an agent may edit outside the PDF's folder).
+  whole work tree (an agent may edit outside the PDF's folder). *(2026-10-04,
+  #2345: the undo puts back only files under the project folder; the rest of
+  the tree is diffed only to name what changed outside it, left alone.)*
 - **`begin(state_dir, root, owner, pdf: Option<rel>, pdf_bytes) -> Result<RoundId, NoUndo>`**
   1. Not a git work tree / no `git` binary → `NoUndo::NotGit` / `NoUndo::NoGit`.
   2. Bound the untracked part first: `ls-files --others --exclude-standard -z`;

@@ -11,6 +11,19 @@ fn changed(app: &AppHandle) {
     let _ = app.emit(CHANGED_EVENT, ());
 }
 
+/// Cancel the prompts and schedules paired phones made that their phone no
+/// longer reaches — after a revoke, Lock down or a narrowed Mobile access
+/// (`mobile_control::phone_origin`, #2348) — and reload the lists that
+/// showed them. Best effort: a failure is logged, and the claim's own check
+/// still stops each of them before it is typed.
+pub(crate) fn cancel_lost_phone_rules(app: &AppHandle, why: &str) {
+    match crate::services::mobile_control::phone_origin::sweep(&crate::storage::state_dir(), why) {
+        Ok(cancelled) if !cancelled.is_empty() => changed(app),
+        Ok(_) => {}
+        Err(error) => eprintln!("{}: phone prompts and schedules not checked {why}: {error}", crate::app_slug!()),
+    }
+}
+
 /// Take or renew the single-client timer lease for this window
 /// (`services::timer_lease`, headless owner plan H2): the timer hosts run
 /// only while it answers `held`. Called on a heartbeat.
@@ -86,12 +99,19 @@ pub fn agent_schedules_delete_target(
 
 #[tauri::command]
 pub fn agent_schedule_claim(
+    app: AppHandle,
     project_id: String,
     schedule_target_id: String,
     schedule_id: String,
     occurrence: String,
 ) -> Result<bool, String> {
-    agent_tasks::claim(&project_id, &schedule_target_id, &schedule_id, &occurrence)
+    let outcome = agent_tasks::claim(&project_id, &schedule_target_id, &schedule_id, &occurrence)?;
+    // A phone's rule its phone can no longer reach was taken out instead: the
+    // lists that still show it reload.
+    if outcome == agent_tasks::ClaimOutcome::Cancelled {
+        changed(&app);
+    }
+    Ok(outcome == agent_tasks::ClaimOutcome::Claimed)
 }
 
 #[tauri::command]

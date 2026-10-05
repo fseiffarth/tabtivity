@@ -1,7 +1,10 @@
 //! Explicit project → phone files, published into `.tabtivity/outbox/`.
 //!
 //! Only safe leaf names of bounded, non-symlink regular files cross the API.
-//! The directory must resolve below its project root. Types come from bytes:
+//! The directory is reached from the project root one held folder at a time
+//! (`openat(O_NOFOLLOW)` per name, `files::ProjectDir`), never by path, so a
+//! `.tabtivity` or `outbox` swapped for a link mid-request changes nothing; a
+//! link anywhere on the way is refused. Types come from bytes:
 //! images/PDF, inert UTF-8 text (including HTML/SVG), or attachment downloads.
 //! Nothing detects terminal paths or copies files on the agent's behalf.
 //!
@@ -21,6 +24,8 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use super::files::ProjectDir;
 
 /// Project-relative directory an agent puts files for the phone in.
 pub const OUTBOX_DIR: &str = crate::brand::OUTBOX_DIR;
@@ -65,7 +70,8 @@ pub struct OutboxFile {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum OutboxError {
-    /// The project root is gone, or the outbox does not resolve below it.
+    /// The project root is gone, or something on the way to the outbox is
+    /// not a plain folder (a link, a file).
     Unavailable,
     /// No such name, or it names something that is not a servable file.
     NotFound,
@@ -126,60 +132,53 @@ pub fn classify(head: &[u8]) -> &'static str {
     else { "application/octet-stream" }
 }
 
-/// The outbox directory, proven to sit below the project root — or `None`
-/// when there is no outbox yet, which is the ordinary case and not an error.
-fn outbox_dir(root: &Path) -> Result<Option<std::path::PathBuf>, OutboxError> {
+/// The outbox folder, held open — or `None` when there is no outbox yet,
+/// which is the ordinary case and not an error.
+fn outbox_dir(root: &Path) -> Result<Option<ProjectDir>, OutboxError> {
     drop_dir(root, OUTBOX_DIR)
 }
 
 /// A project drop box (`rel` below `root`: the outbox, or the phone's inbox),
-/// proven to sit below the project root — `None` when it does not exist yet.
-pub(super) fn drop_dir(root: &Path, rel: &str) -> Result<Option<std::path::PathBuf>, OutboxError> {
-    if !root.is_dir() {
-        return Err(OutboxError::Unavailable);
+/// held open after a walk from the root that opens each name relative to the
+/// folder before it without following a link — `None` when it does not exist
+/// yet. Everything after this works on the held folder, never on a path.
+pub(super) fn drop_dir(root: &Path, rel: &str) -> Result<Option<ProjectDir>, OutboxError> {
+    let mut dir = ProjectDir::open_root(root).map_err(|_| OutboxError::Unavailable)?;
+    for name in rel.split('/') {
+        match dir.lookup_dir(name) {
+            Ok(Some(next)) => dir = next,
+            Ok(None) => return Ok(None),
+            Err(()) => return Err(OutboxError::Unavailable),
+        }
     }
-    let dir = root.join(rel);
-    if fs::symlink_metadata(&dir).is_err() {
-        return Ok(None);
-    }
-    let canonical_root = root.canonicalize().map_err(|_| OutboxError::Unavailable)?;
-    let canonical_dir = dir.canonicalize().map_err(|_| OutboxError::Unavailable)?;
-    if canonical_dir == canonical_root || !canonical_dir.starts_with(&canonical_root) || !canonical_dir.is_dir() {
-        return Err(OutboxError::Unavailable);
-    }
-    Ok(Some(canonical_dir))
+    Ok(Some(dir))
 }
 
-/// Reads the first bytes of a regular, non-symlink, bounded file under the
+/// Reads the first bytes of a regular, non-symlink, bounded file in the
 /// outbox and classifies its media type — or `None` for anything the phone must
 /// not be handed.
-fn probe(dir: &Path, name: &str) -> Option<(fs::File, fs::Metadata, &'static str)> {
+fn probe(dir: &ProjectDir, name: &str) -> Option<(fs::File, fs::Metadata, &'static str)> {
     probe_as(dir, name, valid_name)
 }
 
 /// [`probe`] for a drop box whose leaves `valid` admits.
-pub(super) fn probe_as(dir: &Path, name: &str, valid: fn(&str) -> bool) -> Option<(fs::File, fs::Metadata, &'static str)> {
+pub(super) fn probe_as(dir: &ProjectDir, name: &str, valid: fn(&str) -> bool) -> Option<(fs::File, fs::Metadata, &'static str)> {
     if !valid(name) {
         return None;
     }
-    let (file, meta, kind) = open_sniffed(&dir.join(name))?;
+    let (file, meta) = dir.open_file(name)?;
+    let (file, meta, kind) = sniff_opened(file, meta)?;
     if meta.len() == 0 || meta.len() > MAX_OUTBOX_FILE {
         return None;
     }
     Some((file, meta, kind))
 }
 
-/// Opens a regular file without following a link at its leaf, and classifies
-/// its first bytes — the one way a phone-facing read opens a file, shared with
-/// the project file browser (`files.rs`). The descriptor comes back positioned
-/// after the head; `rewind` before reading the whole of it.
-pub fn open_sniffed(path: &Path) -> Option<(fs::File, fs::Metadata, &'static str)> {
-    let (file, meta) = open_regular(path)?;
-    sniff_opened(file, meta)
-}
-
-/// [`open_sniffed`] for a regular file the caller already opened (the file
-/// browser opens its own, relative to a folder descriptor).
+/// Classifies the first bytes of a regular file the caller opened (relative
+/// to a held folder, `files::ProjectDir::open_file`) — the one way a
+/// phone-facing read types a file, shared with the project file browser. The
+/// descriptor comes back positioned after the head; `rewind` before reading
+/// the whole of it.
 pub fn sniff_opened(mut file: fs::File, meta: fs::Metadata) -> Option<(fs::File, fs::Metadata, &'static str)> {
     let mut head = [0u8; SNIFF_BYTES];
     let mut filled = 0;
@@ -194,33 +193,6 @@ pub fn sniff_opened(mut file: fs::File, meta: fs::Metadata) -> Option<(fs::File,
     Some((file, meta, kind))
 }
 
-/// Opens a regular file without following a link at its leaf (nor blocking
-/// on a FIFO swapped in after the check).
-pub(super) fn open_regular(path: &Path) -> Option<(fs::File, fs::Metadata)> {
-    // `symlink_metadata` does not follow: a link is refused as such, wherever
-    // it points.
-    let meta = fs::symlink_metadata(path).ok()?;
-    if !meta.is_file() {
-        return None;
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)] {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(windows)] {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
-    }
-    let file = options.open(path).ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() {
-        return None;
-    }
-    Some((file, meta))
-}
-
 /// The sender marker of leaf `name`: `.<name>.tab`.
 fn marker_name(name: &str) -> String {
     format!(".{name}.tab")
@@ -228,8 +200,8 @@ fn marker_name(name: &str) -> String {
 
 /// The tab id `tabtivity-send` recorded for `name`, if a well-formed one is
 /// there — the hook's alphabet (`[A-Za-z0-9-]`), bounded.
-fn sender(dir: &Path, name: &str) -> Option<String> {
-    let (file, meta) = open_regular(&dir.join(marker_name(name)))?;
+fn sender(dir: &ProjectDir, name: &str) -> Option<String> {
+    let (file, meta) = dir.open_file(&marker_name(name))?;
     if meta.len() == 0 || meta.len() > MAX_TAB_ID {
         return None;
     }
@@ -249,8 +221,8 @@ fn source_name(name: &str) -> String {
 /// without following a link, bounded, one non-empty line, never a path into
 /// the outbox itself (a copy of a copy has no project file behind it). Only
 /// its shape is checked here; whoever uses it proves it against the tree.
-fn source(dir: &Path, name: &str) -> Option<String> {
-    let (file, meta) = open_regular(&dir.join(source_name(name)))?;
+fn source(dir: &ProjectDir, name: &str) -> Option<String> {
+    let (file, meta) = dir.open_file(&source_name(name))?;
     if meta.len() == 0 || meta.len() > MAX_SOURCE {
         return None;
     }
@@ -301,21 +273,32 @@ pub fn list_for(root: &Path, tab: Option<&str>) -> Result<Vec<OutboxFile>, Outbo
     let Some(dir) = outbox_dir(root)? else {
         return Ok(Vec::new());
     };
+    list_in(&dir, tab)
+}
+
+/// [`list_for`] of an outbox already held open.
+fn list_in(dir: &ProjectDir, tab: Option<&str>) -> Result<Vec<OutboxFile>, OutboxError> {
     // The note the old-named send command leaves here (after a rename).
-    crate::services::brand_migration::compat::take_send_alias_marker(&crate::brand::PAIR, &dir);
+    crate::services::brand_migration::compat::take_send_alias_marker_with(&crate::brand::PAIR, |marker| {
+        // A plain file only: the outbox is the agent's to fill.
+        dir.open_file(marker).is_some() && dir.remove_file(marker).is_ok()
+    });
+    let entries = dir.entries().map_err(|e| match e {
+        super::files::FilesError::Io(e) => OutboxError::Io(e),
+        _ => OutboxError::Unavailable,
+    })?;
     let mut images = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| OutboxError::Io(e.to_string()))? {
-        let entry = entry.map_err(|e| OutboxError::Io(e.to_string()))?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+    for (name, is_dir) in entries {
+        if is_dir {
+            continue;
+        }
+        let Some((_file, meta, kind)) = probe(dir, &name) else {
             continue;
         };
-        let Some((_file, meta, kind)) = probe(&dir, &name) else {
-            continue;
-        };
-        let from_tab = tab.is_some_and(|tab| sender(&dir, &name).as_deref() == Some(tab));
+        let from_tab = tab.is_some_and(|tab| sender(dir, &name).as_deref() == Some(tab));
         images.push(OutboxFile {
             original: sent_name(&name).to_string(),
-            source: source(&dir, &name),
+            source: source(dir, &name),
             name,
             kind,
             size: meta.len(),
@@ -336,8 +319,8 @@ pub fn read(root: &Path, name: &str) -> Result<(Vec<u8>, &'static str), OutboxEr
     read_probed(&dir, name, valid_name)
 }
 
-/// One leaf's bytes out of a proven drop box `dir`, re-proved by `valid`.
-pub(super) fn read_probed(dir: &Path, name: &str, valid: fn(&str) -> bool) -> Result<(Vec<u8>, &'static str), OutboxError> {
+/// One leaf's bytes out of a held drop box `dir`, re-proved by `valid`.
+pub(super) fn read_probed(dir: &ProjectDir, name: &str, valid: fn(&str) -> bool) -> Result<(Vec<u8>, &'static str), OutboxError> {
     let Some((mut file, meta, _kind)) = probe_as(dir, name, valid) else {
         return Err(OutboxError::NotFound);
     };
@@ -361,8 +344,8 @@ pub fn exists(root: &Path, name: &str) -> bool {
 /// Delete one listed file, by the leaf the listing handed out.
 ///
 /// Exactly what [`read`] would serve is what this removes: `probe` re-proves
-/// the leaf, the bounds and the regular, non-symlink file under the *proven*
-/// outbox directory, so a name the phone could not see is `NotFound` rather
+/// the leaf, the bounds and the regular, non-symlink file in the *held*
+/// outbox folder, so a name the phone could not see is `NotFound` rather
 /// than a deletion somewhere else. A symlink inside the outbox is refused as
 /// such here too — the difference between dropping a file the agent published
 /// and unlinking whatever it pointed at.
@@ -377,13 +360,13 @@ pub fn remove(root: &Path, name: &str) -> Result<(), OutboxError> {
     let Some((_file, _meta, _kind)) = probe(&dir, name) else {
         return Err(OutboxError::NotFound);
     };
-    // `dir` is canonical and `name` is a validated leaf, so this is the file
-    // `probe` just held open; `remove_file` never follows a link.
-    fs::remove_file(dir.join(name)).map_err(|e| OutboxError::Io(e.to_string()))?;
+    // Unlinked relative to the same held folder `probe` opened it in; an
+    // unlink never follows a link.
+    dir.remove_file(name).map_err(|e| OutboxError::Io(e.to_string()))?;
     // Its sender and origin markers go with it, or a later file of the same
     // leaf would inherit them.
-    let _ = fs::remove_file(dir.join(marker_name(name)));
-    let _ = fs::remove_file(dir.join(source_name(name)));
+    let _ = dir.remove_file(&marker_name(name));
+    let _ = dir.remove_file(&source_name(name));
     Ok(())
 }
 
@@ -555,6 +538,72 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.join(OUTBOX_DIR)).unwrap();
         assert_eq!(list(&root), Err(OutboxError::Unavailable));
         assert_eq!(read(&root, "private.png"), Err(OutboxError::Unavailable));
+    }
+
+    /// Gap 12: the walk to the outbox opens every folder without following a
+    /// link, so a `.tabtivity` or `outbox` link — out of the project or into
+    /// it — is refused for listing, reading, probing and deleting alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_project_dir_or_outbox_is_refused_for_every_door() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let foreign = outbox(outside.path());
+        touch(&foreign, "private.png", PNG, Duration::from_secs(1));
+        let project_dir = concat!(".", crate::app_slug!());
+
+        // `.tabtivity` itself a link to a folder holding an `outbox/`.
+        let linked_top = dir.path().join("linked-top");
+        fs::create_dir_all(&linked_top).unwrap();
+        std::os::unix::fs::symlink(outside.path().join(project_dir), linked_top.join(project_dir)).unwrap();
+        // `outbox` a link to another folder of the same project.
+        let linked_inside = dir.path().join("linked-inside");
+        fs::create_dir_all(linked_inside.join(project_dir)).unwrap();
+        fs::create_dir_all(linked_inside.join("docs")).unwrap();
+        touch(&linked_inside.join("docs"), "private.png", PNG, Duration::from_secs(1));
+        std::os::unix::fs::symlink(linked_inside.join("docs"), linked_inside.join(OUTBOX_DIR)).unwrap();
+        // `.tabtivity` a plain file.
+        let file_top = dir.path().join("file-top");
+        fs::create_dir_all(&file_top).unwrap();
+        fs::write(file_top.join(project_dir), b"not a folder").unwrap();
+
+        for root in [&linked_top, &linked_inside, &file_top] {
+            assert_eq!(list(root), Err(OutboxError::Unavailable), "{root:?}");
+            assert_eq!(read(root, "private.png"), Err(OutboxError::Unavailable), "{root:?}");
+            assert_eq!(remove(root, "private.png"), Err(OutboxError::Unavailable), "{root:?}");
+            assert!(!exists(root, "private.png"), "{root:?}");
+        }
+        assert!(foreign.join("private.png").is_file());
+        assert!(linked_inside.join("docs/private.png").is_file());
+    }
+
+    /// Gap 12, the race: once the walk holds the outbox, swapping
+    /// `.tabtivity` for a link changes nothing about the rest of the request —
+    /// listing, reading and deleting go on in the folder it holds.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_dir_swapped_for_a_link_mid_request_never_reaches_the_links_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let project_dir = concat!(".", crate::app_slug!());
+        let foreign = outbox(outside.path());
+        touch(&foreign, "leak.png", PNG, Duration::from_secs(1));
+        touch(&foreign, "own.png", JPEG, Duration::from_secs(1));
+        touch(&outbox(dir.path()), "own.png", PNG, Duration::from_secs(1));
+
+        let held = drop_dir(dir.path(), OUTBOX_DIR).unwrap().unwrap();
+        fs::rename(dir.path().join(project_dir), dir.path().join("moved")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join(project_dir), dir.path().join(project_dir)).unwrap();
+
+        let names: Vec<String> = list_in(&held, None).unwrap().into_iter().map(|f| f.name).collect();
+        assert_eq!(names, ["own.png"]);
+        assert_eq!(read_probed(&held, "own.png", valid_name).unwrap(), (PNG.to_vec(), "image/png"));
+        assert_eq!(read_probed(&held, "leak.png", valid_name), Err(OutboxError::NotFound));
+        assert!(held.remove_file("own.png").is_ok());
+        assert!(!dir.path().join("moved/outbox/own.png").exists());
+        assert!(foreign.join("own.png").is_file() && foreign.join("leak.png").is_file());
+        // And a fresh request stops at the link.
+        assert_eq!(list(dir.path()), Err(OutboxError::Unavailable));
     }
 
     #[test]

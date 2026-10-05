@@ -13,14 +13,21 @@
 //!   (SSE `message_start`), and the `model` beside it;
 //! - **Gemini:** `usageMetadata` and `modelVersion` of each top-level
 //!   response object — an SSE event (`alt=sse`), an element of the JSON
-//!   array a plain `streamGenerateContent` sends, or a whole JSON answer.
+//!   array a plain `streamGenerateContent` sends, or a whole JSON answer —
+//!   and the Google Search queries a candidate's `groundingMetadata` lists in
+//!   `webSearchQueries` (grounding is billed per query or per grounded
+//!   prompt, never in `usageMetadata`; `api_prices` prices it).
 //!
 //! A key of that name anywhere else — inside a tool call's arguments, in the
 //! text of an answer (escaped in a string) — is not read. Usage counts are
 //! cumulative in both APIs (`message_delta` repeats the running output total;
 //! every streamed Gemini chunk repeats the running totals), so each field
-//! keeps the largest value seen: nothing is counted twice. What was reported
-//! before a stream broke off (or the client left) is charged.
+//! keeps the largest value seen: nothing is counted twice. Search queries are
+//! told apart by a keyed hash of their text per candidate; a query counts as
+//! often as the one response listing it most often lists it, so a stream that
+//! repeats its grounding metadata is not counted twice and one that splits
+//! it over chunks is counted whole. What was reported before a stream broke
+//! off (or the client left) is charged.
 //!
 //! **An answer that never reported its final count** — the client left or
 //! the stream broke before Anthropic's `message_delta` (or before Gemini's
@@ -34,8 +41,17 @@
 //! ([`ANTHROPIC_TOKENS_PER_SEC`], [`GEMINI_TOKENS_PER_SEC`]) — and by the
 //! request's own `max_tokens` (Anthropic) or the provider's output cap;
 //! input not yet reported is the request body's bytes / 3 (more tokens than
-//! any tokenizer yields), up to a context window. An overcount on purpose:
+//! any tokenizer yields), up to a context window. A Gemini request that may
+//! ground ([`may_ground`]: a Search or Maps grounding tool anywhere in its
+//! body, or a body that does not parse) is charged at least
+//! [`GROUNDING_QUERIES_ESTIMATE`] search queries. An overcount on purpose:
 //! a turn the user cancels costs a little more here than it did.
+//!
+//! **Before the request is sent**, [`Meter::worst_case`] prices the same
+//! estimate at its ceiling — the whole output cap, input as 1-hour cache
+//! writes (Anthropic's dearest input kind), the grounding estimate — so the
+//! proxy can hold it against the monthly limit while the request is in
+//! flight (`api_usage::Book::reserve`).
 //!
 //! Memory is bounded per answer: a nesting stack of [`MAX_DEPTH`] frames, a
 //! [`MAX_STRING`]-byte window on the current string, and a [`MAX_CAPTURE`]
@@ -43,6 +59,10 @@
 //! the scanner, so a malformed event cannot confuse the next one.
 //!
 //! `AppHandle`-free and pure.
+
+use std::collections::hash_map::{DefaultHasher, RandomState};
+use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher};
 
 use super::agent_api_keys::Provider;
 use super::api_prices::{AnthropicUsage, Charge, GeminiUsage};
@@ -68,6 +88,17 @@ const GEMINI_MAX_OUTPUT: u64 = 65_536 + 32_768;
 /// Input a request can hold at most (the providers' context windows).
 const ANTHROPIC_MAX_INPUT: u64 = 1_000_000;
 const GEMINI_MAX_INPUT: u64 = 2_000_000;
+/// Search queries charged for a Gemini answer that may have grounded but
+/// did not deliver its grounding metadata (cut off, client gone, unreadable),
+/// and held for one in flight. Grounded Gemini answers run a handful of
+/// queries; ten is an assumption above that, like the output rate bounds.
+pub const GROUNDING_QUERIES_ESTIMATE: u64 = 10;
+/// Distinct search queries told apart per answer; past this every further
+/// query counts as new (an overcount, never a miss).
+const MAX_DISTINCT_QUERIES: usize = 256;
+/// Gemini tool keys billed per search query or grounded prompt, compared in
+/// ASCII lowercase with `_` dropped (Gemini reads both spellings).
+const GROUNDING_TOOLS: &[&str] = &["googlesearch", "googlesearchretrieval", "googlemaps", "enterprisewebsearch"];
 
 /// Keys the scanner cares about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +108,9 @@ enum Key {
     Message,
     Model,
     ModelVersion,
+    Candidates,
+    GroundingMetadata,
+    WebSearchQueries,
     Other,
 }
 
@@ -87,6 +121,9 @@ fn classify(s: &[u8]) -> Key {
         b"message" => Key::Message,
         b"model" => Key::Model,
         b"modelVersion" => Key::ModelVersion,
+        b"candidates" => Key::Candidates,
+        b"groundingMetadata" => Key::GroundingMetadata,
+        b"webSearchQueries" => Key::WebSearchQueries,
         _ => Key::Other,
     }
 }
@@ -97,6 +134,23 @@ struct Frame {
     /// The key this container is the value of (`Other` for an array element
     /// or a top-level value).
     key: Key,
+    /// Array: the element now being read (0-based).
+    items: u32,
+}
+
+/// A candidate's `groundingMetadata` being read (Gemini).
+#[derive(Debug)]
+struct GroundingOpen {
+    /// Its frame's index in the stack.
+    depth: usize,
+    /// The candidate's position in `candidates`.
+    candidate: u32,
+    /// Keyed hashes of the `webSearchQueries` strings, in order.
+    queries: Vec<u64>,
+    /// Queries past [`MAX_DISTINCT_QUERIES`] in this object.
+    extra: u64,
+    /// The object holds any key at all.
+    had_key: bool,
 }
 
 /// What the scanner found.
@@ -110,6 +164,8 @@ enum Found {
     /// A usage object that could not be read whole (larger than
     /// [`MAX_CAPTURE`], or cut by an SSE line break): the count is not known.
     Lost,
+    /// A candidate's whole `groundingMetadata` (Gemini).
+    Grounding { candidate: u32, queries: Vec<u64>, extra: u64, had_key: bool },
 }
 
 #[derive(Debug, Default)]
@@ -136,11 +192,27 @@ struct Scanner {
     /// The usage object being copied, the depth it was opened at, and
     /// whether that is the answer's root.
     capture: Option<(Vec<u8>, usize, bool)>,
+    /// The grounding metadata being read.
+    grounding: Option<GroundingOpen>,
+    /// The current string is a search query: its hash so far.
+    query_hash: Option<DefaultHasher>,
+    /// Hash keys for search queries, random per answer (an answer cannot
+    /// pick two queries that collide) and kept across resets.
+    keys: RandomState,
 }
 
 impl Scanner {
     fn reset(&mut self) {
-        *self = Scanner::default();
+        *self = Scanner { keys: self.keys.clone(), ..Scanner::default() };
+    }
+
+    /// Whether a string starting now is an element of the open grounding
+    /// metadata's `webSearchQueries`.
+    fn at_query(&self) -> bool {
+        let Some(g) = &self.grounding else { return false };
+        self.deeper == 0
+            && self.stack.len() == g.depth + 2
+            && self.stack.last().is_some_and(|f| !f.object && f.key == Key::WebSearchQueries)
     }
 
     /// The frames below the answer's top-level object: `None` when the
@@ -179,7 +251,7 @@ impl Scanner {
     fn feed(&mut self, provider: Provider, sse: bool, bytes: &[u8], found: &mut Vec<Found>) {
         for &b in bytes {
             if sse && (b == b'\n' || b == b'\r') {
-                if self.capture.is_some() {
+                if self.capture.is_some() || self.grounding.is_some() {
                     found.push(Found::Lost);
                 }
                 self.reset();
@@ -208,6 +280,9 @@ impl Scanner {
                 self.end_string(found);
                 return;
             }
+            if let Some(h) = self.query_hash.as_mut() {
+                h.write_u8(b);
+            }
             if self.string.len() < MAX_STRING {
                 self.string.push(b);
             } else {
@@ -234,6 +309,7 @@ impl Scanner {
                 } else {
                     self.pending.take().filter(|k| self.wanted(provider, *k))
                 };
+                self.query_hash = (!self.string_is_key && self.at_query()).then(|| self.keys.build_hasher());
             }
             b':' => {
                 if self.stack.last().is_some_and(|f| f.object) {
@@ -245,6 +321,11 @@ impl Scanner {
                 self.pending = None;
                 self.last_key = None;
                 self.expect_key = self.stack.last().is_some_and(|f| f.object) && self.deeper == 0;
+                if self.deeper == 0 {
+                    if let Some(top) = self.stack.last_mut().filter(|f| !f.object) {
+                        top.items = top.items.saturating_add(1);
+                    }
+                }
             }
             b'{' | b'[' => {
                 let object = b == b'{';
@@ -257,8 +338,24 @@ impl Scanner {
                     let root = self.below_root().is_some_and(<[Frame]>::is_empty);
                     self.capture = Some((vec![b'{'], self.stack.len(), root));
                 }
+                // `candidates[i].groundingMetadata` of a top-level response.
+                if object && key == Key::GroundingMetadata && provider == Provider::Gemini && self.grounding.is_none() {
+                    let candidate = match self.below_root() {
+                        Some([list, item]) if !list.object && list.key == Key::Candidates && item.object => Some(list.items),
+                        _ => None,
+                    };
+                    if let Some(candidate) = candidate {
+                        self.grounding = Some(GroundingOpen {
+                            depth: self.stack.len(),
+                            candidate,
+                            queries: Vec::new(),
+                            extra: 0,
+                            had_key: false,
+                        });
+                    }
+                }
                 if self.stack.len() < MAX_DEPTH {
-                    self.stack.push(Frame { object, key });
+                    self.stack.push(Frame { object, key, items: 0 });
                 } else {
                     self.deeper += 1;
                 }
@@ -279,6 +376,11 @@ impl Scanner {
                         found.push(Found::Usage(buf, root));
                     }
                 }
+                if self.deeper == 0 && self.grounding.as_ref().is_some_and(|g| g.depth == self.stack.len()) {
+                    if let Some(g) = self.grounding.take() {
+                        found.push(Found::Grounding { candidate: g.candidate, queries: g.queries, extra: g.extra, had_key: g.had_key });
+                    }
+                }
                 if self.stack.is_empty() && self.deeper == 0 {
                     self.reset();
                 }
@@ -293,7 +395,20 @@ impl Scanner {
     }
 
     fn end_string(&mut self, found: &mut Vec<Found>) {
+        if let Some(hash) = self.query_hash.take().map(|h| h.finish()) {
+            if let Some(g) = self.grounding.as_mut() {
+                if g.queries.len() < MAX_DISTINCT_QUERIES {
+                    g.queries.push(hash);
+                } else {
+                    g.extra = g.extra.saturating_add(1);
+                }
+            }
+        }
         if self.string_is_key {
+            let depth = self.stack.len();
+            if let Some(g) = self.grounding.as_mut().filter(|g| depth == g.depth + 1) {
+                g.had_key = true;
+            }
             self.last_key = Some(if self.string_long || self.string_escaped { Key::Other } else { classify(&self.string) });
         } else if let Some(Key::Model | Key::ModelVersion) = self.string_value_of {
             if !self.string_long && !self.string_escaped && !self.string.is_empty() {
@@ -361,6 +476,70 @@ struct RequestFacts {
     /// Anthropic `speed: "fast"` / `inference_geo: "us"`.
     fast: bool,
     us_only: bool,
+    /// Gemini answer: the request may ground ([`may_ground`]).
+    may_ground: bool,
+}
+
+/// Whether a Gemini request body may ask for Search or Maps grounding: one
+/// of [`GROUNDING_TOOLS`] is a key anywhere in it (every occurrence is seen,
+/// duplicates and escaped spellings included), or it does not parse as JSON.
+pub fn may_ground(body: &[u8]) -> bool {
+    use serde::de::DeserializeSeed;
+    let mut found = false;
+    let mut de = serde_json::Deserializer::from_slice(body);
+    let parsed = KeyScan(&mut found).deserialize(&mut de).and_then(|()| de.end()).is_ok();
+    found || !parsed
+}
+
+/// Walks a JSON value, setting the flag at a grounding tool key.
+struct KeyScan<'a>(&'a mut bool);
+
+impl<'de> serde::de::DeserializeSeed<'de> for KeyScan<'_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for KeyScan<'_> {
+    type Value = ();
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let found = self.0;
+        while seq.next_element_seed(KeyScan(&mut *found))?.is_some() {}
+        Ok(())
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let found = self.0;
+        while let Some(key) = map.next_key::<String>()? {
+            let key: String = key.chars().filter(|c| *c != '_').map(|c| c.to_ascii_lowercase()).collect();
+            if GROUNDING_TOOLS.contains(&key.as_str()) {
+                *found = true;
+            }
+            map.next_value_seed(KeyScan(&mut *found))?;
+        }
+        Ok(())
+    }
 }
 
 /// The few fields of an Anthropic request body the estimate reads. A body
@@ -390,6 +569,13 @@ pub struct Meter {
     final_usage: bool,
     /// A usage object could not be read: the reported count is incomplete.
     lost: bool,
+    /// Gemini search queries by (candidate, keyed query hash): the most
+    /// times one response listed it.
+    queries: HashMap<(u32, u64), u64>,
+    /// Queries past [`MAX_DISTINCT_QUERIES`], each counted.
+    extra_queries: u64,
+    /// Grounding metadata arrived (with or without queries).
+    grounded: bool,
     /// The answer's status arrived.
     answered: bool,
     /// The answer's status is 2xx (an error answer costs nothing).
@@ -410,6 +596,9 @@ impl Meter {
             saw_usage: false,
             final_usage: false,
             lost: false,
+            queries: HashMap::new(),
+            extra_queries: 0,
+            grounded: false,
             answered: false,
             success: true,
             request: RequestFacts::default(),
@@ -428,10 +617,14 @@ impl Meter {
         self.sse = content_type.is_some_and(|ct| ct.trim_start().to_ascii_lowercase().starts_with("text/event-stream"));
     }
 
-    /// The request body, read for what bounds an estimate: its size, and
-    /// (Anthropic) `max_tokens`, `model`, `speed`, `inference_geo`.
+    /// The request body, read for what bounds an estimate: its size,
+    /// (Anthropic) `max_tokens`, `model`, `speed`, `inference_geo`, and
+    /// (Gemini answers) whether it may ground.
     pub fn request(&mut self, body: &[u8]) {
         self.request = RequestFacts { body_bytes: body.len(), ..RequestFacts::default() };
+        if self.provider == Provider::Gemini && matches!(self.billing, Billing::Usage { .. }) {
+            self.request.may_ground = may_ground(body);
+        }
         if self.provider == Provider::Anthropic {
             if let Ok(r) = serde_json::from_slice::<AnthropicRequest>(body) {
                 self.request.max_output = r.max_tokens;
@@ -466,8 +659,31 @@ impl Meter {
                     Err(_) => self.lost = true,
                 },
                 Found::Lost => self.lost = true,
+                Found::Grounding { candidate, queries, extra, had_key } => {
+                    self.grounded |= had_key || !queries.is_empty() || extra > 0;
+                    let mut listed: HashMap<u64, u64> = HashMap::new();
+                    for q in queries {
+                        *listed.entry(q).or_default() += 1;
+                    }
+                    for (q, n) in listed {
+                        let room = self.queries.len() < MAX_DISTINCT_QUERIES;
+                        match self.queries.get_mut(&(candidate, q)) {
+                            Some(seen) => *seen = (*seen).max(n),
+                            None if room => {
+                                self.queries.insert((candidate, q), n);
+                            }
+                            None => self.extra_queries = self.extra_queries.saturating_add(n),
+                        }
+                    }
+                    self.extra_queries = self.extra_queries.saturating_add(extra);
+                }
             }
         }
+    }
+
+    /// Search queries the answer's grounding metadata listed.
+    fn search_queries(&self) -> u64 {
+        self.queries.values().fold(self.extra_queries, |a, n| a.saturating_add(*n))
     }
 
     fn merge(&mut self, v: &serde_json::Value) {
@@ -531,6 +747,22 @@ impl Meter {
     /// answer whose final count did not arrive is charged the estimate in
     /// the module docs on top of what it reported.
     pub fn charge(&self, month: &str, end: End) -> Option<Charge> {
+        self.estimate(month, end, false)
+    }
+
+    /// The most the request can cost by the estimate in the module docs, in
+    /// USD, priced in UTC month `month` — for before it is sent (after
+    /// [`Meter::request`]): the whole output cap (Anthropic's `max_tokens`,
+    /// else the provider's cap), input from the body's size as 1-hour cache
+    /// writes (Anthropic), [`GROUNDING_QUERIES_ESTIMATE`] queries for a
+    /// Gemini request that may ground. Held against the monthly limit while
+    /// the request is in flight; the answer is then charged what it cost.
+    pub fn worst_case(&self, month: &str) -> f64 {
+        self.estimate(month, End { complete: false, elapsed: std::time::Duration::MAX }, true)
+            .map_or(0.0, |c| c.usd)
+    }
+
+    fn estimate(&self, month: &str, end: End, worst: bool) -> Option<Charge> {
         if self.answered && !self.success {
             return None;
         }
@@ -562,7 +794,12 @@ impl Meter {
                 let mut u = self.anthropic.clone();
                 if !settled {
                     if u.input_tokens == 0 && u.cache_creation_input_tokens == 0 && u.cache_read_input_tokens == 0 {
-                        u.input_tokens = input_estimate;
+                        if worst {
+                            // Without a TTL breakdown: the 1-hour write rate.
+                            u.cache_creation_input_tokens = input_estimate;
+                        } else {
+                            u.input_tokens = input_estimate;
+                        }
                     }
                     u.output_tokens = u.output_tokens.max(output_estimate);
                     u.fast |= self.request.fast;
@@ -572,7 +809,13 @@ impl Meter {
             }
             Provider::Gemini => {
                 let mut u = self.gemini.clone();
+                u.search_queries = self.search_queries();
+                u.grounded = self.grounded;
                 if !settled {
+                    if self.request.may_ground {
+                        u.search_queries = u.search_queries.max(GROUNDING_QUERIES_ESTIMATE);
+                        u.grounded = true;
+                    }
                     if u.prompt_token_count == 0 {
                         u.prompt_token_count = input_estimate;
                     }
@@ -1003,5 +1246,174 @@ mod tests {
             assert!(!c.known, "{model}");
             assert!((c.usd - 10.0).abs() < 1e-9, "{model}");
         }
+    }
+
+    // ---- Gemini Search grounding (gap 8) ----------------------------------
+
+    fn grounded(model: &str, queries: u64) -> Charge {
+        let usage = GeminiUsage {
+            prompt_token_count: 1000,
+            candidates_token_count: 100,
+            search_queries: queries,
+            grounded: true,
+            ..Default::default()
+        };
+        super::super::api_prices::price_gemini(model, &usage, MONTH)
+    }
+
+    /// A `generateContent` answer whose model ran two searches, with decoy
+    /// grounding keys in a function call's arguments and in the text.
+    const GEMINI_GROUNDED: &str = concat!(
+        "{\"candidates\": [{\"content\": {\"parts\": [",
+        "{\"functionCall\": {\"name\": \"f\", \"args\": {\"groundingMetadata\": {\"webSearchQueries\": [\"x\", \"y\", \"z\"]}}}},",
+        "{\"text\": \"\\\"groundingMetadata\\\": {\\\"webSearchQueries\\\": [\\\"t\\\"]}\"}],\"role\": \"model\"},",
+        "\"groundingMetadata\": {\"webSearchQueries\": [\"weather bonn\", \"weather \\\"cologne\\\"\"],",
+        "\"searchEntryPoint\": {\"renderedContent\": \"<div>[\\\"q\\\"]</div>\"},",
+        "\"groundingChunks\": [{\"web\": {\"uri\": \"https://example.com/\", \"title\": \"t\"}}]}}],",
+        "\"usageMetadata\": {\"promptTokenCount\": 1000, \"candidatesTokenCount\": 100},",
+        "\"modelVersion\": \"gemini-3.5-flash\"}"
+    );
+
+    #[test]
+    fn gemini_grounding_queries_in_a_plain_answer_are_charged() {
+        let expect = grounded("gemini-3.5-flash", 2);
+        assert_eq!(expect.web_searches, 2);
+        assert!((expect.usd - (1000.0 * 1.50 + 100.0 * 9.0) / 1e6 - 2.0 * 0.014).abs() < 1e-12, "{}", expect.usd);
+        every_split(Provider::Gemini, Billing::Usage { model: None }, "application/json", GEMINI_GROUNDED.as_bytes(), &expect);
+        // A grounding object at the response's root is not a candidate's.
+        let body = br#"{"groundingMetadata":{"webSearchQueries":["a"]},"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":100},"modelVersion":"gemini-3.5-flash"}"#;
+        let m = metered(Provider::Gemini, Billing::Usage { model: None }, "application/json", &[body]);
+        assert_eq!(m.charge(MONTH, DONE).unwrap().web_searches, 0);
+    }
+
+    #[test]
+    fn gemini_grounding_queries_in_a_stream_are_counted_once_each() {
+        // Chunk 2 lists two queries; chunk 3 repeats them and adds a third;
+        // a second candidate ran one of the same queries.
+        let body = concat!(
+            "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"It\"}],\"role\": \"model\"},\"index\": 0}],",
+            "\"usageMetadata\": {\"promptTokenCount\": 1000},\"modelVersion\": \"gemini-3.5-flash\"}\r\n\r\n",
+            "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \" rains\"}],\"role\": \"model\"},\"index\": 0,",
+            "\"groundingMetadata\": {\"webSearchQueries\": [\"rain bonn\", \"rain cologne\"]}}],",
+            "\"usageMetadata\": {\"promptTokenCount\": 1000, \"candidatesTokenCount\": 50},\"modelVersion\": \"gemini-3.5-flash\"}\r\n\r\n",
+            "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \".\"}],\"role\": \"model\"},\"index\": 0,",
+            "\"groundingMetadata\": {\"webSearchQueries\": [\"rain bonn\", \"rain cologne\", \"rain aachen\"]}},",
+            "{\"index\": 1, \"groundingMetadata\": {\"webSearchQueries\": [\"rain bonn\"]}}],",
+            "\"usageMetadata\": {\"promptTokenCount\": 1000, \"candidatesTokenCount\": 100},\"modelVersion\": \"gemini-3.5-flash\"}\r\n\r\n",
+        );
+        let expect = grounded("gemini-3.5-flash", 4);
+        every_split(Provider::Gemini, Billing::Usage { model: None }, "text/event-stream", body.as_bytes(), &expect);
+        // One response naming a query twice ran it twice.
+        let body = br#"{"candidates":[{"groundingMetadata":{"webSearchQueries":["a","a","b"]}}],"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":100},"modelVersion":"gemini-3.5-flash"}"#;
+        let m = metered(Provider::Gemini, Billing::Usage { model: None }, "application/json", &[body]);
+        assert_eq!(m.charge(MONTH, DONE), Some(grounded("gemini-3.5-flash", 3)));
+        // Grounding metadata without queries (Maps) is one grounded prompt.
+        let body = br#"{"candidates":[{"groundingMetadata":{"groundingChunks":[{"maps":{"title":"x"}}]}}],"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":100},"modelVersion":"gemini-2.5-flash"}"#;
+        let m = metered(Provider::Gemini, Billing::Usage { model: None }, "application/json", &[body]);
+        let c = m.charge(MONTH, DONE).unwrap();
+        assert_eq!(c, grounded("gemini-2.5-flash", 0));
+        assert_eq!(c.web_searches, 1);
+        // Past the distinct-query bound every further query still counts.
+        let many: Vec<String> = (0..MAX_DISTINCT_QUERIES + 10).map(|i| format!("\"q{i}\"")).collect();
+        let body = format!(
+            r#"{{"candidates":[{{"groundingMetadata":{{"webSearchQueries":[{}]}}}}],"modelVersion":"gemini-3.5-flash"}}"#,
+            many.join(",")
+        );
+        let m = metered(Provider::Gemini, Billing::Usage { model: None }, "application/json", &[body.as_bytes()]);
+        assert_eq!(m.charge(MONTH, DONE).unwrap().web_searches, (MAX_DISTINCT_QUERIES + 10) as u64);
+    }
+
+    fn gemini_meter(body: &str) -> Meter {
+        let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: Some("gemini-3.5-flash".into()) });
+        m.request(body.as_bytes());
+        m.answer(200, Some("text/event-stream"));
+        m
+    }
+
+    #[test]
+    fn a_cut_off_answer_that_may_have_grounded_is_charged_the_estimate() {
+        let first = concat!(
+            "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"It\"}]},",
+            "\"groundingMetadata\": {\"webSearchQueries\": [\"a\"]}}],",
+            "\"usageMetadata\": {\"promptTokenCount\": 1000},\"modelVersion\": \"gemini-3.5-flash\"}\n\n",
+        );
+        let mut m = gemini_meter(r#"{"contents":[],"tools":[{"google_search":{}}]}"#);
+        m.feed(first.as_bytes());
+        assert_eq!(m.charge(MONTH, cut(1)).unwrap().web_searches, GROUNDING_QUERIES_ESTIMATE);
+        // The same answer complete costs the queries it listed.
+        let mut m = gemini_meter(r#"{"contents":[],"tools":[{"google_search":{}}]}"#);
+        m.feed(first.as_bytes());
+        assert_eq!(m.charge(MONTH, DONE).unwrap().web_searches, 1);
+        // A request without a grounding tool gets no grounding estimate.
+        let mut m = gemini_meter(r#"{"contents":[{"parts":[{"text":"googleSearch"}]}]}"#);
+        m.feed(&first.as_bytes()[..40]);
+        assert_eq!(m.charge(MONTH, cut(1)).unwrap().web_searches, 0);
+        // Grounding metadata cut by a line break leaves the answer unsettled.
+        let mut m = gemini_meter(r#"{"tools":[{"googleSearch":{}}]}"#);
+        m.feed(b"data: {\"candidates\": [{\"groundingMetadata\": {\"webSearchQueries\": [\"a\"\n\n");
+        m.feed(b"data: {\"usageMetadata\": {\"promptTokenCount\": 1000},\"modelVersion\": \"gemini-3.5-flash\"}\n\n");
+        assert_eq!(m.charge(MONTH, DONE).unwrap().web_searches, GROUNDING_QUERIES_ESTIMATE);
+    }
+
+    #[test]
+    fn grounding_tools_are_found_however_the_body_spells_them() {
+        for body in [
+            r#"{"tools":[{"googleSearch":{}}]}"#,
+            r#"{"tools":[{"google_search_retrieval":{"dynamicRetrievalConfig":{}}}]}"#,
+            r#"{"tools":[{"googleMaps":{}}]}"#,
+            r#"{"tools":[{"googleSearch":{}}]}"#,
+            r#"{"tools":[{"googleSearch":{}}],"tools":[]}"#,
+            r#"{"tools":[],"tools":[{"GOOGLE_SEARCH":{}}]}"#,
+            "not json",
+            r#"{"tools":[]} trailing"#,
+        ] {
+            assert!(may_ground(body.as_bytes()), "{body}");
+        }
+        let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        assert!(may_ground(deep.as_bytes()), "too deep to read is read as grounding");
+        for body in [
+            r#"{"contents":[{"parts":[{"text":"googleSearch"}]}]}"#,
+            r#"{"tools":[{"functionDeclarations":[{"name":"google_search","parameters":{}}]}]}"#,
+            r#"{"tools":[{"urlContext":{}},{"codeExecution":{}}],"generationConfig":{"maxOutputTokens":10}}"#,
+        ] {
+            assert!(!may_ground(body.as_bytes()), "{body}");
+        }
+    }
+
+    // ---- the worst case held while in flight (gap 9) ----------------------
+
+    #[test]
+    fn the_worst_case_holds_the_output_cap_input_as_cache_writes_and_grounding() {
+        let body = r#"{"model":"claude-opus-5-5","max_tokens":10000,"messages":[]}"#;
+        let m = anthropic_meter(body);
+        let input = (body.len() as u64).div_ceil(3);
+        // Opus 5.5: 1-hour writes $8, output $20 per million.
+        let expect = (input as f64 * 8.0 + 10_000.0 * 20.0) / 1e6;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-12, "{}", m.worst_case(MONTH));
+        // No `max_tokens`, no model: the largest output at the top rate.
+        let m = anthropic_meter("{}");
+        assert!((m.worst_case(MONTH) - (1.0 * 20.0 + 128_000.0 * 50.0) / 1e6).abs() < 1e-12);
+        // Fast mode doubles it.
+        let m = anthropic_meter(r#"{"model":"claude-opus-5-5","max_tokens":10000,"speed":"fast"}"#);
+        assert!(m.worst_case(MONTH) > 2.0 * 10_000.0 * 20.0 / 1e6);
+        // Gemini: the provider's output cap, and the grounding estimate when
+        // the request may ground.
+        let plain = r#"{"contents":[]}"#;
+        let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: Some("gemini-3.5-flash".into()) });
+        m.request(plain.as_bytes());
+        let base = m.worst_case(MONTH);
+        let input = (plain.len() as u64).div_ceil(3);
+        assert!((base - (input as f64 * 1.50 + GEMINI_MAX_OUTPUT as f64 * 9.0) / 1e6).abs() < 1e-12, "{base}");
+        let tools = r#"{"contents":[],"tools":[{"googleSearch":{}}]}"#;
+        let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: Some("gemini-3.5-flash".into()) });
+        m.request(tools.as_bytes());
+        let input = (tools.len() as u64).div_ceil(3);
+        let expect = (input as f64 * 1.50 + GEMINI_MAX_OUTPUT as f64 * 9.0) / 1e6 + GROUNDING_QUERIES_ESTIMATE as f64 * 0.014;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-12);
+        // The answer itself is charged what it reports, not the worst case.
+        let mut m = anthropic_meter(body);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(ANTHROPIC_SSE.as_bytes());
+        assert_eq!(m.charge(MONTH, DONE), Some(anthropic_expected()));
     }
 }

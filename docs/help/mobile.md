@@ -117,7 +117,9 @@ off.
   **Undo**, which lists the files it would put back and, on **Undo**, puts
   them (and the PDF) back as they were before the round, reloads the PDF and
   tells the agent — it refuses, changing nothing, when one of those files was
-  edited since. Where no undo can be kept (not a git repository, a remote
+  edited since. Only files inside the project folder go back; files changed
+  elsewhere in the same repository are left as they are, and the phone says
+  only how many (their names can belong to another project). Where no undo can be kept (not a git repository, a remote
   project, a picture, too many untracked files) the pill says so and the
   agent first only lists the changes; tap **Make these changes** to let it go
   ahead. Home → ⚙ This device → **Mark up prompt** has the **Apply marks
@@ -357,8 +359,10 @@ section shown.
 ## If a phone goes missing
 
 The header's Mobile button shows the host status. **Revoke** drops one device;
-**Lock down** forgets every paired device and stops the host. Also remove the
-device from your Tailscale machines.
+**Lock down** forgets every paired device and stops the host. Both also cancel
+the prompts that phone was holding for an agent and the schedules it made, so
+nothing it left behind is typed later; so does taking a project or box away
+from a phone. Also remove the device from your Tailscale machines.
 
 A phone paired again counts as a new phone: projects limited to **Only these
 phones** do not include it until you tick it again. After **Lock down** (or

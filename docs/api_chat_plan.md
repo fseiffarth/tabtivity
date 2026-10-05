@@ -1119,7 +1119,8 @@ Never live-verified. What was built:
 - **`AgentLoginsRows` is exported** for its test, as `AgentApiKeysRows` is.
 
 **Not metered (stated in the help):** Gemini Search grounding fees (absent
-from `usageMetadata`), Anthropic code-execution hours, refusal-fallback
+from `usageMetadata`; metered since 2026-10-04, threat-model gap 8 — see
+`api_prices` and `api_meter`), Anthropic code-execution hours, refusal-fallback
 repricing, spend outside Tabtivity. Output generated after a client abort and
 never reported is not seen. Gemini CLI's own retry policy on 429 is its own
 (it may retry a few times; each retry is refused before the provider).
@@ -1252,7 +1253,11 @@ Checked, no change:
 
 Not fixed, with reason:
 
-- **Concurrent turns overshoot.** Every billed request that starts while
+- **Concurrent turns overshoot.** *(Fixed 2026-10-04, threat-model gap 9:
+  each billed request now reserves its worst case before it is forwarded —
+  `api_meter::Meter::worst_case`, `api_usage::Book::reserve` — and is refused
+  when spent + held + it would pass the limit; ordinary turns near the limit
+  are refused, as predicted below, by choice.)* Every billed request that starts while
   the month is under its limit runs to its end; N tabs can overshoot by N
   turns (and the estimate makes aborted ones count, not free). A reservation
   per request in flight would need a cost bound before the answer — the

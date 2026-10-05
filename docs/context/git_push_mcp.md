@@ -44,12 +44,23 @@ runs project code holds the token:
    the token. Linux only; a fenced tab elsewhere gets `fence_unavailable`, an
    unfenced Windows tab with a hook `preflight_failed`. Exit ≠ 0 refuses with
    the hook's output; five minutes is the cap. Commits the hook adds are
-   picked up: the plan's SHA, commit list and diffstat are re-read.
+   picked up: the plan's SHA, commit list and diffstat are re-read, and the
+   hook runs once more on the new tip, so its stdin line always names the SHA
+   that is pushed (a scan then covers every commit that leaves); a hook that
+   adds commits on that second run too is `preflight_failed`.
 2. **Transport, host, hooks off.** `push_transport_command`:
    `hardened_git_command_in` (pins `core.hooksPath=`, so
    `reference-transaction` is off too) with the scoped inline credential
    helper for `token_origins(project)`, `GIT_TERMINAL_PROMPT=0`, `--no-verify`,
-   the URL positional and the one refspec `refs/heads/B:refs/heads/B`.
+   the URL positional and the one refspec `<sha>:refs/heads/B` — the SHA the
+   plan validated (Apply) or the approved card showed (Propose), never the
+   branch by name: `.git` refs stay writable in the fence, so the agent could
+   move the branch between the approval and the transport (gap 10, #2344).
+   The lane's own git reads (`lane_git_command`: plan, commit list,
+   `merge-base`), the hook and the transport set `GIT_NO_REPLACE_OBJECTS=1`:
+   a `refs/replace` graft (writable in the fence) would otherwise hide a
+   commit from the card and the scan while `pack-objects` still sends it, or
+   pass push's fast-forward check for a rewrite of the remote branch.
 
 `.githooks/pre-push` knows the variable: under it the signing reminder (gh +
 network) is skipped, the privacy scan and bump commit run as before, and it
@@ -81,8 +92,10 @@ and runs plan → preflight → stage-or-push on a worker under a per-project lo
 the call waits up to 18 s (the listener's sockets live 30 s) and otherwise
 answers `running` with the id. **propose** stages after the preflight, so the
 card shows the *final* commit list, bump included; **apply** pushes at once.
-Approval binds the post-preflight SHA: a moved branch is `stale_approval`, a
-moved remote is re-checked for fast-forward. Unapproved proposals expire after
+Approval binds the post-preflight SHA: a branch moved before the click is
+`stale_approval` (the card no longer describes it, so the user decides
+again); one moved after the check changes nothing, because the transport
+pushes that SHA itself. A moved remote is re-checked for fast-forward. Unapproved proposals expire after
 24 h; records live 24 h in memory beside the tokens (neither survives a
 restart) and go with a revoked session. Dismissing a *finished* card
 (`git_push_mcp_clear`) only sets `cleared`: the card hides it, while
@@ -145,8 +158,10 @@ The git bar's **Release** button (shown when a local project's own repo has
 a remote, nothing unpushed and nothing incoming) and the agent's
 `git_release` share one path: tag the checked-out branch's tip, annotated and
 never signed (`-c tag.gpgSign=false`, so a repo `gpg.program` cannot run), and
-push the one refspec `refs/tags/T:refs/tags/T` through the hooks-off
-transport. Refused unless the tip is exactly the remote branch's SHA
+push the one refspec `<tag object>:refs/tags/T` through the hooks-off
+transport — the local tag's object read once and checked to peel to the
+tip (`stale_approval` otherwise), so a tag re-pointed before the transport
+is not what leaves. Refused unless the tip is exactly the remote branch's SHA
 (`not_pushed`) — a tag can never publish commits the branch push (and its
 privacy scan) did not — and unless `T` is new on the remote (`tag_exists`;
 never moved). A local tag already on the tip is reused; one this call made is

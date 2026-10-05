@@ -142,16 +142,25 @@ export const useGitDirtyStore = create<GitDirtyStore>((set) => ({
   },
 }));
 
-/** One `git_dirty_probe` round trip, written into the store. */
+/** Tauri's answer for a command the running backend does not have. */
+function isMissingCommand(error: unknown): boolean {
+  return /\bcommand [\w:.-]+ not found\b/i.test(String(error));
+}
+
+/** One `git_dirty_probe` round trip, written into the store. An errored probe
+ *  (git refused or timed out, host down) is no reading: the project's entry is
+ *  dropped, never written as "clean". */
 async function probeDirty(projectId: string, dir: string): Promise<void> {
-  let next: GitDirtyState = "clean";
+  let next: GitDirtyState | undefined = "clean";
   try {
     const { status, unpushed } = await invoke<GitDirtyProbe>("git_dirty_probe", {
       projectDir: dir,
-    }).catch(async () => {
+    }).catch(async (error: unknown) => {
       // A running window whose backend predates the combined command (backend
       // edits don't reach a live window until a restart) still answers the
-      // old two-command spelling.
+      // old two-command spelling. Only then: a probe that failed (a FIFO git
+      // blocked on until its ceiling, #2349) is not re-run the old way.
+      if (!isMissingCommand(error)) throw error;
       const [status, unpushedCommits] = await Promise.all([
         invoke<GitStatus>("git_status", { projectDir: dir }),
         invoke<string[]>("git_unpushed_commits", { projectDir: dir }).catch(
@@ -182,12 +191,16 @@ async function probeDirty(projectId: string, dir: string): Promise<void> {
       GIT_GONE_STREAK.delete(projectId);
     }
   } catch {
-    next = "clean";
+    next = undefined;
     // An errored probe (host down, git spawn failure) proves nothing about the
     // repo's existence, so it must not count toward disabling git.
     GIT_GONE_STREAK.delete(projectId);
   }
-  useGitDirtyStore.setState((s) =>
-    s.byId[projectId] === next ? s : { byId: { ...s.byId, [projectId]: next } },
-  );
+  useGitDirtyStore.setState((s) => {
+    if (s.byId[projectId] === next) return s;
+    const byId = { ...s.byId };
+    if (next === undefined) delete byId[projectId];
+    else byId[projectId] = next;
+    return { byId };
+  });
 }
