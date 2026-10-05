@@ -11,6 +11,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
+import { NewTabSheet } from "../../../mobile-web/src/screens/NewTabSheet";
 import type { TabRow } from "../../../mobile-web/src/api";
 import { BRAND, NAMES } from "../../lib/brand";
 
@@ -151,5 +152,50 @@ describe("Mobile project screen — the ＋", () => {
       expect(screen.getByRole("button", { name: "Claude" })).toBeTruthy();
       cleanup();
     }
+  });
+});
+
+describe("Mobile ＋ sheet — cloud sessions", () => {
+  const agents = [
+    { id: "a1", label: "Claude", modes: [] },
+    { id: "a2", label: "Codex", modes: [] },
+    { id: "a3", label: "Gemini", modes: [] },
+  ];
+  const cloud = [
+    { agent_id: "a1", action: "new", task: true },
+    { agent_id: "a1", action: "open", task: false },
+    { agent_id: "a2", action: "open", task: false },
+  ];
+
+  it("keeps the agent tiles plain and folds the cloud launches into one closed group", async () => {
+    serve({ worktrees: [], cloud, sign_in: [] });
+    const onPick = vi.fn();
+    render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={onPick} onSendFile={() => undefined} onClose={() => undefined} />);
+    const group = (await waitFor(() => {
+      const found = document.querySelector(".new-tab-cloud");
+      expect(found).toBeTruthy();
+      return found;
+    })) as HTMLDetailsElement;
+    // A reader who never used a vendor's cloud meets one closed row, no ☁.
+    expect(group.open).toBe(false);
+    expect(group.querySelector("summary")?.textContent).toContain("Cloud sessions");
+    expect(document.querySelector(".new-tab-agents")?.textContent).toBe("ClaudeCodexGemini");
+    expect(document.body.textContent).not.toContain("☁");
+    // Only the agents that have a cloud are listed inside, each with its own launches.
+    const rows = [...group.querySelectorAll(".new-tab-cloud-agent")].map((row) => row.textContent);
+    expect(rows).toEqual(["ClaudeNew sessionOpen existing", "CodexOpen existing"]);
+
+    fireEvent.click(screen.getByRole("group", { name: "Codex" }).querySelector("button")!);
+    expect(onPick).toHaveBeenCalledWith("agent", agents[1], undefined, { cloud: "open" });
+    // A cloud New that takes its task first asks for it.
+    fireEvent.click(screen.getByRole("group", { name: "Claude" }).querySelector("button")!);
+    expect(screen.getByText("New Claude cloud session")).toBeTruthy();
+  });
+
+  it("shows no cloud group when no agent has a cloud session", async () => {
+    serve({ worktrees: [], cloud: [], sign_in: [] });
+    render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(document.querySelector(".new-tab-cloud")).toBeNull();
   });
 });
