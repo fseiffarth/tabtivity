@@ -1724,7 +1724,8 @@ mod tests {
             session_id: session_id.map(str::to_string),
             schedule_target_id: None,
             cmd: cmd.into(),
-            cwd: "/nowhere".into(),
+            // Absolute on each OS: OpenCode's reader takes no relative folder.
+            cwd: if cfg!(windows) { r"C:\nowhere" } else { "/nowhere" }.into(),
             since: None,
             local_model: false,
         }

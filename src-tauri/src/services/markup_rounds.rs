@@ -1754,11 +1754,12 @@ mod tests {
         serde_json::from_slice(&fs::read(state.join(ROUNDS_DIR).join(id).join("round.json")).unwrap()).unwrap()
     }
 
-    /// Every file under `.git` with its length and mtime.
+    /// Every file under `.git` with its length and mtime — read from the file
+    /// itself: on Windows a directory entry's copy of them can lag behind.
     fn git_dir_state(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
         fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, SystemTime)>) {
             for entry in fs::read_dir(dir).unwrap().flatten() {
-                let meta = entry.metadata().unwrap();
+                let meta = fs::metadata(entry.path()).unwrap();
                 if meta.is_dir() {
                     walk(&entry.path(), out);
                 }
@@ -1898,8 +1899,11 @@ mod tests {
         let base = tmp.path().canonicalize().unwrap();
         let root = base.join("planted");
         let git_dir = base.join("planted.git");
-        git(&base, &["init", "-q", "--separate-git-dir", git_dir.to_str().unwrap(), "planted"]);
-        git(&base, &["--git-dir", git_dir.to_str().unwrap(), "config", "core.worktree", elsewhere.to_str().unwrap()]);
+        // As a user's repo names them: without the `\\?\` prefix Windows'
+        // `canonicalize` puts on them.
+        let plain = |p: &Path| crate::commands::fs::display_path(p);
+        git(&base, &["init", "-q", "--separate-git-dir", &plain(&git_dir), "planted"]);
+        git(&base, &["--git-dir", &plain(&git_dir), "config", "core.worktree", &plain(&elsewhere)]);
         assert_eq!(begin(&state, &root, phone(), None), Err(NoUndo::NotGit));
         assert!(fs::read_dir(state.join(ROUNDS_DIR)).map(|d| d.count()).unwrap_or(0) == 0);
     }
@@ -2215,7 +2219,9 @@ mod tests {
             settle(&state, &id, &phone()).unwrap();
             preview(&state, &id, &phone()).unwrap();
             undo(&state, &id, &phone()).unwrap();
-            assert_eq!(git_dir_state(&root), before, "{autocrlf}");
+            let after = git_dir_state(&root);
+            let changed: Vec<_> = before.iter().filter(|e| !after.contains(e)).chain(after.iter().filter(|e| !before.contains(e))).collect();
+            assert!(changed.is_empty(), "{autocrlf}: {changed:?}");
             let objects = state.join(ROUNDS_DIR).join(&id).join("objects");
             assert!(objects.read_dir().unwrap().count() > 2, "the snapshot's objects are the round's");
         }

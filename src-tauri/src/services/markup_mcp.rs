@@ -1124,7 +1124,7 @@ mod tests {
         std::fs::write(root.join(".env"), b"secret").unwrap();
         assert_eq!(resolve_file(&root, "docs/paper/draft.pdf", true).unwrap(), "docs/paper/draft.pdf");
         assert_eq!(resolve_file(&root, "./docs/paper/draft.pdf", true).unwrap(), "docs/paper/draft.pdf");
-        assert_eq!(resolve_file(&root, &root.join("docs/paper/draft.pdf").to_string_lossy(), true).unwrap(), "docs/paper/draft.pdf");
+        assert_eq!(resolve_file(&root, &agent_path(&root, "docs/paper/draft.pdf"), true).unwrap(), "docs/paper/draft.pdf");
         let outboxed = format!("{}/20261003-120000-draft.pdf", outbox::OUTBOX_DIR);
         assert_eq!(resolve_file(&root, &outboxed, true).unwrap(), outboxed);
         for bad in ["docs/paper/missing.pdf", "../x.pdf", "docs/../docs/paper/draft.pdf", "/etc/passwd", ".env", ".git/config",
@@ -1297,6 +1297,13 @@ mod tests {
         assert!(audit(json!({"jsonrpc":"2.0","id":7,"method":"initialize"})), "a closed tab's handshake is a refusal");
     }
 
+    /// An absolute path as an agent writes it: `/` throughout, and on Windows
+    /// no `\\?\` prefix (which `canonicalize` puts on `root`, and under
+    /// which `/` is no separator).
+    fn agent_path(root: &Path, rel: &str) -> String {
+        format!("{}/{rel}", crate::commands::fs::display_path(root).replace('\\', "/"))
+    }
+
     /// A project folder with `docs/draft.pdf` and an outbox copy of it.
     fn pdf_root() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -1375,7 +1382,7 @@ mod tests {
         // Duplicates in one call collapse; a repeat call ticks nothing new.
         let out = call(&s, TOOL_DONE, done("./docs/draft.pdf", "r1", &[(1, 2), (1, 1), (1, 2), (3, 1)]), &ctx);
         assert_eq!((out["status"].as_str(), out["count"].as_u64()), (Some("ticked"), Some(3)));
-        let abs = root.join("docs/draft.pdf").to_string_lossy().to_string();
+        let abs = agent_path(&root, "docs/draft.pdf");
         assert_eq!(call(&s, TOOL_DONE, done(&abs, "r1", &[(1, 1), (3, 1)]), &ctx)["count"], 0, "an absolute path is the same file");
         let outboxed = format!("{}/20261004-120000-draft.pdf", outbox::OUTBOX_DIR);
         assert_eq!(call(&s, TOOL_DONE, done(&outboxed, "r1", &[(1, 1)]), &ctx)["count"], 0, "the outbox copy is the same file");

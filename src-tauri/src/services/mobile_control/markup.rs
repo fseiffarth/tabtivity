@@ -663,9 +663,13 @@ pub fn resolve_local_source(root: &Path, path: &Path) -> Result<ResolvedSource, 
         return Err(MarkupError::OutsideProject);
     }
     let canonical = root.canonicalize().map_err(|_| MarkupError::Files(files::FilesError::Unavailable))?;
+    // Windows canonicalises to `\\?\C:\…`, which never prefixes the `C:/…` an
+    // agent writes: the same root without the verbatim prefix does.
+    let plain = std::path::PathBuf::from(crate::commands::fs::display_path(&canonical));
     let rest = path
         .strip_prefix(root)
         .or_else(|_| path.strip_prefix(&canonical))
+        .or_else(|_| path.strip_prefix(&plain))
         .map_err(|_| MarkupError::OutsideProject)?;
     let mut segments = Vec::new();
     for component in rest.components() {
@@ -1302,7 +1306,9 @@ mod tests {
              (5,1:8799518,8865054:22609920,455111,0\nh1,3:8799518,8865054\nx1,3:11218261,8865054\nk5,1:31409438,8865054:16251655\n)\n\
              (6,1:8799518,13224414:22609920,455111,0\nh5,4:8799518,13224414\nx5,4:10346127,13224414\nk6,1:31409438,13224414:16081655\n)\n\
              (6,9:8799518,19735000:22609920,455111,0\nx6,9:8799518,19735000\n)\n}}1\nPostamble:\n",
-            r = root.display()
+            // As TeX writes it: no `\\?\` prefix, under which Windows would
+            // read `/` as part of a name and never find the file.
+            r = crate::commands::fs::display_path(root)
         );
         fs::write(root.join("docs/draft.synctex"), map).unwrap();
         let strike = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[140.0, 131.0, 0.5], [190.0, 132.0, 0.5]] };
