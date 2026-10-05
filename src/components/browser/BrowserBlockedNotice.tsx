@@ -31,7 +31,7 @@ import type { BlockedNavigation } from "../../types/browser";
  * The one exception is `onProceed`, and it is the gate's *third* outcome rather
  * than a way through the second: a loopback / private / link-local address is
  * **reachable** (a developer's own dev server is the obvious case) but is the
- * one place this browser is more dangerous than a normal one, because Eldrun may
+ * one place this browser is more dangerous than a normal one, because Tabtivity may
  * be holding a VPN tunnel into a network the user's real browser cannot see. So
  * it is presented as a question with a real button — a user gesture — and never
  * as something the page can answer for itself. When `onProceed` is absent this

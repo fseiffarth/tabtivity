@@ -13,20 +13,27 @@
 # the commit will be stamped with. When gitleaks is installed it runs too —
 # CI's `secrets` job runs it over the whole history either way.
 #
-# Override once: ELDRUN_SKIP_PRIVACY_CHECK=1 git commit …  (or --no-verify).
+# Override once: TABTIVITY_SKIP_PRIVACY_CHECK=1 git commit …  (or --no-verify).
 set -uo pipefail
+
+# The hook's switches carry the app's name. A hook runs in any state of the
+# tree, so it cannot source scripts/lib/brand.sh and spells both names itself:
+# the current one, and the one the app had before it was renamed — a shell
+# that still exports the old switch, or an older build of the app running this
+# hook, must not be ignored. brand-check: allow — until the cleanup release.
+app_var() { local new="TABTIVITY_$1" old="ELDRUN_$1"; printf '%s' "${!new:-${!old:-}}"; }
 
 # The version bump pre-push commits mid-push touches only the version files,
 # and pre-push has just scanned the range it rides on.
-[ -n "${ELDRUN_VERSION_BUMP:-}" ] && exit 0
-[ -n "${ELDRUN_SKIP_PRIVACY_CHECK:-}" ] && exit 0
+[ -n "$(app_var VERSION_BUMP)" ] && exit 0
+[ -n "$(app_var SKIP_PRIVACY_CHECK)" ] && exit 0
 
 repo_root="$(git rev-parse --show-toplevel)"
 
 fail() {
   echo "pre-commit: privacy check failed — nothing was committed." >&2
   echo "            Fix or unstage each match above; this repo is public." >&2
-  echo "            To override once: ELDRUN_SKIP_PRIVACY_CHECK=1 git commit …" >&2
+  echo "            To override once: TABTIVITY_SKIP_PRIVACY_CHECK=1 git commit …" >&2
   exit 1
 }
 

@@ -12,7 +12,8 @@ import {
   isPtyTabKind,
   type TabEntry,
 } from "../../stores/tabs";
-import { useActivityStore, type AttentionKind } from "../../stores/activity";
+import { useShallow } from "zustand/react/shallow";
+import { useActivityStore, type AttentionKind, type BusyKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
 import { useT } from "../../lib/i18n";
 import { RailSwitchSideIcon } from "../common/EdgeRailIcons";
@@ -114,7 +115,7 @@ function TerminalOutputRate({ ptyIds }: { ptyIds: readonly string[] }) {
   );
 }
 
-/** Debug-only: every Eldrun window's webview renderer and its resident size —
+/** Debug-only: every Tabtivity window's webview renderer and its resident size —
  * the number the memory watchdog reloads a window on, shown where the TTY meter
  * already is. Per window because that is the unit that leaks and the unit that
  * reloads: a 4.7 GB popout is invisible from the main window otherwise, and it
@@ -195,7 +196,7 @@ export function SidePanel({
   const scope = useTabsStore((s) => s.scope);
 
   const activeProject = projects.find((p) => p.id === activeId) ?? null;
-  // The root scope gets the same panel, rooted at `~/eldrun/root` — the app's
+  // The root scope gets the same panel, rooted at `~/tabtivity/root` — the app's
   // unfiled/scratch area, for data that is only being looked at or has no project
   // to belong to yet. Deliberately keyed off the SCOPE and not merely "no active
   // project": a box scope also has none, and its multi-root view must keep its
@@ -227,9 +228,38 @@ export function SidePanel({
   // Same working/decision/finished glow the tab bar draws for a live tab — a
   // hidden subwindow's tabs are still running underneath the pane, so they keep
   // reporting status even while parked.
-  const busyByTab = useActivityStore((s) => s.busyByTab);
-  const busyKindByTab = useActivityStore((s) => s.busyKindByTab);
-  const attentionByTab = useActivityStore((s) => s.attentionByTab);
+  //
+  // Subscribed to the HIDDEN tabs' entries only, flattened to primitives so a
+  // shallow compare can hold: the whole `busyByTab` / `attentionByTab` maps
+  // move on every agent's every turn edge, in every project, and each move
+  // re-rendered this panel — and the entire file view under it — for the sake
+  // of a section that is usually not even there.
+  const hiddenPtyIds = useMemo(
+    () =>
+      (hiddenGroups ?? []).flatMap((h) => orderedTabKeys(h.subtree).map((k) => `${scope}:${k}`)),
+    [hiddenGroups, scope],
+  );
+  const hiddenActivity = useActivityStore(
+    useShallow((s) =>
+      hiddenPtyIds.flatMap((id) => [
+        s.busyByTab[id] ?? false,
+        s.busyKindByTab[id] ?? "",
+        s.attentionByTab[id] ?? "",
+      ]),
+    ),
+  );
+  const { busyByTab, busyKindByTab, attentionByTab } = useMemo(() => {
+    const busy: Record<string, boolean> = {};
+    const kind: Record<string, BusyKind> = {};
+    const attention: Record<string, AttentionKind> = {};
+    hiddenPtyIds.forEach((id, i) => {
+      const [b, k, a] = hiddenActivity.slice(i * 3, i * 3 + 3);
+      if (b) busy[id] = true;
+      if (k) kind[id] = k as BusyKind;
+      if (a) attention[id] = a as AttentionKind;
+    });
+    return { busyByTab: busy, busyKindByTab: kind, attentionByTab: attention };
+  }, [hiddenPtyIds, hiddenActivity]);
   // One status per hidden group's tab, rolled up per group and overall, so the
   // Hidden section still says "something's running in there" without needing
   // the group unhidden and its tab bar drawn.
@@ -431,7 +461,7 @@ export function SidePanel({
       // rows, the tree's entries) carried into the next project — a path from
       // one project resolved against another's root. Identity is the project,
       // so a switch is a remount. With no project it is the scope — root and a
-      // box are two different roots (`~/eldrun/root` and a multi-root view), and
+      // box are two different roots (`~/tabtivity/root` and a multi-root view), and
       // one shared key would have carried the tree between them.
       key={activeId ?? scope}
       scope={scope}

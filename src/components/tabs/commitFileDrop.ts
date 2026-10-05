@@ -230,9 +230,9 @@ export function relocateExistingTab(key: string, dest: FileDropDestination): voi
  *    that group instead.
  *  - Released OUTSIDE the main window (`detachBounds` set, e.g. dragged onto
  *    another monitor) → if the file has a built-in viewer (pdf/markdown/text/
- *    image), open it in its OWN standalone detached Eldrun window at those bounds
+ *    image), open it in its OWN standalone detached Tabtivity window at those bounds
  *    (detachNewTab). If instead it opens in an EXTERNAL app, just launch that app
- *    directly — don't wrap an external-app file in a detached Eldrun subwindow.
+ *    directly — don't wrap an external-app file in a detached Tabtivity subwindow.
  *  - Dropped anywhere else (side panel, empty space, no resolved target) → do
  *    nothing. A drag is purely a drag-to-tab gesture; opening a file is reserved
  *    for double-click in the FileTree, so a stray drop must never open it.
@@ -359,7 +359,7 @@ export function commitFileDrop(
   // Released outside the main window → standalone window, regardless of layout
   // state. Takes precedence over every in-window target below. An external-app
   // file (no built-in viewer) opens directly in that app — don't wrap it in a
-  // detached Eldrun subwindow; only built-in viewers get their own window.
+  // detached Tabtivity subwindow; only built-in viewers get their own window.
   if (detachBounds) {
     for (const f of items) {
       const viewer = f ? f.viewer : d.viewer;

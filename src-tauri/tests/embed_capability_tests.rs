@@ -8,9 +8,9 @@
 
 use std::collections::HashMap;
 
-use eldrun_lib::commands::apps::{is_embeddable_exec, resolve_default_handler, EMBEDDABLE_EXECS};
-use eldrun_lib::platform::null::NullBackend;
-use eldrun_lib::platform::WorkspaceBackend;
+use app_lib::commands::apps::{is_embeddable_exec, resolve_default_handler, EMBEDDABLE_EXECS};
+use app_lib::platform::null::NullBackend;
+use app_lib::platform::WorkspaceBackend;
 
 fn apps(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
@@ -119,7 +119,7 @@ fn x11_backend_supports_embedding_when_available() {
     // X11Backend::try_new requires a live X server; only assert when present so
     // the test is robust on headless CI. The trait default (false) is covered by
     // the null tests above; this confirms X11's override is true.
-    use eldrun_lib::platform::x11::X11Backend;
+    use app_lib::platform::x11::X11Backend;
     if let Ok(backend) = X11Backend::try_new() {
         assert!(backend.supports_embedding());
     }

@@ -1,5 +1,5 @@
 /**
- * The wire contract for "check for a new Eldrun" (`commands::app_update`).
+ * The wire contract for "check for a new Tabtivity" (`commands::app_update`).
  *
  * Nothing here is persisted — every field is re-read from GitHub on each check.
  * Note what is *absent*: the frontend never sends a URL or a path back. It
@@ -11,7 +11,7 @@
 export type InstallKind =
   /** Linux AppImage: the running file is swapped, then the user restarts. */
   | "appimage"
-  /** Windows: the NSIS installer runs and offers to close Eldrun first. */
+  /** Windows: the NSIS installer runs and offers to close Tabtivity first. */
   | "nsis"
   /** macOS: the disk image opens for a drag into Applications. */
   | "dmg"
@@ -52,7 +52,7 @@ export interface StagedUpdate {
 }
 
 export interface InstallOutcome {
-  /** The user must restart Eldrun for the update to take effect. */
+  /** The user must restart Tabtivity for the update to take effect. */
   restartRequired: boolean;
   /** An external installer was launched and now owns the rest. */
   installerLaunched: boolean;

@@ -9,7 +9,7 @@ import { writePtyInput } from "../../lib/terminal/terminalInput";
  * terminal that types a *known* login name, and a *saved* password, at the cursor.
  *
  * It exists because the non-headless login and a saved credential are not the
- * contradiction they look like. Non-headless means Eldrun does not *handle* the
+ * contradiction they look like. Non-headless means Tabtivity does not *handle* the
  * password — the host asks its own questions in a terminal the user is watching, and
  * the answers go straight to it. It has never meant the keychain is empty: a user who
  * saved an SSH password from a headless connect, or a VPN password from the header

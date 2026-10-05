@@ -9,7 +9,7 @@
  *
  * Two rules run through the whole file and are worth reading once:
  *
- * **Completion wins over placement.** A card's column is Eldrun's own field; its
+ * **Completion wins over placement.** A card's column is Tabtivity's own field; its
  * `percent`/`completed` are the ICS-round-trippable truth that the calendar's
  * Tasks view and `serializeIcs` both read. So wherever the two could disagree —
  * a task ticked in the Tasks view, which knows nothing about columns — the

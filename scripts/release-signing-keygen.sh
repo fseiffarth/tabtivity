@@ -6,7 +6,7 @@
 # the RELEASE_SIGNING_KEY GitHub secret, keep an offline copy (a password
 # manager), then delete the file:
 #
-#   gh secret set RELEASE_SIGNING_KEY --repo fseiffarth/ProjectEldrun < <key file>
+#   gh secret set RELEASE_SIGNING_KEY --repo fseiffarth/tabtivity < <key file>
 #
 # Rotating the key means a new public key ships in a release signed with the
 # OLD key — builds carrying only the old key cannot verify anything else.
@@ -15,13 +15,20 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pub="$repo_root/src-tauri/release-signing.pub.pem"
-key_dir="${ELDRUN_RELEASE_KEY_DIR:-$HOME/.config/eldrun-release-signing}"
+# The app's names (scripts/lib/brand.sh): $APP_SLUG, $APP_LEGACY_SLUG, app_env.
+. "$repo_root/scripts/lib/brand.sh"
+key_dir="$(app_env RELEASE_KEY_DIR "$HOME/.config/$APP_SLUG-release-signing")"
 key="$key_dir/release-signing.key.pem"
+# A key made before the app was renamed sits in the folder named after the
+# old name; a second key would be one nobody's installed build can verify.
+old_key="$HOME/.config/$APP_LEGACY_SLUG-release-signing/release-signing.key.pem"
 
-if [ -e "$key" ]; then
-  echo "refusing: $key already exists" >&2
-  exit 1
-fi
+for existing in "$key" "$old_key"; do
+  if [ -e "$existing" ]; then
+    echo "refusing: $existing already exists" >&2
+    exit 1
+  fi
+done
 
 umask 077
 mkdir -p "$key_dir"
@@ -31,4 +38,4 @@ chmod 644 "$pub"
 
 echo "private key: $key"
 echo "public key:  $pub (commit this)"
-echo "next: gh secret set RELEASE_SIGNING_KEY --repo fseiffarth/ProjectEldrun < \"$key\""
+echo "next: gh secret set RELEASE_SIGNING_KEY --repo $APP_REPO < \"$key\""

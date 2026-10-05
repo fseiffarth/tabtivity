@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { screenModelTag } from "../../lib/agents/agentModel";
 import type { ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
+import { BRAND } from "../../lib/brand";
 
 function screen(rows: string[]): ReadableBufferLike {
   return { length: rows.length, getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }) };
@@ -17,7 +18,7 @@ describe("the model an agent tab's screen is showing", () => {
       "● Done.",
       "",
       ">",
-      "~/eldrun/projects/projecteldrun (develop) · Opus 4.1 · 85% context left",
+      `~/${BRAND.slug}/projects/project${BRAND.slug} (develop) · Opus 4.1 · 85% context left`,
     ]), "Claude")).toBe("Opus 4.1");
   });
 

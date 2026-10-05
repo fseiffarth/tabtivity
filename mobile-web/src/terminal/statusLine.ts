@@ -26,9 +26,12 @@ import {
 import {
   isOpenCodeTab,
   isOpenCodePlaceholder,
+  openCodeComposer,
+  openCodeFullFooter,
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
+import { isActionRow } from "./selectPrompt";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -49,7 +52,13 @@ export interface SessionStatus {
   goal?: boolean;
 }
 
-export interface StatusLineLike { text: string; frameText?: string }
+export interface StatusLineLike {
+  text: string;
+  frameText?: string;
+  /** The row's styled runs, where the caller has them: OpenCode's full TUI
+   * says only by colour where its model's name ends and its provider's begins. */
+  spans?: readonly { text: string; color?: string }[];
+}
 
 /** The input prompt after `readableScreen` stripped the box frame: `>`, `›` or
  * `❯`, alone or followed by the draft being typed. `*` is the YOLO prompt
@@ -270,7 +279,8 @@ function geminiIndicatorAbove(
 
 /**
  * OpenCode's live area (`opencode --mini`), for a tab whose label names it:
- * where the frame starts and what its status row says.
+ * where the frame starts and what its status row says — or, when the last row
+ * is not mini's, the full TUI's composer (`openCodeFullFrame`).
  *
  * The anchor is the status row — the agent's name in capitals — which OpenCode
  * keeps as the last non-blank row of every frame it draws. Above it sits the
@@ -293,7 +303,7 @@ function openCodeFrame(
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0 || index < lines.length - SEARCH_WINDOW) return null;
   const row = openCodeStatusRow(lines[index].text);
-  if (!row) return null;
+  if (!row) return openCodeFullFrame(lines, index);
   let start = index;
   while (start > 0) {
     const above = lines[start - 1].text;
@@ -311,6 +321,41 @@ function openCodeFrame(
       break;
     }
   }
+  return { start, status };
+}
+
+/**
+ * The full TUI's composer, whose last row is `footer`: the agent row in the
+ * box right above it (only its bottom edge between them, which
+ * `readableScreen` drops), and above that the box's blank rows and its
+ * placeholder. A draft is left in the reading view, as `--mini`'s is.
+ *
+ * The agent row is the agent, model and variant (`Build · Muse Spark 1.3
+ * Free · high`), the footer the context the session holds. The working hint
+ * on the footer is `agentBusy`'s to read.
+ */
+function openCodeFullFrame(
+  lines: readonly StatusLineLike[],
+  footer: number,
+): { start: number; status: SessionStatus } | null {
+  const facts = openCodeFullFooter(lines[footer].text);
+  if (!facts) return null;
+  let index = footer - 1;
+  while (index >= 0 && index >= footer - 2 && !lines[index].text.trim()) index -= 1;
+  if (index < 0 || index < footer - 2) return null;
+  const composer = openCodeComposer(lines[index]);
+  if (!composer) return null;
+  let start = index;
+  while (start > 0) {
+    const above = lines[start - 1].text;
+    if (!above.trim() || isOpenCodePlaceholder(above)) start -= 1;
+    else break;
+  }
+  const status: SessionStatus = {};
+  if (composer.mode) status.mode = composer.mode;
+  if (composer.model) status.model = composer.model;
+  if (composer.variant) status.effort = composer.variant;
+  if (facts.context) status.context = facts.context;
   return { start, status };
 }
 
@@ -374,6 +419,13 @@ export function sessionStatus(
     read += 1;
     for (const segment of text.split(SEGMENT_SPLIT)) classify(segment.trim(), status);
   }
+  // Claude Code prints its goal at the right end of its last footer row, under
+  // a custom statusline that can wrap to several rows on a narrow pane — past
+  // the rows read above. The phrase is only ever the footer's, so every row of
+  // the frame is looked through for it.
+  for (let index = inputIndex + 1; !status.goal && index < lines.length; index += 1) {
+    if (lines[index].text.split(SEGMENT_SPLIT).some((segment) => GOAL_ACTIVE.test(segment.trim()))) status.goal = true;
+  }
   if (!status.mode) {
     const mode = geminiIndicatorAbove(lines, inputIndex)?.mode;
     if (mode) status.mode = mode;
@@ -391,11 +443,12 @@ export function shortenPath(path: string): string {
 }
 
 /** A numbered dialog row (`❯ 1. Yes`), which opens with the same marker as the
- * input line. It is a question waiting for an answer, never the composer. */
+ * input line. It is a question waiting for an answer, never the composer —
+ * and so is a multi-select question's unnumbered `❯ Submit` (`isActionRow`). */
 const OPTION_ROW = /^\s*[>›❯*]\s*\d{1,2}[.)]\s/u;
 
 /** The rule an agent draws across the top of its input box, with the project
- * or model name sitting in it (`──────── ProjectEldrun ─`). `readableScreen`
+ * or model name sitting in it (`──────── my-project ─`). `readableScreen`
  * drops the strokes but preserves the original in `frameText`, so the input
  * frame can still be distinguished from an ordinary output line. */
 function labelledRule(text: string) {
@@ -432,7 +485,7 @@ export function inputFrameStart(
   for (let index = lines.length - 1; start < 0 && index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text)) return lines.length;
+    if (OPTION_ROW.test(text) || isActionRow(lines, index)) return lines.length;
     start = index;
   }
   if (start < 0) return lines.length;
@@ -477,7 +530,7 @@ export function statusFieldCount(text: string): number {
  * This is the question "is this row *columned*" — the path, model and context
  * a TUI prints under its box — asked so that a sentence of output cannot
  * answer it. A prompt or an answer is one segment however many fields can be
- * read out of it (`~/eldrun/projects/app (main)`, `Running /usr/bin/foo
+ * read out of it (`~/tabtivity/projects/app (main)`, `Running /usr/bin/foo
  * (again) now`); Gemini's under-box row is four (`~/proj  main
  * gemini-2.5-pro  25% used`). Two or more columns is a status row. */
 export function statusColumns(text: string): number {
@@ -550,7 +603,7 @@ export function statusFrameLines(
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - SEARCH_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!isInputLine(lines, index)) continue;
-    if (OPTION_ROW.test(text)) return [];
+    if (OPTION_ROW.test(text) || isActionRow(lines, index)) return [];
     inputIndex = index;
     break;
   }

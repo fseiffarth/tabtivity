@@ -67,6 +67,25 @@ describe("project hover card git state", () => {
     unmount();
   });
 
+  // #2349: an errored probe is its own state, never drawn as clean.
+  it("names a git status it could not read, and the pill wears the hollow mark", async () => {
+    useGitDirtyStore.setState({ byId: { a: "unknown" } });
+    const card = render(<ProjectHoverCard project={project} state={openState} showTags={false} />);
+    expect(gitLine()?.textContent).toBe("Git status unavailable");
+    expect(gitLine()?.classList.contains("git-unknown")).toBe(true);
+    card.unmount();
+
+    useBoxesStore.setState({ boxes: [] });
+    useProjectsStore.setState({ projects: [project], activeId: "a", loaded: true });
+    let container: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<ProjectSwitcher open />));
+    });
+    const icon = container!.querySelector(".pill-folder-icon");
+    expect(icon?.classList.contains("git-unknown")).toBe(true);
+    expect(icon?.classList.contains("git-clean")).toBe(false);
+  });
+
   it("shows no git line for a clean or unprobed project", () => {
     useGitDirtyStore.setState({ byId: { a: "clean" } });
     const first = render(<ProjectHoverCard project={project} state={openState} showTags={false} />);

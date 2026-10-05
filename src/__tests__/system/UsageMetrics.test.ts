@@ -2,12 +2,13 @@
  * Locks how a tab is classified for the usage recap.
  *
  * "By model" is the whole point of the agent stats, and a local model is not a
- * field on the tab — it is carried in the env Eldrun spawns it with. The trap is
+ * field on the tab — it is carried in the env Tabtivity spawns it with. The trap is
  * that a local model driven through `vibe` still has `cmd: "vibe"`, so a
  * cmd-only classification would file every local model under "Mistral".
  */
 import { describe, expect, it } from "vitest";
 import { METRIC, agentLabel, agentMetricLeaf, agentPromptLeaf, sub } from "../../lib/usageMetrics";
+import { BRAND, envName, tabCommand } from "../../lib/brand";
 
 describe("agentMetricLeaf", () => {
   it("files a cloud agent under its command", () => {
@@ -28,7 +29,7 @@ describe("agentMetricLeaf", () => {
       agentMetricLeaf({
         kind: "local_agent",
         cmd: "vibe",
-        env: { ELDRUN_LOCAL_MODEL: "qwen3:8b", VIBE_ACTIVE_MODEL: "eldrun-qwen3" },
+        env: { [envName("LOCAL_MODEL")]: "qwen3:8b", VIBE_ACTIVE_MODEL: `${BRAND.slug}-qwen3` },
       }),
     ).toEqual({ prefix: METRIC.AGENT_TAB_LOCAL, leaf: "qwen3:8b" });
   });
@@ -37,21 +38,21 @@ describe("agentMetricLeaf", () => {
     const id = agentMetricLeaf({
       kind: "local_agent",
       cmd: "vibe",
-      env: { ELDRUN_LOCAL_MODEL: "llama3.1:8b", VIBE_ACTIVE_MODEL: "eldrun-alias" },
+      env: { [envName("LOCAL_MODEL")]: "llama3.1:8b", VIBE_ACTIVE_MODEL: `${BRAND.slug}-alias` },
     });
     expect(id?.leaf).toBe("llama3.1:8b");
   });
 
   it("falls back to the vibe alias when only that is present", () => {
-    // Tabs restored from a layout written by an older Eldrun have no
-    // ELDRUN_LOCAL_MODEL; naming them by the alias beats losing them.
+    // Tabs restored from a layout written by an older Tabtivity have no
+    // TABTIVITY_LOCAL_MODEL; naming them by the alias beats losing them.
     expect(
       agentMetricLeaf({
         kind: "local_agent",
         cmd: "vibe",
-        env: { VIBE_ACTIVE_MODEL: "eldrun-qwen3" },
+        env: { VIBE_ACTIVE_MODEL: `${BRAND.slug}-qwen3` },
       }),
-    ).toEqual({ prefix: METRIC.AGENT_TAB_LOCAL, leaf: "eldrun-qwen3" });
+    ).toEqual({ prefix: METRIC.AGENT_TAB_LOCAL, leaf: `${BRAND.slug}-qwen3` });
   });
 
   it("falls back to the command for a local agent with no model recorded", () => {
@@ -64,8 +65,8 @@ describe("agentMetricLeaf", () => {
 
   it("classifies non-agent tabs as nothing", () => {
     expect(agentMetricLeaf({ kind: "shell", cmd: "bash" })).toBeNull();
-    expect(agentMetricLeaf({ kind: "files", cmd: "__eldrun_files__" })).toBeNull();
-    expect(agentMetricLeaf({ kind: "network", cmd: "__eldrun_network__" })).toBeNull();
+    expect(agentMetricLeaf({ kind: "files", cmd: tabCommand("files") })).toBeNull();
+    expect(agentMetricLeaf({ kind: "network", cmd: tabCommand("network") })).toBeNull();
   });
 });
 
@@ -74,7 +75,7 @@ describe("agentPromptLeaf", () => {
     // Both prompts and "tabs used" key off this leaf; without the prefix a local
     // model named like an agent would merge with it.
     expect(
-      agentPromptLeaf({ kind: "local_agent", cmd: "vibe", env: { ELDRUN_LOCAL_MODEL: "qwen3:8b" } }),
+      agentPromptLeaf({ kind: "local_agent", cmd: "vibe", env: { [envName("LOCAL_MODEL")]: "qwen3:8b" } }),
     ).toBe("local.qwen3:8b");
     expect(agentPromptLeaf({ kind: "agent", cmd: "claude" })).toBe("claude");
   });

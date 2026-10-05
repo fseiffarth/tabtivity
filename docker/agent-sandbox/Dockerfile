@@ -1,6 +1,6 @@
-# Reference image for Eldrun's per-project "Run agents in Docker sandbox" toggle.
+# Reference image for Tabtivity's per-project "Run agents in Docker sandbox" toggle.
 #
-# When the toggle is on for a project, Eldrun launches each agent tab as:
+# When the toggle is on for a project, Tabtivity launches each agent tab as:
 #   docker run --rm -it --user <uid>:<gid> \
 #     --security-opt no-new-privileges --cap-drop ALL --pids-limit <n> \
 #     -e HOME=<host-home> -w <project> \
@@ -9,7 +9,7 @@
 #     -v <state_dir>/live_sessions:<state_dir>/live_sessions \
 #     -v <state_dir>/hooks:<state_dir>/hooks:ro \
 #     -v <stage>/..._settings.json:<home>/.claude/settings.json \  # writable copy
-#     -e <agent-auth/env vars> eldrun-agent-sandbox:latest <agent> <args>
+#     -e <agent-auth/env vars> tabtivity-agent-sandbox:latest <agent> <args>
 # (see docker/agent-sandbox/README.md and src-tauri/src/services/sandbox.rs).
 #
 # The container therefore needs the agent CLIs on PATH. Auth + session-resume
@@ -17,7 +17,7 @@
 # to the host home), so this image carries no credentials.
 #
 # Build:
-#   docker build -t eldrun-agent-sandbox:latest docker/agent-sandbox
+#   docker build -t tabtivity-agent-sandbox:latest docker/agent-sandbox
 #
 # The container is started with `--user <host-uid>:<host-gid>` and is NOT root,
 # so install everything to global locations at build time (below). The named
@@ -65,4 +65,4 @@ RUN npm install -g \
 ENV NPM_CONFIG_CACHE=/tmp/.npm
 ENV PATH=/usr/local/bin:$PATH
 
-# No ENTRYPOINT: Eldrun passes the agent command + args as the container command.
+# No ENTRYPOINT: Tabtivity passes the agent command + args as the container command.

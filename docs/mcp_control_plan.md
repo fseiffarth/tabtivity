@@ -1,16 +1,16 @@
-# Eldrun MCP Control Server — plan
+# Tabtivity MCP Control Server — plan
 
 *Plan only. Nothing here is implemented. Produced 2026-08-03.* The **root
 console's MCP** (`docs/context/root_console.md`) is the shipped, HTTP,
 write-capable surface — a different server with a different threat model; this
 document is the *control* server that was not built.
 
-The request: **an MCP server for Eldrun**, so that an agent (Claude Code in a
+The request: **an MCP server for Tabtivity**, so that an agent (Claude Code in a
 terminal, or any MCP client) can drive the app itself — *open a new tab of
 type X*, *open this file of this project in a new tab*, *make this project
 active/inactive* — instead of only working inside a shell.
 
-Not to be confused with [`eldrun_hosted_plan.md`](eldrun_hosted_plan.md):
+Not to be confused with [`tabtivity_hosted_plan.md`](tabtivity_hosted_plan.md):
 that is a multi-user server running every user's work. This is a **local
 control surface for the running desktop app**, and it deliberately builds as
 little server as possible.
@@ -26,10 +26,10 @@ that execute through the exact store actions the UI itself uses.**
 claude / any MCP client
    │  stdio (JSON-RPC, MCP)
    ▼
-eldrun-mcp  (bridge bin — dumb, stateless, no tool knowledge)
+tabtivity-mcp  (bridge bin — dumb, stateless, no tool knowledge)
    │  one JSON line per request, token-authenticated
    ▼
-<state_dir>/mcp/eldrun.sock  (0700 dir; Windows: named pipe)
+<state_dir>/mcp/tabtivity.sock  (0700 dir; Windows: named pipe)
    │
 Tauri backend: services/control_socket.rs + commands/mcp.rs
    │  emit "mcp://request" ──► McpBridgeHost (AppShell, mounted once)
@@ -48,7 +48,7 @@ Five decisions carry the design:
    already lives behind. A localhost HTTP MCP server would be reachable by any
    local process *and* by any browser page via `fetch` to `127.0.0.1`; the
    socket is reachable only by processes running as the user. On Windows the
-   socket becomes a named pipe (`\\.\pipe\eldrun-mcp-<user>`), default-ACL'd
+   socket becomes a named pipe (`\\.\pipe\tabtivity-mcp-<user>`), default-ACL'd
    to the user, with the same token check on top.
 
 2. **Tools execute through the frontend, via the UI's own code paths.** Tab
@@ -61,13 +61,13 @@ Five decisions carry the design:
    from an argument), and a single `McpBridgeHost` (mounted once in
    `AppShell`, the `MailOverlayHost` pattern) dispatches to store actions and
    answers with `invoke("mcp_respond", {id, result})`. No window, or 10 s
-   without an answer → the tool call fails with "Eldrun window not
-   responding", never hangs the client. The exception is `eldrun_status`,
+   without an answer → the tool call fails with "Tabtivity window not
+   responding", never hangs the client. The exception is `tabtivity_status`,
    whose source of truth is backend files (`projects.json`,
    `active_session.json`), answered without the round trip.
 
-   *Revisit when the hosted plan's P1 lands (noted 2026-09-29).*
-   [`eldrun_hosted_plan.md`](eldrun_hosted_plan.md) §3.4 moves the live
+   *Revisit when the headless owner lands (noted 2026-09-29).*
+   [`headless_owner_plan.md`](headless_owner_plan.md) moves the live
    model out of the window into one headless `workspace` owner, the Mobile
    sidecar. That covers the tab set, spawning, project activation and every
    timer. Because it is a *move*, not a second implementation, the drift
@@ -76,8 +76,8 @@ Five decisions carry the design:
    of going through `McpBridgeHost`, and they keep working with the window
    closed. Until a slice moves, this decision stands for it.
 
-3. **The bridge is dumb and the tool list has one home.** `eldrun-mcp` is
-   invoked as `eldrun-mcp --project <id>`, reads that project's token from
+3. **The bridge is dumb and the tool list has one home.** `tabtivity-mcp` is
+   invoked as `tabtivity-mcp --project <id>`, reads that project's token from
    the state dir (the id is an identifier, not a secret — the token file is
    the credential), speaks the small MCP stdio subset (`initialize`,
    `tools/list`, `tools/call`, `ping`) and forwards everything else
@@ -146,7 +146,7 @@ Five decisions carry the design:
 - **Registration never touches another app's config** (the
   no-foreign-app-paths rule). Two offered paths, both user-executed:
   a one-click **install-via-new-tab** that opens a terminal with
-  `claude mcp add eldrun -- <path to eldrun-mcp>` pasted and ready to run
+  `claude mcp add tabtivity -- <path to tabtivity-mcp>` pasted and ready to run
   (the Ollama-models pattern), and a "write `.mcp.json` into this project"
   button — with the privacy caveat stated in the dialog: the entry embeds an
   absolute home path, and on a public repo that file must be gitignored
@@ -161,12 +161,12 @@ text to point elsewhere.
 
 | Tool | Args | Does |
 |------|------|------|
-| `eldrun_status` | — | App version, flag states, and the caller's project: id, name, kind (local/remote), whether it is active. Backend-answered; also the "is the app running" probe. Deliberately the *only* window onto the project list — other projects' names, paths and states are not this caller's to read. |
+| `tabtivity_status` | — | App version, flag states, and the caller's project: id, name, kind (local/remote), whether it is active. Backend-answered; also the "is the app running" probe. Deliberately the *only* window onto the project list — other projects' names, paths and states are not this caller's to read. |
 | `list_tabs` | — | The caller's scope only: tab key, kind, title, location, focused — from the live store (frontend round trip). |
 | `list_tab_kinds` | — | The kinds `open_tab` may open *right now* — computed by the same gates the ➕ menu uses (`experimental`, `withdrawnTabKinds`, `browser_capabilities`), so the manifest and the menu cannot disagree. |
 | `activate_project` | — | `useProjectsStore.activateProject` on the token's project. May legitimately end "waiting on user" (VPN password prompt) — reported as such, not as failure. |
 | `deactivate_project` | — | `deactivateProject` on the token's project (closes SSH pool etc.). |
-| `open_tab` | `{kind, location?}` | `addTabToScope` into the token's scope, with the kind's canonical `cmd` (`__eldrun_*__`). v1 kinds: every non-PTY kind from `TabKind` that the gate allows. `shell` only behind `mcp_allow_pty_tabs`, **default off** (§6.1); `agent` tabs not offered at all — spawning an agent from an agent wants the group-O agent-spawn policy first. |
+| `open_tab` | `{kind, location?}` | `addTabToScope` into the token's scope, with the kind's canonical `cmd` (`__tabtivity_*__`). v1 kinds: every non-PTY kind from `TabKind` that the gate allows. `shell` only behind `mcp_allow_pty_tabs`, **default off** (§6.1); `agent` tabs not offered at all — spawning an agent from an agent wants the group-O agent-spawn policy first. |
 | `open_file` | `{path, viewer?}` | Confined resolve inside the token's project root (§2), then the `FileDropContext.openTab` path — so TeX roots dedupe into the workspace tab, viewers resolve exactly as a file-tree click does. |
 | `focus_tab` | `{key}` | Focus + reveal, refused for a key outside the token's scope. |
 
@@ -183,7 +183,7 @@ is a model that will retry.
 (listener lifecycle bound to the flag, per-project token mint/check resolving
 to `{project, tier}`, line-framed JSON, request parse/validate as pure tested
 functions); `commands/mcp.rs` (`mcp_respond`, pending table with oneshot
-channels + 10 s timeout). Nothing user-visible; `eldrun_status` answered
+channels + 10 s timeout). Nothing user-visible; `tabtivity_status` answered
 backend-side is the smoke test.
 
 **Phase 1 — reads + frontend dispatcher.** `McpBridgeHost` in `AppShell`;
@@ -197,9 +197,9 @@ checked on both sides of the IPC, not only in Rust.
 `open_file` (confinement first, with its own Rust tests: `..`, symlink out,
 absolute path, remote project → mirror-vs-host decision), `focus_tab`.
 
-**Phase 3 — the bridge.** `eldrun-mcp` bin: stdio MCP subset ↔ socket,
+**Phase 3 — the bridge.** `tabtivity-mcp` bin: stdio MCP subset ↔ socket,
 manifest fetched at `initialize`, clean errors when the app is not running
-("Eldrun is not running — start it and retry", not a connect stack trace).
+("Tabtivity is not running — start it and retry", not a connect stack trace).
 Bundler wiring for all three OSes; Windows named pipe.
 
 **Phase 4 — registration UX + docs.** SettingsPanel row (enable flag, the two
@@ -231,7 +231,7 @@ need); HTTP/SSE transport; a write-capable calendar/mail tool surface
   drives the socket headlessly against a running app so "the tool is dead"
   and "the tool ran and was refused" are distinguishable without clicking.
 - Vitest: dispatcher map, tab-kind gating parity with the ➕ menu.
-- Live QA is the user's (never launch Eldrun): enable the flag, register via
+- Live QA is the user's (never launch Tabtivity): enable the flag, register via
   `claude mcp add`, and walk one script from a Claude Code session in a
   terminal — status → list tabs → activate → open a file → confirm a
   *refused* shell tab → flip `mcp_allow_pty_tabs` → open one.

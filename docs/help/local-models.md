@@ -4,7 +4,7 @@ title: Local models with Ollama
 keywords: [ollama, local model, model, gpu, vram, pull, download, offline, vibe, mistral, autocomplete, qwen, llama, gemma]
 ---
 
-Eldrun runs open-weight models on your own machine through Ollama. Nothing
+Tabtivity runs open-weight models on your own machine through Ollama. Nothing
 leaves the machine. Local models power Local Model agent tabs, editor
 autocomplete and the mail assistant.
 
@@ -19,7 +19,7 @@ autocomplete and the mail assistant.
    - Or download it from `https://ollama.com/download`.
 3. Linux/macOS: enter your password when the script asks for sudo (it
    registers a system service). Windows: approve the UAC prompt if asked.
-4. Back in the panel click **Re-check**. Eldrun then starts the server.
+4. Back in the panel click **Re-check**. Tabtivity then starts the server.
 
 The panel's automatic **Install** button runs the same command without a
 terminal; on Linux it only succeeds without prompting if your account has
@@ -28,9 +28,9 @@ passwordless sudo, so prefer **Run in terminal**.
 ## 2. Check the server
 
 - The Ollama panel's header says **Server running** or **Server not
-  running** with a **Start** button. Eldrun prefers the system service
-  (`systemctl start ollama`) and falls back to `ollama serve`; a server Eldrun
-  started itself is stopped again when Eldrun quits.
+  running** with a **Start** button. Tabtivity prefers the system service
+  (`systemctl start ollama`) and falls back to `ollama serve`; a server Tabtivity
+  started itself is stopped again when Tabtivity quits.
 - The Models & agents menu shows "Ollama running" / "Ollama stopped".
 - From a terminal: `ollama --version` and `ollama list`. The default address is
   `127.0.0.1:11434`.
@@ -77,8 +77,10 @@ calling; the Models & agents menu tags models without it "no tools".
 4. Optional role chips assign a loaded model to a task: **Autocomplete**,
    **Prose autocomplete**, **Tabs** (the model Local Model tabs use) and
    **Mail**.
-5. Optional: under **Load on Eldrun start** in the Ollama panel, tick models to
+5. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
    load automatically at launch (not in Energy Saver mode unless you allow it).
+6. From a paired phone, Home → **Local models** loads and unloads installed
+   models too (help topic `mobile`, "Local models from the phone").
 
 ## 5. Open a Local Model tab
 
@@ -114,5 +116,5 @@ calling; the Models & agents menu tags models without it "no tools".
   in the server's environment; the Models & agents menu offers the fix.
 - **Server won't start**: run `ollama serve` in a terminal to see its error.
 - **Ollama on another machine**: `ollama_host` in `settings.json` points
-  Eldrun at another address; a non-local host also needs
+  Tabtivity at another address; a non-local host also needs
   `ollama_allow_remote_host`. There is no UI for this yet.

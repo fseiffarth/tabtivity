@@ -35,6 +35,7 @@ import { _clearPtyActivityForTest, noteAgentTurn, useActivityStore } from "../..
 import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { _grantTimerLeaseForTest } from "../../stores/timerLease";
 
 const invokeMock = vi.mocked(invoke);
 const writeMock = vi.mocked(writePtyInput);
@@ -66,6 +67,7 @@ async function settle(): Promise<void> {
 }
 
 beforeEach(() => {
+  _grantTimerLeaseForTest();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-01T09:00:30"));
   invokeMock.mockReset();

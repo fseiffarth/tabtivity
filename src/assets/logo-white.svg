@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="128" height="128" fill="none" role="img" aria-label="Eldrun">
-  <title>Eldrun</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="128" height="128" fill="none" role="img" aria-label="Tabtivity">
+  <title>Tabtivity</title>
   <!--
-    Eldrun logo (white variant for dark backgrounds) — a circuit "tree of life"
+    Tabtivity logo (white variant for dark backgrounds) — a circuit "tree of life"
     inside a ring, crowned by a gold compass star. Same geometry as logo.svg; the
     dark-green traces are recolored to white for dark chrome. The background
     stays transparent so the mark composes with its host surface.
@@ -16,11 +16,11 @@
     <path d="M 256 161 L 256 499" stroke-width="13" />
 
     <!-- Left-side branches (authored), then mirrored. -->
-    <g id="eldrun-branches">
+    <g id="tabtivity-branches">
       <!-- L2 → vertical → diagonal → L3 (trace stops at the pad on both sides) → 45° diagonal down into the leg. -->
       <path d="M 98 249 L 98 289 L 135.2 326.2 M 174.8 365.8 L 233 424" stroke-width="13" />
     </g>
-    <use href="#eldrun-branches" transform="translate(512,0) scale(-1,1)" />
+    <use href="#tabtivity-branches" transform="translate(512,0) scale(-1,1)" />
 
     <!-- Hexagon node terminals (thinner stroke than the traces), each filled with its
          own colour, stepping around the arc from bottom-left to bottom-right. -->

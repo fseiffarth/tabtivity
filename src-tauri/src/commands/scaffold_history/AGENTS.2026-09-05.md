@@ -1,0 +1,39 @@
+# Agents
+
+Canonical instructions for every AI coding agent working in this project.
+The agent-specific files are pointers to this one — write guidance **here**
+so every agent reads the same thing.
+
+## Project
+
+_What this project is and what it is for._
+
+## Running
+
+_Build, run and test commands._
+
+## Conventions
+
+_Layout, style, and anything an agent must not do._
+
+## Showing the user a picture
+
+To put an image in front of the user on their phone (Eldrun Mobile), copy it
+into `.eldrun/outbox/` in this project — the phone lists that folder. Images
+only (PNG, JPEG, GIF, WebP); it is git-ignored and never synced.
+
+## Agent files
+
+- [AGENTS.md](./AGENTS.md) — this file: the single source of truth
+- [CLAUDE.md](./CLAUDE.md) — Claude Code; imports this file
+- [GEMINI.md](./GEMINI.md) — Gemini CLI; imports this file
+
+## Project docs
+
+- [PROJECT.md](./PROJECT.md) — map of the scaffold: every file linked, with what it is for
+- [README.md](./README.md) — overview
+- [DOCUMENTATION.md](./DOCUMENTATION.md) — reference documentation
+- [ROADMAP.md](./ROADMAP.md) — planned direction
+- [TODO.md](./TODO.md) — open work items
+- [REMARKS.md](./REMARKS.md) — project-wide remarks attached to files and lines
+- [STATUS.md](./STATUS.md) — current state

@@ -1,3 +1,4 @@
+use crate::brand::SLUG;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
@@ -5,7 +6,7 @@ use crate::commands::apps::WindowRegistryState;
 use crate::commands::workspace::WorkspaceStateArc;
 use crate::schema::project::TabEntry;
 use crate::schema::session::{FileTabSession, LayoutSession, ProjectState};
-use crate::services::terminal_service::eldrun_sessions_dir;
+use crate::services::terminal_service::app_sessions_dir;
 use crate::services::{restore_service, terminal_service, window_service};
 use crate::storage;
 
@@ -30,6 +31,11 @@ pub struct PreviousProjectSnapshot {
     /// Elapsed project seconds to flush atomically with the switch.
     #[serde(default)]
     pub flush_secs: f64,
+    /// The workspace version the frontend last saw for the outgoing scope
+    /// (headless owner plan, H1); absent from a client that never received
+    /// one, whose snapshot then reads as the whole set.
+    #[serde(default)]
+    pub workspace_version: Option<u64>,
 }
 
 /// Payload emitted as `project-runtime-switched` and returned to the caller.
@@ -73,6 +79,11 @@ pub fn switch(
     // 2. Save previous project's tab layout to <state_dir>/sessions/<id>/ (and
     //    its export copy in the project tree).
     if let Some(local_file) = previous_local_file {
+        // The switch snapshot is a picture of what was in memory; like the
+        // debounced save it never clears (an empty one far more often means
+        // "never loaded" than "closed everything") and it carries no session
+        // list. It goes through the workspace service like every other
+        // writer, so a tab another client opened meanwhile survives it.
         if let Err(e) = terminal_service::save_terminal_session(
             previous_project_id,
             local_file,
@@ -81,6 +92,7 @@ pub fn switch(
             &snapshot.tab_layout,
             snapshot.active_tab_index,
             snapshot.tab_groups.clone(),
+            snapshot.workspace_version,
         ) {
             eprintln!("ProjectRuntime: save tab layout: {e}");
         }
@@ -159,7 +171,7 @@ pub fn switch(
     //     unordered against it, and a stale run could park the active scope's
     //     popout (or, on Wayland, un-park another scope's over it).
 
-    // 6. Save previous window session IDs to .eldrun/sessions/windows.json.
+    // 6. Save previous window session IDs to .tabtivity/sessions/windows.json.
     if let Some(local_file) = previous_local_file {
         let prev_reg_ids = {
             let wins = win_registry.lock().unwrap();
@@ -241,7 +253,7 @@ fn save_previous_sessions(
     project_id: Option<&str>,
     snapshot: &PreviousProjectSnapshot,
 ) {
-    let Some(sessions_dir) = eldrun_sessions_dir(local_file) else {
+    let Some(sessions_dir) = app_sessions_dir(local_file) else {
         return;
     };
 
@@ -262,8 +274,8 @@ fn save_previous_sessions(
         eprintln!("ProjectRuntime: write layout session: {e}");
     }
 
-    // Write .eldrun/state.json one level up from sessions/.
-    if let Some(eldrun_dir) = sessions_dir.parent() {
+    // Write .tabtivity/state.json one level up from sessions/.
+    if let Some(app_dir) = sessions_dir.parent() {
         if let Some(project_dir) = std::path::Path::new(local_file).parent() {
             let state = ProjectState {
                 project_id: project_id.unwrap_or("").to_string(),
@@ -271,8 +283,8 @@ fn save_previous_sessions(
                 saved_at: Some(storage::iso_now()),
                 extra: Default::default(),
             };
-            if let Err(e) = storage::write_json(&eldrun_dir.join("state.json"), &state) {
-                eprintln!("ProjectRuntime: write .eldrun/state.json: {e}");
+            if let Err(e) = storage::write_json(&app_dir.join("state.json"), &state) {
+                eprintln!("ProjectRuntime: write .{SLUG}/state.json: {e}");
             }
         }
     }
@@ -285,10 +297,10 @@ pub fn load_side_panel_folder(local_file: &str) -> Option<String> {
 }
 
 /// Persist the side-panel subfolder for a project, preserving any other
-/// fields already stored in `.eldrun/sessions/filetabs.json`. Lets the active
+/// fields already stored in `.tabtivity/sessions/filetabs.json`. Lets the active
 /// project's panel view survive a restart even without a project switch.
 pub fn save_side_panel_folder(local_file: &str, folder: Option<String>) -> Result<(), String> {
-    let Some(sessions_dir) = eldrun_sessions_dir(local_file) else {
+    let Some(sessions_dir) = app_sessions_dir(local_file) else {
         return Err("cannot resolve project sessions directory".into());
     };
     let path = sessions_dir.join("filetabs.json");
@@ -301,10 +313,10 @@ pub fn save_side_panel_folder(local_file: &str, folder: Option<String>) -> Resul
     storage::write_json(&path, &session).map_err(|e| e.to_string())
 }
 
-/// Load file tabs and side-panel folder from `.eldrun/sessions/filetabs.json`.
+/// Load file tabs and side-panel folder from `.tabtivity/sessions/filetabs.json`.
 /// Returns (file_tabs, side_panel_folder).
 fn load_file_tab_session(local_file: &str) -> (Vec<serde_json::Value>, Option<String>) {
-    if let Some(sessions_dir) = eldrun_sessions_dir(local_file) {
+    if let Some(sessions_dir) = app_sessions_dir(local_file) {
         let path = sessions_dir.join("filetabs.json");
         if path.exists() {
             if let Ok(session) = storage::read_json::<FileTabSession>(&path) {
@@ -335,7 +347,7 @@ mod tests {
     }
 
     fn filetabs_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
-        dir.path().join(".eldrun").join("sessions").join("filetabs.json")
+        dir.path().join(concat!(".", crate::app_slug!())).join("sessions").join("filetabs.json")
     }
 
     /// The frontend's switch payload can be as small as `{}` — every field has
@@ -362,7 +374,7 @@ mod tests {
     }
 
     /// No session file yet: the panel folder is simply unknown, and saving one
-    /// creates `.eldrun/sessions/filetabs.json` beside the project file.
+    /// creates `.tabtivity/sessions/filetabs.json` beside the project file.
     #[test]
     fn the_side_panel_folder_round_trips_through_filetabs_json() {
         let dir = tempfile::tempdir().unwrap();
@@ -433,7 +445,7 @@ mod tests {
     }
 
     /// Leaving a project writes three files: the file tabs and layout under
-    /// `.eldrun/sessions/`, and `.eldrun/state.json` one level up naming the
+    /// `.tabtivity/sessions/`, and `.tabtivity/state.json` one level up naming the
     /// project id and its directory.
     #[test]
     fn leaving_a_project_writes_filetabs_layout_and_state() {
@@ -447,17 +459,18 @@ mod tests {
             side_panel_folder: Some("src".into()),
             active_layout_metadata: Some(serde_json::json!({"name":"wide"})),
             flush_secs: 0.0,
+            workspace_version: None,
         };
         save_previous_sessions(&local, Some("p-42"), &snapshot);
 
-        let sessions = dir.path().join(".eldrun").join("sessions");
+        let sessions = dir.path().join(concat!(".", crate::app_slug!())).join("sessions");
         let tabs: FileTabSession = storage::read_json(&sessions.join("filetabs.json")).unwrap();
         assert_eq!(tabs.file_tabs[0]["path"], "a.rs");
         assert_eq!(tabs.side_panel_folder.as_deref(), Some("src"));
         let layout: LayoutSession = storage::read_json(&sessions.join("layout.json")).unwrap();
         assert_eq!(layout.active_layout_metadata.unwrap()["name"], "wide");
         let state: ProjectState =
-            storage::read_json(&dir.path().join(".eldrun").join("state.json")).unwrap();
+            storage::read_json(&dir.path().join(concat!(".", crate::app_slug!())).join("state.json")).unwrap();
         assert_eq!(state.project_id, "p-42");
         assert_eq!(std::path::Path::new(&state.project_dir), dir.path());
         assert!(state.saved_at.is_some());

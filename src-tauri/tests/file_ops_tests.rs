@@ -3,13 +3,14 @@
 //!
 //! All tests use a tempdir so no real project state is touched.
 
+use app_lib::brand::SLUG;
 use std::fs;
 
-use eldrun_lib::commands::fs::{
+use app_lib::commands::fs::{
     create_dir_local, create_file_local, delete_dir_local, delete_file_local, list_dir_local,
     rename_path_local,
 };
-use eldrun_lib::commands::projects::scaffold_project;
+use app_lib::commands::projects::scaffold_project;
 use tempfile::TempDir;
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -55,17 +56,17 @@ fn list_dir_dirs_come_before_files() {
 }
 
 #[test]
-fn list_dir_hides_eldrun_directory() {
+fn list_dir_hides_app_directory() {
     let tmp = setup();
     let dir = project_dir(&tmp);
 
-    fs::create_dir_all(tmp.path().join(".eldrun/sessions")).unwrap();
-    fs::write(tmp.path().join(".eldrun/sessions/terminals.json"), "{}").unwrap();
+    fs::create_dir_all(tmp.path().join(concat!(".", app_lib::app_slug!(), "/sessions"))).unwrap();
+    fs::write(tmp.path().join(concat!(".", app_lib::app_slug!(), "/sessions/terminals.json")), "{}").unwrap();
     fs::write(tmp.path().join("visible.txt"), "hi").unwrap();
 
     let entries = list_dir_local(&dir, "").unwrap();
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    assert!(!names.contains(&".eldrun"), ".eldrun must be hidden");
+    assert!(!names.contains(&concat!(".", app_lib::app_slug!())), concat!(".", app_lib::app_slug!(), " must be hidden"));
     assert!(names.contains(&"visible.txt"));
 }
 
@@ -348,14 +349,14 @@ fn scaffold_project_integration_creates_full_structure() {
 }
 
 #[test]
-fn scaffold_project_gitignore_contains_eldrun() {
+fn scaffold_project_gitignore_contains_app() {
     let tmp = setup();
     scaffold_project(tmp.path(), true).unwrap();
 
     let gitignore = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
     assert!(
-        gitignore.contains(".eldrun/"),
-        ".gitignore must exclude .eldrun/: {gitignore}"
+        gitignore.contains(concat!(".", app_lib::app_slug!(), "/")),
+        ".gitignore must exclude .{SLUG}/: {gitignore}"
     );
 }
 

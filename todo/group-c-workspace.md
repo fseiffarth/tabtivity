@@ -61,7 +61,7 @@
       - [ ] 🖐️ VM tier: doctor passes with `brew install qemu` (macOS, arm64
         guest on Apple silicon) / the qemu.org installer + WHPX (Windows);
         the built-in seed ISO boots cloud-init; shutdown works over QMP TCP.
-      - [ ] 🖐️ Eldrun Mobile on Windows: the Settings section shows, the Run-key
+      - [ ] 🖐️ Tabtivity Mobile on Windows: the Settings section shows, the Run-key
         sidecar starts, and the PowerShell phone-install handoff prints the URL.
 
 ---

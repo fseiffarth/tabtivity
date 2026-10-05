@@ -10,6 +10,7 @@ import {
 import { useTimerStore } from "../../stores/timer";
 import { useTabsStore } from "../../stores/tabs";
 import { useGitDirtyStore, type GitDirtyState } from "../../stores/gitDirty";
+import { UntestedTag } from "../common/UntestedTag";
 import { projectTypeTags } from "./projectTypeTags";
 import { OrbitSpinner } from "../common/OrbitSpinner";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -41,6 +42,7 @@ export const GIT_STATE_LABEL_KEY: Record<Exclude<GitDirtyState, "clean">, Transl
   staged: "pill.gitStaged",
   unpushed: "pill.gitUnpushed",
   broken: "pill.gitBroken",
+  unknown: "pill.gitUnknown",
 };
 
 export function projectDescription(project: ProjectEntry): string {
@@ -234,6 +236,7 @@ export function ProjectHoverCard({
       {gitState && gitState !== "clean" && (
         <span className={`pill-popup-git git-${gitState}`}>{t(GIT_STATE_LABEL_KEY[gitState])}</span>
       )}
+      {gitState === "unknown" && <UntestedTag id="pill.gitUnknown" />}
       <span className={`pill-popup-status ${project.status === "inactive" ? "inactive" : "active"}`}>
         {statusLabel(t, project.status)}
       </span>

@@ -54,8 +54,9 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
-const STATUS_ROW = "~/eldrun/projects/demo (develop) · Opus · 42% context";
+const STATUS_ROW = `~/${BRAND.slug}/projects/demo (develop) · Opus · 42% context`;
 
 /** A Claude Code screen: a turn, then the input box with the statusline the
  * TUI draws under it. */
@@ -110,13 +111,13 @@ const output = () => screen.getByRole("region", { name: "Session output" });
 const strip = () => screen.queryByRole("status", { name: "Status line" });
 const rowTexts = () => Array.from(document.querySelectorAll(".focus-statusline-row"), (row) => (row.textContent ?? "").trim());
 
-describe("Eldrun Mobile Focus status line", () => {
+describe(`${BRAND.display} Mobile Focus status line`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
-    localStorage.setItem("eldrun.mobile.view.shell", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
+    localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
@@ -211,13 +212,13 @@ function hostWith(files: boolean) {
 
 const drawer = () => screen.queryByRole("dialog", { name: "Files" });
 
-describe("Eldrun Mobile Focus — the project's files drawer", () => {
+describe(`${BRAND.display} Mobile Focus — the project's files drawer`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
-    localStorage.setItem("eldrun.mobile.view.shell", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
+    localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 

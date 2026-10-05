@@ -220,8 +220,8 @@ impl Session {
                 "workspaceFolders": [{"uri": uri.as_str(), "name": "project"}],
                 "capabilities": {"workspace": {"workspaceFolders": true}, "window":{"showDocument":{"support":true}}},
                 "initializationOptions": {
-                    "editorInfo": {"name": "Eldrun", "version": version},
-                    "editorPluginInfo": {"name": "Eldrun autocomplete", "version": version},
+                    "editorInfo": {"name": crate::brand::DISPLAY, "version": version},
+                    "editorPluginInfo": {"name": concat!(crate::app_name!(), " autocomplete"), "version": version},
                 },
             }), INITIALIZE_TIMEOUT)
             .await?;
@@ -845,12 +845,12 @@ mod tests {
     }
 
     /// The real pinned server inside the real fence; needs an installation:
-    /// `ELDRUN_COPILOT_INSTALL=/dir cargo test --lib copilot -- --ignored`.
+    /// `TABTIVITY_COPILOT_INSTALL=/dir cargo test --lib copilot -- --ignored`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore]
     async fn fenced_server_initializes_and_refuses_unauthenticated_completion() {
-        let install = std::env::var("ELDRUN_COPILOT_INSTALL").expect("ELDRUN_COPILOT_INSTALL");
+        let install = std::env::var(crate::app_env!("COPILOT_INSTALL")).expect(crate::app_env!("COPILOT_INSTALL"));
         let project = tempfile::tempdir().unwrap();
         let root = project.path().canonicalize().unwrap();
         std::fs::write(root.join("a.py"), "def square(x):\n    return ").unwrap();

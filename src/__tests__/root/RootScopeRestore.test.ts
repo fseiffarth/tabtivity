@@ -22,6 +22,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 
 import { useProjectsStore } from "../../stores/projects";
+import { BRAND } from "../../lib/brand";
 
 function proj(id: string, position: number, status = "active"): ProjectEntry {
   return { id, name: id, status, position, local_file: `/p/${id}/project.json` };
@@ -34,7 +35,7 @@ function serve(projects: ProjectEntry[]) {
       case "get_projects":
         return Promise.resolve(projects);
       case "root_work_dir":
-        return Promise.resolve("/home/u/eldrun/root");
+        return Promise.resolve(`/home/u/${BRAND.slug}/root`);
       case "load_side_panel_folder":
         return Promise.resolve(null);
       case "detect_git_providers":

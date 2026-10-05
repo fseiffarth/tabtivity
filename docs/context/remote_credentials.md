@@ -2,7 +2,7 @@
 
 Referenced from `AGENTS.md`.
 
-- **A locked keychain is not an empty one, and Eldrun must never confuse the two.**
+- **A locked keychain is not an empty one, and Tabtivity must never confuse the two.**
   On Linux the Secret Service collection holding every saved SSH/VPN credential can be
   *locked*, and through the `keyring` crate a locked collection reads exactly like an
   empty one: every lookup answers "nothing saved". That is not a cosmetic difference —
@@ -21,7 +21,7 @@ Referenced from `AGENTS.md`.
   the keychain whenever that *is* readable. The header's VPN menu is where all of this
   surfaces: a locked banner with **Unlock keyring**, and the per-config save toggle
   beside "Connect on launch" — which is also the only place a **non-headless** user can
-  hand Eldrun a VPN secret at all, since that mode otherwise has no password fields.
+  hand Tabtivity a VPN secret at all, since that mode otherwise has no password fields.
   In that mode the header's Connect uses saved credentials when it has them and
   otherwise opens the connect command in the **root terminal**; it never raises a modal.
   - **A locked collection is never dispatched to, and mostly does not have to be.**
@@ -65,7 +65,7 @@ Referenced from `AGENTS.md`.
   ("this proves nothing, write nothing down") instead of `Some(true)`. A *password*
   is still recorded either way: that is an observation, not an inference.
 - **Headless is a default, not a trap: every login section can be switched to a
-  terminal, for one connect.** Eldrun's own login can only ask what it has fields for —
+  terminal, for one connect.** Tabtivity's own login can only ask what it has fields for —
   an SSH password, an OpenVPN password and key passphrase. A host or tunnel is free to
   ask something else (keyboard-interactive challenge, a one-time code, an expired
   password), and then no number of retries can succeed; the observed symptom is a loop
@@ -73,7 +73,7 @@ Referenced from `AGENTS.md`.
   **"Sign in in a terminal"** (`components/projects/TerminalSignInToggle`) on both
   channels, **default off**, which swaps the password fields for the same embedded
   login terminal `connections_headless: false` uses — the server asks its own
-  questions, the user answers them, Eldrun still never sees a secret. The VPN password
+  questions, the user answers them, Tabtivity still never sees a secret. The VPN password
   modal has the same escape hatch as a button (`stores/remote/vpn/vpnPrompt`'s
   `handoffToTerminal`), since it has no fields to swap. Four rules make it safe:
   it is **per connect** and never writes `connections_headless`; it is **not offered on
@@ -109,7 +109,7 @@ Referenced from `AGENTS.md`.
 - **A terminal login and a saved credential are not a contradiction, so the keychain
   is reachable from one — by the user's click, and only then.**
   `connections_headless: false` (and every "Sign in in a terminal" flip above) means
-  Eldrun does not *handle* the secret: the host asks its own questions in a terminal
+  Tabtivity does not *handle* the secret: the host asks its own questions in a terminal
   the user is watching. It never meant the keychain was empty — a password saved from
   a headless connect, or from the header's VPN menu, sat there unreachable while it
   was retyped into every login. `components/projects/CredentialPasteBar` is the way
@@ -122,14 +122,14 @@ Referenced from `AGENTS.md`.
   non-secrets (an SSH login name, a VPN auth username already shown in a plain field)
   are pasted from JS via the ordinary `pty_write`. It is **user-initiated, at a
   terminal the user is looking at** — the distinction that matters against the
-  next bullet: Eldrun still never *answers a prompt* on its own, it types what it was
+  next bullet: Tabtivity still never *answers a prompt* on its own, it types what it was
   asked to type, where the user put the cursor. It **submits nothing** (no newline), so
   a paste into the wrong prompt is still correctable on the line — a paste is not a
   login. And it **stores and deletes nothing**: an unsaved target (or a locked keyring,
   which reads identically) reports "nothing saved for this login" rather than pasting
   an empty secret. The SSH target carries the login name **being typed into that
   terminal**, not the persisted one, because the keychain is keyed per login.
-- **A password Eldrun sends *by itself* is answering exactly one question, at a machine
+- **A password Tabtivity sends *by itself* is answering exactly one question, at a machine
   that has already been vetted.** It never goes through a PTY — nothing writes into a
   terminal but the user, or the paste they just clicked (above) — so a remote shell,
   MOTD or script that asks for a secret gets nothing. It goes to OpenSSH's own `SSH_ASKPASS`, and what makes that safe is the

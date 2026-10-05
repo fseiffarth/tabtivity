@@ -2,7 +2,7 @@
 *Files: `services/project_runtime.rs`, `terminal_service.rs`, `src/stores/tabs.ts`, `CenterPanel.tsx`.*
 
 24. **Restore/resume agent sessions.** Terminal/tab layout persistence already
-    exists (`.eldrun/sessions/terminals.json`), but app-startup restore via
+    exists (`.tabtivity/sessions/terminals.json`), but app-startup restore via
     `active_session.json` is **unused**. Wire up restoring the full prior session
     (active project, tabs, windows) on launch. Feasibility note: resuming the
     actual *agent* process state depends on the agent CLI's own resume support;
@@ -28,7 +28,7 @@
 39. **Per-tab agent session restore — stepwise.** Concrete, incremental path to
     #24's hard part (per-tab session tracking), built one step at a time so each
     step is verifiable on its own.
-    - [x] **39a — Surface a tab's launch session id (Claude).** ✅ Done. Eldrun
+    - [x] **39a — Surface a tab's launch session id (Claude).** ✅ Done. Tabtivity
       mints a UUID and launches Claude with `claude --session-id <uuid>`, stored
       on `TabEntry.sessionId` and shown on tab hover. This **launch id** is
       deterministic, stable, and unique per tab. *Files: `stores/tabs.ts`
@@ -65,20 +65,20 @@
       after `/clear` (Claude rolls onto a fresh id with no recorded back-link to
       the launch id) — is solved with a global Claude **`SessionStart` hook**
       (fires on startup/resume/clear/compact) that records the live `session_id`
-      keyed by `$ELDRUN_TAB_UID`. Eldrun sets `ELDRUN_TAB_UID` to the tab's
+      keyed by `$TABTIVITY_TAB_UID`. Tabtivity sets `TABTIVITY_TAB_UID` to the tab's
       stable launch id on spawn, then at (re)spawn resolves the hook-recorded
       live id and emits `claude --resume <live-id>` (falling back to the launch
       id, and downgrading to `--session-id` when no log exists yet). The hook is
       installed once into `~/.claude/settings.json` and no-ops for any Claude not
-      launched by Eldrun. *Files: `services/agent_session.rs` (hook install +
+      launched by Tabtivity. *Files: `services/agent_session.rs` (hook install +
       live-id store), `terminal/mod.rs` (`resolve_claude_session`), `lib.rs`
-      (install at startup). Hook script: `~/.local/share/eldrun/hooks/`; live ids:
-      `~/.local/share/eldrun/live_sessions/`.*
+      (install at startup). Hook script: `~/.local/share/tabtivity/hooks/`; live ids:
+      `~/.local/share/tabtivity/live_sessions/`.*
       - [ ] 🖐️ **39c-relaunch — A Claude that relaunched itself before its first
         prompt keeps its tab.** Open a new Claude tab, accept the "flicker-free
         rendering" upsell (or run `/tui fullscreen`) before sending anything, then
         prompt: the phone's Reader shows the conversation, the tab's working /
-        done marks light, and after an Eldrun restart the tab resumes that
+        done marks light, and after a Tabtivity restart the tab resumes that
         conversation. (Claude 2.1.282 comes back under a fresh session id; the
         hook now follows it while the launch id has no transcript — 2026-09-25.)
         - [ ] ✅ Works on Linux (X11)
@@ -92,7 +92,7 @@
     - [x] **39d — Generalize to other agents.** Codex, Gemini and Mistral/vibe done.
       - [x] **Codex.** ✅ Done. Codex mints its own session id (no launch-time
         `--session-id`), but it has a Claude-style `SessionStart` hook and resumes
-        by uuid (`codex resume <id>`). Eldrun sets `ELDRUN_TAB_UID` (a per-tab key)
+        by uuid (`codex resume <id>`). Tabtivity sets `TABTIVITY_TAB_UID` (a per-tab key)
         on the Codex tab, installs a `SessionStart` hook into `~/.codex/config.toml`
         (TOML text-append, idempotent) that records the live session id under that
         key, then at spawn resolves it and launches `codex resume <live-id>` when a
@@ -120,7 +120,7 @@
         running the rollout scan over `ssh_exec`.
       - [x] **Gemini.** ✅ Done via **continue-last**. `--session-id <uuid>` sets
         the launch id (already passed), but `--resume` takes an index/`latest`,
-        not a uuid — so precise resume-by-uuid isn't available. Instead Eldrun
+        not a uuid — so precise resume-by-uuid isn't available. Instead Tabtivity
         restores with `gemini --resume latest`, continuing the project's most-
         recent session, exactly like Grok/Qwen. Same caveat: two Gemini tabs in
         one project share that one latest session. *Files: `stores/tabs.ts`
@@ -131,18 +131,18 @@
       - [x] **Mistral/vibe.** ✅ Done via **continue-last**. Vibe mints its own id
         with no launch-id control, and `--resume` with no id opens an interactive
         picker (hangs a restore) — but `-c/--continue` "Continue from the most
-        recent saved session" is the non-interactive path, so Eldrun restores with
+        recent saved session" is the non-interactive path, so Tabtivity restores with
         `vibe --continue`. Same shared-latest caveat. *Files: `stores/tabs.ts`
         (`RESUMABLE_AGENTS.vibe`).* Verified against `vibe --help`.
 
     - [x] **39e — Restore hardening (review of 39c/39d, 2026-09-02).** ✅ Code
       done, not run live. Four things the review found, each with a unit test:
-      **(1)** the hook accepted any Claude that inherited `ELDRUN_TAB_UID` — a
+      **(1)** the hook accepted any Claude that inherited `TABTIVITY_TAB_UID` — a
       `claude -p` run from the tab's own Bash tool overwrote both the live id and
       the mode record (reproduced live) — so the script now lets only the tab's
       own session move the record (id must be the launch key or the current
       record, else only a `clear`/`resume` start), keyed by a new
-      `ELDRUN_TAB_AGENT` marker, and the Codex binder adopts a hook id only when
+      `TABTIVITY_TAB_AGENT` marker, and the Codex binder adopts a hook id only when
       Codex has a rollout for it; **(2)** a box's per-member Claude tab restored
       into the box folder instead of the member root (`restoredAgentCwd` now
       takes the box's member roots as `agentRoots`); **(3)** a restored remote
@@ -165,14 +165,14 @@
       - [ ] 🖐️ Manual test (needs a backend rebuild + restart, which rewrites the
         hook script on startup)
         - [ ] In a Claude tab, set a non-default mode (shift+tab), ask it to run
-          `claude -p "say ok"`, then restart Eldrun → the tab resumes *its*
+          `claude -p "say ok"`, then restart Tabtivity → the tab resumes *its*
           conversation in the mode you set, not the one-shot run.
         - [ ] `/clear` in a Claude tab, chat, restart → the post-clear
           conversation comes back.
         - [ ] Box scope: "+ → Claude — ⟨member⟩", restart → the tab is in the
           member root (`pwd` in a shell or the tab hover), not the box folder.
         - [ ] Remote project: Claude tab, chat, `tmux kill-server` on the host
-          (or reboot it), restart Eldrun → the tab resumes instead of dying with
+          (or reboot it), restart Tabtivity → the tab resumes instead of dying with
           "Session ID … is already in use".
         - [ ] ✅ Works on Linux (X11)
         - [ ] ❌ Doesn't work on Linux (X11)

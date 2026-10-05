@@ -1,4 +1,4 @@
-# ProjectEldrun — Gemini Context
+# Tabtivity — Gemini Context
 
 This project's instructions live in [AGENTS.md](./AGENTS.md); the import below
 pulls them in. Write project guidance there, not here — keep this file for

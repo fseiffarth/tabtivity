@@ -4,6 +4,7 @@ import { SETTINGS_ANCHORS } from "../layout/settingsUi";
 import { runInstallInTab } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
+import { MOBILE_HOST_KEY } from "../../lib/brand";
 
 /** `translate` at the live language, for the callbacks below (the component's
  *  `t` inside a `window.confirm` string would read a stale language). */
@@ -17,14 +18,14 @@ function tr(
 const DEFAULT_PORT = 8742;
 
 /**
- * The setup instruction behind the header's phone icon while Eldrun Mobile is
+ * The setup instruction behind the header's phone icon while Tabtivity Mobile is
  * off — the one door into Mobile for someone who has never used it.
  *
  * The full guide lives in Mobile settings, which is exactly the problem it
  * solves: a feature nobody has switched on is a feature nobody goes looking for
  * in the settings scroll. The icon is therefore shown *before* setup too, and
  * clicking it opens this — the same six steps, in the order they are performed,
- * with the two that Eldrun can do for the user (run the `tailscale serve`
+ * with the two that Tabtivity can do for the user (run the `tailscale serve`
  * command, land on the Mobile section of Settings) as buttons in their own step.
  *
  * Chrome is `HowToStart`'s down to the class names — `.modal-backdrop` +
@@ -33,8 +34,8 @@ const DEFAULT_PORT = 8742;
  */
 export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   const t = useT();
-  const stored = useSettingsStore((s) => s.settings?.eldrun_mobile_host);
-  // The command has to name the port Eldrun will actually listen on, so a user
+  const stored = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]);
+  // The command has to name the port Tabtivity will actually listen on, so a user
   // who already changed it in Mobile settings is not told to publish 8742.
   const port = Number.isInteger(stored?.port) && (stored?.port ?? 0) >= 1024 && (stored?.port ?? 0) <= 65535
     ? (stored?.port as number)
@@ -59,7 +60,7 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   };
 
   const openMobileSettings = () => {
-    window.dispatchEvent(new CustomEvent("eldrun:open-settings", {
+    window.dispatchEvent(new CustomEvent("app:open-settings", {
       detail: { panel: "main", anchor: SETTINGS_ANCHORS.mobile },
     }));
     onClose();

@@ -4,7 +4,7 @@
 //! The `*Input` ones arrive over IPC from a frontend built from this same tree,
 //! so they `deny_unknown_fields` and a caller's typo is loud. The persisted
 //! ones are read back off disk, and a state file outlives the build that wrote
-//! it: a packaged Eldrun, a frozen `package:dev` snapshot and a dev window all
+//! it: a packaged Tabtivity, a frozen `package:dev` snapshot and a dev window all
 //! read the same file, so the newest of them adding one optional field would
 //! otherwise make every older build reject the whole library with
 //! `unknown field ...` and show the user nothing. They tolerate unknown fields
@@ -34,6 +34,14 @@ pub struct ProjectAgentPrompt {
     /// and a target whose tab is gone is simply one the chart no longer knows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// The paired phone that wrote or last edited this prompt, by its device
+    /// id (#2348). The rule a send makes of it carries the phone
+    /// (`ScheduledAgentPrompt::phone_device`), whichever surface sends it, so
+    /// revoking the phone or narrowing its access cancels it. A desktop edit
+    /// keeps it; absent on prompts only the desktop or an agent wrote. Never
+    /// crosses the browser API (`MobileCollectedPrompt` copies its own fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone_device: Option<String>,
 }
 
 /// A collected prompt that has been aimed at an agent tab, moved out of the
@@ -106,7 +114,7 @@ pub struct SentAgentPrompt {
     /// it (`services::agent_session::agent_session_model`) — read with the
     /// blame, once the tab is idle again, because that is the first moment the
     /// transcript's last answer is *this* prompt's. The chart wears it as a
-    /// `model:` tag. Absent for an agent whose transcript Eldrun does not read,
+    /// `model:` tag. Absent for an agent whose transcript Tabtivity does not read,
     /// and on rows written before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -174,6 +182,11 @@ pub struct ProjectAgentPromptInput {
     /// `Some("")` clears it, `Some(id)` sets it.
     #[serde(default)]
     pub target: Option<String>,
+    /// The paired phone writing the prompt (its create or edit): `Some`
+    /// stamps it, taking the prompt over; `None` (the desktop) keeps
+    /// whatever phone is stored (#2348).
+    #[serde(default)]
+    pub phone_device: Option<String>,
 }
 
 /// A visual/behavioural edge between two prompt cards. Endpoints name prompt

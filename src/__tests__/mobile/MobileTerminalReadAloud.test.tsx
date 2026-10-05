@@ -54,6 +54,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
 
@@ -83,7 +84,7 @@ class FakeUtterance {
   constructor(public text: string) {}
 }
 
-describe("Eldrun Mobile Reader reads answers aloud", () => {
+describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
   let spoken: FakeUtterance[];
   let cancel: ReturnType<typeof vi.fn>;
 
@@ -92,7 +93,7 @@ describe("Eldrun Mobile Reader reads answers aloud", () => {
     terminalState.alternate = false;
     FakeWebSocket.instances = [];
     localStorage.clear();
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     spoken = [];
     cancel = vi.fn();
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -138,9 +139,9 @@ describe("Eldrun Mobile Reader reads answers aloud", () => {
     vi.stubGlobal("fetch", sidecarFetch(() => ({ available: true, version: `${entries.length}:1`, truncated: false, entries })));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Read answers aloud/ }));
-    expect(localStorage.getItem("eldrun.mobile.focusReadAloud")).toBe("1");
+    expect(localStorage.getItem(storageKey("mobile.focusReadAloud"))).toBe("1");
     // Only the silent utterance that lets the page speak later.
     expect(spoken.map((utterance) => utterance.text)).toEqual([""]);
 
@@ -165,12 +166,12 @@ describe("Eldrun Mobile Reader reads answers aloud", () => {
     read();
     expect(spoken.map((utterance) => utterance.lang)).toEqual(["en-GB"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Voice language/ }));
     // What is still being said was said in the old voice; the picker cuts it.
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Deutsch" }));
     expect(cancel).toHaveBeenCalled();
-    expect(localStorage.getItem("eldrun.mobile.speechLang")).toBe("de");
+    expect(localStorage.getItem(storageKey("mobile.speechLang"))).toBe("de");
 
     read();
     expect(spoken.map((utterance) => utterance.lang)).toEqual(["en-GB", "de-DE"]);

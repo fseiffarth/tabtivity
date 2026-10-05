@@ -4,7 +4,7 @@
 //! against the layer it targets. This checks the thing a user actually meets:
 //! a single realistic phishing mail carrying ~40 payloads at once — script
 //! elements, mutation-XSS constructs, framing, a credential form, a
-//! full-viewport fake-Eldrun overlay, trackers in every fetching attribute,
+//! full-viewport fake-Tabtivity overlay, trackers in every fetching attribute,
 //! every way a URL can lie about its destination, and four attachments whose
 //! names attack the filesystem — parsed by `parse_message` and cleaned by
 //! `sanitize_message_html` exactly as `commands::mail` does it.
@@ -18,10 +18,10 @@
 //! (`MailHostileBody.test.ts`) is judging **this** pipeline's real output and
 //! cannot silently drift from it.
 
-use eldrun_lib::schema::mail::{MailAuthState, MailAuthVerdict};
-use eldrun_lib::services::mail_authres::{apply_trust, parse_authentication_results};
-use eldrun_lib::services::mail_engine::parse_message;
-use eldrun_lib::services::mail_sanitize::sanitize_message_html;
+use app_lib::schema::mail::{MailAuthState, MailAuthVerdict};
+use app_lib::services::mail_authres::{apply_trust, parse_authentication_results};
+use app_lib::services::mail_engine::parse_message;
+use app_lib::services::mail_sanitize::sanitize_message_html;
 
 fn fixture() -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

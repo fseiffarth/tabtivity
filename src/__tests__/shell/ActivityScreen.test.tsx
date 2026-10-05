@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActivityTab } from "../../../mobile-web/src/api";
 import { Activity } from "../../../mobile-web/src/screens/Activity";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const fetchMock = vi.fn();
 const MIN = 60_000;
@@ -77,7 +78,7 @@ describe("Mobile activity list — what it says when it cannot answer", () => {
 
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 }));
     document.dispatchEvent(new Event("visibilitychange"));
-    await screen.findByText("Eldrun isn't running on your desktop.");
+    await screen.findByText(`${BRAND.display} isn't running on your desktop.`);
     expect(screen.getByText("Showing the last list this session loaded.")).toBeTruthy();
     expect(screen.getByText("Claude")).toBeTruthy();
     expect(onConnection).toHaveBeenLastCalledWith("desktop_down");
@@ -147,7 +148,7 @@ describe("Mobile activity list — rows", () => {
     const { unmount } = render(<Activity open={() => {}} onConnection={() => {}} />);
     await screen.findByText("A");
     fireEvent.change(screen.getByRole("combobox", { name: "Sort agent tabs" }), { target: { value: "native" } });
-    expect(localStorage.getItem("eldrun.mobile.agentsSort")).toBe("native");
+    expect(localStorage.getItem(storageKey("mobile.agentsSort"))).toBe("native");
     unmount();
 
     render(<Activity open={() => {}} onConnection={() => {}} />);
@@ -177,6 +178,29 @@ describe("Mobile activity list — rows", () => {
     fireEvent.click(screen.getByText("Free").closest("button")!);
     expect(open).toHaveBeenCalledWith("p1", rows[2]);
     expect(screen.getByText("Free").closest("button")!.querySelector(".agent-status")!.textContent).toBe("?question");
+  });
+});
+
+describe("Mobile activity list — plan and goal", () => {
+  it("wears the desktop's PLAN / GOAL pills and a tinted edge while the session is in either", async () => {
+    answer([
+      tab("Planner", "working", { agent_plan: true }),
+      tab("Chaser", "working", { agent_goal: true }),
+      tab("Both", "done", { agent_plan: true, agent_goal: true }),
+      tab("Plain", "done"),
+    ]);
+    render(<Activity open={() => {}} onConnection={() => {}} />);
+    await screen.findByText("Planner");
+    const marks = (label: string) => [...screen.getByText(label).closest("button")!.querySelectorAll(".agent-mode-mark")].map((n) => n.textContent);
+    const card = (label: string) => screen.getByText(label).closest("button")!;
+    expect(marks("Planner")).toEqual(["PLAN"]);
+    expect(card("Planner").classList.contains("in-plan")).toBe(true);
+    expect(marks("Chaser")).toEqual(["GOAL"]);
+    expect(card("Chaser").classList.contains("in-goal")).toBe(true);
+    expect(marks("Both")).toEqual(["PLAN", "GOAL"]);
+    expect(card("Both").classList.contains("in-plan")).toBe(true);
+    expect(marks("Plain")).toEqual([]);
+    expect(card("Plain").className).not.toMatch(/in-(plan|goal)/);
   });
 });
 

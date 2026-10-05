@@ -1,10 +1,10 @@
-//! Which remote hosts Eldrun treats as **HPC hosts**, and therefore samples
+//! Which remote hosts Tabtivity treats as **HPC hosts**, and therefore samples
 //! carefully.
 //!
 //! A shared cluster login node runs under usage rules an ordinary dev box does
 //! not (`docs/context/hpc_careful_mode.md`): other users' account names may not
 //! be determined, information about them that happens to be readable may not be
-//! used, and a login node is not to carry a sustained background load. Eldrun's
+//! used, and a login node is not to carry a sustained background load. Tabtivity's
 //! two host probes — the monitor snapshot (`sysstat::REMOTE_SNAPSHOT_SCRIPT`)
 //! and the connect-time usage check (`services::remote_usage`) — therefore have
 //! a *careful* variant that collects strictly less.
@@ -18,7 +18,7 @@
 //! at all — can still act on what the last probe learned.
 //!
 //! The memory is process-lifetime only and deliberately one-way: a host may be
-//! marked careful, and nothing un-marks it while Eldrun runs. A false "careful"
+//! marked careful, and nothing un-marks it while Tabtivity runs. A false "careful"
 //! costs a slightly thinner monitor pane; a false "ordinary" costs a rule
 //! violation, so the asymmetry is the point.
 
@@ -154,9 +154,9 @@ pub fn is_hpc_spec(spec: &RemoteSpec) -> bool {
 /// know in advance that its target might be a cluster. The alternative — asking
 /// before every scan — would put the question in front of the 99% of users who
 /// have no cluster at all.
-pub const HPC_GUARD: &str = "ELDRUN_HPC_GUARD";
+pub const HPC_GUARD: &str = crate::app_env!("HPC_GUARD");
 
-/// Build the refusal a gated command returns: `ELDRUN_HPC_GUARD <what> <target>`.
+/// Build the refusal a gated command returns: `TABTIVITY_HPC_GUARD <what> <target>`.
 /// `what` is a stable slug the dialog switches its wording on (`du-scan`,
 /// `census`, `login-node-run`, `connect`), `target` the `user@host:port` being
 /// protected.
@@ -192,7 +192,7 @@ pub fn is_careful_host(spec: &RemoteSpec) -> bool {
     let key = key_for(spec);
     // The HPC tag outranks the Light/Detailed answer in one direction only: a
     // tagged machine is careful even if its careful answer says "this one is
-    // mine". Those two say different things — "how much may Eldrun look at" and
+    // mine". Those two say different things — "how much may Tabtivity look at" and
     // "is this a shared cluster" — and there is no coherent reading of the second
     // that permits the first's full collection.
     is_tagged_hpc(&key) || stored_answer(&key).unwrap_or_else(|| is_known_careful(&key))
@@ -246,7 +246,7 @@ mod tests {
         };
         assert_eq!(
             guard_error("du-scan", &spec),
-            "ELDRUN_HPC_GUARD du-scan alice@login.example:22"
+            concat!(crate::app_upper!(), "_HPC_GUARD du-scan alice@login.example:22")
         );
         assert_eq!(guard_error("du-scan", &spec).split_whitespace().count(), 3);
     }

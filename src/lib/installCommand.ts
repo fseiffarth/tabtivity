@@ -41,7 +41,7 @@ export function providerAuthLoginCmd(provider: GitHostProvider): string {
 /**
  * One-click "install in a terminal tab" helper.
  *
- * Eldrun's policy is that any install-via-command flow (Ollama models, agent
+ * Tabtivity's policy is that any install-via-command flow (Ollama models, agent
  * CLIs, and external tools like a LaTeX/TeX distribution or sshfs) must be a
  * single click that opens a fresh terminal tab and *runs* the command — never a
  * "copy this command and run it yourself" manual step.
@@ -50,7 +50,7 @@ export function providerAuthLoginCmd(provider: GitHostProvider): string {
  * `initialInput`; `TerminalView` submits it with a trailing CR once the shell is
  * ready, so the install actually executes. Interactive prompts (a `sudo`
  * password, MiKTeX's installer, etc.) are answered directly in that visible
- * terminal — Eldrun never has to handle them.
+ * terminal — Tabtivity never has to handle them.
  *
  * The tab opens in the **root** scope (installs are machine-global, not project
  * scoped). The active project is deliberately left unchanged — switching scope
@@ -89,7 +89,7 @@ export function runInstallInTab(
   openTabInRootConsole({
     label,
     cmd: installShellCommand(shellKind),
-    cwd: rootDir, // empty resolves to ~/eldrun/root on the backend
+    cwd: rootDir, // empty resolves to ~/tabtivity/root on the backend
     kind: "shell",
     initialInput: command,
   }, (tab) => useRootOverlayStore.getState().markInstallTab(tab.key));

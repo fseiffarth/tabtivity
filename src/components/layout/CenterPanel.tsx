@@ -30,6 +30,7 @@ import {
   hydrateScopeFromDisk,
   isRelaunchableLocalTab,
   isResumableAgentTab,
+  isSavedWhileLive,
   isPtyTabKind,
   localTabCwd,
   remoteHostIdOf,
@@ -39,6 +40,7 @@ import {
 } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
@@ -77,6 +79,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
+import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 
 /** Pixel coordinates of a group's pane region, relative to the center panel. */
 interface Rect {
@@ -99,6 +102,9 @@ function CenterPanelImpl() {
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const windowFocused = useWindowFocused();
   const rootConsoleOpen = useRootOverlayStore((st) => st.open);
+  // Root tab keys an app overlay's docked agent column is drawing right now
+  // (`OverlayAgentColumn`); their copy here stands down, like the root console.
+  const overlayAgentShown = useOverlayAgentStore((st) => st.shownKeys);
   const layout = useTabsStore((s) => s.layout);
   const layoutByScope = useTabsStore((s) => s.layoutByScope);
   const setScope = useTabsStore((s) => s.setScope);
@@ -250,7 +256,7 @@ function CenterPanelImpl() {
         ) {
           useTabsStore.getState().addTab(
             { label: "Projects", cmd: BLOB_TAB_CMD, cwd: "", kind: "projects3d" },
-            // Eldrun opened this, not the user — it must not show up in the usage
+            // Tabtivity opened this, not the user — it must not show up in the usage
             // recap as a tab they opened.
             { seeded: true },
           );
@@ -1174,10 +1180,14 @@ function CenterPanelImpl() {
           const visible =
             isCurrentScope &&
             // The root console shows the root scope's tabs itself (attach-only
-            // views of these panes). With no project open the root scope is
-            // also what THIS panel shows, and two visible views of one PTY
-            // would take turns resizing it — so the panel's copy stands down.
+            // views of these panes), and an app overlay's docked agent column
+            // shows one root tab the same way. With no project open the root
+            // scope is also what THIS panel shows, and two visible views of one
+            // PTY would take turns resizing it — so the panel's copy stands
+            // down: the whole root scope while the console is up, the docked
+            // key while a column draws it. The slot is left empty meanwhile.
             !(rootConsoleOpen && scopeKey === ROOT_SCOPE) &&
+            !(scopeKey === ROOT_SCOPE && overlayAgentShown.has(tab.key)) &&
             groupId != null &&
             activeKeyOfGroup.get(groupId) === tab.key &&
             (!fsActive || groupId === fullscreenGroupId);
@@ -1299,7 +1309,7 @@ function CenterPanelImpl() {
           // Persistent sessions (TODO #85): the stable, persisted session name to
           // wrap a shell/script tab in a tmux session, so a long run survives — for a
           // REMOTE tab an SSH drop / relaunch (default ON per project, opt out via
-          // the pill toggle), for a LOCAL tab an Eldrun crash (default ON on Unix via
+          // the pill toggle), for a LOCAL tab a Tabtivity crash (default ON on Unix via
           // `persist_local_sessions`). Remote shell/script AND remote agent tabs
           // (`shouldPersistTab`; the agent's process reattaches, composing with its
           // own `--resume`); local persistence stays shell-only
@@ -1312,7 +1322,7 @@ function CenterPanelImpl() {
           if (!mobileAgentTmuxReady.current.has(mobileReadyKey)) {
             mobileAgentTmuxReady.current.set(
               mobileReadyKey,
-              !!paneProject?.eldrun_mobile_access || !!paneBox?.eldrun_mobile_access,
+              !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY],
             );
           }
           const tmuxSession =
@@ -1323,7 +1333,7 @@ function CenterPanelImpl() {
               localRunning,
               localPersistEnabled,
               mobileAgentTmuxReady.current.get(mobileReadyKey) === true,
-              isResumableAgentTab(tab) || isRelaunchableLocalTab(tab),
+              isResumableAgentTab(tab) || isRelaunchableLocalTab(tab) || isSavedWhileLive(tab),
             )
               ? tab.tmuxSession
               : undefined;
@@ -1473,6 +1483,9 @@ export function SplitPreviewOverlay({ groupRects }: { groupRects: Record<string,
  *    collide with them.
  * `pointer-events: none`, panel-relative coords from the same measured rects.
  */
+/** `.subwindow-number`'s height (subwindows.css). */
+const SUBWINDOW_NUMBER_SIZE = 18;
+
 export function FocusFrameOverlay({
   groupRects,
   frameRects,
@@ -1534,12 +1547,21 @@ export function FocusFrameOverlay({
           const up = (n - down) % n;
           const label =
             down === 0 ? "0" : down <= up ? `${down}↓` : `${up}↑`;
+          // On the tab bar's drag grip (the strip between the subwindow's top
+          // and its pane), not the pane's corner: there it covered the agent
+          // prompt strip / the terminal's first line. No bar measured (the
+          // empty-scope slot) → the pane corner.
+          const fr = frameRects[id];
+          const bar = fr ? r.top - fr.top : 0;
+          const pos =
+            fr && bar >= SUBWINDOW_NUMBER_SIZE
+              ? {
+                  left: fr.left + 3,
+                  top: fr.top + (bar - SUBWINDOW_NUMBER_SIZE) / 2 + 2,
+                }
+              : { left: r.left + 6, top: r.top + 6 };
           return (
-            <div
-              key={id}
-              className="subwindow-number"
-              style={{ left: r.left + 6, top: r.top + 6 }}
-            >
+            <div key={id} className="subwindow-number" style={pos}>
               {label}
             </div>
           );

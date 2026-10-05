@@ -30,7 +30,7 @@ impl WorkspaceBackend for NullBackend {
         false
     }
 
-    fn make_sticky(&self, _eldrun_pid: u32) -> Result<(), String> {
+    fn make_sticky(&self, _app_pid: u32) -> Result<(), String> {
         Ok(())
     }
 

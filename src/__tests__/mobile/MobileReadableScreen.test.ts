@@ -18,6 +18,7 @@ import {
   lastHistoryText,
   shiftHistory,
 } from "../../../mobile-web/src/terminal/readableHistory";
+import { BRAND } from "../../lib/brand";
 
 /** Marks a row xterm wrapped from the row above it. An explicit glyph, not a
  * leading space: a wrap point regularly *is* a space, and the two must not be
@@ -87,7 +88,7 @@ function styledBuffer(runs: FakeStyle[]): ReadableBufferLike {
 
 const texts = (buffer: ReadableBufferLike) => readableScreen(buffer).lines.map((line) => line.text);
 
-describe("Eldrun Mobile readable terminal view", () => {
+describe(`${BRAND.display} Mobile readable terminal view`, () => {
   it("rejoins wrapped rows so the phone re-wraps at its own width", () => {
     // The desktop tmux window is far wider than a phone. Keeping xterm's
     // physical breaks would show that window's column count as hard newlines.
@@ -137,6 +138,24 @@ describe("Eldrun Mobile readable terminal view", () => {
     ]))).toEqual(["> run the tests"]);
   });
 
+  it("marks the line a dropped rule stood above, without opening a break", () => {
+    // Claude Code 2.1.286 fences a permission prompt's command in dashed
+    // rules; the rule goes, but the dialog's heading still has to stop there.
+    const screen = readableScreen(plainBuffer([
+      " Write Unix timestamp to a.txt",
+      "╌".repeat(40),
+      " date +%s > a.txt",
+      "╌".repeat(40),
+      " Do you want to proceed?",
+    ]));
+    expect(screen.lines.map((line) => line.text)).toEqual([
+      " Write Unix timestamp to a.txt",
+      " date +%s > a.txt",
+      " Do you want to proceed?",
+    ]);
+    expect(screen.lines.map((line) => line.afterRule ?? false)).toEqual([false, true, true]);
+  });
+
   it("leaves a frame edge that is not the row's own, indent and all", () => {
     // OpenCode's full TUI paints a centred dialog over its composer box, so
     // each of the dialog's rows carries the box's `┃` far in from the margin.
@@ -177,11 +196,11 @@ describe("Eldrun Mobile readable terminal view", () => {
   it("still excludes a labelled input frame after its strokes are removed", () => {
     const lines = readableScreen(plainBuffer([
       "Answer text",
-      "──────── ProjectEldrun ─",
+      `──────── Project${BRAND.display} ─`,
       "› ",
       "85% context left",
     ])).lines;
-    expect(lines[1].text).toBe("ProjectEldrun");
+    expect(lines[1].text).toBe(`Project${BRAND.display}`);
     expect(lines.slice(0, inputFrameStart(lines)).map((line) => line.text)).toEqual(["Answer text"]);
   });
 
@@ -238,7 +257,7 @@ describe("Eldrun Mobile readable terminal view", () => {
   });
 });
 
-describe("Eldrun Mobile lazy terminal history", () => {
+describe(`${BRAND.display} Mobile lazy terminal history`, () => {
   /** The combined reading — absorbed history plus the live tail, exactly as the
    * Focus view composes them. */
   const view = (buffer: ReadableBufferLike, history: ReturnType<typeof emptyHistory>) => {
@@ -318,7 +337,7 @@ describe("Eldrun Mobile lazy terminal history", () => {
   });
 });
 
-describe("Eldrun Mobile side panel", () => {
+describe(`${BRAND.display} Mobile side panel`, () => {
   /** A row split at column 40: the conversation left, a panel right. */
   const split = (left: string, right = "") => `${left.padEnd(40)}${right}`;
   const rule = "─".repeat(30);
@@ -350,7 +369,7 @@ describe("Eldrun Mobile side panel", () => {
   });
 });
 
-describe("Eldrun Mobile Codex sparkle", () => {
+describe(`${BRAND.display} Mobile Codex sparkle`, () => {
   it("reads Codex's scattered one-dot braille as blank, so its input box stays found", () => {
     const rows = [
       "• Working (35s • esc to interrupt)",
@@ -358,7 +377,7 @@ describe("Eldrun Mobile Codex sparkle", () => {
       "                    ⢀     ⠁          ⠐     ⠐⠂ ⠄",
       "›⠁Ask Codex to do anything   ⠈             ⢀",
       "      ⠠⢀⠐                 ⠄         ⠠",
-      "  gpt-6-astra high · ~/eldrun/projects/projecteldrun",
+      `  gpt-6-astra high · ~/${BRAND.slug}/projects/project${BRAND.slug}`,
     ];
     const lines = readableScreen(plainBuffer(rows)).lines;
     expect(lines.map((row) => row.text)).toEqual([
@@ -366,7 +385,7 @@ describe("Eldrun Mobile Codex sparkle", () => {
       "",
       "› Ask Codex to do anything",
       "",
-      "  gpt-6-astra high · ~/eldrun/projects/projecteldrun",
+      `  gpt-6-astra high · ~/${BRAND.slug}/projects/project${BRAND.slug}`,
     ]);
     // The frame (with Codex's padding row above the box) is cut; the work stays.
     expect(lines.slice(0, inputFrameStart(lines, "Codex")).map((row) => row.text)).toEqual(["• Working (35s • esc to interrupt)"]);
@@ -404,7 +423,7 @@ describe("Eldrun Mobile Codex sparkle", () => {
   });
 });
 
-describe("Eldrun Mobile prose rewrap", () => {
+describe(`${BRAND.display} Mobile prose rewrap`, () => {
   const rows = (...texts: string[]) => texts.map((text, index) => ({ key: String(index), text, spans: [{ text }] }));
 
   it("rejoins the rows a TUI wrapped itself, and keeps the breaks it meant", () => {

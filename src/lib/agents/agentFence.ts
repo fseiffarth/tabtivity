@@ -1,5 +1,7 @@
 /** Pure frontend helpers for the agent-fence settings and project-pill states. */
 
+import { envName } from "../brand";
+
 export interface AgentFenceStatus {
   /** Prospective spawn policy, not an inspection of already-running tabs. */
   enforced: boolean;
@@ -22,7 +24,7 @@ export function agentFenceInstallCommand(status: AgentFenceStatus | null | undef
 /** The marker `pty_spawn`'s refusal carries on a platform with no fence
  *  (Windows) while the user has not yet accepted that agents run with their
  *  full rights. Mirrors `agent_fence::PLATFORM_UNACCEPTED_SENTINEL`. */
-export const FENCE_PLATFORM_UNACCEPTED = "ELDRUN_FENCE_PLATFORM_UNACCEPTED";
+export const FENCE_PLATFORM_UNACCEPTED = envName("FENCE_PLATFORM_UNACCEPTED");
 
 /** Whether a spawn error is that refusal — the one a `UnfencedPlatformDialog`
  *  answer lifts — rather than something to print as it is. */

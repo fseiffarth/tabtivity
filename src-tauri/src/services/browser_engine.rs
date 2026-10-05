@@ -31,8 +31,8 @@
 //! never fires for an `https://` request. Consequence, stated plainly: **a live
 //! page loaded from a public origin can `fetch("http://127.0.0.1:11434/")` and
 //! port-scan this machine**, and through an active VPN tunnel it can reach the
-//! network that tunnel joined. Nothing here stops that. What bounds it: Eldrun's
-//! own IPC is not an HTTP listener, so a scanner finds no Eldrun port; the
+//! network that tunnel joined. Nothing here stops that. What bounds it: Tabtivity's
+//! own IPC is not an HTTP listener, so a scanner finds no Tabtivity port; the
 //! profile is ephemeral, so findings cannot be correlated across sessions; and
 //! the *navigation* gate prevents the far worse case of the page **becoming** a
 //! local origin — but only when the private address is spelled as a literal
@@ -84,7 +84,7 @@
 //! # The one rule downloads obey
 //!
 //! **The page chooses the bytes. It never chooses the path.** Every download
-//! lands in a quarantine directory Eldrun picked, is inspected there
+//! lands in a quarantine directory Tabtivity picked, is inspected there
 //! non-executable, and reaches the user's filesystem only through an OS-native
 //! save dialog raised from Rust, one file at a time. Quarantine lives under
 //! `<state_dir>/browser/quarantine/` — machine state, deliberately **outside
@@ -135,7 +135,7 @@ const MAX_TITLE_CHARS: usize = 200;
 /// string, not anything that varies between users — a reader fetch should not
 /// be a fingerprint, and pretending to be a specific Chrome build would be a
 /// lie that breaks the day sites start branching on it.
-const READER_USER_AGENT: &str = "Mozilla/5.0 (compatible; Eldrun Reader)";
+const READER_USER_AGENT: &str = concat!("Mozilla/5.0 (compatible; ", crate::app_name!(), " Reader)");
 
 // ── Where things live ───────────────────────────────────────────────────────
 
@@ -710,7 +710,7 @@ pub fn extract_title(raw: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&nbsp;", " ");
-    // A title is a label rendered in Eldrun's own chrome, so bidi and format
+    // A title is a label rendered in Tabtivity's own chrome, so bidi and format
     // controls come out: `example.com — Secure  \u{2069}` is a real technique.
     let text = web_safety::strip_format_controls(&text);
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1134,10 +1134,10 @@ fn tidy_transport_error(msg: &str) -> String {
 
 // ── Security readout ────────────────────────────────────────────────────────
 
-/// Whether an OpenVPN tunnel Eldrun started (or adopted) is up.
+/// Whether an OpenVPN tunnel Tabtivity started (or adopted) is up.
 ///
 /// The browser makes **no** attempt to route around it. A per-webview proxy
-/// that bypassed the tunnel would be a split tunnel Eldrun invented, silently
+/// that bypassed the tunnel would be a split tunnel Tabtivity invented, silently
 /// contradicting what the user's `.ovpn` asked for and what the header's VPN
 /// indicator says — a user who turned on a VPN to browse safely would be
 /// browsing outside it *because of* a security feature. So this is reported,
@@ -1172,7 +1172,7 @@ mod tests {
     /// calls the file, the bytes land under the directory **we** chose.
     #[test]
     fn a_staged_download_can_never_escape_the_quarantine_root() {
-        let root = Path::new("/var/state/eldrun/browser/quarantine");
+        let root = Path::new(concat!("/var/state/", crate::app_slug!(), "/browser/quarantine"));
         let hostile = [
             "../../etc/passwd",
             "..\\..\\windows\\system32\\cmd.exe",

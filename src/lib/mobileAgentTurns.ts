@@ -1,6 +1,6 @@
 /**
  * Which agent-turn changes become a push notice on the phone
- * (`docs/eldrun_mobile_future_plan.md` §A).
+ * (`docs/tabtivity_mobile_future_plan.md` §A).
  *
  * Only the desktop sees a transition — the sidecar gets snapshots — so the
  * edges are found here, from the same per-tab state the phone's lists show
@@ -9,7 +9,7 @@
  * looking at it, and applies each phone's choices and the per-tab cooldown.
  */
 
-export type MobileAgentState = "working" | "question" | "done" | "idle";
+export type MobileAgentState = "working" | "question" | "interrupted" | "done" | "idle";
 
 export interface AgentTurnEdge {
   tmuxSession: string;

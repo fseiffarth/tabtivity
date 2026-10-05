@@ -18,8 +18,15 @@
 # Enable once with:  git config core.hooksPath .githooks
 set -euo pipefail
 
+# The hook's switches carry the app's name. A hook runs in any state of the
+# tree, so it cannot source scripts/lib/brand.sh and spells both names itself:
+# the current one, and the one the app had before it was renamed — a shell
+# that still exports the old switch, or an older build of the app running this
+# hook, must not be ignored. brand-check: allow — until the cleanup release.
+app_var() { local new="TABTIVITY_$1" old="ELDRUN_$1"; printf '%s' "${!new:-${!old:-}}"; }
+
 # Guard against the recursion from our own re-push below.
-[ -n "${ELDRUN_BUMPING:-}" ] && exit 0
+[ -n "$(app_var BUMPING)" ] && exit 0
 
 remote="$1"
 
@@ -42,9 +49,12 @@ EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 # missing; a v* tag push, which would cut a doomed release, stops. Once the
 # secret is seen, a marker in .git skips the check for good. No gh, no network
 # or no admin access to the secrets (a fork, a contributor) → silent.
-signing_marker="$(git rev-parse --git-dir)/eldrun-release-signing-secret-ok"
+signing_marker="$(git rev-parse --git-dir)/tabtivity-release-signing-secret-ok"
+# The marker a push made before the rename left, under the app's old name.
+# brand-check: allow — until the cleanup release
+old_signing_marker="$(git rev-parse --git-dir)/eldrun-release-signing-secret-ok"
 signing_secret_missing() {
-  [ -e "$signing_marker" ] && return 1
+  [ -e "$signing_marker" ] || [ -e "$old_signing_marker" ] && return 1
   command -v gh >/dev/null 2>&1 || return 1
   local names
   names="$(cd "$repo_root" && timeout 10 gh secret list --json name -q '.[].name' </dev/null 2>/dev/null)" || return 1
@@ -55,15 +65,15 @@ signing_secret_missing() {
   return 0
 }
 signing_missing=0
-# Eldrun's agent-push preflight (ELDRUN_PUSH_PREFLIGHT=1, see
+# Tabtivity's agent-push preflight (TABTIVITY_PUSH_PREFLIGHT=1, see
 # docs/context/git_push_mcp.md) runs this hook inside the agent's sandbox with
 # no credentials: the signing reminder is for the user's own pushes (it needs
 # gh and the network), and a v* tag can't be pushed through that lane anyway.
-if [ -z "${ELDRUN_BUMPING:-}" ] && [ -z "${ELDRUN_PUSH_PREFLIGHT:-}" ] && signing_secret_missing; then
+if [ -z "$(app_var BUMPING)" ] && [ -z "$(app_var PUSH_PREFLIGHT)" ] && signing_secret_missing; then
   signing_missing=1
   echo "pre-push: REMINDER — the RELEASE_SIGNING_KEY secret is not set on GitHub." >&2
   echo "          The next v* release will fail at signing until it is:" >&2
-  echo "          gh secret set RELEASE_SIGNING_KEY < ~/.config/eldrun-release-signing/release-signing.key.pem" >&2
+  echo "          gh secret set RELEASE_SIGNING_KEY < <the key file scripts/release-signing-keygen.sh wrote>" >&2
   echo "          Step by step: docs/context/release_signing.md" >&2
 fi
 
@@ -77,7 +87,7 @@ privacy_fail() {
   echo "          fix the last commit with 'git commit --amend', an older one with" >&2
   echo "          'git rebase -i $onto' (edit/drop), then push again." >&2
   echo "          A real credential that sat in a commit is safest rotated." >&2
-  echo "          To override once: ELDRUN_SKIP_PRIVACY_CHECK=1 git push …" >&2
+  echo "          To override once: TABTIVITY_SKIP_PRIVACY_CHECK=1 git push …" >&2
   exit 1
 }
 
@@ -94,9 +104,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   bumpable=0
   case "$remote_ref" in
     refs/tags/v*)
-      if [ "$signing_missing" -eq 1 ] && [ -z "${ELDRUN_SKIP_SIGNING_CHECK:-}" ]; then
+      if [ "$signing_missing" -eq 1 ] && [ -z "$(app_var SKIP_SIGNING_CHECK)" ]; then
         echo "pre-push: not pushing ${remote_ref#refs/tags/}: its release would fail unsigned." >&2
-        echo "          Set the secret first, or override once: ELDRUN_SKIP_SIGNING_CHECK=1 git push …" >&2
+        echo "          Set the secret first, or override once: TABTIVITY_SKIP_SIGNING_CHECK=1 git push …" >&2
         exit 1
       fi ;;
     refs/tags/*) : ;;
@@ -125,7 +135,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
 
   # </dev/null: this loop owns stdin (git's ref list) — a child must not eat it.
-  if [ "$scan" -eq 1 ] && [ -z "${ELDRUN_SKIP_PRIVACY_CHECK:-}" ]; then
+  if [ "$scan" -eq 1 ] && [ -z "$(app_var SKIP_PRIVACY_CHECK)" ]; then
     if ! (cd "$repo_root" && scripts/privacy-check.sh "$base" "$head_commit") </dev/null; then
       privacy_fail "$base"
     fi
@@ -156,21 +166,21 @@ new="$("$repo_root/scripts/bump-version.sh" patch)"
 # sweep up whatever else happens to be in the working tree.
 git -C "$repo_root" add -- \
   package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock
-# ELDRUN_VERSION_BUMP tells post-commit this is the push's own bump: its
+# TABTIVITY_VERSION_BUMP tells post-commit this is the push's own bump: its
 # phone-staleness advisory has nothing to do with pushing, and git routes a
 # hook's output to stderr, where it read as the push's error.
-ELDRUN_VERSION_BUMP=1 git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null
+TABTIVITY_VERSION_BUMP=1 git -C "$repo_root" commit -m "chore: bump version to v${new}" >/dev/null
 
-# Under Eldrun's preflight there is nothing to re-push with: the bump commit
-# is on the branch, Eldrun's own transport (hooks off, with the token this
+# Under Tabtivity's preflight there is nothing to re-push with: the bump commit
+# is on the branch, Tabtivity's own transport (hooks off, with the token this
 # sandbox never sees) carries it. Exit 0 = "go ahead".
-if [ -n "${ELDRUN_PUSH_PREFLIGHT:-}" ]; then
-  echo "pre-push: bumped version to v${new}; Eldrun's transport carries the bump." >&2
+if [ -n "$(app_var PUSH_PREFLIGHT)" ]; then
+  echo "pre-push: bumped version to v${new}; Tabtivity's transport carries the bump." >&2
   exit 0
 fi
 
 echo "pre-push: bumped version to v${new}; pushing with the bump included…" >&2
-ELDRUN_BUMPING=1 git push "$remote" HEAD
+TABTIVITY_BUMPING=1 git push "$remote" HEAD
 echo "pre-push: pushed v${new}. The 'failed to push' line below is the original" >&2
 echo "          pre-bump push being intentionally aborted — the push succeeded." >&2
 

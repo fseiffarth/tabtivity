@@ -1,4 +1,4 @@
-# Eldrun — Code Review
+# Tabtivity — Code Review
 
 Date: 2026-06-18
 Scope: full `src/` (React/TS) and `src-tauri/src/` (Rust) tree.
@@ -52,7 +52,7 @@ lexical-normalization step that collapses/rejects `..`) **before**
 
 ### 1.3 `import_project` "move" mode fails across filesystems — Medium
 `src-tauri/src/commands/projects.rs:580` uses `fs::rename(&source, &dest)`. When
-the source folder and `~/eldrun/projects/` live on different mounts (very common:
+the source folder and `~/tabtivity/projects/` live on different mounts (very common:
 `/home` vs an external/`/mnt` checkout) `rename` returns `EXDEV` and the import
 fails outright. `copy` mode already has a working `copy_dir_all`.
 Fix: on `rename` error fall back to `copy_dir_all` + `remove_dir_all(source)`.
@@ -188,8 +188,8 @@ the Settings UI captures it (`ProjectSwitcher.tsx:328`/`348`). But `grep` shows 
 token is **never** sent to any git command — it is dead aside from being a
 plaintext secret on disk. Either remove the field, or, if a feature is intended,
 store it in the OS keyring (e.g. `keyring` crate / `tauri-plugin-stronghold`)
-rather than a world-readable JSON file. (Note `.gitignore` covers `.eldrun/` but
-`settings.json` lives in `~/.local/share/eldrun/`, so it's not committed — the
+rather than a world-readable JSON file. (Note `.gitignore` covers `.tabtivity/` but
+`settings.json` lives in `~/.local/share/tabtivity/`, so it's not committed — the
 risk is local disk/backup exposure.)
 
 ### 4.3 `detect_mime` reads arbitrary absolute paths — Low (security)

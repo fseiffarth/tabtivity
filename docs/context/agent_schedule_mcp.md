@@ -10,11 +10,22 @@ The shared loopback listener dispatches `/mcp/schedule` separately from `/mcp`
 before reading request bodies. Only `Caller::Scheduler` tokens enter the former;
 they never enter the root tool registry. A token binds one project, tab and stable
 schedule target at spawn. Claude and Codex receive their existing per-invocation
-MCP flag recipes with the server name `eldrun-schedule`; opted-in Vibe models get
+MCP flag recipes with the server name `tabtivity-schedule`; opted-in Vibe models get
 their env configuration. Other CLIs get the inert URL/token env pair only.
 Remote hosts (including workers), VM and container projects receive no token.
 Local tmux launcher scripts omit schedule secrets just as they omit root secrets.
 Close, natural exit, failed spawn and session revocation invalidate the token.
+
+**Tabs the Mobile host starts with no window** (phone ＋, the scheduler's
+restart) get the same server from the host's own listener and token store
+(`docs/headless_mcp_plan.md`): each process serves the tabs it spawned, tokens
+stay in memory, and a token is refused by every other process's listener. The
+proposal lands in `agent_tasks.json` under the file lock like any other; the
+host pokes an open window (`refresh`, slice `schedules`), otherwise the card
+appears when a window loads the rows. Such a session is not in the window's
+MCP session access; it ends when the tab's tmux session is gone (the host's
+sweep) or the host stops. A host restart leaves the tab without the tools
+until it is restarted.
 
 The three tools are `schedule_prompt`, `list_my_schedules`, `cancel_schedule`.
 Arguments are strict, every schema field carries a description, and they contain

@@ -150,7 +150,7 @@ export const useOllamaActivityStore = create<OllamaActivityState>((set, get) => 
   setCheckResult: (checkResult) => set({ checkResult }),
   setVersion: (version) => set({ version }),
 
-  // Re-run on every open so an upgrade performed outside Eldrun shows up,
+  // Re-run on every open so an upgrade performed outside Tabtivity shows up,
   // instead of the version frozen at whenever it was first read. The earlier
   // check's `latest` is carried over, but its verdict is **dropped the moment
   // the installed version changes**: that is exactly the case where the user

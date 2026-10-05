@@ -11,6 +11,7 @@ import { FileIcon } from "../common/icons/FileIcon";
 import { InboxIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
+import { BRAND } from "../../lib/brand";
 
 /**
  * The side-panel Downloads section (fast-copy of freshly downloaded files into a
@@ -21,7 +22,7 @@ import { ErrorNote } from "../common/ErrorNote";
  * browsed folder with the per-row `→` button.
  *
  * It scans the machine-wide `download_sources` setting (default: the OS Downloads
- * dir), read-only — Eldrun never changes any browser's download path. The backend
+ * dir), read-only — Tabtivity never changes any browser's download path. The backend
  * `list_recent_downloads` command merges + recency-filters the folders; copying
  * reuses `import_external_file` (collision-safe). Local projects only: for a
  * remote project `import_external_file` can't reach the remote tree, so copy is
@@ -167,7 +168,7 @@ export function DownloadsSection({
     void useWindowsStore
       .getState()
       .openFile(entry.path, undefined, projectId, "downloads")
-      .catch((e) => console.error("[eldrun] open download preview:", e));
+      .catch((e) => console.error(`[${BRAND.slug}] open download preview:`, e));
   }
 
   // Pointer-based drag of a download row onto a tree folder above → copy it there.

@@ -1,5 +1,5 @@
 /**
- * Clearing a **stray OS fullscreen** off an Eldrun window — the state that makes
+ * Clearing a **stray OS fullscreen** off a Tabtivity window — the state that makes
  * a popout silently stop moving.
  *
  * A window the WM has put into `_NET_WM_STATE_FULLSCREEN` loses

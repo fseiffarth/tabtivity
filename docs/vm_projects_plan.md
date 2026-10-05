@@ -11,7 +11,7 @@ the Phase 1/2 live-QA loops are still owed.
 
 A third trust tier for projects, above the Docker container toggle: the whole
 project — files, shells, agent tabs, builds, test runs — lives inside a locally
-booted virtual machine, and Eldrun talks to it **exclusively over SSH/SFTP**,
+booted virtual machine, and Tabtivity talks to it **exclusively over SSH/SFTP**,
 exactly as it talks to any remote host. **Remote-only by default**: no host-side
 copy of the tree exists at all; browsing, viewing and diffing happen over SFTP
 (sub-ms on localhost). A git-lockstep mirror is the same per-project **opt-in**
@@ -29,7 +29,7 @@ The tier ladder this creates:
 ## The one architectural decision (everything follows from it)
 
 **A VM project IS a remote project.** Not a sibling stack. The VM boots, exposes
-SSH on a forwarded localhost port, and from that moment Eldrun sees an ordinary
+SSH on a forwarded localhost port, and from that moment Tabtivity sees an ordinary
 `RemoteSpec { host: "127.0.0.1", port: <forwarded>, remote_path, key_auth: true }`.
 Every existing mechanism then applies verbatim, already tested:
 
@@ -98,8 +98,8 @@ in-process (`services::iso9660`) where no mkisofs-class tool exists.
 ### State layout
 
 ```
-~/.local/share/eldrun/vm/
-  images/eldrun-base-<ver>.qcow2      # shared base image
+~/.local/share/tabtivity/vm/
+  images/tabtivity-base-<ver>.qcow2      # shared base image
   <project-id>/
     disk.qcow2                        # per-project overlay
     seed.iso                          # cloud-init NoCloud seed
@@ -129,7 +129,7 @@ Two-stage, to keep first-project latency sane:
 2. **Bake** (`vm_build_base`): boot it once headless with a provisioning
    cloud-init that installs the agent toolchain — git, build-essential,
    node/npm, the Claude/Gemini/Codex CLIs, tmux — then `system_powerdown` and
-   keep the result as `eldrun-base-<ver>.qcow2`. Surfaced as a **build tab**
+   keep the result as `tabtivity-base-<ver>.qcow2`. Surfaced as a **build tab**
    streaming progress, same UX as the sandbox's missing-image build. Re-bake
    on demand ("Update VM base image" in settings), never automatically.
 
@@ -183,7 +183,7 @@ three-valued:
   Only useful with a local model or for pure build/test isolation. Agent tabs
   are marked unavailable with the reason.
 - **Proxy** (default): slirp `restrict=on` **plus** a `guestfwd` channel to a
-  host-side allowlisting HTTP CONNECT proxy (small Rust task inside Eldrun,
+  host-side allowlisting HTTP CONNECT proxy (small Rust task inside Tabtivity,
   bound to localhost). Cloud-init sets `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`
   in the guest. Allowlist defaults to the agent API endpoints
   (`api.anthropic.com` etc.) + `github.com` (opt-in per project, off for

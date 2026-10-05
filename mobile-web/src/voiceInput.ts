@@ -81,23 +81,59 @@ export function speechRecognitionSupported(scope: Window = window): boolean {
   return speechRecognitionConstructor(scope) !== undefined;
 }
 
+/** How long the on-device check may take before dictation gives up on it and
+ * uses the phone's speech service. Chromium answers at once. */
+export const ON_DEVICE_CHECK_LIMIT_MS = 3_000;
+
 /**
- * Prefer Chromium's on-device dictation model. Older browsers, unsupported
- * languages, failed downloads, and policy/API errors safely retain the normal
- * browser recognition service instead of making voice input disappear.
+ * Whether this browser's on-device recognizer (`available`/`install`) is one
+ * to ask. Only Chromium's is: Safari on an iPad has the same methods, and its
+ * `available()` never settled — the dictate button sat on "Checking for
+ * on-device dictation…", disabled, for good. `userAgentData` is Chromium's
+ * alone, and every iOS browser is WebKit underneath.
+ */
+export function onDeviceSpeechAsked(
+  Recognition: MobileSpeechRecognitionConstructor,
+  scope: Window = window,
+): boolean {
+  return typeof Recognition.available === "function" && "userAgentData" in scope.navigator;
+}
+
+/** `promise`, or `fallback` once `ms` pass without it settling. */
+function settleWithin<T>(promise: Promise<T>, ms: number, fallback: T, scope: Window): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = scope.setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => { scope.clearTimeout(timer); resolve(value); },
+      (error: unknown) => { scope.clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/**
+ * Prefer Chromium's on-device dictation model. Other browsers, older ones,
+ * unsupported languages, a check that does not answer, failed downloads, and
+ * policy/API errors safely retain the normal browser recognition service
+ * instead of making voice input disappear.
  */
 export async function prepareOnDeviceSpeech(
   Recognition: MobileSpeechRecognitionConstructor,
   lang: string,
+  scope: Window = window,
 ): Promise<OnDeviceSpeechPreparation> {
-  if (!Recognition.available) return "remote";
+  if (!Recognition.available || !onDeviceSpeechAsked(Recognition, scope)) return "remote";
   const options: MobileSpeechRecognitionOptions = {
     langs: [lang],
     processLocally: true,
     quality: "dictation",
   };
   try {
-    const availability = await Recognition.available(options);
+    const availability = await settleWithin(
+      Recognition.available(options),
+      ON_DEVICE_CHECK_LIMIT_MS,
+      "unavailable" as const,
+      scope,
+    );
     if (availability === "available") return "local";
     if (availability === "unavailable" || !Recognition.install) return "remote";
     // A language-pack download can outlive the transient user activation that
@@ -232,6 +268,23 @@ export function settleDictation(progress: DictationProgress): DictationProgress 
 /** What "Heard:" quotes: the words since the last send or clear, then the live guess. */
 export function dictationPreview(progress: DictationProgress, interim: string): string {
   return [...progress.heard.slice(progress.shownFrom), ...(interim ? [interim] : [])].join(" ");
+}
+
+/** "go on", or German "los", said last sends the draft. Only after a word
+ * boundary, so "ziellos" or a "Los Angeles" mid-draft stays text. */
+const SPOKEN_SEND = /(^|[\s\p{P}])(go\s+on|los)[\s\p{P}]*$/iu;
+
+/**
+ * The draft without its spoken send, when it ends in one; `null` otherwise.
+ * German "was ist los" is a question, not a send, so a "los" right after
+ * "ist" stays in the draft.
+ */
+export function spokenSend(draft: string): string | null {
+  const match = SPOKEN_SEND.exec(draft);
+  if (!match) return null;
+  const before = draft.slice(0, match.index);
+  if (match[2].toLowerCase() === "los" && /(^|[\s\p{P}])ist$/iu.test(before.trimEnd())) return null;
+  return before.replace(/[\s,;:–-]+$/u, "");
 }
 
 /** Voice text is terminal input, so never forward terminal control bytes. */

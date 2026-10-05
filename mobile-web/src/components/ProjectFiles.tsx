@@ -1,68 +1,154 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import { ApiError, listProjectFiles, openOutside, viewerFileUrl, type OutboxFile, type ProjectFileEntry, type ProjectFileListing, type ViewerScope } from "../api";
+import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
+import { ApiError, listProjectFiles, searchProjectFiles, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type TabRow, type ViewerScope } from "../api";
+import { openFileTab, readFilesPlace, rememberFilesPlace } from "../filesPlace";
+import { shareAs, useOutboxShare } from "../outboxShare";
 import { sizeLabel } from "../terminal/fileLabels";
 import { installFocusSwipe } from "../terminal/focusSwipe";
-import { OutboxViewer } from "./OutboxViewer";
+import { OutboxViewer, type MarkupTarget } from "./OutboxViewer";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
 type Crumb = { token?: string; name: string };
 
 /** A listed file as the viewer takes it, fetched by its token. */
-function asViewerFile(entry: ProjectFileEntry): OutboxFile {
+export function asViewerFile(entry: ProjectFileEntry): OutboxFile {
   return { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token };
 }
 
-/** A listed time as the row prints it: the phone's own date and clock. */
-function stampLabel(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+/** A listed time as the row prints it, in the app's language and as
+ * short as it can be told apart: the clock for today, the day this year, the
+ * whole date before that. */
+function stampLabel(seconds: number, lang: Language, now = new Date()): string {
+  const when = new Date(seconds * 1000);
+  if (when.toDateString() === now.toDateString()) return when.toLocaleTimeString(lang, { timeStyle: "short" });
+  return when.toLocaleDateString(lang, when.getFullYear() === now.getFullYear()
+    ? { day: "numeric", month: "short" }
+    : { dateStyle: "medium" });
+}
+
+/** What a row's tile draws: a folder, a picture, a PDF, a text, or a file. */
+type Glyph = "dir" | "image" | "pdf" | "text" | "file";
+
+function glyphOf(kind: string): Glyph {
+  if (kind === "dir") return "dir";
+  if (kind.startsWith("image/")) return "image";
+  if (kind === "application/pdf") return "pdf";
+  return kind.startsWith("text/") ? "text" : "file";
+}
+
+const SHEET = "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5";
+const GLYPHS: Record<Glyph, ReactNode> = {
+  dir: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z" />,
+  image: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><circle cx="9" cy="10" r="1.6" /><path d="m20.5 15.5-4.5-4.5-9.5 8.5" /></>,
+  pdf: <><path d={SHEET} /><path d="M8.5 13.5h7M8.5 17h4.5" /></>,
+  text: <><path d={SHEET} /><path d="M8.5 12.5h7M8.5 15.5h7M8.5 18.5h4" /></>,
+  file: <path d={SHEET} />,
+};
+
+/** A row's tinted kind tile; the project screen's file cards wear it too. */
+export function FileGlyph({ kind }: { kind: string }) {
+  const glyph = glyphOf(kind);
+  return <span className={`files-icon files-icon-${glyph}`} aria-hidden="true"><svg viewBox="0 0 24 24">{GLYPHS[glyph]}</svg></span>;
+}
+
+/** The folder's rows as the desktop tree groups them: the rest first, then
+ * the project root's scaffold (README, AGENTS.md, …) and what git ignores,
+ * each folded into its own section. A scaffold file git ignores stays a
+ * scaffold file, as on the desktop. */
+function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean) {
+  const scaffold = atRoot ? entries.filter((entry) => STANDARD_PROJECT_FILES.has(entry.name)) : [];
+  const rest = atRoot ? entries.filter((entry) => !STANDARD_PROJECT_FILES.has(entry.name)) : entries;
+  return { regular: rest.filter((entry) => !entry.ignored), scaffold, ignored: rest.filter((entry) => entry.ignored) };
 }
 
 /** The line under a row's name: a file's size, then when it was created (where
  * the desktop's filesystem says) and last edited. */
-function rowMeta(entry: ProjectFileEntry, t: ReturnType<typeof useT>): string {
+function rowMeta(entry: ProjectFileEntry, t: ReturnType<typeof useT>, lang: Language): string {
   return [
     entry.kind !== "dir" ? sizeLabel(entry.size) : null,
-    entry.created ? t("mobile.files.created", { when: stampLabel(entry.created) }) : null,
-    entry.modified > 0 ? t("mobile.files.edited", { when: stampLabel(entry.modified) }) : null,
+    entry.created ? t("mobile.files.created", { when: stampLabel(entry.created, lang) }) : null,
+    entry.modified > 0 ? t("mobile.files.edited", { when: stampLabel(entry.modified, lang) }) : null,
   ].filter(Boolean).join(" · ");
 }
 
-/** The message for a listing the sidecar refused. */
-function failureKey(reason: unknown): TranslationKey {
+/** The message for a listing (or a search) the sidecar refused. */
+function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.error"): TranslationKey {
   if (reason instanceof ApiError) {
     if (reason.code === "files_off") return "mobile.files.off";
     if (reason.code === "file_not_found") return "mobile.files.gone";
   }
-  return "mobile.files.error";
+  return fallback;
 }
+
+/** How long typing rests before the search goes out. */
+const SEARCH_DEBOUNCE_MS = 250;
+/** The sidecar's bound on a query (`files::MAX_QUERY`, bytes). */
+const MAX_QUERY = 80;
 
 /**
  * The project's own tree, read-only (`files.rs`, #31bo): folders to walk into
  * and files to open — a picture, a PDF or a text — in the outbox's full-screen
- * viewer, with its Save and Share. The "what did the agent just write" glance
- * without a shell. Nothing here can change a file.
+ * viewer, with its Save and Share (a PDF then goes on to the browser's
+ * viewer). The "what did the agent just write" glance without a shell.
+ * Nothing here can change a file.
+ *
+ * A file the phone's share sheet takes carries ↗ Share on its row, as an
+ * outbox tile does: passing a file on to Signal or WhatsApp should not mean
+ * opening it first.
+ *
+ * The project root's scaffold files and everything git ignores sit in
+ * collapsed sections below the rest, as in the desktop's file tree.
  *
  * The phone never holds a path: each folder and file is a sealed token the
  * sidecar handed out, and the trail across the top is the tokens walked so far.
+ * The trail is remembered per project (`filesPlace.ts`), so the drawer opens
+ * again in the folder it was put away in — after a viewed file, a closed
+ * drawer or a reloaded app alike. A remembered folder that no longer lists
+ * steps back to the nearest one that does.
+ *
+ * The search box finds a file or folder anywhere in the project by name
+ * (`files/search`; what git ignores is not searched). Each hit carries the
+ * sealed folders above it, so opening one moves the drawer there: a folder is
+ * walked into, a file opens with the drawer standing in its folder — and the
+ * results are still there when the viewer closes.
  *
  * A drawer from the left edge: the project screen opens it on a left→right
  * swipe, and a right→left swipe over it (or a tap beside it) puts it away.
  */
-export function ProjectFiles({ projectId, label, onClose }: {
+export function ProjectFiles({ projectId, label, onClose, markup, showTab }: {
   projectId: string;
   /** The project's name, the trail's first crumb. */
   label: string;
   onClose: () => void;
+  /** An agent tab's drawer offers **Mark up** on its PDFs and pictures; the
+   * project screen's passes none (it has no chat). The drawer finds a
+   * file's newest version itself (`refresh`). */
+  markup?: Omit<MarkupTarget, "projectId" | "place" | "refresh">;
+  /** With no `markup`, Mark up's Submit opens a new agent tab, and the
+   * view's Open tab button shows it through this (`MarkupNewTab`). */
+  showTab?: (tab: TabRow) => void;
 }) {
   const t = useT();
-  const [trail, setTrail] = useState<Crumb[]>([{ name: label }]);
+  const lang = useI18nStore((state) => state.lang);
+  const [trail, setTrail] = useState<Crumb[]>(() => [{ name: label }, ...readFilesPlace(projectId)]);
+  /** Still standing on the remembered trail, not yet listed once: a folder
+   * that is gone (or a token a re-keyed host no longer opens) steps back. */
+  const restored = useRef(trail.length > 1);
   const [listing, setListing] = useState<ProjectFileListing | null>(null);
   const [failure, setFailure] = useState<TranslationKey | null>(null);
   const [fileOpen, setFileOpen] = useState<OutboxFile | null>(null);
+  // Both fold shut by default, and stay as set while the drawer is walked.
+  const [scaffoldOpen, setScaffoldOpen] = useState(false);
+  const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<ProjectFileSearch | null>(null);
+  const [searchFailure, setSearchFailure] = useState<TranslationKey | null>(null);
+  const searching = query.trim() !== "";
   const scope = useMemo<ViewerScope>(() => ({ files: projectId }), [projectId]);
+  const sharing = useOutboxShare(scope);
   const here = trail[trail.length - 1];
   const drawer = useRef<HTMLElement | null>(null);
 
@@ -71,16 +157,58 @@ export function ProjectFiles({ projectId, label, onClose }: {
     setListing(null);
     setFailure(null);
     void listProjectFiles(projectId, here.token, controller.signal).then(
-      (next) => { if (!controller.signal.aborted) setListing(next); },
-      (reason) => { if (!controller.signal.aborted) setFailure(failureKey(reason)); },
+      (next) => {
+        if (controller.signal.aborted) return;
+        restored.current = false;
+        setListing(next);
+      },
+      (reason) => {
+        if (controller.signal.aborted) return;
+        const key = failureKey(reason);
+        if (restored.current && here.token && key === "mobile.files.gone") {
+          setTrail((current) => current.slice(0, -1));
+          return;
+        }
+        setFailure(key);
+      },
     );
     return () => controller.abort();
   }, [projectId, here.token]);
 
-  /** The folder's pictures, which the viewer steps through in listing order. */
+  useEffect(() => {
+    // The last results stay up while the next search is out, so typing does
+    // not blank the list letter by letter.
+    const words = query.trim();
+    if (!words) {
+      setFound(null);
+      setSearchFailure(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void searchProjectFiles(projectId, words, controller.signal).then(
+        (next) => {
+          if (controller.signal.aborted) return;
+          setFound(next);
+          setSearchFailure(null);
+        },
+        (reason) => { if (!controller.signal.aborted) setSearchFailure(failureKey(reason, "mobile.files.searchError")); },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [projectId, query]);
+
+  useEffect(() => {
+    rememberFilesPlace(projectId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
+  }, [projectId, trail]);
+
+  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], trail.length === 1), [listing, trail.length]);
+
+  /** The folder's shown pictures, which the viewer steps through in row order. */
   const pictures = useMemo(
-    () => (listing?.entries ?? []).filter((entry) => entry.kind.startsWith("image/")).map(asViewerFile),
-    [listing],
+    () => [...sections.regular, ...(scaffoldOpen ? sections.scaffold : []), ...(ignoredOpen ? sections.ignored : [])]
+      .filter((entry) => entry.kind.startsWith("image/")).map(asViewerFile),
+    [sections, scaffoldOpen, ignoredOpen],
   );
 
   useEffect(() => {
@@ -88,11 +216,12 @@ export function ProjectFiles({ projectId, label, onClose }: {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (fileOpen) setFileOpen(null);
+      else if (searching) setQuery("");
       else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fileOpen, onClose]);
+  }, [fileOpen, searching, onClose]);
 
   useEffect(() => {
     // Remounted with the drawer after a file was viewed, hence `fileOpen`.
@@ -101,51 +230,127 @@ export function ProjectFiles({ projectId, label, onClose }: {
     return installFocusSwipe(host, { onSwipeRight: () => {}, onSwipeLeft: onClose });
   }, [fileOpen, onClose]);
 
-  const open = (entry: ProjectFileEntry) => {
+  /** Mark up's Reload: the open file's folder listed again, for its fresh
+   * token, size and time. The viewer keeps showing it — swapping `fileOpen`
+   * would remount the viewer (its key) and lose the markup's view. */
+  const refresh = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
+    const fresh = await listProjectFiles(projectId, here.token);
+    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    return entry ? asViewerFile(entry) : null;
+  }, [projectId, here.token]);
+
+  /** Opens a row of the folder at `at` (the trail as it stands, or as a
+   * search hit's sets it). */
+  const open = (entry: ProjectFileEntry, at: Crumb[] = trail) => {
     if (entry.kind === "dir") {
-      setTrail((current) => [...current, { token: entry.token, name: entry.name }]);
+      setTrail([...at, { token: entry.token, name: entry.name }]);
       return;
     }
-    const file = asViewerFile(entry);
-    // A PDF opens in the browser's own viewer, as it does from the outbox.
-    if (entry.kind === "application/pdf") void openOutside(viewerFileUrl(scope, file));
-    else setFileOpen(file);
+    // A PDF too: the browser's own PDF viewer has no Save or Share, so the
+    // viewer's head carries them and its Open button hands the file over.
+    // It also becomes a card among the project screen's tabs.
+    if (entry.kind === "application/pdf") {
+      const { token, name, kind, size, modified } = entry;
+      openFileTab(projectId, { token, name, kind, size, modified, folder: at[at.length - 1].token, place: at.slice(1).map((crumb) => crumb.name).join("/") });
+    }
+    setTrail(at);
+    setFileOpen(asViewerFile(entry));
+  };
+
+  /** A search hit: the drawer moves to its folder (Mark up's Reload and the
+   * picture steps read that folder), a folder hit ends the search there. */
+  const openHit = (hit: ProjectFileHit) => {
+    if (hit.kind === "dir") setQuery("");
+    open(hit, [trail[0], ...hit.trail]);
   };
 
   if (fileOpen) {
-    return <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} onStep={setFileOpen} onClose={() => setFileOpen(null)} />;
+    // The folder trail names the file's layer on the phone; its token cannot.
+    const place = trail.slice(1).map((crumb) => crumb.name).join("/");
+    return <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} onStep={setFileOpen} onClose={() => setFileOpen(null)}
+      markup={markup && { ...markup, projectId, place, refresh }} newTab={showTab && { projectId, place, refresh, show: showTab }} />;
   }
+  /** One file or folder: its tile, name and times, and ↗ Share for a file.
+   * A search hit names its folder above the times. */
+  function row(entry: ProjectFileEntry, folded = false, hit?: ProjectFileHit) {
+    const file = entry.kind === "dir" ? null : asViewerFile(entry);
+    const ready = sharing.ready === entry.name;
+    return <li key={entry.token} className={folded ? "files-folded" : undefined}>
+      <button onClick={() => hit ? openHit(hit) : open(entry)} aria-label={entry.kind === "dir" ? t("mobile.files.openFolder", { name: entry.name }) : t("mobile.files.openFile", { name: entry.name })}>
+        <FileGlyph kind={entry.kind} />
+        <span>
+          <strong>{entry.name}</strong>
+          {hit && <small className="files-hit-place">{hit.trail.length ? hit.trail.map((crumb) => crumb.name).join("/") : t("mobile.files.atRoot")}</small>}
+          <small>{rowMeta(entry, t, lang)}</small>
+        </span>
+        {entry.kind === "dir" && <svg className="files-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>}
+      </button>
+      {file && shareAs(file) && <button
+        className="files-share"
+        disabled={sharing.busy === entry.name}
+        onClick={() => void sharing.share(file)}
+        aria-label={t(ready ? "mobile.outbox.shareReadyFile" : "mobile.outbox.shareFile", { name: entry.name })}
+      ><span aria-hidden="true">↗</span>{ready && t("mobile.outbox.shareReady")}</button>}
+      {sharing.failed === entry.name && <p className="files-share-error" role="alert">{t("mobile.outbox.shareError")}</p>}
+    </li>;
+  }
+
+  /** A folded section: the desktop tree's divider, then its rows when open. */
+  function section(kind: "scaffold" | "ignored", isOpen: boolean, setOpen: (open: boolean) => void, entries: ProjectFileEntry[]) {
+    const scaffold = kind === "scaffold";
+    return <>
+      <li className="files-section">
+        <button aria-expanded={isOpen} onClick={() => setOpen(!isOpen)}
+          title={t(scaffold ? (isOpen ? "fileTree.collapseScaffold" : "fileTree.expandScaffold") : (isOpen ? "fileTree.collapseGitignored" : "fileTree.expandGitignored"))}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          <span>{t(scaffold ? "fileTree.scaffoldSection" : "fileTree.gitignoredSection", { count: entries.length })}</span>
+        </button>
+      </li>
+      {isOpen && entries.map((entry) => row(entry, !scaffold))}
+    </>;
+  }
+
   return <div className="sheet-backdrop files-drawer-backdrop" role="presentation" onClick={onClose}>
     <section ref={drawer} className="option-sheet project-files" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")} onClick={(event) => event.stopPropagation()}>
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.files.close")}>✕</button>
-        <h2>{t("mobile.files.title")} {isUntested("mobile.files.browse") && <small>{t("mobile.outbox.untested")}</small>}</h2>
-        <span className="sheet-close" aria-hidden="true" />
+        <button className="files-close" onClick={onClose} aria-label={t("mobile.files.close")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>
+        <h2>{t("mobile.files.title")} {(isUntested("mobile.files.browse") || isUntested("mobile.files.share") || isUntested("mobile.files.sections") || isUntested("mobile.files.remember") || isUntested("mobile.files.search")) && <small>{t("mobile.outbox.untested")}</small>}</h2>
+        <span className="files-close" aria-hidden="true" />
       </header>
-      <nav className="files-trail" aria-label={t("mobile.files.trail")}>
+      <input className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
+        placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
+        onChange={(event) => setQuery(event.target.value)} />
+      {!searching && <nav className="files-trail" aria-label={t("mobile.files.trail")}>
         {trail.map((crumb, index) => {
           const last = index === trail.length - 1;
           return <button key={`${index}:${crumb.token ?? ""}`} aria-current={last ? "location" : undefined} disabled={last}
             onClick={() => setTrail((current) => current.slice(0, index + 1))}>{crumb.name}</button>;
         })}
-      </nav>
+      </nav>}
       <p className="sheet-note">{t("mobile.files.readOnly")}</p>
-      {failure
+      {searching ? searchFailure
+        ? <p className="sheet-note error" role="alert">{t(searchFailure)}</p>
+        : !found
+          ? <p className="sheet-note">{t("mobile.files.searching")}</p>
+          : found.hits.length === 0
+            ? <p className="sheet-note">{t("mobile.files.noHits")}</p>
+            : <ul className="option-list files-list" aria-label={t("mobile.files.search")}>
+              {found.hits.map((hit) => row(hit, false, hit))}
+            </ul>
+      : failure
         ? <p className="sheet-note error" role="alert">{t(failure)}</p>
         : !listing
           ? <p className="sheet-note">{t("mobile.files.loading")}</p>
           : listing.entries.length === 0
             ? <p className="sheet-note">{t("mobile.files.empty")}</p>
-            : <ul className="option-list">{listing.entries.map((entry) => <li key={entry.token}>
-              <button onClick={() => open(entry)} aria-label={entry.kind === "dir" ? t("mobile.files.openFolder", { name: entry.name }) : t("mobile.files.openFile", { name: entry.name })}>
-                <span>
-                  <strong><span aria-hidden="true">{entry.kind === "dir" ? "📁 " : entry.kind.startsWith("image/") ? "🖼 " : "📄 "}</span>{entry.name}</strong>
-                  <small>{rowMeta(entry, t)}</small>
-                </span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-              </button>
-            </li>)}</ul>}
-      {listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
+            : <ul className="option-list files-list">
+              {sections.regular.map((entry) => row(entry))}
+              {sections.scaffold.length > 0 && section("scaffold", scaffoldOpen, setScaffoldOpen, sections.scaffold)}
+              {sections.ignored.length > 0 && section("ignored", ignoredOpen, setIgnoredOpen, sections.ignored)}
+            </ul>}
+      {searching
+        ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
+        : listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
     </section>
   </div>;
 }

@@ -59,7 +59,7 @@ export interface TrafficPoint {
 }
 
 interface Props {
-  /** Whose network this is, or `null` in the ROOT scope — the machine Eldrun
+  /** Whose network this is, or `null` in the ROOT scope — the machine Tabtivity
    *  runs on, with no project behind it. A root tab therefore has no remote
    *  half at all: no host to be careful of, no SSH link, no per-project usage
    *  totals — exactly the shape a LOCAL project already renders. */

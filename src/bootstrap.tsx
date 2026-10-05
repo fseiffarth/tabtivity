@@ -39,9 +39,9 @@ function devCommitRecorder(
 ): void {
   const perf = (
     window as unknown as {
-      __ELDRUN_PERF__?: { commit?: (ms: number, phase: string) => void };
+      __APP_PERF__?: { commit?: (ms: number, phase: string) => void };
     }
-  ).__ELDRUN_PERF__;
+  ).__APP_PERF__;
   perf?.commit?.(actualDuration, phase);
 }
 

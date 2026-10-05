@@ -582,14 +582,14 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
                 <>
                   <button onClick={() => runContextAction(() => createEntry("file"))}>{t("fileBrowser.newFile")}</button>
                   <button onClick={() => runContextAction(() => createEntry("folder"))}>{t("fileBrowser.newFolder")}</button>
-                  {/* Eldrun's own formats get their own caption: a `.eldeck.json`
+                  {/* Tabtivity's own formats get their own caption: a `.eldeck.json`
                       is not a file "New File" can make (it must be written with
                       real contents to parse), so it reads as a separate thing to
                       create rather than a variant of the generic one. */}
                   {deckEnabled && (
                     <div className="context-menu-group">
                       <div className="context-menu-group-label">
-                        {t("fileTree.eldrunNativeGroup")}
+                        {t("fileTree.appNativeGroup")}
                       </div>
                       <button
                         className="untested"

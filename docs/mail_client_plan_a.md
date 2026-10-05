@@ -1,6 +1,6 @@
-# Mail client in Eldrun — Plan A (host integration / architecture)
+# Mail client in Tabtivity — Plan A (host integration / architecture)
 
-Scope: how a native mail client plugs into Eldrun. IMAP/SMTP library choice and
+Scope: how a native mail client plugs into Tabtivity. IMAP/SMTP library choice and
 HTML sanitization are Plan B's (`docs/mail_client_plan_b.md`); this plan owns the
 tab surface, the backend surface, the sandbox/capability boundary, persistence,
 credentials, and the two-workstream split.
@@ -20,7 +20,7 @@ credentials, and the two-workstream split.
 
 ## 0. Constraints (restated, binding)
 
-- **Never launch Eldrun to verify.** The only gates an agent has are
+- **Never launch Tabtivity to verify.** The only gates an agent has are
   `npx tsc --noEmit` and `cargo test --manifest-path src-tauri/Cargo.toml`.
   Everything else is a request to the user.
 - Every new/unverified surface carries `<UntestedTag />`
@@ -55,7 +55,7 @@ Exact edit sites (all frontend; the Rust `TabEntry` needs **no** change —
 | # | File:line | Change |
 |---|---|---|
 | 1 | `src/stores/tabs.ts:46-57` | Add `\| "mail"` to the `TabKind` union. |
-| 2 | `src/stores/tabs.ts:164` | Add `export const MAIL_TAB_CMD = "__eldrun_mail__";` beside `CALENDAR_TAB_CMD`, with the same doc-comment shape (why it carries no PTY). |
+| 2 | `src/stores/tabs.ts:164` | Add `export const MAIL_TAB_CMD = "__tabtivity_mail__";` beside `CALENDAR_TAB_CMD`, with the same doc-comment shape (why it carries no PTY). |
 | 3 | `src/stores/tabs.ts:3677-3687` `cmdToKind` | `if (cmd === MAIL_TAB_CMD) return "mail";` — this is what recovers the kind from a bare persisted `cmd` on restore. |
 | 4 | `src/stores/tabs.ts:3702-3714` `isRestorableKind` | Add `kind === "mail"`. Policy fit: shell/files/network/monitor/diskusage/calendar always restore; agent tabs restore only when resumable (`isResumableAgentTab`) and embeds only when in-app viewers. Mail has **no live process and no session to lose** — it re-renders from its own store — so it belongs in the always-restore set. It must *not* auto-sync on restore (see §2 cancel/poll rules). |
 | 5 | `src/stores/tabs.ts:3718-3720` `isPtyTabKind` | **No change** — mail must never enter spawn/kill/activity paths. |
@@ -153,7 +153,7 @@ Therefore, non-negotiable:
 
 The requirement is: *only explicitly selected files cross the boundary*. Judge
 the three options on security delivered, cross-platform cost, and fit with what
-Eldrun has.
+Tabtivity has.
 
 ### (a) Reuse/extend the Docker project-container machinery
 
@@ -163,7 +163,7 @@ spec-fingerprint lifecycle, orphan sweep. But every one of its design axes is
 wrong for mail:
 
 - **Wrong scope and lifetime.** The container is *per project*, keyed
-  `eldrun-<project-id>`, created on project activation and destroyed on
+  `tabtivity-<project-id>`, created on project activation and destroyed on
   deactivate/exit (`docs/context/docker_containers.md`). Mail is a machine-level
   feature like the calendar, the VPN tunnel and global machines — it has no
   project. You would either invent a fake project (ugly, and it inherits
@@ -171,7 +171,7 @@ wrong for mail:
   second, differently-shaped container lifecycle, which is new machinery, not
   reuse.
 - **Wrong platform coverage.** Local projects only, **hidden on Windows**,
-  refused at spawn (`services/mod.rs:17-24`). Eldrun ships deb/appimage/nsis. A
+  refused at spawn (`services/mod.rs:17-24`). Tabtivity ships deb/appimage/nsis. A
   mail client that only exists on Linux-with-Docker is not a feature of the app.
 - **It requires Docker installed.** Optional for a per-project sandbox toggle;
   unacceptable as a hard prerequisite for reading mail.
@@ -189,7 +189,7 @@ Verdict: **no.** Not reuse; a parallel implementation wearing reuse's clothes.
 Real security value: bubblewrap or a `landlock` ruleset + `seccomp` filter around
 a helper that holds the socket and the MIME parser bounds the blast radius of a
 parser bug to a process with no filesystem beyond
-`~/.local/share/eldrun/mail/`. That is the textbook-correct answer for
+`~/.local/share/tabtivity/mail/`. That is the textbook-correct answer for
 "untrusted bytes from the internet".
 
 Costs, concretely for this repo:
@@ -282,12 +282,12 @@ adds a path here".
 
 ## 4. Persistence + settings
 
-Everything global, under the existing `~/.local/share/eldrun/` layout
+Everything global, under the existing `~/.local/share/tabtivity/` layout
 (`storage::state_dir()`), **never inside a project** — mail is machine-level like
 `calendar.json`, `boxes.json`, the VPN configs and the global machines:
 
 ```
-~/.local/share/eldrun/mail/
+~/.local/share/tabtivity/mail/
   accounts.json          # NO secrets: label, address, imap/smtp host+port+user+security,
                          # auth kind, save_password flag, signature, check interval
   mail.db                # SQLite (rusqlite, already a bundled dependency)
@@ -328,7 +328,7 @@ a second keychain path. It already solves every hazard mail is about to meet:
 - **New account key builder** beside `ssh_account` (`:42`) / `openvpn_account`
   (`:52`): `pub fn mail_account(proto: MailProto, user: &str, host: &str, port:
   u16) -> String` → `"mail:imap:user@host:port"` / `"mail:smtp:…"`, under the same
-  `SERVICE = "eldrun-remote"` (`:22`). Keyed by **server target, not account id**,
+  `SERVICE = "tabtivity-remote"` (`:22`). Keyed by **server target, not account id**,
   matching the SSH rule — one saved secret per login, whichever dialog saved it.
 - **Reads go through `get`** (`:164`), which is `read_timed`-bounded at 4 s
   (`:127`) and asks `cached_keyring_state()` before dispatching, so a locked
@@ -494,7 +494,7 @@ frozen contract, and the only integration step is deleting the fixture returns.
 |---|---|---|
 | 1 | Sandbox model | **(c)** in-process capability boundary + path-free command surface + sandboxed render iframe, with the `MailEngine` seam so **(b)** is a Phase-5 transport swap on Linux. Reject **(a)**. |
 | 2 | Store engine | SQLite (`rusqlite`, already bundled) for index + small bodies; content-addressed `blobs/` for large parts. Not maildir, not JSON. |
-| 3 | Where the store lives | Global `~/.local/share/eldrun/mail/`, never inside a project. |
+| 3 | Where the store lives | Global `~/.local/share/tabtivity/mail/`, never inside a project. |
 | 4 | Password persistence | Opt-in checkbox, **default OFF**; unsaved = in-memory for the session; keyed by server target via the existing `remote_credentials`. |
 | 5 | OAuth refresh token | Treated as a password (same opt-in, same default OFF) — so OAuth re-authorizes each session when off. Say so in the dialog. |
 | 6 | Body download policy | Headers-only sync; bodies on demand, cached with a size cap and a "Clear cached mail" button. |
@@ -505,7 +505,7 @@ frozen contract, and the only integration step is deleting the fixture returns.
 | 11 | Experimental gate | Ship Phases 1-2 behind an experimental `mail_client` flag (`src/lib/experimental.ts` — off for users, on in debug), flip it on when the user reports it live-verified. |
 | 12 | New-mail push | Polling on `mail_check_interval_min` (default 5) in Phase 2; IMAP IDLE deferred (a persistent thread per account is a separate lifecycle problem). |
 | 13 | Send failures | Phase 3 sends directly and surfaces a failure state; a retrying outbox queue is Phase 4. |
-| 14 | The `mail` global-app role | Leave `GLOBAL_APP_ROLES`' external-mail launcher (`GlobalAppBar.tsx:20`) alone; optionally add "Open Eldrun Mail" as an extra entry in its menu once the feature is verified. |
+| 14 | The `mail` global-app role | Leave `GLOBAL_APP_ROLES`' external-mail launcher (`GlobalAppBar.tsx:20`) alone; optionally add "Open Tabtivity Mail" as an extra entry in its menu once the feature is verified. |
 | 15 | Untested pills | On the new-tab entry, the account dialog and the compose dialog until the user confirms each; removed per-item, only on their explicit say-so. |
 
 ## Critical files for implementation

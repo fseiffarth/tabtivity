@@ -1,5 +1,5 @@
 //! Read-only browsing of a mobile project's tree (#31bo,
-//! `docs/eldrun_mobile_future_plan.md` §D): the "what did the agent just
+//! `docs/tabtivity_mobile_future_plan.md` §D): the "what did the agent just
 //! write" glance, without a shell.
 //!
 //! Paths never cross the browser API. Every folder and file the phone may ask
@@ -8,12 +8,13 @@
 //! — so a token is opaque to the phone and useless against another project.
 //! Tokens are not a permission: every request re-proves the path below the
 //! project root, with no link anywhere on the way, and the host-wide switch
-//! (`eldrun_mobile_host.project_files`, default off) is read per request.
+//! (`tabtivity_mobile_host.project_files`, default off) is read per request.
 //!
 //! Nothing here writes. A file is served exactly as the outbox serves one —
 //! typed by its bytes (`outbox::classify`), opened without following a link.
 
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Seek},
     path::{Path, PathBuf},
@@ -45,7 +46,7 @@ pub fn files_open(state_dir: &Path) -> bool {
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|settings| {
             settings
-                .get("eldrun_mobile_host")?
+                .get(crate::brand::MOBILE_HOST_KEY)?
                 .get("project_files")?
                 .as_bool()
         })
@@ -90,6 +91,10 @@ pub struct Entry {
     /// Unix seconds of the birth time; left out where the filesystem keeps none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created: Option<u64>,
+    /// Git ignores it — the desktop tree's collapsed "gitignored" section.
+    /// Left out when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -99,16 +104,23 @@ pub struct Listing {
 }
 
 /// Names the listing leaves out and no token may cross: git's internals, the
-/// project's own `.eldrun/` (its outbox has its own door), and `.env*`. A
+/// project's own `.tabtivity/` (its outbox has its own door), and `.env*`. A
 /// courtesy against a glance over a shoulder, not the boundary — that is the
 /// switch, since a phone with a shell can read anything anyway.
 pub fn hidden(name: &str) -> bool {
-    name == ".git" || name == ".eldrun" || name.starts_with(".env")
+    name == ".git" || crate::brand::is_project_dir(name) || name.starts_with(".env")
 }
 
 /// A leaf the browser lists and resolves. The same test both ways, so nothing
 /// is listed that could not be opened again.
 fn valid_segment(name: &str) -> bool {
+    plain_segment(name) && !hidden(name)
+}
+
+/// One name inside a held folder, hidden or not: never a path, never `.` or
+/// `..`. What every handle-relative open checks, so no caller can turn the
+/// single name into a walk (the drop boxes live under the hidden `.tabtivity`).
+fn plain_segment(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_NAME
         && name != "."
@@ -117,18 +129,19 @@ fn valid_segment(name: &str) -> bool {
         // A Windows name holding `\` is a path, and one holding `:` names an
         // alternate data stream of another file.
         && !(cfg!(windows) && name.contains(['\\', ':']))
-        && !hidden(name)
 }
 
 fn valid_rel(rel: &str) -> bool {
     rel.len() <= MAX_REL && (rel.is_empty() || rel.split('/').all(valid_segment))
 }
 
-fn token_key(host_key: &[u8]) -> [u8; 32] {
+/// The token key under a given salt: the current one, or the one an older
+/// build's host sealed with.
+fn token_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
     // Not `[0u8; 32]`: CodeQL reads that literal as the key itself, since it
     // doesn't see `expand` overwrite the buffer.
     let mut key: [u8; 32] = std::array::from_fn(|_| 0);
-    Hkdf::<Sha256>::new(Some(b"eldrun-mobile-files"), host_key)
+    Hkdf::<Sha256>::new(Some(salt.as_bytes()), host_key)
         .expand(b"path-token v1", &mut key)
         .expect("32 bytes is a valid HKDF-SHA256 length");
     key
@@ -136,9 +149,13 @@ fn token_key(host_key: &[u8]) -> [u8; 32] {
 
 /// Seals a project-relative path for the phone.
 pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> String {
+    seal_with(crate::brand::MOBILE_FILES_SALT, host_key, raw_id, rel)
+}
+
+fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> String {
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce).expect("the OS RNG must be available to seal a path");
-    let cipher = XChaCha20Poly1305::new((&token_key(host_key)).into());
+    let cipher = XChaCha20Poly1305::new((&token_key_with(salt, host_key)).into());
     let sealed = cipher
         .encrypt((&nonce).into(), Payload { msg: rel.as_bytes(), aad: raw_id.as_bytes() })
         .expect("XChaCha20-Poly1305 only fails on an impossibly long message");
@@ -151,6 +168,25 @@ pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> String {
 /// The relative path a token seals, if it was sealed for this project by this
 /// host and names a path the browser would list.
 pub fn unseal(host_key: &[u8], raw_id: &str, token: &str) -> Option<String> {
+    unseal_for(&crate::brand::PAIR, host_key, raw_id, token)
+}
+
+/// [`unseal`] for a brand pair: a token that does not open under the current
+/// salt is tried under the one an older build's host sealed with (counted as
+/// a legacy hit). A phone that kept a page open across the update still holds
+/// such tokens; new ones are only ever sealed under the current salt.
+pub(crate) fn unseal_for(pair: &crate::brand::Pair, host_key: &[u8], raw_id: &str, token: &str) -> Option<String> {
+    let salt = pair.cur(crate::brand::Name::MOBILE_FILES_SALT);
+    if let Some(rel) = unseal_with(&salt, host_key, raw_id, token) {
+        return Some(rel);
+    }
+    let old_salt = pair.legacy(crate::brand::Name::MOBILE_FILES_SALT)?;
+    let rel = unseal_with(&old_salt, host_key, raw_id, token)?;
+    crate::brand::legacy_hit("mobile-files-salt");
+    Some(rel)
+}
+
+fn unseal_with(salt: &str, host_key: &[u8], raw_id: &str, token: &str) -> Option<String> {
     if token.len() > 2 * MAX_REL {
         return None;
     }
@@ -160,7 +196,7 @@ pub fn unseal(host_key: &[u8], raw_id: &str, token: &str) -> Option<String> {
     }
     let (nonce, sealed) = bytes.split_at(NONCE_LEN);
     let nonce: [u8; NONCE_LEN] = nonce.try_into().ok()?;
-    let cipher = XChaCha20Poly1305::new((&token_key(host_key)).into());
+    let cipher = XChaCha20Poly1305::new((&token_key_with(salt, host_key)).into());
     let plain = cipher
         .decrypt((&nonce).into(), Payload { msg: sealed, aad: raw_id.as_bytes() })
         .ok()?;
@@ -183,23 +219,23 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// to the folder before it, and listing and opening a file start from this
 /// descriptor too. Nothing is resolved by path after a check, so a folder on
 /// the way swapped for a link mid-request changes nothing — the walk already
-/// holds the real one. Elsewhere it is the path, proven per request by
-/// canonicalizing (a swap between that proof and the open is not caught there).
+/// holds the real one. Windows uses the same boundary through native
+/// handle-relative opens and handle-based directory enumeration.
+///
+/// The phone's drop boxes (`outbox.rs`, `inbox.rs`) walk, list, read, create
+/// and delete through the same handles ([`ProjectDir::open_root`],
+/// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
+/// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]).
 #[cfg(unix)]
-struct ProjectDir(fs::File);
+pub(super) struct ProjectDir(fs::File);
 
 #[cfg(unix)]
 impl ProjectDir {
     fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
-        let root = canonical_root(root)?;
+        let mut dir = Self::open_root(root)?;
         if !valid_rel(rel) {
             return Err(FilesError::NotFound);
         }
-        let mut dir = fs::File::open(&root)
-            .ok()
-            .filter(|dir| dir.metadata().is_ok_and(|meta| meta.is_dir()))
-            .map(Self)
-            .ok_or(FilesError::Unavailable)?;
         if !rel.is_empty() {
             for name in rel.split('/') {
                 dir = dir.child_dir(name).ok_or(FilesError::NotFound)?;
@@ -208,30 +244,95 @@ impl ProjectDir {
         Ok(dir)
     }
 
+    /// The project root itself, held open — the one folder opened by path.
+    pub(super) fn open_root(root: &Path) -> Result<Self, FilesError> {
+        let root = canonical_root(root)?;
+        fs::File::open(&root)
+            .ok()
+            .filter(|dir| dir.metadata().is_ok_and(|meta| meta.is_dir()))
+            .map(Self)
+            .ok_or(FilesError::Unavailable)
+    }
+
     /// `name` in this folder, opened without following a link at it.
     fn open_at(&self, name: &str, directory: bool) -> Option<fs::File> {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        let name = std::ffi::CString::new(name).ok()?;
-        // Non-blocking, so a FIFO swapped in is refused below, not waited on.
         let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
         if directory {
             flags |= libc::O_DIRECTORY;
         }
+        // Non-blocking, so a FIFO swapped in is refused below, not waited on.
+        self.openat(name, flags, 0).ok()
+    }
+
+    /// `openat` relative to this folder, for one [`plain_segment`] name.
+    fn openat(&self, name: &str, flags: libc::c_int, mode: libc::c_uint) -> std::io::Result<fs::File> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
-        let fd = unsafe { libc::openat(self.0.as_raw_fd(), name.as_ptr(), flags) };
+        let fd = unsafe { libc::openat(self.0.as_raw_fd(), name.as_ptr(), flags, mode) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         // SAFETY: `fd` was just opened and nothing else owns it.
-        (fd >= 0).then(|| unsafe { fs::File::from_raw_fd(fd) })
+        Ok(unsafe { fs::File::from_raw_fd(fd) })
     }
 
     fn child_dir(&self, name: &str) -> Option<Self> {
         self.open_at(name, true).map(Self)
     }
 
+    /// The folder `name` in this one: `Ok(None)` when nothing has that name,
+    /// `Err(())` when something does but is not a plain folder (a link, a
+    /// file) — never followed either way.
+    pub(super) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        match self.openat(name, flags, 0) {
+            Ok(dir) => Ok(Some(Self(dir))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Creates the folder `name` here unless something already has that name
+    /// (`mkdirat` never follows a link at it). Open it with [`Self::lookup_dir`],
+    /// which refuses a link standing there.
+    pub(super) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c_name = segment_cstr(name)?;
+        // SAFETY: a live directory descriptor and a NUL-terminated name.
+        if unsafe { libc::mkdirat(self.0.as_raw_fd(), c_name.as_ptr(), 0o777) } == 0 {
+            return Ok(());
+        }
+        match std::io::Error::last_os_error() {
+            error if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            error => Err(error),
+        }
+    }
+
+    /// A new regular file `name` here, for writing: never an existing name
+    /// (`AlreadyExists`), never through a link (`O_EXCL` does not follow one).
+    pub(super) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
+        let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        self.openat(name, flags, 0o666)
+    }
+
+    /// Unlinks `name` in this folder — a link itself, never what it points at.
+    pub(super) fn remove_file(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c_name = segment_cstr(name)?;
+        // SAFETY: a live directory descriptor and a NUL-terminated name.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), c_name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
     fn child_dir_meta(&self, name: &str) -> Option<fs::Metadata> {
         self.child_dir(name)?.0.metadata().ok()
     }
 
-    fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
+    pub(super) fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
         let file = self.open_at(name, false)?;
         let meta = file.metadata().ok()?;
         meta.is_file().then_some((file, meta))
@@ -239,7 +340,7 @@ impl ProjectDir {
 
     /// The folders and regular files in this folder, named, `true` for a
     /// folder. Links and anything else are left out without being followed.
-    fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
+    pub(super) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
         use std::os::fd::AsRawFd;
         let os_error = || FilesError::Io(std::io::Error::last_os_error().to_string());
         // SAFETY: `fdopendir` takes ownership of a descriptor of its own.
@@ -288,7 +389,7 @@ impl ProjectDir {
     /// `fstatat` without following a link; `None` for anything else.
     fn kind_of(&self, name: &str) -> Option<bool> {
         use std::os::fd::AsRawFd;
-        let c_name = std::ffi::CString::new(name).ok()?;
+        let c_name = segment_cstr(name).ok()?;
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: a live directory descriptor, a NUL-terminated name, and room for the result.
         let found = unsafe {
@@ -307,55 +408,63 @@ impl ProjectDir {
     }
 }
 
-#[cfg(not(unix))]
-struct ProjectDir(PathBuf);
-
-#[cfg(not(unix))]
-impl ProjectDir {
-    /// `root` + `rel`, proven to be exactly that: canonicalizing it must change
-    /// nothing, so no link anywhere on the way (not just at the leaf) — and a
-    /// link swapped in after the listing is caught here, per request.
-    fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
-        let root = canonical_root(root)?;
-        if !valid_rel(rel) {
-            return Err(FilesError::NotFound);
-        }
-        let mut expected = root.clone();
-        if !rel.is_empty() {
-            expected.extend(rel.split('/'));
-        }
-        let canonical = expected.canonicalize().map_err(|_| FilesError::NotFound)?;
-        if canonical != expected || !canonical.starts_with(&root) || !canonical.is_dir() {
-            return Err(FilesError::NotFound);
-        }
-        Ok(Self(canonical))
-    }
-
-    fn child_dir_meta(&self, name: &str) -> Option<fs::Metadata> {
-        fs::symlink_metadata(self.0.join(name)).ok().filter(fs::Metadata::is_dir)
-    }
-
-    fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
-        outbox::open_regular(&self.0.join(name))
-    }
-
-    fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
-        let mut out = Vec::new();
-        for entry in fs::read_dir(&self.0).map_err(|e| FilesError::Io(e.to_string()))? {
-            let Ok(entry) = entry else { continue };
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
-            // `file_type` does not follow a link.
-            let Ok(kind) = entry.file_type() else { continue };
-            if kind.is_dir() || kind.is_file() {
-                out.push((name, kind.is_dir()));
-            }
-        }
-        Ok(out)
-    }
+/// One [`plain_segment`] as the C string `openat` and friends take; anything
+/// else is refused before a system call sees it.
+#[cfg(unix)]
+fn segment_cstr(name: &str) -> std::io::Result<std::ffi::CString> {
+    plain_segment(name)
+        .then(|| std::ffi::CString::new(name).ok())
+        .flatten()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))
 }
+
+#[cfg(windows)]
+#[path = "files_windows.rs"]
+mod windows;
+#[cfg(windows)]
+pub(super) use windows::ProjectDir;
 
 fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
+}
+
+/// Which of a folder's kept names git ignores, by one hardened `git
+/// check-ignore` over all of them — what puts a row in the phone's collapsed
+/// "gitignored" section, as on the desktop tree. A tracked file is never
+/// ignored (check-ignore reads the index), and a folder counts only when it is
+/// ignored itself, not when something inside it is. No repo, no git, or any
+/// other failure is no names: a display hint, never a gate.
+fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<String> {
+    if found.is_empty() {
+        return HashSet::new();
+    }
+    let mut input = Vec::new();
+    for (_, name) in found {
+        // `./` first, so a leaf like `:(top)x` is a name, not pathspec magic
+        // (which check-ignore refuses outright, failing the whole folder).
+        input.extend_from_slice(b"./");
+        input.extend_from_slice(child(rel, name).as_bytes());
+        input.push(0);
+    }
+    // Fed from a thread (git answers while it reads, so a full pipe either
+    // way would stall both ends), and bounded (#2349): a FIFO `.gitignore`
+    // must not hang the phone's listing.
+    let ran = crate::services::git_bounded::run(
+        &mut crate::commands::git::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"]),
+        crate::services::git_bounded::Opts { stdin: Some(input), ..Default::default() },
+    );
+    // Exit 0: some are ignored; 1: none; 128: not a repo, or git refused.
+    let Some(out) = ran.ok().map(|r| r.output).filter(|out| out.status.success()) else {
+        return HashSet::new();
+    };
+    let prefix = if rel.is_empty() { "./".to_string() } else { format!("./{rel}/") };
+    out.stdout
+        .split(|&byte| byte == 0)
+        .filter_map(|path| std::str::from_utf8(path).ok())
+        .filter_map(|path| path.trim_end_matches('/').strip_prefix(prefix.as_str()))
+        .filter(|name| !name.is_empty() && !name.contains('/'))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// One folder of the project, folders first, then by name. Links, sockets and
@@ -374,6 +483,7 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
     });
     let truncated = found.len() > MAX_ENTRIES;
     found.truncate(MAX_ENTRIES);
+    let ignored = ignored_names(root, rel, &found);
     let mut entries = Vec::with_capacity(found.len());
     for (is_dir, name) in found {
         // Swapped for a link or removed since the listing: not listed.
@@ -387,9 +497,27 @@ pub fn list(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Lis
         };
         let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
         let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
-        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name)), name, kind, size, modified, created });
+        let ignored = ignored.contains(&name);
+        entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name)), name, kind, size, modified, created, ignored });
     }
     Ok(Listing { entries, truncated })
+}
+
+/// One file of the project as its folder's listing would row it, or `None`
+/// when it is not a regular file reached with no link on the way (or names
+/// something the browser hides). What the phone needs to open a file it was
+/// not browsing to — the Focus banner of an agent's markup question.
+pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
+    if rel.is_empty() || !valid_rel(rel) {
+        return None;
+    }
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let dir = ProjectDir::open(root, parent).ok()?;
+    let (file, meta) = dir.open_file(name)?;
+    let (_file, meta, kind) = outbox::sniff_opened(file, meta)?;
+    let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
+    let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
+    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false })
 }
 
 /// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
@@ -416,11 +544,229 @@ pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesErro
     Ok((bytes, kind))
 }
 
+/// Whether `rel` names a regular file of the project, reached from the root
+/// one checked name at a time with no link on the way — what [`read`] would
+/// open, without reading it.
+pub fn exists(root: &Path, rel: &str) -> bool {
+    if rel.is_empty() || !valid_rel(rel) {
+        return false;
+    }
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    ProjectDir::open(root, parent).ok().and_then(|dir| dir.open_file(name)).is_some()
+}
+
+/// The most hits one search answers; `truncated` says there were more.
+pub const MAX_HITS: usize = 200;
+/// The longest query a search takes, in bytes — the project list's bound.
+pub const MAX_QUERY: usize = 80;
+/// How many paths a search weighs before it stops and says `truncated`: a
+/// walk of a tree git does not list has to end somewhere.
+const MAX_SCANNED: usize = 50_000;
+/// How much of `git ls-files` a search reads.
+const MAX_LISTING_BYTES: u64 = 16 * 1024 * 1024;
+
+/// One folder on a hit's way down from the project root, as the drawer's
+/// trail holds it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Crumb {
+    pub token: String,
+    pub name: String,
+}
+
+/// A file or folder whose name matched: its row as its folder's listing would
+/// give it, and the folders above it, so the drawer can stand where it is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Hit {
+    #[serde(flatten)]
+    pub entry: Entry,
+    /// From the root's first folder down to the hit's own; empty at the root.
+    pub trail: Vec<Crumb>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Found {
+    pub hits: Vec<Hit>,
+    pub truncated: bool,
+}
+
+/// How well a leaf matches the query's words, lower is better, or `None`
+/// when some word is not in it: the whole name (or the name before its
+/// extension), then a name starting with the first word, then anywhere.
+fn rank(name: &str, words: &[String]) -> Option<u8> {
+    let lower = name.to_lowercase();
+    if !words.iter().all(|word| lower.contains(word.as_str())) {
+        return None;
+    }
+    let whole = words.join(" ");
+    let stem = lower.rsplit_once('.').map_or(lower.as_str(), |(stem, _)| stem);
+    Some(if lower == whole || stem == whole {
+        0
+    } else if lower.starts_with(words[0].as_str()) {
+        1
+    } else {
+        2
+    })
+}
+
+/// What git lists under the root — tracked files and untracked ones it does
+/// not ignore — as project-relative paths, or `None` when the root is not in
+/// a repo, git fails, or lists nothing. The `bool` is whether the listing
+/// was cut at [`MAX_LISTING_BYTES`].
+fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
+    // Bounded (#2349): stopped at the cap, or at the timeout when a FIFO
+    // ignore file blocks it.
+    let ran = crate::services::git_bounded::run(
+        &mut crate::commands::git::hardened_git_command_in(
+            root,
+            &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        ),
+        crate::services::git_bounded::Opts { stdout_cap: Some(MAX_LISTING_BYTES), ..Default::default() },
+    )
+    .ok()?;
+    let (out, cut) = (ran.output.stdout, ran.cut);
+    if !cut && !ran.output.status.success() {
+        return None;
+    }
+    let mut paths: Vec<String> = out
+        .split(|&byte| byte == 0)
+        .filter_map(|path| std::str::from_utf8(path).ok())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect();
+    // A cut listing ends mid-path.
+    if cut {
+        paths.pop();
+    }
+    (!paths.is_empty()).then_some((paths, cut))
+}
+
+/// Every folder and file below the root, breadth first, the way the drawer
+/// would list them (no links, no hidden names), until [`MAX_SCANNED`]. The
+/// `bool` is whether it stopped there.
+fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> {
+    let mut found = Vec::new();
+    let mut folders = std::collections::VecDeque::from([String::new()]);
+    while let Some(rel) = folders.pop_front() {
+        // Gone or swapped for a link since its parent was read: left out.
+        let Ok(dir) = ProjectDir::open(root, &rel) else { continue };
+        for (name, is_dir) in dir.entries()? {
+            if !valid_segment(&name) {
+                continue;
+            }
+            if found.len() >= MAX_SCANNED {
+                return Ok((found, true));
+            }
+            let path = child(&rel, &name);
+            if is_dir {
+                folders.push_back(path.clone());
+            }
+            found.push((path, is_dir));
+        }
+    }
+    Ok((found, false))
+}
+
+/// A folder of the project as its parent's listing would row it.
+fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
+    if rel.is_empty() || !valid_rel(rel) {
+        return None;
+    }
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let meta = ProjectDir::open(root, parent).ok()?.child_dir_meta(name)?;
+    let modified = meta.modified().map(outbox::unix_secs).unwrap_or(0);
+    let created = meta.created().ok().map(outbox::unix_secs).filter(|&secs| secs > 0);
+    Some(Entry { token: seal(host_key, raw_id, rel), name: name.to_string(), kind: "dir", size: 0, modified, created, ignored: false })
+}
+
+/// The project's files and folders whose names hold every word of `query`
+/// (any case), best match first, then the shallower, then by path. In a git
+/// repo the names come from git — what it ignores (`target/`,
+/// `node_modules/`) is not searched — and anywhere else from a bounded walk.
+/// Each hit is proven again as [`entry`] proves a file, so a path git names
+/// through a link, or one that is hidden, is never answered.
+pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
+    canonical_root(root)?;
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Ok(Found { hits: Vec::new(), truncated: false });
+    }
+    let (candidates, mut truncated) = match git_paths(root) {
+        Some((paths, cut)) => {
+            let mut seen = HashSet::new();
+            let mut candidates = Vec::new();
+            for path in paths {
+                if !valid_rel(&path) {
+                    continue;
+                }
+                // The folders on the way are candidates too, each once.
+                let mut end = 0;
+                while let Some(slash) = path[end..].find('/') {
+                    end += slash;
+                    if seen.insert(path[..end].to_string()) {
+                        candidates.push((path[..end].to_string(), true));
+                    }
+                    end += 1;
+                }
+                candidates.push((path, false));
+            }
+            (candidates, cut)
+        }
+        None => walked_paths(root)?,
+    };
+    let mut matched: Vec<(u8, usize, String, bool)> = candidates
+        .into_iter()
+        .filter_map(|(rel, is_dir)| {
+            let leaf = rel.rsplit('/').next().unwrap_or(&rel);
+            let score = rank(leaf, &words)?;
+            Some((score, rel.matches('/').count(), rel, is_dir))
+        })
+        .collect();
+    matched.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then_with(|| a.2.to_lowercase().cmp(&b.2.to_lowercase())));
+    let mut hits = Vec::new();
+    for (_, _, rel, is_dir) in matched {
+        if hits.len() == MAX_HITS {
+            truncated = true;
+            break;
+        }
+        let proven = if is_dir { dir_entry(root, &rel, host_key, raw_id) } else { entry(root, &rel, host_key, raw_id) };
+        let Some(entry) = proven else { continue };
+        let mut trail = Vec::new();
+        let mut end = 0;
+        while let Some(slash) = rel[end..].find('/') {
+            let start = end;
+            end += slash;
+            trail.push(Crumb { token: seal(host_key, raw_id, &rel[..end]), name: rel[start..end].to_string() });
+            end += 1;
+        }
+        hits.push(Hit { entry, trail });
+    }
+    Ok(Found { hits, truncated })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const KEY: &[u8] = b"host-key-for-tests-0123456789abcdef";
+
+    /// A token sealed by an older build's host still opens after a rename
+    /// (and is counted); one sealed now opens without a second try; a token
+    /// for another project opens under neither salt.
+    #[test]
+    fn a_token_sealed_under_the_old_salt_still_opens() {
+        use crate::brand::Name;
+        use crate::services::brand_migration::{hits, testing::RENAMED};
+        let _ = hits::taken();
+        let old = seal_with(&crate::brand::LEGACY.name(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf");
+        assert_eq!(unseal_for(&RENAMED, KEY, "p1", &old).as_deref(), Some("docs/a.pdf"));
+        assert_eq!(hits::taken(), ["mobile-files-salt"]);
+        let new = seal_with(&RENAMED.cur(Name::MOBILE_FILES_SALT), KEY, "p1", "docs/a.pdf");
+        assert_eq!(unseal_for(&RENAMED, KEY, "p1", &new).as_deref(), Some("docs/a.pdf"));
+        assert_eq!(unseal_for(&RENAMED, KEY, "p2", &old), None);
+        assert!(hits::taken().is_empty());
+        // The production pair: what `seal` writes, `unseal` reads.
+        assert_eq!(unseal(KEY, "p1", &seal(KEY, "p1", "x/y.txt")).as_deref(), Some("x/y.txt"));
+    }
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-body";
 
     fn tree() -> tempfile::TempDir {
@@ -428,7 +774,7 @@ mod tests {
         let root = dir.path();
         fs::create_dir_all(root.join("src/deep")).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        fs::create_dir_all(root.join(".eldrun/outbox")).unwrap();
+        fs::create_dir_all(root.join(concat!(".", crate::app_slug!(), "/outbox"))).unwrap();
         fs::write(root.join("README.md"), "# Hello\n").unwrap();
         fs::write(root.join("b.txt"), "b").unwrap();
         fs::write(root.join("plot.png"), PNG).unwrap();
@@ -492,12 +838,50 @@ mod tests {
         let dir = tree();
         assert_eq!(read(dir.path(), "src/main.rs").unwrap(), (b"fn main() {}\n".to_vec(), "text/plain; charset=utf-8"));
         assert_eq!(read(dir.path(), "plot.png").unwrap().1, "image/png");
-        for refused in ["", "src", "missing.txt", ".env.local", ".git", ".eldrun/outbox", "../x", "src/../b.txt"] {
+        for refused in ["", "src", "missing.txt", ".env.local", ".git", concat!(".", crate::app_slug!(), "/outbox"), "../x", "src/../b.txt"] {
             assert!(read(dir.path(), refused).is_err(), "{refused}");
         }
         assert_eq!(list(dir.path(), "README.md", KEY, "p1"), Err(FilesError::NotFound));
         assert_eq!(list(dir.path(), ".git", KEY, "p1"), Err(FilesError::NotFound));
         assert_eq!(list(&dir.path().join("gone"), "", KEY, "p1"), Err(FilesError::Unavailable));
+    }
+
+    #[test]
+    fn rows_git_ignores_are_marked_and_tracked_ones_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("run.log"), "x").unwrap();
+        fs::write(root.join("kept.log"), "x").unwrap();
+        fs::write(root.join(":(top)odd.log"), "x").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("src/trace.log"), "x").unwrap();
+        git(&["add", "-f", "kept.log"]);
+        let ignored = |listing: &Listing| -> Vec<String> {
+            listing.entries.iter().filter(|e| e.ignored).map(|e| e.name.clone()).collect()
+        };
+        let top = list(root, "", KEY, "p1").unwrap();
+        assert_eq!(ignored(&top), ["target", ":(top)odd.log", "run.log"], "a tracked match is not ignored");
+        // `src` holds an ignored file but is not ignored itself.
+        assert!(!top.entries.iter().find(|e| e.name == "src").unwrap().ignored);
+        assert_eq!(ignored(&list(root, "src", KEY, "p1").unwrap()), ["trace.log"]);
+        let json = serde_json::to_value(top.entries.iter().find(|e| e.name == "target").unwrap()).unwrap();
+        assert_eq!(json["ignored"], true);
+        let plain = top.entries.iter().find(|e| e.name == "src").unwrap();
+        assert!(serde_json::to_value(plain).unwrap().get("ignored").is_none(), "false is left out");
+    }
+
+    #[test]
+    fn outside_a_repo_nothing_is_ignored() {
+        let dir = tree();
+        assert!(list(dir.path(), "", KEY, "p1").unwrap().entries.iter().all(|e| !e.ignored));
     }
 
     #[test]
@@ -581,14 +965,185 @@ mod tests {
         assert_eq!(read(dir.path(), "src/main.rs"), Err(FilesError::NotFound));
     }
 
+    // Junctions need neither Administrator rights nor Developer Mode. These
+    // tests run on Windows CI and must fail if creating the fixture fails.
+    #[cfg(windows)]
+    fn junction(target: &Path, link: &Path) {
+        use std::os::windows::process::CommandExt;
+        let output = std::process::Command::new("cmd")
+            .arg("/D")
+            .raw_arg(format!("/C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "mklink: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctions_are_not_listed_or_traversed_even_when_they_point_inside() {
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), "private").unwrap();
+        junction(outside.path(), &dir.path().join("away"));
+        junction(&dir.path().join("src"), &dir.path().join("alias"));
+        junction(outside.path(), &dir.path().join("src/deep/escape"));
+
+        let listing = list(dir.path(), "", KEY, "p1").unwrap();
+        assert!(!names(&listing).contains(&"away"));
+        assert!(!names(&listing).contains(&"alias"));
+        assert!(!names(&list(dir.path(), "src/deep", KEY, "p1").unwrap()).contains(&"escape"));
+        for path in ["away/secret.txt", "alias/main.rs", "src/deep/escape/secret.txt", "away"] {
+            assert_eq!(read(dir.path(), path), Err(FilesError::NotFound), "{path}");
+        }
+        assert_eq!(list(dir.path(), "away", KEY, "p1"), Err(FilesError::NotFound));
+        assert_eq!(list(dir.path(), "alias", KEY, "p1"), Err(FilesError::NotFound));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handle_enumeration_continues_across_batches_and_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        // These native directory records total more than the 64 KiB buffer.
+        let count = 800;
+        for i in 0..count {
+            fs::write(dir.path().join(format!("entry-{i:04}-{}", "x".repeat(100))), "ok").unwrap();
+        }
+        let held = ProjectDir::open(dir.path(), "").unwrap();
+        for _ in 0..2 {
+            let entries = held.entries().unwrap();
+            assert_eq!(entries.len(), count);
+            assert_eq!(entries.iter().map(|(name, _)| name).collect::<std::collections::HashSet<_>>().len(), count);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_concurrent_parent_junction_replacement_cannot_redirect_a_held_walk() {
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(outside.path().join("deep")).unwrap();
+        fs::write(outside.path().join("main.rs"), "private").unwrap();
+        fs::write(outside.path().join("leak.txt"), "private").unwrap();
+        fs::write(outside.path().join("deep/notes.txt"), "private").unwrap();
+
+        // Precisely schedule the attacker between acquiring the parent and
+        // opening/listing its children: the original path implementation
+        // would leak both the file bytes and the outside listing here.
+        let held = ProjectDir::open(dir.path(), "src").unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                fs::rename(dir.path().join("src"), dir.path().join("src-moved")).unwrap();
+                junction(outside.path(), &dir.path().join("src"));
+            }).join().unwrap();
+
+            let (mut file, _) = held.open_file("main.rs").unwrap();
+            let mut text = String::new();
+            file.read_to_string(&mut text).unwrap();
+            assert_eq!(text, "fn main() {}\n");
+            let entries = held.entries().unwrap();
+            assert!(entries.iter().any(|(name, _)| name == "deep"));
+            assert!(!entries.iter().any(|(name, _)| name == "leak.txt"));
+            assert!(held.child_dir_meta("deep").is_some());
+            // A second step of a walk also uses the held parent handle.
+            let deep = held.child_dir("deep").unwrap();
+            let (mut file, _) = deep.open_file("notes.txt").unwrap();
+            text.clear();
+            file.read_to_string(&mut text).unwrap();
+            assert_eq!(text, "deep");
+        });
+        assert_eq!(read(dir.path(), "src/main.rs"), Err(FilesError::NotFound));
+        assert_eq!(list(dir.path(), "src", KEY, "p1"), Err(FilesError::NotFound));
+    }
+
+    fn hit_paths(found: &Found) -> Vec<String> {
+        found.hits.iter().map(|hit| rel_of(&hit.entry, "p1")).collect()
+    }
+
+    #[test]
+    fn a_search_outside_a_repo_walks_and_ranks_the_closest_names_first() {
+        let dir = tree();
+        fs::write(dir.path().join("src/deep/main_notes.md"), "x").unwrap();
+        let found = search(dir.path(), "MAIN", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&found), ["src/main.rs", "src/deep/main_notes.md"], "the stem match first");
+        assert!(!found.truncated);
+        let main = &found.hits[0];
+        assert_eq!((main.entry.name.as_str(), main.entry.kind), ("main.rs", "text/plain; charset=utf-8"));
+        let trail: Vec<(&str, String)> = main.trail.iter().map(|crumb| (crumb.name.as_str(), unseal(KEY, "p1", &crumb.token).unwrap())).collect();
+        assert_eq!(trail, [("src", "src".to_string())]);
+        let deep = search(dir.path(), "notes deep", KEY, "p1").unwrap();
+        assert!(deep.hits.is_empty(), "every word must be in the name itself");
+        let folder = search(dir.path(), "dee", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&folder), ["src/deep"]);
+        assert_eq!(folder.hits[0].entry.kind, "dir");
+        assert_eq!(folder.hits[0].trail.iter().map(|crumb| crumb.name.as_str()).collect::<Vec<_>>(), ["src"]);
+        for hidden in ["env", "outbox", "config"] {
+            assert!(search(dir.path(), hidden, KEY, "p1").unwrap().hits.is_empty(), "{hidden}");
+        }
+        assert!(search(dir.path(), "  ", KEY, "p1").unwrap().hits.is_empty());
+        assert_eq!(search(&dir.path().join("gone"), "x", KEY, "p1"), Err(FilesError::Unavailable));
+    }
+
+    #[test]
+    fn a_search_in_a_repo_skips_what_git_ignores_and_finds_untracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        fs::create_dir_all(root.join("target/report")).unwrap();
+        fs::create_dir_all(root.join("docs/report")).unwrap();
+        fs::write(root.join("target/report/report.txt"), "x").unwrap();
+        fs::write(root.join("docs/report/report.txt"), "x").unwrap();
+        fs::write(root.join("report.md"), "x").unwrap();
+        git(&["add", "report.md"]);
+        let found = search(root, "report", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&found), ["report.md", "docs/report", "docs/report/report.txt"], "target/ is ignored");
+        // A project folder below the repo's top searches only itself.
+        let docs = search(&root.join("docs"), "report", KEY, "p1").unwrap();
+        assert_eq!(hit_paths(&docs), ["report", "report/report.txt"]);
+    }
+
+    #[test]
+    fn a_search_answers_at_most_max_hits_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..(MAX_HITS + 2) {
+            fs::write(dir.path().join(format!("hit{i:04}.txt")), "x").unwrap();
+        }
+        let found = search(dir.path(), "hit", KEY, "p1").unwrap();
+        assert_eq!(found.hits.len(), MAX_HITS);
+        assert!(found.truncated);
+        assert_eq!(found.hits[0].entry.name, "hit0000.txt");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_search_never_answers_through_a_link() {
+        let dir = tree();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), "private").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("away")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), dir.path().join("secret-link.txt")).unwrap();
+        assert!(search(dir.path(), "secret", KEY, "p1").unwrap().hits.is_empty());
+        assert!(search(dir.path(), "away", KEY, "p1").unwrap().hits.is_empty());
+        // Nor when git names the link: it tracks a link as a path of its own.
+        let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(dir.path()).output().unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        assert!(search(dir.path(), "secret", KEY, "p1").unwrap().hits.is_empty());
+        assert!(search(dir.path(), "away", KEY, "p1").unwrap().hits.is_empty());
+    }
+
     #[test]
     fn the_switch_is_off_unless_the_settings_turn_it_on() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!files_open(dir.path()));
         let write = |value: Value| fs::write(dir.path().join("settings.json"), value.to_string()).unwrap();
-        write(serde_json::json!({ "eldrun_mobile_host": { "enabled": true } }));
+        write(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true } }));
         assert!(!files_open(dir.path()));
-        write(serde_json::json!({ "eldrun_mobile_host": { "enabled": true, "project_files": true } }));
+        write(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }));
         assert!(files_open(dir.path()));
         fs::write(dir.path().join("settings.json"), "{ not json").unwrap();
         assert!(!files_open(dir.path()));

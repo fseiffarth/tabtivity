@@ -21,6 +21,7 @@ open_apps.json
 project.json
 .eldrun_colors.json
 .eldrun/
+.tabtivity/
 *.migrated
 
 # Exempt test fixtures from the above exclusions
@@ -52,8 +53,11 @@ src-tauri/WixTools/
 
 # Machine-list exports (contain real hostnames)
 eldrun-machines.json
+tabtivity-machines.json
 eldrun-screenshots/
+tabtivity-screenshots/
 eldrun-emails/
+tabtivity-emails/
 screenshots/
 emails/
 .aider*

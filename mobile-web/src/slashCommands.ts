@@ -15,7 +15,11 @@
 // does not have. Kept beside the drafts (`drafts.ts`) and like them never sent
 // across the bridge.
 
-const KEY = "eldrun.mobile.slashCommands";
+import { agentDraftPrefixes, agentFamily } from "../../shared/agentComposer";
+import { storageKey } from "../../src/lib/brand";
+import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
+
+const KEY = storageKey("mobile.slashCommands");
 
 /** Lines kept per CLI; past it the oldest goes. */
 const MAX_PER_CLI = 30;
@@ -37,7 +41,10 @@ interface StoredLine {
 interface CatalogEntry {
   /** The command, slash included. */
   command: string;
-  description: string;
+  /** What the menu says it does, in the phone's language. */
+  description: TranslationKey;
+  /** Placeholders `description` fills in (the CLI's name). */
+  vars?: Record<string, string>;
   /** The command reads an argument, so picking it leaves a space after it. */
   args?: boolean;
 }
@@ -52,29 +59,10 @@ export interface SlashSuggestion {
   args: boolean;
 }
 
-/** Which CLI a tab runs, as the store keys it. The families are matched on the
- * tab's agent label the way the rest of the composer matches them; any other
- * label keys by its first word, so a CLI with no catalog here still keeps its
- * own commands apart from every other one's. */
-const FAMILIES: [RegExp, string][] = [
-  [/claude/iu, "claude"],
-  [/codex/iu, "codex"],
-  [/gemini/iu, "gemini"],
-  [/qwen/iu, "qwen"],
-  [/opencode/iu, "opencode"],
-  [/aider/iu, "aider"],
-  [/kimi/iu, "kimi"],
-  [/copilot/iu, "copilot"],
-  [/cursor/iu, "cursor"],
-  [/antigravity/iu, "antigravity"],
-  // The new-tab menu labels Mistral's `vibe` "Mistral".
-  [/mistral|\bvibe\b/iu, "vibe"],
-];
-
+/** Which CLI a tab runs, as the store keys it (`agentFamily`, shared with the
+ * desktop's steering keys). */
 export function slashCli(agentLabel: string): string {
-  for (const [pattern, key] of FAMILIES) if (pattern.test(agentLabel)) return key;
-  const word = agentLabel.trim().toLowerCase().split(/\s+/u)[0]?.replace(/[^\p{L}\p{N}_-]/gu, "");
-  return word || "agent";
+  return agentFamily(agentLabel);
 }
 
 /** Only commands each CLI documents; anything unsure is left for the reader's
@@ -82,125 +70,114 @@ export function slashCli(agentLabel: string): string {
  * than no row at all. */
 const CATALOG: Record<string, CatalogEntry[]> = {
   claude: [
-    { command: "/clear", description: "Start a new conversation" },
-    { command: "/compact", description: "Summarize the conversation to free context", args: true },
-    { command: "/context", description: "Show what fills the context window" },
-    { command: "/model", description: "Choose the model", args: true },
-    { command: "/plan", description: "Plan first, without editing", args: true },
-    { command: "/goal", description: "Keep working until a goal is met", args: true },
-    { command: "/usage", description: "Plan usage and limits" },
-    { command: "/cost", description: "Tokens and cost of this session" },
-    { command: "/resume", description: "Resume an earlier conversation" },
-    { command: "/rewind", description: "Go back to an earlier point" },
-    { command: "/review", description: "Review a pull request", args: true },
-    { command: "/init", description: "Write a CLAUDE.md for this project" },
-    { command: "/memory", description: "Edit the memory files" },
-    { command: "/mcp", description: "MCP servers" },
-    { command: "/agents", description: "Subagents" },
-    { command: "/permissions", description: "Tool permission rules" },
-    { command: "/status", description: "Version, model, account" },
-    { command: "/login", description: "Sign in or switch accounts" },
-    { command: "/logout", description: "Sign out" },
-    { command: "/config", description: "Settings" },
-    { command: "/export", description: "Export the conversation", args: true },
-    { command: "/add-dir", description: "Add a working directory", args: true },
-    { command: "/doctor", description: "Check the installation" },
-    { command: "/help", description: "List the commands" },
+    { command: "/clear", description: "mobile.slash.cmd.newConversation" },
+    { command: "/compact", description: "mobile.slash.cmd.compact", args: true },
+    { command: "/context", description: "mobile.slash.cmd.context" },
+    { command: "/model", description: "mobile.slash.cmd.model", args: true },
+    { command: "/plan", description: "mobile.slash.cmd.plan", args: true },
+    { command: "/goal", description: "mobile.slash.cmd.goal", args: true },
+    { command: "/usage", description: "mobile.slash.cmd.usage" },
+    { command: "/cost", description: "mobile.slash.cmd.cost" },
+    { command: "/resume", description: "mobile.slash.cmd.resume" },
+    { command: "/rewind", description: "mobile.slash.cmd.rewind" },
+    { command: "/review", description: "mobile.slash.cmd.reviewPr", args: true },
+    { command: "/init", description: "mobile.slash.cmd.initClaude" },
+    { command: "/memory", description: "mobile.slash.cmd.memoryEdit" },
+    { command: "/mcp", description: "mobile.slash.cmd.mcpServers" },
+    { command: "/agents", description: "mobile.slash.cmd.subagents" },
+    { command: "/permissions", description: "mobile.slash.cmd.permissions" },
+    { command: "/status", description: "mobile.slash.cmd.status" },
+    { command: "/login", description: "mobile.slash.cmd.login" },
+    { command: "/logout", description: "mobile.slash.cmd.logout" },
+    { command: "/config", description: "mobile.slash.cmd.settings" },
+    { command: "/export", description: "mobile.slash.cmd.export", args: true },
+    { command: "/add-dir", description: "mobile.slash.cmd.addDir", args: true },
+    { command: "/doctor", description: "mobile.slash.cmd.doctor" },
+    { command: "/help", description: "mobile.slash.cmd.help" },
   ],
   codex: [
-    { command: "/clear", description: "Start a new conversation" },
-    { command: "/new", description: "New conversation, in a checkout or worktree" },
-    { command: "/compact", description: "Summarize the conversation to free context" },
-    { command: "/model", description: "Choose the model and reasoning effort" },
-    { command: "/plan", description: "Plan first, without editing", args: true },
-    { command: "/goal", description: "Keep working until a goal is met", args: true },
-    { command: "/approvals", description: "What runs without asking" },
-    { command: "/review", description: "Review the working tree" },
-    { command: "/diff", description: "Show the git diff" },
-    { command: "/status", description: "Session configuration and token usage" },
-    { command: "/mention", description: "Mention a file", args: true },
-    { command: "/resume", description: "Resume an earlier conversation" },
-    { command: "/init", description: "Write an AGENTS.md for this project" },
-    { command: "/mcp", description: "MCP tools" },
-    { command: "/quit", description: "Exit Codex" },
+    { command: "/clear", description: "mobile.slash.cmd.newConversation" },
+    { command: "/new", description: "mobile.slash.cmd.newCheckout" },
+    { command: "/compact", description: "mobile.slash.cmd.compact" },
+    { command: "/model", description: "mobile.slash.cmd.modelEffort" },
+    { command: "/plan", description: "mobile.slash.cmd.plan", args: true },
+    { command: "/goal", description: "mobile.slash.cmd.goal", args: true },
+    { command: "/approvals", description: "mobile.slash.cmd.approvals" },
+    { command: "/review", description: "mobile.slash.cmd.reviewTree" },
+    { command: "/diff", description: "mobile.slash.cmd.diff" },
+    { command: "/status", description: "mobile.slash.cmd.sessionConfig" },
+    { command: "/mention", description: "mobile.slash.cmd.mention", args: true },
+    { command: "/resume", description: "mobile.slash.cmd.resume" },
+    { command: "/init", description: "mobile.slash.cmd.initAgents" },
+    { command: "/mcp", description: "mobile.slash.cmd.mcpTools" },
+    { command: "/quit", description: "mobile.slash.cmd.exit", vars: { name: "Codex" } },
   ],
   gemini: [
-    { command: "/clear", description: "Clear the screen and conversation" },
-    { command: "/compress", description: "Summarize the conversation to free context" },
-    { command: "/model", description: "Choose the model" },
-    { command: "/plan", description: "Plan first, without editing", args: true },
-    { command: "/stats", description: "Session statistics" },
-    { command: "/memory", description: "Show, add or refresh memory", args: true },
-    { command: "/chat", description: "Save, resume or list conversations", args: true },
-    { command: "/restore", description: "Restore files to a checkpoint", args: true },
-    { command: "/tools", description: "Available tools" },
-    { command: "/mcp", description: "MCP servers" },
-    { command: "/directory", description: "Workspace directories", args: true },
-    { command: "/init", description: "Write a GEMINI.md for this project" },
-    { command: "/settings", description: "Settings" },
-    { command: "/auth", description: "Sign in or change how you sign in" },
-    { command: "/help", description: "List the commands" },
-    { command: "/quit", description: "Exit Gemini CLI" },
+    { command: "/clear", description: "mobile.slash.cmd.clearScreen" },
+    { command: "/compress", description: "mobile.slash.cmd.compact" },
+    { command: "/model", description: "mobile.slash.cmd.model" },
+    { command: "/plan", description: "mobile.slash.cmd.plan", args: true },
+    { command: "/stats", description: "mobile.slash.cmd.stats" },
+    { command: "/memory", description: "mobile.slash.cmd.memoryShow", args: true },
+    { command: "/chat", description: "mobile.slash.cmd.chat", args: true },
+    { command: "/restore", description: "mobile.slash.cmd.restore", args: true },
+    { command: "/tools", description: "mobile.slash.cmd.tools" },
+    { command: "/mcp", description: "mobile.slash.cmd.mcpServers" },
+    { command: "/directory", description: "mobile.slash.cmd.directory", args: true },
+    { command: "/init", description: "mobile.slash.cmd.initGemini" },
+    { command: "/settings", description: "mobile.slash.cmd.settings" },
+    { command: "/auth", description: "mobile.slash.cmd.auth" },
+    { command: "/help", description: "mobile.slash.cmd.help" },
+    { command: "/quit", description: "mobile.slash.cmd.exit", vars: { name: "Gemini CLI" } },
   ],
   qwen: [
-    { command: "/clear", description: "Clear the screen and conversation" },
-    { command: "/compress", description: "Summarize the conversation to free context" },
-    { command: "/stats", description: "Session statistics" },
-    { command: "/memory", description: "Show, add or refresh memory", args: true },
-    { command: "/tools", description: "Available tools" },
-    { command: "/mcp", description: "MCP servers" },
-    { command: "/init", description: "Write a QWEN.md for this project" },
-    { command: "/auth", description: "Sign in or change how you sign in" },
-    { command: "/help", description: "List the commands" },
-    { command: "/quit", description: "Exit Qwen Code" },
+    { command: "/clear", description: "mobile.slash.cmd.clearScreen" },
+    { command: "/compress", description: "mobile.slash.cmd.compact" },
+    { command: "/stats", description: "mobile.slash.cmd.stats" },
+    { command: "/memory", description: "mobile.slash.cmd.memoryShow", args: true },
+    { command: "/tools", description: "mobile.slash.cmd.tools" },
+    { command: "/mcp", description: "mobile.slash.cmd.mcpServers" },
+    { command: "/init", description: "mobile.slash.cmd.initQwen" },
+    { command: "/auth", description: "mobile.slash.cmd.auth" },
+    { command: "/help", description: "mobile.slash.cmd.help" },
+    { command: "/quit", description: "mobile.slash.cmd.exit", vars: { name: "Qwen Code" } },
   ],
   opencode: [
-    { command: "/new", description: "Start a new session" },
-    { command: "/compact", description: "Summarize the session to free context" },
-    { command: "/models", description: "Choose the model" },
-    { command: "/sessions", description: "Switch session" },
-    { command: "/undo", description: "Undo the last message and its changes" },
-    { command: "/redo", description: "Redo what was undone" },
-    { command: "/share", description: "Share the session" },
-    { command: "/init", description: "Write an AGENTS.md for this project" },
-    { command: "/help", description: "List the commands" },
-    { command: "/exit", description: "Exit OpenCode" },
+    { command: "/new", description: "mobile.slash.cmd.newSession" },
+    { command: "/compact", description: "mobile.slash.cmd.compactSession" },
+    { command: "/models", description: "mobile.slash.cmd.model" },
+    { command: "/sessions", description: "mobile.slash.cmd.sessions" },
+    { command: "/undo", description: "mobile.slash.cmd.undo" },
+    { command: "/redo", description: "mobile.slash.cmd.redo" },
+    { command: "/share", description: "mobile.slash.cmd.share" },
+    { command: "/init", description: "mobile.slash.cmd.initAgents" },
+    { command: "/help", description: "mobile.slash.cmd.help" },
+    { command: "/exit", description: "mobile.slash.cmd.exit", vars: { name: "OpenCode" } },
   ],
   aider: [
-    { command: "/add", description: "Add files to the chat", args: true },
-    { command: "/drop", description: "Drop files from the chat", args: true },
-    { command: "/ls", description: "Files in the chat and the repo" },
-    { command: "/ask", description: "Ask without editing", args: true },
-    { command: "/code", description: "Ask for edits", args: true },
-    { command: "/architect", description: "Plan with the architect model", args: true },
-    { command: "/run", description: "Run a shell command", args: true },
-    { command: "/test", description: "Run a test command", args: true },
-    { command: "/undo", description: "Undo the last aider commit" },
-    { command: "/diff", description: "Diff since the last message" },
-    { command: "/commit", description: "Commit edits made outside aider", args: true },
-    { command: "/model", description: "Switch the main model", args: true },
-    { command: "/tokens", description: "Context token usage" },
-    { command: "/clear", description: "Clear the chat history" },
-    { command: "/reset", description: "Drop all files and clear the history" },
-    { command: "/help", description: "List the commands" },
+    { command: "/add", description: "mobile.slash.cmd.add", args: true },
+    { command: "/drop", description: "mobile.slash.cmd.drop", args: true },
+    { command: "/ls", description: "mobile.slash.cmd.ls" },
+    { command: "/ask", description: "mobile.slash.cmd.ask", args: true },
+    { command: "/code", description: "mobile.slash.cmd.code", args: true },
+    { command: "/architect", description: "mobile.slash.cmd.architect", args: true },
+    { command: "/run", description: "mobile.slash.cmd.run", args: true },
+    { command: "/test", description: "mobile.slash.cmd.test", args: true },
+    { command: "/undo", description: "mobile.slash.cmd.undoAider" },
+    { command: "/diff", description: "mobile.slash.cmd.diffAider" },
+    { command: "/commit", description: "mobile.slash.cmd.commitAider", args: true },
+    { command: "/model", description: "mobile.slash.cmd.switchModel", args: true },
+    { command: "/tokens", description: "mobile.slash.cmd.tokens" },
+    { command: "/clear", description: "mobile.slash.cmd.clearHistory" },
+    { command: "/reset", description: "mobile.slash.cmd.reset" },
+    { command: "/help", description: "mobile.slash.cmd.help" },
   ],
 };
 
-/** The commands the composer bar offers as chips beside ＋: each one leads the
- * draft with the reader's own words after it. Each CLI gets only the ones it
- * documents (checked 2026-09-27); a CLI with neither shows no chips. */
-const DRAFT_PREFIXES: Record<string, readonly string[]> = {
-  claude: ["/plan", "/goal"],
-  codex: ["/plan", "/goal"],
-  antigravity: ["/plan", "/goal"],
-  gemini: ["/plan"],
-  copilot: ["/plan"],
-  cursor: ["/plan"],
-  kimi: ["/plan"],
-};
-
+/** The commands the composer bar offers as chips beside ＋ (`agentDraftPrefixes`,
+ * shared with the desktop's steering keys). */
 export function draftPrefixes(cli: string): readonly string[] {
-  return DRAFT_PREFIXES[cli] ?? [];
+  return agentDraftPrefixes(cli);
 }
 
 /** The draft's leading command when it is one of `commands`, else null. */
@@ -221,6 +198,26 @@ export function toggleDraftPrefix(draft: string, command: string, commands: read
 /** The built-in list for a CLI, empty for one without. */
 export function slashCatalog(cli: string): readonly CatalogEntry[] {
   return CATALOG[cli] ?? [];
+}
+
+/**
+ * The command a bare `/prefix` runs once the CLI's own popup completes it at
+ * Enter (`/clea` → `/clear`): the one command — built in, or sent to this CLI
+ * before — whose name starts with it. The draft itself when it is a whole
+ * command or not a bare `/word`; null when no known command, or more than one,
+ * continues it — the popup's pick is then not known here.
+ */
+export function completedSlashCommand(draft: string, cli: string, used: readonly string[]): string | null {
+  const typed = draft.trim();
+  if (!/^\/[\w-]+$/u.test(typed)) return typed;
+  const prefix = typed.toLowerCase();
+  const names = new Set([
+    ...slashCatalog(cli).map((entry) => entry.command),
+    ...used.map((line) => line.split(" ")[0].toLowerCase()),
+  ]);
+  if (names.has(prefix)) return typed;
+  const matches = [...names].filter((name) => name.startsWith(prefix));
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
@@ -309,9 +306,14 @@ export function slashSuggestions(draft: string, cli: string, used: readonly stri
   const query = typed.toLowerCase();
   const exact = typed.trimEnd().toLowerCase();
   const catalog = slashCatalog(cli);
+  // Read in the language live now: the menu is worked out afresh as the
+  // draft changes, and the desktop's slash menu calls this too.
+  const lang = useI18nStore.getState().lang;
+  const text = (entry: CatalogEntry) => translate(lang, entry.description, entry.vars);
   const describe = (line: string) => {
     const command = line.split(" ")[0].toLowerCase();
-    return catalog.find((entry) => entry.command === command)?.description;
+    const entry = catalog.find((known) => known.command === command);
+    return entry && text(entry);
   };
   const out: SlashSuggestion[] = [];
   const seen = new Set<string>();
@@ -325,13 +327,13 @@ export function slashSuggestions(draft: string, cli: string, used: readonly stri
     if (line.toLowerCase().startsWith(query)) add({ line, description: describe(line), used: true, args: false });
   }
   for (const entry of catalog) {
-    if (entry.command.startsWith(query)) add({ line: entry.command, description: entry.description, used: false, args: !!entry.args });
+    if (entry.command.startsWith(query)) add({ line: entry.command, description: text(entry), used: false, args: !!entry.args });
   }
   // One letter inside a name matches half the list; the fallback waits for two.
   const bare = query.slice(1);
   if (bare.length >= 2 && !/\s/u.test(bare)) {
     for (const entry of catalog) {
-      if (entry.command.includes(bare)) add({ line: entry.command, description: entry.description, used: false, args: !!entry.args });
+      if (entry.command.includes(bare)) add({ line: entry.command, description: text(entry), used: false, args: !!entry.args });
     }
   }
   return out.slice(0, limit);

@@ -6,8 +6,9 @@ import {
   agentInputWrites,
   bracketsAgentMessage,
 } from "../../../mobile-web/src/terminal/composer";
+import { BRAND } from "../../lib/brand";
 
-describe("Eldrun Mobile agent composer writes", () => {
+describe(`${BRAND.display} Mobile agent composer writes`, () => {
   it("keeps the line reset, the text and the submit in separate writes", () => {
     expect(agentInputWrites("fix the mobile terminal")).toEqual([
       AGENT_LINE_RESET,

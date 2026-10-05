@@ -7,7 +7,7 @@ import { useRemoteStatusStore, type ConnState } from "../remoteStatus";
  *
  * A tunnel is not a property of a project, however much the Connect dialog makes
  * it look like one. `openvpn` runs elevated (`pkexec openvpn --config …`) and
- * Eldrun passes it no routing flags, so whatever the `.ovpn` pushes — typically
+ * Tabtivity passes it no routing flags, so whatever the `.ovpn` pushes — typically
  * `redirect-gateway def1` plus DNS — applies to the *whole computer*, for as long
  * as the tunnel is up, no matter which project asked for it. Three facts follow,
  * and this store exists for all of them:
@@ -174,7 +174,7 @@ function onTunnelDropped(config: string): void {
 }
 
 /** True when at least one tunnel is up or coming up — i.e. the machine's routing
- *  is (or is about to be) Eldrun's doing. */
+ *  is (or is about to be) Tabtivity's doing. */
 export function anyVpnLive(byConfig: Record<string, ConnState>): boolean {
   return Object.values(byConfig).some((s) => s === "connected" || s === "connecting");
 }
@@ -274,12 +274,12 @@ export function disconnectVpnTunnel(config: string): void {
  *
  * The backend also disconnects all tunnels in its `RunEvent::Exit` handler, but that
  * fires only *after* the webview window has been destroyed, so the elevated
- * `pkexec kill` raised its polkit password prompt against a screen where Eldrun had
+ * `pkexec kill` raised its polkit password prompt against a screen where Tabtivity had
  * already vanished — password *after* close, the wrong order. `openvpn_disconnect_all_on_quit`
  * tears down the **same registered set** that exit-time handler would (not the liveness-
  * filtered `openvpn_active` subset, which could skip a tunnel that then prompts at exit),
  * surfaces a refused prompt as an error, and keeps the tunnel registered — so this runs
- * to completion, prompt and all, while Eldrun is still visible.
+ * to completion, prompt and all, while Tabtivity is still visible.
  */
 export async function disconnectAllTunnelsOnQuit(): Promise<boolean> {
   return invoke("openvpn_disconnect_all_on_quit")

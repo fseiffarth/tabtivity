@@ -1,7 +1,7 @@
 /**
  * Locks the "you asked them N things" heuristic.
  *
- * Eldrun only sees the bytes going into an agent's PTY, so a submitted prompt is
+ * Tabtivity only sees the bytes going into an agent's PTY, so a submitted prompt is
  * inferred: Enter pressed with content typed since the last Enter. The cases that
  * matter are the ones that must NOT count — arrow keys (escape sequences whose
  * payload bytes are printable), Ctrl-C, and a bare Enter on an empty line — and

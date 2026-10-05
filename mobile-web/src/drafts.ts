@@ -10,7 +10,9 @@
 // two agent tabs each hold their own half-finished thought, and a draft must
 // never surface in the session it was not meant for.
 
-const KEY = "eldrun.mobile.drafts";
+import { storageKey } from "../../src/lib/brand";
+
+const KEY = storageKey("mobile.drafts");
 
 /** How many tabs' drafts are kept. A phone opens a lot of sessions over a
  * month and every one of them would otherwise keep its last words forever;

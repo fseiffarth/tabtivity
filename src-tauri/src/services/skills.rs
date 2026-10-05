@@ -1,7 +1,7 @@
 //! Skills Library (`docs/skills_plan.md`) — fetch + catalog, no manifest, no
 //! versioning. A "source" is a git repo (Anthropic's own `anthropics/skills` by
 //! default, or any other collection the user points at); its clone is cached
-//! under `~/.local/share/eldrun/skills_cache/<id>/` and walked on demand for
+//! under `~/.local/share/tabtivity/skills_cache/<id>/` and walked on demand for
 //! `**/SKILL.md` folders. Install is a plain recursive copy into a target's
 //! `.claude/skills/<name>/` — the tree itself is the only record of what is
 //! installed, matching how `CLAUDE.md`/`AGENTS.md` scaffolding already works.
@@ -132,7 +132,7 @@ pub fn remove_source(id: String) -> Result<(), String> {
 /// into its cache dir. Reuses `commands::git`'s hardened clone plumbing rather
 /// than adding an HTTP client; the pull path mirrors its no-prompt env so a
 /// private repo that lost access fails instead of hanging on a credential
-/// prompt Eldrun has no console to answer.
+/// prompt Tabtivity has no console to answer.
 pub fn refresh_source(id: &str) -> Result<(), String> {
     let sources = list_sources();
     let source = sources

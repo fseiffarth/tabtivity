@@ -50,7 +50,7 @@ pub fn ssh_tooling_status() -> SshTooling {
     }
 }
 
-/// What the fingerprint-confirmation dialog shows for a host Eldrun has never
+/// What the fingerprint-confirmation dialog shows for a host Tabtivity has never
 /// connected to. `scan` is the raw known_hosts text behind `keys` and is handed
 /// straight back to [`ssh_trust_host_key`], so what gets stored is exactly what
 /// was shown — a re-scan at accept time would leave a window for a different key.
@@ -469,7 +469,7 @@ fn run_one_secret_attempt(
 /// `[user@]host[:port]`, sharing the multiplexing master the mount/check paths
 /// reuse. Returned for the frontend to type into a root-scope shell tab when
 /// headless connections are off, so the password is entered in the visible
-/// terminal and never handled by Eldrun (see `ssh_exec::interactive_login_command`).
+/// terminal and never handled by Tabtivity (see `ssh_exec::interactive_login_command`).
 #[tauri::command]
 pub fn remote_login_command(
     user: Option<String>,
@@ -622,7 +622,7 @@ pub async fn remote_saved_password_state(
 /// platform secret store — on Linux a D-Bus round-trip to the Secret Service,
 /// which is unbounded: it is slow while the daemon starts, and it blocks
 /// *indefinitely* while the keyring is locked, because the unlock prompt has to be
-/// answered first. Answering it needs the compositor, and Eldrun's window is
+/// answered first. Answering it needs the compositor, and Tabtivity's window is
 /// frozen mid-frame at that point. Auto-connect is what makes this a launch
 /// problem rather than a rare one: it asks this question once per host, for the
 /// primary and every opted-in worker, on every launch and every activation — so a
@@ -822,7 +822,7 @@ fn close_control_master(_user: &Option<String>, _host: &str, _port: Option<u16>)
 /// browser has no caller but a dialog somebody is typing into — the new/import
 /// project flow, extend-to-remote, the add-worker form, the HPC pipeline wizard.
 /// Leaving it background made a tagged machine impossible to *add*, which turns
-/// the tag from a protection into a trap: the point is that Eldrun never reaches
+/// the tag from a protection into a trap: the point is that Tabtivity never reaches
 /// a cluster on its own, not that the user cannot.
 #[tauri::command]
 pub async fn ssh_default_dir(

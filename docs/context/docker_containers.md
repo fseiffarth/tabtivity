@@ -4,7 +4,7 @@ Referenced from `AGENTS.md`.
 
 **A project can run in a container** (#38, `services::sandbox`): with the pill's "Run this project in a
 container" toggle on, every shell/agent tab `docker exec`s into ONE
-session-lived, capability-dropped container (`eldrun-<id>`); `local_agent`
+session-lived, capability-dropped container (`tabtivity-<id>`); `local_agent`
 tabs stay on the host. The project dir stays on the host, bind-mounted at its
 **identical absolute path** — file tree/git/viewers/usage watcher keep reading
 host bytes, and agent resume keeps working — which is what makes it a toggle,
@@ -74,7 +74,7 @@ project reaches the store, so activation already warms the right container.
 
 **Claude transcripts are the one cross-project mount**, and the rule is *read
 every project, write only our own*. `~/.claude/projects` is keyed by encoded
-cwd, not by Eldrun project, so it is mounted **per entry, explicitly**: this
+cwd, not by Tabtivity project, so it is mounted **per entry, explicitly**: this
 project's transcript dirs rw, **every other project's `:ro`**. Reading another
 project's history is allowed; rewriting one is not — the rewritten log is what
 an *uncontained* future session reads back as its own history. Membership comes

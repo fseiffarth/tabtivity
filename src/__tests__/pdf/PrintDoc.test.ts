@@ -37,6 +37,7 @@ import {
   deletePages,
   type PageList,
 } from "../../lib/viewers/pageModel";
+import { storageKey } from "../../lib/brand";
 
 const withOpts = (patch: Partial<PrintOptions>): PrintOptions => ({
   ...DEFAULT_PRINT_OPTIONS,
@@ -185,14 +186,14 @@ describe("sheet geometry", () => {
     // transform does not change the layout box, so a turned page is centred out
     // of flow and pre-constrained to the swapped printable box.
     const css = buildOptionsCss(withOpts({ paper: "A4", margin: "none" }), true);
-    expect(css).toContain(".print-page.eldrun-rot-90>img,.print-page.eldrun-rot-270>img");
+    expect(css).toContain(".print-page.app-rot-90>img,.print-page.app-rot-270>img");
     // Read off the sheet in container units: a box stated in centimetres would
     // overflow the engine's page box exactly as the cm-sized sheet did.
     expect(css).toContain("max-width:100cqh;max-height:100cqw");
     expect(css).toContain("container-type:size");
     expect(css).toContain("rotate(90deg)");
     expect(css).toContain("rotate(270deg)");
-    expect(css).toContain(".print-page.eldrun-rot-180>img{transform:rotate(180deg)}");
+    expect(css).toContain(".print-page.app-rot-180>img{transform:rotate(180deg)}");
   });
 
 });
@@ -245,7 +246,7 @@ describe("buildOptionsCss", () => {
 
   it("always hides deselected pages via the shared class", () => {
     expect(buildOptionsCss(DEFAULT_PRINT_OPTIONS)).toContain(
-      ".eldrun-print-hidden{display:none!important}",
+      ".app-print-hidden{display:none!important}",
     );
   });
 });
@@ -382,9 +383,9 @@ describe("loadPrintOptions", () => {
   });
 
   it("falls back to the kind's own defaults on junk", () => {
-    localStorage.setItem("eldrun.print.options.page", "{not json");
+    localStorage.setItem(storageKey("print.options.page"), "{not json");
     expect(loadPrintOptions("page").margin).toBe("none");
-    localStorage.setItem("eldrun.print.options.page", JSON.stringify({ margin: "huge" }));
+    localStorage.setItem(storageKey("print.options.page"), JSON.stringify({ margin: "huge" }));
     expect(loadPrintOptions("page").margin).toBe("none");
     expect(sanitizePrintOptions({}, PAGED_PRINT_OPTIONS).margin).toBe("none");
   });

@@ -20,6 +20,7 @@ import {
 } from "../../lib/terminal/tmuxSession";
 import { useTabsStore } from "../../stores/tabs";
 import type { RemoteSpec } from "../../types";
+import { BRAND, NAMES } from "../../lib/brand";
 
 const remote = (over: Partial<RemoteSpec> = {}): RemoteSpec => ({
   host: "gpu.example",
@@ -30,25 +31,25 @@ const remote = (over: Partial<RemoteSpec> = {}): RemoteSpec => ({
 describe("newTmuxSessionName", () => {
   it("mints a tmux-safe (uuid-based) name — no `:`/`.` that tmux treats specially", () => {
     const name = newTmuxSessionName("p1");
-    expect(name.startsWith("eldrun-")).toBe(true);
+    expect(name.startsWith(NAMES.tmuxPrefix)).toBe(true);
     expect(name).not.toMatch(/[:.\s]/);
     // Distinct per call, so each shell tab owns its own host session.
     expect(newTmuxSessionName("p1")).not.toBe(name);
   });
 
   it("embeds the owning scope so the Sessions view can filter by project", () => {
-    expect(newTmuxSessionName("proj-1")).toMatch(/^eldrun-proj-1--/);
+    expect(newTmuxSessionName("proj-1")).toMatch(new RegExp(String.raw`^${BRAND.slug}-proj-1--`));
     // A scope with tmux-unsafe characters is sanitized, never dropped or thrown.
-    expect(newTmuxSessionName("weird:scope.id")).toMatch(/^eldrun-weird_scope_id--/);
+    expect(newTmuxSessionName("weird:scope.id")).toMatch(new RegExp(String.raw`^${BRAND.slug}-weird_scope_id--`));
   });
 
   it("embeds the tab kind AFTER the scope separator so the project prefix is untouched", () => {
-    // The kind token sits at the front of the uuid half, so the `eldrun-<scope>--`
+    // The kind token sits at the front of the uuid half, so the `tabtivity-<scope>--`
     // prefix the Sessions view filters by is exactly as it was before the token.
-    expect(newTmuxSessionName("p1", "agent")).toMatch(/^eldrun-p1--agent-/);
-    expect(newTmuxSessionName("p1", "shell")).toMatch(/^eldrun-p1--shell-/);
+    expect(newTmuxSessionName("p1", "agent")).toMatch(new RegExp(String.raw`^${BRAND.slug}-p1--agent-`));
+    expect(newTmuxSessionName("p1", "shell")).toMatch(new RegExp(String.raw`^${BRAND.slug}-p1--shell-`));
     // Defaults to shell (the common case; both mint sites narrow the tab kind).
-    expect(newTmuxSessionName("p1")).toMatch(/^eldrun-p1--shell-/);
+    expect(newTmuxSessionName("p1")).toMatch(new RegExp(String.raw`^${BRAND.slug}-p1--shell-`));
   });
 });
 
@@ -61,13 +62,13 @@ describe("sessionKindFromName — the Sessions view's per-machine grouping", () 
   it("classifies as `other` anything with no recognizable token", () => {
     // A legacy name minted before the token existed: a bare uuid after the `--`.
     // Hex can never begin with `agent`/`shell`, so it never misclassifies.
-    expect(sessionKindFromName("eldrun-p1--fe80abcd-1234-5678-9abc-def012345678")).toBe("other");
+    expect(sessionKindFromName(`${BRAND.slug}-p1--fe80abcd-1234-5678-9abc-def012345678`)).toBe("other");
     // A foreign / hand-started session.
     expect(sessionKindFromName("train")).toBe("other");
     // A name that was hand-renamed through the Sessions view (no `--`).
-    expect(sessionKindFromName("eldrun-my-run")).toBe("other");
+    expect(sessionKindFromName(`${BRAND.slug}-my-run`)).toBe("other");
     // A scope that itself contains the token word must not leak across the `--`.
-    expect(sessionKindFromName("eldrun-agent-repo--shell-abc")).toBe("shell");
+    expect(sessionKindFromName(`${BRAND.slug}-agent-repo--shell-abc`)).toBe("shell");
   });
 });
 
@@ -190,7 +191,7 @@ describe("attach tab restore", () => {
           cwd: "/p",
           kind: "shell",
           location: "remote",
-          tmuxSession: "eldrun-fixed-uuid",
+          tmuxSession: `${BRAND.slug}-fixed-uuid`,
         },
       ],
       "/p",
@@ -200,7 +201,7 @@ describe("attach tab restore", () => {
     // The key changed (fresh mint) but the session name is stable → the tab
     // reattaches to the SAME host session rather than spawning a second one.
     expect(tab.key).not.toBe("shell-3");
-    expect(tab.tmuxSession).toBe("eldrun-fixed-uuid");
+    expect(tab.tmuxSession).toBe(`${BRAND.slug}-fixed-uuid`);
   });
 
   it("mints a stable tmuxSession for a shell tab persisted before the feature existed", () => {
@@ -210,12 +211,12 @@ describe("attach tab restore", () => {
       "p",
     );
     const tab = useTabsStore.getState().tabsByScope["p"][0];
-    expect(tab.tmuxSession).toMatch(/^eldrun-/);
+    expect(tab.tmuxSession).toMatch(new RegExp(String.raw`^${BRAND.slug}-`));
   });
 
   it("mints a stable tmuxSession for a restorable remote agent tab, in the shell-tab format", () => {
     // A resumable remote agent tab (claude, with a sessionId) persisted before the
-    // feature: on restore it mints a persisted name in the SAME eldrun-<scope>--<uuid>
+    // feature: on restore it mints a persisted name in the SAME tabtivity-<scope>--<uuid>
     // format shell tabs use, so it reattaches on every subsequent relaunch.
     useTabsStore.getState().loadFromLayout(
       [
@@ -234,7 +235,7 @@ describe("attach tab restore", () => {
     );
     const tab = useTabsStore.getState().tabsByScope["p"][0];
     expect(tab.kind).toBe("agent");
-    expect(tab.tmuxSession).toMatch(/^eldrun-p--/);
+    expect(tab.tmuxSession).toMatch(new RegExp(String.raw`^${BRAND.slug}-p--`));
   });
 
   it("keeps an agent tab's persisted tmuxSession across a restart (reattach, not fork)", () => {
@@ -248,7 +249,7 @@ describe("attach tab restore", () => {
           kind: "agent",
           location: "remote",
           sessionId: "sess-xyz",
-          tmuxSession: "eldrun-p--fixed-agent-uuid",
+          tmuxSession: `${BRAND.slug}-p--fixed-agent-uuid`,
         },
       ],
       "/p",
@@ -256,6 +257,6 @@ describe("attach tab restore", () => {
     );
     const tab = useTabsStore.getState().tabsByScope["p"][0];
     expect(tab.key).not.toBe("agent-9");
-    expect(tab.tmuxSession).toBe("eldrun-p--fixed-agent-uuid");
+    expect(tab.tmuxSession).toBe(`${BRAND.slug}-p--fixed-agent-uuid`);
   });
 });

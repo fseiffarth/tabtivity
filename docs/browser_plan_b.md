@@ -6,7 +6,7 @@
 > and Plan C's surfaces only as contracts.
 >
 > Verification gates for everything below: `npx tsc --noEmit` and
-> `cargo test --manifest-path src-tauri/Cargo.toml`. **Never launch Eldrun to verify.**
+> `cargo test --manifest-path src-tauri/Cargo.toml`. **Never launch Tabtivity to verify.**
 > Every example host in this document and in every test fixture is a neutral public
 > or RFC 2606 / RFC 6761 reserved domain — no institution, lab, or employer hostnames
 > anywhere, since the repo is public.
@@ -54,7 +54,7 @@ From `Cargo.toml` and `Cargo.lock` at the repo root:
 | `zeroize` | 1.9.0 | not needed; the browser holds no secret of its own |
 
 `grep -rn "register_uri_scheme_protocol" src-tauri/src` returns **nothing**. That is
-load-bearing and §2.4 explains why: every custom protocol Eldrun registers is, by
+load-bearing and §2.4 explains why: every custom protocol Tabtivity registers is, by
 Tauri's own definition, a *local* origin.
 
 ### 1.2 Verified crate status for the additions
@@ -129,7 +129,7 @@ pointed at `https://example.com`.** `src/manager/webview.rs:157–224` assembles
 initialization scripts unconditionally: `window.isTauri`, `window.__TAURI_INTERNALS__`,
 the invoke script (carrying `__TAURI_INVOKE_KEY__`), the window/webview metadata, the IPC
 and pattern init. There is **no builder switch that skips it.** Consequence: any page
-Eldrun loads in a Tauri webview can read `window.__TAURI_INTERNALS__.invoke` *and the
+Tabtivity loads in a Tauri webview can read `window.__TAURI_INTERNALS__.invoke` *and the
 invoke key baked beside it*. The invoke key is therefore **not** a defence against page
 JS; it only stops content that never received the init script.
 
@@ -173,7 +173,7 @@ regardless of the value of [`webviews`]."* Resolution
 (`src/ipc/authority.rs:resolve_access`) is
 `origin.matches(&cmd.context) && (webviews.any(match) || windows.any(match))`.
 
-Eldrun's `src-tauri/capabilities/default.json` today reads
+Tabtivity's `src-tauri/capabilities/default.json` today reads
 `"windows": ["main", "detached-*", "present-*"]` with **no `webviews` field**. A browser
 webview added as a child of the `main` window therefore satisfies the window half of that
 condition. The *only* thing between it and `core:default` + `dialog:default` +
@@ -190,14 +190,14 @@ Six requirements. Each is a "must be true" with an owner and a test.
 | **BC-1** | The capability grant is scoped by **webview label**, never by window label. `default.json` drops `windows` entirely and uses `webviews`. | `src-tauri/capabilities/default.json` | §12.1 |
 | **BC-2** | No capability file anywhere contains a `remote` key, and none sets `"local": false` on a grant intended for the app. | same | §12.1 |
 | **BC-3** | The browser webview's label matches `browser-*` and **no** capability pattern matches it. | `commands/browser.rs::spawn_browser_webview` | §12.1 |
-| **BC-4** | Eldrun registers **zero** custom URI scheme protocols for as long as an in-app browser exists. | anywhere (`register_uri_scheme_protocol`) | §12.2 |
+| **BC-4** | Tabtivity registers **zero** custom URI scheme protocols for as long as an in-app browser exists. | anywhere (`register_uri_scheme_protocol`) | §12.2 |
 | **BC-5** | The navigation gate hard-refuses the app's own origin, `tauri:`, and the dev-server origin — in **both** debug and release builds. | `services::browser_policy::navigation_allowed` | §12.3 |
 | **BC-6** | `withGlobalTauri` stays absent/false and `app.security.pattern` is untouched. | `tauri.conf.json` | §12.1 |
 
 **BC-1 is the load-bearing one.** With it, the browser webview fails *both* halves of
 `origin.matches(...) && (webviews.any(...) || windows.any(...))`, independently. A
 regression in the navigation gate (BC-5) no longer becomes IPC access; it becomes a
-cosmetic bug where a page renders Eldrun's own UI inside a browser tab. That is the
+cosmetic bug where a page renders Tabtivity's own UI inside a browser tab. That is the
 difference between a defence and an architecture.
 
 The exact file, complete:
@@ -206,7 +206,7 @@ The exact file, complete:
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema/capability.json",
   "identifier": "default",
-  "description": "Eldrun default capabilities — commands and window management. Scoped by WEBVIEW label, deliberately: a capability with a `windows` list grants every webview inside that window, which would include the in-app browser's child webview (docs/browser_plan_b.md §2.1 Fact 4). There is no `remote` key here and there must never be one — a `remote` entry is the single line that would hand a browsed page the Tauri IPC bridge.",
+  "description": "Tabtivity default capabilities — commands and window management. Scoped by WEBVIEW label, deliberately: a capability with a `windows` list grants every webview inside that window, which would include the in-app browser's child webview (docs/browser_plan_b.md §2.1 Fact 4). There is no `remote` key here and there must never be one — a `remote` entry is the single line that would hand a browsed page the Tauri IPC bridge.",
   "webviews": ["main", "detached-*", "present-*"],
   "permissions": [
     "core:default",
@@ -253,7 +253,7 @@ browser. Requires the `tauri` crate's **`unstable`** feature —
 before BC-1: catastrophic (§2.1 Fact 4). After BC-1: none — the webview label is the gate,
 and the window it happens to live in is irrelevant.
 
-**(B) A separate `WebviewWindow`** labelled `browser-<id>`. Stable API; Eldrun already
+**(B) A separate `WebviewWindow`** labelled `browser-<id>`. Stable API; Tabtivity already
 does this twice (`commands/presenter.rs`, `commands/subwindow.rs`). Security cost before
 BC-1: none, because `browser-*` matches none of `main`/`detached-*`/`present-*`. After
 BC-1: none.
@@ -264,7 +264,7 @@ risk, and it is easy to get backwards because (A) *looks* safe (the origin gate 
 today).
 
 One consequence of (A) that is a security problem and not only a layout one: **a child
-webview is a native view composited above the window's HTML.** Eldrun's own overlays —
+webview is a native view composited above the window's HTML.** Tabtivity's own overlays —
 modals, the file-tree panel, menus — will render *underneath* it. A confirmation dialog
 raised over a browser tab may be invisible. Therefore:
 
@@ -290,11 +290,11 @@ request headers, parses it as a `u32`, and `remove`s the matching entry from a
 from `static CHANNEL_DATA_COUNTER: AtomicU32`, i.e. they start at 0 and increment.
 
 So: **a browsed page can enumerate channel-data ids and read large `Channel` payloads
-queued for Eldrun's own webview.**
+queued for Tabtivity's own webview.**
 
 Why this is survivable today, and what keeps it that way:
 
-- `grep -rn "ipc::Channel" src-tauri/src` returns **nothing**. Eldrun uses events
+- `grep -rn "ipc::Channel" src-tauri/src` returns **nothing**. Tabtivity uses events
   (`Emitter::emit`), not channels, so the queue is permanently empty and there is nothing
   to steal. Events are pushed to a labelled target and are not readable this way.
 - A **tripwire test** (§12.2) asserts that `tauri::ipc::Channel` appears nowhere in
@@ -394,7 +394,7 @@ blocked navigation is a page state, not an interrupt):**
 | `data` | top-level `data:` gets an opaque origin in modern engines, but the phishing value of a full-page `data:text/html` with a fake address bar is high and the legitimate value is zero. |
 | `blob` | a `blob:` top-level navigation inherits the creator's origin. |
 | `ws`, `wss`, `ftp`, `smb`, `gopher`, `vbscript`, `chrome`, `chrome-extension`, `resource`, `moz-extension`, `ms-*`, `search-ms`, `intent`, everything else | no legitimate top-level use, several are historical RCE handlers. |
-| `mailto`, `tel`, `webcal`, `magnet`, `sms` | **not blocked, not navigated.** Handled internally: `mailto:` opens Eldrun's own composer (the mail client exists), the rest route through TODO J #33's `launch_app` role dispatch. Never handed to `opener::open` from browsed content without a confirm that names the target (§3.6). |
+| `mailto`, `tel`, `webcal`, `magnet`, `sms` | **not blocked, not navigated.** Handled internally: `mailto:` opens Tabtivity's own composer (the mail client exists), the rest route through TODO J #33's `launch_app` role dispatch. Never handed to `opener::open` from browsed content without a confirm that names the target (§3.6). |
 
 The list is expressed as an **allowlist plus an explicit deny-list**, not as a deny-list
 alone, and `navigation_allowed` returns `Block(UnknownScheme)` for anything it does not
@@ -438,7 +438,7 @@ matter beyond that:
 
 ### 3.5 What the user sees when a navigation is blocked
 
-An **in-app** error page, rendered by Eldrun's own React (not injected into the browser
+An **in-app** error page, rendered by Tabtivity's own React (not injected into the browser
 webview — never inject HTML we wrote into an origin a page controls), stating:
 
 - the scheme or rule that blocked it, in words;
@@ -464,7 +464,7 @@ rule as mail's link table (`docs/mail_client_plan_b.md` §2.5), same reason.
 
 ### 4.1 The decision: ephemeral by default, and that is the whole design
 
-**v1 browses in one ephemeral profile per Eldrun run. Nothing is written to disk.
+**v1 browses in one ephemeral profile per Tabtivity run. Nothing is written to disk.
 Everything is gone at quit.**
 
 Mechanism: `WebviewBuilder::incognito(true)`, verified in wry 0.55.1 to mean:
@@ -484,7 +484,7 @@ What ephemeral buys, stated as the threats it retires outright:
 | Cross-project session bleed | there is no session to bleed; a project switch is not a boundary that has to hold |
 | Third-party tracking across launches | every launch is a fresh profile with no identifiers |
 | Service-worker persistence (a script that outlives the tab that installed it) | the SW registration store is in the ephemeral data store and dies with it |
-| "Which browser profile did Eldrun read?" (#60's rule) | Eldrun's browser reads no profile at all — not its own, and never, ever another browser's |
+| "Which browser profile did Tabtivity read?" (#60's rule) | Tabtivity's browser reads no profile at all — not its own, and never, ever another browser's |
 | A malicious page seeding IndexedDB with a payload that a later, more-trusted page reads | nothing survives |
 
 What it costs, stated honestly and shown in the UI: **every site looks logged out, every
@@ -500,7 +500,7 @@ partition and the project lifetime already coincide, and a second partitioning a
 be state that pretends to be a boundary.
 
 There is, however, one thing worth doing and it is free: the browser's data store is
-**per Eldrun run, not per tab**, so two tabs share a login within one session (a user who
+**per Tabtivity run, not per tab**, so two tabs share a login within one session (a user who
 signs into a site in tab 1 expects tab 2 to be signed in). Do **not** add per-tab
 partitioning; it produces a browser that behaves like nothing the user has used.
 
@@ -520,12 +520,12 @@ Downloads (§6), and only via quarantine → native dialog. There is no other wr
 `services::sandbox::sweep_orphans` sweeps stale containers: anything left there from a
 previous run is by definition abandoned and is deleted.
 
-### 4.4 What Eldrun must never touch
+### 4.4 What Tabtivity must never touch
 
 Restating the repo's standing rule (TODO O #60, `docs`-level policy) in browser terms,
 because a browser is precisely the feature that will tempt someone to break it:
 
-> **Eldrun never reads, writes, imports from, or "detects" another browser's profile,
+> **Tabtivity never reads, writes, imports from, or "detects" another browser's profile,
 > preferences, cookie jar, bookmark file, password store, or download directory.** Not
 > Firefox's `prefs.js`, not Chromium's `Preferences`, not `~/.mozilla`, not
 > `~/.config/google-chrome`, not the macOS `Safari` container, not the WebView2 user data
@@ -549,7 +549,7 @@ Handling, and it is not "hope":
   `webview2-com` dependency Tauri pulls in on Windows) and **refuse to open a browser tab
   at all** below 101.0.1210.39, with a message naming the required runtime version and a
   link to Microsoft's evergreen installer (opened via `open_external_url`).
-- This is the same posture Eldrun already takes for the Docker sandbox on Windows (TODO O
+- This is the same posture Tabtivity already takes for the Docker sandbox on Windows (TODO O
   #86): *refuse rather than silently do something weaker than the user was promised.*
 
 ### 4.6 Credentials: there is no password manager, and there will not be one
@@ -560,7 +560,7 @@ Handling, and it is not "hope":
   is the single largest secret store an app can have, and this one would be built by an
   app whose actual job is running terminals.
 - **No `keyring` call is made from any browser code path.** There is one keychain path in
-  Eldrun (`services::remote_credentials`) and the browser does not open a second. §12.2
+  Tabtivity (`services::remote_credentials`) and the browser does not open a second. §12.2
   asserts `keyring` and `remote_credentials` appear nowhere under the browser modules.
 - Because the profile is ephemeral, the engines' own autofill stores have nothing to
   persist to anyway. On Windows, WebView2's general autofill is additionally disabled
@@ -581,7 +581,7 @@ Handling, and it is not "hope":
 | Microphone (`getUserMedia` audio) | **Deny, no prompt** | §5.2 |
 | Screen capture (`getDisplayMedia`) | **Deny, no prompt** | §5.2 |
 | Geolocation | **Deny, no prompt** | §5.2 |
-| Notifications | **Deny, no prompt** — Eldrun owns the notification surface (`tauri-plugin-notification`, used for calendar reminders); a browsed page must not be able to raise something the user reads as an Eldrun alert | §5.2 |
+| Notifications | **Deny, no prompt** — Tabtivity owns the notification surface (`tauri-plugin-notification`, used for calendar reminders); a browsed page must not be able to raise something the user reads as a Tabtivity alert | §5.2 |
 | Clipboard **read** (`navigator.clipboard.readText`) | **Deny** | §5.3 |
 | Clipboard **write** on user gesture | Allow (engine default; a copy button must work) | — |
 | MIDI (`requestMIDIAccess`) | **Deny** | §5.2 |
@@ -605,14 +605,14 @@ on Linux is denied with no prompt, today, with no code from us.
 
 The requirement is therefore a *negative* one, and it is the one that can regress:
 
-> Eldrun must never call `enable_clipboard_access()` on any webview, and must never
+> Tabtivity must never call `enable_clipboard_access()` on any webview, and must never
 > connect `permission-request`. §12.2 tests both.
 
 **macOS (WKWebView) — deny by omission, structurally.** WKWebView routes media capture
 through `WKUIDelegate`'s `webView:requestMediaCapturePermissionForOrigin:…`; wry's
 `WryWebViewUIDelegate` does not implement it, so WebKit denies. More importantly, macOS
 gates camera/microphone/location at the **process** level on `Info.plist` usage-description
-keys. Eldrun's `tauri.macos.conf.json` declares none, so those APIs are unavailable to the
+keys. Tabtivity's `tauri.macos.conf.json` declares none, so those APIs are unavailable to the
 whole process regardless of what any delegate does.
 
 > **Never add `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`,
@@ -629,7 +629,7 @@ whole process regardless of what any delegate does.
 (`wry-0.55.1/src/webview2/mod.rs:497–515`). Everything else falls through to the Edge
 prompt.
 
-That is not default-deny. It is default-*ask*, with a dialog Eldrun did not write, whose
+That is not default-deny. It is default-*ask*, with a dialog Tabtivity did not write, whose
 "Allow" grants a browsed page the camera.
 
 **Decision: the in-app browser does not ship on Windows in v1.** The Windows build shows
@@ -652,7 +652,7 @@ against a raw pointer, and that deserves its own review, not a paragraph in a br
 Denied on all platforms by the above. Worth calling out separately because it is the
 permission a developer tool is most tempted to grant: a page that can read the clipboard
 reads whatever the user last copied, and in this application that is disproportionately
-likely to be **a password, an SSH command line, or an API token** — Eldrun has a
+likely to be **a password, an SSH command line, or an API token** — Tabtivity has a
 `credential_paste_to_pty` path precisely because credentials move through this app.
 Clipboard *write* on a user gesture stays allowed because a "copy" button that does
 nothing is a bug report, and write leaks nothing.
@@ -663,11 +663,11 @@ nothing is a bug report, and write leaks nothing.
 wry: `webkitgtk/mod.rs:487`, `webview2/mod.rs:696`, `wkwebview/mod.rs:600`) and returns
 `NewWindowResponse::{Allow, Create, Deny}`.
 
-**Policy: always `Deny`, then open the URL as a new tab in Eldrun's own browser chrome,
+**Policy: always `Deny`, then open the URL as a new tab in Tabtivity's own browser chrome,
 through the §3 gate.**
 
 Reasoning: `NewWindowResponse::Allow` produces a **chromeless OS window with no address
-bar** — the ideal canvas for painting a fake Eldrun dialog or a fake bank login. `Create`
+bar** — the ideal canvas for painting a fake Tabtivity dialog or a fake bank login. `Create`
 would let us supply the window, but a second window shape is a second thing to secure for
 no user benefit. Denying and re-opening as a tab means every page the user ever sees is
 inside chrome that shows the real origin.
@@ -696,7 +696,7 @@ an audio indicator with a mute (Plan A); upstream ask filed for
 **Fullscreen API.** WebKitGTK exposes `WebKitSettings::enable-fullscreen`; wry does not
 expose it and Tauri does not either. A page that calls `requestFullscreen()` on a child
 webview inside the `main` window could plausibly take the GTK window fullscreen, which is
-the classic full-screen phishing setup. Mitigations: Eldrun already owns `F11` and a
+the classic full-screen phishing setup. Mitigations: Tabtivity already owns `F11` and a
 fullscreen toggle, so the state is visible and reversible from a key the page cannot
 consume; the child webview is clipped to its rect, which bounds (but does not eliminate)
 the effect. **Plan C must verify the actual behaviour on WebKitGTK before v1 ships**; if a
@@ -711,7 +711,7 @@ resulting Tauri window-resize/fullscreen event and immediately revert it with a
 ### 6.1 The rule
 
 > **The page chooses the bytes. It never chooses the path.** Every download lands in a
-> quarantine directory Eldrun picked, is inspected there, and reaches the user's
+> quarantine directory Tabtivity picked, is inspected there, and reaches the user's
 > filesystem only through an OS-native save dialog raised from Rust, one file at a time.
 
 This is the mail client's boundary rule (`docs/mail_client_plan_b.md` §3) with one
@@ -798,7 +798,7 @@ invent one** — an extensionless file is harmless, a guessed `.exe` is not.
 - The move never follows a symlink at the destination and never creates directories.
 - On macOS the quarantine attribute (`com.apple.quarantine`) that the OS sets on
   browser downloads is **not** something we can set from Rust portably; note it as a
-  residual — a file saved through Eldrun may not carry Gatekeeper's quarantine bit that
+  residual — a file saved through Tabtivity may not carry Gatekeeper's quarantine bit that
   the same file downloaded through Safari would. Phase-2 fix: set the xattr explicitly.
   **Disclosed.**
 - **`Finished` on macOS always reports `path: None`** (Tauri documents this as an API
@@ -858,7 +858,7 @@ browser cannot be as strict" honesty this plan owes.
 
 ### 7.1 The address bar is a security control, not a text field
 
-Rendered by Eldrun's own React, in the app webview, **never** by anything the page can
+Rendered by Tabtivity's own React, in the app webview, **never** by anything the page can
 touch. Rules:
 
 1. **The origin is emphasized and everything else is de-emphasized.** Layout:
@@ -927,7 +927,7 @@ auto-fill, and that the session dies at quit.
 ### 7.4 Certificates: no escape hatch, and why it is structural
 
 **There is no "proceed anyway", no "add exception", no "ignore certificate errors"
-control in Eldrun's browser. Not hidden, not behind a setting, not behind a dev flag.**
+control in Tabtivity's browser. Not hidden, not behind a setting, not behind a dev flag.**
 
 This is enforceable rather than aspirational, exactly as in the mail client, and for the
 same reason: the engines validate against the **OS trust store**. A user with an internal
@@ -973,10 +973,10 @@ the plan does not pretend otherwise:
 | Social engineering: a convincing fake login, a fake system dialog drawn in the page | §7.3 |
 | Playing audio/video on load | §5.5 |
 
-### 8.2 The Linux-specific one: the page shares Eldrun's main loop
+### 8.2 The Linux-specific one: the page shares Tabtivity's main loop
 
-This is not a generic browser concern, it is an Eldrun concern and it is already documented
-in the mail plan (§2.8): **WebKitGTK renders on the same GTK main loop as Eldrun's UI.** A
+This is not a generic browser concern, it is a Tabtivity concern and it is already documented
+in the mail plan (§2.8): **WebKitGTK renders on the same GTK main loop as Tabtivity's UI.** A
 page with a pathological DOM or a spinning script can jank the whole window — the same
 class of failure the mail sanitizer's 20 000-element cap exists to prevent, except here
 the content is a live document we cannot cap.
@@ -1001,7 +1001,7 @@ because it is also fallback F1 (§2.5) and because it is the right default for a
 user did not type.
 
 ```
-User/agent/mail hands Eldrun a URL
+User/agent/mail hands Tabtivity a URL
   └─ backend fetch (reqwest, rustls, OS trust store, no cookies, no Referer,
      fixed generic UA, 15 s timeout, 8 MB cap, ≤3 redirects, is_public_http_url()
      re-checked at every hop — §9.3)
@@ -1047,7 +1047,7 @@ is fine; it is a deliberate, infrequent action.
 | Typed or pasted into the address bar by the user | **Full** | the user asked for a browser |
 | Clicked inside an already-Full tab | **Full** | mode is sticky within a browsing session |
 | A link from a **mail message**, from terminal output, from an agent's response, from a file the user is viewing | **Reader** | this is untrusted content choosing a destination — exactly the mail client's threat, so it gets the mail client's answer |
-| The Eldrun UI's own links (docs, release notes) | **Reader** | they are articles |
+| The Tabtivity UI's own links (docs, release notes) | **Reader** | they are articles |
 
 The mode is shown as a segmented control in the address bar (`Reader · No script · Full`),
 switching is one click and one reload, and the current mode is *always* visible — a
@@ -1056,13 +1056,13 @@ security mode the user cannot see the state of is not a security mode.
 Why not reader-only for v1: it is not a browser, and TODO J #61 asks for a browser
 (and #53 asks to drag a tab into a *browser upload field*, which reader mode cannot have).
 Why not full-only: the highest-risk navigations in this app are the ones that arrive from
-content Eldrun already treats as hostile, and for those we already own a proven renderer.
+content Tabtivity already treats as hostile, and for those we already own a proven renderer.
 Shipping both costs one backend fetch path we need for F1 anyway.
 
 ### 8.6 Engine RCE — the threat with no in-app answer
 
 A memory-safety bug in WebKitGTK or WebView2 gives an attacker code execution in the
-**renderer process**, and from there Eldrun's process boundary is whatever the engine's
+**renderer process**, and from there Tabtivity's process boundary is whatever the engine's
 own sandbox provides — which on WebKitGTK is a real bubblewrap sandbox and on WebView2 is
 the browser sandbox, in both cases outside our control.
 
@@ -1092,7 +1092,7 @@ What this plan does about it:
 
 ### 9.1 The situation
 
-Eldrun is not an ordinary app on the network. At any moment it may hold: an OpenVPN tunnel
+Tabtivity is not an ordinary app on the network. At any moment it may hold: an OpenVPN tunnel
 that, per `docs/context/openvpn.md`, is **machine-wide and elevated**, passes no routing
 flags, and so *"a config that pushes `redirect-gateway` reroutes the whole computer's
 traffic — browser included"* including DNS; one or more SSH ControlMaster sessions to
@@ -1104,12 +1104,12 @@ the user's real browser cannot see.
 ### 9.2 The decision on the tunnel
 
 **Browser traffic traverses an active tunnel, exactly like every other process on the
-machine, and Eldrun does not try to change that.**
+machine, and Tabtivity does not try to change that.**
 
 Rejected alternatives and why:
 
 - **Bypass the tunnel with `proxy_url`.** Setting a per-webview proxy to route browser
-  traffic around a VPN would be a *split tunnel Eldrun invented*, silently contradicting
+  traffic around a VPN would be a *split tunnel Tabtivity invented*, silently contradicting
   what the user's `.ovpn` asked for and what the header's VPN indicator says. Worse, it is
   a leak: a user who turned on a VPN to browse safely would be browsing outside it because
   of a security feature. TODO #82 tracks split tunnelling as a deliberate, user-visible
@@ -1132,7 +1132,7 @@ it is visible:
 ### 9.3 The intranet gate
 
 The tunnel is not the sharp edge; **loopback and RFC 1918 are**. A hostile page in this
-app can reach: Eldrun's own dev server on `127.0.0.1:1420` (which, per §2.1 Fact 3, is a
+app can reach: Tabtivity's own dev server on `127.0.0.1:1420` (which, per §2.1 Fact 3, is a
 *local origin* in dev builds), any dev server a project tab is running, an Ollama endpoint
 on `11434`, a Docker API if the user exposed one on TCP, a printer, a router admin page,
 and — through an active tunnel — the entire remote network the tunnel joined.
@@ -1170,8 +1170,8 @@ So a page loaded from `https://example.com` **can** `fetch("http://127.0.0.1:114
 and port-scan the machine. Nothing in this plan stops that, and no in-app browser can
 without an engine-level request filter Tauri does not expose. What bounds it:
 
-- Eldrun's own IPC is **not** HTTP-reachable — `http://ipc.localhost` is a WebView-internal
-  custom-protocol origin, not a listening socket, so a scanner finds no Eldrun port to
+- Tabtivity's own IPC is **not** HTTP-reachable — `http://ipc.localhost` is a WebView-internal
+  custom-protocol origin, not a listening socket, so a scanner finds no Tabtivity port to
   talk to;
 - the ephemeral profile means a scanner's findings cannot be persisted or correlated across
   sessions;
@@ -1206,22 +1206,22 @@ in §3.5 (a "private" address is now private *on the remote side*).
 
 | Rejected | Why |
 |---|---|
-| **Grant the browser webview a narrow `remote` capability** (e.g. just `core:event:allow-emit`) so the page can talk to Eldrun's chrome | This is the one line that undoes the entire plan. A `remote` entry is matched by URL pattern, patterns get widened, and "just events" is a message channel into privileged code. Everything the browser chrome needs — title changes, navigation state, downloads — is available to the **backend** via `on_page_load` / `on_document_title_changed` / `on_navigation` / `on_download` and is relayed to the app webview as a Tauri event. The page is never a party to it. §12.1 fails the build if a `remote` key appears. |
-| **Persistent profiles in v1** | Persistence is what turns "a page ran some JS" into "a page has a foothold". It also creates a directory full of session cookies inside `~/.local/share/eldrun/`, which changes the privacy-check story, the backup story, and the "delete my data" story all at once. Ephemeral first; persistence when there is a concrete need and a design for clearing it. |
+| **Grant the browser webview a narrow `remote` capability** (e.g. just `core:event:allow-emit`) so the page can talk to Tabtivity's chrome | This is the one line that undoes the entire plan. A `remote` entry is matched by URL pattern, patterns get widened, and "just events" is a message channel into privileged code. Everything the browser chrome needs — title changes, navigation state, downloads — is available to the **backend** via `on_page_load` / `on_document_title_changed` / `on_navigation` / `on_download` and is relayed to the app webview as a Tauri event. The page is never a party to it. §12.1 fails the build if a `remote` key appears. |
+| **Persistent profiles in v1** | Persistence is what turns "a page ran some JS" into "a page has a foothold". It also creates a directory full of session cookies inside `~/.local/share/tabtivity/`, which changes the privacy-check story, the backup story, and the "delete my data" story all at once. Ephemeral first; persistence when there is a concrete need and a design for clearing it. |
 | **A built-in password manager or autofill** | §4.6. The repo's stance is no password persistence by default; the largest possible secret store is not the place to make an exception. |
 | **Per-project cookie partitioning** | Solves a problem ephemeral already solves, and introduces a mapping (project ↔ identity) that breaks on rename and confuses on switch. §4.2. |
 | **DOMPurify (or any second sanitizer) for reader mode** | The mail plan rejected it for the same three reasons and they all still hold: the raw bytes would exist inside the app origin; two parsers with different serializers is a known mXSS source; and the repo has a documented no-DOMPurify convention in four places. Reader mode uses the shipped `ammonia` config, unchanged. |
 | **Running the browser inside `services::sandbox` (Docker)** | §8.6. Wrong mechanism for a composited view, wrong mounts, Unix-only. |
-| **Tauri's Isolation Pattern (`app.security.pattern`)** | It hardens the *app's own frontend* against a compromised app frontend by routing IPC through a sandboxed iframe. It does nothing about a separate webview on a remote origin, which is this plan's actual threat, and it adds a build-time asset pipeline and a second CSP to reason about. Revisit only if Eldrun's own frontend ever loads third-party JS, which it should not. |
+| **Tauri's Isolation Pattern (`app.security.pattern`)** | It hardens the *app's own frontend* against a compromised app frontend by routing IPC through a sandboxed iframe. It does nothing about a separate webview on a remote origin, which is this plan's actual threat, and it adds a build-time asset pipeline and a second CSP to reason about. Revisit only if Tabtivity's own frontend ever loads third-party JS, which it should not. |
 | **`NewWindowResponse::Allow` for popups** | A chromeless OS window with no address bar. §5.4. |
 | **Bypassing an active VPN with `proxy_url`** | A split tunnel the user did not ask for, contradicting the header indicator. §9.2. |
 | **Browsing through an SSH dynamic forward** | §9.4. |
 | **A "trusted sites" list that relaxes any of §3, §5, or §9** | Every such list is a list of origins an attacker wants to be on, and the relaxation always outlives the reason for it. The only per-host state in this plan is §9.3's in-memory, single-session, single-host grant. |
-| **Shipping the browser on Windows in v1** | §5.2: WebView2's default is to *prompt* for camera/microphone/geolocation with a dialog Eldrun did not write, and its TLS interstitial may offer a continue path we do not control. Refuse, as `services::sandbox` already refuses. |
+| **Shipping the browser on Windows in v1** | §5.2: WebView2's default is to *prompt* for camera/microphone/geolocation with a dialog Tabtivity did not write, and its TLS interstitial may offer a continue path we do not control. Refuse, as `services::sandbox` already refuses. |
 | **An "ignore certificate errors" setting, in any form** | §7.4. Enforced by a source-scanning test, not by convention. |
-| **Bundling a browser engine** (Chromium/Servo/Ladybird) | A 100+ MB bundle whose security updates become Eldrun's responsibility. The platform webview is patched by the OS. |
+| **Bundling a browser engine** (Chromium/Servo/Ladybird) | A 100+ MB bundle whose security updates become Tabtivity's responsibility. The platform webview is patched by the OS. |
 | **`enable_clipboard_access()` on the browser webview** | It is the one call that installs an *allow* handler for `CLIPBOARD_READ` on Windows (verified in wry). §5.3. |
-| **Browser extensions** (`browser_extensions_enabled`, `extensions_path`) | An extension in this webview would run with the page's privileges *and* whatever the extension API grants, in a process that also hosts Eldrun's window. No. |
+| **Browser extensions** (`browser_extensions_enabled`, `extensions_path`) | An extension in this webview would run with the page's privileges *and* whatever the extension API grants, in a process that also hosts Tabtivity's window. No. |
 
 ---
 
@@ -1230,7 +1230,7 @@ in §3.5 (a "private" address is now private *on the remote side*).
 Written for the user-facing docs as much as for reviewers. Each line is a *design output*,
 not a missing feature.
 
-1. **It cannot keep you logged in.** The profile is ephemeral; quitting Eldrun signs you
+1. **It cannot keep you logged in.** The profile is ephemeral; quitting Tabtivity signs you
    out of everything. Use *Open in your browser* for anything you want to stay signed
    into.
 2. **It cannot save passwords, and it will never offer to.**
@@ -1357,7 +1357,7 @@ One `#[test] fn navigation_table()` over `&[(url, expected)]`. Blocked unless no
 `smb://host/share`, `vbscript:msgbox`, `ms-msdt:/id`, `search-ms:query=x`,
 `chrome://settings`, `moz-extension://x/y`, `about:config`, `about:cache`,
 `view-source:https://example.com/`, `jar:https://example.com/a.jar!/b`,
-`intent://x#Intent;end`, and a scheme that does not exist (`eldrun-nonsense://x`).
+`intent://x#Intent;end`, and a scheme that does not exist (`tabtivity-nonsense://x`).
 **Allowed:** `https://example.com/`, `http://example.com/`, `about:blank`,
 `about:srcdoc`.
 
@@ -1449,24 +1449,24 @@ never panics, and any input that fails to parse as a `Url` yields `Block`.
 8. **The `UntestedTag` is present** on the browser's entry points until the user confirms
    testing (repo rule) — assert `UntestedTag` is imported by the browser tab's chrome.
 
-### 12.6 Manual QA (for the user's own session after a rebuild — **do not launch Eldrun**)
+### 12.6 Manual QA (for the user's own session after a rebuild — **do not launch Tabtivity**)
 
 - A browser tab opens, loads a public site, and the address bar bolds the right domain.
 - `file:///etc/passwd` typed into the address bar shows the block page with no override.
 - `http://localhost:1420/` typed in a **dev** build shows the block page (this is the one
   that proves BC-5 in the build where it matters).
 - Clicking a download link produces exactly one native save dialog and one file; cancelling
-  leaves nothing in `~/.local/share/eldrun/browser/quarantine/`.
+  leaves nothing in `~/.local/share/tabtivity/browser/quarantine/`.
 - Downloading an `.sh` shows the "This download is a program" banner and the saved file is
   not executable.
 - A site calling `getUserMedia` fails with no prompt.
-- A site calling `window.open` produces a new **tab in Eldrun's chrome**, not an OS window.
+- A site calling `window.open` produces a new **tab in Tabtivity's chrome**, not an OS window.
 - With a VPN tunnel up, the VPN chip is present on the address bar and the one-time notice
   appeared.
 - Reader mode on a documentation page renders legible text with no images-from-network.
 - Quitting and relaunching leaves every site logged out.
 - A page that spins the CPU eventually shows "This page has stopped responding" and the
-  rest of Eldrun's UI still accepts clicks (the WebKitGTK main-loop test — §8.2).
+  rest of Tabtivity's UI still accepts clicks (the WebKitGTK main-loop test — §8.2).
 
 ---
 

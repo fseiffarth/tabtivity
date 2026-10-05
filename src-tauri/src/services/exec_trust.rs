@@ -1,6 +1,6 @@
-//! Ask-once approval for project-supplied programs Eldrun would run on the host.
+//! Ask-once approval for project-supplied programs Tabtivity would run on the host.
 //!
-//! Three things Eldrun runs at a click execute code that lives in the project
+//! Three things Tabtivity runs at a click execute code that lives in the project
 //! tree — a tree a fenced agent, a container tab, a `git pull` or whoever sent
 //! the repo can write:
 //!
@@ -34,7 +34,7 @@ use sha2::{Digest, Sha256};
 use crate::storage;
 
 /// Prefix of the error string a gated command returns; JSON follows.
-pub const TRUST_REQUIRED_PREFIX: &str = "eldrun-trust-required:";
+pub const TRUST_REQUIRED_PREFIX: &str = crate::brand::TRUST_REQUIRED_PREFIX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrustKind {
@@ -290,11 +290,24 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
     // pin every other call carries would make `--git-path hooks` answer `./`.
     // Neither query runs a hook.
     use crate::commands::git::{hardened_git_command_in, hooked_git_command_in};
+    use crate::services::git_bounded::BoundedOutput;
     let mut out = Vec::new();
     let mut have_hook = false;
+    // Bounded (#2349). A query git refused or that timed out (a FIFO it reads)
+    // fails closed: it becomes a subject, so the gated verb asks rather than
+    // running hooks nobody looked at.
+    let unread = |what: &str, e: String| Subject {
+        label: format!("git could not be read ({what})"),
+        bytes: e.into_bytes(),
+        preview: true,
+    };
 
     // `--git-path hooks` honours `core.hooksPath`.
-    if let Ok(o) = hooked_git_command_in(repo, &["rev-parse", "--git-path", "hooks"]).output() {
+    let hooks_path = hooked_git_command_in(repo, &["rev-parse", "--git-path", "hooks"]).bounded_output();
+    if let Err(e) = &hooks_path {
+        out.push(unread("hooks", e.clone()));
+    }
+    if let Ok(o) = hooks_path {
         if o.status.success() {
             let rel = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let hooks = if Path::new(&rel).is_absolute() { PathBuf::from(&rel) } else { repo.join(&rel) };
@@ -314,9 +327,11 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
         }
     }
 
-    if let Ok(o) =
-        hooked_git_command_in(repo, &["config", "--list", "--show-scope", "-z"]).output()
-    {
+    let config = hooked_git_command_in(repo, &["config", "--list", "--show-scope", "-z"]).bounded_output();
+    if let Err(e) = &config {
+        out.push(unread("config", e.clone()));
+    }
+    if let Ok(o) = config {
         if o.status.success() {
             for (scope, key, value) in parse_scoped_config(&o.stdout) {
                 if matches!(scope.as_str(), "local" | "worktree") && is_exec_config_key(&key) {
@@ -334,7 +349,7 @@ fn git_subjects(repo: &Path) -> Vec<Subject> {
     // at the top level, which `repo` (a Commit from a subfolder) need not be.
     if have_hook {
         let repo = hardened_git_command_in(repo, &["rev-parse", "--show-toplevel"])
-            .output()
+            .bounded_output()
             .ok()
             .filter(|o| o.status.success())
             .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
@@ -691,5 +706,21 @@ mod tests {
         let got = git_subjects(repo);
         assert_eq!(got.len(), 1);
         assert!(got[0].label.ends_with("pre-commit"));
+    }
+
+    /// #2349: a query git refuses (a FIFO it would block on) fails closed —
+    /// the gated verb asks instead of finding no hooks.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_repo_is_a_subject_not_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(repo).status().unwrap().success());
+        let c = std::ffi::CString::new(repo.join(".gitignore").as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+        let got = git_subjects(repo);
+        assert!(!got.is_empty(), "an unreadable repo must not read as hook-free");
+        assert!(got.iter().all(|s| s.label.starts_with("git could not be read")), "{:?}", got.iter().map(|s| &s.label).collect::<Vec<_>>());
     }
 }

@@ -14,6 +14,7 @@ import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { openProjectShellInRootConsole, useRootOverlayStore } from "../../stores/rootOverlay";
 import type { ProjectEntry } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const rootTabs = () => useTabsStore.getState().tabsByScope.root ?? [];
 
@@ -23,7 +24,7 @@ function project(extra: Partial<ProjectEntry>): ProjectEntry {
     name: "Alpha",
     status: "active",
     position: 0,
-    local_file: "/home/u/eldrun/projects/alpha/project.json",
+    local_file: `/home/u/${BRAND.slug}/projects/alpha/project.json`,
     ...extra,
   };
 }
@@ -47,7 +48,7 @@ describe("openProjectShellInRootConsole", () => {
 
     expect(rootTabs()).toHaveLength(1);
     const shell = rootTabs()[0];
-    expect(shell).toMatchObject({ kind: "shell", cmd: "", cwd: "/home/u/eldrun/projects/alpha", label: "Alpha" });
+    expect(shell).toMatchObject({ kind: "shell", cmd: "", cwd: `/home/u/${BRAND.slug}/projects/alpha`, label: "Alpha" });
     expect(useRootOverlayStore.getState().open).toBe(true);
     const groups = allGroups(useTabsStore.getState().layoutByScope.root ?? null);
     expect(groups.some((g) => g.activeKey === shell.key)).toBe(true);
@@ -76,14 +77,14 @@ describe("openProjectShellInRootConsole", () => {
         project({
           directory: "/srv/alpha",
           remote: { host: "203.0.113.5", remote_path: "/srv/alpha" } as ProjectEntry["remote"],
-          mirror: "/home/u/eldrun/mirrors/alpha",
+          mirror: `/home/u/${BRAND.slug}/mirrors/alpha`,
         }),
       ],
     });
 
     openProjectShellInRootConsole();
 
-    expect(rootTabs()[0]?.cwd).toBe("/home/u/eldrun/mirrors/alpha");
+    expect(rootTabs()[0]?.cwd).toBe(`/home/u/${BRAND.slug}/mirrors/alpha`);
   });
 
   it("just opens the console when there is no local folder", () => {

@@ -11,9 +11,8 @@
   background-color: transparent;
   display: flex;
   align-items: center;
-  /* No left padding: the strip's first item is the root pill, whose own 10px
-     inset is the space after `.header-left`'s hairline. Anything here would be
-     added on top of it and break the leading run's even spacing. */
+  /* No left padding: the strip's first item is the logo box chip, whose own
+     10px inset is its distance from the window's left edge. */
   padding: 0 6px 0 0;
   gap: 4px;
   /* Fill the header-center track and stay shrinkable so the pill row can never
@@ -346,9 +345,8 @@
   /* Anchors the bottom status-bar strip (.pill-status-bars), exactly as
      .project-pill and .root-pill do. */
   position: relative;
-  /* 10px, the leading run's shared inset (see `.header-left`): the chip IS the
-     leading run now (root and the boxes fold into it), so it keeps
-     the inset the run had. */
+  /* 10px: the chip opens the whole bar (root and the boxes fold into it), so
+     this is the logo's distance from the window's left edge too. */
   padding: 0 10px;
   border: none;
   border-top: 3px solid transparent;
@@ -378,23 +376,25 @@
   white-space: nowrap;
 }
 
-/* The Eldrun logo — the same mark the drag grip wears at the bar's left edge —
-   standing for "all projects / the boxes" while the chip names no scope. */
+/* The Tabtivity logo — the bar's one mark, at the full height the drag grip's
+   copy had before it was dropped — standing for "all projects / the boxes"
+   while the chip names no scope. */
 .box-chip-icon {
-  width: 18px;
-  height: 18px;
+  width: 25px;
+  height: 25px;
   flex-shrink: 0;
   color: var(--top-frame-text);
 }
 
 /* The mark the chip wears instead of the logo when it names the root scope: the
    app's own spark, the glyph its pinned pill carried before it folded in here,
-   at 18px and without the pill's one-per-launch intro flourish (the chip
-   re-mounts its star on every trip back to root, and a logo that replays its
-   entrance on each visit is a tic, not a flourish). */
+   at the logo's 25px (the two swap in one slot) and without the pill's
+   one-per-launch intro flourish (the chip re-mounts its star on every trip
+   back to root, and a logo that replays its entrance on each visit is a tic,
+   not a flourish). */
 .box-chip-star {
-  width: 18px;
-  height: 18px;
+  width: 25px;
+  height: 25px;
   flex-shrink: 0;
   color: inherit;
 }
@@ -410,6 +410,32 @@
   font-size: var(--text-xs);
   line-height: 1;
   opacity: 0.75;
+}
+
+/* The logo is the window's move handle (BoxScopeChip's onLogoMouseDown); a
+   click on it is still "All projects", so the grab cursor shows only while
+   pressed. */
+.box-chip:not(.box-scope-pill) .box-chip-main:active {
+  cursor: var(--cur-grabbing, grabbing);
+}
+
+/* The caret (with the "+N" overflow count) is the list's only trigger: its own
+   button, spanning the chip's height so the hover target is the full column. */
+.box-chip-caret-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 0 0 5px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: var(--cur-pointer, pointer);
+}
+.box-chip-caret-btn:hover .box-chip-caret,
+.box-chip-caret-btn[aria-expanded="true"] .box-chip-caret {
+  opacity: 1;
 }
 
 /* "+N": the boxes past MAX_BOX_PILLS, which only the chip's list reaches. */
@@ -684,6 +710,18 @@
 .box-pill-menu {
   max-height: min(70vh, 520px);
   overflow-y: auto;
+}
+
+/* The per-phone Mobile access picker (mobile/MobileAccessPicker): the same
+   checklist rows, dropped from a button — `keepBelow` caps it to the room
+   below, and its rows scroll in a `.menu-scroll-region` so the wash spans the
+   whole menu. Portaled into <body>, which sets no text colour. */
+.mobile-access-picker {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  min-width: 220px;
 }
 
 /* Multi-select ring (Ctrl/Cmd-click, 3b): the selection the "Box these…" menu
@@ -1061,6 +1099,10 @@
   color: #8b949e;
 }
 
+.pill-popup-git.git-unknown {
+  color: #8b949e;
+}
+
 .pill-popup-time {
   font-size: 11px;
   color: var(--text-secondary);
@@ -1213,7 +1255,7 @@
   overflow-x: auto;
   /* Scrolls, shows nothing — not even one of the app's own thumbs; overflow is
      conveyed by the chevrons that flank the strip. */
-  --eldrun-scrollbar: none;
+  --app-scrollbar: none;
 }
 
 /* Chevron buttons that flank the strip when it overflows. */
@@ -2344,7 +2386,7 @@ button.tab-todo-link {
    a menu that actually scrolls; one whose content fits keeps the symmetric
    padding its parent gives it, rather than sitting 8px off-centre for a thumb
    that was never drawn. */
-.menu-scroll-region[data-eldrun-scrollbar] {
+.menu-scroll-region[data-app-scrollbar] {
   padding-right: 8px;
 }
 /* Keep the pinned title from shrinking when the menu hits its max-height — only
@@ -2867,6 +2909,10 @@ button:has(> .menu-shortcut) {
   user-select: none;
 }
 
+html:not(.show-untested-tags) .untested-tag {
+  display: none !important;
+}
+
 /* ── Dropdown (the one custom themed dropdown; native <select> popups can't
    be themed on WebKitGTK so we render trigger + menu ourselves) ─────────── */
 .dropdown {
@@ -3278,6 +3324,15 @@ button:has(> .menu-shortcut) {
 }
 
 .agent-schedule-form-actions { justify-content: flex-end; }
+
+/* "In … h … min": two short number boxes, each followed by its unit. */
+.agent-schedule-in {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 
 .tab-schedule-indicator {
   color: var(--accent);

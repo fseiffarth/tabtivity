@@ -29,6 +29,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 import { ProjectExportDialog } from "../../components/projects/ProjectExportDialog";
 import { ProjectImportBundleDialog } from "../../components/projects/ProjectImportBundleDialog";
 import type { BundleInfo, ExportPreview, ProjectEntry } from "../../types";
+import { BRAND, NAMES } from "../../lib/brand";
+import { useBoxesStore } from "../../stores/boxes";
 
 const project: ProjectEntry = {
   id: "p1",
@@ -55,12 +57,12 @@ const preview = (over: Partial<ExportPreview> = {}): ExportPreview => ({
   rebuildableBytes: 1024 * 1024 * 1024,
   tabs: 4,
   boxNames: ["Papers"],
-  suggestedFileName: "thesis-2026-09-21.eldrunproj",
+  suggestedFileName: `thesis-2026-09-21.${NAMES.exportExtension}`,
   ...over,
 });
 
 const bundle = (over: Partial<BundleInfo> = {}): BundleInfo => ({
-  path: "/media/stick/thesis.eldrunproj",
+  path: `/media/stick/thesis.${NAMES.exportExtension}`,
   format: 1,
   appVersion: "0.1.76",
   exportedAt: "2026-09-20T10:00:00+00:00",
@@ -84,7 +86,7 @@ const bundle = (over: Partial<BundleInfo> = {}): BundleInfo => ({
   boxNames: ["Papers"],
   timeDays: 31,
   idInUse: false,
-  suggestedParent: "/home/me/eldrun/projects",
+  suggestedParent: `/home/me/${BRAND.slug}/projects`,
   ...over,
 });
 
@@ -154,7 +156,7 @@ describe("export dialog", () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "preview_project_export") return Promise.resolve(preview());
       return Promise.resolve({
-        path: "/media/stick/thesis.eldrunproj",
+        path: `/media/stick/thesis.${NAMES.exportExtension}`,
         bytes: 4_000_000,
         files: 160,
         payloadBytes: 5_000_000,
@@ -162,7 +164,7 @@ describe("export dialog", () => {
         notes: ["rebuildableSkipped"],
       });
     });
-    mockSave.mockResolvedValue("/media/stick/thesis.eldrunproj");
+    mockSave.mockResolvedValue(`/media/stick/thesis.${NAMES.exportExtension}`);
 
     await act(async () => {
       render(<ProjectExportDialog project={project} onClose={() => {}} />);
@@ -172,12 +174,12 @@ describe("export dialog", () => {
     });
 
     expect(mockSave).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultPath: "thesis-2026-09-21.eldrunproj" }),
+      expect.objectContaining({ defaultPath: `thesis-2026-09-21.${NAMES.exportExtension}` }),
     );
     expect(mockInvoke).toHaveBeenCalledWith("export_project", {
       req: {
         projectId: "p1",
-        destPath: "/media/stick/thesis.eldrunproj",
+        destPath: `/media/stick/thesis.${NAMES.exportExtension}`,
         includeFiles: true,
         includeGit: true,
         includeSession: true,
@@ -223,16 +225,16 @@ describe("import dialog", () => {
   it("reads the file before asking anything, and says what is in it", async () => {
     await chooseBundle(bundle());
     expect(mockInvoke).toHaveBeenCalledWith("inspect_project_export", {
-      bundlePath: "/media/stick/thesis.eldrunproj",
+      bundlePath: `/media/stick/thesis.${NAMES.exportExtension}`,
     });
-    expect(screen.getByText(/Thesis — exported 2026-09-20 by Eldrun 0\.1\.76/)).toBeTruthy();
+    expect(screen.getByText(new RegExp(String.raw`Thesis — exported 2026-09-20 by ${BRAND.display} 0\.1\.76`))).toBeTruthy();
     expect(screen.getByText(/120 files, 5\.0 MB/)).toBeTruthy();
     // Both gaps the bundle records are surfaced before the import, not after.
     expect(screen.getByText(/Rebuildable folders/)).toBeTruthy();
     expect(screen.getByText(/31 recorded days/)).toBeTruthy();
     const name = screen.getByDisplayValue("Thesis");
     expect(name).toBeTruthy();
-    expect(screen.getByDisplayValue("/home/me/eldrun/projects")).toBeTruthy();
+    expect(screen.getByDisplayValue(`/home/me/${BRAND.slug}/projects`)).toBeTruthy();
   });
 
   it("warns that a remote project's credentials stay behind", async () => {
@@ -259,9 +261,12 @@ describe("import dialog", () => {
     const entry: ProjectEntry = { ...project, id: "p2", name: "Thesis copy" };
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "inspect_project_export") return Promise.resolve(bundle());
+      if (cmd === "get_boxes") {
+        return Promise.resolve([{ id: "b1", name: "Papers", member_ids: ["p2"], position: 10, rev: 3 }]);
+      }
       return Promise.resolve({
         entry,
-        directory: "/home/me/eldrun/projects/thesis-copy",
+        directory: `/home/me/${BRAND.slug}/projects/thesis-copy`,
         mirror: null,
         files: 120,
         tabsRestored: 4,
@@ -282,9 +287,9 @@ describe("import dialog", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("import_project_export", {
       req: {
-        bundlePath: "/media/stick/thesis.eldrunproj",
+        bundlePath: `/media/stick/thesis.${NAMES.exportExtension}`,
         name: "Thesis copy",
-        targetParent: "/home/me/eldrun/projects",
+        targetParent: `/home/me/${BRAND.slug}/projects`,
         mirrorParent: null,
         restoreSession: true,
         restoreTime: true,
@@ -298,5 +303,12 @@ describe("import dialog", () => {
     // The downgrade is reported, so a tab that comes back as a bare shell is
     // explained rather than discovered.
     expect(screen.getByText(/came back as plain shells/)).toBeTruthy();
+    // Joining a box wrote boxes.json: the store reloads it, so the pill shows
+    // the member and the next box save carries the moved-on revision.
+    await vi.waitFor(() =>
+      expect(useBoxesStore.getState().boxes).toEqual([
+        { id: "b1", name: "Papers", member_ids: ["p2"], position: 10, rev: 3 },
+      ]),
+    );
   });
 });

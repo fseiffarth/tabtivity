@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { BIOMETRIC_HINTS, BIOMETRIC_SELECTION, MIN_NEW_PIN, nextLockout, validPin } from "../../../mobile-web/src/localLock";
+import { BRAND } from "../../lib/brand";
 
-describe("Eldrun Mobile local app lock", () => {
+describe(`${BRAND.display} Mobile local app lock`, () => {
   it("accepts only a four to twelve digit PIN", () => {
     expect(validPin("1234")).toBe(true);
     expect(validPin("123456789012")).toBe(true);

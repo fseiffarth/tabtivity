@@ -36,7 +36,7 @@ pub struct StagedImport {
 pub fn tool_schema() -> Value {
     json!({
         "name": TOOL,
-        "description": "Hand the user an iCalendar (.ics) file to import. Pass the file's full text; Eldrun takes no path and no URL. Nothing is imported by this call: the file waits in Eldrun's review panel, where the user sees what it contains and imports it into a new calendar of its own, or discards it. Say proposed, never imported. At most 96 KiB; a larger file is one the user imports with the calendar's own Import button.",
+        "description": concat!("Hand the user an iCalendar (.ics) file to import. Pass the file's full text; ", crate::app_name!(), " takes no path and no URL. Nothing is imported by this call: the file waits in ", crate::app_name!(), "'s review panel, where the user sees what it contains and imports it into a new calendar of its own, or discards it. Say proposed, never imported. At most 96 KiB; a larger file is one the user imports with the calendar's own Import button."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -142,7 +142,7 @@ pub fn call(stores: &Stores, tab: &str, args: &Value) -> Result<(Value, Effects)
         json!({
             "staged": true,
             "import": id,
-            "note": "Waiting in Eldrun's review panel. Nothing is imported until the user approves it there.",
+            "note": concat!("Waiting in ", crate::app_name!(), "'s review panel. Nothing is imported until the user approves it there."),
         }),
         Effects::default(),
     ))

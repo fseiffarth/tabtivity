@@ -93,7 +93,7 @@ fn remote_mirror_in(parent: &Path, name: &str, id: &str, list: &ProjectsList) ->
 }
 
 /// The default local mirror location for a new remote (SSH) project: a readable
-/// `<name>` subfolder of the top-level `eldrun/projects-ssh/` root (rather than a
+/// `<name>` subfolder of the top-level `tabtivity/projects-ssh/` root (rather than a
 /// hidden state dir or the managed-local `projects/` tree).
 fn default_remote_mirror(name: &str, id: &str, list: &ProjectsList) -> PathBuf {
     remote_mirror_in(&paths::projects_ssh_root(), name, id, list)
@@ -142,7 +142,7 @@ pub struct ProjectConflict {
     pub name: String,
     /// `"directory"` — the same local folder is already a project.
     /// `"mirror"` — it is a remote project's local mirror (the working copy
-    /// Eldrun syncs), which is a tree that already has an owner.
+    /// Tabtivity syncs), which is a tree that already has an owner.
     /// `"remote-path"` — the same login on the same host, at the same path.
     pub kind: String,
 }
@@ -523,8 +523,8 @@ pub(crate) fn patch_project_entry_mirrored<R>(
     Ok(result)
 }
 
-/// Remove the entry of the retired built-in Trash workspace (`eldrun-trash`),
-/// which older Eldrun versions created and kept pinned. Its `~/eldrun/trash`
+/// Remove the entry of the retired built-in Trash workspace (`tabtivity-trash`),
+/// which older Tabtivity versions created and kept pinned. Its `~/tabtivity/trash`
 /// folder is left untouched.
 fn drop_legacy_trash_project(list: &mut ProjectsList) {
     list.retain(|p| p.id != paths::LEGACY_TRASH_PROJECT_ID);
@@ -563,6 +563,41 @@ pub fn check_project_site(req: CheckProjectSiteRequest) -> Result<Option<Project
     Ok(find_project_conflict(&list, &site, req.skip_id.as_deref()))
 }
 
+/// Whether anything — a folder, a file, a symlink (dangling or not) — already
+/// sits at `directory`. The New-project dialog asks before Create so it can say
+/// the project can't be made there; advisory, like `check_project_site` —
+/// `create_project`'s own `claim_new_project_dir` is the gate.
+#[tauri::command]
+pub fn project_folder_exists(directory: String) -> bool {
+    !directory.trim().is_empty() && fs::symlink_metadata(&directory).is_ok()
+}
+
+/// Create a **new** local project's folder, refusing one that already exists.
+///
+/// A new project starts in a folder of its own. One that is already there holds
+/// somebody's files — a project that was never registered, a backup, another
+/// app's data — and creating over it would scaffold into it, `git init` it, and
+/// replace any `project.json` it carries. Importing is the verb for an existing
+/// folder. `create_dir` (not `_all`) on the leaf makes the check and the claim
+/// one step, so a folder appearing between the dialog's check and this call is
+/// refused too.
+fn claim_new_project_dir(dir: &Path) -> Result<(), String> {
+    if dir.as_os_str().is_empty() {
+        return Err("No folder was given for the new project".to_string());
+    }
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir(dir).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => format!(
+            "The folder {} already exists, so the project cannot be created there. \
+             Choose another name, or import the folder instead.",
+            dir.display()
+        ),
+        _ => e.to_string(),
+    })
+}
+
 // ── Project list ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -577,10 +612,10 @@ pub fn get_projects() -> Result<ProjectsList, String> {
 
 /// Bring one `projects.json` entry up to the current on-disk shape, in place.
 ///
-/// Old Eldrun versions (pre-Group-D) wrote entries that omit fields the current
+/// Old Tabtivity versions (pre-Group-D) wrote entries that omit fields the current
 /// code and pill/hover UI expect. This backfills those from information the
 /// entry already carries, so a legacy project (e.g. the self-hosting
-/// ProjectEldrun entry, which predates persisted `directory`) becomes
+/// checkout's own entry, which predates persisted `directory`) becomes
 /// indistinguishable from a freshly-created one. Purely additive/canonicalizing:
 /// it never overwrites a value the entry already sets.
 ///
@@ -621,7 +656,7 @@ pub(crate) fn normalize_entry(entry: &mut ProjectEntry) -> bool {
 }
 
 /// The hosting provider recorded alongside a `remote-*` `git_type`, from the
-/// dialog's clone/fork URL. Only the two providers Eldrun speaks to are kept,
+/// dialog's clone/fork URL. Only the two providers Tabtivity speaks to are kept,
 /// and only for a project that actually has a hosting target — a `local` or
 /// `none` project naming a provider would badge a repo that is pushed nowhere.
 pub(crate) fn normalize_git_provider(value: Option<&str>, git_type: &str) -> Option<String> {
@@ -675,7 +710,7 @@ pub fn save_projects(projects: ProjectsList) -> Result<(), String> {
 
 // ── Archive (delete → restorable holding area) ─────────────────────────────
 //
-// Deleting a project moves its LOCAL folders into `~/eldrun/archive/<id>/` and
+// Deleting a project moves its LOCAL folders into `~/tabtivity/archive/<id>/` and
 // drops it from `projects.json`. A remote project's tree on its host is never
 // touched — only its local state dir + mirror move. The archive is only cleared
 // manually from Settings; restore moves the folders back and re-registers the
@@ -962,17 +997,17 @@ pub fn archive_project_blocking(project_id: String, archived_at: String) -> Resu
     Ok(())
 }
 
-/// Remove a project from Eldrun and leave its folder exactly where it is.
+/// Remove a project from Tabtivity and leave its folder exactly where it is.
 ///
 /// The counterpart of `archive_project` for when the *files* are fine and only
-/// Eldrun's view of them is wrong — an import that went sideways, a folder
+/// Tabtivity's view of them is wrong — an import that went sideways, a folder
 /// registered under the wrong name, a tree that should be imported again from
 /// scratch. Nothing inside the project folder is touched: not `project.json`,
 /// not the scaffold (`PROJECT.md`, `AGENTS.md`, `.claude/settings.json`,
 /// `.gitignore` — the scaffold only writes those when absent, so any of them may
-/// be the user's own), not `.eldrun/`, and certainly nothing the user put there
+/// be the user's own), not `.tabtivity/`, and certainly nothing the user put there
 /// themselves (a `README.md`). A remote project's mirror is user files
-/// and stays too. What goes is Eldrun's own state *about* the project, all of it
+/// and stays too. What goes is Tabtivity's own state *about* the project, all of it
 /// keyed by the id and all of it outside the tree: the `projects.json` entry,
 /// `<state_dir>/sessions/<id>/` (tab layout, `open_apps`, host-bound markers),
 /// `<state_dir>/live_sessions/<id>/` (agent resume records), the time-tracking
@@ -981,7 +1016,7 @@ pub fn archive_project_blocking(project_id: String, archived_at: String) -> Resu
 /// that would ever be read again — and the duplicate gate it has to pass looks
 /// at the registry, not the folder.
 ///
-/// A VM project is refused: its overlay disk lives in Eldrun's state dir and
+/// A VM project is refused: its overlay disk lives in Tabtivity's state dir and
 /// *is* the working tree, so "keep the files" has nothing to keep — that one
 /// goes through the archive, which moves the disk with it.
 #[tauri::command]
@@ -998,8 +1033,8 @@ pub fn forget_project_blocking(project_id: String) -> Result<(), String> {
         .ok_or_else(|| format!("project '{project_id}' not found"))?
         .clone();
     if entry_is_vm(&entry) {
-        return Err("A VM project's disk lives in Eldrun's state, so there is no folder to \
-                    keep — use \"Delete project…\", which archives the disk with it."
+        return Err(concat!("A VM project's disk lives in ", crate::app_name!(), "'s state, so there is no folder to \
+                    keep — use \"Delete project…\", which archives the disk with it.")
             .into());
     }
     let remote = entry_is_remote(&entry);
@@ -1020,13 +1055,13 @@ pub fn forget_project_blocking(project_id: String) -> Result<(), String> {
     forget_project_state(&project_id, remote)
 }
 
-/// The state-dir half of `forget_project`: every directory Eldrun keeps *about*
+/// The state-dir half of `forget_project`: every directory Tabtivity keeps *about*
 /// a project, keyed by its id — all under the state dir, never under the tree.
 fn forget_project_state(project_id: &str, remote: bool) -> Result<(), String> {
     let mut dirs = vec![
         storage::project_session_dir(project_id),
         crate::services::agent_session::project_live_sessions_dir(project_id),
-        // The project's Eldrun-owned agent home: its agents' config,
+        // The project's Tabtivity-owned agent home: its agents' config,
         // transcripts and session stores go with it (`services::agent_home`).
         crate::services::agent_home::scope_home(Some(project_id)),
     ];
@@ -1165,17 +1200,18 @@ pub struct UnsyncedReport {
     /// Per-branch breakdown (only branches with a non-zero count).
     pub branches: Vec<UnsyncedBranch>,
     /// True when a host baseline existed to compare against (a recorded
-    /// `remote_head` or any `refs/eldrun/{incoming,backup}` ref). When false the
+    /// `remote_head` or any `refs/tabtivity/{incoming,backup}` ref). When false the
     /// count is every local commit and should be framed as "could not verify".
     pub verified: bool,
 }
 
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
 fn git_in(dir: &Path, args: &[&str]) -> String {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .args(args)
         .current_dir(dir)
-        .output()
+        .bounded_output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -1215,18 +1251,31 @@ pub fn archived_mirror_unsynced(project_id: String) -> Result<UnsyncedReport, St
     }
 
     // Build the host baseline: refs whose history we know reached (or came from)
-    // the host. `refs/eldrun/incoming/*` are the host's tips at the last fetch,
-    // `refs/eldrun/backup/*` are safety snapshots, and the recorded `remote_head`
+    // the host. `refs/tabtivity/incoming/*` are the host's tips at the last fetch,
+    // `refs/tabtivity/backup/*` are safety snapshots, and the recorded `remote_head`
     // is the last-observed host HEAD.
     let mut negatives: Vec<String> = vec![
-        "--glob=refs/eldrun/incoming".to_string(),
-        "--glob=refs/eldrun/backup".to_string(),
+        format!("--glob={}", crate::brand::GIT_REF_INCOMING),
+        format!("--glob={}", crate::brand::GIT_REF_BACKUP),
     ];
     let mut have_baseline = !git_in(
         &mirror,
-        &["for-each-ref", "refs/eldrun/incoming", "refs/eldrun/backup"],
+        &["for-each-ref", crate::brand::GIT_REF_INCOMING, crate::brand::GIT_REF_BACKUP],
     )
     .is_empty();
+    // Until the mirror's refs have moved to the current namespace
+    // (`brand_migration::project`, at the next open), they still count from
+    // the old one. Nothing is added while the name is unchanged.
+    let pair = crate::brand::PAIR;
+    for name in [crate::brand::Name::GIT_REF_INCOMING, crate::brand::Name::GIT_REF_BACKUP] {
+        if let Some(old) = pair.legacy(name) {
+            if !git_in(&mirror, &["for-each-ref", &old]).is_empty() {
+                crate::brand::legacy_hit("git-refs");
+                have_baseline = true;
+                negatives.push(format!("--glob={old}"));
+            }
+        }
+    }
     if let Ok(state) = storage::read_json::<crate::services::git_peer::GitPeerState>(
         &dest.join("state").join("git_peer.json"),
     ) {
@@ -1384,7 +1433,7 @@ pub struct ProjectDirRenamePlan {
     pub status: String,
 }
 
-/// A single folder name that is valid on every OS Eldrun ships to: no
+/// A single folder name that is valid on every OS Tabtivity ships to: no
 /// separators, no `.`/`..`, none of Windows' reserved characters, no trailing
 /// dot or space, no control characters.
 fn is_valid_folder_leaf(leaf: &str) -> bool {
@@ -1540,7 +1589,7 @@ fn rename_dir_no_replace(old: &Path, new: &Path) -> Result<(), String> {
 }
 
 /// Rename a **closed** local project's folder to `<same parent>/<leaf>`, then
-/// re-point everything Eldrun stores under the old path: the registry entry
+/// re-point everything Tabtivity stores under the old path: the registry entry
 /// (`directory`, `local_file`, a pinned venv interpreter…), the moved
 /// `project.json`, and the saved tab layout. Refuses anything the plan does not
 /// call `ok`, and refuses an open project — its shells and agents hold the old
@@ -1612,26 +1661,29 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
         eprintln!("rename_project_dir: saved tab layout not updated: {e}");
     }
     if new.join(".git").exists() {
-        // Linked worktrees record absolute paths both ways. The ones that lived
-        // inside the folder (`.eldrun/worktrees/…`) moved with it, and repair can
-        // only find them when told where they went.
-        let moved_worktrees = moved_linked_worktrees(&new, old_s, new_s);
-        match paths::command_no_window("git")
-            .arg("-C")
-            .arg(&new)
-            .args(["worktree", "repair"])
-            .args(&moved_worktrees)
-            .output()
-        {
-            Ok(out) if !out.status.success() => eprintln!(
-                "rename_project_dir: git worktree repair: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Err(e) => eprintln!("rename_project_dir: git worktree repair: {e}"),
-            Ok(_) => {}
+        if let Err(e) = repair_moved_worktrees(&new, old_s, new_s) {
+            eprintln!("rename_project_dir: git worktree repair: {e}");
         }
     }
     Ok(updated)
+}
+
+/// Re-point a repo's linked worktrees after its folder moved from `old` to
+/// `new` (`repo` is the new path). Linked worktrees record absolute paths both
+/// ways. The ones that lived inside the folder (`.tabtivity/worktrees/…`)
+/// moved with it, and repair can only find them when told where they went.
+/// Runs through the hardened git command like every local git spawn.
+fn repair_moved_worktrees(repo: &Path, old: &str, new: &str) -> Result<(), String> {
+    let moved = moved_linked_worktrees(repo, old, new);
+    use crate::services::git_bounded::BoundedOutput;
+    let out = crate::commands::git::hardened_git_command_in(repo, &["worktree", "repair"])
+        .args(&moved)
+        .bounded_output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// The new locations of a repo's linked worktrees that sat under the renamed
@@ -1640,18 +1692,29 @@ fn moved_linked_worktrees(repo: &Path, old: &str, new: &str) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(repo.join(".git").join("worktrees")) else {
         return Vec::new();
     };
+    let (old, new) = (git_path_form(old), git_path_form(new));
     entries
         .flatten()
         .filter_map(|e| fs::read_to_string(e.path().join("gitdir")).ok())
         .filter_map(|gitdir| {
             let mut v = Value::String(gitdir.trim().to_string());
-            if !storage::rewrite_path_prefix(&mut v, old, new) {
+            if !storage::rewrite_path_prefix(&mut v, &old, &new) {
                 return None;
             }
             let moved = PathBuf::from(v.as_str()?);
             moved.parent().map(Path::to_path_buf)
         })
         .collect()
+}
+
+/// A path as git writes it into a `gitdir` file: `/`-separated on every OS,
+/// while a Windows folder path from `projects.json` uses `\`.
+fn git_path_form(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
 }
 
 /// Whether a currently-detected repo source still needs a user decision:
@@ -2002,10 +2065,62 @@ pub fn set_project_persist_sessions(project_id: String, enabled: bool) -> Result
     Ok(enabled)
 }
 
-/// Authoritative per-project opt-in for Eldrun Mobile. This flag lives in the
+/// A scope's Mobile access as `set_project_mobile_access` stored it: the
+/// switch, and which paired phones it reaches (`None` = every phone, also
+/// those paired later).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MobileAccessState {
+    pub enabled: bool,
+    pub devices: Option<Vec<String>>,
+}
+
+/// The per-phone list a `set_*_mobile_access` call stores: `None` (every
+/// phone) as asked, or the asked list validated and cut to the phones paired
+/// right now (`auth::scope_device_list`) — refused when nothing is left.
+pub(crate) fn mobile_scope_devices(requested: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    use crate::services::mobile_control::auth;
+    let paired = auth::read_paired_devices(&storage::state_dir().join("mobile-control"))?;
+    auth::scope_device_list(&requested, &paired).map(Some)
+}
+
+/// Write a project entry's Mobile keys: on with its per-phone list (absent =
+/// every phone), or off with both keys gone — a list never outlives the
+/// switch. Every other key of the entry is left alone.
+fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Option<&[String]>) {
+    if !enabled {
+        project.extra.remove(crate::brand::MOBILE_ACCESS_KEY);
+        project.extra.remove(crate::brand::MOBILE_DEVICES_KEY);
+        return;
+    }
+    project
+        .extra
+        .insert(crate::brand::MOBILE_ACCESS_KEY.into(), Value::Bool(true));
+    match devices {
+        Some(devices) => {
+            project
+                .extra
+                .insert(crate::brand::MOBILE_DEVICES_KEY.into(), serde_json::json!(devices));
+        }
+        None => {
+            project.extra.remove(crate::brand::MOBILE_DEVICES_KEY);
+        }
+    }
+}
+
+/// Authoritative per-project opt-in for Tabtivity Mobile. This flag lives in the
 /// state-dir `projects.json`, never only in project-writable `project.json`.
+/// `devices` narrows it to some paired phones (see [`mobile_scope_devices`]);
+/// omitted, every phone.
 #[tauri::command]
-pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bool, String> {
+pub fn set_project_mobile_access(
+    app: tauri::AppHandle,
+    project_id: String,
+    enabled: bool,
+    devices: Option<Vec<String>>,
+) -> Result<MobileAccessState, String> {
     let projects = get_projects()?;
     let project = projects
         .iter()
@@ -2035,6 +2150,7 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
             return Err("Mobile access requires tmux on this machine".into());
         }
     }
+    let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
         if enabled {
             if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
@@ -2051,15 +2167,13 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
             if runtime_enabled("sandbox") || runtime_enabled("vm") {
                 return Err("Mobile access is unavailable for container and VM projects".into());
             }
-            project
-                .extra
-                .insert("eldrun_mobile_access".into(), Value::Bool(true));
-        } else {
-            project.extra.remove("eldrun_mobile_access");
         }
+        apply_mobile_access(project, enabled, devices.as_deref());
         Ok(())
     })?;
-    Ok(enabled)
+    // A phone this leaves out loses what it scheduled or held here.
+    crate::commands::agent_tasks::cancel_lost_phone_rules(&app, "after a project's Mobile access changed");
+    Ok(MobileAccessState { enabled, devices })
 }
 
 /// Set (or clear) the display name for a **remote** project's primary machine —
@@ -2536,7 +2650,59 @@ pub fn load_tab_session(project_id: String) -> crate::schema::session::TerminalS
     crate::services::terminal_service::load_terminal_session(&project_id)
 }
 
-/// Adopt the layout saved in the project **folder** (`.eldrun/sessions/`) as this
+/// The event every window receives when a scope's shared tab set moved:
+/// `{ scope, version, ops }` (headless owner plan, H1). A client whose known
+/// version skipped re-fetches the snapshot.
+pub const WORKSPACE_PATCH_EVENT: &str = "workspace:patch";
+
+/// A scope's tab set with its version — what a client hydrates from
+/// (`services::workspace::snapshot`). Replaces [`load_tab_session`] for
+/// clients that then write through [`workspace_sync`].
+#[tauri::command]
+pub fn workspace_snapshot(project_id: String) -> Result<crate::services::workspace::Snapshot, String> {
+    crate::services::workspace::snapshot(&project_id)
+}
+
+/// Apply a client's view of a scope onto the shared tab set: the difference
+/// between what it sends and what it knew at `base_version` is the change it
+/// meant, merged onto the current set (`services::workspace::sync`). Same
+/// payload as [`save_tab_layout`] plus the version, so the frontend's one
+/// persisted shape (`toSavedTabEntry`) stays the one shape. Answers the new
+/// version and the stored tabs with their ids, and tells every window what
+/// changed.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_sync(
+    app: tauri::AppHandle,
+    project_id: String,
+    local_file: String,
+    base_version: Option<u64>,
+    tabs: Vec<crate::schema::project::TabEntry>,
+    groups: Option<Value>,
+    sessions: Option<Value>,
+    active_tab_index: Option<usize>,
+    allow_clear: bool,
+) -> Result<crate::services::workspace::SyncOutcome, String> {
+    let client = crate::services::workspace::ClientSync {
+        base_version: base_version.unwrap_or(0),
+        tabs,
+        groups,
+        sessions,
+        active_tab_index,
+        allow_clear,
+    };
+    let outcome = crate::services::workspace::sync(&project_id, &local_file, client)?;
+    if !outcome.ops.is_empty() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            WORKSPACE_PATCH_EVENT,
+            serde_json::json!({ "scope": project_id, "version": outcome.version, "ops": outcome.ops }),
+        );
+    }
+    Ok(outcome)
+}
+
+/// Adopt the layout saved in the project **folder** (`.tabtivity/sessions/`) as this
 /// project's session state. Explicit user action only — see
 /// `terminal_service::adopt_project_tree_session`.
 #[tauri::command]
@@ -2580,7 +2746,7 @@ pub fn save_tab_layout(
     )
 }
 
-/// `~/eldrun/root` — the working directory of everything that belongs to no
+/// `~/tabtivity/root` — the working directory of everything that belongs to no
 /// project (the root control terminal, and now the side panel's file tree over
 /// the same folder, which is where data lands while it is only being looked at
 /// or before it has a project to belong to).
@@ -2605,7 +2771,7 @@ pub fn projects_root_dir() -> String {
 }
 
 /// The default parent directory for a remote (SSH) project's local mirror — the
-/// top-level `eldrun/projects-ssh/` root. The New/Import dialog seeds its "Local
+/// top-level `tabtivity/projects-ssh/` root. The New/Import dialog seeds its "Local
 /// location" picker from this so its default matches `default_remote_mirror`.
 #[tauri::command]
 pub fn remote_mirror_root_dir() -> String {
@@ -2758,17 +2924,25 @@ pub fn move_remote_mirror_blocking(
 /// The one file that carries real instructions. Every agent-specific doc is a
 /// pointer to it (see `CLAUDE_SCAFFOLD`/`GEMINI_SCAFFOLD`), so guidance is
 /// written once and every agent reads the same text instead of three stubs
-/// drifting apart. It links out to the sibling agent files and the rest of the
-/// scaffold, which is what makes it a usable entry point on a fresh project.
+/// drifting apart.
+///
+/// Kept to placeholders: agents load it every session, and it is the user's
+/// file from the first write on — never rewritten unless still byte-identical
+/// to a template Tabtivity shipped (`AGENTS_HISTORY`). So nothing about Tabtivity
+/// itself goes here (the `tabtivity-send` hint comes from `services::agent_hint`
+/// and the session hook), and the map of the other files is `PROJECT.md`'s.
+/// Changing this text? Add the old one to `scaffold_history/` first — a test
+/// pins it.
 const AGENTS_SCAFFOLD: &str = r#"# Agents
 
-Canonical instructions for every AI coding agent working in this project.
-The agent-specific files are pointers to this one — write guidance **here**
-so every agent reads the same thing.
+Canonical instructions for every AI coding agent in this project;
+`CLAUDE.md` and `GEMINI.md` import this file. Write guidance **here**, and
+keep it to what an agent would otherwise get wrong: it is loaded into every
+session. [PROJECT.md](./PROJECT.md) maps the rest of the project.
 
 ## Project
 
-_What this project is and what it is for._
+_What this project is, in a sentence or two._
 
 ## Running
 
@@ -2777,31 +2951,6 @@ _Build, run and test commands._
 ## Conventions
 
 _Layout, style, and anything an agent must not do._
-
-## Showing the user a file
-
-To put a file in front of the user on their phone (Eldrun Mobile), run
-`eldrun-send <file>` — any file up to 24 MiB; images, PDFs and text show
-on the phone, anything else is offered as a download. Local and container
-tabs. `command | eldrun-send -n tests.log` sends stdin; `eldrun-send --clear`
-empties the outbox. A file sent from this tab shows in this tab's phone chat
-and every gallery; one copied into `.eldrun/outbox/` by hand, in the gallery only.
-
-## Agent files
-
-- [AGENTS.md](./AGENTS.md) — this file: the single source of truth
-- [CLAUDE.md](./CLAUDE.md) — Claude Code; imports this file
-- [GEMINI.md](./GEMINI.md) — Gemini CLI; imports this file
-
-## Project docs
-
-- [PROJECT.md](./PROJECT.md) — map of the scaffold: every file linked, with what it is for
-- [README.md](./README.md) — overview
-- [DOCUMENTATION.md](./DOCUMENTATION.md) — reference documentation
-- [ROADMAP.md](./ROADMAP.md) — planned direction
-- [TODO.md](./TODO.md) — open work items
-- [REMARKS.md](./REMARKS.md) — project-wide remarks attached to files and lines
-- [STATUS.md](./STATUS.md) — current state
 "#;
 
 /// Claude Code pointer. `@AGENTS.md` on its own line is Claude Code's import
@@ -2837,11 +2986,11 @@ Other agent files: [AGENTS.md](./AGENTS.md) · [CLAUDE.md](./CLAUDE.md)
 /// point — the links are relative, so the markdown viewer's link-following
 /// (#49/#50) opens each target in-app. Scaffolded like the rest (never
 /// overwritten), and listed first so previews show the map before the mapped.
-const PROJECT_SCAFFOLD: &str = r#"# Project Map
+const PROJECT_SCAFFOLD: &str = concat!(r#"# Project Map
 
 Start here. This file links every scaffold file with what it is for, so the
 project can be navigated from one place. The links are relative and open
-in Eldrun's markdown viewer.
+in "#, crate::app_name!(), r#"'s markdown viewer.
 
 ## Docs
 
@@ -2865,7 +3014,7 @@ in Eldrun's markdown viewer.
 
 _Add links to your own key files and folders here so this stays the map of
 the project._
-"#;
+"#);
 
 const REMARKS_SCAFFOLD: &str = r#"# Remarks
 
@@ -2887,30 +3036,74 @@ pub const SCAFFOLD_FILES: &[(&str, &str)] = &[
     ("DOCUMENTATION.md", "# Documentation\n"),
 ];
 
-/// The folder a saved screen grab lands in. `eldrun-` prefixed because the
+/// The folder a saved screen grab lands in. `tabtivity-` prefixed because the
 /// plain name is one a *project* plausibly owns — a repo with its own
-/// `screenshots/` of documentation images would have Eldrun filing private
+/// `screenshots/` of documentation images would have Tabtivity filing private
 /// captures into a tracked folder, and ignoring that folder would then hide the
 /// project's own files from git. The prefix makes the folder unmistakably
-/// Eldrun's, so ignoring it can never swallow something the user wrote.
-pub const SCREENSHOTS_DIR: &str = "eldrun-screenshots";
+/// Tabtivity's, so ignoring it can never swallow something the user wrote.
+pub const SCREENSHOTS_DIR: &str = crate::brand::SCREENSHOTS_DIR;
 
 /// The folder a saved mail attachment lands in (*Save to emails folder*), named
 /// on the same rule as [`SCREENSHOTS_DIR`].
-pub const EMAILS_DIR: &str = "eldrun-emails";
+pub const EMAILS_DIR: &str = crate::brand::EMAILS_DIR;
 
-// `eldrun-screenshots/` is ignored by default because a screen grab holds
+/// The name one of those folders (`Name::SCREENSHOTS_DIR`, `Name::EMAILS_DIR`)
+/// goes by in the project at `root`: the name an older build gave it where the
+/// project already has that folder and not the current one, the current name
+/// otherwise — so a project filed into before a rename keeps its one folder
+/// instead of growing a second. The old folder is the user's and stays for
+/// good, which is why this is not counted as a legacy hit. Only a real
+/// directory counts (a project tree is attacker-controlled; a link is not a
+/// folder the app made). While the name is unchanged this never looks at the
+/// disk.
+pub fn generated_dir_name_for(pair: &crate::brand::Pair, root: &Path, name: crate::brand::Name) -> String {
+    let current = pair.cur(name);
+    let Some(old) = pair.legacy(name) else {
+        return current;
+    };
+    let old_is_dir = fs::symlink_metadata(root.join(&old)).is_ok_and(|meta| meta.file_type().is_dir());
+    if old_is_dir && fs::symlink_metadata(root.join(&current)).is_err() {
+        old
+    } else {
+        current
+    }
+}
+
+/// [`generated_dir_name_for`] under the running app's brand.
+pub fn generated_dir_name(root: &Path, name: crate::brand::Name) -> String {
+    generated_dir_name_for(&crate::brand::PAIR, root, name)
+}
+
+/// The folder a save into the project at `project_dir` defaults to, for the
+/// dialogs that show it: `kind` is `"screenshots"` or `"emails"`. A directory
+/// that is not on this machine (a remote project's) answers the current name.
+#[tauri::command]
+pub fn project_generated_dir(project_dir: String, kind: String) -> Result<String, String> {
+    let name = match kind.as_str() {
+        "screenshots" => crate::brand::Name::SCREENSHOTS_DIR,
+        "emails" => crate::brand::Name::EMAILS_DIR,
+        _ => return Err("unknown folder kind".into()),
+    };
+    Ok(generated_dir_name(Path::new(&project_dir), name))
+}
+
+// `tabtivity-screenshots/` is ignored by default because a screen grab holds
 // whatever happened to be on the screen — mail, tokens, another project's
 // window — and a project with a public remote is one `git add -A` away from
-// publishing it. `eldrun-emails/` is the same argument from the same direction:
+// publishing it. `tabtivity-emails/` is the same argument from the same direction:
 // it holds correspondence somebody sent to the user, not project source, and
 // the consent that filed it was consent to keep it, never to publish it.
 //
 // The unprefixed `screenshots/` and `emails/` stay on the list. They are what
-// Eldrun wrote into before the rename, so dropping them would un-ignore a
+// Tabtivity wrote into before the rename, so dropping them would un-ignore a
 // folder of already-filed private data the moment a project's `.gitignore` was
 // regenerated — the exact leak these entries exist to prevent.
-pub const GITIGNORE_DEFAULT: &str = "__pycache__/\n*.pyc\n.venv/\nnode_modules/\ntarget/\ndist/\nbuild/\n.env\n.env.local\n.DS_Store\n*.log\n*.swp\n*.swo\n.idea/\n.eldrun/\neldrun-screenshots/\neldrun-emails/\nscreenshots/\nemails/\nproject.json\n";
+//
+// The same goes for the two folders under the app's old name: a project that
+// has one keeps saving into it (`generated_dir_name`), so its rule stays on
+// the list for good.
+pub const GITIGNORE_DEFAULT: &str = concat!("__pycache__/\n*.pyc\n.venv/\nnode_modules/\ntarget/\ndist/\nbuild/\n.env\n.env.local\n.DS_Store\n*.log\n*.swp\n*.swo\n.idea/\n.", crate::app_slug!(), "/\n", crate::app_slug!(), "-screenshots/\n", crate::app_slug!(), "-emails/\n", crate::legacy_slug!(), "-screenshots/\n", crate::legacy_slug!(), "-emails/\nscreenshots/\nemails/\nproject.json\n");
 
 pub const CLAUDE_SETTINGS: &str = r#"{"permissions":{"allow":[],"deny":[]}}"#;
 
@@ -2922,29 +3115,22 @@ pub struct ScaffoldPreviewItem {
     pub kind: String,
 }
 
-/// Write the standard Eldrun project scaffold into a directory.
+/// Write the standard Tabtivity project scaffold into a directory.
 ///
 /// When `with_git` is false the scaffold files are still written but no git
 /// repository is initialized — used for "local, no git" projects (git_type
 /// `"none"`).
 pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
-    let dot_claude = dir.join(".claude");
-    fs::create_dir_all(&dot_claude)?;
 
     for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
-        if !p.exists() {
-            fs::write(&p, content)?;
-        }
+        write_scaffold_file(&dir.join(name), content)?;
     }
-    let gi = dir.join(".gitignore");
-    if with_git && !gi.exists() {
-        fs::write(gi, GITIGNORE_DEFAULT)?;
+    if with_git {
+        write_scaffold_file(&dir.join(".gitignore"), GITIGNORE_DEFAULT)?;
     }
-    let cs = dot_claude.join("settings.json");
-    if !cs.exists() {
-        fs::write(cs, CLAUDE_SETTINGS)?;
+    if let Some(dot_claude) = scaffold_claude_dir(dir)? {
+        write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)?;
     }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
@@ -2961,6 +3147,39 @@ pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Create one scaffold file unless something — a file, a folder, a symlink,
+/// dangling or not — is already at `path`. Returns whether it was written.
+///
+/// The never-overwrite rule in one place. An imported tree is attacker-controlled
+/// and the user's own, so an `exists()`-then-write pair was two holes: a dangling
+/// `CLAUDE.md -> ~/somewhere` passed the check and the write then created the
+/// link's target outside the project, and a file appearing between the check and
+/// the write was truncated. `create_new` + `O_NOFOLLOW` decide in the one open.
+fn write_scaffold_file(path: &Path, content: &str) -> std::io::Result<bool> {
+    match write_no_follow(path, content.as_bytes(), true) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// `dir/.claude`, created when absent. `None` when something other than a real
+/// folder is already there — a file, or a symlink the tree shipped — and the
+/// scaffold then leaves `.claude/settings.json` alone rather than write through
+/// it or fail the whole import on it.
+fn scaffold_claude_dir(dir: &Path) -> std::io::Result<Option<PathBuf>> {
+    let dot_claude = dir.join(".claude");
+    match fs::symlink_metadata(&dot_claude) {
+        Ok(meta) if meta.is_dir() => Ok(Some(dot_claude)),
+        Ok(_) => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&dot_claude)?;
+            Ok(Some(dot_claude))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// `skip_scaffold`'s half of `scaffold_project`: no template files, but a project
 /// asked to be git still gets its repo. Deliberately no initial commit — the tree
 /// is the user's own files (possibly huge), not a scaffold of ours to stage.
@@ -2973,17 +3192,18 @@ fn init_repo_without_scaffold(dir: &Path, git_type: &str) {
 
 /// Stage everything the `.gitignore` permits and create a single scaffold commit.
 /// Best-effort: staging or the commit failing just leaves HEAD as it was. Respects
-/// the user's configured git identity, falling back to an Eldrun identity only when
+/// the user's configured git identity, falling back to a Tabtivity identity only when
 /// git can't resolve one (fresh machine, no global `user.name`/`user.email`) so the
 /// commit never silently fails for lack of a committer and leaves HEAD unborn.
 fn git_scaffold_commit(dir: &Path) {
     // Hardened, hooks off: "extend to remote" seeds this commit in an existing
     // local repo, whose `.git/config` and hooks a fenced agent may have written.
     use crate::commands::git::hookless_git_command_in;
-    let _ = hookless_git_command_in(dir, &["add", "-A"]).output();
-    const MSG: &str = "Initial Eldrun scaffold";
+    use crate::services::git_bounded::BoundedOutput;
+    let _ = hookless_git_command_in(dir, &["add", "-A"]).bounded_output();
+    const MSG: &str = concat!("Initial ", crate::app_name!(), " scaffold");
     let committed = hookless_git_command_in(dir, &["commit", "-m", MSG])
-        .output()
+        .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !committed {
@@ -2991,15 +3211,15 @@ fn git_scaffold_commit(dir: &Path) {
             dir,
             &[
                 "-c",
-                "user.name=Eldrun",
+                concat!("user.name=", crate::app_name!()),
                 "-c",
-                "user.email=eldrun@localhost",
+                concat!("user.email=", crate::app_slug!(), "@localhost"),
                 "commit",
                 "-m",
                 MSG,
             ],
         )
-        .output();
+        .bounded_output();
     }
 }
 
@@ -3008,10 +3228,11 @@ fn git_scaffold_commit(dir: &Path) {
 /// initial commit before lockstep pairing. A missing/erroring git returns `false`
 /// (don't force a commit when we can't tell), never a wipe.
 fn git_head_unborn(dir: &Path) -> bool {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .current_dir(dir)
-        .output()
+        .bounded_output()
         .map(|o| !o.status.success())
         .unwrap_or(false)
 }
@@ -3039,7 +3260,7 @@ fn missing_gitignore_lines_at(dir: &Path) -> std::io::Result<Vec<String>> {
 
 /// Append any `GITIGNORE_DEFAULT` pattern missing from `dir/.gitignore` to the
 /// end of the file, creating it fresh if absent. Existing lines are never
-/// reordered or removed — this only ever adds patterns Eldrun scaffolds by
+/// reordered or removed — this only ever adds patterns Tabtivity scaffolds by
 /// default (e.g. a new one like `project.json` added after the project's
 /// `.gitignore` was first written). Returns the patterns that were added.
 fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
@@ -3064,8 +3285,8 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
     Ok(missing)
 }
 
-/// Make sure `dir/.gitignore` ignores one of Eldrun's own generated folders
-/// (`eldrun-screenshots/`, `eldrun-emails/`) before anything is written into it.
+/// Make sure `dir/.gitignore` ignores one of Tabtivity's own generated folders
+/// (`tabtivity-screenshots/`, `tabtivity-emails/`) before anything is written into it.
 ///
 /// Scaffold repair is the other way these patterns arrive, but it only runs when
 /// the user asks for it — so a project scaffolded before the folder existed
@@ -3078,7 +3299,15 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
 /// with no `.gitignore` at all gets one holding just this pattern — a full
 /// scaffold is `scaffold_project`'s job, not a side effect of saving a file.
 pub fn ensure_generated_dir_ignored(dir: &Path, folder: &str) -> std::io::Result<bool> {
-    if folder != SCREENSHOTS_DIR && folder != EMAILS_DIR {
+    // The old names too: a project that keeps its old folder
+    // (`generated_dir_name`) is saved into under that name.
+    let ours = [
+        SCREENSHOTS_DIR,
+        EMAILS_DIR,
+        crate::brand::LEGACY_SCREENSHOTS_DIR,
+        crate::brand::LEGACY_EMAILS_DIR,
+    ];
+    if !ours.contains(&folder) {
         return Ok(false);
     }
     let pattern = format!("{folder}/");
@@ -3169,13 +3398,32 @@ const LEGACY_AGENT_STUBS: &[(&str, &str)] = &[
     ("GEMINI.md", "# Gemini Context\n"),
 ];
 
+/// Every earlier `AGENTS_SCAFFOLD`, byte for byte, oldest first (2026-08-26 to
+/// 2026-09-28). A project scaffolded with one of them still holds that text
+/// until someone edits it, and only this list lets a repair tell such an
+/// untouched copy from the user's own words: the never-overwrite rule meant
+/// the 09-05 copy kept telling agents the outbox takes images only.
+const AGENTS_HISTORY: &[&str] = &[
+    include_str!("scaffold_history/AGENTS.2026-08-26.md"),
+    include_str!("scaffold_history/AGENTS.2026-08-30.md"),
+    include_str!("scaffold_history/AGENTS.2026-09-05.md"),
+    include_str!("scaffold_history/AGENTS.2026-09-14.md"),
+    include_str!("scaffold_history/AGENTS.2026-09-28.md"),
+];
+
 /// True when `content` is the untouched legacy stub for the agent doc `name`
-/// (or empty). Pure, so the upgrade rule is unit-testable without touching disk.
+/// (or empty), or an untouched earlier `AGENTS.md` template. Line endings are
+/// ignored — a checkout may have turned them to CRLF. Pure, so the upgrade rule
+/// is unit-testable without touching disk.
 fn is_legacy_agent_stub(name: &str, content: &str) -> bool {
     let Some((_, stub)) = LEGACY_AGENT_STUBS.iter().find(|(n, _)| *n == name) else {
         return false;
     };
-    content.trim().is_empty() || content.trim() == stub.trim()
+    if content.trim().is_empty() || content.trim() == stub.trim() {
+        return true;
+    }
+    let content = content.replace("\r\n", "\n");
+    name == "AGENTS.md" && AGENTS_HISTORY.contains(&content.as_str())
 }
 
 /// Like `scaffold_project`, but for an **already-scaffolded** project whose
@@ -3186,14 +3434,11 @@ fn is_legacy_agent_stub(name: &str, content: &str) -> bool {
 /// (plain `scaffold_project` leaves a pre-existing `.gitignore` untouched).
 fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<ScaffoldRepairReport> {
     fs::create_dir_all(dir)?;
-    let dot_claude = dir.join(".claude");
-    fs::create_dir_all(&dot_claude)?;
 
     let mut report = ScaffoldRepairReport::default();
     for (name, content) in SCAFFOLD_FILES {
         let p = dir.join(name);
-        if !p.exists() {
-            fs::write(&p, content)?;
+        if write_scaffold_file(&p, content)? {
             report.created_files.push((*name).to_string());
             continue;
         }
@@ -3202,7 +3447,7 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
             continue;
         };
         if existing != *content && is_legacy_agent_stub(name, &existing) {
-            fs::write(&p, content)?;
+            write_no_follow(&p, content.as_bytes(), false)?;
             report.updated_files.push((*name).to_string());
         }
     }
@@ -3210,12 +3455,12 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
         report.gitignore_lines_added = ensure_gitignore_defaults(dir)?;
     }
 
-    let cs = dot_claude.join("settings.json");
-    if !cs.exists() {
-        fs::write(&cs, CLAUDE_SETTINGS)?;
-        report
-            .created_files
-            .push(".claude/settings.json".to_string());
+    if let Some(dot_claude) = scaffold_claude_dir(dir)? {
+        if write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)? {
+            report
+                .created_files
+                .push(".claude/settings.json".to_string());
+        }
     }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
@@ -3336,11 +3581,11 @@ pub fn repair_all_project_scaffolds() -> Result<Vec<ProjectScaffoldRepair>, Stri
 }
 
 /// One-time-per-entry startup migration that brings legacy `projects.json`
-/// entries fully in line with the current Eldrun version. For each entry:
+/// entries fully in line with the current Tabtivity version. For each entry:
 ///
 /// 1. `normalize_entry` canonicalizes its shape (backfill `directory`, map
 ///    legacy `git_type`). Entries it touches are *legacy* — written by an older
-///    Eldrun that predates those fields.
+///    Tabtivity that predates those fields.
 /// 2. Every legacy entry additionally gets its on-disk scaffold refreshed (the
 ///    same additive, never-overwrite repair as the manual "Repair scaffold
 ///    files" action), since a legacy project also predates current scaffold
@@ -3394,18 +3639,22 @@ pub fn migrate_legacy_projects() {
 }
 
 fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
+    // Anything at the path counts — a dangling symlink too — because that is
+    // what `write_scaffold_file` keeps; `exists()` would call such a link
+    // missing and promise a file the import then doesn't write.
+    let present = |rel: &str| fs::symlink_metadata(dir.join(rel)).is_ok();
     let mut items = SCAFFOLD_FILES
         .iter()
         .map(|(name, _)| ScaffoldPreviewItem {
             path: (*name).to_string(),
-            exists: dir.join(name).exists(),
+            exists: present(name),
             kind: "file".to_string(),
         })
         .collect::<Vec<_>>();
 
     items.push(ScaffoldPreviewItem {
         path: ".gitignore".to_string(),
-        exists: dir.join(".gitignore").exists(),
+        exists: present(".gitignore"),
         kind: "file".to_string(),
     });
     items.push(ScaffoldPreviewItem {
@@ -3418,7 +3667,7 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
     });
     items.push(ScaffoldPreviewItem {
         path: ".claude/settings.json".to_string(),
-        exists: dir.join(".claude/settings.json").exists(),
+        exists: present(".claude/settings.json"),
         kind: "file".to_string(),
     });
     items
@@ -3599,27 +3848,26 @@ fn apply_migration_steps_at(
     let mut report = ScaffoldRepairReport::default();
     for (name, content) in SCAFFOLD_FILES {
         let p = dir.join(name);
-        if accepted.contains(&format!("file:{name}")) && !p.exists() {
-            fs::write(&p, content)?;
-            report.created_files.push((*name).to_string());
+        if accepted.contains(&format!("file:{name}")) {
+            if write_scaffold_file(&p, content)? {
+                report.created_files.push((*name).to_string());
+            }
         } else if accepted.contains(&format!("stub:{name}")) {
             if let Ok(existing) = fs::read_to_string(&p) {
                 if existing != *content && is_legacy_agent_stub(name, &existing) {
-                    fs::write(&p, content)?;
+                    write_no_follow(&p, content.as_bytes(), false)?;
                     report.updated_files.push((*name).to_string());
                 }
             }
         }
     }
     if accepted.contains("claude_settings") {
-        let dot_claude = dir.join(".claude");
-        fs::create_dir_all(&dot_claude)?;
-        let cs = dot_claude.join("settings.json");
-        if !cs.exists() {
-            fs::write(&cs, CLAUDE_SETTINGS)?;
-            report
-                .created_files
-                .push(".claude/settings.json".to_string());
+        if let Some(dot_claude) = scaffold_claude_dir(dir)? {
+            if write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)? {
+                report
+                    .created_files
+                    .push(".claude/settings.json".to_string());
+            }
         }
     }
     if with_git && accepted.contains("gitignore") {
@@ -3633,7 +3881,7 @@ fn apply_migration_steps_at(
 }
 
 /// Dry-run for the "Migrate project" dialog: everything an old project is
-/// missing relative to the current Eldrun state, one step per piece. Changes
+/// missing relative to the current Tabtivity state, one step per piece. Changes
 /// nothing.
 #[tauri::command]
 pub fn project_migration_plan(project_id: String) -> Result<MigrationPlan, String> {
@@ -3719,7 +3967,7 @@ pub struct CreateProjectRequest {
     /// off the repository URL. Ignored for any other `git_type`.
     #[serde(default)]
     pub git_provider: Option<String>,
-    /// Skip writing the Eldrun scaffold (and `git init`) — for new projects
+    /// Skip writing the Tabtivity scaffold (and `git init`) — for new projects
     /// that should start empty. `project.json` is still created so the project
     /// registers normally.
     #[serde(default)]
@@ -3797,6 +4045,35 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
         }
     }
 
+    // A new local project gets a folder of its own (`claim_new_project_dir`),
+    // claimed before anything is written. Should creation fail after that, the
+    // folder — holding nothing but what this call put there — is removed again,
+    // so a retry isn't refused by the remains of the failed attempt.
+    let claimed = match req.remote {
+        None => {
+            let dir = PathBuf::from(&req.directory);
+            claim_new_project_dir(&dir)?;
+            Some(dir)
+        }
+        Some(_) => None,
+    };
+    let created = create_claimed_project(req, id, &registered, is_vm);
+    if created.is_err() {
+        if let Some(dir) = claimed {
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+    created
+}
+
+/// `create_project_blocking` past its gates: the site is free and, for a local
+/// project, its folder was just created empty by `claim_new_project_dir`.
+fn create_claimed_project(
+    req: CreateProjectRequest,
+    id: String,
+    registered: &ProjectsList,
+    is_vm: bool,
+) -> Result<ProjectEntry, String> {
     // Mount-free remote: a remote project's `directory` is a LOCAL per-project
     // state dir that holds its `project.json` (tabs/time/etc.); the project's
     // actual tree lives on the host at `remote.remote_path` and is reached over
@@ -3825,7 +4102,7 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
     let mut git_type = normalize_git_type(req.git_type.as_deref().unwrap_or("local"));
 
     // Remote projects mirror into `<name>` under the chosen "Local location"
-    // (`mirror_parent`), defaulting to the top-level `eldrun/projects-ssh/` root;
+    // (`mirror_parent`), defaulting to the top-level `tabtivity/projects-ssh/` root;
     // relocatable later. None for local projects — and None for VM projects,
     // whose sync posture is the *inverse* of a network remote's
     // (`docs/vm_projects_plan.md`, "Sync posture"): remote-only by default,
@@ -3835,7 +4112,7 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
         None
     } else {
         req.remote.as_ref().map(|_| {
-            resolve_remote_mirror(req.mirror_parent.as_deref(), &req.name, &id, &registered)
+            resolve_remote_mirror(req.mirror_parent.as_deref(), &req.name, &id, registered)
         })
     };
 
@@ -4004,7 +4281,7 @@ pub struct ImportProjectRequest {
     pub mode: String,
     pub scaffold_fill_modes: Option<HashMap<String, String>>,
     pub manual_validation_confirmed: Option<bool>,
-    /// Skip writing the Eldrun scaffold files — for importing projects that
+    /// Skip writing the Tabtivity scaffold files — for importing projects that
     /// already carry their own. A git `git_type` still gets its repo (no initial
     /// commit), and `project.json` is still created/updated so the project
     /// registers normally.
@@ -4117,12 +4394,12 @@ pub fn import_project_blocking(req: ImportProjectRequest) -> Result<ProjectEntry
     finish_import(req, id, target, None)
 }
 
-/// Drop every field of an *adopted* `project.json` that Eldrun later reads back as
+/// Drop every field of an *adopted* `project.json` that Tabtivity later reads back as
 /// executable intent, keeping only the descriptive ones.
 ///
 /// Importing a folder (or cloning/forking a repo) adopts whatever `project.json`
 /// the tree happens to ship. That file is written by whoever wrote the tree, and
-/// several of its fields are commands Eldrun runs on the **host**, unprompted:
+/// several of its fields are commands Tabtivity runs on the **host**, unprompted:
 ///
 /// - `open_apps` — auto-launched on every project activation
 ///   (`services::restore_service`, which now also allowlists each entry);
@@ -4233,7 +4510,7 @@ fn finish_import(
     let git_provider = normalize_git_provider(req.git_provider.as_deref(), &git_type);
 
     // Remote imports mirror into `<name>` under the chosen "Local location"
-    // (`mirror_parent`), defaulting to the `eldrun/projects-ssh/` root; created up
+    // (`mirror_parent`), defaulting to the `tabtivity/projects-ssh/` root; created up
     // front so a local-on-remote tab can cwd into it immediately. None for local.
     let mirror = remote
         .as_ref()
@@ -4246,7 +4523,7 @@ fn finish_import(
         let mut existing: Project = storage::read_json(&project_file).unwrap_or_default();
         // The adopted `project.json` came with the folder — a foreign repository, a
         // clone, a fork, or a tree someone else wrote — so anything in it that
-        // Eldrun would later read back as *executable intent* must not be adopted
+        // Tabtivity would later read back as *executable intent* must not be adopted
         // along with the descriptive fields (see `strip_untrusted_project_fields`).
         strip_untrusted_project_fields(&mut existing);
         existing.id = id.clone();
@@ -4554,27 +4831,21 @@ pub async fn detach_project_from_remote(
     let state_dir = remote_project_state_dir(&project_id);
     let state_dir_s = state_dir.to_string_lossy().to_string();
     let new_local_file = new_project_file.to_string_lossy().to_string();
-    let mut session = crate::services::terminal_service::load_terminal_session(&project_id);
-    // project-tree-read: ok — `session` is the state-dir `TerminalSession`, loaded
-    // by project id; the whole block below never touches the project tree.
-    if !session.tab_layout.is_empty() {
-        // project-tree-read: ok — same `TerminalSession`.
-        for tab in session.tab_layout.iter_mut() {
-            if tab.cwd == state_dir_s {
-                tab.cwd = mirror.clone();
-            } else if let Some(rest) = tab.cwd.strip_prefix(&format!("{state_dir_s}/")) {
-                tab.cwd = format!("{mirror}/{rest}");
+    // project-tree-read: ok — the state-dir `TerminalSession`, edited in place
+    // by project id through the workspace service (which moves the scope's
+    // version, so a client holding the old cwds re-syncs against these); the
+    // whole block never touches the project tree.
+    if !crate::services::terminal_service::load_terminal_session(&project_id).tab_layout.is_empty() {
+        let _ = crate::services::workspace::edit(&project_id, &new_local_file, |session| {
+            for tab in session.tab_layout.iter_mut() {
+                if tab.cwd == state_dir_s {
+                    tab.cwd = mirror.clone();
+                } else if let Some(rest) = tab.cwd.strip_prefix(&format!("{state_dir_s}/")) {
+                    tab.cwd = format!("{mirror}/{rest}");
+                }
             }
-        }
-        let _ = crate::services::terminal_service::save_tab_layout(
-            Some(&project_id),
-            &new_local_file,
-            // project-tree-read: ok — same `TerminalSession`, written straight back.
-            &session.tab_layout,
-            session.tab_groups.clone(),
-            None,
-            false,
-        );
+            Ok(())
+        });
     }
 
     // Drop everything that was bound to the host we are detaching from. Not merely
@@ -4585,7 +4856,7 @@ pub async fn detach_project_from_remote(
     clear_host_bound_state(&project_id, manifest.inner()).await;
 
     // Remove the old state-dir project.json, its session mirror, and then the state dir.
-    // `.eldrun/` is why the dir used to survive every detach: `remove_dir` is
+    // `.tabtivity/` is why the dir used to survive every detach: `remove_dir` is
     // non-recursive, so it failed on a dir that still held the session mirror, and the
     // project's id was left lying around under `remote-projects/` forever.
     //
@@ -4595,7 +4866,7 @@ pub async fn detach_project_from_remote(
     // survive; `remove_dir` succeeds only once the dir is genuinely empty, which is
     // exactly that distinction.
     let _ = std::fs::remove_file(&state_local_file);
-    let _ = std::fs::remove_dir_all(state_dir.join(".eldrun"));
+    let _ = std::fs::remove_dir_all(state_dir.join(crate::brand::PROJECT_DIR));
     let _ = std::fs::remove_dir(&state_dir);
 
     // Update the projects.json entry in place, preserving every other extra key
@@ -4711,18 +4982,24 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
     copy_tree_core(src, dst, false)
 }
 
-/// Mint a pseudo-UUID without an external dep. Time-based (nanos), so callers
-/// that mint several ids back-to-back (e.g. box creation in a loop) must guard
-/// against collisions — see `commands::boxes::create_box`, which re-mints if the
-/// generated id already exists in the list.
+/// Mint a random RFC 4122 v4 UUID (36 chars, `8-4-4-4-12`). It must be a real
+/// UUID: it is passed as `claude --session-id` and checked by
+/// `agent_session::is_uuid_shaped`. Ids minted by older builds repeat a
+/// nanosecond timestamp in every group (85 chars); they stay valid as ids.
+/// Should the system RNG fail, the bytes fall back to the clock, so callers
+/// that mint several ids back-to-back keep their collision guards (see
+/// `commands::boxes::create_box`).
 pub(crate) fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Simple UUID v4 without external deps for now.
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{ts:016x}-{ts:08x}-4{ts:03x}-8{ts:03x}-{ts:012x}")
+    let mut b = [0u8; 16];
+    if getrandom::fill(&mut b).is_err() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        b = ts.to_le_bytes();
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
 fn chrono_now() -> String {
@@ -4733,9 +5010,114 @@ fn chrono_now() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The Mobile keys follow the switch: a list is written only with access
+    /// on, "every phone" removes it, off removes both — and every other key
+    /// of the entry, Python-era ones included, rides through untouched.
+    #[test]
+    fn mobile_access_writes_and_removes_both_keys_and_keeps_the_rest() {
+        let access = crate::brand::MOBILE_ACCESS_KEY;
+        let devices = crate::brand::MOBILE_DEVICES_KEY;
+        let raw = serde_json::json!({
+            "id": "p", "name": "P", "status": "active", "position": 3, "local_file": "/p/project.json",
+            "directory": "/p", "python_era_field": { "kept": [1, 2] },
+        });
+        let mut entry: super::ProjectEntry = serde_json::from_value(raw.clone()).unwrap();
+        let ids = vec!["a".repeat(27)];
+
+        super::apply_mobile_access(&mut entry, true, Some(&ids));
+        let on = serde_json::to_value(&entry).unwrap();
+        assert_eq!(on[access], true);
+        assert_eq!(on[devices], serde_json::json!(ids));
+        assert_eq!(on["python_era_field"], raw["python_era_field"]);
+
+        super::apply_mobile_access(&mut entry, true, None);
+        let all = serde_json::to_value(&entry).unwrap();
+        assert_eq!(all[access], true);
+        assert!(all.get(devices).is_none(), "every phone is the key's absence");
+
+        super::apply_mobile_access(&mut entry, true, Some(&ids));
+        super::apply_mobile_access(&mut entry, false, None);
+        assert_eq!(serde_json::to_value(&entry).unwrap(), raw, "off leaves the entry as it was");
+    }
+
+    /// An omitted list is every phone, and asks nothing of `devices.json`
+    /// (the asked-list checks are `auth::scope_device_list`'s tests).
+    #[test]
+    fn an_omitted_device_list_is_every_phone() {
+        assert_eq!(super::mobile_scope_devices(None), Ok(None));
+    }
+
     use super::*;
 
-    /// `forget_project` purges only Eldrun's state dirs about a project: a dir
+    /// A minted id is a real v4 UUID: `claude --session-id` rejects anything else.
+    #[test]
+    fn uuid_v4_is_a_real_v4_uuid() {
+        let a = uuid_v4();
+        assert_eq!(a.len(), 36);
+        assert!(crate::services::agent_session::is_uuid_shaped(&a), "{a}");
+        assert_eq!(&a[14..15], "4");
+        assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"), "{a}");
+        assert_ne!(a, uuid_v4());
+    }
+
+    /// git writes a worktree's `gitdir` with `/` on every OS; the folder paths
+    /// come from `projects.json` in the OS's own form (`\` on Windows). The
+    /// worktree under the renamed folder is still found.
+    #[test]
+    fn moved_linked_worktrees_matches_gits_slashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("before");
+        let new = tmp.path().join("after");
+        let (old_s, new_s) = (old.to_string_lossy().to_string(), new.to_string_lossy().to_string());
+        let meta = new.join(".git").join("worktrees").join("feature");
+        std::fs::create_dir_all(&meta).unwrap();
+        let gitdir = format!("{}/wt/feature/.git\n", old_s.replace('\\', "/"));
+        std::fs::write(meta.join("gitdir"), gitdir).unwrap();
+
+        let moved = moved_linked_worktrees(&new, &old_s, &new_s);
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        assert_eq!(moved[0], new.join("wt").join("feature"));
+    }
+
+    /// A folder rename re-points the linked worktree that moved inside it, so
+    /// it still works from both ends.
+    #[test]
+    fn a_renamed_folder_repairs_the_worktree_inside_it() {
+        fn git(dir: &Path, args: &[&str]) -> String {
+            let out = crate::commands::git::hardened_git_command_in(dir, args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        // Resolved (macOS' /var symlink), without Windows' `\\?\` prefix.
+        let root = PathBuf::from(crate::commands::fs::display_path(&tmp.path().canonicalize().unwrap()));
+        let old = root.join("before");
+        std::fs::create_dir_all(&old).unwrap();
+        git(&old, &["init", "-q", "-b", "main"]);
+        std::fs::write(old.join("a.txt"), b"a\n").unwrap();
+        git(&old, &["add", "a.txt"]);
+        git(&old, &["commit", "-q", "-m", "first"]);
+        let inside = Path::new("wt").join("feature");
+        git(&old, &["worktree", "add", "-q", "-b", "feature", &old.join(&inside).to_string_lossy()]);
+
+        let new = root.join("after");
+        std::fs::rename(&old, &new).unwrap();
+        repair_moved_worktrees(&new, &old.to_string_lossy(), &new.to_string_lossy()).unwrap();
+
+        let worktree = new.join(&inside);
+        assert_eq!(git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]), "feature");
+        assert_eq!(git(&worktree, &["status", "--porcelain"]), "");
+        let listed = git(&new, &["worktree", "list", "--porcelain"]);
+        assert!(!listed.contains("prunable"), "{listed}");
+    }
+
+    /// `forget_project` purges only Tabtivity's state dirs about a project: a dir
     /// that is there goes, one that never existed is not an error, and a
     /// sibling that is not on the list — the project folder — is untouched.
     #[test]
@@ -4942,10 +5324,29 @@ mod tests {
         }
     }
 
+    /// A project keeps an old-named screenshots or mail folder it already
+    /// has, so the default ignore list names both spellings: regenerating a
+    /// `.gitignore` must never un-ignore a folder of filed private data.
+    #[test]
+    fn the_default_gitignore_covers_the_generated_folders_under_both_names() {
+        let lines: Vec<&str> = GITIGNORE_DEFAULT.lines().collect();
+        for dir in [
+            crate::brand::SCREENSHOTS_DIR,
+            crate::brand::EMAILS_DIR,
+            crate::brand::LEGACY_SCREENSHOTS_DIR,
+            crate::brand::LEGACY_EMAILS_DIR,
+        ] {
+            assert!(lines.contains(&format!("{dir}/").as_str()), "{dir}/ is ignored");
+        }
+        assert!(lines.contains(&crate::brand::PROJECT_DIR_EXCLUDE_RULE));
+        assert!(lines.contains(&"screenshots/") && lines.contains(&"emails/"));
+    }
+
     #[test]
     fn the_retired_trash_workspace_entry_is_dropped_and_nothing_else() {
         let mut list = vec![
-            entry("eldrun-trash", "Trash", vec![("eldrun_trash", Value::Bool(true))]),
+            // The entry an old build wrote: its id and its marker carry the old name.
+            entry(paths::LEGACY_TRASH_PROJECT_ID, "Trash", vec![(concat!(crate::legacy_slug!(), "_trash"), Value::Bool(true))]),
             entry("p1", "Trash", vec![]),
         ];
         drop_legacy_trash_project(&mut list);
@@ -5405,7 +5806,7 @@ mod tests {
 
     #[test]
     fn git_provider_rides_only_on_a_hosted_project() {
-        // The clone/fork URL's own host, kept for the two providers Eldrun speaks.
+        // The clone/fork URL's own host, kept for the two providers Tabtivity speaks.
         assert_eq!(
             normalize_git_provider(Some("GitHub"), "remote-private").as_deref(),
             Some("github")
@@ -5425,14 +5826,14 @@ mod tests {
     // ── normalize_entry ────────────────────────────────────────────────────
 
     fn legacy_entry() -> ProjectEntry {
-        // A pre-Group-D stub like the real ProjectEldrun entry: core fields only,
+        // A pre-Group-D stub like the self-hosting checkout's entry: core fields only,
         // no `directory`, no `git_type`.
         ProjectEntry {
             id: "legacy-id".to_string(),
-            name: "ProjectEldrun".to_string(),
+            name: concat!("Project", crate::app_name!()).to_string(),
             status: "active".to_string(),
             position: 10,
-            local_file: "/home/u/eldrun/projects/projecteldrun/project.json".to_string(),
+            local_file: concat!("/home/u/", crate::app_slug!(), "/projects/project", crate::app_slug!(), "/project.json").to_string(),
             extra: HashMap::new(),
         }
     }
@@ -5443,7 +5844,7 @@ mod tests {
         normalize_entry(&mut entry);
         assert_eq!(
             entry.extra.get("directory").and_then(Value::as_str),
-            Some("/home/u/eldrun/projects/projecteldrun"),
+            Some(concat!("/home/u/", crate::app_slug!(), "/projects/project", crate::app_slug!())),
         );
     }
 
@@ -5563,7 +5964,7 @@ mod tests {
         assert_eq!(
             details,
             vec![
-                "directory → /home/u/eldrun/projects/projecteldrun".to_string(),
+                concat!("directory → /home/u/", crate::app_slug!(), "/projects/project", crate::app_slug!()).to_string(),
                 "git_type: private → remote-private".to_string(),
             ],
         );
@@ -5597,7 +5998,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold_project(dir.path(), true).unwrap();
         let gitignore = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert!(gitignore.lines().any(|line| line == "eldrun-screenshots/"));
+        assert!(gitignore.lines().any(|line| line == concat!(crate::app_slug!(), "-screenshots/")));
         // The pre-rename folder stays ignored: projects still hold one.
         assert!(gitignore.lines().any(|line| line == "screenshots/"));
     }
@@ -5610,7 +6011,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold_project(dir.path(), true).unwrap();
         let gitignore = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert!(gitignore.lines().any(|line| line == "eldrun-emails/"));
+        assert!(gitignore.lines().any(|line| line == concat!(crate::app_slug!(), "-emails/")));
         assert!(gitignore.lines().any(|line| line == "emails/"));
     }
 
@@ -5618,7 +6019,40 @@ mod tests {
     /// a project whose `.gitignore` predates the folder gets the pattern before
     /// the first file lands in it.
     #[test]
-    fn ensure_generated_dir_ignored_appends_once_and_only_for_eldrun_folders() {
+    fn a_project_keeps_the_generated_folder_it_already_has() {
+        use crate::brand::{Name, PAIR};
+        use crate::services::brand_migration::testing::RENAMED;
+        let name = Name::SCREENSHOTS_DIR;
+        let (cur, old) = (RENAMED.cur(name), RENAMED.legacy(name).unwrap());
+
+        // Nothing there yet: the current name.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(generated_dir_name_for(&RENAMED, dir.path(), name), cur);
+        // Only the old folder: it is kept.
+        fs::create_dir(dir.path().join(&old)).unwrap();
+        assert_eq!(generated_dir_name_for(&RENAMED, dir.path(), name), old);
+        // Both: the current one.
+        fs::create_dir(dir.path().join(&cur)).unwrap();
+        assert_eq!(generated_dir_name_for(&RENAMED, dir.path(), name), cur);
+
+        // A link under the old name is not a folder the app made.
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), dir.path().join(&old)).unwrap();
+            assert_eq!(generated_dir_name_for(&RENAMED, dir.path(), name), cur);
+        }
+
+        // An unchanged name is answered without a second lookup.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(generated_dir_name_for(&PAIR, dir.path(), name), PAIR.cur(name));
+        assert_eq!(project_generated_dir(dir.path().to_string_lossy().into_owned(), "emails".into()).unwrap(), EMAILS_DIR);
+        assert!(project_generated_dir(String::new(), "other".into()).is_err());
+    }
+
+    #[test]
+    fn ensure_generated_dir_ignored_appends_once_and_only_for_app_folders() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(".gitignore"), "node_modules/\n").unwrap();
 
@@ -5631,13 +6065,13 @@ mod tests {
         assert_eq!(
             gitignore
                 .lines()
-                .filter(|l| *l == "eldrun-screenshots/")
+                .filter(|l| *l == concat!(crate::app_slug!(), "-screenshots/"))
                 .count(),
             1
         );
         assert!(gitignore.lines().any(|line| line == "node_modules/"));
 
-        // Not a folder Eldrun generates: the file is left alone.
+        // Not a folder Tabtivity generates: the file is left alone.
         assert!(!ensure_generated_dir_ignored(dir.path(), "src").unwrap());
         let after = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert!(!after.contains("src"));
@@ -5668,7 +6102,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(ensure_generated_dir_ignored(dir.path(), EMAILS_DIR).unwrap());
         let gitignore = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert_eq!(gitignore, "eldrun-emails/\n");
+        assert_eq!(gitignore, concat!(crate::app_slug!(), "-emails/\n"));
     }
 
     #[test]
@@ -5712,6 +6146,90 @@ mod tests {
             content.contains("custom"),
             "custom settings must not be overwritten"
         );
+    }
+
+    #[test]
+    fn scaffold_project_keeps_every_existing_scaffold_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ours: Vec<String> = SCAFFOLD_FILES.iter().map(|(n, _)| n.to_string()).collect();
+        ours.push(".gitignore".to_string());
+        ours.push(".claude/settings.json".to_string());
+        std::fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+        for name in &ours {
+            std::fs::write(tmp.path().join(name), format!("user's own {name}")).unwrap();
+        }
+
+        scaffold_project(tmp.path(), true).unwrap();
+
+        for name in &ours {
+            assert_eq!(
+                std::fs::read_to_string(tmp.path().join(name)).unwrap(),
+                format!("user's own {name}"),
+                "{name} must survive an import's scaffold"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_project_never_writes_through_a_shipped_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        // A tree can ship a dangling link: `exists()` says false, and a plain
+        // write would create the link's target outside the project.
+        let outside = tmp.path().join("outside.md");
+        std::os::unix::fs::symlink(&outside, project.join("CLAUDE.md")).unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, project.join(".claude")).unwrap();
+
+        scaffold_project(&project, false).unwrap();
+
+        assert!(!outside.exists(), "the link's target must not be created");
+        assert!(!elsewhere.join("settings.json").exists());
+        assert!(std::fs::symlink_metadata(project.join("CLAUDE.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(project.join("AGENTS.md").is_file(), "the rest is still scaffolded");
+        let preview = scaffold_preview(&project);
+        let claude = preview.iter().find(|i| i.path == "CLAUDE.md").unwrap();
+        assert!(claude.exists, "the preview must call the kept link present");
+    }
+
+    #[test]
+    fn claim_new_project_dir_refuses_anything_already_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fresh = tmp.path().join("parent/fresh");
+        claim_new_project_dir(&fresh).unwrap();
+        assert!(fresh.is_dir());
+        assert!(project_folder_exists(fresh.to_string_lossy().to_string()));
+
+        let err = claim_new_project_dir(&fresh).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+
+        let file = tmp.path().join("a-file");
+        std::fs::write(&file, "keep me").unwrap();
+        assert!(claim_new_project_dir(&file).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
+
+        assert!(claim_new_project_dir(Path::new("")).is_err());
+        assert!(!project_folder_exists(String::new()));
+        assert!(!project_folder_exists(
+            tmp.path().join("nope").to_string_lossy().to_string()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claim_new_project_dir_refuses_a_dangling_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(tmp.path().join("missing"), &link).unwrap();
+        assert!(project_folder_exists(link.to_string_lossy().to_string()));
+        assert!(claim_new_project_dir(&link).is_err());
+        assert!(!tmp.path().join("missing").exists());
     }
 
     #[test]
@@ -5898,21 +6416,13 @@ mod tests {
         scaffold_project(tmp.path(), false).unwrap();
 
         let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
-        // AGENTS.md carries the instructions and links every sibling agent doc
-        // plus the rest of the scaffold.
-        for link in &[
-            "(./CLAUDE.md)",
-            "(./GEMINI.md)",
-            "(./PROJECT.md)",
-            "(./README.md)",
-            "(./DOCUMENTATION.md)",
-            "(./ROADMAP.md)",
-            "(./TODO.md)",
-            "(./REMARKS.md)",
-            "(./STATUS.md)",
-        ] {
-            assert!(agents.contains(link), "AGENTS.md missing link {link}");
+        // AGENTS.md carries the instructions and points at the map; it is
+        // loaded every session, so it doesn't repeat the map's links.
+        assert!(agents.contains("(./PROJECT.md)"), "AGENTS.md must link PROJECT.md");
+        for link in &["(./README.md)", "(./TODO.md)", "(./AGENTS.md)"] {
+            assert!(!agents.contains(link), "AGENTS.md repeats the map: {link}");
         }
+        assert!(!agents.contains(concat!(crate::app_slug!(), "-send")), concat!(crate::app_name!(), "'s own hint is not the project's"));
 
         // The agent-specific docs carry no instructions of their own: each
         // imports AGENTS.md and links the other agent files.
@@ -5960,6 +6470,38 @@ mod tests {
         assert!(scaffold_is_missing_at(tmp.path(), true));
         repair_project_scaffold_at(tmp.path(), true).unwrap();
         assert!(!scaffold_is_missing_at(tmp.path(), true));
+    }
+
+    #[test]
+    fn untouched_earlier_agents_templates_are_upgraded_and_edited_ones_kept() {
+        for old in AGENTS_HISTORY {
+            assert_ne!(*old, AGENTS_SCAFFOLD);
+            let tmp = tempfile::tempdir().unwrap();
+            scaffold_project(tmp.path(), false).unwrap();
+            std::fs::write(tmp.path().join("AGENTS.md"), old.replace('\n', "\r\n")).unwrap();
+            assert!(scaffold_is_missing_at(tmp.path(), false));
+            let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
+            assert_eq!(report.updated_files, vec!["AGENTS.md".to_string()]);
+            assert_eq!(std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(), AGENTS_SCAFFOLD);
+
+            let edited = format!("{old}\n## Mine\n");
+            std::fs::write(tmp.path().join("AGENTS.md"), &edited).unwrap();
+            assert!(!scaffold_is_missing_at(tmp.path(), false));
+            repair_project_scaffold_at(tmp.path(), false).unwrap();
+            assert_eq!(std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(), edited);
+        }
+    }
+
+    /// Pins the shipped `AGENTS.md` template. When this fails, the template
+    /// changed: copy the *previous* text byte for byte into
+    /// `scaffold_history/AGENTS.<date>.md`, add it to `AGENTS_HISTORY`, then
+    /// update the pin — otherwise every project scaffolded with it keeps it.
+    #[test]
+    fn the_agents_template_is_pinned_so_its_predecessor_stays_upgradable() {
+        let fnv1a = AGENTS_SCAFFOLD.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+        assert_eq!(fnv1a, 0x75197758527454ff, "AGENTS_SCAFFOLD changed; see this test's doc");
     }
 
     #[test]

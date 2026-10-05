@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MobileAlertItem, MobileAlerts } from "../../../mobile-web/src/api";
 import { Home } from "../../../mobile-web/src/screens/Home";
+import { BRAND } from "../../lib/brand";
 
 const fetchMock = vi.fn();
 
@@ -18,7 +19,7 @@ const row = (over: Partial<MobileAlertItem> = {}): MobileAlertItem => ({
   kind: "task",
   severity: "overdue",
   title: "Ship mobile alerts",
-  detail: "Eldrun",
+  detail: BRAND.display,
   at: "2026-09-03",
   all_day: true,
   minutes_away: -60,

@@ -13,6 +13,7 @@ import {
   compactAgentMenuEntries,
 } from "../../components/tabs/newTabItems";
 import { isRestorableTab } from "../../stores/tabs";
+import { envName } from "../../lib/brand";
 
 const t = (key: string, vars?: Record<string, string>) =>
   vars ? `${key}(${Object.values(vars).join(",")})` : key;
@@ -44,8 +45,10 @@ describe("cloud launches", () => {
     expect(spec).toMatchObject({ cmd: "claude", args: ["--cloud", "fix it"], cwd: "/p", kind: "agent" });
     expect(spec.sessionId).toBeUndefined();
     expect(spec.initialInput).toBeUndefined();
-    expect(spec.env).not.toHaveProperty("ELDRUN_TAB_UID");
+    expect(spec.env).not.toHaveProperty(envName("TAB_UID"));
     expect(isRestorableTab(spec)).toBe(false);
+    // …yet it is saved while it runs, so a phone that started it can attach.
+    expect(spec.cloud).toBe(true);
   });
 });
 

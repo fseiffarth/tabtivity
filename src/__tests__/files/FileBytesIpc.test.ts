@@ -12,6 +12,7 @@
  * there is nowhere else for them to go.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NAMES } from "../../lib/brand";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
@@ -59,8 +60,8 @@ describe("writeFileBytes", () => {
     expect(Array.isArray(body)).toBe(false);
     expect(options).toEqual({
       headers: {
-        "x-eldrun-path": "%2Fp%2Fthesis.pdf",
-        "x-eldrun-project": "proj",
+        [NAMES.filePathHeader]: "%2Fp%2Fthesis.pdf",
+        [NAMES.fileProjectHeader]: "proj",
       },
     });
   });
@@ -70,8 +71,8 @@ describe("writeFileBytes", () => {
     await writeFileBytes("/p/Übung/a b.pdf", new Uint8Array([0]), null);
 
     const headers = invoke.mock.calls[0][2].headers as Record<string, string>;
-    expect(decodeURIComponent(headers["x-eldrun-path"])).toBe("/p/Übung/a b.pdf");
+    expect(decodeURIComponent(headers[NAMES.filePathHeader])).toBe("/p/Übung/a b.pdf");
     // The root scope is the empty string, never the word "null".
-    expect(headers["x-eldrun-project"]).toBe("");
+    expect(headers[NAMES.fileProjectHeader]).toBe("");
   });
 });

@@ -39,13 +39,13 @@ a brand-new file is not tracked until `git add`.
 
 | # | Scenario | Config | Current behaviour | Status |
 |---|---|---|---|---|
-| 10 | Local commit, nothing byte-pushed first | LS | bundle → SFTP → fetch to `refs/eldrun/incoming/*` → `merge --ff-only` writes files on host → restamp → green | |
+| 10 | Local commit, nothing byte-pushed first | LS | bundle → SFTP → fetch to `refs/tabtivity/incoming/*` → `merge --ff-only` writes files on host → restamp → green | |
 | 11 | Local commit, byte-sync already pushed an **identical** copy | BS+LS | ff refused → `retry_ff_clearing_identical` proves identity on the dest (`hash-object` vs `rev-parse <sha>:<path>`), removes it with `git clean -f -x -- :(literal)<path>`, retries → green | ✅ fixed (D1) |
 | 12 | Local commit, byte-pushed copy **differs** from the committed content | BS+LS | `stale_byte_sync_residue` proves the differing peer copy is byte-sync's own untouched prior push (manifest base still matches the peer's current stat) → cleared and the ff retried; a genuine independent edit still blocks | ✅ fixed |
 | 13 | Local commit | BS only | commit stays local; bytes cross, history doesn't | |
 | 14 | Host commit (host CLI, or the Git panel — runs git *on the host*) | LS | 12 s poll → mirror ff → same three sub-cases mirrored | |
 | 14b | A commit on either side while the two sides sit on **different** branches (an "Out of step" state) | LS | fast-forward of that branch only; the peer's HEAD is **not** moved. ✅ fixed (2026-09-03): `detect_and_sync` compared whole `HeadRef`s, so the new sha read as a checkout and replayed `git checkout <branch>` on the peer — a silent branch switch on the host | |
-| 15 | Both sides commit on `main` | LS | `Diverged` → never auto-applied → desync bar shows both heads as `sha · subject`, offers Use local / Use remote, parks peer tip at `refs/eldrun/peer/<branch>` for terminal resolution | ✅ fixed (live QA) — **reported green** until then: the thin-bundle excludes name the peer's tip, which in a divergence is a commit the source has never seen, so `bundle create` aborted and both transfer legs no-op'd |
+| 15 | Both sides commit on `main` | LS | `Diverged` → never auto-applied → desync bar shows both heads as `sha · subject`, offers Use local / Use remote, parks peer tip at `refs/tabtivity/peer/<branch>` for terminal resolution | ✅ fixed (live QA) — **reported green** until then: the thin-bundle excludes name the peer's tip, which in a divergence is a commit the source has never seen, so `bundle create` aborted and both transfer legs no-op'd |
 
 ## Checkouts
 
@@ -74,7 +74,7 @@ a brand-new file is not tracked until `git add`.
 | # | Scenario | Current behaviour | Status |
 |---|---|---|---|
 | 25 | Pool cold / disconnected | `SyncStatus::Disconnected`, "Not connected to the remote host". No probes, pairing, or writes; early-out signatures cleared | ✅ fixed (D4) — used to report green |
-| 26 | Any resolve or pairing overwrite | Tip saved to `refs/eldrun/backup/<ts>/<branch>` — listable (`git_peer_backups`), restorable (`git_peer_restore_backup`, backs up current tip first), pruned | ✅ fixed (D6) — was write-only |
+| 26 | Any resolve or pairing overwrite | Tip saved to `refs/tabtivity/backup/<ts>/<branch>` — listable (`git_peer_backups`), restorable (`git_peer_restore_backup`, backs up current tip first), pruned | ✅ fixed (D6) — was write-only |
 | 26b | A resolve/FF where the dest **already has the objects** (they arrived via another branch, or via the peer-tip ref) | The refs still move. ✅ fixed (live QA) — git reports "nothing to bundle" by *refusing to create an empty bundle*, and that was treated as a no-op **transfer** *and* a no-op **apply**: `resolve` transferred nothing, moved nothing, and re-reported the divergence it was asked to end |
 | 27 | Committed deletion | rides the fast-forward; git removes it on the peer | |
 | 28 | Uncommitted deletion | not propagated (deliberate v1 byte-sync policy) | |
@@ -110,7 +110,7 @@ All 28 cases have been run against a real SSH host; see
 fixes. Re-run it with `src-tauri/examples/lockstep_drv.rs`:
 
 ```bash
-ELDRUN_PROJECT=<project-id> cargo run --example lockstep_drv -- <script>
+TABTIVITY_PROJECT=<project-id> cargo run --example lockstep_drv -- <script>
 ```
 
 The driver calls the same service entry points the Tauri commands call, so a case
@@ -127,5 +127,5 @@ pass writes inside the mirror's `.git`, the lockstep watcher observes that direc
 and a non-green state never early-outs — so a diverged or blocked project re-ran the
 full SSH pass every debounce window for as long as it stayed red. `poll_loop` now skips
 a watcher burst that leaves the mirror's ref signature as the previous pass left it
-(`watcher_burst_is_own`, unit-tested); the byte-sync watcher ignores `.git`/`.eldrun`
+(`watcher_burst_is_own`, unit-tested); the byte-sync watcher ignores `.git`/`.tabtivity`
 altogether. Still not proven live — it is the timing gap above.

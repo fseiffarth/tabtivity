@@ -29,7 +29,7 @@
 
 /// Returned when this platform has no native PDF print path; the frontend
 /// falls back to its own print preview on seeing it.
-pub const UNSUPPORTED: &str = "eldrun-native-print-unsupported";
+pub const UNSUPPORTED: &str = crate::brand::NATIVE_PRINT_UNSUPPORTED;
 
 /// What the system print dialog opens preset to: the paper the frontend laid
 /// the document out on (`A4`, `Letter`, …) and colour off for a grayscale job.
@@ -77,7 +77,7 @@ async fn write_spool(bytes: Vec<u8>) -> Result<tempfile::NamedTempFile, String> 
     use std::io::Write;
     tauri::async_runtime::spawn_blocking(move || {
         let mut f = tempfile::Builder::new()
-            .prefix("eldrun-print-")
+            .prefix(concat!(crate::app_slug!(), "-print-"))
             .suffix(".pdf")
             .tempfile()
             .map_err(|e| format!("print spool: {e}"))?;

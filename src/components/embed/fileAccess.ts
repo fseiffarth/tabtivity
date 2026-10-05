@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { TranslationKey } from "../../lib/i18n";
+import { NAMES } from "../../lib/brand";
 
 /**
  * The project scope that absolute-path file commands are confined to.
@@ -170,8 +171,8 @@ export function writeFileBytes(
   const bytes = content instanceof Uint8Array ? content : Uint8Array.from(content);
   return invoke("write_file_bytes", bytes, {
     headers: {
-      "x-eldrun-path": encodeURIComponent(path),
-      "x-eldrun-project": encodeURIComponent(projectId ?? ""),
+      [NAMES.filePathHeader]: encodeURIComponent(path),
+      [NAMES.fileProjectHeader]: encodeURIComponent(projectId ?? ""),
     },
   });
 }

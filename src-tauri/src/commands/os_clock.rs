@@ -1,4 +1,4 @@
-//! The OS's own 12/24-hour clock preference — the default for Eldrun's app-wide
+//! The OS's own 12/24-hour clock preference — the default for Tabtivity's app-wide
 //! clock while `Settings.time_format_24h` is unset (`src/lib/timeFormat.ts`).
 //!
 //! Two answers, strongest first. `use24h` is the desktop's explicit clock

@@ -27,7 +27,7 @@ sanitizer (`services/web_safety.rs`); neither has been runtime-verified.*
       the file tree; confirm each raises the configured global app rather than
       `xdg-open`'s default.
 
-65. **Include a mail viewer in Eldrun.** Add an in-app email reader so mail can be
+65. **Include a mail viewer in Tabtivity.** Add an in-app email reader so mail can be
     read without leaving the workspace. Scope to be defined when picked; open
     questions to settle first: protocol (IMAP vs JMAP vs a provider API like
     Gmail), auth model (app password vs OAuth, mirroring the SSH "no in-app
@@ -128,7 +128,7 @@ sanitizer (`services/web_safety.rs`); neither has been runtime-verified.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-61. **Include a browser in Eldrun. (BUILT — reader mode; live pages opt-in.)**
+61. **Include a browser in Tabtivity. (BUILT — reader mode; live pages opt-in.)**
     Shipped as two surfaces, because the obvious third one is not buildable:
     `tauri-runtime-wry` packs a child webview into the window's `GtkBox`, where
     `set_bounds` is a no-op, so an in-pane embedded browser renders as a vertical
@@ -382,7 +382,7 @@ sanitizer (`services/web_safety.rs`); neither has been runtime-verified.*
       whose `process` returns the `user=…\x01auth=Bearer …\x01\x01` string, and
       `mail_send::Credentials::new_xoauth2` exists for the SMTP side. Neither
       needs a new dependency.
-    - **The cost is the flow around it**, and it is all Eldrun-side: a loopback
+    - **The cost is the flow around it**, and it is all Tabtivity-side: a loopback
       `http://127.0.0.1:<port>` redirect listener, PKCE, the refresh token in
       the OS keychain beside the passwords (`remote_credentials`), silent
       refresh before each connect, and a `MailAccount.auth` discriminant so a
@@ -495,14 +495,14 @@ sanitizer (`services/web_safety.rs`); neither has been runtime-verified.*
     from inside its network used to fail every interval check while the tunnel
     was down — a connect timeout per tick, a red ✉, and no catch-up when the
     tunnel came back. Now the header's tick skips the account while no OpenVPN
-    tunnel Eldrun knows about is up (its tooltip says *n account(s) waiting for
+    tunnel Tabtivity knows about is up (its tooltip says *n account(s) waiting for
     the VPN*), and checks it the moment one comes up — on a reconciled
     `false → true` only, so the store's first sight of a tunnel at launch is not
     a check at mount. The backend enforces the same rule before every engine
     operation (`mail_engine::vpn_gate`), so a manual *Check mail*, a body fetch,
     a flag write and a send all refuse with the one shared sentence
     (`services::openvpn::VPN_GATE_REFUSAL`). Known limit, stated in the hint:
-    only tunnels started from Eldrun count. Design note in
+    only tunnels started from Tabtivity count. Design note in
     `docs/context/openvpn.md`; helper in `src/lib/remote/vpn/vpnGate.ts`.
     - [x] 🤖 Automated test — `VpnGate.test.ts` (the three-valued hook, the
       rising edge), `openvpn::tests` (the gate's truth table),
@@ -556,7 +556,7 @@ sanitizer (`services/web_safety.rs`); neither has been runtime-verified.*
 network/credentials, storage/crypto) whose findings each reviewer
 cross-checked against the code. **Fixed 2026-09-17 (✅ Done · 🧪 untested
 live)** except where an item says otherwise — `cargo test`, clippy,
-`npm run build` and vitest green; nothing was run in a live Eldrun, and every
+`npm run build` and vitest green; nothing was run in a live Tabtivity, and every
 backend part needs a rebuild + restart. Line numbers below are the audit's,
 as of `504bc19`. Everything the audit found **done
 well** — Rust-side sanitizing with no surviving `href`, `sandbox=""` frame, no
@@ -595,32 +595,41 @@ no-MDC OpenPGP refused — is deliberately not re-listed here.*
       - [ ] ❌ Doesn't work on macOS
 
 848. **🔴 High — "Save to project" writes through symlinks.**
-    `commands/mail.rs:3244-3280`: `create_dir_all(<project>/eldrun-emails)` accepts
+    `commands/mail.rs:3244-3280`: `create_dir_all(<project>/tabtivity-emails)` accepts
     a symlinked dir, `unique_in_dir` checks `Path::exists()` (false for a dangling
     link), then a plain `fs::write` follows it. A cloned repo committing
-    `eldrun-emails -> ~/.config/autostart` (or the project root / `~/.claude/`)
+    `tabtivity-emails -> ~/.config/autostart` (or the project root / `~/.claude/`)
     plus a mailed `x.desktop` / `CLAUDE.md` is code execution on the user's
     click. **A fenced agent can plant the link itself** (the project is a
-    read-write bind), so the unfenced Eldrun process writes outside the fence —
+    read-write bind), so the unfenced Tabtivity process writes outside the fence —
     a fence escape. The companion `ensure_generated_dir_ignored`
     (`commands/projects.rs:2681-2702`) appends through a symlinked `.gitignore`.
-    Fix: refuse a symlinked `eldrun-emails`/`.gitignore` (`symlink_metadata`),
+    Fix: refuse a symlinked `tabtivity-emails`/`.gitignore` (`symlink_metadata`),
     `OpenOptions::create_new` + `O_NOFOLLOW`, canonical parent must stay under
     the project root. Also: on a remote project `project_directory` is the local
     state dir, so the file lands there instead of on the host (`:3243`).
     - **Fixed:** `emails_dir_in` refuses a non-directory/symlinked
-      `eldrun-emails` and checks its canonical parent; files are written
+      `tabtivity-emails` and checks its canonical parent; files are written
       `create_new` + `O_NOFOLLOW` (`write_unique_in_dir`); agent instruction
       names (`CLAUDE.md`, `AGENTS.md`, …) get an `attachment-` prefix;
       `ensure_generated_dir_ignored` refuses a symlinked `.gitignore`; remote
-      projects are refused (and the button hidden). **Not done:** the same
-      pattern in `commands/screenshot.rs` (`eldrun-screenshots/`).
+      projects are refused (and the button hidden).
+    - **Screenshot half fixed 2026-09-30 (🧪 untested live)** — at the source,
+      `fs::canonical_or_new`: a dangling link resolved to where it points, and
+      `missing/../..` resolved lexically, both used to pass confinement (the
+      write then left the project). Every local project write
+      (`write_project_file{,_bytes}_local`, `create_file_local`,
+      `create_dir_local`, the clipboard PNG save) now writes the resolved path,
+      the file opened `O_NOFOLLOW`. Tests:
+      `write_project_file_never_follows_a_dangling_link_out_of_the_project`,
+      `write_project_file_blocks_escape_through_a_missing_folder`,
+      `write_project_file_still_saves_through_a_link_inside_the_project`.
     - [x] 🤖 Automated test — `the_emails_folder_must_be_a_real_folder_inside_the_project`,
       `a_save_never_follows_or_clobbers_what_is_already_there`,
       `agent_instruction_names_are_defused`,
       `ensure_generated_dir_ignored_never_writes_through_a_symlink`.
     - [ ] 🖐️ Manual test — save an attachment to a local project; with
-      `eldrun-emails` replaced by a symlink the save is refused.
+      `tabtivity-emails` replaced by a symlink the save is refused.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)
@@ -731,8 +740,12 @@ no-MDC OpenPGP refused — is deliberately not re-listed here.*
       one-time pass for already-marked stores); plaintext in a completed sealed
       store reads as damaged; blobs re-sealed unless they actually open; Argon2
       parameters bounded; account delete prunes blobs and `VACUUM`s.
-      **Not done:** a passphrase change still does not rotate the master key;
-      drafts/outbox of a removed account are kept on purpose.
+      Drafts/outbox of a removed account are kept on purpose.
+    - **Passphrase rotation — not applicable (2026-09-30).** There is no
+      passphrase-change action: the only way to get a new passphrase is
+      `mail_encryption_reset`, which mints a new master key. The key-keeping
+      `mail_crypt::rewrap` has no caller; its doc comment now says it must not
+      back a "change passphrase" button without a re-seal.
     - [x] 🤖 Automated test — `plaintext_planted_in_a_sealed_store_reads_as_damaged`.
 
 855. **🟡 Low — crypto chrome vanishes on reopen.** A body-cache hit returns
@@ -762,12 +775,12 @@ no-MDC OpenPGP refused — is deliberately not re-listed here.*
       every `mail_*` command (tauri 2.11 `webview/mod.rs:1823`); remote origins
       are blocked. `capabilities/browser.json`'s "resolves to no command" is
       wrong for app commands — correct the description, consider an app manifest.
-    - Eldrun Mobile reads mail with pairing as the only gate
+    - Tabtivity Mobile reads mail with pairing as the only gate
       (`mobile_control/host.rs:981-1060`); writes have `mail_actions`/`mail_reply`,
       reading has no switch of its own.
     - Fenced agents can't see `state_dir()/mail` on Linux/macOS, except when
-      `ELDRUN_STATE_DIR` sits outside `$HOME` (read-only `/` bind); Windows is
-      unfenced. `eldrun-emails/` is always agent-readable.
+      `TABTIVITY_STATE_DIR` sits outside `$HOME` (read-only `/` bind); Windows is
+      unfenced. `tabtivity-emails/` is always agent-readable.
     - Password copies escape `Password`: frontend `String`,
       `expose().to_string()` into async-imap/mail-send (`mail_engine.rs:1107`,
       `:1762`), `session_secret` returns `String`.
@@ -934,7 +947,7 @@ no-MDC OpenPGP refused — is deliberately not re-listed here.*
       the thread's recipients and the reader banner; an address outside the
       thread is refused; a root tab does not list the reader's draft. Ask the
       reader to add a board card → a proposal carrying the reader mark. An
-      ordinary project agent tab has no `eldrun` MCP server at all.
+      ordinary project agent tab has no `tabtivity` MCP server at all.
 
 ### Address book (#870)
 

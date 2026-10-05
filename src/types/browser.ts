@@ -177,7 +177,7 @@ export interface LiveWindowClosed {
  *
  * The frontend must never hardcode a platform check: Windows is refused in v1
  * (`docs/browser_plan_b.md` §5.2 — WebView2's permission default is *ask*, with
- * a dialog Eldrun did not write, the same call `services::sandbox` already makes
+ * a dialog Tabtivity did not write, the same call `services::sandbox` already makes
  * for Docker on Windows), but that is the backend's statement to make, and it
  * may change without this file changing. `platform_note` is the explanation to
  * show in place of the live-page control — a plain, non-alarming sentence.

@@ -12,6 +12,7 @@ import {
   type PromptChartWindow,
 } from "../../lib/agents/prompt/chart";
 import { agentModelsFor, prefaceCommandsFor } from "../../lib/agents/agentPrefaces";
+import { historyTabId } from "../../lib/agents/prompt/adopt";
 import { afterLinkRefusal } from "../../lib/agents/prompt/links";
 import { agentItemFor, newAgentTabForDraft, promptChartNewTabAgent } from "../../lib/agents/prompt/newTab";
 import { useUse24h } from "../../lib/timeFormat";
@@ -69,6 +70,7 @@ import { draftSequence } from "../../lib/agents/prompt/drafts";
 import { AGENT_ITEMS, EMPTY_CUSTOM_AGENTS } from "../tabs/newTabItems";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
 import { ArrowLeftIcon, ArrowRightIcon } from "../common/icons/Icon";
+import { storageKey } from "../../lib/brand";
 
 const EMPTY_PROMPTS: ProjectAgentPrompt[] = [];
 const EMPTY_HISTORY: SentAgentPrompt[] = [];
@@ -93,7 +95,7 @@ const pastRefusalKey = (zoneKind?: TimelineZone["kind"]) =>
 /** Whether the timeline is shown: a reader's convenience, remembered per
  *  window like the Agents view's sort. The filters are not — a filter that
  *  survives a relaunch is how a card goes missing. */
-const TIMELINE_STORAGE_KEY = "eldrun.promptChart.timeline";
+const TIMELINE_STORAGE_KEY = storageKey("promptChart.timeline");
 
 function readShowTimeline(): boolean {
   try { return localStorage.getItem(TIMELINE_STORAGE_KEY) !== "hidden"; } catch { return true; }
@@ -274,7 +276,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     scheduleTargetId: tab.scheduleTargetId,
     tabKey: tab.key,
     sessionId: tab.sessionId,
-    tabId: tab.sessionId,
+    tabId: historyTabId(tab),
     agent: tab.cmd,
     model: modelByTab[`${scope}:${tab.key}`],
     schedules: schedulesByTarget[scheduleCacheKey(scope, tab.scheduleTargetId!)] ?? [],

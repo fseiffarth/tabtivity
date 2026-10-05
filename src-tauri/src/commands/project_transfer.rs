@@ -1,4 +1,4 @@
-//! Full project export / import — moving one Eldrun project to another computer.
+//! Full project export / import — moving one Tabtivity project to another computer.
 //!
 //! A project is not just a folder. Its files live wherever the user put them,
 //! but its *identity* (`projects.json` entry: git label, remote spec, compute
@@ -7,16 +7,16 @@
 //! (`time_summary.json`) and its box membership (`boxes.json`) are all elsewhere
 //! — four stores keyed by project id. Copying the folder to a second machine and
 //! importing it there rebuilds none of that; the user re-answers every question
-//! Eldrun ever asked them about the project. This module is the one operation
+//! Tabtivity ever asked them about the project. This module is the one operation
 //! that carries all five pieces at once.
 //!
 //! ## The bundle
 //!
-//! A `.eldrunproj` file is a zip (same crate `commands::fs` already extracts
+//! A `.tabtivityproj` file is a zip (same crate `commands::fs` already extracts
 //! dropped archives with) laid out as:
 //!
 //! ```text
-//! eldrun-export.json   the manifest — everything that is NOT files
+//! tabtivity-export.json   the manifest — everything that is NOT files
 //! dir/…                a local project's folder
 //! state/…              a remote project's local state dir (project.json only)
 //! mirror/…             a remote project's local mirror tree
@@ -24,10 +24,10 @@
 //!
 //! ## Which half is trusted
 //!
-//! The manifest is written by Eldrun and holds the registry entry, the
+//! The manifest is written by Tabtivity and holds the registry entry, the
 //! `project.json` body and the tab layout. The payload sections are just files.
 //! A bundle is a *file*, though — it can be mailed, dropped in a shared folder,
-//! or fetched from anywhere — so "written by Eldrun" is a claim, not a fact, and
+//! or fetched from anywhere — so "written by Tabtivity" is a claim, not a fact, and
 //! import treats the whole thing as untrusted input:
 //!
 //! - the tab layout goes through the same sanitizer a cloned repository's does
@@ -49,7 +49,7 @@
 //! ## What deliberately does not travel
 //!
 //! - **Passwords / tokens.** They live in the OS keychain keyed by host, never
-//!   in any file Eldrun writes (`services::remote_credentials`). The remote spec
+//!   in any file Tabtivity writes (`services::remote_credentials`). The remote spec
 //!   travels; the secret is re-entered on the new machine.
 //! - **Host-bound sync state** (`sync.json`, `git_peer.json`). Both describe a
 //!   relationship between *this* machine's mirror and a host; carrying them to a
@@ -80,20 +80,20 @@ use super::projects::{
     resolve_remote_mirror, sanitize_name, uuid_v4, validate_project_id, ProjectSite,
 };
 
-/// Bundle format version. Bumped only for a change an older Eldrun could not
+/// Bundle format version. Bumped only for a change an older Tabtivity could not
 /// read correctly; import refuses anything newer than it understands, because
 /// silently dropping a section it does not know about is how a "full" export
 /// stops being full without anyone noticing.
 pub const BUNDLE_FORMAT: u32 = 1;
 
 /// The manifest entry name inside the zip. Its presence is what makes a zip an
-/// Eldrun project bundle.
-pub const BUNDLE_MANIFEST: &str = "eldrun-export.json";
+/// Tabtivity project bundle.
+pub const BUNDLE_MANIFEST: &str = crate::brand::EXPORT_MANIFEST;
 
 /// The extension the save dialog suggests. A plain `.zip` would also import
 /// (the manifest is what is checked), but a distinct one keeps a bundle from
 /// being double-clicked into `extract_archive` when it lands in a project tree.
-pub const BUNDLE_EXTENSION: &str = "eldrunproj";
+pub const BUNDLE_EXTENSION: &str = crate::brand::EXPORT_EXTENSION;
 
 const SECTION_DIR: &str = "dir";
 const SECTION_STATE: &str = "state";
@@ -117,9 +117,9 @@ const PROGRESS_EVENT: &str = "project-export";
 /// everything else in the tree put together.
 ///
 /// A near-twin of `commands::search`'s and `commands::fs`'s skip lists, and
-/// deliberately not shared with them: those two also skip `.git` and `.eldrun`
+/// deliberately not shared with them: those two also skip `.git` and `.tabtivity`
 /// unconditionally, and both of those *must* be exportable — `.git` is the
-/// project's history and `.eldrun` is its scaffold. The overlap is the cheap
+/// project's history and `.tabtivity` is its scaffold. The overlap is the cheap
 /// half; the difference is the whole point.
 const REBUILDABLE_DIRS: &[&str] = &[
     "node_modules",
@@ -155,12 +155,12 @@ pub struct BundleContents {
     pub bytes: u64,
 }
 
-/// `eldrun-export.json`. Everything about the project that is not a file.
+/// `tabtivity-export.json`. Everything about the project that is not a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportManifest {
     pub format: u32,
-    /// The Eldrun that wrote it — informational, for a "made by a newer build"
+    /// The Tabtivity that wrote it — informational, for a "made by a newer build"
     /// message that is more useful than a bare version number mismatch.
     pub app_version: String,
     pub exported_at: String,
@@ -309,7 +309,7 @@ pub struct ImportBundleRequest {
     #[serde(default)]
     pub name: Option<String>,
     /// Parent folder the project's tree lands in. Absent → the managed
-    /// `eldrun/projects/` root.
+    /// `tabtivity/projects/` root.
     #[serde(default)]
     pub target_parent: Option<String>,
     /// Remote bundles only: parent for the recreated local mirror.
@@ -535,7 +535,7 @@ fn tally(root: &Path) -> Result<SizeTally, String> {
     Ok(out)
 }
 
-/// A filename for the save dialog: `name-YYYY-MM-DD.eldrunproj`.
+/// A filename for the save dialog: `name-YYYY-MM-DD.tabtivityproj`.
 pub fn suggested_bundle_name(name: &str) -> String {
     let safe = sanitize_name(name);
     let stem = if safe.is_empty() { "project" } else { &safe };
@@ -733,7 +733,7 @@ pub fn export_project_blocking(
         format: BUNDLE_FORMAT,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: storage::iso_now(),
-        entry: entry.clone(),
+        entry: exported_entry(&entry),
         project: project_json,
         session,
         time_days,
@@ -922,6 +922,39 @@ fn drop_imported_openvpn(value: &mut Value) -> bool {
     dropped
 }
 
+/// The registry keys that open a project to phones: the switch, its per-phone
+/// list, and the switch under the name an older build wrote (the migrator
+/// would rename that one into place). None of them travels in a bundle, either
+/// way: phone access is consent given on one machine to the phones paired with
+/// it, and a list names device ids that mean nothing anywhere else.
+fn mobile_keys() -> Vec<String> {
+    let mut keys = vec![
+        crate::brand::MOBILE_ACCESS_KEY.to_string(),
+        crate::brand::MOBILE_DEVICES_KEY.to_string(),
+    ];
+    keys.extend(crate::brand::PAIR.legacy(crate::brand::Name::MOBILE_ACCESS_KEY));
+    keys
+}
+
+/// The registry entry as a bundle carries it: phone access stays on this
+/// machine ([`mobile_keys`]).
+fn exported_entry(entry: &ProjectEntry) -> ProjectEntry {
+    let mut entry = entry.clone();
+    for key in mobile_keys() {
+        entry.extra.remove(&key);
+    }
+    entry
+}
+
+/// Drop [`mobile_keys`] from an entry (or `project.json`) body.
+fn drop_mobile_keys(value: &mut Value) {
+    if let Some(map) = value.as_object_mut() {
+        for key in mobile_keys() {
+            map.remove(&key);
+        }
+    }
+}
+
 fn absolutize(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -973,16 +1006,21 @@ type Bundle = zip::ZipArchive<fs::File>;
 fn open_bundle(path: &str) -> Result<(Bundle, ExportManifest), String> {
     let file = fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("read {path}: {e}"))?;
+    // A bundle an older build wrote carries its manifest under the app's old
+    // name; such bundles stay importable.
+    let manifest_name = crate::services::brand_migration::compat::export_manifest_name(&crate::brand::PAIR, |name| {
+        zip.file_names().any(|entry| entry == name)
+    });
     let manifest: ExportManifest = {
-        let entry = zip.by_name(BUNDLE_MANIFEST).map_err(|_| {
-            "That file is not an Eldrun project export (no eldrun-export.json inside)".to_string()
+        let entry = zip.by_name(&manifest_name).map_err(|_| {
+            concat!("That file is not a ", crate::app_name!(), " project export (no ", crate::app_slug!(), "-export.json inside)").to_string()
         })?;
         serde_json::from_reader(entry).map_err(|e| format!("read {BUNDLE_MANIFEST}: {e}"))?
     };
     if manifest.format > BUNDLE_FORMAT {
         return Err(format!(
-            "This bundle was written by a newer Eldrun (bundle format {}, this build reads {}). \
-             Update Eldrun and try again.",
+            concat!("This bundle was written by a newer ", crate::app_name!(), " (bundle format {}, this build reads {}). \
+             Update ", crate::app_name!(), " and try again."),
             manifest.format, BUNDLE_FORMAT
         ));
     }
@@ -1296,6 +1334,11 @@ pub fn import_project_export_blocking(
     if drop_imported_openvpn(&mut project_value) || vpn_dropped {
         notes.push("vpnDropped".to_string());
     }
+    // Nor is phone access: a bundle exported with it on (or by a build that
+    // still carried it) must not open the project to this machine's phones
+    // without the user switching it on here.
+    drop_mobile_keys(&mut entry_value);
+    drop_mobile_keys(&mut project_value);
 
     let mut entry: ProjectEntry =
         serde_json::from_value(entry_value).map_err(|e| format!("bundle entry: {e}"))?;
@@ -1608,7 +1651,7 @@ mod tests {
             zip.finish().unwrap();
         }
         let err = open_bundle(path.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("not an Eldrun project export"), "{err}");
+        assert!(err.contains(concat!("not a ", crate::app_name!(), " project export")), "{err}");
     }
 
     /// The zip-slip guard, on the extractor this module owns: an entry naming
@@ -1616,7 +1659,7 @@ mod tests {
     #[test]
     fn extraction_ignores_entries_that_would_escape_the_destination() {
         let tmp = tempfile::tempdir().unwrap();
-        let bundle = tmp.path().join("evil.eldrunproj");
+        let bundle = tmp.path().join(concat!("evil.", crate::app_slug!(), "proj"));
         {
             let file = fs::File::create(&bundle).unwrap();
             let mut zip = zip::ZipWriter::new(file);
@@ -1635,6 +1678,39 @@ mod tests {
         assert_eq!(files, 1);
         assert!(dest.join("ok.txt").exists());
         assert!(!tmp.path().join("escaped.txt").exists());
+    }
+
+    /// An imported bundle never opens the project to a phone: the switch, its
+    /// list and the old switch name are all dropped, the rest is kept.
+    #[test]
+    fn imported_entries_carry_no_mobile_access() {
+        let mut entry = serde_json::json!({
+            "id": "p", "directory": "/d",
+            crate::brand::MOBILE_ACCESS_KEY: true,
+            crate::brand::MOBILE_DEVICES_KEY: ["a".repeat(27)],
+            crate::brand::LEGACY_MOBILE_ACCESS_KEY: true,
+        });
+        drop_mobile_keys(&mut entry);
+        assert_eq!(entry, serde_json::json!({ "id": "p", "directory": "/d" }));
+        drop_mobile_keys(&mut Value::Null);
+        assert!(mobile_keys().iter().all(|key| key.contains("_mobile_")));
+    }
+
+    /// Nor does an exported one: the bundle's entry leaves both Mobile keys
+    /// behind and keeps the rest.
+    #[test]
+    fn exported_entries_carry_no_mobile_access() {
+        let entry = entry_with(
+            "p",
+            &[
+                ("directory", Value::String("/d".into())),
+                (crate::brand::MOBILE_ACCESS_KEY, Value::Bool(true)),
+                (crate::brand::MOBILE_DEVICES_KEY, serde_json::json!(["a".repeat(27)])),
+            ],
+        );
+        let exported = exported_entry(&entry);
+        assert_eq!(exported.extra.keys().collect::<Vec<_>>(), ["directory"]);
+        assert_eq!(entry.extra.len(), 3, "the registry's own entry is untouched");
     }
 
     fn entry_with(id: &str, extra: &[(&str, Value)]) -> ProjectEntry {
@@ -1668,7 +1744,7 @@ mod tests {
     fn the_suggested_file_name_is_a_safe_leaf() {
         let name = suggested_bundle_name("My Project / v2");
         assert!(name.starts_with("my-project-v2-"), "{name}");
-        assert!(name.ends_with(".eldrunproj"), "{name}");
+        assert!(name.ends_with(concat!(".", crate::app_slug!(), "proj")), "{name}");
         assert!(!name.contains('/'));
     }
 }

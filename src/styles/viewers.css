@@ -4459,6 +4459,193 @@
   pointer-events: none;
 }
 
+/* Mark up (`PdfMarkupLayer`, `usePdfMarkup`). The drawing surface covers the
+   page above every other layer — the remarks' markers (4) and cards (6) and the
+   blackout boxes (6) included — so while it is on the page takes no other click:
+   an armed tool owns the plain drag, as the blackout surface's comment says. */
+.file-viewer-pdf-markup-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 7;
+  cursor: var(--cur-crosshair, crosshair);
+  touch-action: none;
+}
+.file-viewer-pdf-markup-layer.is-text {
+  cursor: var(--cur-text, text);
+}
+/* The eraser's reach (`ERASE_PX`) as a ring, white under black so it shows on
+   any page. */
+.file-viewer-pdf-markup-layer.is-eraser {
+  cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><circle cx='11' cy='11' r='10' fill='none' stroke='white' stroke-width='2'/><circle cx='11' cy='11' r='10' fill='none' stroke='black' stroke-width='1'/></svg>") 11 11, var(--cur-crosshair, crosshair);
+}
+.file-viewer-pdf-markup-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+/* The remarks stay on show while marking, out of reach (and out of the tab order
+   in effect: nothing over the layer takes a pointer). */
+.file-viewer-pdf-page-wrap.is-marking .file-viewer-pdf-note,
+.file-viewer-pdf-page-wrap.is-marking .file-viewer-pdf-hl {
+  pointer-events: none;
+}
+/* A typed note's card: the remark card, opened where the note sits. */
+.file-viewer-pdf-markup-note .file-viewer-pdf-note-text {
+  font-weight: 600;
+}
+/* The strip's tools and colours show which one is armed — the selected state
+   of the generic toolbar button (`.toolbar-btn.active`). */
+/* An icon tool (the eraser) sits where a glyph would. */
+.file-viewer-pdf-markup-bar .file-viewer-zoom-btn > svg {
+  display: block;
+  margin: 0 auto;
+}
+.file-viewer-pdf-markup-bar .file-viewer-zoom-btn[aria-pressed="true"],
+.file-viewer-pdf-markup-status .file-viewer-zoom-btn.active,
+.file-viewer-pdf-markup-questions .file-viewer-zoom-btn.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.file-viewer-pdf-markup-colors {
+  display: inline-flex;
+  gap: 3px;
+}
+.file-viewer-pdf-markup-swatch span {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  vertical-align: middle;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+.file-viewer-pdf-markup-round {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+}
+/* The agent's markup questions (`PdfMarkupQuestions`): the reader's question
+   card (`terminal-reader-question`, `subwindows.css`) on the markup strip's
+   ground, scrolling on its own so a long ask never pushes the pages away.
+   Positioned so a row's `offsetTop` is measured from here (pin → question). */
+.file-viewer-pdf-markup-questions {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow: auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--control-bg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.file-viewer-pdf-markup-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: var(--radius);
+}
+/* The question a pin was clicked for. */
+.file-viewer-pdf-markup-question.is-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+/* The card's head line, and on its right the ‹ n / m › pager of an ask with
+   several questions (one shown at a time). */
+.file-viewer-pdf-markup-question-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.file-viewer-pdf-markup-question-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+/* A picked row: the answered card's chosen row (`.terminal-reader-question.asked`). */
+.file-viewer-pdf-markup-questions .terminal-reader-option.chosen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.file-viewer-pdf-markup-question-other,
+.file-viewer-pdf-markup-question-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.file-viewer-pdf-markup-question-other input {
+  flex: 1;
+  min-width: 12em;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+/* A question's pin (`?1`…): the remark marker's fixed-size pin (#pdf-notes), in
+   the accent rather than the comment yellow — it is the agent asking, not a
+   remark in the file. Above the markup layer (7), so it takes its click while
+   marking. `is-inline` is the same badge as the question's chip in the card. */
+.file-viewer-pdf-question-pin {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  cursor: var(--cur-pointer, pointer);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, #000);
+  border-radius: 4px 4px 4px 0;
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  z-index: 8;
+}
+.file-viewer-pdf-question-pin:hover,
+.file-viewer-pdf-question-pin:focus-visible {
+  background: color-mix(in srgb, var(--accent) 80%, #fff);
+}
+.file-viewer-pdf-question-pin.is-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.file-viewer-pdf-question-pin.is-inline {
+  position: static;
+  flex: none;
+  box-shadow: none;
+}
+/* A tick's ✓ (`PdfMarkupTicks`): the same pin at a sent mark's top-right
+   corner, in the success colour — the agent says it handled the mark; a click
+   approves and removes it. */
+.file-viewer-pdf-question-pin.is-tick {
+  border-color: color-mix(in srgb, var(--success) 70%, #000);
+  background: var(--success);
+}
+.file-viewer-pdf-question-pin.is-tick:hover,
+.file-viewer-pdf-question-pin.is-tick:focus-visible {
+  background: color-mix(in srgb, var(--success) 80%, #fff);
+}
+.file-viewer-pdf-question-pin.is-tick:disabled {
+  cursor: var(--cur-default, default);
+  opacity: 0.6;
+}
+
 .file-viewer-pdf-copy-bar {
   display: flex;
   align-items: center;
@@ -4601,7 +4788,7 @@
   100% { box-shadow: 0 0 0 14px rgba(68, 147, 248, 0); }
 }
 
-/* The card a remark is written in. App chrome rather than paper — it is Eldrun's
+/* The card a remark is written in. App chrome rather than paper — it is Tabtivity's
    editor, not part of the document — and it sits above every page overlay. */
 .file-viewer-pdf-note-card {
   position: absolute;
@@ -6010,6 +6197,165 @@
   left: 16px;
 }
 
+/* The laser is the pointer while it is on, windowed or not. */
+.pdf-present.is-laser {
+  cursor: none;
+}
+
+/* Above the sheet and any blank, under the bar; never takes the pointer. */
+.pdf-present-laser {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* With the bar up, the hint sits above it rather than under it. */
+.pdf-present.has-bar .pdf-present-hint {
+  bottom: 62px;
+}
+
+/* A blanked screen: the sheet is covered, not unmounted, so lifting the blank
+   is instant. The bar stays above it — the reader still needs it. */
+.pdf-present-blank {
+  position: absolute;
+  inset: 0;
+}
+.pdf-present-blank.is-black { background: #000; }
+.pdf-present-blank.is-white { background: #fff; }
+
+/* The bottom bar (`PdfPresentBar`). Its own colours, like the rest of this
+   window's chrome: it has to read over any sheet and any blank. The pointer
+   comes back over it even while the window hides it everywhere else. */
+.pdf-present-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-radius: 9px;
+  background: rgba(16, 16, 16, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: var(--cur-default, default);
+  user-select: none;
+  overflow: hidden;
+}
+
+.pdf-present-bar-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.pdf-present-bar-progress > span {
+  display: block;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.5);
+  transition: width 0.2s ease;
+}
+
+.pdf-present-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.pdf-present-bar-group.is-file {
+  flex: 1 1 0;
+  gap: 8px;
+}
+.pdf-present-bar-group.is-actions {
+  flex: 1 1 0;
+  justify-content: flex-end;
+}
+
+.pdf-present-bar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.pdf-present-bar-page {
+  min-width: 64px;
+  text-align: center;
+}
+
+.pdf-present-bar-dim {
+  margin-left: 6px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
+.pdf-present-bar-timer {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 48px;
+  text-align: right;
+}
+
+/* Fixed colours, not --warning/--danger: the bar ignores the theme. */
+.pdf-present-bar-timer.is-near,
+.pdf-present-bar-dim.is-near { color: #f0b429; }
+.pdf-present-bar-timer.is-over,
+.pdf-present-bar-dim.is-over { color: #ff6b6b; }
+.pdf-present-bar-timer.is-paused { color: rgba(255, 255, 255, 0.45); }
+
+.pdf-present-bar-wall {
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.pdf-present-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: var(--cur-pointer, pointer);
+}
+.pdf-present-bar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.pdf-present-bar-btn.is-active {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.pdf-present-bar-btn.is-key {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pdf-present-swatch {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+.pdf-present-swatch.is-black { background: #000; }
+.pdf-present-swatch.is-white { background: #fff; }
+
 /* ── Markdown relationship graph (md_graph experimental) ──────────────────
    The "Graph" mode of the markdown viewer (MdGraphView): local-file links
    crawled from the viewed document, drawn as SVG on concentric BFS rings.
@@ -6182,6 +6528,17 @@
 .project-remark-row.missing { opacity:.55; }
 .project-remark-target { font:inherit; color:var(--accent); border:0; background:none; padding:0; }
 .project-remark-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+/* Dev build's Todo view (files/DevTodoView): todo groups folding into rendered markdown. */
+.dev-todo-view { flex:1; min-height:0; overflow-y:auto; padding:6px; color:var(--text-primary); }
+.dev-todo-head { display:flex; align-items:center; gap:6px; padding:2px 2px 6px; }
+.dev-todo-notice { padding:4px 6px; font-size: var(--text-xs); color:var(--text-secondary); }
+.dev-todo-group { border-bottom:1px solid var(--border-color); }
+.dev-todo-group-head { display:flex; align-items:center; gap:6px; width:100%; padding:5px 4px; border:0; background:none; font:inherit; color:inherit; text-align:left; cursor: var(--cur-pointer, pointer); }
+.dev-todo-group-head:hover { background:var(--bg-hover); }
+.dev-todo-chevron { width:10px; color:var(--text-muted); }
+.dev-todo-group-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dev-todo-count { min-width:16px; padding:0 4px; border-radius:8px; background:var(--bg-hover); color:var(--text-secondary); font-size: var(--text-xs); text-align:center; }
+.markdown-body.dev-todo-body { padding:4px 6px 10px 18px; font-size:12px; }
 .file-delete-dialog textarea.file-paste-name { resize:vertical; }
 
 /* ── The achromatic pair: document colour ──────────────────────────────────

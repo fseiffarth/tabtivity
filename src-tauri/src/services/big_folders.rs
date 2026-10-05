@@ -164,8 +164,8 @@ pub fn pick(
 ///
 /// Symlinks are never followed (the host walk in `remote_sync` makes the same
 /// promise, for the same reason: a `link -> /` must not be measured as project
-/// data), and `.git`/`.eldrun` are skipped — git's bytes are lockstep's business
-/// and Eldrun's runtime dir is nobody's. Stops at [`MAX_ENTRIES`].
+/// data), and `.git`/`.tabtivity` are skipped — git's bytes are lockstep's business
+/// and Tabtivity's runtime dir is nobody's. Stops at [`MAX_ENTRIES`].
 pub fn walk_local_files(root: &Path) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     let mut stack: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
@@ -178,7 +178,7 @@ pub fn walk_local_files(root: &Path) -> Vec<(String, u64)> {
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".git" || name == ".eldrun" {
+            if name == ".git" || crate::brand::is_project_dir(&name) {
                 continue;
             }
             let child_rel = if rel.is_empty() {
@@ -236,8 +236,7 @@ pub fn parse_du_files(root: &str, out: &str) -> Vec<(String, u64)> {
         if rel.is_empty()
             || rel == ".git"
             || rel.starts_with(".git/")
-            || rel == ".eldrun"
-            || rel.starts_with(".eldrun/")
+            || rel.split('/').next().is_some_and(crate::brand::is_project_dir)
         {
             continue;
         }

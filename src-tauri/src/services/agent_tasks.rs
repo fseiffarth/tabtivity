@@ -12,7 +12,7 @@ use crate::{
 };
 
 const FILE_NAME: &str = "agent_tasks.json";
-const MAX_SCHEDULES: usize = 32;
+pub(crate) const MAX_SCHEDULES: usize = 32;
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 /// A preface is a short list of the agent's own slash commands, not a second
 /// message channel: each entry is one line, must be a command, and there are
@@ -25,26 +25,58 @@ const SCHEDULE_TARGET_KEY: &str = "scheduleTargetId";
 
 static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+/// The transaction guard of the state dir's file: the in-process mutex the
+/// window's commands always took, plus the file's `FileLock`, because the
+/// Mobile sidecar is a second process on the same file (headless owner plan,
+/// H2: it claims and completes occurrences with no window open, and a claim
+/// is the only at-most-once check there is). Fields drop in order — the
+/// file lock goes before the mutex.
+struct Guard {
+    _file: Option<storage::FileLock>,
+    _mutex: std::sync::MutexGuard<'static, ()>,
+}
+
+fn lock() -> Guard {
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    Guard { _file: file_lock(&path()), _mutex: mutex }
+}
+
+/// The cross-process lock beside `path` (`agent_tasks.json.lock`). Best
+/// effort, like every `FileLock`: a filesystem without advisory locks still
+/// gets the occurrence checks inside the transaction.
+fn file_lock(path: &std::path::Path) -> Option<storage::FileLock> {
+    storage::FileLock::exclusive(path).ok()
+}
+
+/// `<state_dir>/agent_tasks.json`.
+pub fn file_path(state_dir: &std::path::Path) -> std::path::PathBuf {
+    state_dir.join(FILE_NAME)
 }
 
 fn path() -> std::path::PathBuf {
-    storage::state_dir().join(FILE_NAME)
+    file_path(&storage::state_dir())
 }
 
-fn read() -> Result<AgentTasksFile, String> {
-    let path = path();
+fn read_at(path: &std::path::Path) -> Result<AgentTasksFile, String> {
     if !path.exists() {
         return Ok(AgentTasksFile::default());
     }
-    storage::read_json(&path).map_err(|e| format!("read {FILE_NAME}: {e}"))
+    storage::read_json(path).map_err(|e| format!("read {FILE_NAME}: {e}"))
+}
+
+fn read() -> Result<AgentTasksFile, String> {
+    read_at(&path())
+}
+
+fn write_at(path: &std::path::Path, file: &AgentTasksFile) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create state directory: {e}"))?;
+    }
+    storage::write_json_atomic(path, file).map_err(|e| format!("write {FILE_NAME}: {e}"))
 }
 
 fn write(file: &AgentTasksFile) -> Result<(), String> {
-    std::fs::create_dir_all(storage::state_dir())
-        .map_err(|e| format!("create state directory: {e}"))?;
-    storage::write_json_atomic(&path(), file).map_err(|e| format!("write {FILE_NAME}: {e}"))
+    write_at(&path(), file)
 }
 
 pub(crate) fn validate_id(label: &str, value: &str) -> Result<(), String> {
@@ -158,6 +190,9 @@ pub(crate) fn validate_preface(preface: Vec<String>) -> Result<Vec<String>, Stri
 
 fn validate_prompt(mut prompt: ScheduledAgentPrompt) -> Result<ScheduledAgentPrompt, String> {
     validate_id("schedule id", &prompt.id)?;
+    if let Some(device) = &prompt.phone_device {
+        validate_id("phone device", device)?;
+    }
     validate_rule(&prompt.rule)?;
     prompt.preface = validate_preface(std::mem::take(&mut prompt.preface))?;
     prompt.message = sanitize_message(&prompt.message);
@@ -201,12 +236,50 @@ pub fn list(project_id: &str, target_id: &str) -> Result<Vec<ScheduledAgentPromp
     if super::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339()) {
         write(&file)?;
     }
+    Ok(schedules_of(&file, project_id, target_id))
+}
+
+/// [`list`] for a process that must not write this file — the Mobile sidecar
+/// answering a phone with no window open reads `state_dir` and prunes expired
+/// proposals in memory only.
+pub fn list_at(
+    state_dir: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+) -> Result<Vec<ScheduledAgentPrompt>, String> {
+    validate_id("project id", project_id)?;
+    validate_id("schedule target id", target_id)?;
+    let mut file = read_at(&file_path(state_dir))?;
+    super::schedule_mcp::prune_proposals(&mut file, &chrono::Utc::now().to_rfc3339());
+    Ok(schedules_of(&file, project_id, target_id))
+}
+
+/// Every (project, target) of `state_dir`'s file that holds at least one
+/// enabled rule — what the sidecar's scheduler walks with no window open
+/// (headless owner plan, H2). A read, never a write.
+pub fn bindings_at(state_dir: &std::path::Path) -> Result<Vec<AgentScheduleTargetBinding>, String> {
+    let file = read_at(&file_path(state_dir))?;
     Ok(file
         .projects
+        .iter()
+        .flat_map(|(project_id, targets)| {
+            targets
+                .iter()
+                .filter(|(_, target)| target.schedules.iter().any(|rule| rule.enabled))
+                .map(move |(target_id, _)| AgentScheduleTargetBinding {
+                    project_id: project_id.clone(),
+                    schedule_target_id: target_id.clone(),
+                })
+        })
+        .collect())
+}
+
+fn schedules_of(file: &AgentTasksFile, project_id: &str, target_id: &str) -> Vec<ScheduledAgentPrompt> {
+    file.projects
         .get(project_id)
         .and_then(|project| project.get(target_id))
         .map(|target| target.schedules.clone())
-        .unwrap_or_default())
+        .unwrap_or_default()
 }
 
 /// Schedule MCP uses the same transaction lock for validation, quotas and writes.
@@ -284,6 +357,13 @@ pub(crate) fn apply_upsert(
             let mut next = prompt;
             next.last = target.schedules[index].last.clone();
             next.origin = target.schedules[index].origin.clone();
+            // The phone that made it stays unless the edit names one: a
+            // phone's edit takes the rule over (revoking that phone cancels
+            // it, #2348); a desktop or agent edit names none and never
+            // disowns a phone's rule.
+            if next.phone_device.is_none() {
+                next.phone_device = target.schedules[index].phone_device.clone();
+            }
             let next = validate_prompt(next)?;
             target.schedules[index] = next;
         }
@@ -323,6 +403,30 @@ pub fn upsert(
     Ok(result)
 }
 
+/// [`upsert`] on `path` by a process that shares the file — the Mobile
+/// sidecar writing a phone's schedule with no window open (headless owner
+/// plan, H3) — under the file's lock alone.
+pub fn upsert_in(
+    path: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+    mut prompt: ScheduledAgentPrompt,
+    expect_existing_on: Option<&str>,
+) -> Result<Vec<ScheduledAgentPrompt>, String> {
+    validate_id("project id", project_id)?;
+    validate_id("schedule target id", target_id)?;
+    if let Some(source) = expect_existing_on {
+        validate_id("schedule target id", source)?;
+    }
+    prompt.last = None;
+    let prompt = validate_prompt(prompt)?;
+    let _lock = file_lock(path);
+    let mut file = read_at(path)?;
+    let result = apply_upsert(&mut file, project_id, target_id, prompt, expect_existing_on)?;
+    write_at(path, &file)?;
+    Ok(result)
+}
+
 /// Pure core of [`delete`]; `expect_undelivered` refuses as [`check_live`] does.
 pub(crate) fn apply_delete(
     file: &mut AgentTasksFile,
@@ -352,13 +456,36 @@ pub fn delete(
     schedule_id: &str,
     expect_undelivered: bool,
 ) -> Result<(), String> {
+    let _guard = lock();
+    delete_locked(&path(), project_id, target_id, schedule_id, expect_undelivered)
+}
+
+/// [`delete`] on `path` by a process that shares the file (the sidecar's
+/// retire of a fired one-time rule), under the file's lock alone.
+pub fn delete_in(
+    path: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+    expect_undelivered: bool,
+) -> Result<(), String> {
+    let _lock = file_lock(path);
+    delete_locked(path, project_id, target_id, schedule_id, expect_undelivered)
+}
+
+fn delete_locked(
+    path: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+    expect_undelivered: bool,
+) -> Result<(), String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
     validate_id("schedule id", schedule_id)?;
-    let _guard = lock();
-    let mut file = read()?;
+    let mut file = read_at(path)?;
     apply_delete(&mut file, project_id, target_id, schedule_id, expect_undelivered)?;
-    write(&file)
+    write_at(path, &file)
 }
 
 pub fn delete_target(project_id: &str, target_id: &str) -> Result<(), String> {
@@ -373,30 +500,94 @@ pub fn delete_target(project_id: &str, target_id: &str) -> Result<(), String> {
     write(&file)
 }
 
+/// What a claim came to. `Cancelled`: the rule was a phone's that no longer
+/// reaches its scope (revoked, Lock down, or its access narrowed), and it was
+/// taken out instead of claimed — the fire-time backstop of
+/// `mobile_control::phone_origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    Claimed,
+    Refused,
+    Cancelled,
+}
+
 pub fn claim(
     project_id: &str,
     target_id: &str,
     schedule_id: &str,
     occurrence: &str,
+) -> Result<ClaimOutcome, String> {
+    let _guard = lock();
+    claim_locked(&path(), project_id, target_id, schedule_id, occurrence, chrono::Local::now())
+}
+
+/// [`claim`] on `path` by a process that shares the file — the Mobile
+/// sidecar firing a schedule with no window open (headless owner plan, H2).
+/// Under the file's lock alone: the check and the write are one transaction
+/// against whatever a window wrote, so an occurrence is claimed by exactly
+/// one of them, whichever asked first.
+pub fn claim_in(
+    path: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+    occurrence: &str,
+    now: chrono::DateTime<chrono::Local>,
 ) -> Result<bool, String> {
+    let _lock = file_lock(path);
+    claim_locked(path, project_id, target_id, schedule_id, occurrence, now).map(|outcome| outcome == ClaimOutcome::Claimed)
+}
+
+fn claim_locked(
+    path: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+    occurrence: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> Result<ClaimOutcome, String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
     validate_id("schedule id", schedule_id)?;
     if parse_date_time(occurrence).is_none() {
         return Err("invalid occurrence".into());
     }
-    let _guard = lock();
-    let mut file = read()?;
+    let mut file = read_at(path)?;
     let Some(target) = file
         .projects
         .get_mut(project_id)
         .and_then(|project| project.get_mut(target_id))
     else {
-        return Ok(false);
+        return Ok(ClaimOutcome::Refused);
     };
     let Some(prompt) = target.schedules.iter().find(|item| item.id == schedule_id) else {
-        return Ok(false);
+        return Ok(ClaimOutcome::Refused);
     };
+    // A phone's rule goes in only while that phone still reaches the scope,
+    // whichever owner fires it and whatever happened while it was down.
+    if let Some(device) = prompt.phone_device.as_deref() {
+        let state_dir = path.parent().unwrap_or(std::path::Path::new("."));
+        match super::mobile_control::phone_origin::reaches(state_dir, device, project_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                let cancelled = CancelledRule {
+                    project_id: project_id.to_string(),
+                    target_id: target_id.to_string(),
+                    schedule_id: schedule_id.to_string(),
+                };
+                apply_delete(&mut file, project_id, target_id, schedule_id, false)?;
+                write_at(path, &file)?;
+                super::mobile_control::phone_origin::log_cancelled(std::slice::from_ref(&cancelled), "at fire time");
+                return Ok(ClaimOutcome::Cancelled);
+            }
+            Err(why) => {
+                // Unknown is not "still allowed": not typed, and kept for a
+                // check that can answer.
+                eprintln!("{}: a phone's scheduled prompt '{schedule_id}' was held back: its phone's access could not be read: {why}", crate::app_slug!());
+                return Ok(ClaimOutcome::Refused);
+            }
+        }
+    }
     if !prompt.enabled
         || prompt
             .last
@@ -407,17 +598,110 @@ pub fn claim(
             .get(schedule_id)
             .is_some_and(|value| value == occurrence)
     {
-        return Ok(false);
+        return Ok(ClaimOutcome::Refused);
     }
-    if !reserve_agent_delivery(target, schedule_id, occurrence, chrono::Local::now()) { return Ok(false); }
+    if !reserve_agent_delivery(target, schedule_id, occurrence, now) { return Ok(ClaimOutcome::Refused); }
     target
         .claims
         .insert(schedule_id.to_string(), occurrence.to_string());
-    write(&file)?;
-    Ok(true)
+    write_at(path, &file)?;
+    Ok(ClaimOutcome::Claimed)
+}
+
+/// A phone's rule taken out because its phone no longer reaches its scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelledRule {
+    pub project_id: String,
+    pub target_id: String,
+    pub schedule_id: String,
+}
+
+/// Take out every phone-made rule `reaches(device, project_id)` says no to
+/// (`Ok(false)`), with any claim on it. A rule with no phone, or one whose
+/// answer is unknown (`Err`), stays. The window's half of `path`, under
+/// the in-process lock too.
+pub fn cancel_phone_rules(
+    path: &std::path::Path,
+    reaches: impl Fn(&str, &str) -> Result<bool, String>,
+) -> Result<Vec<CancelledRule>, String> {
+    // Mutex first, then the file — the order `lock()` takes them in. A
+    // struct literal evaluates its fields as written, so naming the file lock
+    // first inverted it: a claim holding the mutex and this holding the file
+    // lock waited on each other for good.
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let _guard = Guard { _file: file_lock(path), _mutex: mutex };
+    cancel_phone_rules_locked(path, reaches)
+}
+
+/// [`cancel_phone_rules`] on `path` by a process that shares the file — the
+/// Mobile sidecar — under the file's lock alone.
+pub fn cancel_phone_rules_in(
+    path: &std::path::Path,
+    reaches: impl Fn(&str, &str) -> Result<bool, String>,
+) -> Result<Vec<CancelledRule>, String> {
+    let _lock = file_lock(path);
+    cancel_phone_rules_locked(path, reaches)
+}
+
+fn cancel_phone_rules_locked(
+    path: &std::path::Path,
+    reaches: impl Fn(&str, &str) -> Result<bool, String>,
+) -> Result<Vec<CancelledRule>, String> {
+    let mut file = read_at(path)?;
+    let mut cancelled = Vec::new();
+    for (project_id, project) in &mut file.projects {
+        for (target_id, target) in project.iter_mut() {
+            let lost: Vec<String> = target
+                .schedules
+                .iter()
+                .filter(|rule| rule.phone_device.as_deref().is_some_and(|device| reaches(device, project_id) == Ok(false)))
+                .map(|rule| rule.id.clone())
+                .collect();
+            for schedule_id in lost {
+                target.schedules.retain(|rule| rule.id != schedule_id);
+                target.claims.remove(&schedule_id);
+                cancelled.push(CancelledRule {
+                    project_id: project_id.clone(),
+                    target_id: target_id.clone(),
+                    schedule_id,
+                });
+            }
+        }
+    }
+    if cancelled.is_empty() {
+        return Ok(cancelled);
+    }
+    prune_empty(&mut file);
+    write_at(path, &file)?;
+    Ok(cancelled)
 }
 
 pub fn complete(
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+    occurrence: &str,
+    result: AgentScheduleResult,
+) -> Result<Vec<ScheduledAgentPrompt>, String> {
+    let _guard = lock();
+    complete_locked(&path(), project_id, target_id, schedule_id, occurrence, result)
+}
+
+/// [`complete`] on `path`, the sidecar's half of [`claim_in`].
+pub fn complete_in(
+    path: &std::path::Path,
+    project_id: &str,
+    target_id: &str,
+    schedule_id: &str,
+    occurrence: &str,
+    result: AgentScheduleResult,
+) -> Result<Vec<ScheduledAgentPrompt>, String> {
+    let _lock = file_lock(path);
+    complete_locked(path, project_id, target_id, schedule_id, occurrence, result)
+}
+
+fn complete_locked(
+    path: &std::path::Path,
     project_id: &str,
     target_id: &str,
     schedule_id: &str,
@@ -430,8 +714,7 @@ pub fn complete(
     if parse_date_time(occurrence).is_none() {
         return Err("invalid occurrence".into());
     }
-    let _guard = lock();
-    let mut file = read()?;
+    let mut file = read_at(path)?;
     let target = file
         .projects
         .get_mut(project_id)
@@ -456,7 +739,7 @@ pub fn complete(
     }
     target.claims.remove(schedule_id);
     let schedules = target.schedules.clone();
-    write(&file)?;
+    write_at(path, &file)?;
     Ok(schedules)
 }
 
@@ -606,6 +889,7 @@ mod tests {
             preface: Vec::new(),
             last: None,
             origin: None,
+            phone_device: None,
         }
     }
 
@@ -642,6 +926,34 @@ mod tests {
 
     fn snapshot(file: &AgentTasksFile) -> String {
         serde_json::to_string(file).unwrap()
+    }
+
+    /// The window's phone sweep takes the in-process mutex before the file
+    /// lock, as `lock()` (every claim) does: waiting on the mutex, it must
+    /// not already hold the file — or a claim holding the mutex deadlocks
+    /// waiting for it.
+    #[test]
+    fn the_phone_sweep_waits_for_the_mutex_before_taking_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file_path(dir.path());
+        write_at(&path, &AgentTasksFile::default()).unwrap();
+        let held = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let sweeping = {
+            let path = path.clone();
+            std::thread::spawn(move || cancel_phone_rules(&path, |_, _| Ok(true)).map(|cancelled| cancelled.len()))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path.with_file_name(format!("{FILE_NAME}.lock")))
+            .unwrap();
+        let free = lock_file.try_lock().is_ok();
+        let _ = lock_file.unlock();
+        drop(held);
+        assert_eq!(sweeping.join().unwrap(), Ok(0));
+        assert!(free, "the sweep held the file lock while waiting for the mutex");
     }
 
     #[test]

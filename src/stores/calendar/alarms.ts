@@ -19,6 +19,8 @@ import { formatStampTime } from "../../lib/calendar/calendarTime";
 import { readUse24h } from "../../lib/timeFormat";
 import { translate, useI18nStore } from "../../lib/i18n";
 import { useCalendarStore } from "./calendar";
+import { holdsTimerLease } from "../timerLease";
+import { storageKey } from "../../lib/brand";
 
 /** How often the ticker looks for due reminders. */
 const TICK_MS = 30_000;
@@ -31,7 +33,7 @@ const TICK_MS = 30_000;
  * "this user already dismissed this" — which is nobody else's business, and would
  * churn the file on every reminder.
  */
-const FIRED_KEY = "eldrun.calendar.firedAlarms";
+const FIRED_KEY = storageKey("calendar.firedAlarms");
 
 /** Cap on remembered keys, so the list cannot grow without bound. */
 const MAX_FIRED = 500;
@@ -114,7 +116,7 @@ async function notifyOs(alarm: DueAlarm) {
 
 /**
  * The same reminder as a push notice on every phone that switched reminders
- * on (Eldrun Mobile's Calendar → Reminders). The sidecar holds the
+ * on (Tabtivity Mobile's Calendar → Reminders). The sidecar holds the
  * subscriptions and encrypts per phone; with Mobile off or no phone
  * subscribed the call has nowhere to go, which is not an error here.
  */
@@ -126,10 +128,27 @@ function notifyPhone(alarm: DueAlarm) {
 }
 
 /**
+ * The keys of `keys` this window may show: the backend answers the ones
+ * nobody had claimed. A backend without the command (an older binary under a
+ * hot-reloaded `src/`), or one that fails, leaves the decision to this window
+ * alone, as before the record existed.
+ */
+async function claimFired(keys: string[]): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+  try {
+    const granted = await invoke<string[] | null>("calendar_alarms_claim", { keys });
+    if (Array.isArray(granted)) return new Set(granted);
+  } catch {
+    // Fall through: this window decides.
+  }
+  return new Set(keys);
+}
+
+/**
  * The reminder engine.
  *
  * A single ticker scans the calendar for reminders that have come due and shows
- * each one **twice over**: an OS notification (which reaches the user when Eldrun
+ * each one **twice over**: an OS notification (which reaches the user when Tabtivity
  * is not focused, or not even visible) and an in-app popup (which offers snooze
  * and dismiss) — plus a push notice to a subscribed phone. All channels are
  * driven from one fire-once record, so a reminder cannot double-show or re-show
@@ -155,6 +174,9 @@ export const useAlarmStore = create<AlarmStore>((set, get) => ({
   },
 
   tick: async (now = new Date()) => {
+    // Another Tabtivity window holds the timer lease: it fires the reminders,
+    // this one does not (headless owner plan, H2 interim).
+    if (!holdsTimerLease()) return;
     const { events, calendars, loaded } = useCalendarStore.getState();
     if (!loaded) return;
 
@@ -175,7 +197,13 @@ export const useAlarmStore = create<AlarmStore>((set, get) => ({
     const window = alarmWindow(events, now);
     const occurrences = expandEvents(events, window.start, window.end);
     const allDue = dueAlarms(occurrences, fired, now);
-    const due = allDue.filter((a) => !muted.has(a.calendarId));
+    // Claim before showing (headless owner plan, H2): the backend's fired
+    // record is shared with every other window and with the Mobile sidecar,
+    // which pushes reminders to the phone while no window is open. A key
+    // somebody else claimed is theirs — it still joins this window's own set
+    // below, so it is never asked about again.
+    const granted = await claimFired(allDue.map((a) => a.key));
+    const due = allDue.filter((a) => granted.has(a.key) && !muted.has(a.calendarId));
 
     if (allDue.length === 0 && woken.length === 0) {
       if (dropped) set({ active, snoozed: stillSnoozed });

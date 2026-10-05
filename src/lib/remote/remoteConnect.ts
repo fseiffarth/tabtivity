@@ -27,10 +27,10 @@ export async function resolveRemoteStartDir(
 }
 
 /**
- * Non-headless remote-connection support: instead of Eldrun handling the
+ * Non-headless remote-connection support: instead of Tabtivity handling the
  * SSH/OpenVPN password itself, the actual connecting command is launched as an
- * interactive shell tab in the Eldrun **root** scope, where the user types the
- * password directly into the live terminal. Eldrun never sees or stores it.
+ * interactive shell tab in the Tabtivity **root** scope, where the user types the
+ * password directly into the live terminal. Tabtivity never sees or stores it.
  *
  * Gated by the `connections_headless` setting (default ON = old headless flow).
  */
@@ -83,7 +83,7 @@ export function markConnectionOpened(dedupeKey: string): void {
  * Open `command` as an interactive shell tab in the **root** scope. `command` is
  * typed into the freshly-spawned shell via the tab's `initialInput` (see
  * TerminalView), so a password prompt it raises is answered in that visible
- * terminal — Eldrun never handles the password.
+ * terminal — Tabtivity never handles the password.
  *
  * The active project is deliberately NOT changed (this is called mid-activation,
  * where switching scope would undo the activation in progress); instead a brief
@@ -116,7 +116,7 @@ export function openConnectionInRoot(opts: {
     {
       label,
       cmd: "", // empty → backend default_shell()
-      cwd: rootDir, // empty resolves to ~/eldrun/root on the backend
+      cwd: rootDir, // empty resolves to ~/tabtivity/root on the backend
       kind: "shell",
       initialInput: command,
     },

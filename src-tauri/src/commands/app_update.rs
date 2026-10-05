@@ -1,4 +1,4 @@
-//! Tauri surface for "check for a new Eldrun" (Settings → Updates).
+//! Tauri surface for "check for a new Tabtivity" (Settings → Updates).
 //!
 //! Thin on purpose: the release parsing, the URL allowlist, the staging and the
 //! per-platform install all live in [`crate::services::app_update`], which is
@@ -99,7 +99,7 @@ pub async fn download_app_update(app: AppHandle) -> Result<StagedInfo, String> {
 }
 
 /// Apply the staged update. See [`app_update::install`] for what that means per
-/// platform — none of the branches restart Eldrun themselves.
+/// platform — none of the branches restart Tabtivity themselves.
 #[tauri::command]
 pub async fn install_app_update() -> Result<InstallOutcome, String> {
     tauri::async_runtime::spawn_blocking(app_update::install)

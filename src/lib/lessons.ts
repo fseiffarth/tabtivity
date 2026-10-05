@@ -10,7 +10,7 @@ import type { TranslationKey } from "./i18n";
  *
  * The two overview tours are lessons too — the quick tour opens Basics and the
  * tour of other machines opens Advanced — so there is one place to learn
- * Eldrun instead of a tour, an advanced tour, and a lesson list side by side.
+ * Tabtivity instead of a tour, an advanced tour, and a lesson list side by side.
  * Only the quick tour counts as onboarding done (`completesOnboarding`).
  *
  * Most steps spotlight a persistent entry-point control (the + button, the gear,
@@ -71,12 +71,12 @@ export interface Lesson {
 }
 
 /** The quick tour's lesson id — what the wizard's "Take a tour" and the
- *  `eldrun:start-tour` event start. */
+ *  `tabtivity:start-tour` event start. */
 export const TOUR_LESSON_ID = "tour";
 
 /** Reveal the right-side file panel so a step's anchor exists to spotlight.
  *  AppShell listens for this (the panel is otherwise hover-revealed). */
-const revealFilePanel = () => window.dispatchEvent(new Event("eldrun:reveal-side-panel"));
+const revealFilePanel = () => window.dispatchEvent(new Event("app:reveal-side-panel"));
 
 export const LESSONS: Lesson[] = [
   // ── Basics ──────────────────────────────────────────────────────────────
@@ -379,15 +379,8 @@ export const LESSONS: Lesson[] = [
         task: {
           promptKey: "lessons.keyboardSteering.enterModeTask",
           hintKey: "lessons.keyboardSteering.enterModeTaskHint",
-          appear: ".steering-legend",
+          appear: ".steering-legend, .steering-legend-fab",
         },
-      },
-      {
-        id: "stations",
-        anchor: ".project-pills-region",
-        placement: "top",
-        titleKey: "lessons.keyboardSteering.stationsTitle",
-        bodyKey: "lessons.keyboardSteering.stationsBody",
       },
       {
         id: "move-focus",
@@ -397,11 +390,53 @@ export const LESSONS: Lesson[] = [
         bodyKey: "lessons.keyboardSteering.moveFocusBody",
       },
       {
-        id: "single-keys",
+        id: "terminal-scroll",
         anchor: null,
         placement: "bottom",
-        titleKey: "lessons.keyboardSteering.singleKeysTitle",
-        bodyKey: "lessons.keyboardSteering.singleKeysBody",
+        titleKey: "lessons.keyboardSteering.terminalScrollTitle",
+        bodyKey: "lessons.keyboardSteering.terminalScrollBody",
+      },
+      {
+        id: "stations",
+        anchor: ".project-pills-region",
+        placement: "top",
+        titleKey: "lessons.keyboardSteering.stationsTitle",
+        bodyKey: "lessons.keyboardSteering.stationsBody",
+      },
+      {
+        id: "new-tabs",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.keyboardSteering.newTabsTitle",
+        bodyKey: "lessons.keyboardSteering.newTabsBody",
+      },
+      {
+        id: "agent-keys",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.keyboardSteering.agentKeysTitle",
+        bodyKey: "lessons.keyboardSteering.agentKeysBody",
+      },
+      {
+        id: "panels",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.keyboardSteering.panelsTitle",
+        bodyKey: "lessons.keyboardSteering.panelsBody",
+      },
+      {
+        id: "status-jumps",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.keyboardSteering.statusJumpsTitle",
+        bodyKey: "lessons.keyboardSteering.statusJumpsBody",
+      },
+      {
+        id: "settings",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.keyboardSteering.settingsTitle",
+        bodyKey: "lessons.keyboardSteering.settingsBody",
       },
       {
         id: "exits",
@@ -1077,6 +1112,13 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.installAgent.pickFromListTitle",
         bodyKey: "lessons.installAgent.pickFromListBody",
+      },
+      {
+        id: "reader",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.installAgent.readerTitle",
+        bodyKey: "lessons.installAgent.readerBody",
       },
       {
         id: "only-installed",

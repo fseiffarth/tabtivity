@@ -15,6 +15,7 @@ import {
   WORKING_SET_HEADROOM,
   type RendererRss,
 } from "../../lib/window/rendererWatchdog";
+import { BRAND } from "../../lib/brand";
 
 const MB = 1024;
 
@@ -54,7 +55,7 @@ describe("rendererWatchdog / ownRenderer", () => {
   it("acts on this window's own renderer, not the largest one", () => {
     // The 2026-09-01 loop: main at 1.4 GB, a popout at 4.7 GB. The main
     // window must see ITS renderer and leave the popout to the popout.
-    const all = [row(100, 1400, "main", "Eldrun"), row(200, 4700, "detached-p1-g-1", "Eldrun win-1")];
+    const all = [row(100, 1400, "main", BRAND.display), row(200, 4700, "detached-p1-g-1", `${BRAND.display} win-1`)];
     expect(ownRenderer(all, 100, false)?.rss_kib).toBe(1400 * MB);
     expect(ownRenderer(all, 200, false)?.rss_kib).toBe(4700 * MB);
   });
@@ -141,8 +142,8 @@ describe("rendererWatchdog / shouldReplaceRenderer", () => {
 
 describe("rendererWatchdog / readout formatting", () => {
   it("names a renderer by its window title minus the app name, then label, then pid", () => {
-    expect(rendererName({ label: "detached-p1-g-1", title: "Eldrun win-1", pid: 7 })).toBe("win-1");
-    expect(rendererName({ label: "main", title: "Eldrun", pid: 7 })).toBe("main");
+    expect(rendererName({ label: "detached-p1-g-1", title: `${BRAND.display} win-1`, pid: 7 })).toBe("win-1");
+    expect(rendererName({ label: "main", title: BRAND.display, pid: 7 })).toBe("main");
     expect(rendererName({ label: "", title: "", pid: 4242 })).toBe("pid 4242");
     expect(rendererName({ label: "", title: "", pid: 0 })).toBe("renderer");
   });

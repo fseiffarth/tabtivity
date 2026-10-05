@@ -134,7 +134,7 @@ describe("OSC 52 clipboard writes are bounded, not trusted", () => {
   it("refuses a read-back query, a non-clipboard register, and a malformed payload", () => {
     // `Pc;?` would let any program read whatever the user last copied.
     expect(decodeOsc52Clipboard("c;?")).toBeNull();
-    // Primary-selection-only is not Eldrun's one clipboard.
+    // Primary-selection-only is not Tabtivity's one clipboard.
     expect(decodeOsc52Clipboard(osc52("hello", "p"))).toBeNull();
     expect(decodeOsc52Clipboard("c")).toBeNull();
     expect(decodeOsc52Clipboard("c;!!!not-base64!!!")).toBeNull();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standalone, synthetic-document CLS probe; never starts Eldrun.
+"""Standalone, synthetic-document CLS probe; never starts Tabtivity.
 
 Usage: python3 scripts/copilot-probe.py /absolute/path/to/copilot-language-server
 No credentials are read from other editors. Sign-in is deliberately not part of
@@ -20,7 +20,7 @@ import time
 
 
 def probe(executable):
-    with tempfile.TemporaryDirectory(prefix="eldrun-cls-probe-") as directory:
+    with tempfile.TemporaryDirectory(prefix="tabtivity-cls-probe-") as directory:
         root = Path(directory)
         project = root / "synthetic-project"
         project.mkdir()
@@ -101,8 +101,8 @@ def probe(executable):
             send({"id": 1, "method": "initialize", "params": {
                 "processId": os.getpid(), "workspaceFolders": [{"uri": project.as_uri(), "name": "probe"}],
                 "capabilities": {"workspace": {"workspaceFolders": True}, "window": {"showDocument": {"support": True}}},
-                "initializationOptions": {"editorInfo": {"name": "Eldrun", "version": "0.1"},
-                                          "editorPluginInfo": {"name": "Eldrun probe", "version": "0.1"}},
+                "initializationOptions": {"editorInfo": {"name": "Tabtivity", "version": "0.1"},
+                                          "editorPluginInfo": {"name": "Tabtivity probe", "version": "0.1"}},
             }})
             initialized = result(1)
             if "error" in initialized:

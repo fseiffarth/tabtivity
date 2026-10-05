@@ -15,7 +15,7 @@
 //! Hours are 24× denser, so they are pruned to [`HOUR_RETENTION`] keys; the day
 //! totals they contributed to survive that pruning untouched.
 //!
-//! Only **SSH-link bytes per remote project** are stored: Eldrun pools one
+//! Only **SSH-link bytes per remote project** are stored: Tabtivity pools one
 //! ControlMaster per active remote project, so those counters are genuinely
 //! per-project. Host-wide interface counters are not attributable to a project
 //! and are never recorded here, so local projects have no entry.

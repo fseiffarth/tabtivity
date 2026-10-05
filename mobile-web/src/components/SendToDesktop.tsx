@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ANY_FILE_ACCEPT, ApiError, MAX_INBOX_FILE, uploadToDesktop } from "../api";
+import { ANY_FILE_ACCEPT, ApiError, MAX_INBOX_FILE, pickPhoneFiles, uploadToDesktop } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 
@@ -36,7 +36,7 @@ export function SendToDesktop() {
     setUploads((current) => current.map((upload) => upload.id === id ? { ...upload, ...patch } : upload));
   const dismiss = (id: number) => setUploads((current) => current.filter((upload) => upload.id !== id));
 
-  const send = (files: FileList | null) => {
+  const send = (files: ArrayLike<File> | null) => {
     if (!files) return;
     for (const file of Array.from(files)) {
       const id = ++seq.current;
@@ -59,8 +59,8 @@ export function SendToDesktop() {
   return <section className="phone-settings" aria-labelledby="send-to-desktop-heading">
     <h2 id="send-to-desktop-heading">{t("mobile.sendToDesktop.heading")}</h2>
     <ul className="option-list">
-      <li><button onClick={() => input.current?.click()}>
-        <span><strong>{t("mobile.home.sendToDesktop")}{isUntested("mobile.home.sendToDesktop") && <span className="untested">Untested</span>}</strong><small>{t("mobile.sendToDesktop.hint")}</small></span>
+      <li><button onClick={() => pickPhoneFiles(input.current, send)}>
+        <span><strong>{t("mobile.home.sendToDesktop")}{isUntested("mobile.home.sendToDesktop") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{t("mobile.sendToDesktop.hint")}</small></span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
       </button></li>
     </ul>

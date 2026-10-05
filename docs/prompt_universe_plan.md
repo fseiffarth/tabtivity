@@ -20,7 +20,7 @@ Skills family — a header button, mounted once in `AppShell`, surviving a proje
 switch) whose primary view is a **3D sphere of projects** that drills into one
 project's jobs.
 
-Eldrun already has that sphere. `src/components/common/ProjectBlobPane.tsx` is a
+Tabtivity already has that sphere. `src/components/common/ProjectBlobPane.tsx` is a
 working, shipped 3D project cloud that drills from the project cloud into a focused
 project's **files**. This feature reuses that engine and swaps the second level
 from files to **jobs**. Nothing about the sphere is invented here.
@@ -300,7 +300,7 @@ denser (20 projects × 40 cards), so:
   `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`.
 - `npm run backend:stale` after the one-line `settings.rs` edit; report what it says.
 
-**Manual QA — the user runs this; agents never launch or restart Eldrun.** In a
+**Manual QA — the user runs this; agents never launch or restart Tabtivity.** In a
 debug-mode window (the flag is on there by default, no toggle needed), with agents
 running in at least two projects:
 

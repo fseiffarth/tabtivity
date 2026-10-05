@@ -28,6 +28,7 @@ import { useActivityStore } from "../../stores/activity";
 import { _resetAgentContinueForTest, continueKey, useAgentContinueStore } from "../../stores/agents/agentContinue";
 import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { _grantTimerLeaseForTest } from "../../stores/timerLease";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -89,6 +90,7 @@ function seedReadyTerminal(): { writes: string[] } {
 let usageAnswer: unknown = { agent: "claude", label: "Claude Code", supported: true, raw: PANEL, cached: false };
 
 beforeEach(() => {
+  _grantTimerLeaseForTest();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   invokeMock.mockReset();

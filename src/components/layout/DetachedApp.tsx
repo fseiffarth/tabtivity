@@ -515,7 +515,7 @@ export function DetachedApp({ param }: Props) {
   // window nobody can see. Polled rather than event-driven: a Tauri-side
   // `hide()` raises no window event the renderer can hear, and the check is one
   // cheap IPC check on the same cadence a hidden pane would otherwise cost far
-  // more than. Include Eldrun's parking state: Wayland does not reliably expose
+  // more than. Include Tabtivity's parking state: Wayland does not reliably expose
   // minimization, and a parked surface deliberately remains mapped there.
   useEffect(() => {
     const win = getCurrentWindow();

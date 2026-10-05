@@ -4,8 +4,9 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { useTexViewPrefStore, texViewScopeKey } from "../../stores/viewers/texViewPref";
+import { storageKey } from "../../lib/brand";
 
-const KEY = "eldrun.texViewByProject";
+const KEY = storageKey("texViewByProject");
 
 beforeEach(() => {
   localStorage.clear();

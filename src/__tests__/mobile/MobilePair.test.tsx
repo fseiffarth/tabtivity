@@ -1,50 +1,65 @@
-/**
- * The pairing screen is the first thing a new phone sees, and its failures
- * used to be shown as `Error: invalid_pairing_code` — the sidecar's own codes,
- * word for word. Each one now says what to do.
- */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../../../mobile-web/src/api";
-import { Pair, describePairFailure } from "../../../mobile-web/src/screens/Pair";
 
-const fetchMock = vi.fn();
+vi.mock("../../../mobile-web/src/auth", () => ({ pair: vi.fn() }));
+vi.mock("../../../mobile-web/src/localLock", () => ({
+  MIN_NEW_PIN: 6,
+  validPin: (pin: string) => /^\d{4,12}$/.test(pin),
+  configureLocalUnlock: vi.fn(),
+  platformBiometricAvailable: vi.fn(async () => true),
+}));
+
+import { pair } from "../../../mobile-web/src/auth";
+import { configureLocalUnlock } from "../../../mobile-web/src/localLock";
+import { Pair } from "../../../mobile-web/src/screens/Pair";
+
+const paired = vi.mocked(pair);
+const configured = vi.mocked(configureLocalUnlock);
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", fetchMock);
+  paired.mockResolvedValue(undefined);
+  configured.mockResolvedValue({ biometricEnrolled: true });
 });
 
 afterEach(() => {
   cleanup();
-  fetchMock.mockReset();
-  vi.unstubAllGlobals();
+  paired.mockReset();
+  configured.mockReset();
 });
 
-describe("describePairFailure", () => {
-  it("explains a wrong or expired code and where a fresh one is", () => {
-    const copy = describePairFailure(new ApiError(400, "invalid_pairing_code"));
-    expect(copy).not.toContain("invalid_pairing_code");
-    expect(copy).toContain("Eldrun Settings");
+function fillForm() {
+  fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "12345678" } });
+  fireEvent.change(screen.getByLabelText("App PIN (6–12 digits)"), { target: { value: "123456" } });
+  fireEvent.change(screen.getByLabelText("Confirm app PIN"), { target: { value: "123456" } });
+}
+
+describe("phone connection", () => {
+  it("pairs and sets the lock with one submit, then opens the workspace", async () => {
+    const onDone = vi.fn();
+    render(<Pair setupLock onDone={onDone} />);
+    const button = screen.getByRole("button", { name: "Connect and secure" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fillForm();
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(paired).toHaveBeenCalledWith("12345678", "Mobile device");
+    expect(configured).toHaveBeenCalledWith("123456");
+    expect(paired.mock.invocationCallOrder[0]).toBeLessThan(configured.mock.invocationCallOrder[0]!);
   });
 
-  it("names the rate limiter instead of its code", () => {
-    expect(describePairFailure(new ApiError(400, "too_many_attempts"))).toMatch(/Too many pairing attempts/);
-  });
-
-  it("uses the splash's machine-naming copy for anything not about the code", () => {
-    expect(describePairFailure(new ApiError(0, "offline"))).toMatch(/Can't reach your desktop|This phone is offline/);
-    expect(describePairFailure(new ApiError(503, "request_failed"))).toContain("Eldrun Mobile isn't running");
-  });
-});
-
-describe("Pair screen", () => {
-  it("shows the rejection as an alert in plain words", async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "invalid_pairing_code" }), { status: 400 }));
-    render(<Pair onDone={() => {}} />);
-    fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "12345678" } });
-    fireEvent.click(screen.getByRole("button", { name: "Pair device" }));
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("That code is wrong or has expired");
-    expect(alert.textContent).not.toContain("invalid_pairing_code");
+  it("retries lock setup without consuming the pairing code twice", async () => {
+    configured.mockRejectedValueOnce(new Error("Device verification was cancelled."));
+    const onDone = vi.fn();
+    render(<Pair setupLock onDone={onDone} />);
+    fillForm();
+    fireEvent.click(screen.getByRole("button", { name: "Connect and secure" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Device verification was cancelled.");
+    expect(screen.queryByLabelText("Pairing code")).toBeNull();
+    expect(onDone).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(paired).toHaveBeenCalledTimes(1);
+    expect(configured).toHaveBeenCalledTimes(2);
   });
 });

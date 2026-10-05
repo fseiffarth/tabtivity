@@ -1,13 +1,13 @@
-//! Eldrun-owned agent CLI installs.
+//! Tabtivity-owned agent CLI installs.
 //!
-//! An agent CLI Eldrun installs goes into `<state_dir>/agents/install/`, a
+//! An agent CLI Tabtivity installs goes into `<state_dir>/agents/install/`, a
 //! home of its own handed to the vendor's installer as `HOME` (with the npm,
 //! bun and uv prefixes pointed there too), never into the user's home. Inside
 //! every fence that tree is read-only and the CLI's own auto-updater is
 //! switched off where the CLI has a switch, so an agent cannot replace the
 //! binary it runs as; updates run outside the fence (Manage CLIs → install
 //! again). A CLI the user installed on the host keeps being detected and keeps
-//! its self-update path in the fence until it is reinstalled through Eldrun.
+//! its self-update path in the fence until it is reinstalled through Tabtivity.
 //!
 //! Verified per installer only where noted in `commands::agents`; an
 //! installer that ignores these variables lands in the user's home as before.
@@ -76,7 +76,7 @@ pub fn bin_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether `cmd`, as found on `search_dirs`, is a CLI Eldrun installed. Pure
+/// Whether `cmd`, as found on `search_dirs`, is a CLI Tabtivity installed. Pure
 /// over the filesystem.
 pub fn owns_command_in(state_dir: &Path, cmd: &str, search_dirs: &[PathBuf]) -> bool {
     let root = install_root_in(state_dir);
@@ -119,7 +119,7 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
 }
 
 /// Switch off the self-updater of a CLI for a fenced spawn: its install is
-/// read-only in every fence, whether Eldrun or the host installed it (a
+/// read-only in every fence, whether Tabtivity or the host installed it (a
 /// payload one scope's agent could rewrite would run in every other scope
 /// and the user's own shell next). Updates go through Manage CLIs. A value
 /// the user set wins.
@@ -131,7 +131,7 @@ pub fn apply_fence_env(cmd: &str, env: &mut std::collections::HashMap<String, St
     }
 }
 
-/// Startup: adopt what an older Eldrun kept for the Claude login — the
+/// Startup: adopt what an older Tabtivity kept for the Claude login — the
 /// stable-inode mirror at `agent-creds/claude/.credentials.json` — into the
 /// per-CLI store, once, so every tab stays signed in across the upgrade. The
 /// old dir is removed afterwards.

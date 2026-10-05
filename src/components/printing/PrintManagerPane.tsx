@@ -36,7 +36,7 @@ import { ErrorNote } from "../common/ErrorNote";
  * It replaces the `print_manager` **global app** slot — the button that launched
  * whatever external printer GUI was configured — for the reason the mail,
  * calendar and file-manager roles were retired before it: what sat behind that
- * button was a list and a handful of actions, and a list is something Eldrun can
+ * button was a list and a handful of actions, and a list is something Tabtivity can
  * render itself, in the same window, under the same theme.
  *
  * Three properties it shares with the other machine-wide panes:
@@ -61,7 +61,7 @@ export interface PrintManagerPaneProps {
  * process spawns on CUPS (`lpstat` ×4 + `lpq`), so this is deliberately slower
  * than the system monitor's tick: a queue changes on the scale of a document
  * printing, not a CPU sample. Every action re-reads immediately anyway, so the
- * interval only covers changes made *outside* Eldrun.
+ * interval only covers changes made *outside* Tabtivity.
  */
 const POLL_MS = 10_000;
 

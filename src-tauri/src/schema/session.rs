@@ -9,7 +9,7 @@ use crate::schema::project::{OpenApp, TabEntry};
 ///
 /// Lives at `<state_dir>/sessions/<project key>/terminals.json` — see
 /// [`crate::storage::project_session_dir`] for why it is **not** in the project
-/// tree. A copy is still written to `<project>/.eldrun/sessions/terminals.json`
+/// tree. A copy is still written to `<project>/.tabtivity/sessions/terminals.json`
 /// so the layout keeps travelling with a folder that gets synced or copied, but
 /// that copy is **export-only**: nothing reads it without an explicit user
 /// action (`commands::projects::adopt_folder_tab_layout`).
@@ -37,7 +37,7 @@ pub struct TerminalSession {
     pub extra: HashMap<String, Value>,
 }
 
-/// `.eldrun/sessions/windows.json` — project-owned window registry IDs.
+/// `.tabtivity/sessions/windows.json` — project-owned window registry IDs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowSession {
@@ -46,7 +46,7 @@ pub struct WindowSession {
     pub extra: HashMap<String, Value>,
 }
 
-/// `.eldrun/sessions/filetabs.json` — file browser tab state and side panel.
+/// `.tabtivity/sessions/filetabs.json` — file browser tab state and side panel.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTabSession {
@@ -54,7 +54,7 @@ pub struct FileTabSession {
     /// The folder the side panel was browsing. Serialized as `sidePanelFolder`;
     /// the alias reads back the `rightPanelFolder` every build before the panel
     /// was renamed wrote, so an existing `filetabs.json` keeps its folder. Only
-    /// the new spelling is ever written — and an older Eldrun reading a new file
+    /// the new spelling is ever written — and an older Tabtivity reading a new file
     /// merely opens the panel at the project root, which is what it does for a
     /// project that never had one.
     #[serde(alias = "rightPanelFolder", skip_serializing_if = "Option::is_none")]
@@ -63,7 +63,7 @@ pub struct FileTabSession {
     pub extra: HashMap<String, Value>,
 }
 
-/// `.eldrun/sessions/layout.json` — active layout metadata.
+/// `.tabtivity/sessions/layout.json` — active layout metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutSession {
@@ -73,7 +73,7 @@ pub struct LayoutSession {
     pub extra: HashMap<String, Value>,
 }
 
-/// `.eldrun/state.json` — top-level project runtime state.
+/// `.tabtivity/state.json` — top-level project runtime state.
 ///
 /// Written whenever a project is switched away from so that the next restore
 /// can quickly identify the last-known runtime state without reading all
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(back.extra["futureKey"]["x"], 1);
     }
 
-    /// `.eldrun/state.json` is camelCase and omits `savedAt` when unknown.
+    /// `.tabtivity/state.json` is camelCase and omits `savedAt` when unknown.
     #[test]
     fn project_state_is_camel_case_and_omits_an_absent_timestamp() {
         let state = ProjectState {

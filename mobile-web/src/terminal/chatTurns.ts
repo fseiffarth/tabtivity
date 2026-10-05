@@ -178,6 +178,22 @@ export function isPromptEcho(line: { text: string }, agentLabel?: string): boole
   return !PLACEHOLDER.test(line.text.slice(marker[0].length));
 }
 
+/** Claude Code's prompt echo in its fullscreen frame: `❯` and the prompt,
+ * the whole row painted on its user-message background. */
+const PAINTED_ECHO = /^ ?❯ (?=\S)/u;
+
+/** Whether `line` is where the session on a *live* screen moved past a
+ * prompt: `isPromptEcho`, or Claude Code's `❯` echo told from a picker's
+ * highlight cursor by its painted background — a cursor row carries none.
+ * Only for cutting the live tail: missing it handed the startup banner and
+ * every earlier prompt to an agent's question as its context. */
+export function isLiveEcho(line: { text: string; spans?: readonly ReadableSpan[] }, agentLabel?: string): boolean {
+  if (isPromptEcho(line, agentLabel)) return true;
+  if (!PAINTED_ECHO.test(line.text) || OPTION_ROW.test(line.text)) return false;
+  const painted = line.spans?.filter((span) => span.text.trim()) ?? [];
+  return painted.length > 0 && painted.every((span) => !!span.background);
+}
+
 /** Whether the echo at `index` is a box the TUI is still drawing rather than a
  * prompt somebody submitted: the first non-blank row under it is one the TUI
  * pins beneath its input box. A real echo is followed by the answer, by the
@@ -191,7 +207,7 @@ function isInputBox(lines: readonly { text: string }[], index: number): boolean 
     // gemini-2.5-pro  25% used`), and their mode indicator sits *above* the
     // box where this never looks. Two *columns* carrying status means the row
     // is printed in columns, which an answer's sentence is not — counting
-    // fields instead scored `~/eldrun/projects/app (main)` two on its own and
+    // fields instead scored `~/tabtivity/projects/app (main)` two on its own and
     // handed the prompt above it to the agent.
     return isFooterRow(text) || statusColumns(text) >= 2;
   }

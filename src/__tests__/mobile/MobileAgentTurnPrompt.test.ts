@@ -20,6 +20,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
 import type { TabEntry } from "../../stores/tabs";
 import type { ProjectBox, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY } from "../../lib/brand";
 
 const box: ProjectBox = {
   id: "b1",
@@ -27,9 +28,9 @@ const box: ProjectBox = {
   member_ids: [],
   position: 10,
   folder: "/boxes/paper",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
-const TMUX = "eldrun-box_b1--agent-123456789";
+const TMUX = `${BRAND.slug}-box_b1--agent-123456789`;
 
 function adminRequests() {
   return vi.mocked(invoke).mock.calls
@@ -97,7 +98,7 @@ describe("agent-turn notice prompt", () => {
   });
 
   it("sends the bare edge for a tab no phone can reach", async () => {
-    await reportAgentTurn({ tmuxSession: "eldrun-unknown", status: "done" });
-    expect(adminRequests()).toEqual([{ type: "agent_turn", tmux_session: "eldrun-unknown", status: "done" }]);
+    await reportAgentTurn({ tmuxSession: `${BRAND.slug}-unknown`, status: "done" });
+    expect(adminRequests()).toEqual([{ type: "agent_turn", tmux_session: `${BRAND.slug}-unknown`, status: "done" }]);
   });
 });

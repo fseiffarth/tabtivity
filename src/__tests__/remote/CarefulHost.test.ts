@@ -18,7 +18,7 @@ describe("careful-host resolution", () => {
     // The failure direction, and the reason there is no HPC detection left: a
     // wrong careful costs a thinner table, a wrong full reading costs a policy
     // violation on someone else's cluster. Only "no target" — the local machine,
-    // where Eldrun is not a guest — reads false.
+    // where Tabtivity is not a guest — reads false.
     expect(isCarefulHost({}, login)).toBe(true);
     expect(isCarefulHost({}, null)).toBe(false);
     expect(isCarefulHost({}, { host: "" })).toBe(false);

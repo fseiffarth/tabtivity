@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// parsed and says `enabled: false`. Everything else about reading that file is
 /// a [`SETTINGS_UNREADABLE_ERROR`], because the two need opposite exit codes and
 /// used to share one — see [`HostConfig::load`].
-pub const DISABLED_ERROR: &str = "Eldrun Mobile is disabled";
+pub const DISABLED_ERROR: &str = concat!(crate::app_name!(), " Mobile is disabled");
 
 /// The load error meaning "the settings file could not be read or parsed".
 ///
@@ -23,7 +23,7 @@ pub const DISABLED_ERROR: &str = "Eldrun Mobile is disabled";
 /// settings change, and a transient read error is over by the next attempt),
 /// whereas a clean exit would take Mobile down until somebody noticed and
 /// pressed Reconnect.
-pub const SETTINGS_UNREADABLE_ERROR: &str = "Eldrun Mobile settings could not be read";
+pub const SETTINGS_UNREADABLE_ERROR: &str = concat!(crate::app_name!(), " Mobile settings could not be read");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MobileHostSettings {
@@ -35,6 +35,9 @@ pub struct MobileHostSettings {
     pub port: u16,
     #[serde(default)]
     pub serve_origin: Option<String>,
+    /// Keep running when Tabtivity quits (Settings → Mobile, default off).
+    #[serde(default)]
+    pub stay_after_quit: Option<bool>,
 }
 
 fn default_name() -> String {
@@ -51,14 +54,16 @@ impl Default for MobileHostSettings {
             display_name: default_name(),
             port: default_port(),
             serve_origin: None,
+            stay_after_quit: None,
         }
     }
 }
 
 #[derive(Deserialize, Default)]
 struct SettingsFile {
-    #[serde(default)]
-    eldrun_mobile_host: Option<MobileHostSettings>,
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_HOST_KEY
+    #[serde(default, rename = "tabtivity_mobile_host")]
+    app_mobile_host: Option<MobileHostSettings>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +96,7 @@ pub fn validate_origin(raw: &str) -> Result<String, String> {
 /// The Tailscale CLI to run. PATH first; then the CLI the platform's own
 /// Tailscale app ships where PATH does not reach it — the macOS App Store /
 /// standalone app bundles its CLI inside `Tailscale.app` and adds nothing to a
-/// GUI app's PATH, and a Windows install made after Eldrun started is on the
+/// GUI app's PATH, and a Windows install made after Tabtivity started is on the
 /// machine but not yet on this process's PATH (the MiKTeX/Codex gap `paths`
 /// already covers). Falls back to the bare name so the spawn error stays the
 /// ordinary "not installed" one.
@@ -151,7 +156,7 @@ pub struct DetectedServeSettings {
     pub origin: String,
 }
 
-/// Find the one private HTTPS root handler that points at Eldrun's supported
+/// Find the one private HTTPS root handler that points at Tabtivity's supported
 /// loopback listener shape. Detection is deliberately as strict as activation:
 /// a Funnel, non-root handler, non-loopback proxy, or ambiguous set is never
 /// turned into settings merely because it appeared in Tailscale's JSON.
@@ -234,7 +239,7 @@ pub fn detect_serve_settings_json(
     match candidates.len() {
         1 => Ok(candidates.remove(0)),
         0 => Err("No private HTTPS root handler proxies to http://127.0.0.1:<port>".into()),
-        _ => Err("Multiple eligible Tailscale Serve mappings were found; keep only the Eldrun root mapping before detecting settings".into()),
+        _ => Err(concat!("Multiple eligible Tailscale Serve mappings were found; keep only the ", crate::app_name!(), " root mapping before detecting settings").into()),
     }
 }
 
@@ -278,7 +283,7 @@ pub fn verify_serve_json(
         .and_then(serde_json::Value::as_bool)
         == Some(true)
     {
-        return Err("The configured origin is exposed through Tailscale Funnel; disable Funnel before enabling Eldrun Mobile".into());
+        return Err(concat!("The configured origin is exposed through Tailscale Funnel; disable Funnel before enabling ", crate::app_name!(), " Mobile").into());
     }
     Ok(())
 }
@@ -313,7 +318,7 @@ impl HostConfig {
             }
             Err(error) => return Err(format!("{SETTINGS_UNREADABLE_ERROR}: {error}")),
         };
-        let host = settings.eldrun_mobile_host.unwrap_or_default();
+        let host = settings.app_mobile_host.unwrap_or_default();
         if !host.enabled {
             return Err(DISABLED_ERROR.into());
         }
@@ -338,6 +343,15 @@ impl HostConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The serde key is a literal in the attribute; this ties it to the brand
+    /// module so the two cannot drift.
+    #[test]
+    fn the_mobile_host_key_is_the_brand_constant() {
+        let json = format!(r#"{{"{}":{{"enabled":true}}}}"#, crate::brand::MOBILE_HOST_KEY);
+        let file: SettingsFile = serde_json::from_str(&json).unwrap();
+        assert!(file.app_mobile_host.is_some());
+    }
     use crate::paths::OsKind;
 
     #[test]
@@ -379,12 +393,12 @@ mod tests {
         dir
     }
 
-    const ENABLED: &str = r#"{"eldrun_mobile_host":{"enabled":true,"port":8742,
-        "serve_origin":"https://desk.example.ts.net"}}"#;
+    const ENABLED: &str = concat!(r#"{""#, crate::app_slug!(), r#"_mobile_host":{"enabled":true,"port":8742,
+        "serve_origin":"https://desk.example.ts.net"}}"#);
 
     #[test]
     fn only_an_explicit_off_is_the_clean_disabled_exit() {
-        let dir = state_dir_with(r#"{"eldrun_mobile_host":{"enabled":false}}"#);
+        let dir = state_dir_with(concat!(r#"{""#, crate::app_slug!(), r#"_mobile_host":{"enabled":false}}"#));
         assert_eq!(
             HostConfig::load(dir.path()).unwrap_err(),
             DISABLED_ERROR,
@@ -410,7 +424,7 @@ mod tests {
             "",
             // Present, enabled, but one field serde cannot take: the whole
             // parse fails, which is exactly the case that read as "off".
-            r#"{"eldrun_mobile_host":{"enabled":true,"port":"8742"}}"#,
+            concat!(r#"{""#, crate::app_slug!(), r#"_mobile_host":{"enabled":true,"port":"8742"}}"#),
         ] {
             let dir = state_dir_with(broken);
             let error = HostConfig::load(dir.path()).unwrap_err();
@@ -435,7 +449,7 @@ mod tests {
     fn a_misconfigured_but_enabled_host_is_a_failure_not_a_disable() {
         // An enabled host with no verified origin cannot serve, but it is also
         // not "off" — reporting it as DISABLED would exit 0 and hide it.
-        let dir = state_dir_with(r#"{"eldrun_mobile_host":{"enabled":true}}"#);
+        let dir = state_dir_with(concat!(r#"{""#, crate::app_slug!(), r#"_mobile_host":{"enabled":true}}"#));
         assert_ne!(HostConfig::load(dir.path()).unwrap_err(), DISABLED_ERROR);
     }
 

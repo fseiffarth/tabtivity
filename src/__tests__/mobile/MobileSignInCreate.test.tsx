@@ -17,6 +17,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const paper: ProjectEntry = {
   id: "p-paper",
@@ -25,11 +26,11 @@ const paper: ProjectEntry = {
   position: 1,
   local_file: "/projects/paper/project.json",
   directory: "/projects/paper",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   invokeMock.mockClear();
@@ -64,11 +65,11 @@ describe("Mobile bridge — sign-in tabs", () => {
     made.mockReset();
     useTabsStore.setState({
       tabsByScope: {
-        [paper.id]: [{ key: "a1", label: "Codex", cmd: "codex", args: [], env: {}, cwd: "/projects/paper", kind: "agent", tmuxSession: "eldrun-codex-1" } as TabEntry],
+        [paper.id]: [{ key: "a1", label: "Codex", cmd: "codex", args: [], env: {}, cwd: "/projects/paper", kind: "agent", tmuxSession: `${BRAND.slug}-codex-1` } as TabEntry],
       },
       hydrateThenCreateInScope: (options: { spec: Omit<TabEntry, "key"> }) => {
         made(options.spec);
-        return Promise.resolve({ ...options.spec, key: "new", tmuxSession: "eldrun-new" } as TabEntry);
+        return Promise.resolve({ ...options.spec, key: "new", tmuxSession: `${BRAND.slug}-new` } as TabEntry);
       },
     } as never);
     render(<MobileBridgeHost />);
@@ -82,7 +83,7 @@ describe("Mobile bridge — sign-in tabs", () => {
   });
 
   it("starts the picked agent's login command, or its other way in", async () => {
-    expect(await create({ agent_id: "agent-claude", sign_in: "default" })).toMatchObject({ status: "created", tmux_session: "eldrun-new" });
+    expect(await create({ agent_id: "agent-claude", sign_in: "default" })).toMatchObject({ status: "created", tmux_session: `${BRAND.slug}-new` });
     expect(made).toHaveBeenLastCalledWith(expect.objectContaining({ cmd: "claude", args: ["auth", "login", "--claudeai"] }));
     expect(made.mock.lastCall?.[0].sessionId).toBeUndefined();
     await create({ agent_id: "agent-claude", sign_in: "alternate" });
@@ -90,9 +91,9 @@ describe("Mobile bridge — sign-in tabs", () => {
   });
 
   it("signs in the CLI an agent tab runs, found by its session", async () => {
-    await create({ like_tab: "eldrun-codex-1", sign_in: "default" });
+    await create({ like_tab: `${BRAND.slug}-codex-1`, sign_in: "default" });
     expect(made).toHaveBeenLastCalledWith(expect.objectContaining({ cmd: "codex", args: ["login", "--device-auth"] }));
-    expect(await create({ like_tab: "eldrun-gone", sign_in: "default" })).toMatchObject({ status: "error", code: "tab_not_found" });
+    expect(await create({ like_tab: `${BRAND.slug}-gone`, sign_in: "default" })).toMatchObject({ status: "error", code: "tab_not_found" });
     expect(await create({ agent_id: "agent-nope", sign_in: "default" })).toMatchObject({ status: "error", code: "unknown_agent" });
   });
 });

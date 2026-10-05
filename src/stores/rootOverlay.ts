@@ -6,6 +6,7 @@ import { boxScopeId, useBoxesStore } from "./boxes";
 import { useProjectsStore } from "./projects";
 import { BOX_SCOPE_PREFIX } from "../lib/terminal/ptyId";
 import { resolveLocalMirror, resolveProjectDirectory } from "../types";
+import { storageKey } from "../lib/brand";
 
 /**
  * The **root console** — the root scope, reached as an overlay instead of as a
@@ -16,7 +17,7 @@ import { resolveLocalMirror, resolveProjectDirectory } from "../types";
  * the one that cost you the project you were in. It is now a floating subwindow
  * (`layout/RootOverlay`, Ctrl+Shift+R) over whatever is open — the fast-reach,
  * cross-project management surface: its agents are the only ones handed
- * Eldrun's own MCP tools (projects, calendar, to-do board; see the backend's
+ * Tabtivity's own MCP tools (projects, calendar, to-do board; see the backend's
  * `services::root_mcp`). The phone reaches it only behind its own switch and
  * the review gate (`docs/context/root_console.md`, "On the phone").
  *
@@ -60,7 +61,7 @@ export const ROOT_OVERLAY_FILL_MARGIN = 16;
 /** Which edge (or the whole thing) a frame drag is moving. */
 export type RootOverlayDragMode = "move" | "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
-const FRAME_STORAGE_KEY = "eldrun.rootConsoleFrame";
+const FRAME_STORAGE_KEY = storageKey("rootConsoleFrame");
 
 /**
  * Keep a frame inside the window and above the minimum. Applied on every write
@@ -241,32 +242,60 @@ export function toggleRootConsole(): void {
 }
 
 /**
- * Open `spec` as a root tab and put it in front of the user in the console —
- * the one door for every flow that runs something in the root terminal on the
- * user's behalf (a one-click install, a login that needs a password).
+ * Run `run` once root is hydrated: at once when it already is (or in a popout,
+ * whose heap owns no tabs — its adds are forwarded to the main window, which
+ * owns root's hydration too), after the restore otherwise.
  *
  * Root is hydrated FIRST when this is its first use this session: a tab added
  * to an unhydrated root creates the scope key, which reads as "hydrated", so
  * the restore is skipped and the host's persist then writes the lone new tab
- * over the saved root layout. `onOpened` runs synchronously when root is
- * already hydrated, after the restore otherwise.
+ * over the saved root layout.
+ */
+function whenRootHydrated(run: () => void): void {
+  if (isDetachedWindow() || ROOT_SCOPE in useTabsStore.getState().tabsByScope) {
+    run();
+    return;
+  }
+  void ensureRootScopeHydrated().then(run);
+}
+
+/**
+ * Open `spec` as a root tab WITHOUT showing the console — the door for a view
+ * that shows the tab somewhere else (an app overlay's docked agent column).
+ * The tab is an ordinary root tab: its PTY is owned by `CenterPanel`'s
+ * keep-alive layer and it shows in the console's strip like any other.
+ *
+ * Root is restored first on its first use this session (`whenRootHydrated`).
+ * `onOpened` runs synchronously when root is already hydrated, after the
+ * restore otherwise. In a popout the add is forwarded to the main window, so
+ * the tab `onOpened` gets is a placeholder whose key names no real tab.
+ */
+export function addTabToRoot(
+  spec: Omit<TabEntry, "key">,
+  onOpened?: (tab: TabEntry) => void,
+): void {
+  whenRootHydrated(() => {
+    const tab = useTabsStore.getState().addTabToScope(ROOT_SCOPE, spec);
+    onOpened?.(tab);
+  });
+}
+
+/**
+ * Open `spec` as a root tab and put it in front of the user in the console —
+ * the one door for every flow that runs something in the root terminal on the
+ * user's behalf (a one-click install, a login that needs a password).
+ *
+ * `addTabToRoot` plus `show`: root is restored before the add, and `onOpened`
+ * runs (synchronously when root is already hydrated) before the console opens.
  */
 export function openTabInRootConsole(
   spec: Omit<TabEntry, "key">,
   onOpened?: (tab: TabEntry) => void,
 ): void {
-  const open = () => {
-    const tab = useTabsStore.getState().addTabToScope(ROOT_SCOPE, spec);
+  addTabToRoot(spec, (tab) => {
     onOpened?.(tab);
     useRootOverlayStore.getState().show(tab.key);
-  };
-  // A popout's heap owns no tabs: the add is forwarded to the main window,
-  // which owns root's hydration too.
-  if (isDetachedWindow() || ROOT_SCOPE in useTabsStore.getState().tabsByScope) {
-    open();
-    return;
-  }
-  void ensureRootScopeHydrated().then(open);
+  });
 }
 
 /**
@@ -310,8 +339,7 @@ export function openProjectShellInRootConsole(): void {
   const spawn = () => {
     if (!reuse()) openTabInRootConsole({ label, cmd: "", args: [], env: {}, cwd, kind: "shell" });
   };
-  if (isDetachedWindow() || ROOT_SCOPE in useTabsStore.getState().tabsByScope) spawn();
-  else void ensureRootScopeHydrated().then(spawn);
+  whenRootHydrated(spawn);
 }
 
 /**

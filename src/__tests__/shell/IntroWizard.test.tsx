@@ -1,6 +1,6 @@
 /**
  * "How to start" is a paged intro wizard: Welcome → Projects → Agent CLIs →
- * Local models → Ask Eldrun → What next. It pages with Back/Next, the step rail
+ * Local models → Ask Tabtivity → What next. It pages with Back/Next, the step rail
  * and ←/→, remembers the page it was left on, and each page's one-click
  * actions reuse an existing mechanism: the + menu's project dialogs (a window
  * event), the registry's installer run in a terminal tab (`runInstallInTab`),
@@ -26,6 +26,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { resetOllamaStatusPoller } from "../../lib/ollamaStatus";
 import type { Settings } from "../../types";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const GB = 1024 ** 3;
 
@@ -49,7 +50,7 @@ describe("How to start intro wizard", () => {
     runInstallInTab.mockReset();
     resetOllamaStatusPoller();
     backend({});
-    useProjectsStore.setState({ projects: [], activeId: null, loaded: true, rootDir: "/home/u/eldrun/root" });
+    useProjectsStore.setState({ projects: [], activeId: null, loaded: true, rootDir: `/home/u/${BRAND.slug}/root` });
     useSettingsStore.setState({ settings: {} as Settings, loaded: true });
   });
   afterEach(() => {
@@ -64,7 +65,7 @@ describe("How to start intro wizard", () => {
     await act(async () => {
       ({ unmount } = render(<HowToStart onClose={onClose} />));
     });
-    expect(heading()).toContain("Welcome to Eldrun");
+    expect(heading()).toContain(`Welcome to ${BRAND.display}`);
     expect((screen.getByRole("button", { name: /Back/ }) as HTMLButtonElement).disabled).toBe(true);
 
     next();
@@ -78,14 +79,14 @@ describe("How to start intro wizard", () => {
 
     // The rail jumps straight to a page.
     const rail = screen.getByRole("navigation");
-    fireEvent.click(Array.from(rail.querySelectorAll("button")).find((b) => b.textContent?.includes("Ask Eldrun"))!);
-    expect(heading()).toContain("Ask Eldrun");
-    expect(readIntroPage()).toBe("askEldrun");
+    fireEvent.click(Array.from(rail.querySelectorAll("button")).find((b) => b.textContent?.includes(`Ask ${BRAND.display}`))!);
+    expect(heading()).toContain(`Ask ${BRAND.display}`);
+    expect(readIntroPage()).toBe("askApp");
 
     // Closed mid-way, it reopens on the same page.
     unmount();
     render(<HowToStart onClose={onClose} />);
-    expect(heading()).toContain("Ask Eldrun");
+    expect(heading()).toContain(`Ask ${BRAND.display}`);
   });
 
   it("finishing on the last page resets to Welcome; Skip keeps the page", () => {
@@ -97,7 +98,7 @@ describe("How to start intro wizard", () => {
     expect(readIntroPage()).toBe("projects");
     unmount();
 
-    localStorage.setItem("eldrun.intro.page", "done");
+    localStorage.setItem(storageKey("intro.page"), "done");
     render(<HowToStart onClose={onClose} />);
     expect(heading()).toContain("What next");
     expect(screen.queryByRole("button", { name: "Skip intro" })).toBeNull();
@@ -107,20 +108,20 @@ describe("How to start intro wizard", () => {
   });
 
   it("the What-next links keep their events", () => {
-    localStorage.setItem("eldrun.intro.page", "done");
+    localStorage.setItem(storageKey("intro.page"), "done");
     const events: string[] = [];
     const record = (e: Event) => events.push(e.type);
-    for (const type of ["eldrun:start-tour", "eldrun:open-lessons", "eldrun:open-settings"]) window.addEventListener(type, record);
+    for (const type of ["app:start-tour", "app:open-lessons", "app:open-settings"]) window.addEventListener(type, record);
     render(<HowToStart onClose={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Take a tour" }));
     fireEvent.click(screen.getByRole("button", { name: "Lessons" }));
     fireEvent.click(screen.getByRole("button", { name: /Feature Guide/ }));
-    for (const type of ["eldrun:start-tour", "eldrun:open-lessons", "eldrun:open-settings"]) window.removeEventListener(type, record);
-    expect(events).toEqual(["eldrun:start-tour", "eldrun:open-lessons", "eldrun:open-settings"]);
+    for (const type of ["app:start-tour", "app:open-lessons", "app:open-settings"]) window.removeEventListener(type, record);
+    expect(events).toEqual(["app:start-tour", "app:open-lessons", "app:open-settings"]);
   });
 
   it("Projects: live count, and New/Import open the + menu's dialogs", () => {
-    localStorage.setItem("eldrun.intro.page", "projects");
+    localStorage.setItem(storageKey("intro.page"), "projects");
     const kinds: unknown[] = [];
     const onOpen = (e: Event) => kinds.push((e as CustomEvent).detail);
     window.addEventListener(OPEN_PROJECT_DIALOG_EVENT, onOpen);
@@ -140,7 +141,7 @@ describe("How to start intro wizard", () => {
   });
 
   it("Agent CLIs: installed state per CLI, and Install runs the registry command in a terminal tab", async () => {
-    localStorage.setItem("eldrun.intro.page", "agents");
+    localStorage.setItem(storageKey("intro.page"), "agents");
     backend({
       list_agents: () => [
         { id: "claude", label: "Claude", bin: "claude", install_cmd: "curl claude | bash", shell_kind: "bash", docs: "", installed: true },
@@ -168,7 +169,7 @@ describe("How to start intro wizard", () => {
   });
 
   it("Local models: Ollama missing → install in a terminal; recommendation sized to the machine", async () => {
-    localStorage.setItem("eldrun.intro.page", "localModels");
+    localStorage.setItem(storageKey("intro.page"), "localModels");
     backend({
       ollama_is_installed: () => false,
       ollama_install_strategy: () => ({ os: "linux", command: "curl -fsSL https://ollama.com/install.sh | sh", auto: true, download_url: "" }),
@@ -188,7 +189,7 @@ describe("How to start intro wizard", () => {
   });
 
   it("Local models: running server → pull the pick, load it on the GPU, use it for tabs", async () => {
-    localStorage.setItem("eldrun.intro.page", "localModels");
+    localStorage.setItem(storageKey("intro.page"), "localModels");
     let models = [{ name: "qwen2.5-coder:3b", running: false, size_vram: 0 }];
     backend({
       ollama_is_installed: () => true,
@@ -221,8 +222,8 @@ describe("How to start intro wizard", () => {
     expect(screen.getByText("Runners available: Mistral (Vibe)")).toBeTruthy();
   });
 
-  it("Ask Eldrun: status from root_mcp_status, a plain sentence on an older backend, and search", async () => {
-    localStorage.setItem("eldrun.intro.page", "askEldrun");
+  it(`Ask ${BRAND.display}: status from root_mcp_status, a plain sentence on an older backend, and search`, async () => {
+    localStorage.setItem(storageKey("intro.page"), "askApp");
     backend({ root_mcp_status: () => ({ wired_clis: ["claude"] }) });
     const { unmount } = render(<HowToStart onClose={() => {}} />);
     expect(await screen.findByText(/no help server yet/)).toBeTruthy();
@@ -240,7 +241,7 @@ describe("How to start intro wizard", () => {
     expect(invoke).toHaveBeenCalledWith("help_search", { query: "sync", limit: 3 });
     // ← in the search box moves the caret, not the page.
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowLeft" });
-    expect(heading()).toContain("Ask Eldrun");
+    expect(heading()).toContain(`Ask ${BRAND.display}`);
   });
 });
 

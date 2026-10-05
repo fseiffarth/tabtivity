@@ -3,7 +3,9 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../lib/i18n";
+import { patchDefaultApps } from "../../lib/defaultApps";
 import { ErrorNote } from "../common/ErrorNote";
+import { UntestedTag } from "../common/UntestedTag";
 
 interface InstalledApp {
   name: string;
@@ -146,10 +148,12 @@ export function SetDefaultAppDialog({ ext, fileName, projectId, onClose }: Props
     setError(null);
     try {
       if (scope === "global") {
+        // One entry, not the whole map: another window or the phone saving
+        // meanwhile keeps its entries (headless owner plan, H1b).
         const next = { ...globalApps };
         if (nextExec) next[ext] = nextExec;
         else delete next[ext];
-        await invoke("save_default_apps", { defaultApps: next });
+        await patchDefaultApps(nextExec ? { set: { [ext]: nextExec } } : { remove: [ext] }, () => next);
       } else {
         if (!projectId) throw new Error(t("setDefaultApp.errNoProjectFile"));
         const map = { ...projectApps };
@@ -171,7 +175,7 @@ export function SetDefaultAppDialog({ ext, fileName, projectId, onClose }: Props
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="settings-title-row">
-          <h2>{t("setDefaultApp.title", { ext })}</h2>
+          <h2>{t("setDefaultApp.title", { ext })} <UntestedTag id="setDefaultApp.patch" /></h2>
           <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
         </div>
         <p className="settings-help">

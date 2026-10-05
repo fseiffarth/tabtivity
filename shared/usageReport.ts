@@ -59,8 +59,14 @@ export interface UsageReport {
  * is about. The `used` suffix is optional because Gemini omits the word and
  * Claude may reword it; the percentage itself is the thing being matched. The
  * sign is captured so a negative figure is clamped to an empty bar rather than
- * silently becoming a positive one. */
-const PERCENT = /(-?\d{1,3}(?:\.\d+)?)\s?%/u;
+ * silently becoming a positive one.
+ *
+ * Anchored to the start of the value: a limit window *is* its figure
+ * (`Current session: 11% used · resets …`), while Claude 2.1.284's "What's
+ * contributing" breakdown names things first and puts a share after them
+ * (`Top subagents: general-purpose 39%, Explore 1%`) — a share of usage, not a
+ * window that fills up, so it stays a note. */
+const PERCENT = /^(-?\d{1,3}(?:\.\d+)?)\s?%/u;
 
 /** `resets 6:20pm`, `resets Mon 9am`, `Resets: tomorrow 09:00`,
  * `resets Sep 15, 10:30pm (Europe/Berlin)`. Stops at a separator so a trailing

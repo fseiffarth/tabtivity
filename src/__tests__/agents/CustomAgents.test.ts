@@ -19,6 +19,7 @@ import {
 import { isResumableAgentTab } from "../../stores/tabs";
 import { translate, type TranslationKey } from "../../lib/i18n";
 import type { CustomAgent } from "../../types";
+import { envName } from "../../lib/brand";
 
 const t = (key: TranslationKey) => translate("en", key);
 
@@ -32,7 +33,7 @@ describe("buildStaticTabSpec — custom agents", () => {
     // No resume flag → not restart-resumable → no minted session id / tab uid.
     expect(spec.resumeArgs).toBeUndefined();
     expect(spec.sessionId).toBeUndefined();
-    expect(spec.env?.ELDRUN_TAB_UID).toBeUndefined();
+    expect(spec.env?.[envName("TAB_UID")]).toBeUndefined();
     expect(isResumableAgentTab({ ...spec })).toBe(false);
   });
 
@@ -57,9 +58,9 @@ describe("buildStaticTabSpec — custom agents", () => {
     const spec = buildStaticTabSpec(customAgentToItem(ca), "/proj", "Proj", t);
     expect(spec.resumeArgs).toEqual(["--continue"]);
     // A session id is minted so the tab satisfies the persistence gate, and the
-    // tab is tagged with the ELDRUN_TAB_UID env var like the built-in resumables.
+    // tab is tagged with the TABTIVITY_TAB_UID env var like the built-in resumables.
     expect(typeof spec.sessionId).toBe("string");
-    expect(spec.env?.ELDRUN_TAB_UID).toBe(spec.sessionId);
+    expect(spec.env?.[envName("TAB_UID")]).toBe(spec.sessionId);
     expect(isResumableAgentTab({ ...spec })).toBe(true);
   });
 });

@@ -96,7 +96,7 @@ the mail store; `src-tauri/src/schema/settings.rs` (five `mail_ai_*` flags +
 **Verification:** `cargo test` (pure helpers — prompt builders, JSON extractors,
 date anchoring, classify/event/task parsers, provenance round-trip,
 loopback-refusal), `npm test`, `npm run lint`, clippy, `privacy-check.sh`. **No
-live run** (Claude cannot launch Eldrun); every feature stays `untested` until
+live run** (Claude cannot launch Tabtivity); every feature stays `untested` until
 the user runs it, and each new surface carries an `UntestedTag`.
 
 **Live QA (#203–#208)** — needs a loopback Ollama with a completion model tagged

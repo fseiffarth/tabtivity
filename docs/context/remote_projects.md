@@ -10,7 +10,7 @@ pooled ControlMaster + `Sftp` session per active remote project (opened via
 (`user?`, `host`, `port?`, `remote_path`, `openvpn?`) in their `project.json`
 and mirrored into the `projects.json` entry's `extra` (the always-local source
 of truth `remote_target_for` reads). Their `directory` is a **local** per-
-project state dir (`~/.local/share/eldrun/remote-projects/<id>/`) that holds
+project state dir (`~/.local/share/tabtivity/remote-projects/<id>/`) that holds
 `project.json`; the actual tree lives on `host:remote_path`. Remoteness is
 resolved explicitly by `services::remote::remote_target_for{,_dir}`, never by a
 path convention.

@@ -9,7 +9,11 @@ import {
   type ProjectPrompt,
   type ProjectPromptList,
   type TabRow,
+  wasApplied,
 } from "../api";
+import { describeFailure } from "../connection";
+import { useT } from "../../../src/lib/i18n";
+import { isUntested } from "../../../src/lib/untested";
 
 /** The project's collected prompts — text kept without a tab. Sending aims
  * one at an agent tab now (the desktop queues a one-time schedule at its own
@@ -21,6 +25,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
   onClose: () => void;
   onSchedule: (tab: TabRow, message: string) => void;
 }) {
+  const t = useT();
   const agentTabs = tabs.filter((tab) => tab.kind === "agent" && tab.available);
   const [prompts, setPrompts] = useState<ProjectPrompt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,14 +40,25 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
 
   const apply = useCallback((value: ProjectPromptList) => {
     setPrompts(value.prompts ?? []);
-    setOffline(false);
+    // Listed off the host's files with no window open: the Mobile host
+    // writes them itself (headless owner plan, H3); the note says so.
+    setOffline(value.desktop_available === false);
     setError("");
   }, []);
   const fail = useCallback((cause: unknown) => {
+    // Made on the desktop, only the refreshed list did not come back: say so,
+    // rather than "could not be loaded" under a form that invites a resend.
+    if (wasApplied(cause)) {
+      setError(describeFailure(cause));
+      return;
+    }
     const unavailable = cause instanceof ApiError && (cause.status === 503 || cause.code === "desktop_unavailable");
     setOffline(unavailable);
-    setError(unavailable ? "Open desktop Eldrun to manage collected prompts." : "Prompts could not be loaded.");
-  }, []);
+    setError(t(unavailable ? "mobile.prompts.openDesktop" : "mobile.prompts.loadFailed"));
+  }, [t]);
+  // Held only when the host itself could not answer (a 503): with the window
+  // closed the host writes the prompts itself (headless owner plan, H3).
+  const held = offline && !!error;
   const refresh = useCallback(
     () => getPrompts(projectId).then(apply, fail).finally(() => setLoading(false)),
     [apply, fail, projectId],
@@ -69,7 +85,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
   };
   const save = async () => {
     if (!message.trim()) {
-      setError("Enter a prompt.");
+      setError(t("mobile.prompts.enterPrompt"));
       return;
     }
     setBusy(true);
@@ -77,6 +93,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
       apply(editing ? await updatePrompt(projectId, editing, message) : await createPrompt(projectId, message));
       reset();
     } catch (cause) {
+      if (wasApplied(cause)) reset();
       fail(cause);
     } finally {
       setBusy(false);
@@ -88,7 +105,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
     setNotice("");
     try {
       apply(await sendPrompt(projectId, prompt.id, target.id));
-      setNotice(`Queued for ${target.label} — delivered at its next safe idle point, within one hour.`);
+      setNotice(t("mobile.prompts.queued", { tab: target.label }));
     } catch (cause) {
       fail(cause);
     } finally {
@@ -97,28 +114,29 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
   };
 
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
-    <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label="Collected prompts" onClick={(event) => event.stopPropagation()}>
+    <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("agentPrompts.heading")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label="Close">✕</button><h2>Collected prompts <small>Untested</small></h2><span className="sheet-close" aria-hidden="true" /></header>
-      <p className="sheet-note">Prompts kept for this project without a tab. Send one to an agent tab now, or turn it into a schedule.</p>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("agentPrompts.heading")} {isUntested("mobile.sheet.prompts") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <p className="sheet-note">{t("mobile.prompts.note")}</p>
       {agentTabs.length > 0
-        ? <label className="mobile-prompt-target">Target tab<select value={target?.id ?? ""} disabled={offline} onChange={(event) => setTargetId(event.target.value)}>{agentTabs.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}</select></label>
-        : <p className="sheet-note">Open an agent tab to send or schedule a collected prompt.</p>}
+        ? <label className="mobile-prompt-target">{t("agentPrompts.target")}<select value={target?.id ?? ""} disabled={held} onChange={(event) => setTargetId(event.target.value)}>{agentTabs.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}</select></label>
+        : <p className="sheet-note">{t("mobile.prompts.openAgentTab")}</p>}
       {notice && <p className="sheet-note" role="status">{notice}</p>}
       {error && <p className="sheet-note error" role="alert">{error}</p>}
-      {loading ? <p className="sheet-note">Loading prompts…</p> : prompts.length === 0 ? <p className="sheet-note">No prompts collected yet.</p> : <div className="mobile-schedule-list">{prompts.map((prompt) => <article key={prompt.id}>
+      {offline && !error && <p className="sheet-note" role="status">{t("mobile.headless.owner")} {isUntested("mobile.headless.prompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+      {loading ? <p className="sheet-note">{t("mobile.prompts.loading")}</p> : prompts.length === 0 ? <p className="sheet-note">{t("mobile.prompts.empty")}</p> : <div className="mobile-schedule-list">{prompts.map((prompt) => <article key={prompt.id}>
         <p>{prompt.message}</p>
         <div>
-          <button className="primary" disabled={busy || offline || !target} onClick={() => void send(prompt)} aria-label={`Send now: ${prompt.message}`}>Send now</button>
-          <button disabled={busy || offline || !target} onClick={() => target && onSchedule(target, prompt.message)}>Schedule…</button>
-          <button disabled={busy || offline} onClick={() => { setEditing(prompt.id); setMessage(prompt.message); }}>Edit</button>
-          <button className="danger" disabled={busy || offline} onClick={() => { setBusy(true); void deletePrompt(projectId, prompt.id).then(apply, fail).finally(() => setBusy(false)); }}>Delete</button>
+          <button className="primary" disabled={busy || held || !target} onClick={() => void send(prompt)} aria-label={t("mobile.prompts.sendNowAria", { message: prompt.message })}>{t("agentPrompts.send")}</button>
+          <button disabled={busy || held || !target} onClick={() => target && onSchedule(target, prompt.message)}>{t("agentPrompts.schedule")}</button>
+          <button disabled={busy || held} onClick={() => { setEditing(prompt.id); setMessage(prompt.message); }}>{t("common.edit")}</button>
+          <button className="danger" disabled={busy || held} onClick={() => { setBusy(true); void deletePrompt(projectId, prompt.id).then(apply, fail).finally(() => setBusy(false)); }}>{t("common.delete")}</button>
         </div>
       </article>)}</div>}
-      <div className="mobile-schedule-form" aria-disabled={offline}>
-        <h3>{editing ? "Edit prompt" : "Add prompt"}</h3>
-        <label>Prompt<textarea rows={4} value={message} disabled={offline} onChange={(event) => setMessage(event.target.value)} /></label>
-        <div className="mobile-schedule-actions">{editing && <button disabled={busy} onClick={reset}>Cancel</button>}<button className="primary" disabled={busy || offline} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button></div>
+      <div className="mobile-schedule-form" aria-disabled={held}>
+        <h3>{t(editing ? "mobile.prompts.edit" : "agentPrompts.add")}</h3>
+        <label>{t("agentSchedule.message")}<textarea rows={4} value={message} disabled={held} onChange={(event) => setMessage(event.target.value)} /></label>
+        <div className="mobile-schedule-actions">{editing && <button disabled={busy} onClick={reset}>{t("common.cancel")}</button>}<button className="primary" disabled={busy || held} onClick={() => void save()}>{t(busy ? "common.saving" : "common.save")}</button></div>
       </div>
     </section>
   </div>;

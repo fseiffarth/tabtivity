@@ -53,7 +53,7 @@ function savedShell(label: string) {
 function sessionsBy(byId: Record<string, unknown>) {
   mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
     Promise.resolve(
-      cmd === "load_tab_session" ? byId[args?.projectId as string] ?? { tabLayout: [] } : undefined,
+      cmd === "workspace_snapshot" ? byId[args?.projectId as string] ?? { tabLayout: [] } : undefined,
     ),
   );
 }
@@ -160,7 +160,7 @@ describe("restoreActiveProjectScopes", () => {
     await restoreActiveProjectScopes();
     await restoreActiveProjectScopes();
 
-    const reads = mockInvoke.mock.calls.filter((c) => c[0] === "load_tab_session");
+    const reads = mockInvoke.mock.calls.filter((c) => c[0] === "workspace_snapshot");
     expect(reads).toHaveLength(1);
   });
 });
@@ -176,7 +176,7 @@ describe("load — the startup path", () => {
         return Promise.resolve([project("boot_cur", "current"), project("boot_act", "active")]);
       }
       if (cmd === "root_work_dir") return Promise.resolve("/root");
-      if (cmd === "load_tab_session") {
+      if (cmd === "workspace_snapshot") {
         return Promise.resolve(saved[args?.projectId as string] ?? { tabLayout: [] });
       }
       return Promise.resolve(undefined);

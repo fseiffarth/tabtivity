@@ -105,7 +105,7 @@ export interface PdfNote {
    *  sentence is worth doing on its own); for a sticky note it means "delete me",
    *  since a blank marker is indistinguishable from a bug in the next reader. */
   text: string;
-  /** Who wrote it (`/T`). Absent unless somebody typed one: Eldrun has no name of
+  /** Who wrote it (`/T`). Absent unless somebody typed one: Tabtivity has no name of
    *  the reader's to offer, and taking one from the OS login would put a real
    *  identity into a document that leaves the machine. */
   author?: string;

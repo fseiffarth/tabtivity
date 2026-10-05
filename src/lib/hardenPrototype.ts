@@ -1,5 +1,5 @@
 /**
- * Freeze `Object.prototype` for Eldrun's own windows (#159) — the guard Tauri's
+ * Freeze `Object.prototype` for Tabtivity's own windows (#159) — the guard Tauri's
  * `freezePrototype` offers, done here instead for two measured reasons:
  *
  * - Tauri injects that freeze into *every* webview, the in-app browser's

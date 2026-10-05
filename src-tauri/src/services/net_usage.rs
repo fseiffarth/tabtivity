@@ -36,14 +36,18 @@
 
 use crate::services::remote::RemotePoolState;
 
-/// How often to sample each connected project's link counters.
+/// How often to sample each connected project's link counters. Each sample is
+/// a system-wide `ss -p` (a walk of every process's fds) plus an `ssh -O check`
+/// per project, while any remote is connected. The counters are cumulative, so
+/// a slower cadence books the same totals; it only widens the tail a master
+/// that dies between two samples takes with it.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const SAMPLE_INTERVAL_SECS: u64 = 5;
+const SAMPLE_INTERVAL_SECS: u64 = 15;
 /// Flush the in-memory accumulator to disk every this-many ticks (~30 s). The
 /// bytes for a project persist in memory between flushes, so a slower cadence
 /// only widens the tail lost on a hard kill — not steady-state accuracy.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const FLUSH_EVERY_TICKS: u64 = 6;
+const FLUSH_EVERY_TICKS: u64 = 2;
 
 /// Start the background traffic sampler. Spawns a single detached task that runs
 /// for the life of the process. A no-op on Windows (no ControlMaster there).

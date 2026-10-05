@@ -1,6 +1,8 @@
 // The mail window (`mail/MailOverlay`): a composer tab's text outlives closing
 // the window, its × asks only when there is something to lose, and opening a
-// composer is not an edit — not even under StrictMode's double mount.
+// composer is not an edit — not even under StrictMode's double mount. Its bar's
+// agent button docks a root agent beside the mailbox, only while the window
+// shows; Escape typed into that agent is the agent's.
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -19,9 +21,24 @@ vi.mock("../../components/mail/MailPane", () => ({
   ),
 }));
 vi.mock("../../components/layout/OverlayApprovals", () => ({ OverlayApprovals: () => null }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+// The docked pane is the column's subject; here only what it was handed.
+const paneProps: Array<Record<string, unknown>> = [];
+vi.mock("../../components/tabs/TabPane", () => ({
+  TabPane: (props: Record<string, unknown>) => {
+    paneProps.push(props);
+    return <div data-testid="agent-pane" />;
+  },
+}));
 
 import { MailOverlayHost } from "../../components/mail/MailOverlay";
 import { MAIL_INBOX_TAB, useMailStore } from "../../stores/mail";
+import { requestOverlayAgent } from "../../lib/shortcuts/newTabChord";
+import { useSettingsStore } from "../../stores/settings";
+import { useTabsStore } from "../../stores/tabs";
+import { useProjectsStore } from "../../stores/projects";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useOverlayAgentStore } from "../../stores/overlayAgent";
 
 const account = { id: "a1", label: "Me", address: "me@home.example" } as MailAccount;
 const source = {
@@ -191,5 +208,114 @@ describe("the mail window", () => {
     fireEvent.click(screen.getByTitle("Open me@work.example"));
     expect(useMailStore.getState().selectedAccountId).toBe("a2");
     expect(useMailStore.getState().activeMailTab).toBe(MAIL_INBOX_TAB);
+  });
+
+  describe("the docked agent", () => {
+    const rootTabs = () => useTabsStore.getState().tabsByScope.root ?? [];
+    const column = () => document.querySelector<HTMLElement>(".overlay-agent-column");
+    const agentButton = () => screen.getByRole("button", { name: "Agent (Ctrl+1)" });
+    const chord = () => {
+      let answered = false;
+      act(() => {
+        answered = requestOverlayAgent("mail", 0);
+      });
+      return answered;
+    };
+
+    beforeEach(() => {
+      paneProps.length = 0;
+      invoke.mockImplementation((cmd: string, args?: { bins?: string[] }) => {
+        switch (cmd) {
+          case "list_agents":
+            return Promise.resolve([{ id: "claude", bin: "claude", installed: true }]);
+          case "probe_binaries":
+            return Promise.resolve(args?.bins ?? []);
+          case "root_mcp_status":
+            return Promise.resolve({ running: true, tools: [] });
+          default:
+            return Promise.resolve([]);
+        }
+      });
+      useSettingsStore.setState({
+        settings: { default_agent_cmd: "claude", root_agents: ["claude"] },
+        loaded: true,
+      } as never);
+      useTabsStore.setState({
+        scope: "p1",
+        tabsByScope: { root: [] },
+        layoutByScope: { root: null },
+        focusedGroupByScope: { root: null },
+      });
+      useProjectsStore.setState({ rootDir: "/r", activeId: "p1" });
+      useRootOverlayStore.setState({ open: false });
+      useOverlayAgentStore.setState({
+        docks: {
+          mail: { key: null, open: false },
+          calendar: { key: null, open: false },
+          todo: { key: null, open: false },
+        },
+        shownKeys: new Set(),
+        width: 560,
+      });
+    });
+
+    /** Open the window and let the root agent probe answer. */
+    async function mountOpen() {
+      act(() => useMailStore.getState().openOverlay());
+      render(<MailOverlayHost />);
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_agents"));
+      await act(async () => {});
+    }
+
+    it("docks beside the mail panes from the bar's button", async () => {
+      await mountOpen();
+      fireEvent.click(agentButton());
+
+      expect(rootTabs()).toHaveLength(1);
+      const tab = rootTabs()[0];
+      expect(useOverlayAgentStore.getState().docks.mail).toEqual({ key: tab.key, open: true });
+      // The stacked tab panes keep their own box; the column sits beside it.
+      const body = document.querySelector(".mail-overlay-body")!;
+      expect(body.classList.contains("app-overlay-body-row")).toBe(true);
+      expect(body.firstElementChild?.classList.contains("mail-overlay-panes")).toBe(true);
+      expect(body.firstElementChild?.contains(screen.getByTestId("mail-pane"))).toBe(true);
+      expect(body.lastElementChild).toBe(column());
+      const pane = paneProps[paneProps.length - 1];
+      expect(pane).toMatchObject({ scope: "root", attachOnly: true });
+      expect((pane.tab as { key: string }).key).toBe(tab.key);
+      expect(agentButton().getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("leaves Escape typed in the docked agent to the agent, and still hides on any other", async () => {
+      await mountOpen();
+      fireEvent.click(agentButton());
+
+      fireEvent.keyDown(screen.getByTestId("agent-pane"), { key: "Escape" });
+      expect(useMailStore.getState().overlayOpen).toBe(true);
+
+      fireEvent.keyDown(screen.getByTestId("mail-pane"), { key: "Escape" });
+      expect(useMailStore.getState().overlayOpen).toBe(false);
+    });
+
+    it("answers nothing and draws no column while hidden with a composer waiting", async () => {
+      await mountOpen();
+      expect(chord()).toBe(true);
+      const key = useOverlayAgentStore.getState().docks.mail.key;
+      expect(column()).not.toBeNull();
+
+      openComposer();
+      act(() => useMailStore.getState().closeOverlay());
+      // Still mounted (the composer), but the column is gone with the window…
+      expect(body()).toBeTruthy();
+      expect(column()).toBeNull();
+      // …and a chord for it goes on, opening nothing.
+      expect(chord()).toBe(false);
+      expect(rootTabs()).toHaveLength(1);
+
+      // Shown again, the same docked agent is back.
+      act(() => useMailStore.getState().openOverlay());
+      expect(column()).not.toBeNull();
+      expect(useOverlayAgentStore.getState().docks.mail).toEqual({ key, open: true });
+    });
   });
 });

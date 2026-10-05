@@ -18,6 +18,7 @@ import {
   type GroupNode,
   type TabEntry,
 } from "../../stores/tabs";
+import { BRAND, envName } from "../../lib/brand";
 
 function seed() {
   useTabsStore.setState({
@@ -137,11 +138,11 @@ describe("duplicateSpec", () => {
     label: "Claude",
     cmd: "claude",
     args: ["--session-id", "sess-1", "--verbose"],
-    env: { ELDRUN_TAB_UID: "sess-1", TERM: "xterm" },
+    env: { [envName("TAB_UID")]: "sess-1", TERM: "xterm" },
     cwd: "/p",
     kind: "agent",
     sessionId: "sess-1",
-    tmuxSession: "eldrun-p--agent-xyz",
+    tmuxSession: `${BRAND.slug}-p--agent-xyz`,
     tmuxAttach: "some-session",
     hostBoundUid: "uid-1",
   };
@@ -154,7 +155,7 @@ describe("duplicateSpec", () => {
     // frozen at creation — a copy still carrying either would collide with the
     // original's conversation.
     expect(spec.args).toEqual(["--session-id", spec.sessionId, "--verbose"]);
-    expect(spec.env).toEqual({ ELDRUN_TAB_UID: spec.sessionId, TERM: "xterm" });
+    expect(spec.env).toEqual({ [envName("TAB_UID")]: spec.sessionId, TERM: "xterm" });
   });
 
   it("drops the identities a second tab must not share", () => {

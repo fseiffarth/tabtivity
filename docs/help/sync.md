@@ -38,8 +38,8 @@ File sync will not carry tracked files. This is by design.
 - Branch checkouts replay on the other side.
 - When both sides committed (**Diverged**): choose **Use local**, **Use
   remote**, or **Resolve in terminal** (the other side's tip is at
-  `refs/eldrun/peer/<branch>`, so `git merge` or a rebase works). Overwritten
-  tips are backed up under `refs/eldrun/backup/…` and can be restored from
+  `refs/tabtivity/peer/<branch>`, so `git merge` or a rebase works). Overwritten
+  tips are backed up under `refs/tabtivity/backup/…` and can be restored from
   **Backups**.
 
 ## File sync

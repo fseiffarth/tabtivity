@@ -1,0 +1,8 @@
+# GitHub Pages (Jekyll) config for the project website.
+# Built and deployed by .github/workflows/pages.yml; the images under
+# assets/ are copied in from the repo at build time, not stored here.
+# brand-check: allow — the Pages site's title is prose, like the docs
+title: Tabtivity
+description: You open projects, not applications
+theme: jekyll-theme-cayman
+show_downloads: false

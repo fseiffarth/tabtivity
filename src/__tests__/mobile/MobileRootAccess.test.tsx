@@ -24,11 +24,12 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
 import type { TabEntry } from "../../stores/tabs";
 import type { Settings } from "../../types";
+import { BRAND, MOBILE_HOST_KEY, NAMES } from "../../lib/brand";
 
-const TMUX = "eldrun-root--agent-123456789";
+const TMUX = `${BRAND.slug}-root--agent-123456789`;
 
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   invokeMock.mockClear();
@@ -48,14 +49,14 @@ async function mount(settings: Settings, reviewEnforced: boolean) {
     return Promise.resolve(undefined);
   });
   vi.mocked(listen).mockResolvedValue(() => {});
-  useProjectsStore.setState({ projects: [], activeId: null, loaded: true, rootDir: "/home/user/eldrun/root" });
+  useProjectsStore.setState({ projects: [], activeId: null, loaded: true, rootDir: `/home/user/${BRAND.slug}/root` });
   useBoxesStore.setState({ boxes: [], loaded: true });
   useSettingsStore.setState({ settings, loaded: true });
   useTabsStore.setState({
     scope: "p-other",
     tabsByScope: {
       root: [
-        { key: "agent-1", label: "Claude", kind: "agent", cmd: "claude", cwd: "/home/user/eldrun/root", tmuxSession: TMUX },
+        { key: "agent-1", label: "Claude", kind: "agent", cmd: "claude", cwd: `/home/user/${BRAND.slug}/root`, tmuxSession: TMUX },
       ] satisfies TabEntry[],
     },
   });
@@ -82,12 +83,12 @@ describe("Mobile bridge — the root console", () => {
   const seen = () => ask({ type: "tab_seen", request_id: "r", project_id: "root", tmux_session: TMUX });
 
   it("is refused while its switch is off", async () => {
-    await mount({ eldrun_mobile_host: host() } as Settings, true);
+    await mount({ [MOBILE_HOST_KEY]: host() } as Settings, true);
     expect(await seen()).toMatchObject({ status: "error", code: "project_ineligible" });
   });
 
   it("answers with its agent tab's state once switched on, staged and fenced", async () => {
-    await mount({ eldrun_mobile_host: host(true) } as Settings, true);
+    await mount({ [MOBILE_HOST_KEY]: host(true) } as Settings, true);
     const response = await ask({ type: "catalog", request_id: "r1", project_id: "root" });
     expect(response.statuses).toMatchObject([{ tmux_session: TMUX, status: "working" }]);
     const feed = await ask({ type: "activity", request_id: "r2" });
@@ -95,22 +96,22 @@ describe("Mobile bridge — the root console", () => {
   });
 
   it("stays closed while the tools are on and writes are not staged behind the fence", async () => {
-    await mount({ eldrun_mobile_host: host(true) } as Settings, false);
+    await mount({ [MOBILE_HOST_KEY]: host(true) } as Settings, false);
     expect(await seen()).toMatchObject({ status: "error", code: "project_ineligible" });
   });
 
   it("stays closed on a weaker review level even when fenced", async () => {
-    await mount({ eldrun_mobile_host: host(true), root_mcp_review: "destructive" } as Settings, true);
+    await mount({ [MOBILE_HOST_KEY]: host(true), root_mcp_review: "destructive" } as Settings, true);
     expect(await seen()).toMatchObject({ status: "error", code: "project_ineligible" });
   });
 
   it("needs neither once the root MCP tools are off", async () => {
-    await mount({ eldrun_mobile_host: host(true), root_mcp: false, root_mcp_review: "off" } as Settings, false);
+    await mount({ [MOBILE_HOST_KEY]: host(true), root_mcp: false, root_mcp_review: "off" } as Settings, false);
     expect((await seen()).status).not.toBe("error");
   });
 
   it("activating raises the console over the open project instead of switching scope", async () => {
-    await mount({ eldrun_mobile_host: host(true) } as Settings, true);
+    await mount({ [MOBILE_HOST_KEY]: host(true) } as Settings, true);
     const response = await ask({ type: "activate", request_id: "r5", project_id: "root" });
     expect(response.status).toBe("activated");
     expect(useRootOverlayStore.getState().open).toBe(true);

@@ -96,6 +96,7 @@ vi.mock("../../stores/settings", () => ({
 
 import { TerminalView } from "../../components/terminal/TerminalView";
 import { clearClaimedInitialInputsForTest } from "../../lib/terminal/terminalControl";
+import { BRAND, NAMES } from "../../lib/brand";
 
 /** Fire `terminal-ready` plus a first output chunk, then let the boot cushion
  *  and the type/Enter timers run out. */
@@ -137,7 +138,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="claude"
-          cwd="/home/u/eldrun/boxes/new-box"
+          cwd={`/home/u/${BRAND.slug}/boxes/new-box`}
           kind="agent"
           initialInput="/rename New Box"
           visible
@@ -149,7 +150,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
 
     const probe = invoke.mock.calls.find((c) => c[0] === "claude_folder_trusted");
     expect(probe?.[1]).toEqual({
-      cwd: "/home/u/eldrun/boxes/new-box",
+      cwd: `/home/u/${BRAND.slug}/boxes/new-box`,
       projectId: null,
       sandbox: false,
       localOnly: false,
@@ -169,7 +170,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="claude"
-          cwd="/home/u/eldrun/projects/p"
+          cwd={`/home/u/${BRAND.slug}/projects/p`}
           kind="agent"
           initialInput="/rename P"
           visible
@@ -184,7 +185,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
   });
 
   it("passes the tab's scope, so the backend knows which trust store the spawn reads", async () => {
-    // Trust Eldrun recorded inside the fence lives only in the fence's staged
+    // Trust Tabtivity recorded inside the fence lives only in the fence's staged
     // `.claude.json`; an unfenced tab reads the host file. Turning a project's
     // fence off made the probe answer "trusted" from the record while the
     // unfenced Claude asked anyway — and the rename's Enter said `No, exit`.
@@ -197,7 +198,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="claude"
-          cwd="/home/u/eldrun/projects/audio"
+          cwd={`/home/u/${BRAND.slug}/projects/audio`}
           kind="agent"
           projectId="p9"
           initialInput="/rename Audio"
@@ -210,7 +211,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
 
     const probe = invoke.mock.calls.find((c) => c[0] === "claude_folder_trusted");
     expect(probe?.[1]).toEqual({
-      cwd: "/home/u/eldrun/projects/audio",
+      cwd: `/home/u/${BRAND.slug}/projects/audio`,
       projectId: "p9",
       sandbox: false,
       localOnly: false,
@@ -234,7 +235,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="claude"
-          cwd="/home/u/eldrun/projects/audio"
+          cwd={`/home/u/${BRAND.slug}/projects/audio`}
           kind="agent"
           initialInput="/rename Audio"
           visible
@@ -248,7 +249,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
   });
 
   it.each([
-    ["codex", ["> You are in /home/u/eldrun/projects/new", "  Do you trust the contents of this directory? Working with untrusted", "  contents comes with higher risk of prompt injection.", "› 1. Yes, continue", "  2. No, quit"]],
+    ["codex", [`> You are in /home/u/${BRAND.slug}/projects/new`, "  Do you trust the contents of this directory? Working with untrusted", "  contents comes with higher risk of prompt injection.", "› 1. Yes, continue", "  2. No, quit"]],
     ["gemini", [" Do you trust the files in this folder?", " ● 1. Trust folder (new)", "   2. Trust parent folder (projects)", "   3. Don't trust"]],
   ])("types nothing into a %s tab showing its trust question", async (cmd, lines) => {
     screen.lines = lines;
@@ -258,9 +259,9 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd={cmd}
-          cwd="/home/u/eldrun/projects/new"
+          cwd={`/home/u/${BRAND.slug}/projects/new`}
           kind="agent"
-          initialInput="Read .eldrun/scaffold-fill.md and complete the task."
+          initialInput={`Read ${NAMES.projectDir}/scaffold-fill.md and complete the task.`}
           visible
           focused
         />,
@@ -282,7 +283,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="codex"
-          cwd="/home/u/eldrun/projects/p"
+          cwd={`/home/u/${BRAND.slug}/projects/p`}
           kind="agent"
           initialInput="/hooks"
           visible
@@ -304,7 +305,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="bash"
-          cwd="/home/u/eldrun/projects/p"
+          cwd={`/home/u/${BRAND.slug}/projects/p`}
           kind="shell"
           initialInput="pytest -q"
           visible
@@ -330,7 +331,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
         <TerminalView
           id={id}
           cmd="claude"
-          cwd="/home/u/eldrun/projects/p"
+          cwd={`/home/u/${BRAND.slug}/projects/p`}
           kind="agent"
           initialInput="/rename P"
           visible

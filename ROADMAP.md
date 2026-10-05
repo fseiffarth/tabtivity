@@ -1,4 +1,4 @@
-# ProjectEldrun — Roadmap
+# Tabtivity — Roadmap
 
 Reviewed **2026-09-15** against **v0.1.68**. This file records direction and
 sequencing; [STATUS.md](STATUS.md) describes the implementation and verification
@@ -8,7 +8,7 @@ limits. Concrete tasks live in [TODO.md](TODO.md) and [`todo/`](todo/).
 
 The Rust/Tauri migration is complete. Project/box desktop contexts, tiling and
 pop-out tabs, agent resume, remote SSH/SFTP with Git lockstep and byte-sync,
-Docker/VM runtimes, mail/calendar/CalDAV, native viewers, and Eldrun Mobile are
+Docker/VM runtimes, mail/calendar/CalDAV, native viewers, and Tabtivity Mobile are
 implemented. Windows and macOS have native integration and CI packaging.
 
 Recent work adds the per-project prompt chart, draft board, scheduling and
@@ -229,7 +229,7 @@ queue before handing it to the unfenced login shell.
 
 ## Longer-Term Direction
 
-- **Eldrun Server — plan only.** One Linux server running every user's
+- **Tabtivity Server — plan only.** One Linux server running every user's
   projects, terminals and agents, with desktop browser and phone as thin
   clients. Each user gets a daemon under their own uid and signs in to their
   own agent CLIs. Shared projects are a bare hub repo with a clone per member.
@@ -237,7 +237,7 @@ queue before handing it to the unfenced login shell.
   and todo lists can be opened to others. The first step is moving live state
   out of the desktop window into the headless Mobile sidecar, which pays off
   on the desktop alone. See the
-  [server plan](docs/eldrun_hosted_plan.md).
+  [server plan](docs/tabtivity_hosted_plan.md).
 - **Broader desktop integration.** Linux X11 remains the reference. Validate the
   implemented KDE Wayland, Windows, and macOS backends before claiming parity
   from real use. Other Wayland compositors still need their own backends; macOS
@@ -245,5 +245,5 @@ queue before handing it to the unfenced login shell.
   and [workspace work](todo/group-c-workspace.md).
 - **Complete project context.** Extend the existing terminal/file/app/machine
   context with richer notes, task metadata, and workflow state. Pluggable
-  compositor backends and an eventual Eldrun-native compositor remain long-term
+  compositor backends and an eventual Tabtivity-native compositor remain long-term
   direction, not current delivery commitments. See [VISION.md](docs/VISION.md).

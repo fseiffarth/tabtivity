@@ -9,7 +9,7 @@
  * refuses a path that does not exist. So the deck debounces its own writes and
  * goes through `writeFileBytes`, which may create.
  *
- * **Why there is no save button.** Eldrun has no unsaved-work prompt anywhere —
+ * **Why there is no save button.** Tabtivity has no unsaved-work prompt anywhere —
  * `closeTabWithConfirm` is literally `removeTab` — so a deck must never *hold*
  * unsaved state. It is small, it is text, and it is under git, which is where the
  * durable undo belongs. Ctrl+Z is the in-session undo; git is the real one.
@@ -468,7 +468,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
    * The debounce's own cleanup cancels the pending write — which is correct for a
    * *rescheduled* write and catastrophic for a *final* one. Closing the tab
    * within 800 ms of an edit silently discarded it, while the toolbar said
-   * "Saved" (TODO V #93). There is no unsaved-work prompt anywhere in Eldrun to
+   * "Saved" (TODO V #93). There is no unsaved-work prompt anywhere in Tabtivity to
    * catch it either, by design, so the flush has to be unconditional.
    */
   useEffect(() => {
@@ -976,7 +976,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
    * base plate this deck is missing.
    *
    * Deliberately never overwrites an existing `.tex` — the author owns that file
-   * from the moment it is created, and Eldrun writing over a source they have
+   * from the moment it is created, and Tabtivity writing over a source they have
    * been editing is exactly the trust this feature cannot afford to lose.
    */
   const generateBase = useCallback(async () => {
@@ -1172,7 +1172,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     }
   }, [deck, path, scope, withObjects, toDeckRelative, rasterizeInto, markTexBusy, t]);
 
-  /** Open a TeX-figure's source as its own tab — Eldrun's full TeX editor, with
+  /** Open a TeX-figure's source as its own tab — Tabtivity's full TeX editor, with
    *  its own Compile button and SyncTeX. The poll below is what notices when
    *  that tab's own recompile finishes and updates the slide. */
   const editTexObject = useCallback(

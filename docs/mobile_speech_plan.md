@@ -8,7 +8,7 @@ in `mobile-web/src/voiceSession.ts`.
 
 ## 1. Context
 
-Eldrun Mobile dictates through the browser's Web Speech API
+Tabtivity Mobile dictates through the browser's Web Speech API
 (`mobile-web/src/voiceInput.ts`, `voiceSession.ts`). That API is the ceiling on
 quality: Android's recognizer is a streaming command model — little or no
 punctuation, weak on technical vocabulary ("clippy", "rebase", file names),
@@ -16,7 +16,7 @@ and it re-finalizes utterances, which is why `readDictation` /
 `advanceDictation` carry ~100 lines of dedup heuristics.
 
 Apps that feel good at this (ChatGPT's among them) do not use it. They record
-audio and run a Whisper-class model over it. Eldrun can do the same without a
+audio and run a Whisper-class model over it. Tabtivity can do the same without a
 cloud: the phone already talks to an authenticated desktop over the tailnet,
 and the desktop has the CPU/GPU.
 
@@ -40,7 +40,7 @@ phone  appends text to the draft
 
 - `getUserMedia` + an `AudioWorklet` that downsamples to **16 kHz mono s16le
   PCM**. Not `MediaRecorder`/Opus: PCM needs no decoder on the desktop (there
-  is no ffmpeg here and Eldrun should not grow one). 32 KB/s — a 30 s
+  is no ffmpeg here and Tabtivity should not grow one). 32 KB/s — a 30 s
   utterance is under 1 MB, nothing on a tailnet.
 - Energy **VAD** in the worklet (the RMS `voiceSession.ts` already computes
   for the meter): an utterance ends after ~900 ms below threshold, or at a
@@ -143,7 +143,7 @@ Modelled on `inbox_upload` (`mobile_control/host.rs`): `authenticate` +
 2. Speak two sentences with a pause: each lands in the draft punctuated,
    within a few seconds of its end; nothing is sent.
 3. Stay silent 20 s: no phantom text.
-4. Stop Eldrun's speech setting / rename the model: phone falls back to Web
+4. Stop Tabtivity's speech setting / rename the model: phone falls back to Web
    Speech with no error.
 5. Pull the tailnet mid-utterance: error line, session survives, next
    utterance works after reconnect.

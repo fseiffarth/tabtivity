@@ -23,4 +23,9 @@ describe("agent turn edges", () => {
     expect(agentTurnEdges(snap([["a", "question"], ["b", "done"]]), snap([["a", "question"], ["b", "working"], ["new", "question"]])))
       .toEqual([]);
   });
+
+  it("sends no notice for a turn the user cut off, nor for the idle notice after it", () => {
+    expect(agentTurnEdges(snap([["a", "working"], ["b", "interrupted"]]), snap([["a", "interrupted"], ["b", "done"]])))
+      .toEqual([]);
+  });
 });

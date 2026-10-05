@@ -7,7 +7,7 @@ import { currentSpeechId, speak, speechOutputSupported, spokenText, stopSpeaking
 /** How long a finger rests on a bubble before its menu opens. Long enough
  * that a flick of the chat is never a press, short enough to feel like the
  * platform's own hold. */
-const HOLD_MS = 450;
+export const HOLD_MS = 450;
 /** A press that wanders this far is a scroll, not a hold. */
 const HOLD_SLOP = 12;
 
@@ -36,7 +36,7 @@ function selectedIn(host: HTMLElement | null): string {
  * screen on a phone, and two controls per message crowd it. The bubble holds
  * what was said and nothing else; a click-hold on it asks what to do with it.
  */
-function MessageMenu({ id, text, onClose }: { id: string; text: string; onClose: () => void }) {
+function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; onEdit?: () => void; onClose: () => void }) {
   const t = useT();
   const speaking = useSyncExternalStore(subscribeSpeech, currentSpeechId) === id;
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
@@ -96,6 +96,14 @@ function MessageMenu({ id, text, onClose }: { id: string; text: string; onClose:
       </> : <>
       <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : preview(text)}</p>
       <ul className="option-list">
+        {/* Only a prompt the agent has not taken in yet has one: its words
+            wait on the desktop and can still change. */}
+        {onEdit && <li>
+          <button onClick={() => { onClose(); onEdit(); }}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4ZM13 7l4 4" /></svg>
+            <span><strong>{t("mobile.focus.editPrompt")}</strong><small>{t("mobile.focus.editPromptHint")}{isUntested("mobile.chat.editHeld") && <> · {t("mobile.focus.untested")}</>}</small></span>
+          </button>
+        </li>}
         <li>
           <button onClick={copy}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h8" /></svg>
@@ -135,10 +143,11 @@ export interface HoldHandlers {
 /**
  * The message menu for a chat: `hold(id, text)` on every bubble, `menu` once
  * beside them. The message is read at the moment of the press and kept — a
- * shown bubble never changes, and neither does what the menu acts on.
+ * shown bubble never changes, and neither does what the menu acts on. `edit`
+ * is given for a prompt whose words can still change (a held prompt).
  */
-export function useMessageMenu(): { hold: (id: string, text: () => string) => HoldHandlers; menu: React.ReactNode } {
-  const [target, setTarget] = useState<{ id: string; text: string } | null>(null);
+export function useMessageMenu(): { hold: (id: string, text: () => string, edit?: () => void) => HoldHandlers; menu: React.ReactNode } {
+  const [target, setTarget] = useState<{ id: string; text: string; edit?: () => void } | null>(null);
   const timer = useRef(0);
   const from = useRef<{ x: number; y: number } | null>(null);
   const cancel = useCallback(() => {
@@ -147,20 +156,20 @@ export function useMessageMenu(): { hold: (id: string, text: () => string) => Ho
     from.current = null;
   }, []);
   useEffect(() => cancel, [cancel]);
-  const open = useCallback((id: string, text: () => string) => {
+  const open = useCallback((id: string, text: () => string, edit?: () => void) => {
     cancel();
     // The browser's own hold may have selected the words under the finger;
     // this menu is the answer to that press, not a selection.
     window.getSelection()?.removeAllRanges();
-    setTarget({ id, text: text() });
+    setTarget({ id, text: text(), edit });
   }, [cancel]);
   const close = useCallback(() => setTarget(null), []);
-  const hold = useCallback((id: string, text: () => string): HoldHandlers => ({
+  const hold = useCallback((id: string, text: () => string, edit?: () => void): HoldHandlers => ({
     onPointerDown: (event) => {
       if (event.button !== 0) return;
       from.current = { x: event.clientX, y: event.clientY };
       window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => open(id, text), HOLD_MS);
+      timer.current = window.setTimeout(() => open(id, text, edit), HOLD_MS);
     },
     onPointerMove: (event) => {
       const start = from.current;
@@ -171,8 +180,8 @@ export function useMessageMenu(): { hold: (id: string, text: () => string) => Ho
     onPointerCancel: cancel,
     onContextMenu: (event) => {
       event.preventDefault();
-      open(id, text);
+      open(id, text, edit);
     },
   }), [cancel, open]);
-  return { hold, menu: target && <MessageMenu id={target.id} text={target.text} onClose={close} /> };
+  return { hold, menu: target && <MessageMenu id={target.id} text={target.text} onEdit={target.edit} onClose={close} /> };
 }

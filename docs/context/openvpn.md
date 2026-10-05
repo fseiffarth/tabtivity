@@ -3,7 +3,7 @@
 Referenced from `AGENTS.md`.
 
 - The **OpenVPN tunnel is machine-wide, not project-scoped.** It runs elevated
-  (`pkexec openvpn`) and Eldrun passes it no routing flags, so a config that pushes
+  (`pkexec openvpn`) and Tabtivity passes it no routing flags, so a config that pushes
   `redirect-gateway` reroutes *the whole computer's* traffic — browser included — for
   as long as it is up, whichever project asked for it. Two consequences are baked in:
   it is tracked machine-level in `src/stores/remote/vpn/vpnStatus.ts` (keyed by config path, with
@@ -19,11 +19,11 @@ Referenced from `AGENTS.md`.
   a tunnel *that* dialog itself brought up stays expanded, so its log and its
   Disconnect remain where the user started it.
   Interactive (non-headless) tunnels are *armed* at command-build time —
-  `interactive_connect_command` appends a `--writepid` Eldrun owns and registers it —
+  `interactive_connect_command` appends a `--writepid` Tabtivity owns and registers it —
   so a tunnel typed into a terminal tab is as visible and as killable as a headless
   one, and no longer outlives the app still owning the routing. Split-tunnelling is
   **not** implemented: whatever the `.ovpn` pushes still applies (TODO #82).
-- **A headless login that cannot work is escapable, per tunnel.** Eldrun's own login
+- **A headless login that cannot work is escapable, per tunnel.** Tabtivity's own login
   models exactly two secrets (account password, key passphrase); a config whose server
   asks anything else — a challenge/OTP, a second prompt — is unanswerable from the
   modal, and no amount of retyping changes that. The symptom is a loop: the saved
@@ -34,7 +34,7 @@ Referenced from `AGENTS.md`.
   terminal tunnel with it), and, after a failed connect, the same offer in the two
   connect dialogs, which open their own embedded login terminal instead of a root tab.
   It is deliberately a **local** switch and never writes `connections_headless`: a mode
-  is how the user wants Eldrun to behave, not something a failed handshake decides for
+  is how the user wants Tabtivity to behave, not something a failed handshake decides for
   them. `lib/remote/vpn/vpnAutoConnect`'s `openVpnLoginInTerminal` is the one implementation of the
   handoff (arms the tunnel, opens the root tab, polls), shared with the paths that are
   always non-headless. The prompt rejects its caller with `VPN_TERMINAL_HANDOFF` —
@@ -48,7 +48,7 @@ Referenced from `AGENTS.md`.
   the connect silent, and it is re-checked at launch, so a stale opt-in leaves the
   tunnel down. One config, not a set: two would be two claims on one machine's routing.
   With `connections_headless` off it instead opens the connect command in the root
-  terminal, since Eldrun handles no passwords in that mode.
+  terminal, since Tabtivity handles no passwords in that mode.
 - **Never elevate on a connect that cannot succeed.** `pkexec` authenticates the user
   *before* OpenVPN reads the config, so a doomed attempt is not a cheap failure — it
   costs a polkit dialog, and the modal that then collects the missing credential costs
@@ -58,9 +58,9 @@ Referenced from `AGENTS.md`.
   on a project's `OpenVpnSpec`, so a tunnel started from the header had none — the
   backend now keeps a copy beside the saved password (`openvpn_user_account`), saved
   and cleared by the same opt-in checkbox as the secrets.
-- **One polkit prompt per tunnel, on connect — and closing Eldrun never traps you.**
+- **One polkit prompt per tunnel, on connect — and closing Tabtivity never traps you.**
   Elevation is unavoidable to *build* a tunnel (tun device + routing), but stopping
-  one is not: every tunnel Eldrun starts, headless or typed into a terminal tab,
+  one is not: every tunnel Tabtivity starts, headless or typed into a terminal tab,
   carries an owner-only `--management` socket on loopback, and teardown asks the root
   daemon to `signal SIGTERM` **itself** — nothing to elevate, so no second password.
   The endpoint sits beside the pidfile so a tunnel from a previous run stays
@@ -69,7 +69,7 @@ Referenced from `AGENTS.md`.
   twice would turn into an options error) falls back to the old `pkexec kill`, so no
   path can silently strand a tunnel. And that fallback is asked **at most once** — on
   the close path, while the window is still on screen. Declining it does **not** block
-  the quit: Eldrun warns that the tunnel stays up and closes anyway, and records the
+  the quit: Tabtivity warns that the tunnel stays up and closes anyway, and records the
   refusal so the exit-time teardown does not raise a second, parentless polkit dialog
   after the window is gone (which is what used to leave the machine unusable).
 - **A VPN-only mail or CalDAV account** (`require_vpn` on `MailAccount` /

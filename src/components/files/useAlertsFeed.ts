@@ -40,7 +40,7 @@ import {
  *
  * The mail source carries a **second** gate, `mail_client`, and it is checked
  * before the invoke rather than around the rendering — opening the mail store
- * creates `~/.local/share/eldrun/mail/` as a side effect, and a file viewer must
+ * creates `~/.local/share/tabtivity/mail/` as a side effect, and a file viewer must
  * not materialize a mail database for someone who has mail switched off. This is
  * `TodoMailRail`'s rule, verbatim — and both now share the one refcounted poll
  * in `stores/todo` behind that same gate.
@@ -132,7 +132,7 @@ function occurrenceEnded(occ: Occurrence, now: string): boolean {
 /** What a caller other than the file viewer may say about the gates. */
 export interface AlertsFeedOptions {
   /**
-   * Read the feed *without* the file viewer's 🔔 visibility key. Eldrun Mobile
+   * Read the feed *without* the file viewer's 🔔 visibility key. Tabtivity Mobile
    * asks for this: `files_alerts` is the desktop group's visibility, so closing
    * the strip beside the tree on the laptop would otherwise blank the phone's
    * Alerts screen — a control on one surface silently switching off another.

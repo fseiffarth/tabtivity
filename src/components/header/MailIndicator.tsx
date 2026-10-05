@@ -143,7 +143,7 @@ export function MailIndicator() {
   // both before any mail surface is opened: the interval check below has nothing
   // to check without the accounts, and the badge has nothing to show without the
   // counts. This is the read that puts a number on the button at launch for mail
-  // that arrived while Eldrun was closed — no socket is involved.
+  // that arrived while Tabtivity was closed — no socket is involved.
   useEffect(() => {
     if (!live) return;
     void useMailStore.getState().refreshUnread();

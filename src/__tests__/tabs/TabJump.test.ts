@@ -17,6 +17,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import { PROMPTCHART_TAB_CMD, useTabsStore } from "../../stores/tabs";
 import type { ProjectEntry } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const revealTabInScope = vi.fn();
 const tabSetActive = vi.fn();
@@ -35,8 +36,8 @@ const p1: ProjectEntry = {
   name: "One",
   status: "active",
   position: 0,
-  local_file: "/home/u/eldrun/projects/one/project.json",
-  directory: "/home/u/eldrun/projects/one",
+  local_file: `/home/u/${BRAND.slug}/projects/one/project.json`,
+  directory: `/home/u/${BRAND.slug}/projects/one`,
 };
 
 beforeEach(() => {
@@ -103,7 +104,7 @@ describe("openPromptChartTab", () => {
     expect(tab).toEqual({
       label: translate("en", "promptChart.heading"),
       cmd: PROMPTCHART_TAB_CMD,
-      cwd: "/home/u/eldrun/projects/one",
+      cwd: `/home/u/${BRAND.slug}/projects/one`,
       kind: "promptchart",
     });
     // One chart per scope: the matcher finds an existing chart tab by kind.

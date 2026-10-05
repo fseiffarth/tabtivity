@@ -19,11 +19,11 @@
 //! needs a real key: a hand-typed armor block cannot produce a *valid* signature
 //! over the wrong body, which is the case that matters most.
 
-use eldrun_lib::services::mail_crypt::{Key, MailKeys};
-use eldrun_lib::services::mail_crypto::{self, CryptoKind, VerifyOutcome};
-use eldrun_lib::services::mail_engine::parse_message;
-use eldrun_lib::services::mail_pgp::{self, PgpKeyring, SealOpts};
-use eldrun_lib::services::mail_sanitize::sanitize_message_html;
+use app_lib::services::mail_crypt::{Key, MailKeys};
+use app_lib::services::mail_crypto::{self, CryptoKind, VerifyOutcome};
+use app_lib::services::mail_engine::parse_message;
+use app_lib::services::mail_pgp::{self, PgpKeyring, SealOpts};
+use app_lib::services::mail_sanitize::sanitize_message_html;
 
 fn keyring(seed: u8) -> (tempfile::TempDir, PgpKeyring) {
     let dir = tempfile::tempdir().unwrap();
@@ -291,7 +291,7 @@ fn a_message_cannot_claim_protection_it_does_not_have() {
     let info = mail_crypto::info_for(CryptoKind::PgpSigned, None, false, "a@example.com");
     assert_ne!(
         info.state,
-        eldrun_lib::schema::mail::MailCryptoState::Verified,
+        app_lib::schema::mail::MailCryptoState::Verified,
         "no verification means no positive chrome"
     );
 }

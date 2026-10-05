@@ -10,6 +10,7 @@
 // Type-only, so this stays free of a runtime import cycle: `tabs.ts` imports
 // *this* module to count tab opens.
 import type { TabKind } from "../stores/tabs";
+import { envName } from "./brand";
 
 export const METRIC = {
   /** `autocomplete.accept/dismiss.<mode>.<model>` — one outcome per suggestion. */
@@ -37,6 +38,19 @@ export const METRIC = {
   TAB_OPENED: "tab.opened",
   TAB_CLOSED: "tab.closed",
   APP_LAUNCHED: "app.launched",
+  // `tokens.<kind>.<cli>.<model>` — agent tokens, derived backend-side from the
+  // CLIs' own records (`usage_token_stats`), never counted by the frontend.
+  // `<model>` is everything after the third `.`: model names contain dots.
+  /** Fresh input, not counting cache reads or writes. */
+  TOKENS_IN: "tokens.in",
+  /** Input written to the prompt cache. */
+  TOKENS_CACHE_W: "tokens.cache_w",
+  /** Input read back from the prompt cache. */
+  TOKENS_CACHE_R: "tokens.cache_r",
+  /** Output, thinking/reasoning included. */
+  TOKENS_OUT: "tokens.out",
+  /** A total with no split — only Codex's SQLite fallback reports one. */
+  TOKENS_TOTAL: "tokens.total",
 } as const;
 
 /** Compose `agent.prompt` + `claude` → `agent.prompt.claude`. */
@@ -49,7 +63,7 @@ export function sub(prefix: string, leaf: string): string {
  * (`claude`), or the model name for a local one (`qwen3:8b`).
  *
  * A `local_agent` tab's model is not a field on the tab — it is carried in the
- * env Eldrun sets when spawning it (`ELDRUN_LOCAL_MODEL`, set at both local-model
+ * env Tabtivity sets when spawning it (`TABTIVITY_LOCAL_MODEL`, set at both local-model
  * launch routes in `TabBar`/`NewTabMenu`), with `VIBE_ACTIVE_MODEL` as the
  * fallback for the vibe route. Returns `null` for a tab that is not an agent.
  *
@@ -63,7 +77,7 @@ export function agentMetricLeaf(tab: {
   env?: Record<string, string>;
 }): { prefix: string; leaf: string } | null {
   if (tab.kind === "local_agent") {
-    const model = tab.env?.ELDRUN_LOCAL_MODEL || tab.env?.VIBE_ACTIVE_MODEL;
+    const model = tab.env?.[envName("LOCAL_MODEL")] || tab.env?.VIBE_ACTIVE_MODEL;
     // A local agent tab with no recorded model would otherwise be filed under an
     // empty key; count it under its driving command instead of inventing one.
     if (model) return { prefix: METRIC.AGENT_TAB_LOCAL, leaf: model };

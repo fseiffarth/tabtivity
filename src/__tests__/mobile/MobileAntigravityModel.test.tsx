@@ -69,6 +69,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND } from "../../lib/brand";
 
 const ESC = String.fromCharCode(27);
 const DOWN = `${ESC}[B`;
@@ -157,7 +158,7 @@ const antigravityTab = {
   viewer_busy: false,
 };
 
-describe("Eldrun Mobile — Antigravity's model and effort sheet", () => {
+describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];

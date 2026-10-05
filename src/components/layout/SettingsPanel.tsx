@@ -81,6 +81,7 @@ import { setVpnAutoConnect, vpnUsernameFor } from "../../lib/remote/vpn/vpnAutoC
 import type { StoredVpnConfig } from "../../types";
 import { MobileSettings } from "../mobile/MobileSettings";
 import { UpdatesPanel } from "./UpdatesPanel";
+import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION, DEFAULT_PDF_MARKUP_ASK, DEFAULT_PDF_MARKUP_INSTRUCTION, MAX_PDF_MARKUP_PROMPT, PDF_MARKUP_ASK_STOPS, pdfMarkupAsk, pdfMarkupInstruction } from "../../lib/viewers/pdfMarkup";
 import { BugIcon, PlayIcon, WarningIcon } from "../common/icons/Icon";
 import {
   SETTINGS_ANCHORS,
@@ -124,6 +125,74 @@ interface WorkspaceCapabilities {
  * command is missing (a backend older than this frontend). Not on Windows or
  * macOS, whose backends always park.
  */
+/** One Mark up prompt of the desktop PDF viewer (Settings → PDF markup): a
+ *  free-text field that starts from the default, kept as typed; Use the
+ *  default clears it (`undefined` = the default). */
+function PdfMarkupPromptCard({ id, label, help, value, fallback, onChange }: {
+  id: string;
+  label: string;
+  help: string;
+  value: string | undefined;
+  fallback: string;
+  onChange: (value: string | undefined) => void;
+}) {
+  const t = useT();
+  const custom = value?.trim() ? value : undefined;
+  return (
+    <SettingsCard>
+      <label className="settings-card-label" htmlFor={id}>{label}</label>
+      <textarea
+        id={id}
+        className="settings-prompt-text"
+        rows={4}
+        maxLength={MAX_PDF_MARKUP_PROMPT}
+        value={custom ?? fallback}
+        onChange={(e) => {
+          const next = e.target.value.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+          onChange(next.trim() && next.trim() !== fallback ? next : undefined);
+        }}
+      />
+      <p className="settings-help">{help}</p>
+      <div className="settings-link-row">
+        <button type="button" className="settings-btn sm" disabled={custom === undefined} onClick={() => onChange(undefined)}>
+          {t("settings.pdfMarkupReset")}
+        </button>
+      </div>
+    </SettingsCard>
+  );
+}
+
+/** Settings → PDF markup's asking dial: how often a Submit lets the agent
+ *  stop to ask about a mark, five stops from Ask always to Never ask. The
+ *  backend words each stop (`markup::ASK_LINES`) and puts it after the
+ *  prompt; the phone keeps its own dial. */
+function PdfMarkupAskCard({ value, onChange }: { value: number; onChange: (stop: number) => void }) {
+  const t = useT();
+  const stop = t(`markup.ask.stop${value}` as TranslationKey);
+  return (
+    <SettingRow
+      label={<>{t("markup.ask.label")} <UntestedTag id="desktop.markup.ask" /></>}
+      htmlFor="pdf-markup-ask"
+      control={
+        <span className="settings-ask-dial">
+          <input
+            id="pdf-markup-ask"
+            type="range"
+            min={0}
+            max={PDF_MARKUP_ASK_STOPS - 1}
+            step={1}
+            value={value}
+            aria-valuetext={stop}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+          <output htmlFor="pdf-markup-ask">{stop}</output>
+        </span>
+      }
+      help={<>{t(`markup.ask.hint${value}` as TranslationKey)} {t("markup.ask.help")}</>}
+    />
+  );
+}
+
 export function WorkspaceParkingNote() {
   const t = useT();
   const [caps, setCaps] = useState<WorkspaceCapabilities | null>(null);
@@ -393,7 +462,10 @@ function ShortcutsSettings({ onBack, onClose }: SubPanelProps) {
         return;
       }
       if (e.key === "Escape") {
+        // Only the capture ends — not steering's settings region, whose
+        // Escape would close the dialog.
         e.preventDefault();
+        e.stopPropagation();
         setCapturing(null);
         return;
       }
@@ -727,7 +799,7 @@ function VpnAutoConnectSettings({ onBack, onClose }: SubPanelProps) {
                 )}
                 {on && (
                   <p className="settings-help">
-                    {t("vpn.startsWithEldrun")}
+                    {t("vpn.startsWithApp")}
                     {headless ? "" : ` ${t("vpn.waitsInRootTerminal")}`}.
                   </p>
                 )}
@@ -1064,6 +1136,7 @@ const MAIN_SECTIONS = [
   "browser",
   "calendar",
   "usageStats",
+  "pdfMarkup",
   "rootConsole",
   "remoteFeatures",
   "vm",
@@ -1089,7 +1162,7 @@ function sectionOfAnchor(anchor: string | undefined): MainSection {
 const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "system"; entries: NavEntry[] }[] = [
   { key: "general", entries: ["general", "layout", "clock", "hintsOnboarding", "shortcuts", "updates", "help"] },
   { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "calendar", "usageStats", "archive", "scaffoldRepair"] },
-  { key: "agents", entries: ["agents", "ollama", "rootConsole"] },
+  { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole"] },
   { key: "remote", entries: ["remoteFeatures", "git", "remoteHosts", "vpn", "vm", "mobile"] },
   { key: "system", entries: ["performance", "resourceMonitor", "experimental"] },
 ];
@@ -1099,7 +1172,7 @@ const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "s
  *  so the search works in the UI language; a new control on a page adds its
  *  label key here, or the search will not find it. */
 const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
-  general: ["settings.theme", "settings.themeVars", "settings.language", "settings.runScriptsBg", "settings.persistLocal"],
+  general: ["settings.theme", "settings.themeVars", "settings.language", "settings.showUntestedTags", "settings.runScriptsBg", "settings.persistLocal"],
   layout: ["settings.windowZoom", "settings.minSubWidth", "settings.minSubHeight"],
   clock: ["settings.showClockSeconds", "settings.clock24"],
   hintsOnboarding: ["settings.showHints", "settings.howToStart", "settings.lessons", "lessons.tour.title", "lessons.tourRemote.title", "settings.resetHints"],
@@ -1107,10 +1180,11 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   browser: ["settings.browserHome", "settings.browserSearch", "settings.browserLinkTarget", "settings.browserRestoreNavigate", "settings.browserLivePages"],
   calendar: ["settings.calendarGlobalApp", "settings.todoBoard", "settings.weekStartsOn", "settings.defaultView", "settings.dayGridStart", "settings.defaultReminder"],
   usageStats: ["settings.dailyRecap", "settings.openUsageStats"],
+  pdfMarkup: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply"],
   rootConsole: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
-  mobile: ["settings.mobileIndicator"],
+  mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
   performance: ["settings.energySaver", "settings.fastMode"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
   experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug"],
@@ -1168,7 +1242,7 @@ export function SettingsDialog({
   const modalRef = useModalFocus(onClose, !showCustomizer);
   const t = useT();
 
-  const currentTheme = (settings?.color_scheme ?? "dark") as Theme;
+  const currentTheme = (settings?.color_scheme ?? "light_lavender") as Theme;
   const currentLang = (settings?.language ?? "en") as Language;
   // Through the hook, never off `settings`: unset means "not chosen", and only
   // `resolveUse24h` knows that it then follows the OS. Reading the raw key with a
@@ -1301,6 +1375,13 @@ export function SettingsDialog({
                   options={LANGUAGES.map((l) => ({ value: l.value, label: l.label }))}
                 />
               }
+            />
+
+            <ToggleCard
+              label={<>{t("settings.showUntestedTags")} <UntestedTag id="settings.showUntestedTags" /></>}
+              help={t("settings.showUntestedTags.help")}
+              checked={settings?.show_untested_tags ?? false}
+              onChange={(e) => void updateSettings({ show_untested_tags: e.target.checked })}
             />
 
             <ToggleCard
@@ -1441,7 +1522,7 @@ export function SettingsDialog({
                 className="settings-btn"
                 onClick={() => {
                   onClose();
-                  window.dispatchEvent(new Event("eldrun:open-how-to-start"));
+                  window.dispatchEvent(new Event("app:open-how-to-start"));
                 }}
               >
                 {t("settings.howToStart")}
@@ -1451,7 +1532,7 @@ export function SettingsDialog({
                 className="settings-btn"
                 onClick={() => {
                   onClose();
-                  window.dispatchEvent(new Event("eldrun:open-lessons"));
+                  window.dispatchEvent(new Event("app:open-lessons"));
                 }}
               >
                 {t("settings.lessons")}
@@ -1701,6 +1782,56 @@ export function SettingsDialog({
             </div>
             </>)}
 
+            {section === "pdfMarkup" && (<>
+            {/* The desktop PDF viewer's Mark up prompts — the desktop's own, as
+                the phone keeps its own (Home → This phone → Mark up prompt).
+                Blank = the default, shown as the starting text. */}
+            <SettingsSection anchor="settings-anchor-pdfMarkup" title={<>{t("settings.pdfMarkup")} <UntestedTag id="desktop.markup.apply" /></>} help={t("settings.pdfMarkupHelp")} />
+            {/* Absent means on: a Submit asks for an `apply` round, which the
+                backend backs with an undo snapshot or runs as `list`. The
+                instruction below starts from the default of this mode. */}
+            <ToggleCard
+              label={<>{t("settings.pdfMarkupDirect")} <UntestedTag id="desktop.markup.undo" /></>}
+              checked={settings?.pdf_markup_direct ?? true}
+              onChange={(e) => void updateSettings({ pdf_markup_direct: e.target.checked })}
+              help={t("settings.pdfMarkupDirectHelp")}
+            />
+            <PdfMarkupPromptCard
+              id="pdf-markup-instruction"
+              label={t("settings.pdfMarkupInstruction")}
+              help={t("settings.pdfMarkupInstructionHelp")}
+              // Either mode's default kept from before is no instruction of
+              // the user's: the field shows (and a Submit sends) this mode's.
+              value={pdfMarkupInstruction(settings?.pdf_markup_instruction) === null ? undefined : settings?.pdf_markup_instruction}
+              fallback={(settings?.pdf_markup_direct ?? true) ? DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION : DEFAULT_PDF_MARKUP_INSTRUCTION}
+              onChange={(value) => void updateSettings({ pdf_markup_instruction: value })}
+            />
+            <PdfMarkupAskCard
+              value={pdfMarkupAsk(settings?.pdf_markup_ask) ?? DEFAULT_PDF_MARKUP_ASK}
+              onChange={(stop) => void updateSettings({ pdf_markup_ask: stop === DEFAULT_PDF_MARKUP_ASK ? undefined : stop })}
+            />
+            <PdfMarkupPromptCard
+              id="pdf-markup-apply"
+              label={t("settings.pdfMarkupApply")}
+              help={t("settings.pdfMarkupApplyHelp")}
+              value={settings?.pdf_markup_apply}
+              fallback={DEFAULT_PDF_MARKUP_APPLY}
+              onChange={(value) => void updateSettings({ pdf_markup_apply: value })}
+            />
+            <ToggleCard
+              label={<>{t("settings.pdfMarkupAutoReload")} <UntestedTag id="desktop.markup.autoReload" /></>}
+              checked={settings?.pdf_markup_auto_reload ?? true}
+              onChange={(e) => void updateSettings({ pdf_markup_auto_reload: e.target.checked })}
+              help={t("settings.pdfMarkupAutoReloadHelp")}
+            />
+            <ToggleCard
+              label={<>{t("settings.pdfMarkupSubagents")} <UntestedTag id="desktop.markup.subagents" /></>}
+              checked={settings?.pdf_markup_subagents ?? false}
+              onChange={(e) => void updateSettings({ pdf_markup_subagents: e.target.checked })}
+              help={t("settings.pdfMarkupSubagentsHelp")}
+            />
+            </>)}
+
             {section === "rootConsole" && (<>
             {/* Root console: the MCP endpoint every agent session may reach.
                 Its own page under Agents rather than a tail of General — it
@@ -1803,7 +1934,7 @@ export function SettingsDialog({
             </>)}
 
             {section === "mobile" && (<>
-            {/* Eldrun Mobile runs its host sidecar on every desktop (systemd
+            {/* Tabtivity Mobile runs its host sidecar on every desktop (systemd
                 user unit, launchd agent, or the Windows Run key), so the
                 section is not platform-gated. */}
             <SettingsSection title={t("settings.mobile")} anchor={SETTINGS_ANCHORS.mobile} />

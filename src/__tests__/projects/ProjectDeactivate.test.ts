@@ -92,7 +92,7 @@ describe("project deactivation", () => {
       0,
     );
     const commands = mocks.invoke.mock.calls.map((call) => call[0]);
-    expect(commands.indexOf("save_tab_layout")).toBeLessThan(commands.indexOf("local_tmux_kill"));
+    expect(commands.indexOf("workspace_sync")).toBeLessThan(commands.indexOf("local_tmux_kill"));
     expect(commands.indexOf("local_tmux_kill")).toBeLessThan(commands.indexOf("pty_kill_scope"));
     expect(mocks.invoke).toHaveBeenCalledWith("local_tmux_kill", { session: "train" });
     expect(mocks.invoke).toHaveBeenCalledWith("pty_kill_scope", { scope: "a" });
@@ -163,7 +163,7 @@ describe("project deactivation", () => {
   it("aborts before termination when the strict layout save fails", async () => {
     answerStopPrompt(true);
     mocks.invoke.mockImplementation((command: string) =>
-      command === "save_tab_layout"
+      command === "workspace_sync"
         ? Promise.reject(new Error("disk full"))
         : Promise.resolve(undefined),
     );

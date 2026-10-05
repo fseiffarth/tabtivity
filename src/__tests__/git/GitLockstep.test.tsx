@@ -37,6 +37,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { GitHistory } from "../../components/files/GitHistory";
 import { useTabsStore } from "../../stores/tabs";
+import { NAMES } from "../../lib/brand";
 
 const COMMITS = [
   { hash: "aaa111", short: "aaa111", subject: "feat", author: "me", date: "2d", refs: "HEAD -> main", is_head: true, parents: [] },
@@ -216,7 +217,7 @@ describe("#28p git lockstep hardening UI", () => {
         return Promise.resolve([
           {
             peer: "remote",
-            refname: "refs/eldrun/backup/1735689600/main",
+            refname: `${NAMES.gitRefBackup}/1735689600/main`,
             ts: 1735689600,
             branch: "main",
             sha: "deadbeefcafe",
@@ -236,7 +237,7 @@ describe("#28p git lockstep hardening UI", () => {
     expect(mockInvoke).toHaveBeenCalledWith("git_peer_restore_backup", {
       projectId: "proj1",
       peer: "remote",
-      refname: "refs/eldrun/backup/1735689600/main",
+      refname: `${NAMES.gitRefBackup}/1735689600/main`,
     });
   });
 
@@ -262,7 +263,7 @@ describe("#28p git lockstep hardening UI", () => {
     // A remote-located shell would cd into the HOST tree, where the parked peer ref
     // isn't — the merge has to happen in the local mirror.
     expect(tab.location).toBe("local");
-    expect(tab.initialInput).toContain("refs/eldrun/peer/main");
+    expect(tab.initialInput).toContain(`${NAMES.gitRefPeer}/main`);
     addTab.mockRestore();
   });
 

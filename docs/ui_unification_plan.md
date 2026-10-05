@@ -17,7 +17,7 @@ listed in [§6](#6-audit-findings-dropped) so nobody re-files them.
 **Tier 1 landed in full on 2026-09-16 — all 21 items, none skipped.** Gates at
 the time of landing: `npm test` 957 files / 10282 tests passed (byte-identical
 to the pre-change baseline), `npm run build` green, `git diff --check` clean.
-Not verified live — Eldrun was not started; `src/` hot-reloads, so the user's
+Not verified live — Tabtivity was not started; `src/` hot-reloads, so the user's
 open window has it.
 
 **Reviewed 2026-09-16 (second pass).** All 21 items re-read hunk by hunk against
@@ -184,7 +184,7 @@ that restate an existing class, explicit `color` on the shared dialog surface.
 *extra* check): `npm test` (the CSS invariant tests read the whole corpus),
 `npm run lint`, `npm run build`, and `git diff --check`. `src/` hot-reloads, so
 the user's open window shows the result without a restart — **never** restart
-Eldrun to check.
+Tabtivity to check.
 
 ### 2.1 Dead selectors (all re-verified: zero references in `src/`, including
 concatenated class names and the test suite)
@@ -342,7 +342,7 @@ that is the baseline to hold.
 
 No backend files are touched, so `npm run backend:stale` is not part of this
 strand. `src/` hot-reloads: the user sees each landed item in their open window
-immediately, and **Eldrun must not be started, stopped or restarted** to check.
+immediately, and **Tabtivity must not be started, stopped or restarted** to check.
 
 ---
 

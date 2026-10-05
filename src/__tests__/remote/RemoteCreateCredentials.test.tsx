@@ -31,13 +31,14 @@ import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSettingsStore } from "../../stores/settings";
 import { useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
 import type { ProjectEntry } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
 const PROJECT = {
   id: "p1",
   name: "sshtest",
-  directory: "/home/u/eldrun/projects/sshtest",
+  directory: `/home/u/${BRAND.slug}/projects/sshtest`,
   position: 0,
   status: "active",
 } as unknown as ProjectEntry;

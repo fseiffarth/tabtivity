@@ -4,7 +4,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "./UntestedTag";
 
 /**
- * The confirmation in front of closing a project — Eldrun's own, mounted once at
+ * The confirmation in front of closing a project — Tabtivity's own, mounted once at
  * the shell beside the host-key and HPC prompts.
  *
  * This replaced a native `confirm()`. Two things the platform dialog could not

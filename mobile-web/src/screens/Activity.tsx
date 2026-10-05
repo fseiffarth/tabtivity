@@ -3,9 +3,13 @@ import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type Agent
 import { lastPrompt } from "../agentPrompts";
 import { getActivity, type ActivityTab } from "../api";
 import { AgentStatusPill } from "../components/AgentStatusPill";
+import { AgentModeMarks, SubagentCount, TurnDuration, agentModeClass } from "../components/AgentModeMarks";
 import { tabColorCss } from "../tabColors";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readChoice, writeChoice } from "../prefs";
+import { useT, type TranslationKey } from "../../../src/lib/i18n";
+
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
 /**
  * Every agent tab that is working, waiting on a decision, or done — across
@@ -26,36 +30,36 @@ import { readChoice, writeChoice } from "../prefs";
  * overview's, and stopped while the phone is showing something else. */
 const POLL_MS = 5_000;
 
-const SORT_LABEL: Record<AgentSort, string> = {
-  lastWorking: "Last working",
-  lastDone: "Last done",
-  native: "Status",
+const SORT_LABEL: Record<AgentSort, TranslationKey> = {
+  lastWorking: "agentPrompts.sort.lastWorking",
+  lastDone: "agentPrompts.sort.lastDone",
+  native: "mobile.activity.sortStatus",
 };
 
 /** "3m ago" from a desktop timestamp — a rough age, since the two clocks are
  * not the same clock and the reading is a minute old at worst. */
-function ago(at: number, now: number): string {
+function ago(at: number, now: number, t: Translate): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 90) return `${minutes}m ago`;
+  if (minutes < 1) return t("mobile.activity.justNow");
+  if (minutes < 90) return t("mobile.activity.minutesAgo", { count: minutes });
   const hours = Math.round(minutes / 60);
-  if (hours < 36) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
+  if (hours < 36) return t("mobile.activity.hoursAgo", { count: hours });
+  return t("mobile.activity.daysAgo", { count: Math.round(hours / 24) });
 }
 
 /** The reading the current sort is ordering by, said on the row so the order
  * explains itself: what a tab is doing now, or when it last did it. */
-function timing(tab: ActivityTab, sort: AgentSort, now: number): string {
-  if (sort === "lastDone") return tab.done_at === undefined ? "" : `finished ${ago(tab.done_at, now)}`;
-  if (tab.agent_status === "working") return "working now";
+function timing(tab: ActivityTab, sort: AgentSort, now: number, t: Translate): string {
+  if (sort === "lastDone") return tab.done_at === undefined ? "" : t("mobile.activity.finished", { ago: ago(tab.done_at, now, t) });
+  if (tab.agent_status === "working") return t("mobile.activity.workingNow");
   // Under `lastWorking` a tab that is neither asking nor working sits in the
   // tier ordered by its last finished turn, so that is the reading its row
   // shows. A question is ordered by nothing timed, and its last output is when
   // it stopped to ask — which is the reading worth having on it.
   if (sort === "lastWorking" && tab.agent_status !== "question" && tab.done_at !== undefined) {
-    return `finished ${ago(tab.done_at, now)}`;
+    return t("mobile.activity.finished", { ago: ago(tab.done_at, now, t) });
   }
-  return tab.working_at === undefined ? "" : `worked ${ago(tab.working_at, now)}`;
+  return tab.working_at === undefined ? "" : t("mobile.activity.worked", { ago: ago(tab.working_at, now, t) });
 }
 
 /** Sorted here, by the reader's choice — by last working (the default), by
@@ -67,6 +71,7 @@ export function Activity({ open, onConnection }: {
    * that is this one — the project list behind it is not being polled at all. */
   onConnection: (reason: UnavailableReason | null) => void;
 }) {
+  const t = useT();
   const [tabs, setTabs] = useState<ActivityTab[]>([]);
   /** Until the first answer, an empty list is "still loading", not "nothing". */
   const [loaded, setLoaded] = useState(false);
@@ -121,19 +126,19 @@ export function Activity({ open, onConnection }: {
     {offline && <p className="error connection-error">
       <strong>{describeUnavailable(offline).title}</strong>
       <span>{describeUnavailable(offline).hint}</span>
-      <span>{tabs.length ? "Showing the last list this session loaded." : "Agent activity is never loaded from cache."}</span>
+      <span>{tabs.length ? t("mobile.home.showingLast") : t("mobile.activity.neverCached")}</span>
     </p>}
-    {!loaded && !offline && <p className="projects-empty" role="status">Loading agent tabs…</p>}
-    {loaded && !desktop && <p className="notice">Desktop unavailable — Eldrun on the desktop is what tells a working session from one waiting on you.</p>}
-    {loaded && desktop && tabs.length === 0 && <p className="projects-empty">Nothing is working, waiting or done. Quiet tabs are not listed here — open a project to reach one.</p>}
+    {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.activity.loading")}</p>}
+    {loaded && !desktop && <p className="notice">{t("mobile.activity.desktopUnavailable")}</p>}
+    {loaded && desktop && tabs.length === 0 && <p className="projects-empty">{t("mobile.activity.empty")}</p>}
     {tabs.length > 1 && <label className="activity-sort">
-      <span>Sort</span>
-      <select aria-label="Sort agent tabs" value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
-        {AGENT_SORTS.map((value) => <option key={value} value={value}>{SORT_LABEL[value]}</option>)}
+      <span>{t("agentPrompts.sort.label")}</span>
+      <select aria-label={t("mobile.activity.sortAria")} value={sort} onChange={(event) => { if (isAgentSort(event.target.value)) chooseSort(event.target.value); }}>
+        {AGENT_SORTS.map((value) => <option key={value} value={value}>{t(SORT_LABEL[value])}</option>)}
       </select>
     </label>}
     <section className="cards">{sorted.map((tab) => {
-      const when = timing(tab, sort, now);
+      const when = timing(tab, sort, now, t);
       // The one line that says what a session is *about*. A flat cross-project
       // list is read to decide which tab to open, and "claude 2 · Paper ·
       // worked 3m ago" says everything about that except the thing it was
@@ -143,14 +148,14 @@ export function Activity({ open, onConnection }: {
         // The tab's colour (#264) carries onto this list too, and this is the
         // list it earns most: a flat cross-project row of look-alike "claude"
         // sessions is the case the colour is assigned for.
-        className={`card${tabColorCss(tab.color) ? " has-tab-color" : ""}`}
+        className={`card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}`}
         key={tab.id}
         disabled={!tab.available}
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}
         onClick={() => open(tab.project_id, tab)}
       >
-        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? " · open elsewhere" : tab.available ? "" : " · gone"}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}</small>}</span>
-        <span className="card-trailing">{tab.agent_status && <AgentStatusPill status={tab.agent_status} />}<span>›</span></span>
+        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}</small>}</span>
+        <span className="card-trailing"><AgentModeMarks tab={tab} /><SubagentCount tab={tab} /><TurnDuration tab={tab} finished={false} />{tab.agent_status && <AgentStatusPill status={tab.agent_status} />}<span>›</span></span>
       </button>;
     })}</section>
   </>;

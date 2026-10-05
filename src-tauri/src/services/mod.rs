@@ -7,6 +7,9 @@ pub mod agent_turn;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
+// The files that conversation changed, as the diffs its CLI recorded — the
+// desktop Reader's Changes panel.
+pub mod agent_changes;
 pub mod agent_bin;
 pub mod agent_tasks;
 pub mod schedule_mcp;
@@ -16,16 +19,22 @@ pub mod git_push_mcp;
 pub mod git_release;
 pub mod git_ci;
 pub mod help_mcp;
+pub mod markup_mcp;
+// The Undo of a PDF markup round that applied the marks directly: git-tree
+// snapshots of the work tree in the round's own object store under the state
+// dir, reverse-applied only when nothing changed since.
+pub mod markup_rounds;
 pub mod schedule_usage;
 // One agent CLI's own usage panel (Claude's `/usage`), read in print mode
 // without a tab: recipe table, envelope parsing, and the short-lived cache
 // that keeps a phone reopening the status sheet from spawning a CLI each
 // time.
 pub mod agent_usage;
-// Which release of each agent CLI is installed vs. the one Eldrun's parsers
+// Which release of each agent CLI is installed vs. the one Tabtivity's parsers
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+pub mod agent_latest;
 // Default-on Linux filesystem boundary for local agent tabs.  The authority
 // decision and root computation stay AppHandle-free; terminal spawn only applies
 // the resulting bubblewrap argv.
@@ -33,39 +42,58 @@ pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub mod fence_scope;
-// The Claude credential mirror: one Eldrun-owned inode mounted into every
+// `--agent-exec`: an agent's secrets mapped from their app-named carriers to
+// the CLI's own variable names, just before the agent runs (no common name on
+// the user's tmux server).
+pub mod agent_exec;
+// The Claude credential mirror: one Tabtivity-owned inode mounted into every
 // fenced/contained tab in place of `~/.claude/.credentials.json`, kept in step
 // with the host file by in-place writes — a file bind mount pins an inode, and
 // Claude rotates that file by rename.
 pub mod agent_auth;
+// Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
+pub mod agent_api_keys;
+pub mod api_proxy;
+pub mod api_meter;
+pub mod api_prices;
+pub mod api_usage;
 pub mod agent_global;
+pub mod agent_hint;
 pub mod agent_home;
 pub mod agent_install;
 pub mod agent_shim;
-// Copilot CLI sign-in for fenced tabs: Eldrun keeps the token in its own
+// Copilot CLI sign-in for fenced tabs: Tabtivity keeps the token in its own
 // keyring entry (the fence hides the keyring) and hands it to each fenced
 // Copilot as COPILOT_GITHUB_TOKEN.
 pub mod copilot_auth;
-// "Check for a new Eldrun" against the GitHub releases page: version compare,
+// "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
 pub mod big_folders;
-// Ask-once approval for project-supplied programs Eldrun runs on the host
+// Ask-once approval for project-supplied programs Tabtivity runs on the host
 // (git hooks, latexmkrc, a project's own prettier), re-asked when they change.
 pub mod exec_trust;
 // In-app browser (TODO J #61): reader-mode fetch+sanitize, the live-page window
 // registry, and download quarantine. See docs/browser_plan_{b,c}.md.
+pub mod brand_migration;
 pub mod browser_engine;
 // CalDAV accounts (docs/caldav_plan.md): the WebDAV transport half. Hand-rolled
 // on reqwest + roxmltree; iCalendar itself is still parsed by src/lib/calendar/ics.ts.
 pub mod caldav;
+// Recurrence expansion and to-do board routing, the backend twins of
+// `src/lib/calendar/recurrence.ts` and `src/lib/todoBoard.ts`, so the Mobile
+// sidecar answers a month and the board with no window (headless owner, H0).
+pub mod calendar_recurrence;
+pub mod todo_board;
 // What the phone's composer may attach from the desktop: recent screenshots and
 // pictures by opaque id, copied into the project inbox on request.
 pub mod desktop_images;
-// What the background "Eldrun (dev)" freeze (`scripts/package-dev-auto.sh`) is
+// What the background "Tabtivity (dev)" freeze (`scripts/package-dev-auto.sh`) is
 // doing, read from that script's own state files for the header's dev-build
 // chip. Compiled to "no chip" unless the binary was built from a checkout.
 pub mod dev_build;
+// The checkout's `todo/*.md` groups for the dev build's side-panel Todo view.
+pub mod dev_todo;
 pub mod codex_bind;
 // Codex's own SQLite thread store (`~/.codex/state_<n>.sqlite`), read
 // read-only for the model a Codex tab is running now that its releases
@@ -73,9 +101,11 @@ pub mod codex_bind;
 pub mod codex_store;
 pub mod copilot;
 pub mod git_credentials;
+// Bounded local git runs: FIFO pre-check + timeout that reaps the subtree (#2349).
+pub mod git_bounded;
 // The `.git` control files a sandbox keeps its occupant from writing (#158).
 pub mod git_guard;
-// The default branch (`main`) for repositories Eldrun creates, and the
+// The default branch (`main`) for repositories Tabtivity creates, and the
 // unpublished-`master` rename that runs just before a publish.
 pub mod git_init;
 pub mod git_peer;
@@ -140,6 +170,24 @@ pub mod state_gc;
 pub mod sync_auto;
 pub mod terminal_service;
 pub mod tmux_local;
+// The launch assembly `pty_spawn` and the sidecar's headless spawn share
+// (headless owner plan, H1b).
+pub mod launch_prep;
+// The shared tab set with a version and per-operation merge (headless owner
+// plan, H1): what `save_tab_layout`'s whole-snapshot write became.
+pub mod workspace;
+// The single-client timer lease (headless owner plan, H2, interim): one
+// window fires schedules, alarms and syncs at a time.
+pub mod timer_lease;
+// Calendar reminders' due set and their cross-process fired record (headless
+// owner plan, H2): the window claims before showing, the sidecar pushes with
+// no window open.
+pub mod calendar_alarms;
+pub mod token_stats;
+// The UI's main threads (this process's, each renderer's) asked to rtkit for
+// nice -10, so the work agent tabs start cannot outrank typing.
+#[cfg(target_os = "linux")]
+pub mod ui_priority;
 pub mod usage_stats;
 // Project VMs (`docs/vm_projects_plan.md`): the third trust tier — the whole
 // project inside a hardware-accelerated QEMU guest (KVM on Linux, HVF on

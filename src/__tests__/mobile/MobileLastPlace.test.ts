@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forgetLastPlace, readLastPlace, rememberLastPlace, restoreLastPlace } from "../../../mobile-web/src/lastPlace";
+import { BRAND, storageKey } from "../../lib/brand";
 
 /** The storage key predates sections and is kept so a phone does not lose its place on update. */
-const KEY = "eldrun.mobile.lastTab";
+const KEY = storageKey("mobile.lastTab");
 
-describe("Eldrun Mobile last-place persistence", () => {
+describe(`${BRAND.display} Mobile last-place persistence`, () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
 

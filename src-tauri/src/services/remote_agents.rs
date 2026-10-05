@@ -34,6 +34,7 @@
 //! runs with no prelude and simply reports `command not found`, which is honest,
 //! where a prelude would print a password prompt into an agent's PTY.
 
+use crate::brand::SLUG;
 /// A known agent CLI and how to detect / install it on a remote host.
 pub struct AgentRecipe {
     /// Executable probed with `command -v` and finally exec'd.
@@ -125,10 +126,10 @@ pub fn bootstrap_prelude(recipe: &AgentRecipe) -> String {
     } = recipe;
     format!(
         "command -v {bin} >/dev/null 2>&1 || \
-         {{ echo 'eldrun: {bin} not found on remote, installing...'; {install}; \
+         {{ echo '{SLUG}: {bin} not found on remote, installing...'; {install}; \
          hash -r 2>/dev/null || true; }}; \
          command -v {bin} >/dev/null 2>&1 || \
-         {{ echo 'eldrun: {bin} not found and auto-install failed - install it manually: \
+         {{ echo '{SLUG}: {bin} not found and auto-install failed - install it manually: \
          {manual_hint}' >&2; exit 127; }}"
     )
 }

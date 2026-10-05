@@ -1,3 +1,5 @@
+import type { TranslationKey } from "../../src/lib/i18n";
+
 /**
  * The tab-colour palette, phone side (#264).
  *
@@ -24,17 +26,17 @@ export const TAB_COLORS: Record<string, string> = {
 /** Sheet order — an array so the swatches draw in one fixed order. */
 export const TAB_COLOR_IDS = Object.keys(TAB_COLORS);
 
-/** Palette-name labels for the swatch buttons. The PWA carries no i18n
- *  dictionary (it is English throughout, like the rest of its screens). */
-export const TAB_COLOR_LABELS: Record<string, string> = {
-  blue: "Blue",
-  orange: "Orange",
-  green: "Green",
-  purple: "Purple",
-  yellow: "Yellow",
-  red: "Red",
-  teal: "Teal",
-  indigo: "Indigo",
+/** Palette-name labels for the swatch buttons: the desktop's own colour
+ *  names, so both surfaces call a hue the same thing in every language. */
+export const TAB_COLOR_LABELS: Record<string, TranslationKey> = {
+  blue: "tabColor.blue",
+  orange: "tabColor.orange",
+  green: "tabColor.green",
+  purple: "tabColor.purple",
+  yellow: "tabColor.yellow",
+  red: "tabColor.red",
+  teal: "tabColor.teal",
+  indigo: "tabColor.indigo",
 };
 
 /** The CSS a published colour renders as, or `undefined` for an uncoloured tab

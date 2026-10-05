@@ -31,6 +31,7 @@ import {
   unlockLocalBiometric,
 } from "../../../mobile-web/src/localLock";
 import { LocalUnlock } from "../../../mobile-web/src/screens/LocalUnlock";
+import { BRAND } from "../../lib/brand";
 
 const lock = {
   configure: vi.mocked(configureLocalUnlock),
@@ -250,7 +251,7 @@ describe("Mobile local unlock — unlock", () => {
     lock.available.mockResolvedValue(false);
     render(<LocalUnlock setup={false} onUnlocked={() => {}} />);
     await screen.findByLabelText("PIN");
-    expect(screen.getByText(/Open Eldrun Mobile in Chrome or Safari/)).toBeTruthy();
+    expect(screen.getByText(new RegExp(String.raw`Open ${BRAND.display} Mobile in Chrome or Safari`))).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Unlock with fingerprint" })).toBeNull();
   });
 });

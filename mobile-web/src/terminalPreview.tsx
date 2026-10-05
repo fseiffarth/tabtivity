@@ -1,6 +1,8 @@
 import ReactDOM from "react-dom/client";
 import { Terminal } from "./screens/Terminal";
 import "./style.css";
+import "./themes.css";
+import { BRAND } from "../../src/lib/brand";
 
 // Escape sequences on purpose: the reading view renders the colours the
 // program emitted, so a fixture without them exercises none of that path.
@@ -38,23 +40,23 @@ const AGENT_OUTPUT = [
   "╭────────────────────────────────────────────────────────────╮",
   "│ >                                                          │",
   "╰────────────────────────────────────────────────────────────╯",
-  `  ${DIM}~/projects/eldrun (develop) · Opus 4.1 · plan mode on (shift+tab to cycle) · 85% context left${OFF}`,
+  `  ${DIM}~/projects/${BRAND.slug} (develop) · Opus 4.1 · plan mode on (shift+tab to cycle) · 85% context left${OFF}`,
 ].join("\r\n");
 
 const SHELL_OUTPUT = [
-  "dev@workstation:~/projecteldrun$ npm test",
+  `dev@workstation:~/project${BRAND.slug}$ npm test`,
   "",
-  " RUN  v4.1.8 /home/dev/projects/projecteldrun",
+  ` RUN  v4.1.8 /home/dev/projects/project${BRAND.slug}`,
   " ✓ MobileReadableScreen.test.ts (11 tests)",
   " ✓ MobileTerminalVoice.test.tsx (5 tests)",
   "",
   " Test Files  2 passed (2)",
   "      Tests  16 passed (16)",
   "",
-  "dev@workstation:~/projecteldrun$ git status --short --untracked-files=all",
+  `dev@workstation:~/project${BRAND.slug}$ git status --short --untracked-files=all`,
   " M mobile-web/src/screens/Terminal.tsx",
   "?? mobile-web/src/terminal/readableScreen.ts",
-  "dev@workstation:~/projecteldrun$ ",
+  `dev@workstation:~/project${BRAND.slug}$ `,
 ].join("\r\n");
 
 class PreviewWebSocket {

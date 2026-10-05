@@ -4,7 +4,7 @@
 //! It replaces the `print_manager` *global app* slot — the button that launched
 //! whatever external printer GUI the user had configured — for the reason the
 //! mail/calendar/file-manager roles were retired before it: the thing behind the
-//! button is a list and a handful of verbs, and Eldrun can render a list.
+//! button is a list and a handful of verbs, and Tabtivity can render a list.
 //!
 //! Two backends, picked by target OS, both **read-only by default**:
 //!
@@ -756,7 +756,7 @@ fn ipp_job_progress() -> HashMap<u32, JobProgress> {
         .or_else(|_| std::env::var("LOGNAME"))
         .ok()
         .filter(|u| !u.is_empty() && u.len() <= 255 && !u.contains(['\r', '\n']))
-        .unwrap_or_else(|| "eldrun".into());
+        .unwrap_or_else(|| crate::app_slug!().into());
     let body = ipp_get_jobs_request(&user);
     let host = match &server {
         CupsServer::Socket(_) => "localhost",
@@ -901,7 +901,7 @@ fn set_default_impl(printer: &str) -> Result<(), String> {
     check_printer_name(printer)?;
     // `lpoptions -d` sets the *user's* default (~/.cups/lpoptions), which needs
     // no admin rights — deliberately not `lpadmin -d`, which sets it for the
-    // whole machine and would ask for a password Eldrun has no business asking.
+    // whole machine and would ask for a password Tabtivity has no business asking.
     let (ok, out, err) = run_capped("lpoptions", &["-d", printer])?;
     action_error("lpoptions", ok, out, err)
 }
@@ -1238,7 +1238,7 @@ pub async fn print_set_enabled(printer: String, enabled: bool) -> Result<(), Str
 /// Send a small text page to `printer`, so "is this thing actually connected?"
 /// has an answer that does not involve finding a document first.
 ///
-/// The page is written by Eldrun into the OS temp dir rather than taken from a
+/// The page is written by Tabtivity into the OS temp dir rather than taken from a
 /// path the frontend supplies: the print manager deliberately has no
 /// print-this-file command at all, so no caller can turn it into one.
 #[tauri::command]
@@ -1246,14 +1246,14 @@ pub async fn print_test_page(printer: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         check_printer_name(&printer)?;
         let body = format!(
-            "Eldrun print test\n\n\
+            "{app} print test\n\n\
              Printer: {printer}\n\
-             If you are reading this on paper, the queue works.\n"
+             If you are reading this on paper, the queue works.\n", app = crate::brand::DISPLAY
         );
-        let path = std::env::temp_dir().join("eldrun-print-test.txt");
+        let path = std::env::temp_dir().join(concat!(crate::app_slug!(), "-print-test.txt"));
         std::fs::write(&path, body).map_err(|e| format!("test page: {e}"))?;
         let path_str = path.to_string_lossy().into_owned();
-        print_file_impl(&printer, &path_str, "Eldrun print test")
+        print_file_impl(&printer, &path_str, concat!(crate::app_name!(), " print test"))
     })
     .await
     .map_err(|e| e.to_string())?

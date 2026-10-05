@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Is the RUNNING Eldrun older than the backend source on disk?
+# Is the RUNNING Tabtivity older than the backend source on disk?
 #
 # `npm run tauri:dev` passes `--no-watch`, so a `src-tauri/` edit no longer
 # rebuilds and relaunches the window out from under whoever is using it (open
@@ -28,22 +28,27 @@ if [ "${1:-}" = "--mobile-only" ]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="${ELDRUN_APP_DIR:-$HOME/.local/share/eldrun}"
-STATE_DIR="${ELDRUN_STATE_DIR:-$APP_DIR}"
+# The app's names (scripts/lib/brand.sh): $APP_DISPLAY, $APP_SLUG, $APP_BIN_NAME, …
+. "$ROOT/scripts/lib/brand.sh"
+APP_DIR="$(app_env APP_DIR "$APP_SHARE_DIR")"
+STATE_DIR="$(app_env STATE_DIR "$APP_DIR")"
 
 # ---------------------------------------------------------------------------
-# Which Eldrun is running?
+# Which Tabtivity is running?
 #
 # The hot-reload dev binary is only one of the shapes this takes: `npm run
-# package:dev` freezes the tree at eldrun-dev and `npm run package` installs
-# eldrun[.AppImage]. Matching only target/debug made this script print "nothing
+# package:dev` freezes the tree at tabtivity-dev and `npm run package` installs
+# tabtivity[.AppImage]. Matching only target/debug made this script print "nothing
 # to be stale against" and exit 0 — a false all-clear — for precisely the
 # builds whose backend cannot hot-reload at all, and whose embedded mobile PWA
 # is therefore the most likely thing in the window to be months behind.
 #
-# Order matters: `^$APP_DIR/eldrun` prefix-matches the other two, so the
+# Order matters: `^$APP_DIR/tabtivity` prefix-matches the other two, so the
 # specific paths are tried first.
 # ---------------------------------------------------------------------------
+# What the frozen dev build is called below (matched again where the advice is
+# printed).
+FROZEN_KIND="frozen \"$APP_DISPLAY (dev)\" build"
 app_pid=""
 app_kind=""
 while IFS='|' read -r path kind; do
@@ -55,20 +60,28 @@ while IFS='|' read -r path kind; do
     break
   fi
 done <<EOF
-$ROOT/target/debug/eldrun|hot-reload dev session
-$ROOT/target/release/eldrun|release binary from the checkout
-$APP_DIR/eldrun-dev|frozen "Eldrun (dev)" build
-$APP_DIR/eldrun.AppImage|packaged AppImage
-$APP_DIR/eldrun|packaged build
+$ROOT/target/debug/$APP_BIN_NAME|hot-reload dev session
+$ROOT/target/release/$APP_BIN_NAME|release binary from the checkout
+$APP_DIR/$APP_DEV_BIN_NAME|$FROZEN_KIND
+$APP_DIR/$APP_BIN_NAME.AppImage|packaged AppImage
+$APP_DIR/$APP_BIN_NAME|packaged build
 EOF
 
 # An AppImage execs its payload out of a FUSE mount, so the process actually
-# serving the sidecar has /tmp/.mount_*/usr/bin/eldrun on its cmdline and
+# serving the sidecar has /tmp/.mount_*/usr/bin/tabtivity on its cmdline and
 # matches none of the paths above.
 if [ -z "$app_pid" ]; then
-  app_pid="$(pgrep -f '^/tmp/\.mount_[^/]*/usr/bin/eldrun' | head -n 1 || true)"
+  app_pid="$(pgrep -f "^/tmp/\\.mount_[^/]*/usr/bin/$APP_BIN_NAME" | head -n 1 || true)"
   if [ -n "$app_pid" ]; then
     app_kind="running AppImage"
+  fi
+fi
+
+# A build made before the app was renamed runs under the old binary names.
+if [ -z "$app_pid" ]; then
+  app_pid="$(app_legacy_pids "$ROOT" | head -n 1 || true)"
+  if [ -n "$app_pid" ]; then
+    app_kind="build from before the rename"
   fi
 fi
 
@@ -100,14 +113,14 @@ mobile_entry() {
 # ---------------------------------------------------------------------------
 served_entry=""
 probe_note=""
-port="$(node -e 'const fs=require("node:fs");let p=8742;try{p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))?.eldrun_mobile_host?.port??8742}catch(e){}process.stdout.write(String(p))' \
-  "$STATE_DIR/settings.json" 2>/dev/null || echo 8742)"
+port="$(node -e 'const fs=require("node:fs");let p=8742;try{p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))?.[process.argv[2]]?.port??8742}catch(e){}process.stdout.write(String(p))' \
+  "$STATE_DIR/settings.json" "${APP_SLUG}_mobile_host" 2>/dev/null || echo 8742)"
 if command -v curl >/dev/null 2>&1; then
   shell_html="$(curl -fsS --max-time 2 "http://127.0.0.1:$port/" 2>/dev/null || true)"
   if [ -n "$shell_html" ]; then
     served_entry="$(printf '%s' "$shell_html" | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -n 1)"
   else
-    probe_note="  (Eldrun Mobile is off or not listening on 127.0.0.1:$port, so the embedded
+    probe_note="  ($APP_DISPLAY Mobile is off or not listening on 127.0.0.1:$port, so the embedded
    bundle could only be checked by mtime.)"
   fi
 else
@@ -133,7 +146,7 @@ expected_entry="${live_entry:-$built_entry}"
 
 if [ -z "$app_pid" ] && [ -z "$served_entry" ]; then
   if [ "$mobile_only" = "0" ]; then
-    echo "No Eldrun is running — nothing to be stale against."
+    echo "No $APP_DISPLAY is running — nothing to be stale against."
   fi
   exit 0
 fi
@@ -222,7 +235,7 @@ fi
 
 # --- the sidecar's own copy of the backend ---------------------------------
 # The phone's HTTP API is not this window's process. `mobile_host_apply` copies
-# the running image to bin/<version>/eldrun-mobile-host and the service manager
+# the running image to bin/<version>/tabtivity-mobile-host and the service manager
 # runs that copy — and the directory is keyed by the version ALONE, so every
 # build between two pushes shares one, and the copy answering the phone is
 # whichever of them installed first. Nothing said so, in either direction: the
@@ -236,7 +249,7 @@ host_pid="$(pgrep -f -- '--mobile-host' | head -n 1 || true)"
 if [ -n "$host_pid" ] && [ -n "$app_pid" ]; then
   # Both images are measured THROUGH `/proc/<pid>/exe` with `stat -L`, never
   # through the path that link resolves to. `readlink -f` answers
-  # "…/eldrun-dev (deleted)" the moment a rebuild unlinks the file under the
+  # "…/tabtivity-dev (deleted)" the moment a rebuild unlinks the file under the
   # running window — unreadable, so this check used to skip in silence in the
   # very shape it exists for (2026-09-21: the sidecar was nine hours behind the
   # window and nothing said so). And when the path does still exist it is the
@@ -266,7 +279,7 @@ fi
 
 # --- the desktop frontend seam ---------------------------------------------
 # Only the hot-reload session gets `src/` for free: vite serves it and HMR pushes
-# every edit into the window. Every other shape — the frozen "Eldrun (dev)"
+# every edit into the window. Every other shape — the frozen "Tabtivity (dev)"
 # build, the packaged one, the AppImage — has the frontend COMPILED IN, so it
 # goes stale exactly like the backend does, and nothing said so. The symptom is
 # not an error: the window simply renders an older UI than the hot-reload one
@@ -320,7 +333,7 @@ elif [ "$mobile_only" = "0" ] && [ -n "$served_entry" ] && [ -n "$built_entry" ]
   # running frozen instance keeps its old inode — so the usual shape of this is
   # a fresh snapshot sitting on disk that simply nobody has relaunched into.
   desktop_built="${desktop_built:-$(grep -o '/assets/[A-Za-z0-9_.-]*\.js' "$ROOT/dist/index.html" 2>/dev/null | head -n 1)}"
-  for snapshot in "$APP_DIR/eldrun-dev" "$APP_DIR/eldrun" "$APP_DIR/eldrun.AppImage"; do
+  for snapshot in "$APP_DIR/$APP_DEV_BIN_NAME" "$APP_DIR/$APP_BIN_NAME" "$APP_DIR/$APP_BIN_NAME.AppImage"; do
     [ -r "$snapshot" ] || continue
     [ -n "$desktop_built" ] || continue
     if grep -qaF -- "$desktop_built" "$snapshot"; then
@@ -348,7 +361,7 @@ if [ "$stale" = "0" ]; then
       echo "Its compiled-in frontend matches dist/ too."
     fi
   else
-    echo "No Eldrun process was identified, but the sidecar on 127.0.0.1:$port is serving"
+    echo "No $APP_DISPLAY process was identified, but the sidecar on 127.0.0.1:$port is serving"
     echo "$served_entry — the bundle built in mobile-dist/. The Rust side could not be checked."
   fi
   exit 0
@@ -377,10 +390,10 @@ case "$app_kind" in
 esac
 case "$app_kind" in
   "hot-reload dev session")
-    echo "  pkill -f '$ROOT/node_modules/.bin/tauri'; pkill -f '$ROOT/target/debug/eldrun'"
-    echo "  ./start-eldrun-tauri-hotreload.sh"
+    echo "  pkill -f '$ROOT/node_modules/.bin/tauri'; pkill -f '$ROOT/target/debug/$APP_BIN_NAME'"
+    echo "  ./start-$APP_SLUG-tauri-hotreload.sh"
     ;;
-  'frozen "Eldrun (dev)" build')
+  "$FROZEN_KIND")
     # The commit hook refreezes on its own; when it could not, say so here —
     # its notification has no session bus to reach from an agent tab.
     if [ -f "$APP_DIR/package-dev-auto.failed" ]; then
@@ -389,14 +402,14 @@ case "$app_kind" in
       echo "  see $APP_DIR/package-dev-auto.log. Fix the build, or freeze by hand:"
     fi
     echo "  npm run package:dev   # refreezes the tree, mobile bundle included"
-    echo "  then quit and relaunch the \"Eldrun (dev)\" entry"
+    echo "  then quit and relaunch the \"$APP_DISPLAY (dev)\" entry"
     ;;
   "packaged AppImage"|"packaged build"|"running AppImage")
     echo "  npm run package       # rebuilds and reinstalls, mobile bundle included"
-    echo "  then quit and relaunch Eldrun"
+    echo "  then quit and relaunch $APP_DISPLAY"
     ;;
   *)
-    echo "  rebuild whichever Eldrun you are running, then relaunch it"
+    echo "  rebuild whichever $APP_DISPLAY you are running, then relaunch it"
     ;;
 esac
 exit 1

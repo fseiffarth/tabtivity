@@ -21,6 +21,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
 import type { ProjectEntry } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const base = { name: "p", status: "active" as const, position: 0, local_file: "/p" };
 const local: ProjectEntry = { ...base, id: "local" };
@@ -48,7 +49,7 @@ const tab = (extra: Partial<TabEntry> = {}): TabEntry => ({
   cmd: "bash",
   cwd: "/h",
   kind: "shell",
-  tmuxSession: "eldrun-abc",
+  tmuxSession: `${BRAND.slug}-abc`,
   ...extra,
 });
 
@@ -66,20 +67,20 @@ describe("persistentSessionOf", () => {
   });
 
   it("owns its minted session on the primary by default, or on a named worker", () => {
-    expect(persistentSessionOf("remote", tab())).toEqual({ session: "eldrun-abc", hostId: "primary" });
+    expect(persistentSessionOf("remote", tab())).toEqual({ session: `${BRAND.slug}-abc`, hostId: "primary" });
     expect(persistentSessionOf("remote", tab({ location: "host:w-1" }))).toEqual({
-      session: "eldrun-abc",
+      session: `${BRAND.slug}-abc`,
       hostId: "w-1",
     });
     expect(persistentSessionOf("remote", tab({ kind: "agent", location: "remote" }))).toEqual({
-      session: "eldrun-abc",
+      session: `${BRAND.slug}-abc`,
       hostId: "primary",
     });
   });
 
   it("falls back to the primary for a tab naming a removed worker", () => {
     expect(persistentSessionOf("remote", tab({ location: "host:gone" }))).toEqual({
-      session: "eldrun-abc",
+      session: `${BRAND.slug}-abc`,
       hostId: "primary",
     });
   });
@@ -100,7 +101,7 @@ describe("persistentSessionOf", () => {
 
   it("pins a VM project's tab to the VM host even when its stored location says local", () => {
     expect(persistentSessionOf("vm", tab({ location: "local" }))).toEqual({
-      session: "eldrun-abc",
+      session: `${BRAND.slug}-abc`,
       hostId: "primary",
     });
   });
@@ -108,10 +109,10 @@ describe("persistentSessionOf", () => {
 
 describe("localPersistentSessionOf", () => {
   it("owns a shell's local session on the root, a box, a local project and a mirror tab", () => {
-    expect(localPersistentSessionOf("root", tab())).toBe("eldrun-abc");
-    expect(localPersistentSessionOf("box:b1", tab())).toBe("eldrun-abc");
-    expect(localPersistentSessionOf("local", tab())).toBe("eldrun-abc");
-    expect(localPersistentSessionOf("remote", tab({ location: "local" }))).toBe("eldrun-abc");
+    expect(localPersistentSessionOf("root", tab())).toBe(`${BRAND.slug}-abc`);
+    expect(localPersistentSessionOf("box:b1", tab())).toBe(`${BRAND.slug}-abc`);
+    expect(localPersistentSessionOf("local", tab())).toBe(`${BRAND.slug}-abc`);
+    expect(localPersistentSessionOf("remote", tab({ location: "local" }))).toBe(`${BRAND.slug}-abc`);
   });
 
   it("owns nothing for a tab that runs on a host", () => {

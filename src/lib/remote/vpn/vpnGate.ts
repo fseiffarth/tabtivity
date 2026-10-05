@@ -15,13 +15,13 @@ import type { ConnState } from "../../../stores/remote/remoteStatus";
  * from there — one sentence, `services::openvpn::VPN_GATE_REFUSAL`, rather than
  * a copy kept here.
  *
- * "VPN on" means **a tunnel Eldrun knows about** — headless, or typed into a
+ * "VPN on" means **a tunnel Tabtivity knows about** — headless, or typed into a
  * terminal tab — which is all `openvpn_active` can see. A tunnel brought up
  * elsewhere (NetworkManager, WireGuard) is invisible, so an account gated on it
  * never syncs; the account dialogs say so beside the checkbox.
  */
 
-/** True while any tunnel Eldrun knows about is up. Pure, for the tests. */
+/** True while any tunnel Tabtivity knows about is up. Pure, for the tests. */
 export function anyTunnelUp(byConfig: Record<string, ConnState>): boolean {
   return Object.values(byConfig).some((state) => state === "connected");
 }

@@ -17,6 +17,7 @@ import {
   texPathForDeck,
   titleFromPath,
 } from "../../lib/viewers/deck/template";
+import { BRAND } from "../../lib/brand";
 
 describe("texEscape", () => {
   it("escapes the characters that would otherwise be LaTeX syntax", () => {
@@ -75,7 +76,7 @@ describe("starterTex", () => {
     expect(starterTex({ title: "T", section: "Method" })).toContain("\\section{Method}");
   });
 
-  it("says in the file itself that Eldrun will not write to it again", () => {
+  it(`says in the file itself that ${BRAND.display} will not write to it again`, () => {
     // The promise this whole path rests on; worth pinning so a later edit to the
     // template cannot quietly drop it.
     expect(starterTex({ title: "T" })).toMatch(/never writes back/i);
@@ -90,7 +91,7 @@ describe("starterTexFigure", () => {
     expect(tex).toContain("\\end{document}");
   });
 
-  it("says Eldrun will keep the slide's raster in sync on recompile", () => {
+  it(`says ${BRAND.display} will keep the slide's raster in sync on recompile`, () => {
     expect(starterTexFigure()).toMatch(/updates it/i);
   });
 });

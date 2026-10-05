@@ -20,6 +20,7 @@ import {
   normalizeCursorPack,
   type CursorPack,
 } from "../lib/theme/cursorPacks";
+import { storageDashKey } from "../lib/brand";
 
 /** Each Tauri window is its own JS runtime with its own copy of this store, so
  *  a theme change made in one (normally the main window's Settings dialog)
@@ -27,12 +28,12 @@ import {
  *  out subwindow (`DetachedApp`) keeps whatever theme it loaded at open time.
  *  Broadcast the new scheme so every live window can re-apply it; see the
  *  listener in `DetachedApp`. */
-export const THEME_CHANGED_EVENT = "eldrun:theme-changed";
+export const THEME_CHANGED_EVENT = "app:theme-changed";
 
 /** Like THEME_CHANGED_EVENT, but for the UI language: broadcast so every live
  *  window (including detached popouts, which each hold their own i18n store)
  *  re-applies the new language. See the listener in `DetachedApp`. */
-export const LANGUAGE_CHANGED_EVENT = "eldrun:language-changed";
+export const LANGUAGE_CHANGED_EVENT = "app:language-changed";
 
 /**
  * Group B #226: the whole settings object, broadcast after every write, so every
@@ -44,7 +45,7 @@ export const LANGUAGE_CHANGED_EVENT = "eldrun:language-changed";
  * included — a redundant `set` of equal content) applies the payload via
  * `listenSettingsChanged`.
  */
-export const SETTINGS_CHANGED_EVENT = "eldrun:settings-changed";
+export const SETTINGS_CHANGED_EVENT = "app:settings-changed";
 
 // Serialize refreshes inside each JS heap. Two backend patches are serialized,
 // but their IPC responses/broadcasts can be delivered in the opposite order;
@@ -88,7 +89,7 @@ export function resolveTheme(scheme: string): string {
   if (scheme !== "system") return scheme;
   try {
     const media = window.matchMedia?.("(prefers-color-scheme: light)");
-    // Unreadable OS preference — fall back to the app default (Plain Dark).
+    // Unreadable OS preference — fall back to Plain Dark.
     if (!media) return "dark";
     return media.matches ? "fancy_light" : "fancy_dark";
   } catch {
@@ -125,6 +126,10 @@ function armSystemThemeListener(scheme: string) {
 export function applyTheme(scheme: string) {
   const resolved = resolveTheme(scheme);
   document.documentElement.setAttribute("data-theme", resolved);
+  // "System" paints as Fancy Dark / Fancy Light but has looks of its own (the
+  // Reader's octagon bubbles), which need to know it was picked.
+  if (scheme === "system") document.documentElement.setAttribute("data-theme-pick", "system");
+  else document.documentElement.removeAttribute("data-theme-pick");
   armSystemThemeListener(scheme);
   // Cache for index.html's pre-paint inline script, so the next launch
   // paints the right theme immediately instead of flashing the CSS
@@ -133,7 +138,7 @@ export function applyTheme(scheme: string) {
   // verbatim and cannot resolve. If the OS scheme flipped while the app was
   // closed, the pre-paint is one frame behind and load() corrects it.
   try {
-    localStorage.setItem("eldrun-theme", resolved);
+    localStorage.setItem(storageDashKey("theme"), resolved);
   } catch {
     // localStorage unavailable — worst case is the old one-frame flash.
   }
@@ -146,7 +151,7 @@ export function applyTheme(scheme: string) {
  *  corner style, per-token theme colors): broadcast so every live window
  *  re-applies them. Payload is the full set — a popout cannot know which part
  *  changed. */
-export const APPEARANCE_CHANGED_EVENT = "eldrun:appearance-changed";
+export const APPEARANCE_CHANGED_EVENT = "app:appearance-changed";
 
 export interface AppearancePayload {
   accent: string | null;
@@ -199,8 +204,8 @@ export function applyAccent(accent: string | null | undefined) {
   // Pre-paint cache, applyTheme's bargain: index.html re-applies this before
   // first paint so launch doesn't flash the theme accent and then snap.
   try {
-    if (value) localStorage.setItem("eldrun-accent", value);
-    else localStorage.removeItem("eldrun-accent");
+    if (value) localStorage.setItem(storageDashKey("accent"), value);
+    else localStorage.removeItem(storageDashKey("accent"));
   } catch {
     // localStorage unavailable — worst case is a one-frame accent flash.
   }
@@ -250,9 +255,9 @@ export function applyThemeVars(vars: Record<string, string> | null | undefined) 
   // before first paint so launch doesn't flash the theme's own palette.
   try {
     if (Object.keys(clean).length > 0) {
-      localStorage.setItem("eldrun-theme-vars", JSON.stringify(clean));
+      localStorage.setItem(storageDashKey("theme-vars"), JSON.stringify(clean));
     } else {
-      localStorage.removeItem("eldrun-theme-vars");
+      localStorage.removeItem(storageDashKey("theme-vars"));
     }
   } catch {
     // localStorage unavailable — worst case is a one-frame palette flash.
@@ -336,9 +341,9 @@ export function applyCorners(corners: string | null | undefined) {
   }
   try {
     if (radii && (corners === "square" || corners === "rounded")) {
-      localStorage.setItem("eldrun-corners", corners);
+      localStorage.setItem(storageDashKey("corners"), corners);
     } else {
-      localStorage.removeItem("eldrun-corners");
+      localStorage.removeItem(storageDashKey("corners"));
     }
   } catch {
     // localStorage unavailable — worst case is a one-frame corner flash.
@@ -471,7 +476,7 @@ interface SettingsStore {
 /**
  * Resolve once settings have loaded — or after `timeoutMs`, whichever comes first.
  *
- * Every gate that decides whether Eldrun may reach a host **without a gesture**
+ * Every gate that decides whether Tabtivity may reach a host **without a gesture**
  * reads settings (`lib/remote/hpc/hpcHost`'s `mayAutoTouch`, `machines_enabled`) and every one
  * of them fails closed on an unloaded store. That is the right default, and its
  * consequence is that the launch sweeps must *wait* rather than fire into the gap:
@@ -562,7 +567,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const settings = await invoke<Settings>("get_settings");
     // The default clock when `time_format_24h` is unset (`lib/timeFormat.ts`).
     probeOsClock();
-    applyTheme(settings.color_scheme ?? "dark");
+    applyTheme(settings.color_scheme ?? "light_lavender");
     applyAccent(settings.ui_accent);
     applyThemeVars(settings.ui_theme_vars);
     applyCorners(settings.ui_corners);
@@ -688,3 +693,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     });
   },
 }));
+
+// The print viewer builds its pills directly in the DOM, so one document-level
+// flag covers those as well as React's UntestedTag in every window. Store
+// changes include the initial load, optimistic writes and cross-window refresh.
+useSettingsStore.subscribe(({ settings }) => {
+  if (typeof document !== "undefined") {
+    document.documentElement.classList.toggle("show-untested-tags", settings?.show_untested_tags === true);
+  }
+});

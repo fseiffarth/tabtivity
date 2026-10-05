@@ -5,7 +5,7 @@ import { foldPrompt } from "./adopt";
 
 /**
  * The last prompt echoed on an agent tab's screen — the fallback for an
- * agent whose transcript Eldrun cannot read (Gemini, Qwen, Codex since its
+ * agent whose transcript Tabtivity cannot read (Gemini, Qwen, Codex since its
  * thread store stopped recording messages, any custom command).
  *
  * Every agent TUI echoes a submitted prompt back into its transcript with

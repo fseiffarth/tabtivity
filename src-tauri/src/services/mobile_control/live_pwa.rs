@@ -16,8 +16,8 @@
 //! Three things keep it honest:
 //!
 //! - **Opt-in at compile time.** `MOBILE_LIVE_DIR` is `None` unless
-//!   `ELDRUN_MOBILE_LIVE_DIR` was set when this binary was built, which only the
-//!   two dev shapes do. A released Eldrun has no overlay path at all and reads
+//!   `TABTIVITY_MOBILE_LIVE_DIR` was set when this binary was built, which only the
+//!   two dev shapes do. A released Tabtivity has no overlay path at all and reads
 //!   nothing off the disk.
 //! - **Never backwards.** An overlay is used only when it is *newer* than the
 //!   bundle compiled in (`MOBILE_ASSETS_BUILT_AT`), so an abandoned branch's

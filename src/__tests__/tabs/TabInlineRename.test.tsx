@@ -96,6 +96,22 @@ describe("#56 inline tab rename", () => {
     expect(container.querySelector(".tab-label")!.textContent).toBe("renamed");
   });
 
+  it("a re-render while typing does not re-select the text (the next key would replace it)", () => {
+    const { groupId } = seedOneTab("old");
+    const { container, rerender } = render(
+      <TabBar groupId={groupId} projectCwd="/p" showGroupClose={false} />,
+    );
+    fireEvent.contextMenu(container.querySelector(".tab")!, { shiftKey: true });
+    const input = container.querySelector("input.tab-label-edit") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "ne" } });
+    input.setSelectionRange(2, 2);
+    // A status tick re-renders the bar mid-edit.
+    rerender(<TabBar groupId={groupId} projectCwd="/p" showGroupClose={true} />);
+    const after = container.querySelector("input.tab-label-edit") as HTMLInputElement;
+    expect(after).toBe(input);
+    expect([after.selectionStart, after.selectionEnd]).toEqual([2, 2]);
+  });
+
   it("Escape discards the edit, label unchanged", () => {
     const { groupId, key } = seedOneTab("keepme");
     const { container } = render(

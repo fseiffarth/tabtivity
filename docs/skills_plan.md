@@ -10,7 +10,7 @@ overlay off the header's 🧠 menu. Scaled down from a broader four-part
 investigation (discovery/library UX, integration mechanics, backend storage,
 cross-agent generalization) after weighing effort vs. value: the underlying
 action — getting a skill folder into `.claude/skills/` — is already nearly
-free without any Eldrun code (a user can `git clone`/drag a folder in via the
+free without any Tabtivity code (a user can `git clone`/drag a folder in via the
 existing file browser), so this MVP only builds the part that's genuinely
 missing: **a good place to browse, preview, and one-click-copy skills into a
 project.** Everything speculative or Claude-only-adjacent is deferred (see
@@ -38,11 +38,11 @@ section).
 New `services/skills.rs`:
 
 - `add_source(url)` / `list_sources()` — a small flat JSON list under
-  `~/.local/share/eldrun/skills_sources.json` (just `{id, label, url}[]`,
+  `~/.local/share/tabtivity/skills_sources.json` (just `{id, label, url}[]`,
   seeded by default with `anthropics/skills`). No per-skill version/commit
   tracking, no install-state manifest — see below for why.
 - `refresh_source(id)` — shallow `git clone --depth 1` (first time) /
-  `git pull` (subsequent) into `~/.local/share/eldrun/skills_cache/<id>/`,
+  `git pull` (subsequent) into `~/.local/share/tabtivity/skills_cache/<id>/`,
   reusing the existing hardened clone plumbing
   (`commands/git.rs`'s `validate_clone_url` + `git_clone_blocking`) rather
   than adding an HTTP client.
@@ -133,7 +133,7 @@ now, which is correct independently of this feature.
 - **No manifest, no `Project.enabled_skills` field, no `enabled_in` map.**
   The tree itself is the only source of truth for "is this skill here" —
   matches how the rest of `.claude/` scaffolding already works (`CLAUDE.md`,
-  `AGENTS.md` etc. have no separate Eldrun-tracked "is this present" flag
+  `AGENTS.md` etc. have no separate Tabtivity-tracked "is this present" flag
   either).
 
 ### 4. Propagation — free, no extra code

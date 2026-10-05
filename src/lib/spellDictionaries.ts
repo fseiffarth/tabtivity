@@ -13,7 +13,7 @@
 /** An installed dictionary as `spell_dictionaries` reports it. */
 export interface InstalledDictionary {
   code: string;
-  /** Lives in Eldrun's own dictionaries folder (downloaded or dropped in), so
+  /** Lives in Tabtivity's own dictionaries folder (downloaded or dropped in), so
    *  it can be removed from here; a system dictionary cannot. */
   removable: boolean;
 }

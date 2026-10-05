@@ -67,7 +67,7 @@ describe("tabs store — closeAllTabs", () => {
     expect(s.focusedGroupByScope.b).toBeUndefined();
     expect(s.tabsByScope.a).toHaveLength(2);
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
-      "save_tab_layout",
+      "workspace_sync",
       expect.anything(),
     );
   });

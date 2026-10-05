@@ -24,6 +24,7 @@ import {
   unfold,
 } from "../../lib/calendar/ics";
 import type { CalendarEvent } from "../../types";
+import { BRAND, LEGACY_BRAND } from "../../lib/brand";
 
 function event(over: Partial<CalendarEvent> = {}): CalendarEvent {
   return {
@@ -302,8 +303,8 @@ describe("serialize → parse round-trips", () => {
     expect(out).toContain("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:https://meet.example.org/x?y=1,2;3");
     const { events } = parseIcs(out);
     expect(events[0]).toMatchObject({ uid: "abc@server", conference: original.conference, recurrence_id: "2026-07-01T09:00" });
-    expect(icsUid({ id: "row-9", uid: "  " })).toBe("row-9@eldrun");
-    expect(parseIcs(serializeIcs([event({ id: "row-9" })], [], AT)).events[0].uid).toBe("row-9@eldrun");
+    expect(icsUid({ id: "row-9", uid: "  " })).toBe(`row-9@${LEGACY_BRAND.slug}`);
+    expect(parseIcs(serializeIcs([event({ id: "row-9" })], [], AT)).events[0].uid).toBe(`row-9@${LEGACY_BRAND.slug}`);
   });
 
   it("writes an all-day series' exdates as dates and reads them back as dates", () => {
@@ -333,7 +334,7 @@ describe("serialize → parse round-trips", () => {
   it("an empty calendar is still a well-formed, CRLF-terminated file", () => {
     const out = serializeIcs([], [], AT);
     expect(out.split("\r\n").filter(Boolean)).toEqual([
-      "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Eldrun//Calendar//EN", "CALSCALE:GREGORIAN", "END:VCALENDAR",
+      "BEGIN:VCALENDAR", "VERSION:2.0", `PRODID:-//${BRAND.display}//Calendar//EN`, "CALSCALE:GREGORIAN", "END:VCALENDAR",
     ]);
     expect(out.endsWith("\r\n")).toBe(true);
   });

@@ -62,7 +62,7 @@ export interface LoginSession {
   tty: string;
   /** The rest of the `who` line verbatim — login time and `(origin)`. */
   detail: string;
-  /** This session belongs to the account Eldrun is connected as. The backend also
+  /** This session belongs to the account Tabtivity is connected as. The backend also
    *  *synthesizes* such a row when `who` has none: utmp only records a session that
    *  got a pty, and the monitor's own probe rides the pooled (non-pty) master — so
    *  without it the panel listed every logged-in user except the one reading it. */
@@ -563,12 +563,12 @@ export function SystemMonitorPane({ projectId, visible, globalMachine }: Props) 
   // the Machines menu and in the remote hub (`lib/remote/carefulHost.ts`).
   const carefulTarget = globalMachine ? targetOfSpec(globalMachine) : (selectedHost?.target ?? null);
   // The mode asked for: careful for every remote machine until the user says
-  // this one is theirs. A local sample is never careful — Eldrun is not a guest
+  // this one is theirs. A local sample is never careful — Tabtivity is not a guest
   // on the machine it runs on.
   // The HPC tag (`lib/remote/hpc/hpcHost.ts`) outranks that answer in one direction: a
   // machine the user called a cluster login node is read lightly even if its
   // careful answer says "this one is mine". The two say different things — how
-  // much may Eldrun look at, and is this a shared cluster — and there is no
+  // much may Tabtivity look at, and is this a shared cluster — and there is no
   // reading of the second that permits the first's full collection. The backend
   // enforces the same precedence, so this is the UI agreeing with it, not the
   // place it is decided.
@@ -815,7 +815,7 @@ export function SystemMonitorPane({ projectId, visible, globalMachine }: Props) 
           )}
 
           {/* How the selected machine is read. Light is the default for every
-              remote machine — Eldrun has no way to tell whose machine it is, and
+              remote machine — Tabtivity has no way to tell whose machine it is, and
               the wrong guess in the other direction is a policy violation on
               someone else's cluster rather than a thinner table. Switching to
               Detailed is a statement about that machine ("this one is mine"),

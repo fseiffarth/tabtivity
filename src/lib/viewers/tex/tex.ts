@@ -71,14 +71,14 @@ export type TexError = {
   message: string;
 };
 
-// `file:line: message`, the form TeX uses under `-file-line-error` (which Eldrun
+// `file:line: message`, the form TeX uses under `-file-line-error` (which Tabtivity
 // always passes). The file part is non-greedy so the FIRST `:<digits>:` wins,
 // and the line must be followed by `:` then a space to avoid matching e.g.
 // Windows drive letters or `l.12` context dumps.
 const FILE_LINE_ERROR = /^(.+?):(\d+): (.*)$/;
 
 /** Parse `compile_tex`'s log into the list of errors TeX reported, in order.
- *  Relies on the `-file-line-error` format Eldrun compiles with. Duplicate
+ *  Relies on the `-file-line-error` format Tabtivity compiles with. Duplicate
  *  file+line+message lines (TeX can repeat them) are collapsed. */
 /** True when the build log says latexmk ran NO engine because every tracked
  *  source still matched its recorded checksum — "Nothing to do for 'main.tex'" /
@@ -446,7 +446,7 @@ export function synctexView(
  * SyncTeX forward search is sensitive to how the source path is spelled — it
  * matches the `-i` input against the path string recorded at compile time, which
  * may be the absolute path, the name relative to the compile dir, or a bare
- * basename depending on the engine/version and how the file was passed in. Eldrun
+ * basename depending on the engine/version and how the file was passed in. Tabtivity
  * compiles with the bare filename, so an absolute `-i` often fails to match. This
  * tries the absolute path, the path relative to the build dir, and the basename
  * (deduped, in that order) and returns the first spelling that yields records —

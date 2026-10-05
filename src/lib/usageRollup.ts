@@ -1,7 +1,7 @@
 /**
  * Folding persisted per-bucket usage into calendar windows.
  *
- * Both stores Eldrun rolls up on disk — `net_usage.json` (bytes) and
+ * Both stores Tabtivity rolls up on disk — `net_usage.json` (bytes) and
  * `usage_stats.json` (counters) — have the same shape: a map of UTC bucket keys
  * ("YYYY-MM-DD" for days, "YYYY-MM-DDTHH" for hours) to a per-bucket payload. So
  * the windowing is one implementation, generic over the payload, rather than one

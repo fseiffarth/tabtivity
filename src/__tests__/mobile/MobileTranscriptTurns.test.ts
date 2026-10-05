@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
 import { commandArgsInline, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { BRAND } from "../../lib/brand";
 
 const prompt = (text: string, at?: string): TranscriptEntry => ({ kind: "prompt", text, at });
 const answer = (text: string, at?: string): TranscriptEntry => ({ kind: "answer", text, at });
 
-describe("Eldrun Mobile stored-session turns", () => {
+describe(`${BRAND.display} Mobile stored-session turns`, () => {
   it("makes every record a bubble of its own: the next message is the next bubble", () => {
     const turns = transcriptTurns([
       prompt("fix the test", "10:00:00"),

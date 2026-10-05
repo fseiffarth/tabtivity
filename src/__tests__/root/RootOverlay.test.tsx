@@ -4,7 +4,7 @@
  * that makes it safe to float over a project: opening it never moves the active
  * project, its panes are attach-only views of the root tabs' own PTYs (so
  * closing it ends nothing), a tab added from it lands in the ROOT scope, and a
- * row a root agent wrote through Eldrun's MCP tools reaches the calendar store
+ * row a root agent wrote through Tabtivity's MCP tools reaches the calendar store
  * and the CalDAV write hook.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -63,11 +63,11 @@ vi.mock("../../components/tabs/NewTabMenu", () => ({
         {/* A singleton kind and a stacking one, to hold the console's ensure rule. */}
         <button
           data-testid="pick-monitor"
-          onClick={() => pick({ label: "System Monitor", cmd: "__eldrun_monitor__", cwd: "", kind: "monitor" })}
+          onClick={() => pick({ label: "System Monitor", cmd: tabCommand("monitor"), cwd: "", kind: "monitor" })}
         />
         <button
           data-testid="pick-network"
-          onClick={() => pick({ label: "Network Traffic", cmd: "__eldrun_network__", cwd: "", kind: "network" })}
+          onClick={() => pick({ label: "Network Traffic", cmd: tabCommand("network"), cwd: "", kind: "network" })}
         />
       </>
     );
@@ -88,8 +88,10 @@ import {
 } from "../../stores/rootOverlay";
 import { setCalendarWriteHandler } from "../../lib/calendar/calendarWriteHook";
 import { useRootReviewStore } from "../../stores/rootReview";
+import { resetArrivals, useArrivalsStore } from "../../stores/calendar/arrivals";
 import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { SHORTCUT_DEFS, chordMatches, resolveChord } from "../../lib/shortcuts/shortcuts";
+import { BRAND, tabCommand } from "../../lib/brand";
 
 function seedRootTabs() {
   const tabs = useTabsStore.getState();
@@ -112,6 +114,7 @@ beforeEach(() => {
   useRootOverlayStore.setState({ open: false, frame: null, filled: false, installTabs: {} });
   useCalendarStore.setState({ events: [], tasks: [] });
   useRootReviewStore.setState({ proposals: [], count: 0, panel: false, busy: false, error: null });
+  resetArrivals();
 });
 
 describe("the rootConsole shortcut", () => {
@@ -249,7 +252,7 @@ describe("RootOverlayHost", () => {
     expect(screen.queryByRole("region", { name: "Agent proposals" })).toBeNull();
     // The tools chip is a report, not a door: it is not a control at all, so a
     // click on it can neither open the panel nor flip a setting.
-    expect(screen.queryByRole("button", { name: /Eldrun tools/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: new RegExp(String.raw`${BRAND.display} tools`) })).toBeNull();
     const approvals = screen.getByRole("button", { name: /Approvals/ });
     await act(async () => { fireEvent.click(approvals); });
     expect(useRootReviewStore.getState().panel).toBe(true);
@@ -397,7 +400,7 @@ describe("RootOverlayHost", () => {
     expect(useCalendarStore.getState().tasks.map((t) => t.id)).toEqual(["t1"]);
     expect(announced).toHaveLength(1);
 
-    // A move's rank/column rows are Eldrun's own: merged, never announced.
+    // A move's rank/column rows are Tabtivity's own: merged, never announced.
     await act(async () =>
       listeners.get("root-mcp-changed")?.({ payload: { kind: "task", op: "upsert", row: { ...row, rank: 2048 }, local: true } }),
     );
@@ -407,6 +410,66 @@ describe("RootOverlayHost", () => {
     await act(async () => listeners.get("root-mcp-changed")?.({ payload: { kind: "task", op: "delete", row, local: false } }));
     expect(useCalendarStore.getState().tasks).toHaveLength(0);
     expect(announced).toHaveLength(2);
+    uninstall();
+  });
+});
+
+describe("arrivals from root-mcp-changed", () => {
+  const arrived = () => Object.keys(useArrivalsStore.getState().until).sort();
+  const send = (payload: unknown) => act(async () => listeners.get("root-mcp-changed")?.({ payload }));
+  beforeEach(() => {
+    useCalendarStore.setState({ loaded: true });
+  });
+
+  it("marks a new event, not an update of it, a delete, or a calendar", async () => {
+    const uninstall = setCalendarWriteHandler(async () => {});
+    render(<RootOverlayHost />);
+    const row = { id: "e1", calendar_id: "default", title: "Review", start: "2026-09-18T14:00", end: "2026-09-18T15:00", all_day: false };
+    await send({ kind: "event", op: "upsert", row });
+    expect(arrived()).toEqual(["e1"]);
+
+    resetArrivals();
+    await send({ kind: "event", op: "upsert", row: { ...row, title: "Renamed" } });
+    await send({ kind: "event", op: "delete", row });
+    await send({ kind: "calendar", op: "upsert", row: { id: "c2", name: "Work", color: "#e8663d", visible: true, readonly: false }, local: true });
+    expect(arrived()).toEqual([]);
+    uninstall();
+  });
+
+  it("a move to another calendar (delete + upsert of one id) is no arrival", async () => {
+    const uninstall = setCalendarWriteHandler(async () => {});
+    const before = { id: "e1", calendar_id: "default", title: "Review", start: "2026-09-18T14:00", end: "2026-09-18T15:00", all_day: false };
+    useCalendarStore.setState({ events: [before] } as never);
+    render(<RootOverlayHost />);
+    await send({ kind: "event", op: "delete", row: before });
+    await send({ kind: "event", op: "upsert", row: { ...before, calendar_id: "c2" } });
+    expect(useCalendarStore.getState().events.map((e) => e.calendar_id)).toEqual(["c2"]);
+    expect(arrived()).toEqual([]);
+    uninstall();
+  });
+
+  it("marks a new task like an event, never a board-only move", async () => {
+    const uninstall = setCalendarWriteHandler(async () => {});
+    useCalendarStore.setState({ taskColumns: [{ id: "col-doing", name: "Doing", position: 0 }] } as never);
+    render(<RootOverlayHost />);
+    const row = { id: "t1", calendar_id: "default", title: "Ship", priority: 0, percent: 0, column: "col-doing" };
+    await send({ kind: "task", op: "upsert", row, local: false });
+    expect(arrived()).toEqual(["t1"]);
+
+    resetArrivals();
+    await send({ kind: "task", op: "upsert", row: { ...row, id: "t2", rank: 2048 }, local: true });
+    await send({ kind: "task", op: "upsert", row: { ...row, rank: 4096 }, local: true });
+    await send({ kind: "task", op: "upsert", row: { ...row, title: "Ship it" }, local: false });
+    expect(arrived()).toEqual([]);
+    uninstall();
+  });
+
+  it("marks nothing while the store has not loaded: it has no rows to tell new from updated", async () => {
+    const uninstall = setCalendarWriteHandler(async () => {});
+    useCalendarStore.setState({ loaded: false });
+    render(<RootOverlayHost />);
+    await send({ kind: "event", op: "upsert", row: { id: "e9", calendar_id: "default", title: "Old", start: "2026-09-18T14:00", end: "2026-09-18T15:00", all_day: false } });
+    expect(arrived()).toEqual([]);
     uninstall();
   });
 });

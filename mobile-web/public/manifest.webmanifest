@@ -1,11 +1,11 @@
 {
-  "name": "Eldrun Mobile",
-  "short_name": "Eldrun",
-  "description": "Private project agent and shell control for Eldrun",
+  "name": "Tabtivity Mobile",
+  "short_name": "Tabtivity",
+  "description": "A tab for each project. A tab for everything in it. Private project agent and shell control for Tabtivity.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#fcfbff",
+  "theme_color": "#fcfbff",
   "icons": [
     {
       "src": "/icons/icon.svg",

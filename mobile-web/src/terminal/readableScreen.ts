@@ -13,6 +13,8 @@
  * whenever earlier output is left out.
  */
 
+import { translate, useI18nStore } from "../../../src/lib/i18n";
+
 export interface ReadableSpan {
   text: string;
   /** Space-separated attribute classes (`b`, `i`, `u`, `d`, `s`). */
@@ -28,6 +30,10 @@ export interface ReadableLine {
   spans: ReadableSpan[];
   /** Original labelled rule, for detecting the input frame after stripping it. */
   frameText?: string;
+  /** A frame-only row was dropped right above this line. No paragraph break
+   * stands in for it, so this is what still says the program drew a divider
+   * here (`selectPrompt`'s heading stops at one). */
+  afterRule?: boolean;
 }
 
 export interface ReadableScreen {
@@ -74,9 +80,6 @@ export const MAX_ROWS = 1_200;
 export const MAX_LINES = 400;
 /** A single logical line longer than this is clipped, with a marker. */
 const MAX_LINE = 4_000;
-
-export const TRUNCATION_NOTICE =
-  "Earlier output is not shown here. Switch to Terminal for the full session.";
 
 /** The default foreground/background of the phone terminal theme. Needed to
  * resolve `inverse` on a cell that is otherwise using terminal defaults. */
@@ -326,8 +329,9 @@ function capLine(line: ReadableLine): ReadableLine {
   if (line.text.length <= MAX_LINE) return line;
   const spans = line.spans.slice();
   trimSpansRight(spans, line.text.length - MAX_LINE);
-  spans.push({ text: "… [line truncated]", className: "d" });
-  return { ...line, text: `${line.text.slice(0, MAX_LINE)}… [line truncated]`, spans };
+  const marker = `… ${translate(useI18nStore.getState().lang, "mobile.focus.lineTruncated")}`;
+  spans.push({ text: marker, className: "d" });
+  return { ...line, text: `${line.text.slice(0, MAX_LINE)}${marker}`, spans };
 }
 
 /**
@@ -371,9 +375,15 @@ export function readableRange(
   joined.forEach((line) => { line.text = spanText(trimTrailing(line.spans)); });
 
   const lines: ReadableLine[] = [];
+  let ruled = false;
   for (const line of joined) {
     const spans = undecorate(line.spans);
-    if (spans === "border") continue;
+    if (spans === "border") {
+      ruled = true;
+      continue;
+    }
+    const afterRule = ruled;
+    ruled = false;
     if (spans === "blank") {
       // Collapse a run of blank rows — a repainting TUI leaves plenty — into a
       // single paragraph break, and never open the range with one unless the
@@ -388,9 +398,9 @@ export function readableRange(
     if (LABELLED_RULE.test(text)) {
       trimSpansRight(spans, RULE_RIGHT.exec(text)![0].length);
       trimSpansLeft(spans, RULE_LEFT.exec(text)![0].length);
-      lines.push(capLine({ key: line.key, text: spanText(spans), spans, frameText: text }));
+      lines.push(capLine({ key: line.key, text: spanText(spans), spans, frameText: text, ...(afterRule && { afterRule }) }));
     } else {
-      lines.push(capLine({ key: line.key, text, spans }));
+      lines.push(capLine({ key: line.key, text, spans, ...(afterRule && { afterRule }) }));
     }
   }
   return lines;

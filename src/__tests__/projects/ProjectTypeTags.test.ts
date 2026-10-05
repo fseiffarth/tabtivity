@@ -17,6 +17,7 @@ import { translate, type TranslationKey } from "../../lib/i18n";
 const t = (key: TranslationKey, vars?: Record<string, string | number>) =>
   translate("en", key, vars);
 import { formatRemoteTarget, type ProjectEntry, type RemoteSpec } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const SSH: RemoteSpec = { user: "ada", host: "box.example", remote_path: "/srv/app" };
 
@@ -121,7 +122,7 @@ describe("projectTypeTags — stacked / edge axes", () => {
       t,
     ).find((tag) => tag.key === "provider");
     expect(detected?.title.split("\n")).toEqual([
-      "origin on GitHub (detected — not published via Eldrun)",
+      `origin on GitHub (detected — not published via ${BRAND.display})`,
       url,
     ]);
     const published = projectTypeTags(

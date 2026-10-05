@@ -107,7 +107,7 @@ pub async fn remote_connect(
     // Connect *fail* on a tagged host, because the alternative is the bug this
     // whole change exists to close: a launch path that inherits "user-initiated"
     // by saying nothing is exactly how the cluster kept being dialled. Failing
-    // closed here costs one `ELDRUN_HPC_GUARD connect …` naming the machine.
+    // closed here costs one `TABTIVITY_HPC_GUARD connect …` naming the machine.
     // A VM project boots first (`docs/vm_projects_plan.md`): the VM *is* the
     // host, so every connect path — activation auto-connect, the lamp click,
     // a tab's silent re-connect — funnels through ensure-booted here rather
@@ -239,6 +239,21 @@ pub async fn remote_connect(
                 eprintln!("record auth mode for '{project_id}' failed: {e}");
             }
         }
+    }
+    // Before the sync layers look at the project: what an older build left
+    // under the app's old name moves to the current one, in the local mirror
+    // and — over the session that just opened — on the host. Skipped as a
+    // whole while the name is unchanged.
+    if crate::brand::PAIR.renamed() {
+        let id = project_id.clone();
+        let spec = remote::remote_target_for_host(&project_id, &host_id).map(|t| t.spec);
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::services::brand_migration::project::on_project_open(&id);
+            if let Some(spec) = spec {
+                crate::services::brand_migration::project::on_remote_connect(&id, &spec);
+            }
+        })
+        .await;
     }
     sync_auto::start(
         app.clone(),

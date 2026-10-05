@@ -23,6 +23,7 @@ import { AgentsPanel, OllamaPanel } from "../layout/SettingsSubPanels";
 import { SkillsLibraryView } from "../skills/SkillsLibraryView";
 import { AgentChips, LocalModelsSection, MachineMeters } from "./ModelsHubSections";
 import { useModelsHub, type HubAgentInfo } from "./useModelsHub";
+import { storageKey } from "../../lib/brand";
 
 /**
  * The **Models & agents overlay** — what a click on the header's processor-chip
@@ -101,7 +102,7 @@ function ModelsOverlay() {
   const close = () => useModelsOverlayStore.getState().close();
   // Moves, resizes and fills like the root console; remembered per overlay.
   const { frameRef, frameStyle, frameClass, barProps, grips, fillButton } =
-    useFloatingFrame("eldrun.modelsOverlayFrame");
+    useFloatingFrame(storageKey("modelsOverlayFrame"));
   // `barProps.title` is the move hint; on the whole bar it would hover over the
   // back button too, so it goes on the mark alone (the root console's placement).
   const { title: moveHint, ...barRest } = barProps;

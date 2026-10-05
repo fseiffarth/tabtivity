@@ -232,7 +232,7 @@ export function AlertsSection({ onClose }: AlertsSectionProps) {
    * Resolve the item in the way its source supports.
    *
    * The three resolutions live in `lib/alertDone` rather than here, because
-   * Eldrun Mobile's Alerts rows press the same ✓ through the desktop bridge and
+   * Tabtivity Mobile's Alerts rows press the same ✓ through the desktop bridge and
    * a second copy of "what Done means for a meeting" is exactly how the two
    * surfaces would start disagreeing. What stays local is the busy row and the
    * failure line — this component's chrome, not the act.

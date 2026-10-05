@@ -1,3 +1,5 @@
+import { dateLocale } from "../../../src/lib/i18n";
+
 /**
  * The times a messenger puts on a chat: the clock time in a bubble's corner,
  * and a day chip across the chat where the day changes. Both read the
@@ -12,9 +14,14 @@ export function chatMoment(at: string | undefined): Date | null {
   return Number.isNaN(moment.getTime()) ? null : moment;
 }
 
-/** The clock time in a bubble's corner: `14:05`. */
-export function chatTime(moment: Date): string {
-  return moment.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** The clock time in a bubble's corner: `14:05`. `use24h` is the desktop's
+ * clock answer (`lib/timeFormat`: the setting, else the OS) — its webview's
+ * locale is not the desktop's, so without it an English UI printed `2:05 PM`
+ * on a 24-hour desktop. The phone leaves it to its own browser's locale. */
+export function chatTime(moment: Date, use24h?: boolean): string {
+  return moment.toLocaleTimeString([], use24h === undefined
+    ? { hour: "2-digit", minute: "2-digit" }
+    : { hour: "2-digit", minute: "2-digit", hour12: !use24h });
 }
 
 /** The local calendar day of a moment, as a sortable key (`2026-09-29`). */
@@ -31,8 +38,8 @@ export function chatDayLabel(moment: Date, now: Date, labels: { today: string; y
   const days = Math.round((midnight(now) - midnight(moment)) / 86_400_000);
   if (days === 0) return labels.today;
   if (days === 1) return labels.yesterday;
-  if (days > 1 && days < 7) return moment.toLocaleDateString([], { weekday: "long" });
-  return moment.toLocaleDateString([], moment.getFullYear() === now.getFullYear()
+  if (days > 1 && days < 7) return moment.toLocaleDateString(dateLocale(), { weekday: "long" });
+  return moment.toLocaleDateString(dateLocale(), moment.getFullYear() === now.getFullYear()
     ? { weekday: "short", day: "numeric", month: "short" }
     : { day: "numeric", month: "short", year: "numeric" });
 }

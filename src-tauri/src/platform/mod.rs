@@ -49,7 +49,7 @@ pub trait WorkspaceBackend: Send + Sync {
     /// model. X11 moves it to desktop 0; other backends may restore/raise it.
     fn show_window(&self, window_id: u64) -> Result<(), String>;
     /// Hide a tracked window according to this backend's workspace model. X11
-    /// parks it on desktop 1, the Eldrun hidden workspace.
+    /// parks it on desktop 1, the Tabtivity hidden workspace.
     fn hide_window(&self, window_id: u64) -> Result<(), String>;
     /// Compatibility helper for older command paths. Backend implementations
     /// should normally only need to implement show_window/hide_window.
@@ -84,25 +84,25 @@ pub trait WorkspaceBackend: Send + Sync {
     fn can_park(&self) -> bool {
         true
     }
-    /// Called at startup to make Eldrun visible on all desktops (sticky).
-    fn make_sticky(&self, eldrun_pid: u32) -> Result<(), String>;
+    /// Called at startup to make Tabtivity visible on all desktops (sticky).
+    fn make_sticky(&self, app_pid: u32) -> Result<(), String>;
     /// Called when the app exits — restore original desktop configuration.
     fn cleanup(&self) -> Result<(), String>;
 
-    /// Mark an Eldrun-owned window id as PARKABLE (#42). Detached subwindows
-    /// share Eldrun's `eldrun` WM_CLASS, which is normally never parked so the
+    /// Mark a Tabtivity-owned window id as PARKABLE (#42). Detached subwindows
+    /// share Tabtivity's `tabtivity` WM_CLASS, which is normally never parked so the
     /// MAIN window is never hidden. A detached subwindow is a *different* window
     /// that DOES want to follow the project-switch hide/show path, so it is
     /// explicitly opted in by id here.
     ///
     /// STRUCTURAL SAFETY: implementations MUST refuse the main window id so the
-    /// "Eldrun's own window is never parked" invariant holds even if a caller is
+    /// "Tabtivity's own window is never parked" invariant holds even if a caller is
     /// buggy. The default no-op (null/Wayland/Windows) is safe — those backends
     /// don't desktop-park at all.
     fn set_parkable(&self, _window_id: u64) {}
     /// Remove a window id from the parkable override (on dock-back / close).
     fn unset_parkable(&self, _window_id: u64) {}
-    /// Record the MAIN Eldrun window's id so `set_parkable` can structurally
+    /// Record the MAIN Tabtivity window's id so `set_parkable` can structurally
     /// refuse to ever add it to the override. Called once at startup when the
     /// main window's X11 id is resolved. Default no-op.
     fn set_main_window_id(&self, _window_id: u64) {}
@@ -190,7 +190,7 @@ pub fn session_is_wayland() -> bool {
 
 /// Whether the desktop shell claims the lone Super/Meta key for itself.
 ///
-/// Eldrun binds the bare Super key to the panel toggle, which only works on a
+/// Tabtivity binds the bare Super key to the panel toggle, which only works on a
 /// desktop that leaves that key to the focused window. Cinnamon does — it is
 /// the desktop the binding was written on. GNOME does not: Super opens the
 /// Activities overview, and every `Super+<key>` shell shortcut (the apps grid,

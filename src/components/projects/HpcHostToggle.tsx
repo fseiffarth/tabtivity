@@ -9,8 +9,8 @@ import { useT } from "../../lib/i18n";
  * the tick on the Machines menu's add-a-machine form.
  *
  * It sits beside `CarefulHostToggle` and says a strictly stronger thing. Careful
- * is about *reading* (how much of this machine may Eldrun look at) and has a safe
- * default. This is about *doing*: on a tagged machine Eldrun runs no disk-usage
+ * is about *reading* (how much of this machine may Tabtivity look at) and has a safe
+ * default. This is about *doing*: on a tagged machine Tabtivity runs no disk-usage
  * scan or folder census, no background sync or lockstep poll, never connects at
  * launch by itself, and asks before a run lands on the login node
  * (`lib/remote/hpc/hpcHost.ts`, `docs/context/hpc_careful_mode.md`). None of that can be

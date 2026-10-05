@@ -6,7 +6,7 @@
 > `docs/browser_plan_b.md`: the surface that runs real JavaScript.
 >
 > Verification gates: `npx tsc --noEmit`, `npx vitest run`, and
-> `cargo test --manifest-path src-tauri/Cargo.toml`. **Never launch Eldrun** —
+> `cargo test --manifest-path src-tauri/Cargo.toml`. **Never launch Tabtivity** —
 > a second instance corrupts workspace state. Nothing in this document can be
 > proven by an agent; every behavioural claim is a manual-QA item.
 
@@ -44,21 +44,21 @@ field). If that answer is "not really", the correct action is to delete
 
 ## 1. The display channel is the whole design
 
-The filesystem is the easy gate — Eldrun already quarantines downloads, strips
+The filesystem is the easy gate — Tabtivity already quarantines downloads, strips
 exec bits, sniffs MIME, and requires a native save dialog. **The hard crossing is
 pixels out and input in.** Everything else follows from how that is answered.
 
 | Option | Isolation | Verdict |
 |---|---|---|
 | Bind-mount the host X11 socket | **Broken.** X11 has no client isolation: a client can read keystrokes destined for every other window and screenshot the whole session. A container with `/tmp/.X11-unix` is not sandboxed in any sense that matters. | **Reject outright.** This is the option that looks like it works and does not. |
-| Bind-mount the host Wayland socket | Good — Wayland clients cannot snoop other clients' input or surfaces | Viable **only** on a Wayland session; Eldrun supports X11 too (`platform/x11.rs`). Not a universal answer. |
+| Bind-mount the host Wayland socket | Good — Wayland clients cannot snoop other clients' input or surfaces | Viable **only** on a Wayland session; Tabtivity supports X11 too (`platform/x11.rs`). Not a universal answer. |
 | Nested display server (Xephyr on X11, `cage`/wlroots on Wayland) | Good — the container sees only a display server that contains itself | **Adopt.** Works on both session types with one abstraction, and the nested server's own window *is* the visible window. |
 | Headless + stream (VNC/WebRTC into the webview) | Complete — pixels out, events in, no socket shared at all | **Reject for v1.** DMABUF is off app-wide (`project_webkit_paint_perf`), so decoding a video stream inside a software-rendered WebKitGTK is the worst possible place to put it. Keep as the answer for *remote* hosts later. |
 | Full VM (microVM/Qubes-style) | Strongest | Out of proportion to a desktop workspace app. |
 
 ### 1.1 A correction that shapes v1
 
-An earlier draft of this plan assumed Eldrun could reparent the nested server's
+An earlier draft of this plan assumed Tabtivity could reparent the nested server's
 window into a pane, because `embed/EmbedPane.tsx` exists. **It cannot.**
 `EmbedPane` is Phase 1 of Group K #40: it opens the file in an external app and
 renders a placeholder. Its own doc comment says the X11-reparent path "is Phase
@@ -98,7 +98,7 @@ own commit, landed and green before any browser code.
 
 ```
 docker run -d
-  --name eldrun-browser-<session>
+  --name tabtivity-browser-<session>
   --network <netns>          # see §2.3 — NEVER the default bridge without thought
   --cap-drop ALL --security-opt no-new-privileges
   --pids-limit … --memory … --cpus …
@@ -164,7 +164,7 @@ guard so closing one window does not kill a session another window is using.
 ## 3. Phases
 
 Each is individually committable, with acceptance criteria checkable by
-`cargo test` / `tsc` / `vitest` alone. **Anything requiring a running Eldrun or a
+`cargo test` / `tsc` / `vitest` alone. **Anything requiring a running Tabtivity or a
 running container is manual QA, listed in §5, and cannot be signed off by an
 agent.**
 
@@ -223,7 +223,7 @@ proof. Its help text changes to state what is now true.
 
 ## 5. What no agent can verify
 
-Every item below needs a human, a running Eldrun, and a running container.
+Every item below needs a human, a running Tabtivity, and a running container.
 
 1. **The network claim, which is the whole plan.** From inside the container:
    every host loopback service unreachable by IP; unreachable by a hostname that

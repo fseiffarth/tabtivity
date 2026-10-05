@@ -168,7 +168,7 @@
     in the side panel opened `window.prompt()` — which WebKitGTK draws as an
     origin-titled browser alert ("localhost:1420 says" in a dev window, a blank
     system box in a packaged one) — while the rename gesture right next to it
-    opened Eldrun's own dialog. Auditing the rest of the panel found the same
+    opened Tabtivity's own dialog. Auditing the rest of the panel found the same
     split everywhere: New Folder, New Presentation, the sessions kill/rename,
     the SLURM cancel/watch, the HPC workspace extend and project move, the log
     copy, every destructive git confirm (lockstep resolve, pairing overwrite,
@@ -192,7 +192,7 @@
     Implemented 2026-09-01.
     - [x] 🤖 Automated test
     - [ ] 🖐️ Manual test — in the side panel, right-click the tree background →
-      **New File**: an Eldrun dialog opens (accent top rail, "Creating in
+      **New File**: a Tabtivity dialog opens (accent top rail, "Creating in
       &lt;folder&gt;"), Enter creates, and a name that already exists keeps the
       dialog open with the error under the field. Same for New Folder and New
       Presentation, and in the middle file browser. Then check one confirm

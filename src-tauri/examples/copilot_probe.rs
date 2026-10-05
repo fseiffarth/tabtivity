@@ -1,6 +1,6 @@
 //! Interactive synthetic-project probe. Prints only a device code, account
 //! status and result counts; never tokens, protocol payloads or generated code.
-use eldrun_lib::services::copilot::{documents::position, process::ManagedProcess, session::{Session, CompletionRequest}};
+use app_lib::services::copilot::{documents::position, process::ManagedProcess, session::{Session, CompletionRequest}};
 use std::path::Path;
 
 #[tokio::main]

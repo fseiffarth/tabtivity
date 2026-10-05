@@ -65,7 +65,7 @@ fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
   **Git** (branches, commits, Git sync), **Search** (file names and contents),
   **Apps** (tracked external windows), and for remote projects the **±** sync
   view, **Sessions** and **Jobs**.
-- Double-click a file to open it in Eldrun's built-in viewers: PDF, LaTeX,
+- Double-click a file to open it in Tabtivity's built-in viewers: PDF, LaTeX,
   Markdown, notebooks, YAML/JSON, tables/CSV, SQLite, images, audio/video,
   code and more. Right-click → **Set default app…** sends a type to an
   external application instead.
@@ -82,11 +82,13 @@ macOS push the cursor to a screen edge. **F11** toggles fullscreen.
 ## The root console
 
 Ctrl+Shift+R (or the ✦ entry) opens the root console: a floating window over
-whatever is open, with its own tabs in Eldrun's root folder, independent of
+whatever is open, with its own tabs in Tabtivity's root folder, independent of
 any project. Closing it ends nothing. One-click installs open their terminal
 tab here. Agents are opt-in in the root console: turn on an agent's **Root**
 chip in the Models & agents menu to offer it there; the **MCP** chip also
-gives it Eldrun's root tools (calendar, board, project list).
+gives it Tabtivity's root tools (calendar, board, project list). An agent
+docked beside the mail, calendar or to-do window is a root-console tab too, and
+shows in the console's strip. See `mail-calendar`.
 
 ## The Models & agents menu
 

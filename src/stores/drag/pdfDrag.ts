@@ -1,6 +1,6 @@
 /**
  * Dragging PDF pages out of one page strip and into another — in the same window, or
- * across two Eldrun windows.
+ * across two Tabtivity windows.
  *
  * Two problems have to be solved separately, because they have different shapes:
  *

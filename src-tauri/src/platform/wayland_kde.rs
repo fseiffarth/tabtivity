@@ -88,7 +88,7 @@ impl WorkspaceBackend for KdeWaylandBackend {
         false
     }
 
-    fn make_sticky(&self, _eldrun_pid: u32) -> Result<(), String> {
+    fn make_sticky(&self, _app_pid: u32) -> Result<(), String> {
         // Not implemented: making a window sticky on KWin/Wayland needs the KWin
         // scripting API, which this backend does not use.
         Ok(())

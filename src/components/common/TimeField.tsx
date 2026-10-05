@@ -4,13 +4,13 @@ import { useUse24h } from "../../lib/timeFormat";
 
 /**
  * **The** clock-entry field — the one control in the app an hour is typed into,
- * drawn by Eldrun rather than by the engine.
+ * drawn by Tabtivity rather than by the engine.
  *
  * It exists because `<input type="time">` cannot be told which clock to show.
  * The segments it renders come from a locale: WebKitGTK takes that from the
  * **process** locale and ignores the element's `lang` outright, and Chromium
  * follows the browser's UI locale, which app code cannot reach either. So
- * `Settings.time_format_24h` moved every clock Eldrun prints and left the field
+ * `Settings.time_format_24h` moved every clock Tabtivity prints and left the field
  * behind — a card due at 17:00 read `17:00` on the board and `5:30 PM` the
  * moment it was opened for editing, which is the exact disagreement that
  * setting exists to end.

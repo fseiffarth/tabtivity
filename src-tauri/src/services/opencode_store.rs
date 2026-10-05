@@ -26,7 +26,8 @@
 //! the `synthetic` ones OpenCode writes for itself, such as a file's content
 //! or its auto-continue nudge) and the assistant's text parts, each finished
 //! part one bubble. Reasoning, tool calls, patches and compaction summaries
-//! are stepped over. A part still streaming is left out until it is finished,
+//! are stepped over — save the completed edit tool parts, which
+//! [`session_changes`] reads for the desktop Reader's Changes panel. A part still streaming is left out until it is finished,
 //! so a bubble never changes once shown.
 //!
 //! The database also holds OpenCode's account tokens. Only the `session`,
@@ -39,24 +40,33 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 
+use crate::services::agent_changes::{opencode_part_changes, AgentChanges};
 use crate::services::agent_transcript::{
-    agent_entry, insert_by_time, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
+    agent_entry, agents_unlisted, insert_by_time, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
 };
 use crate::services::prompt_blame::epoch_ms_to_iso;
 
 /// The most messages of one session read per answer: the newest ones. What
 /// fell before them is announced as `truncated`.
 const MESSAGE_TAIL: i64 = 2000;
+/// The most edit tool parts of one session read for its changes.
+const CHANGE_TAIL: i64 = 2000;
 
 /// The scope's OpenCode database: `.local/share/opencode/opencode.db` of its
-/// Eldrun-owned agent home — where OpenCode's `xdg-basedir` puts it under the
+/// Tabtivity-owned agent home — where OpenCode's `xdg-basedir` puts it under the
 /// `$HOME` the tab runs with.
 pub fn db_path_for(scope_id: Option<&str>) -> PathBuf {
-    crate::services::agent_home::scope_home(scope_id)
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db")
+    db_in_home(&crate::services::agent_home::scope_home(scope_id))
+}
+
+/// The OpenCode database of the scope's local-model tabs (`ollama launch
+/// opencode`), in the scope's local-model home.
+pub fn local_model_db_path_for(scope_id: Option<&str>) -> PathBuf {
+    db_in_home(&crate::services::agent_home::local_model_home(scope_id))
+}
+
+fn db_in_home(home: &Path) -> PathBuf {
+    home.join(".local").join("share").join("opencode").join("opencode.db")
 }
 
 /// The conversation of the newest top-level, unarchived session OpenCode ran
@@ -75,6 +85,67 @@ pub fn session_transcript(
     limit: usize,
 ) -> Option<AgentTranscript> {
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let session = match tab_session(&conn, directory, since, subagent)? {
+        TabSession::Id(id) => id,
+        TabSession::NoSubagent => return Some(AgentTranscript::unavailable("no_subagent")),
+        TabSession::None => {
+            return Some(AgentTranscript {
+                available: true,
+                version: Some(format!("new:{directory}")),
+                ..Default::default()
+            })
+        }
+    };
+    let current = fingerprint(&conn, &session)?;
+    if version == Some(current.as_str()) {
+        return Some(AgentTranscript {
+            available: true,
+            version: Some(current),
+            unchanged: true,
+            ..Default::default()
+        });
+    }
+    let (mut entries, mut truncated) = read_entries(&conn, &session)?;
+    let children = children(&conn, &session);
+    let spawned: Vec<String> = children.iter().filter_map(|entry| entry.subagent.clone()).collect();
+    insert_by_time(&mut entries, children, truncated);
+    let running_agents = running_agents(&entries);
+    if entries.len() > limit {
+        entries.drain(..entries.len() - limit);
+        truncated = true;
+    }
+    let agents_earlier = truncated && agents_unlisted(&entries, &spawned);
+    Some(AgentTranscript {
+        available: true,
+        reason: None,
+        version: Some(current),
+        unchanged: false,
+        entries,
+        truncated,
+        agents_earlier,
+        running_agents,
+        usage: None,
+        model: None,
+        effort: None,
+        tokens: None,
+        shells: Vec::new(),
+        cwd: None,
+        running_cwds: Vec::new(),
+    })
+}
+
+/// Which session a tab in `directory` reads: see [`session_transcript`].
+enum TabSession {
+    /// The folder has no session of the tab's yet.
+    None,
+    /// `subagent` names none of that session's descendants.
+    NoSubagent,
+    Id(String),
+}
+
+/// The tab's session — or, with `subagent`, its descendant of that handle.
+/// `None` when the store cannot be queried.
+fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, subagent: Option<&str>) -> Option<TabSession> {
     let mut dirs = vec![directory.to_string()];
     if let Ok(real) = std::fs::canonicalize(directory) {
         let real = real.to_string_lossy().into_owned();
@@ -94,46 +165,67 @@ pub fn session_transcript(
         .optional()
         .ok()?;
     let Some(session) = session else {
-        if subagent.is_some() {
-            return Some(AgentTranscript::unavailable("no_subagent"));
-        }
-        return Some(AgentTranscript {
-            available: true,
-            version: Some(format!("new:{directory}")),
-            ..Default::default()
-        });
+        return Some(if subagent.is_some() { TabSession::NoSubagent } else { TabSession::None });
     };
-    let session = match subagent {
-        None => session,
-        Some(token) => match descendants(&conn, &session).into_iter().find(|id| subagent_token(id) == token) {
-            Some(child) => child,
-            None => return Some(AgentTranscript::unavailable("no_subagent")),
+    Some(match subagent {
+        None => TabSession::Id(session),
+        Some(token) => match descendants(conn, &session).into_iter().find(|id| subagent_token(id) == token) {
+            Some(child) => TabSession::Id(child),
+            None => TabSession::NoSubagent,
         },
+    })
+}
+
+/// The files the tab's session — or `subagent`'s — changed, from its
+/// completed edit tool parts (`services::agent_changes`): the newest
+/// [`CHANGE_TAIL`] such parts, the last `limit` changes of those.
+pub fn session_changes(
+    db: &Path,
+    directory: &str,
+    since: Option<i64>,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> Option<AgentChanges> {
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let session = match tab_session(&conn, directory, since, subagent)? {
+        TabSession::Id(id) => id,
+        TabSession::NoSubagent => return Some(AgentChanges::unavailable("no_subagent")),
+        TabSession::None => return Some(AgentChanges::read(format!("new:{directory}"), Vec::new(), false, limit)),
     };
     let current = fingerprint(&conn, &session)?;
     if version == Some(current.as_str()) {
-        return Some(AgentTranscript {
+        return Some(AgentChanges {
             available: true,
             version: Some(current),
             unchanged: true,
             ..Default::default()
         });
     }
-    let (mut entries, mut truncated) = read_entries(&conn, &session)?;
-    insert_by_time(&mut entries, children(&conn, &session), truncated);
-    if entries.len() > limit {
-        entries.drain(..entries.len() - limit);
-        truncated = true;
-    }
-    Some(AgentTranscript {
-        available: true,
-        reason: None,
-        version: Some(current),
-        unchanged: false,
-        entries,
-        truncated,
-        usage: None,
-    })
+    // Edit tool parts only, filtered in SQL: the others carry whole file
+    // reads and command outputs.
+    let mut stmt = conn
+        .prepare(
+            "SELECT time_created, data FROM part
+              WHERE session_id = ?1 AND json_extract(data, '$.type') = 'tool'
+                AND json_extract(data, '$.tool') IN ('edit', 'multiedit', 'write', 'apply_patch')
+              ORDER BY time_created DESC, id DESC LIMIT ?2",
+        )
+        .ok()?;
+    let mut rows: Vec<(i64, String)> = stmt
+        .query_map(rusqlite::params![session, CHANGE_TAIL + 1], |row| Ok((row.get(0)?, row.get(1)?)))
+        .ok()?
+        .filter_map(Result::ok)
+        .collect();
+    let truncated = rows.len() as i64 > CHANGE_TAIL;
+    rows.truncate(CHANGE_TAIL as usize);
+    rows.reverse();
+    let changes = rows
+        .iter()
+        .filter_map(|(created, data)| Some((*created, serde_json::from_str::<Value>(data).ok()?)))
+        .flat_map(|(created, part)| opencode_part_changes(created, &part))
+        .collect();
+    Some(AgentChanges::read(current, changes, truncated, limit))
 }
 
 /// The sessions `session` spawned, as its `agent` entries: the task its title
@@ -339,7 +431,7 @@ mod tests {
     /// A store with OpenCode's own table shapes (the columns this reads, plus
     /// the account table whose presence is why only three tables are read).
     fn store() -> (PathBuf, Connection) {
-        let dir = unique_tmp("eldrun-opencode-store");
+        let dir = unique_tmp(concat!(crate::app_slug!(), "-opencode-store"));
         let db = dir.join("opencode.db");
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(

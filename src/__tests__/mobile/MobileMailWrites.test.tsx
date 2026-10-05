@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, type MobileMailView } from "../../../mobile-web/src/api";
 import { Mail } from "../../../mobile-web/src/screens/Mail";
+import { BRAND } from "../../lib/brand";
 
 vi.mock("../../../mobile-web/src/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../mobile-web/src/api")>();
@@ -76,7 +77,7 @@ describe("phone mail writes", () => {
     await openMessage({ actions: true });
     vi.mocked(api).mockRejectedValue(new ApiError(403, "mail_actions_disabled"));
     fireEvent.click(screen.getByText("★ Star"));
-    await screen.findByText(/Switched off in Eldrun/);
+    await screen.findByText(new RegExp(String.raw`Switched off in ${BRAND.display}`));
   });
 
   it("sends a reply only after a second, explicit confirmation naming the recipient", async () => {

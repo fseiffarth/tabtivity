@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Tabtivity
+Comment=A tab for each project. A tab for everything in it.
+Exec=/path/to/tabtivity/start-tabtivity-tauri.sh
+Icon=/path/to/tabtivity/src-tauri/icons/128x128.png
+Terminal=false
+Categories=Utility;TerminalEmulator;Development;
+StartupWMClass=tabtivity

@@ -27,7 +27,7 @@ fn main() {
     for pair in args[2..].chunks(2) {
         let x: f64 = pair[0].parse().expect("x must be a number");
         let y: f64 = pair[1].parse().expect("y must be a number");
-        match eldrun_lib::commands::synctex::resolve(pdf, page, x, y) {
+        match app_lib::commands::synctex::resolve(pdf, page, x, y) {
             Some((input, line)) => println!("{x:>8.2} {y:>8.2} -> {input}:{line}"),
             None => println!("{x:>8.2} {y:>8.2} -> (no answer)"),
         }

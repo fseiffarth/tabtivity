@@ -3,11 +3,12 @@ import type { TranscriptEntry } from "../../../mobile-web/src/api";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { pendingPrompt, withPending } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { BRAND } from "../../lib/brand";
 
 const labels = { today: "Today", yesterday: "Yesterday" };
 const local = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min);
 
-describe("Eldrun Mobile chat times", () => {
+describe(`${BRAND.display} Mobile chat times`, () => {
   it("reads a record's stamp, and nothing from a missing or unreadable one", () => {
     expect(chatMoment("2026-09-29T10:05:00Z")?.toISOString()).toBe("2026-09-29T10:05:00.000Z");
     expect(chatMoment(undefined)).toBeNull();
@@ -16,6 +17,12 @@ describe("Eldrun Mobile chat times", () => {
 
   it("stamps a bubble with its clock time", () => {
     expect(chatTime(local(2026, 9, 29, 14, 5))).toMatch(/14:05|2:05/);
+  });
+
+  it("follows the desktop's clock when it is handed one, whatever the locale", () => {
+    expect(chatTime(local(2026, 9, 29, 14, 5), true)).toBe("14:05");
+    expect(chatTime(local(2026, 9, 29, 14, 5), false)).toMatch(/02:05|2:05/);
+    expect(chatTime(local(2026, 9, 29, 14, 5), false)).not.toMatch(/14/);
   });
 
   it("names the day as a messenger does", () => {

@@ -16,6 +16,7 @@ import type { AlertItem } from "../../lib/alerts";
 import { awayDelta } from "../../lib/todoBoard";
 import type { CalendarEvent, CalendarTask } from "../../types";
 import type { MailHeader } from "../../types/mail";
+import { BRAND } from "../../lib/brand";
 
 /**
  * The alert feed's selector layer.
@@ -470,7 +471,7 @@ describe("selectAlerts — titles and details", () => {
     const detail = (over: Partial<CalendarTask>) =>
       one(selectAlerts({ now: NOW, tasks: [task({ due: "2026-07-08", ...over })] })).detail;
 
-    expect(detail({ project_id: "eldrun", category: "work", tags: ["a"] })).toBe("eldrun");
+    expect(detail({ project_id: BRAND.slug, category: "work", tags: ["a"] })).toBe(BRAND.slug);
     expect(detail({ category: "work", tags: ["a"] })).toBe("work");
     expect(detail({ tags: ["a", "b"] })).toBe("a · b");
     expect(detail({})).toBe("");
@@ -483,10 +484,10 @@ describe("selectAlerts — titles and details", () => {
 
   it("carries the ids the open action needs", () => {
     const item = one(
-      selectAlerts({ now: NOW, tasks: [task({ due: "2026-07-08", project_id: "eldrun" })] }),
+      selectAlerts({ now: NOW, tasks: [task({ due: "2026-07-08", project_id: BRAND.slug })] }),
     );
     expect(item.id).toBe("task:t1");
-    expect(item.source).toEqual({ taskId: "t1", calendarId: "work", projectId: "eldrun" });
+    expect(item.source).toEqual({ taskId: "t1", calendarId: "work", projectId: BRAND.slug });
   });
 
   it("carries an event's video-call link + provider for the Join button", () => {
@@ -750,7 +751,7 @@ describe("alertCounts", () => {
 
 /**
  * The gates. The one asymmetry worth locking: `files_alerts` is the *file
- * viewer's* group visibility, so Eldrun Mobile — a surface with its own screen
+ * viewer's* group visibility, so Tabtivity Mobile — a surface with its own screen
  * and no 🔔 of its own — reads past it, while everything that says which alerts
  * exist stays shared between the two.
  */

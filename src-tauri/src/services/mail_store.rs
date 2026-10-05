@@ -2622,6 +2622,38 @@ impl MailStore {
             .collect())
     }
 
+    /// ✓ Approvals' approve on agent drafts: each goes into the "Drafted by
+    /// agents" folder (`filed`). Bound to what the panel showed — a draft an
+    /// agent changed since, or the user took over in the composer, is left
+    /// for the panel's next look. Files the user picked into it are not part
+    /// of that comparison: they are the user's own. Returns how many were
+    /// filed; an error names how many changed under the panel.
+    pub fn file_agent_drafts(&self, shown: &[MailDraft]) -> Result<usize, String> {
+        fn seen(d: &MailDraft) -> Result<serde_json::Value, String> {
+            let mut d = d.clone();
+            d.staged.clear();
+            serde_json::to_value(d).map_err(|e| e.to_string())
+        }
+        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let (mut filed, mut changed) = (0, 0);
+        for draft in shown {
+            match self.draft_in(&conn, &draft.id)? {
+                Some(mut current) if current.origin.is_some() && seen(&current)? == seen(draft)? => {
+                    if !current.filed {
+                        current.filed = true;
+                        self.put_draft(&conn, &current)?;
+                    }
+                    filed += 1;
+                }
+                _ => changed += 1,
+            }
+        }
+        if changed > 0 {
+            return Err(format!("{changed} draft(s) changed since they were shown; look again before approving"));
+        }
+        Ok(filed)
+    }
+
     pub fn delete_draft(&self, draft_id: &str) -> Result<(), String> {
         {
             let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
@@ -3636,6 +3668,33 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.staged_id.as_str()).collect::<Vec<_>>(), ["s3"]);
         assert!(store.staged_bytes("d1", "s1").is_err(), "a replaced copy is removed");
         assert_eq!(store.staged_bytes("d1", "s3").unwrap(), b"three");
+    }
+
+    /// Approving files the draft as shown; one changed since (by the agent, or
+    /// taken over in the composer) is refused and stays unfiled, while a file
+    /// the user picked in does not count as a change.
+    #[test]
+    fn approving_files_only_the_draft_as_shown() {
+        let (_dir, store) = store();
+        let (a, b, c) = (agent_draft("a"), agent_draft("b"), agent_draft("c"));
+        for d in [&a, &b, &c] {
+            store.change_agent_draft(None, Some(d)).unwrap();
+        }
+        let mut b2 = b.clone();
+        b2.subject = "changed".into();
+        store.change_agent_draft(Some(&b), Some(&b2)).unwrap();
+        let mut human = c.clone();
+        human.origin = None;
+        human.owner_session = None;
+        store.save_draft_with_staged(&mut human).unwrap();
+        store.stage_attachment("a", "u1", "mine.txt", "text/plain", b"mine").unwrap();
+        let err = store.file_agent_drafts(&[a.clone(), b.clone(), c.clone()]).unwrap_err();
+        assert!(err.starts_with("2 draft(s) changed"), "{err}");
+        assert!(store.draft("a").unwrap().unwrap().filed);
+        assert!(!store.draft("b").unwrap().unwrap().filed);
+        assert!(!store.draft("c").unwrap().unwrap().filed);
+        assert_eq!(store.file_agent_drafts(&[b2]).unwrap(), 1);
+        assert!(store.draft("b").unwrap().unwrap().filed);
     }
 
     /// A file the user picked into an agent draft takes the draft out of the

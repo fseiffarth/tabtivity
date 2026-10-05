@@ -68,7 +68,7 @@ const MAX_REDIRECTS: usize = 5;
 /// resources does not become one enormous request body.
 const MULTIGET_CHUNK: usize = 50;
 
-const USER_AGENT: &str = "Eldrun-CalDAV/1.0";
+const USER_AGENT: &str = concat!(crate::app_name!(), "-CalDAV/1.0");
 
 // ── Credentials ─────────────────────────────────────────────────────────────
 
@@ -628,10 +628,10 @@ async fn dav_reply(
             // the fix for the second is not "retype your password".
             if !authorized {
                 return Err(format!(
-                    "the server redirected to {} and that host asked for the password. Eldrun \
+                    concat!("the server redirected to {} and that host asked for the password. ", crate::app_name!(), " \
                      only sends CalDAV credentials to the server the account's URL names (or a \
                      subdomain of it over HTTPS) — if you trust that address, set the account's \
-                     server URL to it directly.",
+                     server URL to it directly."),
                     url.host_str().unwrap_or("another host")
                 ));
             }
@@ -1197,7 +1197,7 @@ pub async fn fetch_changes(
 // 2. **A `412` is a value, not an error.** See [`CalDavWrite`].
 // 3. **The client names the resource.** RFC 4791 §5.3.2 leaves the URL to the
 //    client, so a create mints `<collection>/<uid>.ics`. The uid comes from
-//    Eldrun's own row id, but it is sanitized anyway ([`resource_name`]) — a UID
+//    Tabtivity's own row id, but it is sanitized anyway ([`resource_name`]) — a UID
 //    that arrived from an *imported* ICS file is text somebody else wrote, and it
 //    would otherwise be a path-traversal primitive aimed at the server.
 // 4. **The body is `text/calendar`.** Sent verbatim, exactly as the frontend's

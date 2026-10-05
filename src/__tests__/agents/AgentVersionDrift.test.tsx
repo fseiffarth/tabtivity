@@ -29,6 +29,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { AgentsPanel } from "../../components/layout/SettingsSubPanels";
+import { BRAND } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -106,7 +107,7 @@ describe("agent CLI version drift", () => {
     panel();
     expect(await screen.findByText("0.153.4")).toBeTruthy();
     expect(
-      screen.getByText(/not the one Eldrun was verified against/),
+      screen.getByText(new RegExp(String.raw`not the one ${BRAND.display} was verified against`)),
     ).toBeTruthy();
     const notes = screen.getAllByRole("listitem").map((li) => li.textContent);
     // Weakest assumption first, and each one names where to look.
@@ -124,7 +125,7 @@ describe("agent CLI version drift", () => {
       version: "0.153.4",
     });
     await waitFor(() =>
-      expect(screen.queryByText(/not the one Eldrun was verified against/)).toBeNull(),
+      expect(screen.queryByText(new RegExp(String.raw`not the one ${BRAND.display} was verified against`))).toBeNull(),
     );
     // The version itself is still shown — only the warning is silenced.
     expect(screen.getByText("0.153.4")).toBeTruthy();
@@ -134,7 +135,7 @@ describe("agent CLI version drift", () => {
     backend([report({ state: "match", stale: [], version: "0.151.0", raw: "codex-cli 0.151.0" })]);
     panel();
     expect(await screen.findByText("0.151.0")).toBeTruthy();
-    expect(screen.queryByText(/not the one Eldrun was verified against/)).toBeNull();
+    expect(screen.queryByText(new RegExp(String.raw`not the one ${BRAND.display} was verified against`))).toBeNull();
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 

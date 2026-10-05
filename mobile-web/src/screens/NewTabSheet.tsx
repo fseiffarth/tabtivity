@@ -25,11 +25,13 @@ export interface NewTabLaunch {
  * agent choices in a compact grid, with each agent's modes inside its tile.
  *
  * Where an agent starts is the desktop "+"'s question too: a project with
- * linked worktrees gets an "Agents start in" row, and an agent with a cloud
- * session gets ☁ buttons in its tile (`src/lib/agents/cloudSessions.ts`). Both
- * come from `launch-options`, asked once the sheet opens; until it answers, the
- * sheet is the plain one. A ☁ New for a CLI that takes its task on the command
- * line swaps the grid for a task box first.
+ * linked worktrees gets an "Agents start in" row, and agents with a cloud
+ * session (`src/lib/agents/cloudSessions.ts`) are listed again in a folded
+ * "Cloud sessions" group under the grid — not in their tiles, where a reader
+ * who never used a vendor's cloud met a row of ☁ buttons beside every agent.
+ * Both come from `launch-options`, asked once the sheet opens; until it
+ * answers, the sheet is the plain one. A cloud New for a CLI that takes its
+ * task on the command line swaps the grid for a task box first.
  *
  * A desktop with a local (Ollama) model set for tabs adds the desktop "+"'s
  * local-model group under the agents: the same agents, driving that model.
@@ -42,11 +44,18 @@ export interface NewTabLaunch {
  * new session, and the sheet closes on the tap rather than waiting for the
  * desktop, so a slow create is a screen the reader can still read.
  */
-export function NewTabSheet({ projectId, agents, busy, onPick, onSendFile, onClose }: {
+export function NewTabSheet({ projectId, agents, shells, busy, headless = false, onPick, onSendFile, onClose }: {
   projectId: string;
   agents: AgentRow[];
-  /** A create in flight, or no desktop to answer one; the file row ignores it. */
+  /** The desktop lets the phone open shells (off by default). */
+  shells: boolean;
+  /** A create in flight; the file row ignores it. */
   busy: boolean;
+  /** No desktop window: a shell or a plain agent is started by the host
+   *  itself (headless owner plan, H1b) and picked up by the next window;
+   *  a mode, a worktree, a cloud session, a local model or a sign-in still
+   *  needs the window — those leave the grid for one folded group. */
+  headless?: boolean;
   onPick: (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => void;
   /** Opens the phone's file picker; runs inside the tap, which the picker needs. */
   onSendFile: () => void;
@@ -87,36 +96,80 @@ export function NewTabSheet({ projectId, agents, busy, onPick, onSendFile, onClo
         </div>
       </div> : <>
       <p className="sheet-note">{t("mobile.newTab.note")}</p>
+      {headless && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
-        <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>
-        {/* Right under the shell, not after the agents: at the foot of a
-            project with many agents it sat past the sheet's fold, and the
-            reader never found it. No desktop round trip — the sidecar writes
-            the file itself — so neither a create in flight nor an absent
-            desktop holds it back. */}
-        <button className="new-tab-file" onClick={onSendFile}>
-          <span><strong>{t("mobile.projectInbox.send")}{isUntested("mobile.project.sendFile") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{t("mobile.projectInbox.hint")}</small></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
-        </button>
-        {linked.length > 0 && agents.length > 0 && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
+        {shells && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
+        {linked.length > 0 && agents.length > 0 && !headless && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
           <small>{t("mobile.newTab.where")}{isUntested("mobile.newTab.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
           <button className={where === "" ? "selected" : ""} aria-pressed={where === ""} onClick={() => setWhere("")}>{t("mobile.newTab.projectFolder")}</button>
           {linked.map((row) => <button key={row.id} className={where === row.id ? "selected" : ""} aria-pressed={where === row.id} title={row.label} onClick={() => setWhere(row.id)}>{row.branch || row.label}</button>)}
         </div>}
         <div className="new-tab-agents">{agents.map((agent) => <div className="agent-create" key={agent.id}>
           <button disabled={busy} onClick={() => pickAgent(agent)}>{agent.label}</button>
-          {agent.modes.map((mode) => <button className="mode" disabled={busy} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
-          {options.cloud.filter((launch) => launch.agent_id === agent.id).map((launch) => <button className="mode" disabled={busy} key={`cloud:${launch.action}`} onClick={() => pickCloud(agent, launch)}>{t(launch.action === "new" ? "mobile.newTab.cloudNew" : "mobile.newTab.cloudOpen")}</button>)}
+          {!headless && agent.modes.map((mode) => <button className="mode" disabled={busy} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
         </div>)}</div>
         {/* A desktop that reports no agents still opens shells — say so, rather
             than leaving the sheet looking half-loaded. */}
         {agents.length === 0 && <p className="sheet-note">{t("mobile.newTab.noAgents")}</p>}
-        {options.local && <LocalModelGroup local={options.local} busy={busy} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
-        {options.sign_in.length > 0 && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
+        {options.local && !headless && <LocalModelGroup local={options.local} busy={busy} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
+        {!headless && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
+        {options.sign_in.length > 0 && !headless && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
+        {headless && <NeedsWindow agents={agents} options={options} linked={linked} />}
+        {/* At the sheet's foot, under everything that opens a tab. No desktop
+            round trip — the sidecar writes the file itself — so neither a
+            create in flight nor an absent desktop holds it back. */}
+        <button className="new-tab-file" onClick={onSendFile}>
+          <span><strong>{t("mobile.projectInbox.send")}{isUntested("mobile.project.sendFile") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{t("mobile.projectInbox.hint")}</small></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
+        </button>
       </div>
       </>}
     </section>
   </div>;
+}
+
+/** With no window, everything only the window can start, folded into one
+ * group at the sheet's foot — the reader sees what waits without a sheet of
+ * dead buttons to tap: an agent's modes, the cloud sessions, the linked
+ * worktrees, the local model's agents and the sign-in list. */
+function NeedsWindow({ agents, options, linked }: { agents: AgentRow[]; options: LaunchOptions; linked: LaunchOptions["worktrees"] }) {
+  const t = useT();
+  const rows: { key: string; label: string; items: string[] }[] = [];
+  for (const agent of agents) {
+    if (agent.modes.length) rows.push({ key: `agent:${agent.id}`, label: agent.label, items: agent.modes });
+  }
+  const clouded = agents.filter((agent) => options.cloud.some((launch) => launch.agent_id === agent.id)).map((agent) => agent.label);
+  if (clouded.length) rows.push({ key: "cloud", label: t("mobile.newTab.cloudGroup"), items: clouded });
+  if (linked.length && agents.length) rows.push({ key: "where", label: t("mobile.newTab.where"), items: linked.map((row) => row.branch || row.label) });
+  if (options.local?.agents.length) rows.push({ key: "local", label: t("mobile.newTab.localGroup", { model: options.local.model }), items: options.local.agents.map((row) => row.label) });
+  if (options.sign_in.length) rows.push({ key: "sign-in", label: t("mobile.signIn.listEntry"), items: [] });
+  if (!rows.length) return null;
+  const count = rows.reduce((sum, row) => sum + Math.max(row.items.length, 1), 0);
+  return <details className="new-tab-held">
+    <summary>{t("mobile.newTab.needsWindow", { count: String(count) })}{isUntested("mobile.newTab.needsWindow") && <span className="untested">{t("mobile.newTab.untested")}</span>}</summary>
+    <ul>{rows.map((row) => <li key={row.key}><strong>{row.label}</strong>{row.items.length > 0 && <span>{row.items.join(" · ")}</span>}</li>)}</ul>
+  </details>;
+}
+
+/** The agents' cloud sessions, folded shut under the grid: one line that
+ * says what a cloud session is, then each agent that has one with its New and
+ * Open. A reader who never used a vendor's cloud sees one closed row, not a
+ * ☁ in every tile. */
+function CloudGroup({ agents, cloud, busy, onPick }: { agents: AgentRow[]; cloud: CloudLaunchRow[]; busy: boolean; onPick: (agent: AgentRow, launch: CloudLaunchRow) => void }) {
+  const t = useT();
+  const rows = agents.flatMap((agent) => {
+    const launches = cloud.filter((launch) => launch.agent_id === agent.id);
+    return launches.length ? [{ agent, launches }] : [];
+  });
+  if (!rows.length) return null;
+  return <details className="new-tab-held new-tab-cloud">
+    <summary>{t("mobile.newTab.cloudGroup")}{isUntested("mobile.newTab.cloud") && <span className="untested">{t("mobile.newTab.untested")}</span>}</summary>
+    <p className="sheet-note">{t("mobile.newTab.cloudGroupHint")}</p>
+    {rows.map(({ agent, launches }) => <div className="new-tab-cloud-agent" key={agent.id} role="group" aria-label={agent.label}>
+      <strong>{agent.label}</strong>
+      {launches.map((launch) => <button disabled={busy} key={launch.action} onClick={() => onPick(agent, launch)}>{t(launch.action === "new" ? "mobile.newTab.cloudNew" : "mobile.newTab.cloudOpen")}</button>)}
+    </div>)}
+  </details>;
 }
 
 /** The local-model agents, as the desktop "+" groups them under the model's
@@ -171,9 +224,13 @@ function SignInList({ agents, rows, busy, onPick, onBack }: {
       <span>
         <strong>{agent.label}</strong>
         {row.signed_in !== undefined && <small className={row.signed_in ? "signed-in" : "signed-out"}>
-          {row.signed_in
-            ? row.account ? t("mobile.signIn.signedInAs", { account: row.account }) : t("mobile.signIn.signedIn")
-            : t("mobile.signIn.signedOut")}
+          {row.api_key && row.api_budget_reached
+            ? <>{t("mobile.signIn.apiBudgetReached")}{isUntested("mobile.signIn.apiBudgetReached") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
+            : row.api_key
+            ? <>{t("mobile.signIn.apiKey")}{isUntested("mobile.signIn.apiKey") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
+            : row.signed_in
+              ? row.account ? t("mobile.signIn.signedInAs", { account: row.account }) : t("mobile.signIn.signedIn")
+              : t("mobile.signIn.signedOut")}
         </small>}
       </span>
       <button className={row.signed_in ? "" : "primary"} disabled={busy} onClick={() => onPick(agent, "default")}>

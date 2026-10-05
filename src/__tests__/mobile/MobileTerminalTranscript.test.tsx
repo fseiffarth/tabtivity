@@ -54,6 +54,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 /** A bubble's words, without the time a messenger puts in its corner. */
 function said(bubble: Element | null | undefined): string | null {
@@ -93,7 +94,7 @@ const STORED = {
   ],
 };
 
-describe("Eldrun Mobile Focus reads the stored session", () => {
+describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     terminalState.alternate = false;
@@ -113,14 +114,14 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     const { unmount } = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Reader" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
     screen.getByTestId("session-transcript");
     // The default is not written down as the reader's choice.
-    expect(localStorage.getItem("eldrun.mobile.view.claude-code")).toBeNull();
+    expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
     await settle();
-    expect(localStorage.getItem("eldrun.mobile.view.claude-code")).toBe("terminal");
+    expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBe("terminal");
     unmount();
 
     // Another Claude tab opens where this one was left.
@@ -135,7 +136,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
     expect(screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed")).toBe("true");
-    expect(localStorage.getItem("eldrun.mobile.view.claude-code")).toBeNull();
+    expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
   });
 
   it("stays in the Reader for a tab with no session id yet, and paints the session once it reads", async () => {
@@ -146,15 +147,92 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    expect(screen.getByRole("button", { name: "Reader" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByTestId("session-transcript")).toBeNull();
-    expect(localStorage.getItem("eldrun.mobile.view.claude-code")).toBeNull();
+    expect(localStorage.getItem(storageKey("mobile.view.claude-code"))).toBeNull();
 
     stored = STORED;
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
-    expect(screen.getByRole("button", { name: "Reader" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
     screen.getByTestId("session-transcript");
+  });
+
+  it("shows a fresh tab's chat loading while its CLI starts, never the CLI's banner", async () => {
+    let stored: unknown = { available: false, reason: "no_transcript", entries: [], truncated: false };
+    vi.stubGlobal("fetch", sidecarFetch(() => stored));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const paint = async (text: string) => {
+      const bytes = new TextEncoder().encode(text);
+      const payload = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(payload).set(bytes);
+      act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    };
+    // Before anything is drawn, and while the banner is all there is.
+    expect(screen.getByTestId("session-starting").textContent).toContain("Starting Claude Code…");
+    await paint("╭──────────────────────────╮\r\n│ ✻ Welcome to the agent!  │\r\n╰──────────────────────────╯\r\n");
+    expect(screen.getByTestId("session-starting")).toBeTruthy();
+    expect(screen.queryByText(/Welcome to the agent/)).toBeNull();
+
+    // Its input box drawn, the CLI waits for a first prompt: the empty chat.
+    await paint("\r\n────────────────────────────\r\n> \r\n────────────────────────────\r\n  ? for shortcuts\r\n");
+    expect(screen.queryByTestId("session-starting")).toBeNull();
+    expect(screen.getByText("No turns yet")).toBeTruthy();
+    expect(screen.queryByText(/Welcome to the agent/)).toBeNull();
+
+    // A recorded session takes over as ever.
+    stored = STORED;
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await settle();
+    screen.getByTestId("session-transcript");
+  });
+
+  it("puts the starting screen one tap away", async () => {
+    vi.stubGlobal("fetch", sidecarFetch(() => ({ available: false, reason: "no_session", entries: [], truncated: false })));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const bytes = new TextEncoder().encode("Error: could not reach the model\r\n");
+    const payload = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(payload).set(bytes);
+    act(() => { FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(screen.queryByText(/could not reach the model/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show the screen" }));
+    expect(screen.queryByTestId("session-starting")).toBeNull();
+    expect(screen.getByText(/could not reach the model/)).toBeTruthy();
+  });
+
+  it("keeps the chat while the composer has focus, even when a read answers the session unavailable", async () => {
+    // Under full load the desktop misses the transcript call's deadline and
+    // the host answers from the tab record — the chat dropped to the screen
+    // (or handed over to Terminal) under the reader's thumbs.
+    let stored: unknown = STORED;
+    const fetchMock = sidecarFetch(() => stored);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    screen.getByTestId("session-transcript");
+    const composer = screen.getByRole("textbox", { name: "Message agent" });
+    act(() => { composer.focus(); });
+    fireEvent.change(composer, { target: { value: "half a" } });
+
+    stored = { available: false, reason: "unsupported", entries: [], truncated: false };
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await settle();
+    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe("true");
+    screen.getByTestId("session-transcript");
+    expect(composer).toBe(document.activeElement);
+
+    // Letting go reads the session afresh, and that answer stands.
+    const reads = () => fetchMock.mock.calls.filter(([url]) => (url as string).includes("/transcript")).length;
+    const before = reads();
+    act(() => { composer.blur(); });
+    await settle();
+    expect(reads()).toBe(before + 1);
+    expect(screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByTestId("session-transcript")).toBeNull();
   });
 
   it("opens a shell tab on Terminal", async () => {
@@ -165,7 +243,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("lays the stored prompts and answers out as a chat and polls with the last version", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     const fetchMock = sidecarFetch(() => STORED);
     vi.stubGlobal("fetch", fetchMock);
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -207,7 +285,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("sets a plan put up for approval apart from the answers around it", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => ({
       ...STORED,
       entries: [
@@ -228,8 +306,47 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     expect(plan.querySelector("h1")?.textContent).toBe("Merge");
   });
 
+  it("keeps a question the agent asked in the chat with its answer", async () => {
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
+    vi.stubGlobal("fetch", sidecarFetch(() => ({
+      ...STORED,
+      entries: [
+        { kind: "prompt", text: "ask me", at: "2026-09-27T10:00:00Z" },
+        {
+          kind: "answer",
+          text: "Which colour?\n→ Red",
+          at: "2026-09-27T10:00:01Z",
+          questions: [
+            { header: "Colour", question: "Which colour?", answer: "Red", options: [{ label: "Red (Recommended)", chosen: false }, { label: "Red", description: "Warm", chosen: true }, { label: "Blue" }] },
+            { question: "Which season?", answer: "Late autumn", options: [{ label: "Spring" }] },
+            { question: "Which day?", options: [{ label: "Monday" }] },
+          ],
+        },
+      ],
+    })));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+
+    const card = screen.getByRole("group", { name: "Question" });
+    expect(card.querySelector(".question-tabs")?.textContent).toBe("Colour");
+    const rows = [...card.querySelectorAll(".asked-list li")];
+    expect(rows.map((row) => [row.querySelector("strong")?.textContent, row.classList.contains("chosen")])).toEqual([
+      ["RedRecommended", false],
+      ["Red", true],
+      ["Blue", false],
+      ["Spring", false],
+      // Typed, not picked: a row of its own.
+      ["Late autumn", true],
+      ["Monday", false],
+    ]);
+    expect(card.querySelectorAll("button")).toHaveLength(0);
+    // Turned down: says so.
+    expect(card.querySelectorAll(".asked-none")).toHaveLength(1);
+    expect(card.querySelector(".asked-none")?.textContent).toBe("Not answered");
+  });
+
   it("lets a message's text be selected in part and copies only what is marked", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -258,7 +375,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("pins the prompt the scroll position is reading the answer to, and a tap returns to it", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => ({
       ...STORED,
       entries: [{ kind: "prompt", text: "an older question", at: "2026-09-15T05:40:00.000Z" }, { kind: "answer", text: "An older answer." }, ...STORED.entries],
@@ -311,7 +428,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("falls back to the screen when the session is unavailable, and can be switched to it", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     let stored: unknown = { available: false, reason: "no_session", entries: [], truncated: false };
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -327,33 +444,33 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     // The choice is a list under the Focus button; Session is there, dimmed,
     // saying why, and a tap on it does not switch.
     expect(screen.queryByRole("menu")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     const dimmed = screen.getByRole("menuitemradio", { name: /Session/ });
     expect(dimmed.getAttribute("aria-disabled")).toBe("true");
     expect(dimmed.textContent).toContain("No session id for this tab yet");
     expect(screen.getByRole("menuitemradio", { name: /Screen/ }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(dimmed);
     expect(screen.queryByTestId("session-transcript")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     expect(screen.queryByRole("menu")).toBeNull();
 
     stored = STORED;
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
     screen.getByTestId("session-transcript");
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Screen/ }));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.queryByTestId("session-transcript")).toBeNull();
     expect(screen.getByText("Hi there.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Session/ }));
     screen.getByTestId("session-transcript");
   });
 
   it("reads a full-screen agent's stored session in Focus instead of the full-screen notice", async () => {
     const openCode = { ...TAB, id: "tab-oc", label: "OpenCode", agent_label: "OpenCode" };
-    localStorage.setItem("eldrun.mobile.view.opencode", "focus");
+    localStorage.setItem(storageKey("mobile.view.opencode"), "focus");
     let stored: unknown = STORED;
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={openCode} back={() => {}} />);
@@ -374,7 +491,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     within(screen.getByRole("group", { name: "Waiting for your answer" })).getByText("Yes");
 
     // Switched to the screen, the full-screen program says so, as before.
-    fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Screen/ }));
     screen.getByText("Full-screen program");
     expect(screen.queryByTestId("session-transcript")).toBeNull();
@@ -390,7 +507,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("shows a sent prompt as the reader's bubble at once, and never changes it", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     let stored = STORED;
     const fetchMock = sidecarFetch(() => stored);
     vi.stubGlobal("fetch", fetchMock);
@@ -427,7 +544,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
 
   it("keeps a sent prompt in Reader while Codex is binding its rollout", async () => {
     const codex = { ...TAB, id: "tab-codex", label: "Codex", agent_label: "Codex" };
-    localStorage.setItem("eldrun.mobile.view.codex", "focus");
+    localStorage.setItem(storageKey("mobile.view.codex"), "focus");
     let stored: unknown = { available: true, version: "new:codex", truncated: false, entries: [] };
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={codex} back={() => {}} />);
@@ -458,7 +575,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
 
   it("shows Codex's next unstamped answer below the prompt sent from this phone", async () => {
     const codex = { ...TAB, id: "tab-codex", label: "Codex", agent_label: "Codex" };
-    localStorage.setItem("eldrun.mobile.view.codex", "focus");
+    localStorage.setItem(storageKey("mobile.view.codex"), "focus");
     let stored: unknown = { available: true, version: "one", truncated: false, entries: [
       { kind: "prompt", text: "first", at: "2026-09-18T10:00:00Z" },
       { kind: "answer", text: "First reply" },
@@ -486,7 +603,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
 
   it("starts Reader on an empty chat after a Codex /clear, until the new session is read", async () => {
     const codex = { ...TAB, id: "tab-codex", label: "Codex", agent_label: "Codex" };
-    localStorage.setItem("eldrun.mobile.view.codex", "focus");
+    localStorage.setItem(storageKey("mobile.view.codex"), "focus");
     let stored: unknown = { ...STORED, usage: { contextLeft: 12 } };
     vi.stubGlobal("fetch", sidecarFetch(() => stored));
     render(<Terminal tab={codex} back={() => {}} />);
@@ -522,7 +639,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
 
   it("does not send /clear to a working Codex, and says why on the phone", async () => {
     const codex = { ...TAB, id: "tab-codex", label: "Codex", agent_label: "Codex" };
-    localStorage.setItem("eldrun.mobile.view.codex", "focus");
+    localStorage.setItem(storageKey("mobile.view.codex"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     render(<Terminal tab={codex} back={() => {}} />);
     await settle();
@@ -542,13 +659,14 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("offers Undo after a Claude clear: the desktop resumes the cleared chat and the Reader shows it again", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude"), "focus");
     const undoCalls: string[] = [];
+    let answerUndo = () => {};
     const sidecar = sidecarFetch(() => STORED);
     vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
       if (url.endsWith("/undo-clear")) {
         undoCalls.push(init?.method ?? "GET");
-        return Promise.resolve(jsonResponse(200, { undone: true }));
+        return new Promise((resolve) => { answerUndo = () => resolve(jsonResponse(200, { undone: true })); });
       }
       return sidecar(url);
     }));
@@ -565,12 +683,39 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     fireEvent.click(undo);
     await settle();
     expect(undoCalls).toEqual(["POST"]);
+    // Until the desktop answers and the conversation is read back, the chip
+    // and the empty chat say the Undo is under way.
+    const undoing = screen.getByRole("button", { name: "Undoing…" });
+    expect(undoing.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("Bringing the conversation back…")).toBeTruthy();
+    answerUndo();
+    await settle();
+    expect(screen.queryByRole("button", { name: "Undoing…" })).toBeNull();
     expect(screen.getByText("add a clear button")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start a new conversation" }).textContent).toBe("Clear");
   });
 
+  it("keeps the chat while a /clear sent mid-turn waits behind the turn, and starts over when it ends", async () => {
+    localStorage.setItem(storageKey("mobile.view.claude"), "focus");
+    vi.stubGlobal("fetch", sidecarFetch(() => STORED));
+    const working = { ...TAB, agent_status: "working" } as typeof TAB;
+    const { rerender } = render(<Terminal tab={working} back={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Start a new conversation" }));
+    await settle();
+    // Claude queues it: the conversation is not cleared yet, so nothing is
+    // hidden and there is nothing to undo — an Undo now resumed an older chat.
+    expect(screen.getByText("add a clear button")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Bring back the conversation you just cleared" })).toBeNull();
+
+    rerender(<Terminal tab={{ ...TAB, agent_status: "idle" } as typeof TAB} back={() => {}} />);
+    await settle();
+    expect(screen.queryByText("add a clear button")).toBeNull();
+    expect(screen.getByRole("button", { name: "Bring back the conversation you just cleared" })).toBeTruthy();
+  });
+
   it("takes Undo away once the new chat is given a prompt, and offers it on Codex but not Aider", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     const { unmount } = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -585,7 +730,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
     unmount();
 
     const codex = { ...TAB, id: "tab-codex", label: "Codex", agent_label: "Codex" };
-    localStorage.setItem("eldrun.mobile.view.codex", "focus");
+    localStorage.setItem(storageKey("mobile.view.codex"), "focus");
     const codexView = render(<Terminal tab={codex} back={() => {}} />);
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Start a new conversation" }));
@@ -603,7 +748,7 @@ describe("Eldrun Mobile Focus reads the stored session", () => {
   });
 
   it("reloads the Reader after an Undo, reading the session afresh", async () => {
-    localStorage.setItem("eldrun.mobile.view.claude", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude"), "focus");
     const transcriptUrls: string[] = [];
     const sidecar = sidecarFetch(() => STORED);
     vi.stubGlobal("fetch", vi.fn((url: string) => {

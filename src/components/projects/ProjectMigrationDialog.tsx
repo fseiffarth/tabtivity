@@ -15,7 +15,7 @@ import type { ProjectEntry } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
 
 /**
- * "Migrate project": update an old project to the current Eldrun state, one
+ * "Migrate project": update an old project to the current Tabtivity state, one
  * reviewed step at a time. The backend's `project_migration_plan` is a pure
  * dry-run; every step renders with what it would change and an Accept/Decline
  * choice, and only the accepted ids are sent to `project_migration_apply` —

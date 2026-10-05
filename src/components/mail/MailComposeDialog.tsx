@@ -278,7 +278,7 @@ export function MailComposeDialog({
       subject: subject.replace(/[\r\n]/g, " "),
       body_text: text,
       // `in_reply_to` must be the sender's RFC `Message-ID`, never `header.id` —
-      // that is Eldrun's own `{folder_id}-{uid}` store key, which no other mail
+      // that is Tabtivity's own `{folder_id}-{uid}` store key, which no other mail
       // system has ever seen. Sending it would put a fabricated reference on the
       // wire: the reply threads nowhere and claims a message that does not exist.
       // A message that carried no `Message-ID` gets no `In-Reply-To` at all,

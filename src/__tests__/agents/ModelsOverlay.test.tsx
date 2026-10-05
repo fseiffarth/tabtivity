@@ -304,7 +304,7 @@ describe("ModelsOverlay", () => {
       fireEvent.click(await within(pane("models")!).findByText("Ollama…"));
       expect(useModelsOverlayStore.getState()).toMatchObject({ open: true, view: "ollama" });
       expect(pane("ollama")?.hidden).toBe(false);
-      const settingsEvents = spy.mock.calls.filter(([e]) => (e as Event).type === "eldrun:open-settings");
+      const settingsEvents = spy.mock.calls.filter(([e]) => (e as Event).type === "app:open-settings");
       expect(settingsEvents).toHaveLength(0);
     } finally {
       spy.mockRestore();

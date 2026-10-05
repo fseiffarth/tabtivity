@@ -1,6 +1,6 @@
 # Mobile Focus: what each agent CLI draws
 
-A survey of the agent CLIs Eldrun offers (`src/components/tabs/newTabItems.ts`
+A survey of the agent CLIs Tabtivity offers (`src/components/tabs/newTabItems.ts`
 `AGENT_ITEMS`), taken 2026-09-15, for the phone's **Focus** view
 (`mobile-web/src/terminal/`): what each CLI puts on the screen, whether that
 screen can be read at all, and where the conversation is stored when it cannot.
@@ -160,6 +160,25 @@ by an indent.
   a bar deep inside a row as that row's left frame.
 - `/models` is the full TUI's command (`/model` only opens the completion), so
   the chip goes through the palette there too.
+
+#### …and the full TUI's composer (2026-10-01, source-read)
+
+Read from `packages/tui/src/component/prompt/index.tsx` at v1.18.34, not a
+capture (no OpenCode runs inside the agent fence). `openCodeComposer` and
+`openCodeFullFooter` read it; `statusLine`'s OpenCode frame tries them when
+the last row is not mini's ` BUILD` row.
+
+- **Agent row**, the box's last row: `┃  Build · <model> <provider> · <variant>`
+  — the agent title-cased (`Shell` in shell mode), `auto` after it in auto
+  permission mode. Model and provider are separated by one space; only the
+  colour says where the model ends (text vs muted), so the reader cuts there
+  when it has the spans and keeps the whole phrase when it does not.
+- **Footer**, the row under the `╹▀▀` edge: while working, the spinner and
+  `esc interrupt` (`esc again to interrupt` after one press) as a column of
+  its own, the context and keys further right — so `agentBusy` no longer needs
+  the hint at the row's end; idle, the folder. Then `12.3K (5%) · $0.02` (the
+  share is *used*; the chip flips it) or `tab agents`, and `ctrl+p commands`,
+  which is the anchor.
 
 ### Antigravity's model and effort (2026-09-20)
 

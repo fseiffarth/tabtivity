@@ -16,7 +16,7 @@ import {
  * bridge — on the phone.
  *
  * Closing an agent tab ends its process, but the conversation stays on disk,
- * and bringing it back is what a restart of Eldrun already does for a tab:
+ * and bringing it back is what a restart of Tabtivity already does for a tab:
  * respawn it on its resume args (`RESUMABLE_AGENTS`, a custom agent's
  * `resumeArgs`, a local-model tab's launch line). So a close through the one
  * user-close seam (`lib/remote/closeRemoteTab`'s `closeTabInScope`, which the

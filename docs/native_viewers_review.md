@@ -15,7 +15,7 @@ handed back there by ID rather than re-filed here.
 and no agent edited anything. Since then **V-01 has landed** (`FileViewerPane.
 tsx`, +34/−4) and **V-02 was landed and then reverted** (see V-26). Everything
 else in this document is still a plan. Live verification is the user's alone —
-Eldrun was not started, and `src/` hot-reloads, so what has landed reaches an
+Tabtivity was not started, and `src/` hot-reloads, so what has landed reaches an
 open window without a restart.
 
 ### What landed
@@ -199,7 +199,7 @@ did not edit. All are `src/`, all hot-reload, each names its test.
   gate surfaced what the review had missed: `ViewerEfficiency.test.ts:37` is
   named *"flushes teardown, but leaves autosave-off drafts alone until explicit
   Save"* and asserts `expect(write).not.toHaveBeenCalled()` after `dispose()`.
-  Together with `DeckView.tsx:462-470`'s note that Eldrun has no unsaved-work
+  Together with `DeckView.tsx:462-470`'s note that Tabtivity has no unsaved-work
   prompt anywhere *"by design"*, that is a deliberate contract: autosave **on**
   means saved, autosave **off** means nothing is written unless asked — and
   closing is not asking. Flushing anyway would write a file behind the back of

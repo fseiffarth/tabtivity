@@ -92,7 +92,7 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// `~/.local/share/eldrun/remote-projects/<id>/local_loss.json`. Sits beside
+/// `~/.local/share/tabtivity/remote-projects/<id>/local_loss.json`. Sits beside
 /// `git_peer.json` in the project's local state dir — the log is about the *local*
 /// mirror, so it belongs on the machine that lost the file, not on the host.
 pub fn log_path(project_id: &str) -> PathBuf {

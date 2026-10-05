@@ -15,7 +15,7 @@ import { useSettingsStore } from "../../stores/settings";
  *     no placeholder, no "…" that never resolves. A user who does not know fast
  *     mode is on must not read a missing figure as a stuck one.
  *  3. **Nothing is lost but the aid.** No file goes unlisted, no edit unsaved,
- *     no lamp wrong. Fast mode may make Eldrun say less; it may never make it
+ *     no lamp wrong. Fast mode may make Tabtivity say less; it may never make it
  *     say something untrue.
  *
  * What it turns off:
@@ -34,7 +34,7 @@ import { useSettingsStore } from "../../stores/settings";
  *    clock and store subscriptions per hover; the tab keeps its `title`.
  *  - **The header CPU/RAM/GPU readout** (`AppResourceDisplay`) — a
  *    `debug_app_resource_usage` poll every 2.5 s for a figure that is, by
- *    construction, a readout of Eldrun's own overhead.
+ *    construction, a readout of Tabtivity's own overhead.
  *  - **The Python ▶ gate** (`FileTree`) — deciding whether a `.py` has a
  *    `__main__` guard means reading it, which on a remote listing is an SFTP
  *    round trip per file. Files already in the persisted cache keep their ▶;

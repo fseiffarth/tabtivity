@@ -32,6 +32,7 @@ import { create } from "zustand";
 import type { MailHeader, MailPriority } from "../types/mail";
 import { mailPriorityPage } from "../lib/mail";
 import { useMailStore } from "./mail";
+import { storageKey } from "../lib/brand";
 
 /**
  * A card drag in flight. Positions are viewport coordinates.
@@ -71,7 +72,7 @@ export interface CardDrag {
 /** How many marked messages the rail asks for. A rail, not a second mailbox. */
 const RAIL_PAGE = 25;
 
-const COLLAPSED_COLUMNS_KEY = "eldrun.todo.collapsedColumns";
+const COLLAPSED_COLUMNS_KEY = storageKey("todo.collapsedColumns");
 
 function readCollapsedColumns(): Record<string, true> {
   try {
@@ -284,7 +285,7 @@ export const useTodoStore = create<TodoStore>((set, get) => ({
 // the shared answer.
 //
 // Callers own the gate: `loadUrgentMail` reaches `mail_priority_page`, and
-// opening the mail store's backend creates `~/.local/share/eldrun/mail/` as a
+// opening the mail store's backend creates `~/.local/share/tabtivity/mail/` as a
 // side effect — so retain ONLY behind the `mail_client` check (plus whatever
 // surface gate applies), exactly where the per-instance intervals sat.
 

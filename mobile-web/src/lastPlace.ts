@@ -1,11 +1,12 @@
 import { api, type TabRow } from "./api";
+import { storageKey } from "../../src/lib/brand";
 
 /**
  * The key predates sections, when this slot held a bare `{ projectId, tabId }`
  * terminal route; a value in that old shape still reads back as the terminal it
  * named, so an update does not lose the phone's place.
  */
-const LAST_PLACE_KEY = "eldrun.mobile.lastTab";
+const LAST_PLACE_KEY = storageKey("mobile.lastTab");
 
 /** The tab bar's four sections — App's `Tab`, defined here because this module validates it. */
 export const MOBILE_SECTIONS = ["projects", "todo", "calendar", "mail"] as const;

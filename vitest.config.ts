@@ -1,4 +1,4 @@
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
@@ -8,9 +8,11 @@ export default defineConfig({
     environment: "jsdom",
     css: false,
     setupFiles: ["./src/test-setup.ts"],
-    // `target/freeze-tree` is a full checkout of HEAD (package-dev.sh --head),
-    // so without this every run collects a second, frozen copy of the suite.
-    exclude: [...configDefaults.exclude, "target/**"],
+    // Collect only this tree's own sources. Full checkouts nest inside the
+    // repo — `target/freeze-tree` (package-dev.sh --head), agent worktrees
+    // under `.claude/worktrees/` — and a run must never test another tree:
+    // an agent working in one of those runs `npm test` from its own root.
+    include: ["{src,mobile-web,shared,scripts}/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
     // The full suite runs heavy viewer renders + real-timer polls across many
     // parallel forks; the 5s default test timeout is too tight under that load
     // and trips otherwise-passing tests. Give them headroom.

@@ -8,7 +8,7 @@ const DAY_MS = 86_400_000;
 
 /** Any surface can open the recap by dispatching this (the same bus Settings, the
  *  tour and How-To-Start already use — no global UI store needed). */
-export const OPEN_STATS_EVENT = "eldrun:open-stats";
+export const OPEN_STATS_EVENT = "app:open-stats";
 
 /**
  * Owns when the usage recap is on screen.

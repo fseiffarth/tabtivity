@@ -155,70 +155,6 @@ select option {
   z-index: -1;
 }
 
-/* The head of the bar reads left-to-right as one evenly spaced run — grip ·
-   clock · hairline · logo scope chip — and the spacing is what makes it read as
-   one: each item carries its own 10px of inset (the clock button's padding,
-   the box chip's), so the visible
-   gap between any two neighbours is the sum of the two facing insets and is the
-   same everywhere. Hence NO trailing padding here and no margin on the hairline:
-   the pills' own left padding is the space after the line, and adding more would
-   push the chip twice as far from the clock as the pills sit from each other —
-   which is exactly what it used to do. The 5px gap pairs with the clock button's
-   own 5px padding to make the grip-to-clock and clock-to-hairline gaps 10 too. */
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 0 0 12px;
-  flex-shrink: 0;
-
-}
-
-/* The one divider between what belongs to the machine (the clock) and what
-   belongs to the project list. It sits centred in that 10+10 gap, so it takes
-   none of the run's spacing for itself — the shared `margin: 0 2px` would make
-   this gap the odd one out. */
-.header-left .project-switcher-separator {
-  margin: 0;
-}
-
-/* Explicit window-move grip at the top-left of the header, mirroring the
-   subwindow `.tab-drag-grip`. The header is already a drag region, but this is
-   an always-present, obvious handle. */
-.app-drag-grip {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  height: 34px;
-  color: var(--text-muted);
-  line-height: 1;
-  user-select: none;
-  cursor: var(--cur-grab, grab);
-  transition: color var(--transition);
-}
-.app-drag-grip:hover {
-  color: var(--text-primary);
-}
-.app-drag-grip:active { cursor: var(--cur-grabbing, grabbing); }
-.app-drag-grip-mark {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 33px;
-  height: 30px;
-  flex: none;
-  color: var(--top-frame-text);
-}
-.app-drag-grip-mark svg {
-  position: relative;
-  width: 25px;
-  height: 25px;
-}
-.app-drag-grip-dots { font-size: 12px; opacity: .7; }
-.app-drag-grip:hover .app-drag-grip-dots { opacity: 1; }
-
 /* The project strip's track, and now nothing else's: the global buttons that
    used to share it moved to .header-right, so the one elastic thing in the bar
    no longer competes with six fixed-width controls for the same space. */
@@ -245,10 +181,10 @@ select option {
 
 /* macOS draws native traffic-light buttons over the top-left of the window
    (Overlay title-bar style; see tauri.macos.conf.json). Reserve room so the
-   logo and version don't sit under them, and the custom `.wm-controls` are
-   hidden in WindowControls.tsx on macOS. */
-.app-header.is-mac .header-left {
-  padding-left: 78px;
+   logo chip that opens the bar doesn't sit under them, and the custom
+   `.wm-controls` are hidden in WindowControls.tsx on macOS. */
+.app-header.is-mac .header-center {
+  padding-left: 68px;
 }
 
 /* ── Close / window controls (rectangular, colored glyphs) ──────────────

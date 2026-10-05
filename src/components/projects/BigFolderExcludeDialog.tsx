@@ -17,7 +17,7 @@ import { useT } from "../../lib/i18n";
  * "These folders are giant — sync them?", asked once, at setup.
  *
  * Byte-sync's scope is an opt-in manifest that does **not** read `.gitignore`,
- * so nothing else in Eldrun would ever mention that a `node_modules/`, `data/`
+ * so nothing else in Tabtivity would ever mention that a `node_modules/`, `data/`
  * or `checkpoints/` is about to cross. The file tree already prices ONE folder
  * on the click that would sync it (`sync_auto_preview`); this asks the same
  * question for the whole project at the only moment the answer is cheap — before

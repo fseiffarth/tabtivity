@@ -5,7 +5,7 @@
  * window event", which is precisely the kind of move that fails silently: a
  * mistyped event name leaves a menu row that opens nothing and throws nothing.
  * So every row is asserted against the listener that answers it — including
- * `eldrun:open-settings`, whose `detail` is the panel `ProjectSwitcher` opens
+ * `tabtivity:open-settings`, whose `detail` is the panel `ProjectSwitcher` opens
  * the dialog on.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -53,12 +53,12 @@ describe("header settings menu", () => {
   it("opens the settings dialog on the main panel", () => {
     const seen: unknown[] = [];
     const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
-    window.addEventListener("eldrun:open-settings", onOpen);
+    window.addEventListener("app:open-settings", onOpen);
     const { container } = renderMenu();
     act(() => {
       fireEvent.click(rowNamed(container, "Settings"));
     });
-    window.removeEventListener("eldrun:open-settings", onOpen);
+    window.removeEventListener("app:open-settings", onOpen);
     expect(seen).toEqual(["main"]);
     // …and the menu closes behind it.
     expect(container.querySelector(".project-switcher-add-menu")).toBeNull();
@@ -67,12 +67,12 @@ describe("header settings menu", () => {
   it("clicking the gear itself opens the settings dialog on the main panel", () => {
     const seen: unknown[] = [];
     const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
-    window.addEventListener("eldrun:open-settings", onOpen);
+    window.addEventListener("app:open-settings", onOpen);
     const { container, btn } = renderMenu();
     act(() => {
       fireEvent.click(btn);
     });
-    window.removeEventListener("eldrun:open-settings", onOpen);
+    window.removeEventListener("app:open-settings", onOpen);
     expect(seen).toEqual(["main"]);
     expect(container.querySelector(".project-switcher-add-menu")).toBeNull();
   });
@@ -80,19 +80,19 @@ describe("header settings menu", () => {
   it("opens the settings dialog on the help panel", () => {
     const seen: unknown[] = [];
     const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
-    window.addEventListener("eldrun:open-settings", onOpen);
+    window.addEventListener("app:open-settings", onOpen);
     const { container } = renderMenu();
     act(() => {
       fireEvent.click(rowNamed(container, "Feature Guide"));
     });
-    window.removeEventListener("eldrun:open-settings", onOpen);
+    window.removeEventListener("app:open-settings", onOpen);
     expect(seen).toEqual(["help"]);
   });
 
   it("opens the settings dialog on the updates panel, as the last row", () => {
     const seen: unknown[] = [];
     const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
-    window.addEventListener("eldrun:open-settings", onOpen);
+    window.addEventListener("app:open-settings", onOpen);
     const { container } = renderMenu();
     const rows = container.querySelectorAll(".project-switcher-add-menu button");
     const row = rows[rows.length - 1] as HTMLElement;
@@ -100,14 +100,14 @@ describe("header settings menu", () => {
     act(() => {
       fireEvent.click(row);
     });
-    window.removeEventListener("eldrun:open-settings", onOpen);
+    window.removeEventListener("app:open-settings", onOpen);
     expect(seen).toEqual(["updates"]);
   });
 
   it("fires the how-to-start and lessons events", () => {
     const rows: [string, string][] = [
-      ["How to start", "eldrun:open-how-to-start"],
-      ["Lessons", "eldrun:open-lessons"],
+      ["How to start", "app:open-how-to-start"],
+      ["Lessons", "app:open-lessons"],
     ];
     for (const [label, event] of rows) {
       const fired = vi.fn();

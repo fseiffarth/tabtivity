@@ -9,6 +9,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TERMINAL_PROTOCOL, TERMINAL_SIZE } from "../../../mobile-web/src/terminal/protocol";
+import { readRustBrand } from "../helpers/rustBrand";
+import { BRAND } from "../../lib/brand";
 
 // vitest runs from the repo root, as the other source-reading tests assume.
 const RUST = readFileSync("src-tauri/src/services/mobile_control/protocol.rs", "utf8");
@@ -19,9 +21,38 @@ function rustConst(name: string): string {
   return m[1].trim();
 }
 
-describe("Eldrun Mobile terminal protocol mirror", () => {
+const TS = readFileSync("mobile-web/src/terminal/protocol.ts", "utf8");
+
+/** The wire `type` of every variant of a Rust enum (`rename_all = "snake_case"`). */
+function rustVariants(name: string): string[] {
+  const body = new RegExp(`pub enum ${name} \\{([\\s\\S]*?)\\n\\}`).exec(RUST);
+  if (!body) throw new Error(`protocol.rs no longer defines ${name}`);
+  return [...body[1].matchAll(/^ {4}([A-Z][A-Za-z]*)/gm)]
+    .map((m) => m[1].replace(/(?!^)([A-Z])/g, "_$1").toLowerCase())
+    .sort();
+}
+
+/** The `type` of every member of a TypeScript union in `protocol.ts`. */
+function tsVariants(name: string): string[] {
+  const body = new RegExp(`export type ${name} =([\\s\\S]*?);\\n\\n`).exec(TS);
+  if (!body) throw new Error(`protocol.ts no longer defines ${name}`);
+  return [...body[1].matchAll(/\{ type: "([a-z_]+)"/g)].map((m) => m[1]).sort();
+}
+
+describe(`${BRAND.display} Mobile terminal protocol mirror`, () => {
+  // A control the sidecar does not name closes the socket for good, and an
+  // event the phone does not name is silently dropped: the two lists are one.
+  it("names the same controls and events as the sidecar", () => {
+    expect(tsVariants("TerminalControl")).toEqual(rustVariants("TerminalControl"));
+    expect(tsVariants("TerminalEvent")).toEqual(rustVariants("TerminalEvent"));
+    expect(rustVariants("TerminalControl")).toContain("visibility");
+    expect(rustVariants("TerminalEvent")).toContain("features");
+  });
+
   it("names the same subprotocol as the sidecar", () => {
-    expect(rustConst("TERMINAL_PROTOCOL")).toBe(JSON.stringify(TERMINAL_PROTOCOL));
+    // The sidecar takes the name from its brand module; resolve it there.
+    expect(rustConst("TERMINAL_PROTOCOL")).toBe("crate::brand::TERMINAL_PROTOCOL");
+    expect(readRustBrand().current.TERMINAL_PROTOCOL).toBe(TERMINAL_PROTOCOL);
   });
 
   it("accepts exactly the geometry the sidecar accepts", () => {

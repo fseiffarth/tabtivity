@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { importIcsText } from "./calendar/importIcs";
+import { useMailStore } from "./mail";
+import { mailAgentDraftsFile, mailDraftDiscard } from "../lib/mail";
+import type { MailDraft } from "../types/mail";
 
 export interface ReviewRow {
   kind: string;
@@ -57,8 +60,25 @@ interface RootReviewState {
    *  `fallbackName` names the new calendar when the agent gave none. */
   importStaged: (staged: StagedIcsImport, fallbackName: string) => Promise<void>;
   discardStaged: (staged: StagedIcsImport) => Promise<void>;
+  /** Approve agent mail drafts, as shown: they go into the "Drafted by
+   *  agents" folder, still unsent — the composer's Send is the user's. */
+  fileDrafts: (drafts: MailDraft[]) => Promise<void>;
+  discardDraft: (draft: MailDraft) => Promise<void>;
 }
 let refreshVersion = 0;
+/** A draft verb: the mail store's list is the one to read again, not ours. */
+async function draftAction(run: () => Promise<unknown>) {
+  if (useRootReviewStore.getState().busy) return;
+  useRootReviewStore.setState({ busy: true, error: null });
+  try {
+    await run();
+  } catch (error) {
+    useRootReviewStore.setState({ error: String(error) });
+  } finally {
+    await useMailStore.getState().loadAgentDrafts();
+    useRootReviewStore.setState({ busy: false });
+  }
+}
 async function action(command: string, args: Record<string, unknown>) {
   if (useRootReviewStore.getState().busy) return;
   useRootReviewStore.setState({ busy: true, error: null });
@@ -117,4 +137,6 @@ export const useRootReviewStore = create<RootReviewState>((set) => ({
     }
   },
   discardStaged: (staged) => action("root_mcp_import_remove", { id: staged.id }),
+  fileDrafts: (drafts) => draftAction(() => mailAgentDraftsFile(drafts)),
+  discardDraft: (draft) => draftAction(() => mailDraftDiscard(draft.id)),
 }));

@@ -8,6 +8,7 @@ import { recordScheduledDelivery } from "../../stores/agents/agentPrompts";
 import { continueKey, useAgentContinueStore } from "../../stores/agents/agentContinue";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
+import { holdsTimerLease } from "../../stores/timerLease";
 
 /**
  * Keeps an agent tab going across its own CLI's rate-limit windows.
@@ -57,7 +58,7 @@ const REARM_AFTER_SEND_MS = 90_000;
  *  error, is asked again. Long enough not to respawn a CLI on a loop. */
 const RETRY_MS = 5 * 60_000;
 
-/** An agent with no usage readout at all cannot grow one while Eldrun runs, so
+/** An agent with no usage readout at all cannot grow one while Tabtivity runs, so
  *  this only exists to stop the (cheap, spawn-free) refusal being re-fetched
  *  every tick. Turning the switch off and on again asks immediately. */
 const UNSUPPORTED_RETRY_MS = 60 * 60_000;
@@ -212,6 +213,7 @@ export function AgentContinueHost() {
         {
           tabLabel: binding.tab.label,
           sessionId: binding.tab.sessionId,
+          tabId: binding.scheduleTargetId,
           agent: binding.tab.cmd,
           result,
           scheduledFor: localOccurrenceKey(new Date(armedAt)),
@@ -220,6 +222,9 @@ export function AgentContinueHost() {
     };
 
     const tick = async () => {
+      // Another Tabtivity window holds the timer lease: it continues the agents,
+      // this one does not (headless owner plan, H2 interim).
+      if (!holdsTimerLease()) return;
       if (disposed || running.current) return;
       running.current = true;
       try {

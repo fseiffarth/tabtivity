@@ -1,6 +1,7 @@
 import type { DetectedSpecSource, ProjectEntry } from "../../types";
 import { resolveProjectDirectory } from "../../types";
 import { translate, useI18nStore, type TranslationKey } from "../../lib/i18n";
+import { BRAND } from "../../lib/brand";
 
 export const TERMINAL_OPTIONS = ["claude", "codex", "gemini", "vibe"];
 
@@ -134,14 +135,16 @@ export function collectScaffoldAgentFills(
 export function buildScaffoldFillPrompt(files: string[]) {
   const fileList = files.map((file) => `- ${file}`).join("\n");
   return [
-    "Fill the Eldrun project scaffold files listed below.",
+    `Fill the ${BRAND.display} project scaffold files listed below.`,
     "",
     "Instructions:",
     "- Inspect the project first so the files reflect the actual codebase and purpose.",
     "- Replace placeholder scaffold content with useful, project-specific guidance.",
     "- Preserve unrelated existing content and do not rewrite files outside this list.",
-    "- All agent guidance belongs in the canonical AGENTS.md — architecture, workflows",
-    "  and constraints — kept practical for coding agents.",
+    "- All agent guidance belongs in the canonical AGENTS.md. Agents load it every",
+    "  session, so keep it short: build/test commands, constraints, and conventions",
+    "  an agent would otherwise get wrong. Overviews and architecture go in README.md",
+    "  or DOCUMENTATION.md, linked from PROJECT.md.",
     "- The CLAUDE.md and GEMINI.md files are pointers to it: keep their `@AGENTS.md`",
     "  import and their links to the other agent files, and never copy guidance into them.",
     "- PROJECT.md is the navigation map: keep its relative links to the other scaffold",
@@ -156,7 +159,7 @@ export function buildScaffoldFillPrompt(files: string[]) {
 
 export function buildDescriptionFillPrompt(projectName: string) {
   return [
-    `Write a concise Eldrun project description for "${projectName}".`,
+    `Write a concise ${BRAND.display} project description for "${projectName}".`,
     "",
     "Instructions:",
     "- Inspect the project first so the description reflects the actual codebase and purpose.",

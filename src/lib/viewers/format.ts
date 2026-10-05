@@ -109,7 +109,7 @@ and <code>inline code</code>.</p>
 `;
 
 /**
- * The one line Eldrun adds to an HTML file's source before it becomes a
+ * The one line Tabtivity adds to an HTML file's source before it becomes a
  * `srcdoc`: pins the document's base URL to its own address so in-page anchors
  * (`<a href="#section">`) stay in-page.
  *

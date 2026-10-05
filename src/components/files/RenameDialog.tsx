@@ -3,7 +3,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { TextPromptDialog } from "../common/PromptDialogs";
 
 /**
- * Renaming a file or folder, in Eldrun's own chrome.
+ * Renaming a file or folder, in Tabtivity's own chrome.
  *
  * Both file surfaces used to call `window.prompt()`, which WebKitGTK renders as
  * a bare browser alert headed with the page origin — "localhost:1420 says" in a
@@ -19,7 +19,7 @@ import { TextPromptDialog } from "../common/PromptDialogs";
  * The chrome itself now lives in `TextPromptDialog` (`common/PromptDialogs`),
  * which the panel's other name prompts — New File, New Folder, New Presentation,
  * rename-session — also wear, so this dialog can no longer be the only gesture
- * in the panel that looks like Eldrun.
+ * in the panel that looks like Tabtivity.
  */
 export function RenameDialog({
   entryName,

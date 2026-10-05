@@ -2,7 +2,7 @@
  * The window's own **fullscreen mode** — F11 or the fullscreen button in
  * `WindowControls`, in the main window and in every popout alike.
  *
- * Eldrun otherwise treats an OS fullscreen as a fault: a window in
+ * Tabtivity otherwise treats an OS fullscreen as a fault: a window in
  * `_NET_WM_STATE_FULLSCREEN` cannot be moved, so `restore_main_window` clears it
  * at launch and a popout's guard (`lib/window/strayFullscreen`) keeps clearing it
  * for as long as the popout lives. A fullscreen the user ASKED for is the one

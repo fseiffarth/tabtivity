@@ -2,15 +2,15 @@
 
 Referenced from `AGENTS.md`.
 
-**Agent authority has three axes Eldrun owns**, and they compose: the project
+**Agent authority has three axes Tabtivity owns**, and they compose: the project
 container `sandbox` (OS containment), the tab's `location` (where the process
 runs), and the default-on local-agent filesystem `fence`. All three are
 properties of the *process* — where it runs and what it can reach — which is
-what makes them Eldrun's to decide.
+what makes them Tabtivity's to decide.
 
 A fourth thing looks like an axis and is narrower: the **root MCP caller
 class** (`root_mcp::Caller`, `docs/context/root_console.md` §Mail). It is fixed
-at spawn with the token and decides which of Eldrun's *own* tools exist for an
+at spawn with the token and decides which of Tabtivity's *own* tools exist for an
 agent — a root tab writes mail drafts and never reads mail; only a `Reader`, an
 agent in a `mail_reader` VM whose egress is the default allowlisting proxy,
 reads. It composes with the axes above rather than replacing them: the class is
@@ -20,7 +20,7 @@ only handed out where `location` is that VM.
 
 An agent's permission mode — Claude's plan / accept-edits / bypass, Codex's
 sandbox and approval policy, Gemini's approval mode — belongs to the agent, and
-is set inside the agent's own CLI. Eldrun launches the plain command and passes
+is set inside the agent's own CLI. Tabtivity launches the plain command and passes
 no mode flag.
 
 There was a fourth axis here: an experimental per-tab **Plan/Auto** toggle
@@ -37,7 +37,7 @@ are what a reimplementation would run into again:
 - **It made the tab layout a second authority record.** A user who set a mode
   inside the CLI and a `TabEntry.agentMode` saying otherwise are two answers to
   one question, and the layout's answer is the one that got re-applied on
-  restart — so Eldrun could quietly put a resumed session into a mode nobody
+  restart — so Tabtivity could quietly put a resumed session into a mode nobody
   had asked for.
 
 The mode a user sets in-session still survives a relaunch, but through the
@@ -47,7 +47,7 @@ cycle fires no hook event, which is why the record exists at all). An explicit
 `--permission-mode` on a custom agent's argv outranks it, and anything outside
 the known mode set is discarded.
 
-Eldrun Mobile is unaffected: the phone's mode sheet
+Tabtivity Mobile is unaffected: the phone's mode sheet
 (`mobile-web/src/terminal/agentModes.ts`) never used launch flags. It presses
 Shift+Tab and verifies each step against the mode the TUI itself prints — which
 is the same thing a person does, through the CLI. The desktop bridge's
@@ -111,8 +111,8 @@ The four items that review left open were closed on 2026-09-26 (tracked in
    switched off for every fenced spawn where it has a switch (Claude's
    `DISABLE_AUTOUPDATER`); a CLI without one fails its update on the
    read-only tree and carries on. Updating a host-installed CLI is a
-   reinstall through Manage CLIs (Eldrun-owned from then on) or an update
-   outside Eldrun. This is the self-update widening of 2026-09-13 taken
+   reinstall through Manage CLIs (Tabtivity-owned from then on) or an update
+   outside Tabtivity. This is the self-update widening of 2026-09-13 taken
    back: the payload was one every scope and the user's own shell executed
    next.
 3. **Terminal injection from shell shims — the drain now covers the shim.**
@@ -136,7 +136,7 @@ The four items that review left open were closed on 2026-09-26 (tracked in
    a write is adopted only through the account guard; a refused one is
    overwritten with the store's copy. A pass adopts from every home first
    and places into every home after, so a login made anywhere reaches every
-   other home in one pass. A hard link from an older Eldrun is replaced by
+   other home in one pass. A hard link from an older Tabtivity is replaced by
    a copy on the first pass. Login directories (Kimi, CodeBuddy) are
    reconciled file by file and no longer bind-mounted. The cost is that a
    token refresh reaches the other running tabs one pass later instead of
@@ -155,7 +155,7 @@ repairs. Further tests cover Claude identity replacement, Copilot temporary
 links and directory links, and owned-install mount ordering. The existing
 kernel seccomp test also runs in the Rust suite. A standalone bubblewrap
 probe failed with “No permissions to create a new namespace”, even outside
-Codex's command sandbox, so no full fence or Eldrun window was tested live.
+Codex's command sandbox, so no full fence or Tabtivity window was tested live.
 
 ### Current implementation
 
@@ -166,7 +166,7 @@ project container is launched under an outer `bubblewrap` boundary. The host
 root remains visible read-only so compilers and system tools still work;
 `/tmp`, `/run` and `~/.cache` are private; the kernel keyring is denied (a
 seccomp filter makes `add_key`/`request_key`/`keyctl` fail with `EPERM`, and
-`/proc/keys` is masked) because Eldrun's saved secrets are cached there in the
+`/proc/keys` is masked) because Tabtivity's saved secrets are cached there in the
 login session keyring every process inherits — the private `/run` alone hid
 only the Secret Service, and until 2026-09-25 a fenced agent could read every
 saved SSH, VPN and mail password; abstract Unix sockets outside the fence
@@ -175,16 +175,20 @@ only the pid namespace, so the host's network namespace — and with it
 `@/tmp/.X11-unix/X0`, the systemd/D-Bus buses and IDE daemons — stayed
 reachable, and on an X11 host that ran `xhost +local:` or
 `+si:localuser:$USER` a fenced agent could log keystrokes and type into
-unfenced windows. Eldrun's own binary (`eldrun --fence-scope`) enters
+unfenced windows. Tabtivity's own binary (`tabtivity --fence-scope`) enters
 Landlock's `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` and execs bwrap; sockets the
 agent creates itself still work and the network is untouched. It is
 best-effort per host — skipped below Landlock ABI 6 (Linux 6.12) or for a
 setuid bwrap, where `no_new_privs` would strip bwrap's privileges — and fails
 closed where used. `--unshare-net` would have closed the same hole but cut
 the agents off the network; and `$HOME` is not the user's home
-at all but the scope's **Eldrun-owned agent home**
+at all but the scope's **Tabtivity-owned agent home**
 (`services::agent_home`, `<state_dir>/agent-homes/<project_key(scope)>/`),
-bound over the home path. The owning project is mounted read-write. If it
+bound over the home path. A local-model tab (`PtyOptions.local_model`) gets
+the scope's second home, `<project_key(scope)>.local` — no scope key can
+contain a `.` — so the config an `ollama launch` writes into its agent and
+the sessions a local model runs stay apart from the scope's own agents';
+same fence, same roots, seeded with only `.claude.json`. The owning project is mounted read-write. If it
 belongs to project boxes, every box folder and member root is added
 read-write; membership in several boxes produces the union. A `box:<id>` tab
 receives that box's roots directly. Claude also receives `--add-dir` and
@@ -192,7 +196,7 @@ Gemini receives `--include-directories`, so their own working-dir checks
 agree with the OS boundary. Codex receives no automatic `--add-dir`: that
 flag requests extra writable roots, and Codex warns and ignores it when its
 own effective permissions are read-only or managed. A root-console agent's
-fence is `~/eldrun/root` read-write and, only with
+fence is `~/tabtivity/root` read-write and, only with
 `root_fence_projects_readable` on (default off), every project, box folder
 and remote mirror read-only through the allowlist's channel — a widening,
 since one poisoned project can then reach the others through an agent with
@@ -211,13 +215,13 @@ unreachable (the state dir is masked inside the fence; on macOS the whole
 own `~/.claude`, `~/.codex`, `~/.gemini` and the rest are never mounted, so
 the whole apparatus that used to protect them — the per-entry deny lists,
 the staged shadow copies of hook-registration files, the credential mirror,
-the per-project transcript stage and its harvest — is gone. Eldrun registers
+the per-project transcript stage and its harvest — is gone. Tabtivity registers
 its session hooks in each home's `settings.json` / `config.toml` /
 `hooks.toml` at every spawn, so it no longer edits another app's config. What
-Eldrun reads back out of a home (transcripts, Codex's SQLite, Copilot's
+Tabtivity reads back out of a home (transcripts, Codex's SQLite, Copilot's
 config) is agent-written and treated as attacker-controlled, as before.
 
-A home is seeded once: the scope's existing Eldrun-kept Codex store and
+A home is seeded once: the scope's existing Tabtivity-kept Codex store and
 Copilot home move in, the Claude transcripts of the scope's own roots are
 **copied** from the user's `~/.claude/projects` (so every tab open before the
 change still resumes; the user's copy stays), and `.claude.json` gets its
@@ -225,24 +229,24 @@ identity keys plus the `projects` entries under the roots. Instructions,
 skills, hooks and MCP entries of the user's home are not seeded per scope.
 Forgetting or deleting a project deletes its home.
 
-**The Eldrun-wide layer.** Per-scope homes meant the user's own CLAUDE.md,
+**The Tabtivity-wide layer.** Per-scope homes meant the user's own CLAUDE.md,
 RTK hook and Codex MCP servers reached no agent; the user asked for "one
-global Eldrun" instead, and chose a layer over one shared home (2026-09-25),
+global Tabtivity" instead, and chose a layer over one shared home (2026-09-25),
 because a shared home would give back exactly the gap-7 path above.
 `services::agent_global` keeps a home-shaped tree at
 `<state_dir>/agent-global/` that the user fills (Settings → Global agent
 config: one-click import from `~/.claude`, `~/.codex`, `~/.gemini` without
-logins, transcripts, folder trust or Eldrun's own hooks; or "Open folder").
+logins, transcripts, folder trust or Tabtivity's own hooks; or "Open folder").
 The import also takes the hook and plugin files the other CLIs read
 (`.cursor/hooks.json`, `.factory/hooks.json`, `.vibe/hooks.toml`,
 `.copilot/hooks/`, `.config/opencode/plugins/`, `.pi/agent/extensions/`,
 `.gemini/hooks/`, every top-level `.md` of `.codex`/`.gemini`), so what the
 user wired into their agents on their side — `rtk init -g --agent …` — reaches
-every agent. Eldrun never installs or registers such a tool itself: it comes
+every agent. Tabtivity never installs or registers such a tool itself: it comes
 from the user's own setup, through this import (2026-09-26).
-At every spawn, before Eldrun's hooks are registered, its plain files are
+At every spawn, before Tabtivity's hooks are registered, its plain files are
 copied over the home's (a scope file replaced the first time is kept in
-`.eldrun-global-backup/`) and its fragments of the files the CLIs write
+`.tabtivity-global-backup/`) and its fragments of the files the CLIs write
 themselves (`.claude/settings.json`, `.claude.json`, `.codex/config.toml`,
 `.gemini/settings.json`, and the Cursor/Droid/Vibe hook files) are merged: objects recurse, arrays gain elements,
 scalars take the layer's value. A per-home manifest records what was placed
@@ -285,7 +289,7 @@ again (the same rule `copilot_auth` had). The fence also sets the per-CLI
 "keep your login in a file" variables (`GEMINI_FORCE_FILE_STORAGE`,
 `FACTORY_DISABLE_KEYRING`, …), since the keyring is not reachable inside
 it. Settings → Agent fence → Agent logins imports a login this computer
-already holds (the one safe direction) and signs out. An older Eldrun's
+already holds (the one safe direction) and signs out. An older Tabtivity's
 Claude mirror (`agent-creds/`) is adopted into the store at startup. The
 first start after the upgrade also runs both imports once
 (`agent_auth::import_once`, `agent_global::import_once`, marker files in
@@ -305,20 +309,23 @@ private `~/.local/bin` copy and carry-back of #861 went with it). The CLI's
 own updater is switched off for every fenced spawn where it has a switch
 (Claude's `DISABLE_AUTOUPDATER`); one without a switch fails its update on
 the read-only tree and carries on. Updating such a CLI is a reinstall
-through Manage CLIs or an update outside Eldrun. Whether each vendor's
+through Manage CLIs or an update outside Tabtivity. Whether each vendor's
 installer honours the prefixes is not verified per installer.
 
 **Shell tabs.** They are still the user's terminals and are never fenced —
 but a CLI typed into one now reaches the same fence: `<state_dir>/bin` holds
 one shim per registry CLI at the front of every tab's PATH
-(`services::agent_bin`), a script that execs `eldrun --agent-shim <cli>`
+(`services::agent_bin`), a script that execs `tabtivity --agent-shim <cli>`
 (`services::agent_shim`), which builds the calling tab's fence from
-`ELDRUN_SCOPE` — same scope home, same shared logins — and runs it as its
+`TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its
 child on the same terminal, draining the terminal's input queue once the
 CLI has exited and before the shell reads again (reevaluation item 3).
-Inside a fence the shim steps aside to the real CLI. There is no bypass flag;
+Inside a fence the shim steps aside to the real CLI, skipping its own
+directory only to *find* it: the CLI runs with PATH unchanged, so
+`tabtivity-send` (same directory) stays reachable. Exporting the trimmed PATH
+hid it from every fenced tab from 2026-09-25 to 2026-09-29. There is no bypass flag;
 running the binary by absolute path is the user's own shell, real home, none
-of Eldrun's logins. `paths::resolve_executable` never returns a shim, so
+of Tabtivity's logins. `paths::resolve_executable` never returns a shim, so
 version probes and the fence's own install binding see the real CLI.
 
 **macOS and Windows.** Seatbelt cannot redirect a path, so a fenced Mac agent
@@ -326,7 +333,7 @@ gets `HOME=<scope home>` by environment with `GIT_CONFIG_GLOBAL`, `CARGO_HOME`,
 `RUSTUP_HOME` and `DOCKER_CONFIG` passed through to the user's (only when
 present and unset), the user's home hidden as before and the whole
 `agent-homes/` tree denied except the own home. Windows has no fence; its
-agent tabs still use the same Eldrun-owned homes and shared logins through
+agent tabs still use the same Tabtivity-owned homes and shared logins through
 `HOME`/`USERPROFILE`, with the user's full rights, accepted once
 (`agent_fence_platform_accepted`). Neither is compiled or run here.
 
@@ -340,7 +347,7 @@ own home, `<state_dir>/agent-homes/host`, which no fence ever mounts, so
 nothing fenced can plant config it runs; it shares the logins (credential
 files only). After a restart it comes back **paused** — a "Resume unfenced"
 card, never an automatic respawn (`TabEntry.hostSessionPaused`). The CLI's
-own permission prompts apply; Eldrun injects no mode. The decision is
+own permission prompts apply; Tabtivity injects no mode. The decision is
 `FenceDecision::NotApplicable { reason: "host session" }`, honoured only with
 no `project_id`.
 
@@ -353,11 +360,126 @@ the native Claude installer leaves `~/.local/bin/claude` pointing into
 `~/.local/share/claude/versions/`, and with only `~/.local/bin` restored the
 link dangles inside the sandbox and bubblewrap fails with `execvp claude: No
 such file or directory`. Copilot signs in through the keyring, which the
-fence hides; `services::copilot_auth` holds the sign-in in Eldrun's own
+fence hides; `services::copilot_auth` holds the sign-in in Tabtivity's own
 keyring entry and hands it to each fenced Copilot as `COPILOT_GITHUB_TOKEN`
 (its `~/.copilot` of the scope home gets Copilot's `storeTokenPlaintext`, the
 keeper moves a `/login` token out of the file within seconds). A harvested
 token replaces a stored one only once GitHub rejects the stored one.
+
+Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Parts
+A and C) take the same keychain route: one key per provider under
+`remote_credentials`' service (account `agent-key:<provider>`), never in a
+file — and since C2 never in an agent process either. `services::api_proxy`,
+a loopback listener of its own (started in `setup`, stopped in the
+`RunEvent::Exit` teardown), holds the keys, cached in memory and re-read after
+a save or remove. A keyed spawn gets a **proxy token** — 32 random bytes,
+memory only, bound to provider + scope + tab — as the CLI's credential
+variable (`ANTHROPIC_AUTH_TOKEN` for Claude, which takes it without its
+custom-key dialog; `GEMINI_API_KEY`), and the CLI's base-URL variable
+(`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) set plain to
+`http://127.0.0.1:<port>/<provider>`. Only CLIs an environment variable can
+point at the proxy keep a row (Claude, Gemini; Codex, Vibe and OpenCode are
+out). The proxy refuses a browser request (`Origin`) or another `Host`,
+needs a live token of the route's provider (`x-api-key`, `Authorization:
+Bearer`, `x-goog-api-key` or `key=`, one value), forwards only the provider's
+allowlisted paths (`/v1/messages`, `count_tokens`, `/v1/models`; Gemini's
+`models/<m>:generateContent` family) and query parameters (`beta`, `alt`,
+model-list paging — never `key` or a method override) to its one fixed HTTPS
+host with the incoming credentials, hop-by-hop and method-override headers
+and `accept-encoding` stripped and the real key added in the provider's
+header, never follows a redirect, bounds the body (32 MiB, 256 MiB held over
+all sockets), drops a socket idle for 60 s between requests (64 at most),
+streams the answer through chunk by chunk, answers its own refusals in the
+provider's error shape (`x-should-retry: false`), and logs nothing. A token
+dies with its tab (`agent_fence::on_tab_gone` → `api_proxy::on_tab_gone`);
+one bound to a local tmux session lives while that session does (a project
+switch or reload kills only the client) — revoked when Tabtivity kills the
+session, following a rename, and swept once a minute otherwise — a respawn of
+the tab gets the same token back, and every token goes at quit — a clean quit
+also ends Tabtivity's tmux sessions; after a crash a re-attached agent holds a
+dead token, refused by the restarted proxy on the port it remembers
+(`<state_dir>/api-proxy-port`), so its requests do not reach whatever else
+took the port. Injection happens inside both fence wraps and in
+`launch_prep`'s Host-session and fence-less-platform arms, only while the
+proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
+shell tab, its own process) gets nothing and stays on its login. Only CLIs
+listed in `agent_api_key_clis` get a token; never a remote, container or
+local-model spawn, nor a subcommand (a sign-in tab); a credential or base URL
+the user set wins. On Linux and macOS the token travels under an app-named
+carrier (`<APP>_AGENT_SECRET_<VAR>`, `agent_api_keys::CARRIERS`), and only the
+carriers are in `tmux_local::SECRET_ENV`: on no tmux argv or launcher script,
+and the `update-environment` slots that stay on the user's default tmux server
+name no variable of theirs. Tabtivity's own binary maps a carrier to the CLI's
+variable and removes every carrier just before the agent runs
+(`services::agent_exec`, `--agent-exec`; `--fence-scope` maps the same way):
+the fence's first step in front of bwrap or `sandbox-exec`, in front of the
+CLI for a Host session; Windows (no tmux) sets the CLI's name directly. That
+step runs outside the fence, so a carrier sets only a CLI credential variable
+(`agent_exec::targets`) — never `LD_PRELOAD`, `PATH` or `BASH_ENV` — and
+every other mode of the binary drops any carrier it inherited at start. On
+tmux < 3.2 every carrier is dropped rather than put on the argv, and the proxy
+base URL beside it too. The unfenced login shell a fenced pane leaves behind
+starts with `env -u` over every `SECRET_ENV` name; the Host session's (the
+user's own shell) drops the carriers only. A keyed local Claude tab skips
+`--remote-control`, which a gateway credential or base URL refuses. Gemini
+still needs its own `/auth` pick. **What is left:** a project's own CLI
+config (`ANTHROPIC_BASE_URL` in `.claude/settings.json`, Gemini's `.env`) can
+still point the CLI at another host — which then receives only the token,
+worthless off this machine and dead with the tab; and the agent can spend
+through its token while the tab lives — up to the monthly limit (C3).
+
+**Spending limit** (`services::api_usage`, `api_meter`, `api_prices`; plan
+C3). A key is saved only beside a monthly USD limit
+(`Settings::agent_api_limits`; `agent_api_key_set` refuses without one). The
+proxy meters every billed request (Anthropic `POST /v1/messages`; Gemini
+`generateContent`, `streamGenerateContent`, embeddings — counting and model
+reads are free and never refused) in its `usage_tap`/`usage_end` seam: a
+streaming JSON scanner with bounded state reads only the usage object of the
+top-level answer (Anthropic `usage` at the root or under `message`, Gemini
+`usageMetadata` at the root of each response) — a `usage` key inside a tool
+call's arguments or the text is never read, so an agent cannot make the model
+print a cheaper usage; counts are cumulative, so each field keeps its maximum;
+what was reported is charged when a stream fails or the client leaves, plus
+an estimate for what was not (an Anthropic answer without its
+`message_delta`, a Gemini stream that did not end cleanly, a request the
+client left before its answer began — the handler's `Pending` guard —, an
+unreadable usage object): output by elapsed time at
+`ANTHROPIC_TOKENS_PER_SEC`/`GEMINI_TOKENS_PER_SEC`, capped by the request's
+`max_tokens` (Anthropic) or the provider's output cap, unreported input as
+body bytes / 3 up to a context window, the request's fast/US flags — so an
+agent cannot read an answer and hang up before its count to spend for free.
+An answer naming two models (server-side fallback) is priced at the dearer.
+The
+model comes from the answer (Gemini: `modelVersion`, else the request path);
+one the table does not know is priced at the provider's highest current rate
+and flagged. The ledger (`agent-api-usage.json`, no secrets, UTC month) is
+in-process memory written atomically (throttled, and in `stop_for_exit`); a
+clock that goes back keeps the later month; a corrupt file is moved aside and
+the restart is shown, never silent. Enforcement sits after the key check and
+before the body is read: spent ≥ limit, or no limit set (a key saved before
+limits existed), answers 429 in the provider's shape (`rate_limit_error` /
+`RESOURCE_EXHAUSTED`, `x-should-retry: false`) naming the app's budget and
+Manage CLIs. Requests in flight count (gap 9, 2026-10-04, not live): after
+the body is read each billed request reserves its worst case
+(`api_meter::Meter::worst_case` — whole output cap, input bytes/3 as 1-hour
+cache writes — the model's whole context window when the body names input
+by URL, file, cache or a fetch/search tool (#2343 follow-up, 2026-10-05,
+`names_input_by_reference`) — ten grounding queries if a Gemini body may
+ground) in
+`api_usage::Book::reserve`; spent + held + this one past the limit answers
+429 (same shapes, a "could cost more than is left" message). The
+`Reservation` drops after the actual charge, or with the meter on a connect
+error, an upstream failure or a client that leaves — it never outlives the
+request; reservations are memory-only (micro-dollars), the ledger file is
+unchanged. The overshoot is now only what an answer costs past its
+reservation. The limit is read from `settings.json` per request (re-parsed
+when its mtime or size changes, and at least every 10 s), so raising it takes
+effect at once. Gemini Search/Maps grounding is metered (gap 8): the meter
+counts `candidates[i].groundingMetadata.webSearchQueries` (keyed hash per
+query and candidate, max over responses), priced per query ($14/1,000, 3.x)
+or per grounded prompt ($35/1,000, 2.5), unknown models $35/1,000 per query;
+an unsettled answer whose body may ground counts at least ten. Not metered:
+spend outside Tabtivity — the help recommends a provider-side limit too.
 
 Composition is explicit:
 
@@ -390,7 +512,7 @@ Composition is explicit:
   agents there run with their full rights (`agent_fence_platform_accepted`).
   AppContainer, the one unprivileged sandbox Windows offers, was rejected: it
   cuts loopback for the contained process unless an admin adds an exemption,
-  and every Eldrun MCP endpoint (`root_mcp`, git push, schedule, help), the
+  and every Tabtivity MCP endpoint (`root_mcp`, git push, schedule, help), the
   local-model endpoint and the agents' own OAuth callbacks are `127.0.0.1`.
   It also blocks Credential Manager and `%TEMP%`. Low integrity / restricted
   tokens block writes but not reads, and hidden reads are the point. The
@@ -411,16 +533,16 @@ Fenced Linux Codex gets no sandbox-backend override. Its own bubblewrap
 cannot nest under the fence on Ubuntu: the outer bwrap runs under the stacked
 `bwrap//&unpriv_bwrap` AppArmor profile, which denies the uid-map write of a
 second user namespace (`unshare -Ur` fails inside the fence, so does a nested
-`bwrap`). Eldrun briefly forced Codex's Landlock backend instead
+`bwrap`). Tabtivity briefly forced Codex's Landlock backend instead
 (`-c features.use_legacy_landlock=true`, 2026-09-14), but Codex 0.154.0
 prints a deprecation warning for that key on every start and its legacy
 backend refuses workspace-write outright ("permission profiles requiring
 direct runtime enforcement are incompatible with --use-legacy-landlock")
 unless `sandbox_workspace_write.exclude_slash_tmp` is also set — a policy
-narrowing Eldrun must not choose for the agent. So the flag was dropped
+narrowing Tabtivity must not choose for the agent. So the flag was dropped
 (2026-09-15): inside the fence Codex's sandbox fails to spawn, Codex reports
 that and asks to run the command outside its sandbox — which is still inside
-Eldrun's fence — and the user answers per command or once per session. The
+Tabtivity's fence — and the user answers per command or once per session. The
 Landlock opt-in that used to be suggested here is gone too: Codex's
 linux-sandbox README (checked 2026-09-28) says the legacy Landlock backend was
 removed and `features.use_legacy_landlock` must be turned off.
@@ -433,7 +555,7 @@ bubblewrap 0.11.1) and rejected, because it cannot be limited to the fence:
   `unpriv_bwrap`'s `audit deny capability` outranks any allow, including one
   in `local/unpriv_bwrap`. A profile "for Codex's bwrap only" is therefore
   impossible.
-- Eldrun cannot start its outer bwrap under a looser profile either:
+- Tabtivity cannot start its outer bwrap under a looser profile either:
   `kernel.apparmor_restrict_unprivileged_unconfined=1` stops an unconfined
   process from `change_onexec`-ing into a profile that allows user namespaces.
 - What is left is a profile attached to a root-owned launcher path. Every
@@ -454,11 +576,11 @@ Codex raises is not confirmed. Manage CLIs has a switch for it on the Codex card
 (`agent_global::set_codex_auto_review`). The switch writes
 only `approvals_reviewer` into the layer's `.codex/config.toml`. The approval
 policy stays Codex's; auto-review needs `on-request`, Codex's default. So this
-is the user's own Codex config reaching every home, not a mode Eldrun picks.
+is the user's own Codex config reaching every home, not a mode Tabtivity picks.
 
 The fence-tool probe caches success, but retries failure on the next request.
 Installing bubblewrap therefore allows the next tab to start without restarting
-Eldrun. The project menu reports the policy for **new spawns**, not an inspection
+Tabtivity. The project menu reports the policy for **new spawns**, not an inspection
 of already-running tabs; existing tabs retain their original mounts/profile.
 
 Cargo toolchains remain readable, but `credentials` and `credentials.toml` under
@@ -479,18 +601,18 @@ be visible.
 The boundary is filesystem-only: network access is shared. A nested bubblewrap
 cannot run under the outer boundary on Linux systems with the
 `bwrap-userns-restrict` AppArmor profile, so Claude Code's own bubblewrap sandbox
-falls back to unsandboxed execution *inside* Eldrun's outer fence. Docker commands
+falls back to unsandboxed execution *inside* Tabtivity's outer fence. Docker commands
 also cannot work there because `/run` is private and the Docker socket is hidden.
 The agent-state mounts deliberately reuse `services::sandbox`: narrowed auth and
 resume state, immutable hook scripts and `<state_dir>/bin` commands (including
-`eldrun-send`, prepended to PATH inside containers too), writable staged copies of hook-registration
+`tabtivity-send`, prepended to PATH inside containers too), writable staged copies of hook-registration
 config, and per-root Claude transcript permissions. That keeps the hook-repointing
 and cross-project transcript protections identical across the two containment
 mechanisms.
 
 What the Linux fence does and does not stop (code read 2026-09-25, not tested
 live). **Network:** `bwrap_args` has no `--unshare-net`, so a fenced agent
-reaches loopback services (Vite, Ollama, CUPS, Eldrun's MCP server, which
+reaches loopback services (Vite, Ollama, CUPS, Tabtivity's MCP server, which
 relies on its bearer tokens), the LAN, the internet and cloud metadata. That is
 intended. **Home:** the scope's agent home, never the user's; `~/.cache` a tmpfs.
 **Host processes:** `--unshare-pid` plus a fresh `--proc` mean
@@ -499,7 +621,7 @@ intended. **Home:** the scope's agent home, never the user's; `~/.cache` a tmpfs
 `portable-pty` closes every fd above 2 before exec (`close_random_fds`), Rust
 opens files close-on-exec, and tmux closes stray fds in the panes it spawns.
 **Environment:** not filtered (no `--clearenv`). An API key exported in the
-shell that launched Eldrun reaches every fenced agent. **Display:** `DISPLAY`
+shell that launched Tabtivity reaches every fenced agent. **Display:** `DISPLAY`
 is kept, and the abstract X11 socket is reachable through the shared network
 namespace. Hiding `/tmp/.X11-unix` does not close it (#2321). On a Wayland
 session only Xwayland clients are exposed, because the Wayland socket under

@@ -1,6 +1,6 @@
 /**
  * The root terminal is a scope like every other one — the only distinction is
- * that it is always there. It has a folder (`~/eldrun/root`), tabs that persist
+ * that it is always there. It has a folder (`~/tabtivity/root`), tabs that persist
  * and restore, and its own pill; what it does NOT have is an entry in
  * `projects.json`, and every difference this file locks came from some code
  * path reading that absence as "this scope does not count".

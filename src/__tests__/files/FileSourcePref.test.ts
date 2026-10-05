@@ -29,6 +29,7 @@ import {
 } from "../../stores/remote/fileSourcePref";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useFileSource, useIndependentFileSource } from "../../components/files/ProjectFilesPane";
+import { storageKey } from "../../lib/brand";
 
 const PID = "p1";
 
@@ -96,10 +97,10 @@ describe("useFileSource (the side panel's tree)", () => {
     const { result } = renderHook(() => useFileSource(PID, true));
     expect(useFileSourcePrefStore.getState().byProject[PID]).toBe("remote"); // latched
     // A fresh process: the store is re-created from localStorage only.
-    expect(localStorage.getItem("eldrun.fileSourceByProject")).toBeNull();
+    expect(localStorage.getItem(storageKey("fileSourceByProject"))).toBeNull();
 
     act(() => result.current[1]("local"));
-    expect(JSON.parse(localStorage.getItem("eldrun.fileSourceByProject")!)).toEqual({
+    expect(JSON.parse(localStorage.getItem(storageKey("fileSourceByProject"))!)).toEqual({
       [PID]: "local",
     });
   });

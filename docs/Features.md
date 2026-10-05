@@ -1,6 +1,6 @@
-# ProjectEldrun — Feature Checklist
+# Tabtivity — Feature Checklist
 
-A manual-QA matrix for the current **Tauri 2 + React + TypeScript** Eldrun
+A manual-QA matrix for the current **Tauri 2 + React + TypeScript** Tabtivity
 (the former Python/GTK `app/` implementation and its `plan_*.md` / `tests/`
 files are gone — ignore any older snapshot that references them).
 
@@ -15,9 +15,9 @@ Use the columns during manual QA:
 - **Partial** — some part works; scope incomplete or unverified.
 - **Issue** — a bug, crash, missing behavior, or UX problem was found.
 
-Do not launch a second Eldrun instance from an agent terminal while checking
+Do not launch a second Tabtivity instance from an agent terminal while checking
 these items (it can corrupt workspace state). Check in the already-running
-instance, or after the user restarts Eldrun. Frontend (`src/`) edits hot-reload;
+instance, or after the user restarts Tabtivity. Frontend (`src/`) edits hot-reload;
 only `src-tauri/` changes need a rebuild/restart.
 
 ## Implemented (code-complete, automated tests passing)
@@ -67,7 +67,7 @@ only `src-tauri/` changes need a rebuild/restart.
 | Agent resume generalization (#39d) | ✅ | | | Claude/Codex resume-by-id; Gemini (`--resume latest`) + Mistral/vibe (`--continue`) via continue-last |
 | KDE Wayland backend (#18) | | | | show/hide are explicit no-ops (KWin scripting pending) |
 | Boxes phases 3–4 (#41) | | | | merged file tree + relation graph deferred |
-| Git worktrees (#23) | ✅ | | | list/add/remove/lock/prune, host-or-mirror side, worktrees confined to `<root>/.eldrun/worktrees/`; `docs/worktree_improvement_plan.md` phases 0–2. **Untested.** Worktree-aware tab groups + worktree-as-project (phases 3–4) deferred |
+| Git worktrees (#23) | ✅ | | | list/add/remove/lock/prune, host-or-mirror side, worktrees confined to `<root>/.tabtivity/worktrees/`; `docs/worktree_improvement_plan.md` phases 0–2. **Untested.** Worktree-aware tab groups + worktree-as-project (phases 3–4) deferred |
 
 ## Open / not started
 

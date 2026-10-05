@@ -32,7 +32,7 @@ import { translate, useI18nStore } from "../../i18n";
  *     validates anything, so a doomed attempt is not free (see `lib/remote/vpn/vpnConnect`).
  *
  * Non-headless mode is the deliberate exception to (1): with `connections_headless`
- * off, Eldrun handles no passwords at all, so "connect on launch" can only mean
+ * off, Tabtivity handles no passwords at all, so "connect on launch" can only mean
  * "open the connect command in the root terminal" — one tab, waiting for the user,
  * which is exactly what activating a VPN-gated project does in that mode.
  */
@@ -53,7 +53,7 @@ export async function setVpnAutoConnect(config: string, enabled: boolean): Promi
 }
 
 /**
- * Whether the user asked Eldrun to remember this config's credentials.
+ * Whether the user asked Tabtivity to remember this config's credentials.
  *
  * Deliberately read from *settings*, not from the keychain. The keychain is the only
  * place the secret lives, but it cannot always be asked: a locked Secret Service
@@ -125,7 +125,7 @@ export async function autoConnectVpnOnLaunch(): Promise<void> {
 
   const username = vpnUsernameFor(config);
 
-  // Non-headless: Eldrun handles no password, so "auto-connect" means the connect
+  // Non-headless: Tabtivity handles no password, so "auto-connect" means the connect
   // command is waiting in the root terminal for the user to authenticate. Building it
   // also arms the tunnel backend-side (`--writepid`), so it stays visible and killable.
   if (settings?.connections_headless === false) {
@@ -176,7 +176,7 @@ export async function autoConnectVpnOnLaunch(): Promise<void> {
 /**
  * **The** non-headless VPN login: hand `config` to an interactive root-terminal tab
  * and let OpenVPN itself ask for whatever it needs — the account password, a key
- * passphrase, a challenge/OTP — none of which Eldrun ever sees or has to model.
+ * passphrase, a challenge/OTP — none of which Tabtivity ever sees or has to model.
  *
  * It is the one implementation of that handoff, shared by every caller that reaches
  * for it: the `connections_headless: false` paths (activation, auto-connect, the
@@ -184,7 +184,7 @@ export async function autoConnectVpnOnLaunch(): Promise<void> {
  * it **per connect** when their own login failed (the modal's "Log in in terminal",
  * see `stores/remote/vpn/vpnPrompt`'s `useTerminal`). That fallback is deliberately a *local*
  * switch — one tunnel, one click — and never writes the global setting: a mode is
- * how the user wants Eldrun to behave, not something a failed handshake gets to
+ * how the user wants Tabtivity to behave, not something a failed handshake gets to
  * decide for them.
  *
  * Building the command also **arms** the tunnel backend-side (the pidfile +

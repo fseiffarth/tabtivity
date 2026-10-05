@@ -3,7 +3,7 @@
  *
  * There were four spellings of it (`useRemoteReconnect`, `ProjectPill`, the
  * Connect modal's non-headless branch, the Machines menu) and they disagreed on
- * the part that matters: a host tagged **HPC** is one Eldrun promises never to
+ * the part that matters: a host tagged **HPC** is one Tabtivity promises never to
  * dial by itself (`lib/remote/hpc/hpcHost.ts` — `stores/projects` refuses the connect at the
  * gate). The Machines menu said so and disabled the switch; the project surfaces
  * left it live, so the user armed a toggle that was guaranteed to do nothing and
@@ -31,7 +31,7 @@ export interface AutoConnectEligibility {
 }
 
 export function autoConnectEligibility(opts: {
-  /** `connections_headless` — off means Eldrun handles no passwords at all. */
+  /** `connections_headless` — off means Tabtivity handles no passwords at all. */
   headless: boolean;
   /** The backend recorded key/agent auth on this host's last connect. */
   keyAuth: boolean;
@@ -44,7 +44,7 @@ export function autoConnectEligibility(opts: {
   hpc: boolean;
 }): AutoConnectEligibility {
   // The tag outranks everything: it is a statement about the machine, not about
-  // what Eldrun happens to have in its keychain for it.
+  // what Tabtivity happens to have in its keychain for it.
   if (opts.hpc) return { eligible: false, reason: "hpc" };
   if (!opts.headless || opts.keyAuth || opts.savedPassword) {
     return { eligible: true, reason: null };

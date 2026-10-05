@@ -31,7 +31,7 @@ describe("fileIconKind", () => {
 describe("FileIcon", () => {
   it("renders a hidden currentColor svg and no emoji text", () => {
     const { container } = render(<FileIcon ext=".py" />);
-    const svg = container.querySelector("svg.eldrun-icon");
+    const svg = container.querySelector("svg.app-icon");
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute("aria-hidden")).toBe("true");
     expect(svg?.querySelector("g")?.getAttribute("stroke")).toBe("currentColor");

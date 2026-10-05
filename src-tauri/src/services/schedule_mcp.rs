@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 use crate::schema::agent_tasks::{AgentPromptTarget, AgentScheduleResult, AgentScheduleRule, AgentTasksFile, ScheduleAuthor, ScheduleOrigin, ScheduledAgentPrompt};
 use super::{agent_tasks, root_mcp::{Caller, Session}};
 
-pub const SERVER_NAME: &str = "eldrun-schedule";
-pub const CONTRACT: &str = "Schedules fire only while Eldrun is running and this tab is open, when it is next idle at/after the time. Occurrences over one hour late are missed. By default the user must approve proposals first. Recurring prompts always require approval. Times are desktop-local YYYY-MM-DDTHH:MM / HH:MM. Weekdays are numbered 1 = Monday … 7 = Sunday (the calendar tools' 0 = Sunday convention does not apply here). A one-time schedule needs five minutes' lead; a daily or weekday rule whose next occurrence is closer than that starts at the occurrence after it. Arguments are validated before anything else runs — a malformed call costs no budget. Prompts only: no commands or prefix commands.";
+pub const SERVER_NAME: &str = crate::brand::MCP_SCHEDULE_SERVER;
+pub const CONTRACT: &str = concat!("Schedules fire from an open ", crate::app_name!(), " window, or, with ", crate::app_name!(), " Mobile switched on, from its background service while no window is open (which restarts this tab's session if it has stopped), when the tab is next idle at/after the time. Occurrences over one hour late are missed. By default the user must approve proposals first. Recurring prompts always require approval. Times are desktop-local YYYY-MM-DDTHH:MM / HH:MM. Weekdays are numbered 1 = Monday … 7 = Sunday (the calendar tools' 0 = Sunday convention does not apply here). A one-time schedule needs five minutes' lead; a daily or weekday rule whose next occurrence is closer than that starts at the occurrence after it. Arguments are validated before anything else runs — a malformed call costs no budget. Prompts only: no commands or prefix commands.");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,7 +17,7 @@ pub fn level(project: &str) -> Result<Level, String> {
     level_at(&state, project)
 }
 
-fn level_at(state: &std::path::Path, project: &str) -> Result<Level, String> {
+pub(crate) fn level_at(state: &std::path::Path, project: &str) -> Result<Level, String> {
     let settings: crate::schema::Settings = crate::storage::read_json(&state.join("settings.json")).map_err(|_| "schedule MCP settings unavailable")?;
     if settings.schedule_mcp != Some(true) { return Err("schedule MCP is switched off".into()); }
     let projects: crate::schema::projects::ProjectsList = crate::storage::read_json(&state.join("projects.json")).map_err(|_| "project policy unavailable")?;
@@ -54,7 +54,7 @@ struct Cancel { id: String }
 #[serde(deny_unknown_fields)]
 struct Empty {}
 
-fn wall(at: &str) -> Option<DateTime<Local>> {
+pub(crate) fn wall(at: &str) -> Option<DateTime<Local>> {
     let naive = NaiveDateTime::parse_from_str(at, "%Y-%m-%dT%H:%M").ok()?;
     // Refuse DST gaps; choose the first occurrence of a repeated wall minute,
     // as the desktop Date constructor does.
@@ -141,7 +141,7 @@ fn apply_create(file: &mut AgentTasksFile, session: &Session, args: Create, leve
     let id = format!("agent-{}", super::root_mcp::mint_token().ok_or("entropy unavailable")?);
     let enabled = level == Level::Apply && !recurring;
     let row = ScheduledAgentPrompt { id: id.clone(), enabled, message, rule, preface: vec![], last: None,
-        origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery }) };
+        origin: Some(ScheduleOrigin { by: ScheduleAuthor::Agent, session: session.id.clone(), at: now.to_rfc3339(), from_delivery }), phone_device: None };
     agent_tasks::apply_upsert(file, project, &binding.target, row, None)?;
     Ok(json!({"id":id, "state":if enabled {"scheduled"} else {"proposed"}, "fires_at":fires_at.to_rfc3339()}))
 }

@@ -6,6 +6,8 @@
 //!   frontend accumulates counters in memory and flushes them on an interval, so
 //!   a burst of keystrokes costs one whole-file rewrite per flush, not per event.
 //! - [`usage_summary`] — read-only rollup, mirroring `commands::net_usage::get_net_usage`.
+//! - [`usage_token_stats`] — agent tokens, **derived** from the CLIs' own
+//!   transcripts by `services::token_stats`, never counted into the store.
 //! - [`usage_git_stats`] — commits/lines, **derived on demand** from `git log`
 //!   rather than counted into the store, so they can never drift or double-count.
 
@@ -52,6 +54,66 @@ pub async fn usage_summary(project_id: String) -> Result<UsageReport, String> {
     })
     .await
     .map_err(|e| format!("usage_summary task failed: {e}"))
+}
+
+/// Agent token counters, in the [`UsageReport`] shape plus what the frontend
+/// needs to read them honestly.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenReport {
+    /// hour ("YYYY-MM-DDTHH") → `tokens.<kind>.<cli>.<model>` → count.
+    pub hours: HashMap<String, Counters>,
+    /// date ("YYYY-MM-DD") → `tokens.<kind>.<cli>.<model>` → count.
+    pub days: HashMap<String, Counters>,
+    /// The scan stopped at its budget; the counts are short and the next call
+    /// carries on.
+    pub partial: bool,
+    /// The CLIs whose records are read at all, so a CLI used in the period but
+    /// missing here reads as "not reported", never as zero.
+    pub sources: Vec<String>,
+}
+
+/// Token counts for `project_id` (a project, `box:<id>` or the root scope), or
+/// summed across every scope when it is empty.
+///
+/// **Derived, not stored**: runs an incremental scan of the agent homes'
+/// transcripts (`services::token_stats`) and folds the result like
+/// [`usage_summary`]. On the blocking pool — the first scan reads every
+/// transcript there is.
+#[tauri::command]
+pub async fn usage_token_stats(project_id: String) -> Result<TokenReport, String> {
+    tokio::task::spawn_blocking(move || {
+        let state_dir = crate::storage::state_dir();
+        let scanned = crate::services::token_stats::scan(&state_dir, &known_scope_ids());
+        TokenReport {
+            hours: scanned.stats.hourly_for(&project_id),
+            days: scanned.stats.daily_for(&project_id),
+            partial: scanned.partial,
+            sources: crate::services::token_stats::SOURCES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    })
+    .await
+    .map_err(|e| format!("usage_token_stats task failed: {e}"))
+}
+
+/// Every scope id an agent home can belong to: the root console, each
+/// registered project, each box (`box:<id>`). An unreadable registry only
+/// means its homes are filed under the root until the next read succeeds —
+/// the scan re-files them then.
+fn known_scope_ids() -> Vec<String> {
+    let mut ids = vec![crate::storage::ROOT_SCOPE.to_string()];
+    if let Ok(projects) = crate::commands::projects::read_projects_list() {
+        ids.extend(projects.into_iter().map(|p| p.id));
+    }
+    let boxes_path = crate::storage::state_dir().join("boxes.json");
+    if let Ok(boxes) = crate::storage::read_json::<crate::schema::boxes::BoxesList>(&boxes_path) {
+        let prefix = crate::commands::boxes::BOX_SCOPE_PREFIX;
+        ids.extend(boxes.into_iter().map(|b| format!("{prefix}{}", b.id)));
+    }
+    ids
 }
 
 /// Point the file-churn watcher at a project's tree, replacing any previous
@@ -130,9 +192,10 @@ fn git_stats_blocking(project_dir: &str, since: &str) -> Result<GitStats, String
     // The recap runs this unattended, in a directory a project container mounts
     // writable — so the repo's own config is untrusted (`commands::git`,
     // Group O #151); `hardened_git_command_in` sanitizes it first.
-    let out = crate::commands::git::hardened_git_command_in(project_dir, &args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(
+        project_dir,
+        &args,
+    ))?;
 
     // A repo with no commits yet exits non-zero; that is "nothing today", not an
     // error worth failing the whole recap over.
@@ -144,11 +207,9 @@ fn git_stats_blocking(project_dir: &str, since: &str) -> Result<GitStats, String
 
 /// The repo's configured author email, or `None` when unset.
 fn git_user_email(project_dir: &str) -> Option<String> {
-    let out = crate::paths::command_no_window("git")
-        .args(["config", "user.email"])
-        .current_dir(project_dir)
-        .output()
-        .ok()?;
+    let mut cmd = crate::paths::command_no_window("git");
+    cmd.args(["config", "user.email"]).current_dir(project_dir);
+    let out = crate::services::git_bounded::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }

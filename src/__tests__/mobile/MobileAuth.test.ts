@@ -1,5 +1,5 @@
 /**
- * Device auth for Eldrun Mobile (`mobile-web/src/auth.ts`): a non-exportable
+ * Device auth for Tabtivity Mobile (`mobile-web/src/auth.ts`): a non-exportable
  * signing key in IndexedDB, a challenge/response sign-in on every open, and —
  * the part worth pinning — the split between "this device was rejected, pair
  * again" and "the host could not be reached, say which machine to fix". The
@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../mobile-web/src/api";
 import { hasPairedDevice, logoutAuth, pair, resumeAuth } from "../../../mobile-web/src/auth";
+import { BRAND } from "../../lib/brand";
 
 // ── A minimal IndexedDB: one database, named stores, get/put by key ─────────
 type Req<T> = { result: T; error: unknown; onsuccess: null | (() => void); onerror: null | (() => void) };
@@ -104,7 +105,7 @@ afterEach(() => {
   subtle.exportKey.mockClear();
 });
 
-describe("Eldrun Mobile auth — resume", () => {
+describe(`${BRAND.display} Mobile auth — resume`, () => {
   it("is unpaired when no device record exists, without touching the network", async () => {
     const fetchMock = fetchAnswering({});
     await expect(resumeAuth()).resolves.toEqual({ kind: "unpaired" });
@@ -266,6 +267,95 @@ describe("Eldrun Mobile auth — resume", () => {
     await expect(pending).resolves.toEqual({ kind: "paired" });
   });
 
+  it("stops riding a proxy 502 after three more tries, so a closed desktop reaches its splash in seconds", async () => {
+    // The desktop app quit and took the sidecar with it; Tailscale Serve
+    // answers 502 for as long as it stays closed. Walking the whole retry
+    // schedule held "Connecting…" for ~9 s first.
+    await seedDevice();
+    const fetchMock = vi.fn(async () => new Response("Bad Gateway", { status: 502 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    let result: Awaited<ReturnType<typeof resumeAuth>> | undefined;
+    void resumeAuth().then((value) => { result = value; });
+    await vi.advanceTimersByTimeAsync(3_000);
+    vi.useRealTimers();
+    expect(result).toMatchObject({ kind: "unavailable", reason: "host_down" });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps the full window for a transport failure that follows a proxy 502", async () => {
+    // The budget is the proxy's own: a path that drops afterwards still gets
+    // the schedule's remaining tries.
+    await seedDevice();
+    let challenges = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const key = `${init?.method ?? "GET"} ${String(input)}`;
+      if (key === "POST /api/v1/auth/challenge") {
+        challenges += 1;
+        if (challenges <= 3) return new Response("Bad Gateway", { status: 502 });
+        if (challenges <= 5) throw new TypeError("Failed to fetch");
+        return json({ nonce: "n", payload: "p" })();
+      }
+      return json({ ok: true })();
+    }));
+    vi.useFakeTimers();
+    const pending = resumeAuth();
+    await vi.advanceTimersByTimeAsync(10_000);
+    vi.useRealTimers();
+    await expect(pending).resolves.toEqual({ kind: "paired" });
+    expect(challenges).toBe(6);
+  });
+
+  it("repeats the exchange when the sidecar restarted between the challenge and the session post", async () => {
+    // Its challenges live in memory: the new process does not know the nonce.
+    await seedDevice();
+    const nonces: string[] = [];
+    let challenges = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const key = `${init?.method ?? "GET"} ${String(input)}`;
+      if (key === "POST /api/v1/auth/challenge") {
+        challenges += 1;
+        return json({ nonce: `n-${challenges}`, payload: "p" })();
+      }
+      nonces.push(JSON.parse(String(init?.body)).nonce);
+      return nonces.length === 1 ? json({ error: "invalid_challenge" }, 401)() : json({ ok: true })();
+    }));
+    vi.useFakeTimers();
+    const pending = resumeAuth();
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.useRealTimers();
+    await expect(pending).resolves.toEqual({ kind: "paired" });
+    expect(nonces).toEqual(["n-1", "n-2"]);
+  });
+
+  it("gives up on a challenge that keeps failing after two retries, without re-pairing", async () => {
+    // Each try spends two of the device's 30 sign-in attempts a minute.
+    await seedDevice();
+    let sessions = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const key = `${init?.method ?? "GET"} ${String(input)}`;
+      if (key === "POST /api/v1/auth/challenge") return json({ nonce: "n", payload: "p" })();
+      sessions += 1;
+      return json({ error: "invalid_challenge" }, 401)();
+    }));
+    vi.useFakeTimers();
+    const pending = resumeAuth();
+    await vi.advanceTimersByTimeAsync(10_000);
+    vi.useRealTimers();
+    await expect(pending).resolves.toMatchObject({ kind: "unavailable" });
+    expect(sessions).toBe(3);
+  });
+
+  it("sends a device whose signature the session post rejects to pairing at once", async () => {
+    await seedDevice();
+    const fetchMock = fetchAnswering({
+      "POST /api/v1/auth/challenge": json({ nonce: "n", payload: "p" }),
+      "POST /api/v1/auth/session": json({ error: "invalid_signature" }, 401),
+    });
+    await expect(resumeAuth()).resolves.toEqual({ kind: "unpaired" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reports the sidecar's rate limiter as busy, with the detail carried along", async () => {
     await seedDevice();
     fetchAnswering({ "POST /api/v1/auth/challenge": json({ error: "too_many_attempts" }, 400) });
@@ -290,7 +380,7 @@ describe("Eldrun Mobile auth — resume", () => {
   });
 });
 
-describe("Eldrun Mobile auth — pair and logout", () => {
+describe(`${BRAND.display} Mobile auth — pair and logout`, () => {
   it("pairs with the code, the device name and the public key, then remembers the device", async () => {
     const fetchMock = fetchAnswering({ "POST /api/v1/pair": json({ device_id: "dev-9" }) });
     await pair("123456", "Pixel");

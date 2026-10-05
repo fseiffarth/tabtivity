@@ -17,6 +17,7 @@
 //! connections, not a fan-out workload, and a thread per tunnel keeps the
 //! module free of any runtime handle (bootable from `spawn_blocking`).
 
+use crate::brand::SLUG;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -307,7 +308,7 @@ fn record_blocked(shared: &ProxyShared, target: String) {
 
 fn deny(mut stream: TcpStream, status: &str) {
     let _ = stream.write_all(
-        format!("HTTP/1.1 {status}\r\nProxy-Agent: eldrun-vm\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        format!("HTTP/1.1 {status}\r\nProxy-Agent: {SLUG}-vm\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .as_bytes(),
     );
 }
@@ -397,7 +398,7 @@ fn handle_conn(mut stream: TcpStream, shared: Arc<ProxyShared>) {
 
     let _ = stream.set_read_timeout(None);
     if stream
-        .write_all(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: eldrun-vm\r\n\r\n")
+        .write_all(concat!("HTTP/1.1 200 Connection Established\r\nProxy-Agent: ", crate::app_slug!(), "-vm\r\n\r\n").as_bytes())
         .is_err()
     {
         return;

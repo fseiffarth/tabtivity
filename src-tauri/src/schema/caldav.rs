@@ -5,7 +5,7 @@
 //! 1. **The wire contract** with `src/types/caldav.ts` — snake_case, same field
 //!    names, same optionality.
 //! 2. **`accounts.json`.** [`CalDavAccounts`] is the on-disk store under
-//!    `~/.local/share/eldrun/caldav/accounts.json`. It carries **no secret** —
+//!    `~/.local/share/tabtivity/caldav/accounts.json`. It carries **no secret** —
 //!    passwords live in the OS keychain via `services::remote_credentials`,
 //!    keyed by server target (`commands::caldav::account_key`).
 //!
@@ -130,7 +130,7 @@ pub struct CalDavAccount {
     pub extra: HashMap<String, Value>,
 }
 
-/// `~/.local/share/eldrun/caldav/accounts.json`.
+/// `~/.local/share/tabtivity/caldav/accounts.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CalDavAccounts {
     #[serde(default)]

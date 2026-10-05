@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectPrompt, TabRow } from "../../../mobile-web/src/api";
 import { PromptsSheet } from "../../../mobile-web/src/screens/PromptsSheet";
+import { BRAND } from "../../lib/brand";
 
 const PATH = "/api/v1/projects/p%201/prompts";
 const tabs: TabRow[] = [
@@ -131,10 +132,19 @@ describe("Mobile prompts sheet", () => {
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("keeps the sheet live when the host answered off its files with no window (H3), and says so", async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ prompts: [], desktop_available: false }), { status: 200 }));
+    render(<PromptsSheet projectId="p 1" tabs={tabs} onClose={() => {}} onSchedule={() => {}} />);
+    expect((await screen.findByRole("status")).textContent).toContain(`The ${BRAND.display} window is closed`);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByLabelText("Target tab") as HTMLSelectElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("disables everything when the desktop is closed, and says why", async () => {
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 }));
     render(<PromptsSheet projectId="p 1" tabs={tabs} onClose={() => {}} onSchedule={() => {}} />);
-    expect((await screen.findByRole("alert")).textContent).toBe("Open desktop Eldrun to manage collected prompts.");
+    expect((await screen.findByRole("alert")).textContent).toBe(`Open desktop ${BRAND.display} to manage collected prompts.`);
     expect((screen.getByLabelText("Target tab") as HTMLSelectElement).disabled).toBe(true);
     expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);

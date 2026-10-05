@@ -129,7 +129,7 @@ describe("VPN auto-connect (machine-level)", () => {
     expect(byConfig[CONFIG]).toBeUndefined();
   });
 
-  /** Non-headless: Eldrun handles no passwords, so "connect on launch" can only mean
+  /** Non-headless: Tabtivity handles no passwords, so "connect on launch" can only mean
    *  "the connect command is waiting in the root terminal" — never a silent connect. */
   it("opens the connect command in the root terminal when headless connections are off", async () => {
     backend({ silent: true });

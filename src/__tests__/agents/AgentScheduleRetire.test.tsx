@@ -20,6 +20,7 @@ import { AgentScheduleHost } from "../../components/layout/AgentScheduleHost";
 import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { _grantTimerLeaseForTest } from "../../stores/timerLease";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -54,6 +55,7 @@ function call(command: string) {
 }
 
 beforeEach(() => {
+  _grantTimerLeaseForTest();
   invokeMock.mockReset();
   useAgentSchedulesStore.setState({ byTarget: {}, loading: {} });
   useAgentPromptsStore.setState({ byProject: {}, historyByProject: {}, loading: {} });

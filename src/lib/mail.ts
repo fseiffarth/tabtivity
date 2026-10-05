@@ -68,6 +68,7 @@ import type {
   MailSyncSummary,
   StagedAttachment,
 } from "../types/mail";
+import { NAMES } from "./brand";
 
 /**
  * Minutes between automatic checks when `mail_check_interval_min` was never
@@ -685,6 +686,12 @@ export function mailAgentDrafts(): Promise<MailDraft[]> {
   return invoke<MailDraft[]>("mail_agent_drafts");
 }
 
+/** ✓ Approvals' approve: file these agent drafts, as shown, into the "Drafted
+ *  by agents" folder. Refuses (and files the rest) when one changed since. */
+export function mailAgentDraftsFile(drafts: MailDraft[]): Promise<number> {
+  return invoke<number>("mail_agent_drafts_file", { drafts });
+}
+
 export function mailDraftDiscard(draftId: string): Promise<void> {
   return invoke<void>("mail_draft_discard", { draftId });
 }
@@ -741,15 +748,15 @@ export function mailAttachmentSave(
 }
 
 /** The project folder a saved attachment lands in, mirroring the backend's
- *  `commands::projects::EMAILS_DIR`. `eldrun-`prefixed so ignoring it in git can
+ *  `commands::projects::EMAILS_DIR`. `tabtivity-`prefixed so ignoring it in git can
  *  never swallow a folder the project itself owns. */
-export const ELDRUN_EMAILS_DIR = "eldrun-emails";
+export const APP_EMAILS_DIR = NAMES.emailsDir;
 
 /**
  * OUT (mail → project): save the attachment into the given project's
- * `eldrun-emails/` folder, creating it if absent, and resolve the full path written (for a
+ * `tabtivity-emails/` folder, creating it if absent, and resolve the full path written (for a
  * toast). The project is named by its **opaque id**, never a path — the backend
- * resolves that id to the project's own directory and fixes the `eldrun-emails/`
+ * resolves that id to the project's own directory and fixes the `tabtivity-emails/`
  * subfolder — so this wrapper honours the same boundary as the rest of the
  * surface. Rejects (never resolves a truthy path for a write that did not
  * happen) when the project has no local directory.

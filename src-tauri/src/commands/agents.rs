@@ -1,5 +1,5 @@
 //! Agent-CLI management: detect and install the AI coding-agent command-line
-//! tools Eldrun can launch as agent tabs. The registry covers the major hosted,
+//! tools Tabtivity can launch as agent tabs. The registry covers the major hosted,
 //! open-source, and provider-agnostic terminal agents (Claude, Codex, Gemini,
 //! Kiro, Cline, Goose, Pi, and more).
 //!
@@ -7,7 +7,7 @@
 //! `install_vibe`), but is registry-driven so the set of agents lives in one
 //! table (`AGENTS`). Each spec carries the binary name, the official one-line
 //! install command, and any well-known user install locations to also check,
-//! since Eldrun's inherited `PATH` may omit `~/.local/bin` / npm's global bin
+//! since Tabtivity's inherited `PATH` may omit `~/.local/bin` / npm's global bin
 //! even when a login shell would include them.
 
 /// A single installable agent CLI.
@@ -32,7 +32,7 @@ struct AgentSpec {
     /// Docs URL shown when automatic install isn't possible.
     docs: &'static str,
     /// Where this CLI keeps its sign-in under `$HOME` (Linux survey
-    /// 2026-09-25): shared across every Eldrun agent home by
+    /// 2026-09-25): shared across every Tabtivity agent home by
     /// `services::agent_auth`. Only files that hold a credential and can
     /// never name a command — a config that mixes both (Continue's
     /// `config.yaml`, Crush's `crush.json`, Aider's `.env`) stays per scope,
@@ -448,7 +448,7 @@ pub struct AgentInfo {
     /// the terminal fallback the frontend offers next to "Remove" when the
     /// one-click uninstall hits a permission error (a system-wide npm global
     /// directory owned by root, common on non-nvm Linux Node installs, needs a
-    /// sudo prompt Eldrun cannot answer itself).
+    /// sudo prompt Tabtivity cannot answer itself).
     pub uninstall_cmd: String,
     /// `install_cmd` prefixed with `sudo`, or empty when that wouldn't make
     /// sense (Windows, or a non-npm installer — see `sudo_variant`). Offered as
@@ -488,6 +488,12 @@ pub fn agent_bins() -> Vec<&'static str> {
 /// tab list is one (`services::mobile_control::discovery`).
 pub fn agent_label_for_bin(bin: &str) -> Option<&'static str> {
     AGENTS.iter().find(|a| a.bin == bin).map(|a| a.label)
+}
+
+/// The registry id of the agent whose binary is `bin` — what the settings'
+/// `disabled_agents` list names (`SettingsSubPanels`' Manage CLIs switches).
+pub fn agent_id_for_bin(bin: &str) -> Option<&'static str> {
+    AGENTS.iter().find(|a| a.bin == bin).map(|a| a.id)
 }
 
 /// POSIX login-shell script used by the explicit "install on remote machine"
@@ -595,7 +601,7 @@ pub fn install_agent_remote_command(
     )
 }
 
-/// Where `spec`'s binary actually lives — on `PATH` (including Eldrun's
+/// Where `spec`'s binary actually lives — on `PATH` (including Tabtivity's
 /// supplemental Windows/macOS fallback dirs) or in one of its well-known
 /// per-user install locations — or `None` when it isn't installed. The single
 /// resolver behind both `spec_is_installed` and `uninstall_agent` (removal
@@ -608,7 +614,7 @@ fn resolve_spec_path(spec: &AgentSpec) -> Option<std::path::PathBuf> {
     if let Some(path) = crate::paths::resolve_executable(spec.bin) {
         return Some(path);
     }
-    // Eldrun's own install home first, then the user's.
+    // Tabtivity's own install home first, then the user's.
     let homes = [crate::services::agent_install::install_root(), crate::paths::home_dir()];
     homes.iter().find_map(|home| spec.extra_paths.iter().find_map(|rel| {
         let base = home.join(rel);
@@ -651,7 +657,7 @@ const NODE_MIN_MAJOR: u32 = 24;
 /// What the Manage Agents Node helper needs to know about the host's Node.js.
 #[derive(serde::Serialize)]
 pub struct NodeRuntimeStatus {
-    /// `npm` is reachable on Eldrun's PATH.
+    /// `npm` is reachable on Tabtivity's PATH.
     npm: bool,
     /// `node --version` (e.g. `v22.22.1`), or `None` when Node is absent or
     /// didn't answer.
@@ -729,10 +735,10 @@ pub fn binary_is_installed(bin: &str) -> bool {
         .unwrap_or_else(|| crate::paths::binary_on_path(bin))
 }
 
-/// Whether Codex is actually running Eldrun's `SessionStart` hook — the precise
+/// Whether Codex is actually running Tabtivity's `SessionStart` hook — the precise
 /// path for resuming a tab's *current* conversation. Codex gates user-level hooks
 /// behind a one-time trust approval (`/hooks`), and an untrusted one never fires,
-/// silently; Eldrun then falls back to guessing the session from Codex's rollout
+/// silently; Tabtivity then falls back to guessing the session from Codex's rollout
 /// logs (`services::codex_bind`). The UI reads this to offer the one-click fix.
 #[tauri::command]
 pub async fn codex_hook_status() -> crate::services::agent_session::CodexHookState {
@@ -828,7 +834,7 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
         }
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("{} 2>&1", spec.install_cmd));
-        // Into Eldrun's own install home, never the user's
+        // Into Tabtivity's own install home, never the user's
         // (`services::agent_install`).
         let root = crate::services::agent_install::install_root();
         std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
@@ -867,16 +873,34 @@ fn manual_install_cmd(spec: &AgentSpec) -> &'static str {
 /// failure. The post-install probe is the real source of truth.
 #[tauri::command]
 pub async fn install_agent(app: tauri::AppHandle, id: String) -> Result<String, String> {
-    use std::io::{BufRead, BufReader};
-    use tauri::Emitter;
-
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
 
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
+    run_installer(app, spec)
+}
 
-    let id_owned = id.clone();
+/// Update an installed agent CLI: its official installer run again, which
+/// fetches the newest release — into Tabtivity's install home, whose launcher
+/// dirs come ahead of any host copy on PATH (`services::agent_install`). Same
+/// `agent-install-progress` stream as [`install_agent`].
+#[tauri::command]
+pub async fn update_agent(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    if !spec_is_installed(spec) {
+        return Err(format!("{} is not installed.", spec.label));
+    }
+    run_installer(app, spec)
+}
+
+/// Run `spec`'s installer, streaming its output; the body of [`install_agent`]
+/// and [`update_agent`].
+fn run_installer(app: tauri::AppHandle, spec: &'static AgentSpec) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+    use tauri::Emitter;
+
+    let id_owned = spec.id.to_string();
     let emit = move |line: &str| {
         let _ = app.emit(
             "agent-install-progress",
@@ -938,9 +962,9 @@ pub async fn install_agent(app: tauri::AppHandle, id: String) -> Result<String, 
         if !sudo_cmd.is_empty() && is_permission_error(&msg) {
             msg.push_str(&format!(
                 "\n\nThis needs elevated rights (a system-wide npm global directory owned by \
-                root — common when Node was installed system-wide rather than per-user). Eldrun \
+                root — common when Node was installed system-wide rather than per-user). {app} \
                 never prompts for a password itself: use the \"Run with sudo\" button below, or \
-                run `{sudo_cmd}` yourself in a terminal."
+                run `{sudo_cmd}` yourself in a terminal.", app = crate::brand::DISPLAY
             ));
         }
         return Err(msg);
@@ -999,7 +1023,7 @@ fn run_capture(mut cmd: std::process::Command) -> Result<String, String> {
 /// a genuine "nothing to remove" — `EACCES`/"permission denied" (a system-wide
 /// npm global directory owned by root, the default on a non-nvm Linux Node
 /// install) and `EPERM`/`EBUSY` (a file locked by a running process, common on
-/// Windows). Used to swap in guidance pointing at a terminal Eldrun can't
+/// Windows). Used to swap in guidance pointing at a terminal Tabtivity can't
 /// elevate on the user's behalf, instead of a bare stack of npm's own output.
 fn is_permission_error(msg: &str) -> bool {
     let lower = msg.to_lowercase();
@@ -1015,7 +1039,7 @@ fn is_permission_error(msg: &str) -> bool {
 /// exactly that point, a stale `.package-random` directory can make the first
 /// later install fail with `ENOTEMPTY` on `rename`.  The retired-name suffix is
 /// fresh on every invocation, so one retry is safe and normally completes the
-/// update without Eldrun deleting anything from the user's global npm prefix.
+/// update without Tabtivity deleting anything from the user's global npm prefix.
 fn is_npm_reify_rename_collision(msg: &str) -> bool {
     let lower = msg.to_lowercase();
     lower.contains("enotempty") && lower.contains("syscall rename")
@@ -1058,7 +1082,7 @@ fn npm_uninstall_command(pkg: &str) -> std::process::Command {
 /// the binary/shim `resolve_spec_path` found — enough to flip
 /// `spec_is_installed` back to false and let the official installer run again
 /// from scratch; any support files the installer left behind (an updater, a
-/// packages cache) are none of Eldrun's business to guess at and clean up.
+/// packages cache) are none of Tabtivity's business to guess at and clean up.
 #[tauri::command]
 pub async fn uninstall_agent(id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
@@ -1078,9 +1102,9 @@ pub async fn uninstall_agent(id: String) -> Result<String, String> {
                 format!(
                     "Permission denied — this machine's npm global directory needs \
                     elevated rights (common when Node was installed system-wide rather \
-                    than per-user). Eldrun never prompts for a password itself: run \
+                    than per-user). {app} never prompts for a password itself: run \
                     `npm uninstall -g {pkg}` yourself in an elevated terminal (or via \
-                    the terminal button below).\n\n{e}"
+                    the terminal button below).\n\n{e}", app = crate::brand::DISPLAY
                 )
             } else {
                 e
@@ -1160,7 +1184,7 @@ const WARMUPS: &[(&str, &[&str])] = &[
 /// How long a warm-up process may live before it is killed. A print-mode run
 /// answering "Test" takes seconds; the ceiling only exists so a CLI that hangs
 /// on a first-run prompt (a trust dialog, a login) does not leave a process
-/// behind per scheduled slot for as long as Eldrun runs.
+/// behind per scheduled slot for as long as Tabtivity runs.
 const WARMUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 /// Longest message a warm-up may send. The frontend sends a fixed four-letter
@@ -1195,7 +1219,7 @@ fn find_spec_by_id_or_bin(agent: &str) -> Option<&'static AgentSpec> {
 
 /// The folder every warm-up runs in. A print-mode agent records its session
 /// under its working directory (Claude keys `~/.claude/projects/` by cwd), so
-/// the run gets a directory of its own under Eldrun's state dir rather than a
+/// the run gets a directory of its own under Tabtivity's state dir rather than a
 /// project's: it must not show up in any project's resume list, and it must
 /// not be able to read anything a project holds. Nothing else lives here.
 fn warmup_dir() -> Result<std::path::PathBuf, String> {
@@ -1241,7 +1265,7 @@ pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupL
         .stderr(std::process::Stdio::null());
     #[cfg(unix)]
     {
-        // Its own process group: a signal aimed at Eldrun's terminal group (a
+        // Its own process group: a signal aimed at Tabtivity's terminal group (a
         // Ctrl+C in the launcher shell) must not take a half-sent warm-up with
         // it, and a warm-up must never be what a Ctrl+C reaches first.
         use std::os::unix::process::CommandExt;
@@ -1333,7 +1357,7 @@ impl AgentUsageReport {
 /// Which model the tab launched as `agent` with launch id `session_id` last
 /// answered with, read from the CLI's own transcript
 /// (`services::agent_session::agent_session_model`). `None` when the agent
-/// keeps no transcript Eldrun reads, or it holds no answer yet — the Agents
+/// keeps no transcript Tabtivity reads, or it holds no answer yet — the Agents
 /// view then shows no tag rather than a guessed one.
 #[tauri::command]
 pub async fn agent_tab_model(
@@ -1353,11 +1377,29 @@ pub async fn agent_tab_model(
     .flatten()
 }
 
+/// Whether the tab launched as `agent` with launch id `session_id` is
+/// pursuing a `/goal`, read from the session's own record
+/// (`services::agent_session::agent_session_goal`). `None` when the agent
+/// keeps none Tabtivity reads; the GOAL mark then goes by the tab's footer.
+#[tauri::command]
+pub async fn agent_tab_goal(
+    agent: String,
+    project_id: Option<String>,
+    session_id: String,
+) -> Option<bool> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::agent_session::agent_session_goal(&agent, project_id.as_deref(), &session_id)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// The last prompt the tab launched as `agent` with launch id `session_id`
 /// was given, however it was submitted — typed in the terminal included —
 /// read from the CLI's own transcript
 /// (`services::agent_session::agent_session_last_prompt`). `None` when the
-/// agent keeps no transcript Eldrun reads, or it holds no prompt yet.
+/// agent keeps no transcript Tabtivity reads, or it holds no prompt yet.
 #[tauri::command]
 pub async fn agent_tab_last_prompt(
     agent: String,
@@ -1405,9 +1447,12 @@ pub async fn agent_tab_recent_prompts(
 /// entries), the conversation of a subagent it spawned. `since` is the launch
 /// moment (epoch ms) of a tab opened fresh rather than restored. `version` is
 /// the fingerprint the caller last saw; a matching one is answered
-/// `unchanged` without a parse. Always answers: an agent with no readable
-/// transcript comes back `available: false` with the reason, never an error.
+/// `unchanged` without a parse. `local_model` marks a local-model tab, whose
+/// OpenCode keeps its sessions in the scope's local-model home. Always
+/// answers: an agent with no readable transcript comes back
+/// `available: false` with the reason, never an error.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_transcript(
     agent: String,
     project_id: Option<String>,
@@ -1417,9 +1462,20 @@ pub async fn agent_tab_transcript(
     subagent: Option<String>,
     version: Option<String>,
     limit: Option<usize>,
+    local_model: Option<bool>,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
     tauri::async_runtime::spawn_blocking(move || {
+        if local_model == Some(true) && agent == "opencode" {
+            return agent_transcript::local_opencode_transcript(
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                since,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+        }
         agent_transcript::agent_session_transcript(
             &agent,
             project_id.as_deref(),
@@ -1433,6 +1489,38 @@ pub async fn agent_tab_transcript(
     })
     .await
     .unwrap_or_else(|_| AgentTranscript::unavailable("read_failed"))
+}
+
+/// The files the tab's conversation — or `subagent`'s — changed, as the
+/// diffs its CLI recorded (`services::agent_changes`): the desktop Reader's
+/// Changes panel. Takes `agent_tab_transcript`'s arguments; never reaches
+/// the phone.
+#[tauri::command]
+pub async fn agent_tab_changes(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    since: Option<i64>,
+    session_id: String,
+    subagent: Option<String>,
+    version: Option<String>,
+    limit: Option<usize>,
+) -> crate::services::agent_changes::AgentChanges {
+    use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_changes::agent_session_changes(
+            &agent,
+            project_id.as_deref(),
+            tab_dir.as_deref(),
+            since,
+            &session_id,
+            subagent.as_deref(),
+            version.as_deref(),
+            limit.unwrap_or(DEFAULT_LIMIT),
+        )
+    })
+    .await
+    .unwrap_or_else(|_| AgentChanges::unavailable("read_failed"))
 }
 
 /// How to take back the tab's last `/clear` (`services::agent_session::undo_clear_plan`):
@@ -1523,7 +1611,7 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
     #[cfg(unix)]
     {
         // Its own process group, for the reason the warm-up spawn gives: a
-        // Ctrl+C in Eldrun's launcher shell must not be what reaches this first.
+        // Ctrl+C in Tabtivity's launcher shell must not be what reaches this first.
         cmd.process_group(0);
     }
     let output = match tokio::time::timeout(usage::USAGE_TIMEOUT, async {
@@ -1579,16 +1667,17 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
 /// the timeout actually reaps, and the state dir as cwd so no project folder's
 /// first-run trust prompt gets in the way of a question that has nothing to do
 /// with that folder.
-async fn probe_agent_version(spec: &'static AgentSpec) -> Result<String, String> {
+async fn probe_agent_version(
+    spec: &'static AgentSpec,
+    path: &std::path::Path,
+) -> Result<String, String> {
     use crate::services::agent_versions as versions;
 
     let argv = versions::version_argv(spec.id)
         .ok_or_else(|| format!("{} has no known version flag", spec.label))?;
-    let path =
-        resolve_spec_path(spec).ok_or_else(|| format!("{} is not installed", spec.label))?;
     let cwd = warmup_dir()?;
 
-    let mut cmd = tokio::process::Command::from(crate::paths::command_no_window(&path));
+    let mut cmd = tokio::process::Command::from(crate::paths::command_no_window(path));
     cmd.args(&argv)
         .envs(versions::version_env(spec.id).iter().copied())
         .current_dir(&cwd)
@@ -1627,18 +1716,16 @@ async fn probe_agent_version(spec: &'static AgentSpec) -> Result<String, String>
 }
 
 /// What version of each *installed* agent CLI is on this machine, against the
-/// releases Eldrun's flags and parsers were verified with.
+/// releases Tabtivity's flags and parsers were verified with.
 ///
 /// Reported, never enforced: nothing here updates a CLI or refuses to launch
 /// one. It exists so "somebody else's CLI moved under us" is a line in Manage
 /// Agents (and in `cargo run --example agent_versions`) instead of a mystery
 /// the next time a TUI parses wrong.
 ///
-/// Only installed agents are probed, at most once a day per agent
-/// (`PROBE_TTL`), all of them concurrently — an agent CLI's version changes
-/// when a person runs an installer, so opening the panel again the same
-/// afternoon spawns nothing. `refresh` skips the cache; that is what the
-/// panel's own re-check means.
+/// Only installed agents are probed, at most once a day per unchanged
+/// executable (`PROBE_TTL`), all of them concurrently. `refresh` skips the
+/// cache; that is what the panel's own re-check means.
 #[tauri::command]
 pub async fn agent_versions(
     refresh: Option<bool>,
@@ -1652,9 +1739,9 @@ pub async fn agent_versions(
     let mut probes = Vec::new();
 
     for spec in AGENTS {
-        if !spec_is_installed(spec) {
+        let Some(path) = resolve_spec_path(spec) else {
             continue;
-        }
+        };
         // Installed, but nobody has checked what it answers: say so rather than
         // guessing a flag at a binary that may open a TUI instead.
         if !versions::is_supported(spec.id) {
@@ -1667,7 +1754,7 @@ pub async fn agent_versions(
         if !refresh {
             if let Some(seen) = store
                 .get(spec.id)
-                .filter(|seen| versions::fresh(seen, versions::PROBE_TTL))
+                .filter(|seen| versions::fresh_for_path(seen, versions::PROBE_TTL, &path))
             {
                 ready.insert(
                     spec.id,
@@ -1681,15 +1768,16 @@ pub async fn agent_versions(
         // spawnable rather than a lifetime that happens to work.
         let spec: &'static AgentSpec = spec;
         probes.push(tokio::spawn(async move {
-            (spec, probe_agent_version(spec).await)
+            let result = probe_agent_version(spec, &path).await;
+            (spec, path, result)
         }));
     }
 
     for probe in probes {
-        let Ok((spec, result)) = probe.await else {
+        let Ok((spec, path, result)) = probe.await else {
             continue;
         };
-        let seen = versions::remember(spec.id, result);
+        let seen = versions::remember(spec.id, result, &path);
         ready.insert(
             spec.id,
             versions::VersionReport::from_seen(spec.id, spec.label, &seen, false),
@@ -1703,35 +1791,139 @@ pub async fn agent_versions(
         .collect()
 }
 
+/// One installed CLI against its newest published release
+/// (`services::agent_latest`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUpdateReport {
+    agent: String,
+    /// The installed version, when it could be read: the CLI's `--version`
+    /// recipe, else the package metadata beside its executable.
+    current: Option<String>,
+    /// The newest published version.
+    latest: Option<String>,
+    /// Both versions read and `latest` genuinely newer — never `latest` alone.
+    update_available: bool,
+    /// Whether a registry is known for this CLI at all.
+    checkable: bool,
+    error: Option<String>,
+}
+
+/// Ask installed CLIs' registries for their newest release — each Manage CLIs
+/// card's "Check for update" (`id`), or every installed CLI when `id` is
+/// `None`; the agent twin of `check_ollama_updates`. Only on a click: one
+/// request per CLI that has a known registry, all at once, each settled on its
+/// own so one registry being down costs only its row. The installed versions
+/// are re-read first, so a CLI that updated itself since the last probe is not
+/// offered the update it already has.
+#[tauri::command]
+pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
+    use crate::services::{agent_latest, agent_versions};
+
+    let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(true))
+        .await
+        .into_iter()
+        .map(|report| (report.agent, report.version))
+        .collect();
+    let mut checks = Vec::new();
+    for spec in AGENTS.iter().filter(|spec| id.as_deref().is_none_or(|id| id == spec.id)) {
+        let Some(path) = resolve_spec_path(spec) else {
+            continue;
+        };
+        let source = agent_latest::source_for(spec.id);
+        let current = probed
+            .remove(spec.id)
+            .flatten()
+            .or_else(|| source.and_then(|source| agent_latest::installed_version_near(&path, source)));
+        checks.push(tokio::spawn(async move {
+            let latest = match source {
+                Some(source) => Some(agent_latest::fetch_latest(source).await),
+                None => None,
+            };
+            (spec.id, current, latest)
+        }));
+    }
+
+    let mut reports = Vec::new();
+    for check in checks {
+        let Ok((agent, current, latest)) = check.await else {
+            continue;
+        };
+        let (latest, error) = match latest {
+            Some(Ok(version)) => (Some(version), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
+        let update_available = matches!(
+            (&current, &latest),
+            (Some(current), Some(latest))
+                if agent_versions::version_cmp(latest, current) == std::cmp::Ordering::Greater
+        );
+        reports.push(AgentUpdateReport {
+            agent: agent.to_string(),
+            checkable: agent_latest::source_for(agent).is_some(),
+            current,
+            latest,
+            update_available,
+            error,
+        });
+    }
+    reports
+}
+
 /// Whether the host's `claude` takes `--name` at launch, from the version store
 /// alone — a tab spawn never waits on a probe. A missing or day-old entry is
 /// refreshed in the background (one probe at a time, however many tabs a
 /// relaunch restores at once), so it is the *next* Claude tab that benefits;
 /// until then this answers from what the store holds, or no.
 pub(crate) fn claude_takes_name_flag() -> bool {
-    use crate::services::agent_versions as versions;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
     static PROBING: AtomicBool = AtomicBool::new(false);
+    host_agent_version_says("claude", &PROBING, crate::services::agent_versions::claude_takes_name_flag)
+}
+
+/// Whether the host's `codex` takes `--no-daemon` at launch — read the same
+/// way as [`claude_takes_name_flag`], never waiting on a probe.
+pub(crate) fn codex_takes_no_daemon() -> bool {
+    use std::sync::atomic::AtomicBool;
+    static PROBING: AtomicBool = AtomicBool::new(false);
+    host_agent_version_says("codex", &PROBING, crate::services::agent_versions::codex_takes_no_daemon)
+}
+
+/// Answer `check` from the version store's entry for `agent`, refreshing a
+/// missing or day-old entry in the background (one probe per agent at a time).
+fn host_agent_version_says(
+    agent: &'static str,
+    probing: &'static std::sync::atomic::AtomicBool,
+    check: fn(Option<&crate::services::agent_versions::Seen>) -> bool,
+) -> bool {
+    use crate::services::agent_versions as versions;
+    use std::sync::atomic::Ordering;
 
     let store = versions::load();
-    let seen = store.get("claude");
-    let stale = !seen.is_some_and(|seen| versions::fresh(seen, versions::PROBE_TTL));
-    if stale && !PROBING.swap(true, Ordering::SeqCst) {
-        if let Some(spec) = find_spec("claude").filter(|spec| spec_is_installed(spec)) {
+    let seen = store.get(agent);
+    let path = find_spec(agent).and_then(resolve_spec_path);
+    let stale = !seen.is_some_and(|seen| {
+        path.as_deref()
+            .is_some_and(|path| versions::fresh_for_path(seen, versions::PROBE_TTL, path))
+    });
+    if stale && !probing.swap(true, Ordering::SeqCst) {
+        if let Some(spec) = find_spec(agent).filter(|_| path.is_some()) {
+            let path = path.expect("checked above");
             tauri::async_runtime::spawn(async move {
-                let result = probe_agent_version(spec).await;
-                versions::remember(spec.id, result);
-                PROBING.store(false, Ordering::SeqCst);
+                let result = probe_agent_version(spec, &path).await;
+                versions::remember(spec.id, result, &path);
+                probing.store(false, Ordering::SeqCst);
             });
         } else {
-            PROBING.store(false, Ordering::SeqCst);
+            probing.store(false, Ordering::SeqCst);
         }
     }
-    versions::claude_takes_name_flag(seen)
+    check(seen)
 }
 
 /// Stop reminding the user that `agent`'s installed version has moved past what
-/// Eldrun was verified against.
+/// Tabtivity was verified against.
 ///
 /// Keyed by the version, not by a flag: the notice comes back on the *next*
 /// release, which is the only time it has something new to say.
@@ -1751,7 +1943,7 @@ pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(),
 /// The caller is the tab's auto-typed `/rename <project>` line, which is
 /// submitted with a bare Enter. On that dialog, Enter confirms the highlighted
 /// default — `No, exit` — so an agent tab opened in an untrusted folder killed
-/// itself on launch. Answering the question is the user's alone; Eldrun only
+/// itself on launch. Answering the question is the user's alone; Tabtivity only
 /// asks whether the question is coming, and stays quiet when it is.
 /// Off the main thread: a `.claude.json` carries a scope's prompt history
 /// and grows into the megabytes, and this is asked once per new Claude tab —
@@ -1777,12 +1969,64 @@ pub async fn claude_folder_trusted(
 /// (`services::agent_auth`). Never a token.
 #[tauri::command]
 pub async fn agent_logins() -> Vec<crate::services::agent_auth::LoginStatus> {
-    tauri::async_runtime::spawn_blocking(crate::services::agent_auth::status)
-        .await
-        .unwrap_or_default()
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut logins = crate::services::agent_auth::status();
+        // Which CLIs start on a stored API key: read here, not in
+        // `agent_auth::status_in`, whose tests stay keyring-free. With no CLI
+        // switched on this reads no keychain entry at all.
+        let ready = crate::services::agent_api_keys::ready_clis();
+        // Of those, the ones whose provider is out of budget this month (or
+        // has no limit): their keyed tabs are refused.
+        let blocked = crate::services::agent_api_keys::budget_blocked_clis(&ready);
+        for login in &mut logins {
+            login.api_key = ready.contains(&login.id.as_str());
+            login.api_budget_reached = blocked.contains(&login.id.as_str());
+        }
+        logins
+    })
+    .await
+    .unwrap_or_default()
 }
 
-/// Copy this computer's login files for `id` into Eldrun's store — the one
+/// The provider API keys and the CLIs switched on for them
+/// (`services::agent_api_keys`), for Manage CLIs. Never a key.
+#[tauri::command]
+pub async fn agent_api_keys_status() -> Result<crate::services::agent_api_keys::ApiKeyStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::services::agent_api_keys::status)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn api_key_provider(provider: &str) -> Result<crate::services::agent_api_keys::Provider, String> {
+    crate::services::agent_api_keys::Provider::from_id(provider)
+        .ok_or_else(|| format!("unknown API key provider: {provider}"))
+}
+
+/// Save `provider`'s API key in the OS keychain. A locked or missing keyring
+/// refuses (its own message); there is no other place a key is kept. A key is
+/// only saved beside a monthly spending limit (`Settings::agent_api_limits`,
+/// written first by Manage CLIs): refused without one.
+#[tauri::command]
+pub async fn agent_api_key_set(provider: String, key: String) -> Result<(), String> {
+    let provider = api_key_provider(&provider)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::agent_api_keys::require_limit(provider)?;
+        crate::services::agent_api_keys::set_key(provider, Some(key.trim()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Remove `provider`'s API key from the OS keychain.
+#[tauri::command]
+pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
+    let provider = api_key_provider(&provider)?;
+    tauri::async_runtime::spawn_blocking(move || crate::services::agent_api_keys::set_key(provider, None))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Copy this computer's login files for `id` into Tabtivity's store — the one
 /// safe direction — and link them into every agent home. Returns how many
 /// files were taken.
 #[tauri::command]
@@ -1800,7 +2044,7 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-/// The Eldrun-wide agent config layer (`services::agent_global`): where it is
+/// The Tabtivity-wide agent config layer (`services::agent_global`): where it is
 /// and how many files it holds.
 #[tauri::command]
 pub async fn agent_global_status() -> Result<crate::services::agent_global::LayerStatus, String> {
@@ -1809,7 +2053,7 @@ pub async fn agent_global_status() -> Result<crate::services::agent_global::Laye
         .map_err(|e| e.to_string())
 }
 
-/// Fill the Eldrun-wide layer from the user's own `~/.claude`, `~/.codex` and
+/// Fill the Tabtivity-wide layer from the user's own `~/.claude`, `~/.codex` and
 /// `~/.gemini`; every agent home picks it up at its next tab start.
 #[tauri::command]
 pub async fn agent_global_import() -> Result<crate::services::agent_global::ImportReport, String> {
@@ -1819,7 +2063,7 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
         .map_err(|e| e.to_string())
 }
 
-/// The Manage CLIs switch for Codex auto-review in the Eldrun-wide layer;
+/// The Manage CLIs switch for Codex auto-review in the Tabtivity-wide layer;
 /// every Codex tab picks it up at its next start.
 #[tauri::command]
 pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), String> {
@@ -1829,7 +2073,7 @@ pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
-/// Open the Eldrun-wide layer's folder in the file manager, creating it first.
+/// Open the Tabtivity-wide layer's folder in the file manager, creating it first.
 #[tauri::command]
 pub async fn agent_global_open() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -2205,6 +2449,25 @@ mod tests {
     /// for `irm … | iex`, `cmd /C` for plain npm/python lines (which may chain
     /// with `&&` — cmd parses that, Windows PowerShell 5.1 does not), and a
     /// clear error when there is no one-line Windows installer at all.
+    #[test]
+    fn every_update_source_names_a_registry_agent() {
+        for (id, _) in crate::services::agent_latest::SOURCES {
+            assert!(find_spec(id).is_some(), "agent_latest::SOURCES names unknown agent {id}");
+        }
+    }
+
+    #[test]
+    fn an_npm_installed_agent_checks_the_package_it_installs() {
+        use crate::services::agent_latest::{source_for, Source};
+        for spec in AGENTS {
+            if let Some(pkg) = npm_package_from_cmd(spec.install_cmd) {
+                if let Some(source) = source_for(spec.id) {
+                    assert_eq!(source, Source::Npm(pkg), "{}", spec.id);
+                }
+            }
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_installer_command_picks_interpreter_per_command() {

@@ -9,7 +9,7 @@
 //! account password and an encrypted key's passphrase — which OpenVPN prompts for
 //! separately. `openvpn_auth_needs` tells the UI which fields to show; the local
 //! root password is a third secret, but that one belongs to polkit/`pkexec`, not
-//! to Eldrun.
+//! to Tabtivity.
 
 use crate::services::openvpn;
 use serde::Serialize;
@@ -327,14 +327,14 @@ pub async fn openvpn_active() -> Result<Vec<String>, String> {
     Ok(openvpn::active_configs())
 }
 
-/// Copy a selected `.ovpn` config into Eldrun's storage and return the stored
+/// Copy a selected `.ovpn` config into Tabtivity's storage and return the stored
 /// path, so the project no longer depends on the original file's location.
 #[tauri::command]
 pub async fn openvpn_store_config(config: String) -> Result<String, String> {
     openvpn::store_config(&config)
 }
 
-/// List the `.ovpn` configs Eldrun has previously stored (newest first), so the
+/// List the `.ovpn` configs Tabtivity has previously stored (newest first), so the
 /// project dialog can offer a previously-used config for reuse instead of
 /// browsing for the file again.
 #[tauri::command]
@@ -342,12 +342,12 @@ pub async fn openvpn_list_configs() -> Result<Vec<openvpn::StoredConfig>, String
     Ok(openvpn::list_configs())
 }
 
-/// Remove a stored `.ovpn` config from Eldrun's store, and with it every
+/// Remove a stored `.ovpn` config from Tabtivity's store, and with it every
 /// credential saved for it — a keychain entry keyed by a config that no longer
 /// exists is exactly the stale half `vpn_forget_password` exists to prevent.
 /// Order matters: the removal is the guarded step (must be a stored path, tunnel
 /// must be down), so it goes first — a refused removal leaves the credentials
-/// alone. Deletes Eldrun's copy only, never the user's original file.
+/// alone. Deletes Tabtivity's copy only, never the user's original file.
 #[tauri::command]
 pub async fn openvpn_remove_config(config: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {

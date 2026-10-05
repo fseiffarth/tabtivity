@@ -35,6 +35,7 @@ import {
   type GitWorktree,
 } from "../../lib/agents/agentWorktrees";
 import type { ProjectEntry } from "../../types";
+import { NAMES } from "../../lib/brand";
 
 function wt(over: Partial<GitWorktree> & { path: string }): GitWorktree {
   return {
@@ -52,29 +53,29 @@ function wt(over: Partial<GitWorktree> & { path: string }): GitWorktree {
 }
 
 const MAIN = wt({ path: "/p/p1", branch: "main", is_main: true, is_current: true });
-const FEATURE = wt({ path: "/p/p1/.eldrun/worktrees/feature", branch: "feature" });
+const FEATURE = wt({ path: `/p/p1/${NAMES.worktreesDir}/feature`, branch: "feature" });
 
 describe("isProjectWorktreeCwd / restoredAgentCwd", () => {
-  it("accepts exactly one directory under <root>/.eldrun/worktrees/", () => {
-    expect(isProjectWorktreeCwd("/p/p1/.eldrun/worktrees/feature", "/p/p1")).toBe(true);
-    expect(isProjectWorktreeCwd("/p/p1/.eldrun/worktrees/feature/", "/p/p1/")).toBe(true);
-    expect(isProjectWorktreeCwd("C:\\p\\p1\\.eldrun\\worktrees\\feature", "C:\\p\\p1")).toBe(true);
+  it(`accepts exactly one directory under <root>/${NAMES.worktreesDir}/`, () => {
+    expect(isProjectWorktreeCwd(`/p/p1/${NAMES.worktreesDir}/feature`, "/p/p1")).toBe(true);
+    expect(isProjectWorktreeCwd(`/p/p1/${NAMES.worktreesDir}/feature/`, "/p/p1/")).toBe(true);
+    expect(isProjectWorktreeCwd(`C:\\p\\p1\\${NAMES.projectDir}\\worktrees\\feature`, "C:\\p\\p1")).toBe(true);
   });
 
   it("rejects the root, the worktrees folder itself, nested paths, traversal, and other roots", () => {
     expect(isProjectWorktreeCwd("/p/p1", "/p/p1")).toBe(false);
-    expect(isProjectWorktreeCwd("/p/p1/.eldrun/worktrees", "/p/p1")).toBe(false);
-    expect(isProjectWorktreeCwd("/p/p1/.eldrun/worktrees/", "/p/p1")).toBe(false);
-    expect(isProjectWorktreeCwd("/p/p1/.eldrun/worktrees/feature/src", "/p/p1")).toBe(false);
-    expect(isProjectWorktreeCwd("/p/p1/.eldrun/worktrees/..", "/p/p1")).toBe(false);
-    expect(isProjectWorktreeCwd("/old/p1/.eldrun/worktrees/feature", "/p/p1")).toBe(false);
-    expect(isProjectWorktreeCwd("/p/p10/.eldrun/worktrees/feature", "/p/p1")).toBe(false);
+    expect(isProjectWorktreeCwd(`/p/p1/${NAMES.worktreesDir}`, "/p/p1")).toBe(false);
+    expect(isProjectWorktreeCwd(`/p/p1/${NAMES.worktreesDir}/`, "/p/p1")).toBe(false);
+    expect(isProjectWorktreeCwd(`/p/p1/${NAMES.worktreesDir}/feature/src`, "/p/p1")).toBe(false);
+    expect(isProjectWorktreeCwd(`/p/p1/${NAMES.worktreesDir}/..`, "/p/p1")).toBe(false);
+    expect(isProjectWorktreeCwd(`/old/p1/${NAMES.worktreesDir}/feature`, "/p/p1")).toBe(false);
+    expect(isProjectWorktreeCwd(`/p/p10/${NAMES.worktreesDir}/feature`, "/p/p1")).toBe(false);
     expect(isProjectWorktreeCwd("", "/p/p1")).toBe(false);
   });
 
   it("keeps a worktree cwd and resets everything else", () => {
-    expect(restoredAgentCwd("/p/p1/.eldrun/worktrees/feature", "/p/p1")).toBe(
-      "/p/p1/.eldrun/worktrees/feature",
+    expect(restoredAgentCwd(`/p/p1/${NAMES.worktreesDir}/feature`, "/p/p1")).toBe(
+      `/p/p1/${NAMES.worktreesDir}/feature`,
     );
     expect(restoredAgentCwd("/old/p1", "/p/p1")).toBe("/p/p1");
     expect(restoredAgentCwd("/p/p1/src", "/p/p1")).toBe("/p/p1");
@@ -86,8 +87,8 @@ describe("isProjectWorktreeCwd / restoredAgentCwd", () => {
     // A box scope's per-member Claude tab starts in the member root.
     expect(restoredAgentCwd("/p/p2", "/boxes/b1", roots)).toBe("/p/p2");
     expect(restoredAgentCwd("/p/p2/", "/boxes/b1", roots)).toBe("/p/p2/");
-    expect(restoredAgentCwd("/p/p1/.eldrun/worktrees/feat", "/boxes/b1", roots)).toBe(
-      "/p/p1/.eldrun/worktrees/feat",
+    expect(restoredAgentCwd(`/p/p1/${NAMES.worktreesDir}/feat`, "/boxes/b1", roots)).toBe(
+      `/p/p1/${NAMES.worktreesDir}/feat`,
     );
     // A subdirectory of a member, a stale root, and an empty root list all reset.
     expect(restoredAgentCwd("/p/p2/src", "/boxes/b1", roots)).toBe("/boxes/b1");
@@ -105,8 +106,8 @@ describe("agentWorktreeChoices", () => {
   });
 
   it("lists main first plus every linked worktree that still has a checkout", () => {
-    const gone = wt({ path: "/p/p1/.eldrun/worktrees/gone", branch: "gone", is_prunable: true });
-    const bare = wt({ path: "/p/p1/.eldrun/worktrees/bare", is_bare: true });
+    const gone = wt({ path: `/p/p1/${NAMES.worktreesDir}/gone`, branch: "gone", is_prunable: true });
+    const bare = wt({ path: `/p/p1/${NAMES.worktreesDir}/bare`, is_bare: true });
     expect(agentWorktreeChoices([MAIN, gone, FEATURE, bare]).map((w) => w.path)).toEqual([
       MAIN.path,
       FEATURE.path,
@@ -114,7 +115,7 @@ describe("agentWorktreeChoices", () => {
   });
 
   it("is empty when the only linked worktrees are gone", () => {
-    const gone = wt({ path: "/p/p1/.eldrun/worktrees/gone", branch: "gone", is_prunable: true });
+    const gone = wt({ path: `/p/p1/${NAMES.worktreesDir}/gone`, branch: "gone", is_prunable: true });
     expect(agentWorktreeChoices([MAIN, gone])).toEqual([]);
   });
 });
@@ -144,7 +145,7 @@ describe("restore keeps a worktree agent where it was", () => {
           key: "agent-1",
           label: "Claude · feature",
           cmd: "claude",
-          cwd: "/p/p1/.eldrun/worktrees/feature",
+          cwd: `/p/p1/${NAMES.worktreesDir}/feature`,
           kind: "agent",
           sessionId: "11111111-1111-4111-8111-111111111111",
         },
@@ -163,7 +164,7 @@ describe("restore keeps a worktree agent where it was", () => {
     );
     const tabs = useTabsStore.getState().tabs;
     const byLabel = (l: string) => tabs.find((t) => t.label === l)!;
-    expect(byLabel("Claude · feature").cwd).toBe("/p/p1/.eldrun/worktrees/feature");
+    expect(byLabel("Claude · feature").cwd).toBe(`/p/p1/${NAMES.worktreesDir}/feature`);
     expect(byLabel("Claude · feature").args).toContain("--resume");
     expect(byLabel("Claude").cwd).toBe("/p/p1");
     // Non-agent tabs were never reset and still are not.
@@ -245,7 +246,7 @@ describe("'+ agent' asks which worktree", () => {
     });
     const created = agentTabs();
     expect(created).toHaveLength(1);
-    expect(created[0].cwd).toBe("/p/p1/.eldrun/worktrees/feature");
+    expect(created[0].cwd).toBe(`/p/p1/${NAMES.worktreesDir}/feature`);
     expect(created[0].label).toBe("Claude · feature");
     expect(created[0].sessionId).toBeTruthy();
     // The session is named after the branch too.

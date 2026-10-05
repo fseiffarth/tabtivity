@@ -1,6 +1,6 @@
 //! Project boxes — meta-project grouping (TODO Group A: #13 + #41).
 //!
-//! Boxes live in their own sibling file `~/.local/share/eldrun/boxes.json` so the
+//! Boxes live in their own sibling file `~/.local/share/tabtivity/boxes.json` so the
 //! existing `projects.json` stays byte-compatible for Python rollback. A box owns
 //! the authoritative ordered `member_ids` — membership is N:M (a project may sit
 //! in several boxes at once) and lives NOWHERE else; the old per-project `box_id`
@@ -9,12 +9,12 @@
 //!
 //! A box folder also carries one **link per member** (a symlink on Unix, a
 //! directory junction on Windows) beside the generated agent docs, so agent CLIs
-//! launched in the box folder can traverse straight into each member's tree. Eldrun's own file confinement
+//! launched in the box folder can traverse straight into each member's tree. Tabtivity's own file confinement
 //! deliberately does NOT follow these links — the multi-root Files view (and the
-//! explicit allowed-roots set in `compute_box_allowed_roots`) is Eldrun's file
+//! explicit allowed-roots set in `compute_box_allowed_roots`) is Tabtivity's file
 //! surface; the links exist purely for the agents' benefit. Ownership of the
-//! links is recorded in `<folder>/.eldrun-box-links.json` so regeneration only
-//! ever removes links Eldrun itself created (see `write_box_member_links`).
+//! links is recorded in `<folder>/.tabtivity-box-links.json` so regeneration only
+//! ever removes links Tabtivity itself created (see `write_box_member_links`).
 
 use std::collections::HashSet;
 use std::fs;
@@ -31,26 +31,94 @@ use crate::storage;
 /// box file should link to (CLAUDE.md → members' CLAUDE.md, etc.).
 const BOX_AGENT_DOCS: &[&str] = &["CLAUDE.md", "GEMINI.md", "AGENTS.md"];
 
-/// Markers delimiting the Eldrun-managed link block inside a box agent doc. Only
+/// Markers delimiting the Tabtivity-managed link block inside a box agent doc. Only
 /// the text between (and including) these lines is rewritten on regeneration, so
 /// anything a user adds outside the block survives.
-const BOX_LINKS_START: &str = "<!-- eldrun:box-links:start -->";
-const BOX_LINKS_END: &str = "<!-- eldrun:box-links:end -->";
+const BOX_LINKS_START: &str = crate::brand::BOX_LINKS_START;
+const BOX_LINKS_END: &str = crate::brand::BOX_LINKS_END;
 
 fn boxes_path() -> std::path::PathBuf {
     storage::state_dir().join("boxes.json")
 }
 
 fn read_boxes() -> Result<BoxesList, String> {
-    let path = boxes_path();
+    read_boxes_at(&boxes_path())
+}
+
+fn read_boxes_at(path: &Path) -> Result<BoxesList, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    storage::read_json(&path).map_err(|e| e.to_string())
+    storage::read_json(path).map_err(|e| e.to_string())
 }
 
-fn write_boxes(boxes: &BoxesList) -> Result<(), String> {
-    storage::write_json(&boxes_path(), boxes).map_err(|e| e.to_string())
+/// Write the list, stamping each box's revision against what the file holds
+/// (headless owner plan, H1): a changed box gets the next revision, an
+/// unchanged one keeps its own, a new one starts at 1 — whatever number the
+/// caller's copy carried. Every writer in this module goes through here, so
+/// the revisions move consistently.
+fn write_boxes(boxes: &BoxesList) -> Result<BoxesList, String> {
+    let path = boxes_path();
+    let _lock = storage::FileLock::exclusive(&path).map_err(|e| e.to_string())?;
+    let current = read_boxes_at(&path)?;
+    write_boxes_stamped(&path, &current, boxes)
+}
+
+/// [`write_boxes`], answering box `box_id` as the file now holds it — its
+/// revision stamped. A command's answer is the copy the window's store keeps
+/// and later sends back whole through `save_boxes`; the pre-write copy's
+/// revision would get that save refused as stale.
+fn write_boxes_answering(boxes: &BoxesList, box_id: &str) -> Result<ProjectBox, String> {
+    write_boxes(boxes)?
+        .into_iter()
+        .find(|b| b.id == box_id)
+        .ok_or_else(|| format!("box '{box_id}' not found"))
+}
+
+/// Write `boxes` stamped against `current`, and answer what was written.
+fn write_boxes_stamped(path: &Path, current: &BoxesList, boxes: &BoxesList) -> Result<BoxesList, String> {
+    let stamped = stamp_box_revs(current, boxes);
+    storage::write_json_atomic(path, &stamped).map_err(|e| e.to_string())?;
+    Ok(stamped)
+}
+
+fn stamp_box_revs(current: &BoxesList, next: &BoxesList) -> BoxesList {
+    next.iter()
+        .map(|incoming| {
+            let mut stamped = incoming.clone();
+            match current.iter().find(|held| held.id == incoming.id) {
+                None => stamped.rev = incoming.rev.saturating_add(1),
+                Some(held) => {
+                    let mut probe = incoming.clone();
+                    probe.rev = held.rev;
+                    stamped.rev = if probe == *held { held.rev } else { held.rev.saturating_add(1) };
+                }
+            }
+            stamped
+        })
+        .collect()
+}
+
+/// What a whole-list save is told when a box it carries moved on since the
+/// caller loaded it.
+pub const BOXES_STALE: &str = "boxes changed on disk since they were loaded; reload and apply the edit again";
+
+/// The whole-list save, compare-and-swap per box: refused outright when any
+/// box the caller carries has a revision other than the file's, so the edit
+/// it did not see is never written over. A box the file no longer holds is
+/// re-created; one the caller dropped is deleted. Answers the list as
+/// written, so the caller can adopt the revisions it stamped.
+fn save_boxes_at(path: &Path, boxes: &BoxesList) -> Result<BoxesList, String> {
+    let _lock = storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    let current = read_boxes_at(path)?;
+    for incoming in boxes {
+        if let Some(held) = current.iter().find(|held| held.id == incoming.id) {
+            if held.rev != incoming.rev {
+                return Err(BOXES_STALE.to_string());
+            }
+        }
+    }
+    write_boxes_stamped(path, &current, boxes)
 }
 
 /// Gap-spaced next position among boxes (mirrors `projects::next_position`).
@@ -190,17 +258,17 @@ pub(crate) fn box_allowed_roots(box_id: &str) -> Option<Vec<PathBuf>> {
     Some(roots)
 }
 
-/// Build the Eldrun-managed link block for one box agent doc. Pure (no IO) so it
+/// Build the Tabtivity-managed link block for one box agent doc. Pure (no IO) so it
 /// is unit-testable. `agent_file` is the filename of THIS doc (e.g. "CLAUDE.md");
 /// each member is linked to its same-named md file plus its root path.
 fn box_links_block(agent_file: &str, box_name: &str, members: &[(String, PathBuf)]) -> String {
     let mut out = String::new();
     out.push_str(BOX_LINKS_START);
     out.push('\n');
-    out.push_str("<!-- Managed by Eldrun — do not edit between these markers. -->\n\n");
+    out.push_str(concat!("<!-- Managed by ", crate::app_name!(), " — do not edit between these markers. -->\n\n"));
     out.push_str(&format!(
-        "## Box \"{box_name}\" — member projects\n\nThis folder is an Eldrun project box grouping the projects below. Each entry \
-links to the project root and its `{agent_file}`:\n\n"
+        "## Box \"{box_name}\" — member projects\n\nThis folder is a {app} project box grouping the projects below. Each entry \
+links to the project root and its `{agent_file}`:\n\n", app = crate::brand::DISPLAY
     ));
     if members.is_empty() {
         out.push_str("_No member projects yet._\n");
@@ -233,7 +301,8 @@ so it is reachable by relative path from this folder.\n",
 /// symlinks on disk) are ever removed on regeneration — a user file or folder
 /// that happens to share a member's name is never touched (the member's link
 /// gets a `-1`/`-2` suffixed name instead).
-const BOX_LINKS_MANIFEST: &str = ".eldrun-box-links.json";
+#[cfg(test)]
+const BOX_LINKS_MANIFEST: &str = crate::brand::BOX_LINKS_MANIFEST;
 
 type BoxLinksManifest = std::collections::BTreeMap<String, String>;
 
@@ -284,7 +353,14 @@ fn plan_member_links(
 /// do not hold, a junction does not, and both read back through the same
 /// `symlink_metadata` / `read_link` calls this planner relies on.
 fn write_box_member_links(folder: &Path, members: &[(String, PathBuf)]) -> std::io::Result<()> {
-    let manifest_path = folder.join(BOX_LINKS_MANIFEST);
+    // The manifest an older build wrote under the app's old name is taken
+    // over (renamed); `folder.join(BOX_LINKS_MANIFEST)` while it is unchanged.
+    let manifest_path = crate::services::brand_migration::adopt_named_file(
+        &crate::brand::PAIR,
+        crate::brand::Name::BOX_LINKS_MANIFEST,
+        folder,
+        "box-links-manifest",
+    );
     let manifest: BoxLinksManifest = if manifest_path.exists() {
         crate::storage::read_json(&manifest_path).unwrap_or_default()
     } else {
@@ -420,21 +496,37 @@ fn remove_member_link(link: &Path) -> std::io::Result<()> {
 /// previous managed block (between the markers) and leaving the rest untouched.
 /// When no file exists, `existing` is empty and a titled doc is created.
 fn merge_box_doc(agent_file: &str, existing: &str, block: &str) -> String {
-    if let (Some(start), Some(end)) = (existing.find(BOX_LINKS_START), existing.find(BOX_LINKS_END))
-    {
-        if end > start {
-            let end = end + BOX_LINKS_END.len();
-            // Drop a trailing newline right after the old end marker so we don't
-            // accumulate blank lines on each regeneration.
-            let tail = existing[end..]
-                .strip_prefix('\n')
-                .unwrap_or(&existing[end..]);
-            return format!("{}{}\n{}", &existing[..start], block.trim_end(), tail);
-        }
+    merge_box_doc_for(&crate::brand::PAIR, agent_file, existing, block)
+}
+
+/// [`merge_box_doc`] for a brand pair. A block an older build wrote sits
+/// between markers that carry the app's old name: it is found there (counted
+/// as a legacy hit) and replaced in place by `block`, which carries the
+/// current markers — never left beside a second block.
+fn merge_box_doc_for(pair: &crate::brand::Pair, agent_file: &str, existing: &str, block: &str) -> String {
+    use crate::brand::Name;
+    let current = (pair.cur(Name::BOX_LINKS_START), pair.cur(Name::BOX_LINKS_END));
+    let old = pair.legacy(Name::BOX_LINKS_START).zip(pair.legacy(Name::BOX_LINKS_END));
+    let found = |(start_marker, end_marker): &(String, String)| {
+        let (start, end) = (existing.find(start_marker.as_str())?, existing.find(end_marker.as_str())?);
+        (end > start).then(|| (start, end + end_marker.len()))
+    };
+    let span = found(&current).or_else(|| {
+        let span = found(old.as_ref()?)?;
+        crate::brand::legacy_hit("box-links-marker");
+        Some(span)
+    });
+    if let Some((start, end)) = span {
+        // Drop a trailing newline right after the old end marker so we don't
+        // accumulate blank lines on each regeneration.
+        let tail = existing[end..]
+            .strip_prefix('\n')
+            .unwrap_or(&existing[end..]);
+        return format!("{}{}\n{}", &existing[..start], block.trim_end(), tail);
     }
     if existing.trim().is_empty() {
         let title = agent_file.strip_suffix(".md").unwrap_or(agent_file);
-        return format!("# {title} — Eldrun box context\n\n{block}");
+        return format!("# {title} — {app} box context\n\n{block}", app = crate::brand::DISPLAY);
     }
     // Existing content without a managed block: append the block at the end.
     format!("{}\n\n{block}", existing.trim_end())
@@ -468,9 +560,12 @@ pub fn get_boxes() -> Result<BoxesList, String> {
     Ok(reconcile_member_ids(boxes, &known_project_ids()))
 }
 
+/// The whole-list save. Answers the list as written: a box this save changed
+/// carries its new revision, which the window's store must adopt before its
+/// next save or that one is refused as stale.
 #[tauri::command]
-pub fn save_boxes(boxes: BoxesList) -> Result<(), String> {
-    write_boxes(&boxes)
+pub fn save_boxes(boxes: BoxesList) -> Result<BoxesList, String> {
+    save_boxes_at(&boxes_path(), &boxes)
 }
 
 #[tauri::command]
@@ -484,18 +579,20 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
     }
     let position = next_box_position(&boxes);
     let new_box = ProjectBox {
+        rev: 0,
         id,
         name,
         member_ids: vec![],
         position,
         folder: None,
         relations: vec![],
-        eldrun_mobile_access: false,
+        app_mobile_access: false,
+        app_mobile_devices: None,
         extra: Default::default(),
     };
-    boxes.push(new_box.clone());
-    write_boxes(&boxes)?;
-    Ok(new_box)
+    let id = new_box.id.clone();
+    boxes.push(new_box);
+    write_boxes_answering(&boxes, &id)
 }
 
 #[tauri::command]
@@ -509,9 +606,7 @@ pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
     // open) it stays authoritative; a later rename does not move it (documented
     // limitation — "rename + move folder" is a Phase 4 nicety).
     target.name = name;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
 #[tauri::command]
@@ -525,7 +620,7 @@ pub fn delete_box(box_id: String) -> Result<(), String> {
     // The box folder (if any) is intentionally NOT deleted — it may hold user
     // data placed there. Clearing each former member's `box_id` is done
     // frontend-side via `save_projects` (a required step of `deleteBox`).
-    write_boxes(&boxes)
+    write_boxes(&boxes).map(|_| ())
 }
 
 /// Add `project_id` to every box whose **name** matches one of `names`, and
@@ -585,12 +680,10 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
         .find(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.member_ids = member_ids;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
-/// Switch a box's Eldrun Mobile reach (#31aa) — the box-scope twin of
+/// Switch a box's Tabtivity Mobile reach (#31aa) — the box-scope twin of
 /// `set_project_mobile_access`. The machine-wide preconditions are the same
 /// (persistent local sessions, tmux), because a box tab reaches the phone the
 /// way a project tab does: through the tmux session the tab already runs in.
@@ -598,8 +691,20 @@ pub fn set_box_members(box_id: String, member_ids: Vec<String>) -> Result<Projec
 /// locally, and the sidecar takes only those whose cwd is the box folder or a
 /// local member root. Enabling also resolves the box folder: the sidecar lists
 /// a box by that folder, and a box never opened on the desktop has none yet.
+/// `devices` narrows it to some paired phones, as for a project; omitted,
+/// every phone. Turning it off drops the list with the switch.
 #[tauri::command]
-pub fn set_box_mobile_access(box_id: String, enabled: bool) -> Result<ProjectBox, String> {
+pub fn set_box_mobile_access(
+    app: tauri::AppHandle,
+    box_id: String,
+    enabled: bool,
+    devices: Option<Vec<String>>,
+) -> Result<ProjectBox, String> {
+    let devices = if enabled {
+        crate::commands::projects::mobile_scope_devices(devices)?
+    } else {
+        None
+    };
     if enabled {
         let settings: crate::schema::Settings =
             storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
@@ -616,10 +721,12 @@ pub fn set_box_mobile_access(box_id: String, enabled: bool) -> Result<ProjectBox
         .iter_mut()
         .find(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
-    target.eldrun_mobile_access = enabled;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    target.app_mobile_access = enabled;
+    target.app_mobile_devices = devices;
+    let written = write_boxes_answering(&boxes, &box_id)?;
+    // A phone this leaves out loses what it scheduled or held here.
+    crate::commands::agent_tasks::cancel_lost_phone_rules(&app, "after a box's Mobile access changed");
+    Ok(written)
 }
 
 // ── Box folder + relations (Phase 2 groundwork) ─────────────────────────────
@@ -664,8 +771,12 @@ fn resolve_box_folder(boxes: &BoxesList, box_id: &str, name: &str) -> std::path:
     }
 }
 
+/// Make sure the box has its folder on disk, resolving and persisting one on
+/// first open, and answer the box as the file now holds it: a first open
+/// stamps a new revision, and the window's store must adopt it or its next
+/// whole-list `save_boxes` is refused as stale.
 #[tauri::command]
-pub fn ensure_box_folder(box_id: String) -> Result<String, String> {
+pub fn ensure_box_folder(box_id: String) -> Result<ProjectBox, String> {
     let mut boxes = read_boxes()?;
     let target = boxes
         .iter()
@@ -677,26 +788,26 @@ pub fn ensure_box_folder(box_id: String) -> Result<String, String> {
     // If the box already has a resolved folder, that path is authoritative —
     // just (idempotently) ensure the directory exists. Otherwise (first open)
     // resolve a unique folder, create it, and persist the chosen path.
-    let folder = if let Some(folder) = target.folder.clone() {
+    let answered = if let Some(folder) = target.folder.clone() {
         fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-        folder
+        target.clone()
     } else {
         let path = resolve_box_folder(&boxes, &box_id, &name);
         fs::create_dir_all(&path).map_err(|e| e.to_string())?;
         let folder = path.to_string_lossy().to_string();
         if let Some(t) = boxes.iter_mut().find(|b| b.id == box_id) {
-            t.folder = Some(folder.clone());
+            t.folder = Some(folder);
         }
-        write_boxes(&boxes)?;
-        folder
+        write_boxes_answering(&boxes, &box_id)?
     };
+    let folder = answered.folder.clone().unwrap_or_default();
 
     // Refresh the box agent docs + member symlinks (best effort — a write
     // failure here must not block opening the box).
     let members = member_projects(&member_ids);
     let _ = write_box_agent_docs(Path::new(&folder), &name, &members);
     let _ = write_box_member_links(Path::new(&folder), &members);
-    Ok(folder)
+    Ok(answered)
 }
 
 /// Regenerate the box agent docs (CLAUDE/GEMINI/AGENTS link blocks) for a box
@@ -733,9 +844,7 @@ pub fn set_box_relations(
         .find(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
     target.relations = relations;
-    let updated = target.clone();
-    write_boxes(&boxes)?;
-    Ok(updated)
+    write_boxes_answering(&boxes, &box_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -755,6 +864,98 @@ mod tests {
 
     fn ids(values: &[&str]) -> HashSet<String> {
         values.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Headless owner plan, H1: the whole-list save is compare-and-swap per
+    /// box — a stale copy is refused, and revisions move only for the boxes
+    /// that changed.
+    #[test]
+    fn save_boxes_is_refused_for_a_box_that_moved_on_and_stamps_what_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        save_boxes_at(&path, &vec![mk_box("a", &["p"]), mk_box("b", &[])]).unwrap();
+        let loaded = read_boxes_at(&path).unwrap();
+        assert_eq!(loaded.iter().map(|b| b.rev).collect::<Vec<_>>(), [1, 1]);
+
+        // Window 1 renames A and saves.
+        let mut one = loaded.clone();
+        one[0].name = "A1".into();
+        save_boxes_at(&path, &one).unwrap();
+        let after_one = read_boxes_at(&path).unwrap();
+        assert_eq!((after_one[0].rev, after_one[1].rev), (2, 1), "only A moved");
+
+        // Window 2, still holding the first load, adds P to B: refused, and
+        // A1 survives.
+        let mut two = loaded.clone();
+        two[1].member_ids.push("p".into());
+        assert_eq!(save_boxes_at(&path, &two).unwrap_err(), BOXES_STALE);
+        let untouched = read_boxes_at(&path).unwrap();
+        assert_eq!(untouched[0].name, "A1");
+        assert!(untouched[1].member_ids.is_empty());
+
+        // Reloaded and re-applied, it lands; the caller's own numbers are
+        // never trusted over the file's.
+        let mut fresh = read_boxes_at(&path).unwrap();
+        fresh[1].member_ids.push("p".into());
+        fresh[1].rev = 99;
+        assert_eq!(save_boxes_at(&path, &fresh).unwrap_err(), BOXES_STALE, "a made-up revision is stale");
+        fresh[1].rev = 1;
+        save_boxes_at(&path, &fresh).unwrap();
+        let done = read_boxes_at(&path).unwrap();
+        assert_eq!((done[0].rev, done[1].rev), (2, 2));
+
+        // A file written before revisions loads at 0 and takes the first
+        // stamped write like any other.
+        std::fs::write(&path, r#"[{"id":"z","name":"Z","member_ids":[],"position":10}]"#).unwrap();
+        let legacy = read_boxes_at(&path).unwrap();
+        assert_eq!(legacy[0].rev, 0);
+        save_boxes_at(&path, &legacy).unwrap();
+        assert_eq!(read_boxes_at(&path).unwrap()[0].rev, 0, "an unchanged legacy box stays unversioned");
+        let mut renamed = legacy.clone();
+        renamed[0].name = "Z2".into();
+        save_boxes_at(&path, &renamed).unwrap();
+        assert_eq!(read_boxes_at(&path).unwrap()[0].rev, 1);
+    }
+
+    /// A single-box command answers the box as written, revision stamped: the
+    /// window's store keeps that copy, so its next whole-list save must pass.
+    #[test]
+    fn a_write_answers_the_stamped_revisions_a_later_save_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        save_boxes_at(&path, &vec![mk_box("a", &[])]).unwrap();
+        let held = read_boxes_at(&path).unwrap();
+        let mut next = held.clone();
+        next[0].app_mobile_access = true;
+        let answered = write_boxes_stamped(&path, &held, &next).unwrap();
+        assert_eq!(answered, read_boxes_at(&path).unwrap());
+        assert_eq!(answered[0].rev, held[0].rev + 1);
+        let mut kept = answered.clone();
+        kept[0].name = "A2".into();
+        save_boxes_at(&path, &kept).expect("the answered copy is not stale");
+    }
+
+    /// The whole-list save answers what it wrote too: a window that adopts
+    /// those revisions can save a second edit; one that keeps its own copy
+    /// is refused, which is what kept a second box edit from landing.
+    #[test]
+    fn a_save_answers_the_revisions_the_next_save_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        save_boxes_at(&path, &vec![mk_box("a", &[]), mk_box("b", &[])]).unwrap();
+        let held = read_boxes_at(&path).unwrap();
+        let mut first = held.clone();
+        first[0].name = "A1".into();
+        let answered = save_boxes_at(&path, &first).unwrap();
+        assert_eq!(answered, read_boxes_at(&path).unwrap());
+        assert_eq!((answered[0].rev, answered[1].rev), (held[0].rev + 1, held[1].rev));
+
+        let mut stale = first.clone();
+        stale[0].name = "A2".into();
+        assert_eq!(save_boxes_at(&path, &stale).unwrap_err(), BOXES_STALE);
+        let mut adopted = answered.clone();
+        adopted[0].name = "A2".into();
+        save_boxes_at(&path, &adopted).expect("the adopted revisions are current");
     }
 
     #[test]
@@ -831,7 +1032,7 @@ mod tests {
             "relations should be skipped: {back}"
         );
         assert!(
-            !back.contains("eldrun_mobile_access"),
+            !back.contains(concat!(crate::app_slug!(), "_mobile_access")),
             "an off Mobile bit should be skipped: {back}"
         );
 
@@ -867,11 +1068,11 @@ mod tests {
         let members = vec![
             (
                 "Alpha".to_string(),
-                PathBuf::from("/home/u/eldrun/projects/alpha"),
+                PathBuf::from(concat!("/home/u/", crate::app_slug!(), "/projects/alpha")),
             ),
             (
                 "Beta".to_string(),
-                PathBuf::from("/home/u/eldrun/projects/beta"),
+                PathBuf::from(concat!("/home/u/", crate::app_slug!(), "/projects/beta")),
             ),
         ];
         let block = box_links_block("CLAUDE.md", "My Box", &members);
@@ -879,12 +1080,12 @@ mod tests {
         assert!(block.trim_end().ends_with(BOX_LINKS_END));
         assert!(block.contains("My Box"));
         // Each member: root path + a link to its same-named (CLAUDE.md) doc.
-        assert!(block.contains("root: `/home/u/eldrun/projects/alpha`"));
-        assert!(block.contains("[`CLAUDE.md`](/home/u/eldrun/projects/alpha/CLAUDE.md)"));
-        assert!(block.contains("[`CLAUDE.md`](/home/u/eldrun/projects/beta/CLAUDE.md)"));
+        assert!(block.contains(concat!("root: `/home/u/", crate::app_slug!(), "/projects/alpha`")));
+        assert!(block.contains(concat!("[`CLAUDE.md`](/home/u/", crate::app_slug!(), "/projects/alpha/CLAUDE.md)")));
+        assert!(block.contains(concat!("[`CLAUDE.md`](/home/u/", crate::app_slug!(), "/projects/beta/CLAUDE.md)")));
         // The agent file name flows through, so GEMINI links point at GEMINI.md.
         let gem = box_links_block("GEMINI.md", "My Box", &members);
-        assert!(gem.contains("[`GEMINI.md`](/home/u/eldrun/projects/alpha/GEMINI.md)"));
+        assert!(gem.contains(concat!("[`GEMINI.md`](/home/u/", crate::app_slug!(), "/projects/alpha/GEMINI.md)")));
     }
 
     #[test]
@@ -897,7 +1098,7 @@ mod tests {
     fn merge_box_doc_creates_titled_doc_when_empty() {
         let block = box_links_block("CLAUDE.md", "B", &[]);
         let merged = merge_box_doc("CLAUDE.md", "", &block);
-        assert!(merged.starts_with("# CLAUDE — Eldrun box context"));
+        assert!(merged.starts_with(concat!("# CLAUDE — ", crate::app_name!(), " box context")));
         assert!(merged.contains(BOX_LINKS_START));
     }
 
@@ -926,6 +1127,51 @@ mod tests {
         assert_eq!(merged.matches(BOX_LINKS_END).count(), 1);
     }
 
+    /// A block an older build wrote (old markers) is replaced in place by the
+    /// current one — one block afterwards, the user's notes kept — and the
+    /// old manifest is taken over under its current name.
+    #[test]
+    fn a_block_and_manifest_under_the_old_name_are_taken_over() {
+        use crate::brand::{Name, LEGACY};
+        use crate::services::brand_migration::{adopt_named_file, hits, testing::RENAMED};
+        let old_block = format!(
+            "{}\n- /p/old\n{}\n",
+            LEGACY.name(Name::BOX_LINKS_START),
+            LEGACY.name(Name::BOX_LINKS_END)
+        );
+        let existing = format!("# CLAUDE\n\n{old_block}\n## My notes\nkeep me\n");
+        let new_block = format!(
+            "{}\n- /p/new\n{}\n",
+            RENAMED.cur(Name::BOX_LINKS_START),
+            RENAMED.cur(Name::BOX_LINKS_END)
+        );
+        let _ = hits::taken();
+        let merged = merge_box_doc_for(&RENAMED, "CLAUDE.md", &existing, &new_block);
+        assert_eq!(hits::taken(), ["box-links-marker"]);
+        assert!(merged.contains("/p/new") && !merged.contains("/p/old"));
+        assert!(merged.contains("## My notes\nkeep me"));
+        assert!(!merged.contains(&LEGACY.name(Name::BOX_LINKS_START)));
+        assert_eq!(merged.matches(&RENAMED.cur(Name::BOX_LINKS_START)).count(), 1);
+        // The next refresh finds the current block: no second one, no hit.
+        let again = merge_box_doc_for(&RENAMED, "CLAUDE.md", &merged, &new_block);
+        assert_eq!(again.matches(&RENAMED.cur(Name::BOX_LINKS_START)).count(), 1);
+        assert!(hits::taken().is_empty());
+
+        let folder = tempfile::tempdir().unwrap();
+        let old_manifest = folder.path().join(LEGACY.name(Name::BOX_LINKS_MANIFEST));
+        std::fs::write(&old_manifest, "{\"alpha\":\"/p/alpha\"}").unwrap();
+        let path = adopt_named_file(&RENAMED, Name::BOX_LINKS_MANIFEST, folder.path(), "box-links-manifest");
+        assert_eq!(path, folder.path().join(RENAMED.cur(Name::BOX_LINKS_MANIFEST)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"alpha\":\"/p/alpha\"}");
+        assert!(!old_manifest.exists());
+        assert_eq!(hits::taken(), ["box-links-manifest"]);
+        // The production pair: the constant's path, nothing looked up.
+        assert_eq!(
+            adopt_named_file(&crate::brand::PAIR, Name::BOX_LINKS_MANIFEST, folder.path(), "x"),
+            folder.path().join(BOX_LINKS_MANIFEST)
+        );
+    }
+
     fn project_entry(id: &str, dir: &str) -> crate::schema::projects::ProjectEntry {
         let mut extra = std::collections::HashMap::new();
         extra.insert("directory".to_string(), Value::String(dir.to_string()));
@@ -950,18 +1196,18 @@ mod tests {
     #[test]
     fn box_allowed_roots_covers_folder_members_and_mirror() {
         let mut b = mk_box("b1", &["p1", "p2"]);
-        b.folder = Some("/home/u/eldrun/boxes/b1".to_string());
+        b.folder = Some(concat!("/home/u/", crate::app_slug!(), "/boxes/b1").to_string());
         let mut p2 = project_entry("p2", "/home/u/code/p2");
         p2.extra.insert(
             "mirror".to_string(),
-            Value::String("/home/u/eldrun/projects-ssh/p2".to_string()),
+            Value::String(concat!("/home/u/", crate::app_slug!(), "/projects-ssh/p2").to_string()),
         );
         let projects = vec![project_entry("p1", "/home/u/code/p1"), p2];
         let roots = compute_box_allowed_roots(&vec![b], &projects, "b1").unwrap();
-        assert!(roots.contains(&PathBuf::from("/home/u/eldrun/boxes/b1")));
+        assert!(roots.contains(&PathBuf::from(concat!("/home/u/", crate::app_slug!(), "/boxes/b1"))));
         assert!(roots.contains(&PathBuf::from("/home/u/code/p1")));
         assert!(roots.contains(&PathBuf::from("/home/u/code/p2")));
-        assert!(roots.contains(&PathBuf::from("/home/u/eldrun/projects-ssh/p2")));
+        assert!(roots.contains(&PathBuf::from(concat!("/home/u/", crate::app_slug!(), "/projects-ssh/p2"))));
     }
 
     #[test]
@@ -1100,7 +1346,7 @@ mod tests {
                 &[("one".to_string(), t1.clone()), ("two".to_string(), t2)],
             )
             .unwrap();
-            // A FOREIGN symlink Eldrun never made stays, member or not.
+            // A FOREIGN symlink Tabtivity never made stays, member or not.
             std::os::unix::fs::symlink(&t1, folder.join("foreign")).unwrap();
 
             write_box_member_links(&folder, &[("one".to_string(), t1)]).unwrap();

@@ -6,6 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Home } from "../../../mobile-web/src/screens/Home";
+import { storageKey } from "../../lib/brand";
 
 const fetchMock = vi.fn();
 
@@ -57,6 +58,22 @@ describe("Mobile home — project list states", () => {
     expect(screen.getByText("Paper").parentElement?.textContent).toContain("box");
   });
 
+  it("counts a row's working, waiting and done agent tabs beside its open tabs", async () => {
+    answer([
+      { id: "p1", label: "Alpha", status: "active", live_sessions: 5, agents: { working: 2, question: 1, done: 0 } },
+      { id: "p2", label: "Beta", status: "active", live_sessions: 1 },
+    ]);
+    render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    expect(screen.getByRole("img", { name: "Working: 2" }).textContent).toContain("2");
+    expect(screen.getByRole("img", { name: "Waiting on a decision: 1" })).toBeTruthy();
+    // A state with no tab is left out, and so is a row with no agent at work.
+    expect(screen.queryByRole("img", { name: /^Done/ })).toBeNull();
+    expect(screen.getAllByRole("img", { name: /^(Working|Waiting|Done)/ })).toHaveLength(2);
+    expect(screen.getByLabelText("Open tabs: 5").textContent).toBe("5");
+    expect(screen.getByLabelText("Open tabs: 1").textContent).toBe("1");
+  });
+
   it("explains an empty active list and points at search", async () => {
     answer([]);
     render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
@@ -78,18 +95,46 @@ describe("Mobile home — project list states", () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
     render(<Home open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
-    const row = screen.getByRole("button", { name: /Voice language/ });
+    // The phone's own settings sit behind the header's gear, not on the page.
+    expect(screen.queryByRole("button", { name: /Voice language/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "This device" }));
+    const row = within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ });
     // Until it is set, the row says which language the phone itself reports.
     expect(row.textContent).toContain("en-GB");
 
+    // The row's sheet takes the settings sheet's place; picking comes back to it.
     fireEvent.click(row);
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Deutsch" }));
-    expect(localStorage.getItem("eldrun.mobile.speechLang")).toBe("de");
-    expect(screen.getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch");
+    expect(localStorage.getItem(storageKey("mobile.speechLang"))).toBe("de");
+    const settings = screen.getByRole("dialog", { name: "This device" });
+    expect(within(settings).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch");
+    fireEvent.click(within(settings).getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     // The agents mode replaces the project list, not the phone's own settings.
     fireEvent.click(screen.getByRole("button", { name: "Agents" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
+    fireEvent.click(screen.getByRole("button", { name: "This device" }));
+    await waitFor(() => expect(within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
+  });
+
+  it("opens the project's git sheet from a row's git mark, and the project from the rest", async () => {
+    answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1, git: "unpushed" }]);
+    const projects = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: string | URL | Request) => String(input) === "/api/v1/projects/p1/git"
+      ? new Response(JSON.stringify({ repo: false, worktrees: [], worktrees_total: 0, branches: [], branches_total: 0, remote_branches: [], remote_total: 0 }), { status: 200 })
+      : projects(input));
+    const open = vi.fn();
+    render(<Home open={open} openTab={noop} todo={noop} mail={noop} />);
+    fireEvent.click(await screen.findByText("not pushed"));
+    expect(open).not.toHaveBeenCalled();
+    const sheet = await screen.findByRole("dialog");
+    expect(sheet.textContent).toContain("Git · Alpha");
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/projects/p1/git")).toBe(true));
+    fireEvent.click(within(sheet).getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(screen.getByText("Alpha"));
+    expect(open).toHaveBeenCalledWith("p1");
   });
 
   it("loads the list again on its own once the page is shown after a failed load", async () => {

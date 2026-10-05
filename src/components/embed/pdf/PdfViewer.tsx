@@ -10,7 +10,7 @@ import { useSearchText } from "./useSearchText";
  * shared viewer plumbing back from `FileViewerPane`; the resulting import cycle is
  * the established pattern here and is safe because every use is at call time.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import * as pdfjs from "pdfjs-dist";
@@ -19,6 +19,7 @@ import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
 import {
   useFileScope,
+  useFileSource,
   usePaneVisible,
   readFileBytes,
   readFileText,
@@ -112,6 +113,22 @@ import { PdfSelectionBar, selectionBarPos } from "./PdfSelectionBar";
 import { readViewerSelection, type ViewerSelection } from "./selection";
 import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
+import { PdfMarkupLayer } from "./PdfMarkupLayer";
+import { PdfMarkupBar } from "./PdfMarkupBar";
+import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
+import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
+import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
+import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
+import {
+  claimMarkup,
+  diskChangeAction,
+  markupClaimsVersion,
+  markupGate,
+  markupHolder,
+  releaseMarkup,
+  subscribeMarkupClaims,
+} from "../../../lib/viewers/pdfMarkup";
+import { isDetachedWindow } from "../../../stores/detachedContext";
 import {
   type PdfPresentReady,
   type PdfPresentSeed,
@@ -154,6 +171,8 @@ import {
   type CaretPhrase,
 } from "../../../lib/viewers/tex/tex";
 import { useT, type TranslationKey } from "../../../lib/i18n";
+import { pdfRasterRatio } from "./raster";
+import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 
@@ -455,6 +474,9 @@ function PdfPageCanvas({
   onNoteUpdate,
   onNoteDelete,
   onCopySelection,
+  markup,
+  questionPins,
+  tickBadges,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -565,6 +587,24 @@ function PdfPageCanvas({
   onRedactRemove?: (markId: string) => void;
   /** A selected page region has been rasterised into a PNG. */
   onCopySelection?: (png: Uint8Array) => void;
+  /** Markup mode is on (`usePdfMarkup`): the page carries the markup layer over
+   *  everything else, and its remarks take no pointer meanwhile. Only ever set on
+   *  a pristine arrangement, where this sheet is the file's page `pageNumber`. */
+  markup?: MarkupEdit | null;
+  /** The agent's markup questions pinned to this sheet (`PdfMarkupQuestions`),
+   *  over the markup layer: a click shows the question in the card. */
+  questionPins?: {
+    pins: readonly QuestionPin[];
+    focus: QuestionFocus | null;
+    onPick: (pin: QuestionPin) => void;
+  } | null;
+  /** The agent's ticks on this sheet's sent marks (`PdfMarkupTicks`), over the
+   *  markup layer: a click approves and removes that mark. */
+  tickBadges?: {
+    badges: readonly TickBadge[];
+    disabled: boolean;
+    onApprove: (index: number, mark: TickBadge["mark"]) => void;
+  } | null;
 }) {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -660,11 +700,13 @@ function PdfPageCanvas({
         return;
       }
       if (cancelled) return;
-      const dpr = window.devicePixelRatio || 1;
-      const viewport = page.getViewport({
-        scale: scale * dpr,
-        rotation: (((page.rotate + rot) % 360) + 360) % 360,
-      });
+      const rotation = (((page.rotate + rot) % 360) + 360) % 360;
+      // The screen's pixel ratio, capped so one page canvas stays within
+      // `PDF_MAX_CANVAS_PIXELS` at high zoom or on a poster-sized page (see
+      // `raster.ts`); the canvas is still laid out at its full CSS size.
+      const cssBox = page.getViewport({ scale, rotation });
+      const dpr = pdfRasterRatio(cssBox.width, cssBox.height, window.devicePixelRatio || 1);
+      const viewport = page.getViewport({ scale: scale * dpr, rotation });
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (!canvas || !ctx) return;
@@ -818,6 +860,14 @@ function PdfPageCanvas({
   const baseline = fileNotes ?? [];
   const [noteMenu, setNoteMenu] = useState<NoteMenuState | null>(null);
   const [noteEdit, setNoteEdit] = useState<NoteEditState | null>(null);
+  // Markup coming on closes a remark's menu and card: the remarks take no pointer
+  // while it is on, so one left open could not be closed by the page.
+  const marking = markup != null;
+  useEffect(() => {
+    if (!marking) return;
+    setNoteMenu(null);
+    setNoteEdit(null);
+  }, [marking]);
 
   // The panel asked for a remark to be opened. Consumed by nonce, so asking twice
   // re-opens it; the scroll and the flash are the layer's own.
@@ -1029,15 +1079,16 @@ function PdfPageCanvas({
 
   return (
     <div
-      className="file-viewer-pdf-page-wrap"
+      className={`file-viewer-pdf-page-wrap${marking ? " is-marking" : ""}`}
       ref={wrapRef}
       // Remarks are placed by right-clicking the page (#pdf-notes) — the gesture
       // every other PDF reader uses, and the one that needs no tool armed first. The
       // handler sits on the WRAPPER rather than on the canvas so a right-click that
       // lands on a link box, a search hit or the blackout layer still means "here on
       // the page", which is the same reasoning `syncClickAt` follows for Ctrl-click.
+      // Off while marking up: the remarks are inert then.
       onContextMenu={
-        onNoteAdd
+        onNoteAdd && !marking
           ? (e) => {
               e.preventDefault();
               const p = pointInPage(e.clientX, e.clientY);
@@ -1298,7 +1349,29 @@ function PdfPageCanvas({
       {/* The bar over a selection (#pdf-textselect), on the sheet the drag ended on.
           Above the remark layer because it is a live control over what the reader is
           doing right now, while a marker stands for something already written. */}
-      {selBar && (
+      {/* The markup layer (`usePdfMarkup`), over every other page layer — the
+          remarks included, which it leaves visible but out of reach. */}
+      {markup && cssSize && (
+        <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
+      )}
+      {tickBadges && tickBadges.badges.length > 0 && cssSize && (
+        <PdfTickBadges
+          badges={tickBadges.badges}
+          size={[cssSize.w, cssSize.h]}
+          scale={scale}
+          disabled={tickBadges.disabled}
+          onApprove={tickBadges.onApprove}
+        />
+      )}
+      {questionPins && questionPins.pins.length > 0 && (
+        <PdfQuestionPins
+          pins={questionPins.pins}
+          scale={scale}
+          focus={questionPins.focus}
+          onPick={questionPins.onPick}
+        />
+      )}
+      {selBar && !marking && (
         <PdfSelectionBar
           left={selectionBarPos(selBar.x, selBar.y, scale, selBar.lineHeight).left}
           top={selectionBarPos(selBar.x, selBar.y, scale, selBar.lineHeight).top}
@@ -1671,6 +1744,9 @@ function PdfCanvas({
   // The authoritative live map. State mirrors it for rendering, but the ref is what
   // the load effect's cleanup frees from — correct even if teardown beats a re-render.
   const sourcesRef = useRef<PdfSources>(new Map());
+  /** The pdf.js worker every load of the viewed file opens on (see the unmount
+   *  effect below, which owns its life). */
+  const workerSlot = useRef<PdfWorkerSlot | null>(null);
   const [pages, setPages] = useState<PageList>([]);
   // A drag's callbacks outlive the render they were created in (an import can land
   // seconds later, from another window), so they read the arrangement from here
@@ -1735,13 +1811,18 @@ function PdfCanvas({
   /** The blackout tool is armed — a drag over a page marks an area. */
   const [redacting, setRedacting] = useState(false);
   /** The region-capture mode is armed — a drag over a page writes that crop to
-   *  the native system clipboard (and into the project's eldrun-screenshots/
+   *  the native system clipboard (and into the project's tabtivity-screenshots/
    *  folder).
    *  Armed by the global Screenshot app rather than a toolbar button: pressing
    *  Screenshot while a PDF is on screen means this document, at document
    *  sharpness, not a grab of the screen around it. Mutually exclusive with
    *  redaction because both modes own the same plain drag gesture. */
   const [copySelecting, setCopySelecting] = useState(false);
+  /** Markup mode (`usePdfMarkup`, `docs/pdf_markup_rounds_plan.md` §2.6) — the
+   *  third mode that owns the plain drag, so it excludes the two above. */
+  const [marking, setMarking] = useState(false);
+  const markingRef = useRef(false);
+  markingRef.current = marking;
   const [copyBusy, setCopyBusy] = useState(false);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const copyNoticeTimer = useRef<number | null>(null);
@@ -1753,7 +1834,7 @@ function PdfCanvas({
   );
   // The project the viewed file belongs to (the longest project directory that is
   // a prefix of `path`), so a capture files its PNG into the right
-  // eldrun-screenshots/ folder and the merge picker lists the right tree even in
+  // tabtivity-screenshots/ folder and the merge picker lists the right tree even in
   // a detached window.
   // It must stay project-scoped: the backend confines every write and read to the
   // scope's tree, so an arbitrary path would simply be refused.
@@ -1810,6 +1891,7 @@ function PdfCanvas({
       if (!detail || detail.claimed || copyBusy) return;
       detail.claimed = true;
       setRedacting(false);
+      setMarking(false);
       setCopyNotice(null);
       setCopySelecting(true);
     };
@@ -2311,6 +2393,121 @@ function PdfCanvas({
   // for this to reach the requested fresh version before it scrolls.
   const [loadedDiskVersion, setLoadedDiskVersion] = useState(-1);
   const lastMtime = useRef<number | null>(null);
+
+  // ── Mark up (`usePdfMarkup`, `docs/pdf_markup_rounds_plan.md` §2.6) ─────────
+  // Marks drawn over the pages and sent, as a prompt with a marked copy, to an
+  // agent tab of this project. Offered only where the sheets are the file's own
+  // pages (`markupGate`), one viewer per file per window (`claimMarkup`).
+  /** The loaded file's size: the gate's 24 MB bound and the layer's fingerprint. */
+  const [docBytes, setDocBytes] = useState<number | null>(null);
+  const fileSource = useFileSource();
+  const [markupOwner] = useState(() => `pdfmarkup:${tabKey ?? path}:${nextStripId()}`);
+  useSyncExternalStore(subscribeMarkupClaims, markupClaimsVersion);
+  const pristineSheets = doc != null && pages.length > 0 && isPristineExceptNotes(pages, doc.numPages);
+  const gateInput = {
+    scope,
+    source: fileSource,
+    detached: isDetachedWindow(),
+    size: docBytes,
+    pristine: pristineSheets,
+    dirty,
+  };
+  const markupOffered = markupGate({ ...gateInput, claimedElsewhere: false }).show;
+  const markup = usePdfMarkup({
+    projectId: markupOffered ? scope : null,
+    scope,
+    path,
+    active: marking,
+    visible: paneVisible,
+    pageCount: doc?.numPages ?? 0,
+    docSize: docBytes,
+    docVersion: loadedDiskVersion,
+    doc,
+  });
+  const markupRef = useRef(markup);
+  markupRef.current = markup;
+  // The agent's questions (`markup_ask`), pinned at the words they quote.
+  const questionPins = useQuestionPins(marking ? doc ?? null : null, markup.questions.asks);
+  const pinnedQuestions = useMemo(
+    () => new Set([...questionPins.values()].flat().map((pin) => pinKey(pin.askId, pin.index))),
+    [questionPins],
+  );
+  const showQuestion = markup.questions.show;
+  // The agent's ticks (`markup_done`): a ✓ on each ticked sent mark.
+  const tickBadges = useMemo(
+    () => tickBadgesByPage(markup.edit.base, markup.ticks.marks),
+    [markup.edit.base, markup.ticks.marks],
+  );
+  const approveTick = markup.ticks.approve;
+  const pickQuestionPin = useCallback((pin: QuestionPin) => showQuestion(pin.askId, pin.index, "card"), [showQuestion]);
+  const holder = markup.key ? markupHolder(markup.key) : undefined;
+  const gate = markupGate({ ...gateInput, claimedElsewhere: holder !== undefined && holder !== markupOwner });
+  const markupAllowed = gate.show && gate.blocked === null;
+  // The claim lasts while this viewer marks; a second pane on the same file is
+  // held back meanwhile (its button says why).
+  useEffect(() => {
+    const key = markup.key;
+    if (!marking || !key) return;
+    if (!claimMarkup(key, markupOwner)) {
+      setMarking(false);
+      return;
+    }
+    return () => releaseMarkup(key, markupOwner);
+  }, [marking, markup.key, markupOwner]);
+  // Anything that makes the sheets stop being the file's pages ends the mode.
+  useEffect(() => {
+    if (marking && !markupAllowed) setMarking(false);
+  }, [marking, markupAllowed]);
+  /** Leave markup mode. A note still being typed is kept; a new version of the
+   *  file held back for the marks loads now, as it would have without them. */
+  const leaveMarkup = useCallback(() => {
+    const m = markupRef.current;
+    if (m.edit.note) m.edit.saveNote(m.edit.note.text);
+    setMarking(false);
+    if (m.stale) {
+      m.clearStale();
+      setDiskVersion((v) => v + 1);
+    }
+  }, []);
+  const enterMarkup = useCallback(() => {
+    // An agent tab asks about this file: the strip opens on that tab.
+    const asking = markupRef.current.askWaiting;
+    if (asking) markupRef.current.chooseTarget(asking);
+    setRedacting(false);
+    setCopySelecting(false);
+    setRailOpen(false);
+    setMarking(true);
+  }, []);
+  /** **Reload PDF** under the marks: the viewer's own same-path reload, which
+   *  keeps zoom, scroll and page ids. */
+  const reloadUnderMarks = useCallback(() => {
+    markupRef.current.beforeReload();
+    void fileMtime(path, scope)
+      .then((mtime) => { lastMtime.current = mtime; })
+      .catch(() => {});
+    setDiskVersion((v) => v + 1);
+  }, [path, scope]);
+  /** The one door for "the file changed on disk" — the mtime poll, a compile's
+   *  re-read request and a SyncTeX reveal after a compile (`diskChangeAction`).
+   *  While marking, the new pages load under the marks on their own unless
+   *  Settings → PDF markup turned that off, or a note or a Submit is under way. */
+  const diskChanged = useCallback((reload: () => void) => {
+    const action = diskChangeAction({
+      dirty: dirtyRef.current,
+      markupHolds: markupRef.current.holdsReload,
+      autoReload: useSettingsStore.getState().settings?.pdf_markup_auto_reload ?? true,
+      noteOpen: markupRef.current.edit.note !== null || markupRef.current.sending,
+    });
+    if (action === "stale") setStaleOnDisk(true);
+    else if (action === "markup") markupRef.current.markStale();
+    else if (action === "underMarks") {
+      // The caller's own reload, with the marks told first — as Reload PDF,
+      // but the strip says it happened by itself.
+      markupRef.current.beforeReload(true);
+      reload();
+    } else reload();
+  }, []);
+
   // The path the currently-loaded document came from. A reload that keeps the
   // same path (a recompile bumped `diskVersion`) should preserve the reader's
   // scroll position; switching to a different file should not.
@@ -2402,7 +2599,9 @@ function PdfCanvas({
         void fileMtime(path, scope)
           .then((mtime) => { lastMtime.current = mtime; })
           .catch(() => {});
-        setDiskVersion(targetVersion);
+        // Held back like any other disk change (unsaved edits, marks on the
+        // pages); the reveal waits for the version the reader then loads.
+        diskChanged(() => setDiskVersion(targetVersion));
       }
     } else {
       setHighlight({ rect: reveal.rect, nonce: reveal.nonce, phrase: reveal.phrase });
@@ -2429,14 +2628,12 @@ function PdfCanvas({
   const reloadNonce = usePdfSyncStore((s) => s.reloadByPath[path] ?? 0);
   useEffect(() => {
     if (!reloadNonce || (!doc && !error)) return;
-    if (dirtyRef.current) {
-      setStaleOnDisk(true);
-      return;
-    }
-    void fileMtime(path, scope)
-      .then((mtime) => { lastMtime.current = mtime; })
-      .catch(() => {});
-    setDiskVersion((v) => v + 1);
+    diskChanged(() => {
+      void fileMtime(path, scope)
+        .then((mtime) => { lastMtime.current = mtime; })
+        .catch(() => {});
+      setDiskVersion((v) => v + 1);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadNonce]);
 
@@ -2955,6 +3152,8 @@ function PdfCanvas({
       subscribePageDragActive((active) => {
         if (active) {
           if (railOpenRef.current) return; // already the reader's own choice
+          // Marking up holds the arrangement still: no rail, so no drop target.
+          if (markingRef.current) return;
           railAutoOpenedRef.current = true;
           setRailOpen(true);
           return;
@@ -3301,17 +3500,22 @@ function PdfCanvas({
       } else if (mod && key === "p" && !e.altKey && !e.shiftKey) {
         // Print what is in front of the reader. `preventDefault` unconditionally,
         // even while a print is already being prepared: the chord otherwise reaches
-        // the webview, whose own Ctrl+P prints the WHOLE Eldrun window — the app's
+        // the webview, whose own Ctrl+P prints the WHOLE Tabtivity window — the app's
         // chrome, tabs and all — which is never what was meant here. (The palette's
         // global Ctrl+P yields to a focused PDF; see QuickOpen.)
         e.preventDefault();
         void handlePrint();
       } else if (mod && key === "z" && !e.shiftKey) {
+        // Marking up, the keys undo strokes; the arrangement holds still then.
+        if (marking && isTextEntry(e.target)) return;
         e.preventDefault();
-        undo();
+        if (marking) markupRef.current.undo();
+        else undo();
       } else if (mod && (key === "y" || (key === "z" && e.shiftKey))) {
+        if (marking && isTextEntry(e.target)) return;
         e.preventDefault();
-        redo();
+        if (marking) markupRef.current.redo();
+        else redo();
       } else if (e.altKey && e.key === "ArrowLeft") {
         // The browser's own "back" gesture, for the same thing it means here:
         // return from the link you just followed.
@@ -3344,9 +3548,14 @@ function PdfCanvas({
       } else if (e.key === "Escape" && copySelecting) {
         e.preventDefault();
         setCopySelecting(false);
+      } else if (e.key === "Escape" && marking && !isTextEntry(e.target)) {
+        e.preventDefault();
+        leaveMarkup();
       }
     },
     [
+      marking,
+      leaveMarkup,
       openFind,
       closeFind,
       findOpen,
@@ -3448,16 +3657,16 @@ function PdfCanvas({
           // A reload REPLACES the arrangement, so it would silently throw away any
           // unsaved page edits. With edits pending we raise a banner and let the
           // reader choose; without them the old auto-reload stands (a LaTeX
-          // recompile must still refresh the PDF on its own).
-          if (dirtyRef.current) setStaleOnDisk(true);
-          else setDiskVersion((v) => v + 1);
+          // recompile must still refresh the PDF on its own). Marks on the pages
+          // hold it back the same way, behind the markup strip's Reload.
+          diskChanged(() => setDiskVersion((v) => v + 1));
         })
         .catch(() => {});
     };
     check();
     const id = setInterval(check, RELOAD_POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, paneVisible]);
+  }, [path, scope, paneVisible, diskChanged]);
 
   // Load (and reload on path / disk change) the document. pdf.js detaches the
   // backing buffer, so each load gets a fresh Uint8Array; the prior documents are
@@ -3467,7 +3676,7 @@ function PdfCanvas({
     // Same-path reload (a recompile): remember where the reader was so we can
     // restore it once the fresh pages have laid out, instead of jumping to the
     // top. A genuine file switch starts fresh. On the FIRST load, instead restore
-    // the position persisted from a prior session (#viewerpos) so an Eldrun
+    // the position persisted from a prior session (#viewerpos) so a Tabtivity
     // restart reopens the PDF where the reader left it.
     const el = scrollRef.current;
     let firstRestore: { top: number; left: number } | null = null;
@@ -3527,6 +3736,9 @@ function PdfCanvas({
         try {
           const bytes = await readFileBytes(path, scope);
           if (cancelled) return;
+          // Taken before pdf.js detaches the buffer: the markup mode's size gate
+          // and its layer's fingerprint.
+          const byteLength = bytes.byteLength;
           // pdf.js DETACHES the buffer it is handed, so a save cannot reuse these
           // bytes — pdf-lib needs its own. For the file being VIEWED that copy is
           // not kept: it is re-read from disk instead, the first time an edit makes
@@ -3535,6 +3747,9 @@ function PdfCanvas({
           // usually never comes.
           const src = await openSource(bytes, {
             reread: () => readFileBytes(path, scope),
+            // The viewer's own worker, so a recompile's reload (and each retry of
+            // a mid-write read) does not spawn a fresh one (`PdfWorkerSlot`).
+            worker: workerSlot.current?.get(),
           });
           if (cancelled) {
             src.doc.loadingTask.destroy();
@@ -3563,6 +3778,7 @@ function PdfCanvas({
           setError(null);
           setEditError(null);
           setLoadedDiskVersion(diskVersion);
+          setDocBytes(byteLength);
           setDoc(src.doc);
           freePrev();
           return;
@@ -3610,13 +3826,20 @@ function PdfCanvas({
   // effect (not the load effect's cleanup) because the load effect now hands its
   // outgoing sources to the next load to free on success — so a same-path reload
   // never tears down the document that is still on screen.
-  useEffect(
-    () => () => {
-      for (const s of sourcesRef.current.values()) s.doc.loadingTask.destroy();
+  //
+  // It also owns the viewer's pdf.js worker (`PdfWorkerSlot`), created here rather
+  // than at render so a StrictMode remount gets a live one, and ended only once the
+  // documents on it have been torn down.
+  useEffect(() => {
+    const slot = new PdfWorkerSlot();
+    workerSlot.current = slot;
+    return () => {
+      const pending = [...sourcesRef.current.values()].map((s) => s.doc.loadingTask.destroy());
       sourcesRef.current = new Map();
-    },
-    [],
-  );
+      if (workerSlot.current === slot) workerSlot.current = null;
+      slot.dispose(pending);
+    };
+  }, []);
 
   // Intrinsic (scale-1) CSS dimensions of every page, computed once per document
   // load. Lets each PdfPageCanvas reserve its true size before rendering so the
@@ -4133,6 +4356,7 @@ function PdfCanvas({
         <button
           className={`file-viewer-zoom-btn${redacting ? " active" : ""}`}
           onClick={() => {
+            if (marking) leaveMarkup();
             setRedacting((v) => !v);
             setCopySelecting(false);
           }}
@@ -4144,6 +4368,33 @@ function PdfCanvas({
           ▮
         </button>
         <UntestedTag id="pdfViewer.3" />
+        {/* Mark up (`usePdfMarkup`): beside the blackout tool, the other mode that
+            draws over the page. Absent where it has nothing to send to (root,
+            boxes, remote projects, popouts) — see `markupGate`. */}
+        {gate.show && (
+          <>
+            <button
+              className={`file-viewer-zoom-btn file-viewer-zoom-text${marking ? " active" : ""}${
+                !marking && (markup.hasUnsent || markup.askWaiting) ? " is-armed" : ""
+              }`}
+              onClick={() => (marking ? leaveMarkup() : enterMarkup())}
+              disabled={!doc || (!marking && gate.blocked !== null)}
+              title={t(
+                gate.blocked === "arranged"
+                  ? "pdfMarkup.toggleArranged"
+                  : gate.blocked === "claimed"
+                    ? "pdfMarkup.toggleClaimed"
+                    : !marking && markup.askWaiting
+                      ? "pdfMarkup.toggleAsks"
+                      : "pdfMarkup.toggleTitle",
+              )}
+              aria-pressed={marking}
+            >
+              ✎ {t("pdfMarkup.toggle")}
+            </button>
+            <UntestedTag id="desktop.markup" />
+          </>
+        )}
         {/* There is deliberately no ✂ copy-region button any more either: the
             region capture is armed by the header's global Screenshot app, which
             hands the shot to a visible PDF viewer before it would spawn an OS
@@ -4183,7 +4434,7 @@ function PdfCanvas({
         <button
           className={`file-viewer-zoom-btn${railOpen ? " active" : ""}`}
           onClick={() => setRailOpen((v) => !v)}
-          disabled={!doc}
+          disabled={!doc || marking}
           title={t("pdfViewer.arrangePagesTitle")}
           aria-label={t("pdfViewer.arrangePagesTitle")}
           aria-pressed={railOpen}
@@ -4193,7 +4444,7 @@ function PdfCanvas({
         <button
           className="file-viewer-zoom-btn"
           onClick={() => setPickerOpen(true)}
-          disabled={!doc || !pdfProjectDir}
+          disabled={!doc || !pdfProjectDir || marking}
           title={
             pdfProjectDir
               ? t("pdfViewer.insertPdfTitle")
@@ -4206,7 +4457,7 @@ function PdfCanvas({
         <button
           className="file-viewer-zoom-btn"
           onClick={undo}
-          disabled={past.length === 0}
+          disabled={past.length === 0 || marking}
           title={t("pdfViewer.undoTitle")}
           aria-label={t("common.undo")}
         >
@@ -4215,7 +4466,7 @@ function PdfCanvas({
         <button
           className="file-viewer-zoom-btn"
           onClick={redo}
-          disabled={future.length === 0}
+          disabled={future.length === 0 || marking}
           title={t("pdfViewer.redoTitle")}
           aria-label={t("common.redo")}
         >
@@ -4345,6 +4596,10 @@ function PdfCanvas({
           <span className="file-viewer-pdf-redact-warn">{t("pdfRedact.flattenWarning")}</span>
         </div>
       )}
+      {marking && (
+        <PdfMarkupBar markup={markup} page={visiblePage} onReload={reloadUnderMarks} onDone={leaveMarkup} />
+      )}
+      {marking && <PdfMarkupQuestions questions={markup.questions} pinned={pinnedQuestions} />}
       {/* A successful shot disarms the mode, so the bar outlives it just long
           enough to carry the busy/"copied" feedback the disarm would otherwise
           swallow. */}
@@ -4568,7 +4823,7 @@ function PdfCanvas({
             onClose={() => setNotesOpen(false)}
           />
         )}
-        {railOpen && doc && (
+        {railOpen && doc && !marking && (
           // The page rail: the SAME <PageStrip> the print preview uses, stood on its
           // side. Drag to reorder, shift-click for a range, right-click for the rest.
           <div className="file-viewer-pdf-rail">
@@ -4680,6 +4935,17 @@ function PdfCanvas({
                     onRedactAdd={(rect) => addRedactMark(ref.id, rect)}
                     onRedactRemove={(markId) => removeRedactMark(ref.id, markId)}
                     onCopySelection={copySelection}
+                    markup={marking ? markup.edit : null}
+                    questionPins={
+                      marking && ref.src === SELF && questionPins.has(i + 1)
+                        ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
+                        : null
+                    }
+                    tickBadges={
+                      marking && ref.src === SELF && tickBadges.has(i + 1)
+                        ? { badges: tickBadges.get(i + 1)!, disabled: markup.sending, onApprove: (index, mark) => approveTick(i + 1, index, mark) }
+                        : null
+                    }
                   />
                 );
               })}

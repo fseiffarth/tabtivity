@@ -143,7 +143,7 @@ fn libreoffice_dict_dirs_under(roots: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// An installed dictionary. `removable` when it lives in the first directory
-/// (the state dir, the one place Eldrun writes) — a system dictionary is the
+/// (the state dir, the one place Tabtivity writes) — a system dictionary is the
 /// package manager's and is never deleted from here.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InstalledEntry {
@@ -478,7 +478,7 @@ fn download_client() -> Result<reqwest::Client, String> {
     // process default is installed — the same guard `app_update` uses.
     crate::services::mail_engine::install_crypto_provider();
     reqwest::Client::builder()
-        .user_agent("eldrun-spell")
+        .user_agent(format!("{}-spell", crate::brand::SLUG))
         .timeout(DOWNLOAD_TIMEOUT)
         .referer(false)
         .build()
@@ -1273,7 +1273,7 @@ mod tests {
 
     #[test]
     fn installed_in_marks_only_the_first_dir_removable() {
-        let root = std::env::temp_dir().join(format!("eldrun-spell-installed-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-spell-installed-{}"), std::process::id()));
         let state = root.join("state");
         let system = root.join("system");
         std::fs::create_dir_all(&state).unwrap();

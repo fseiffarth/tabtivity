@@ -304,7 +304,7 @@ describe("detached host (#42)", () => {
     expect(useTabsStore.getState().hiddenGroupsByScope["p"]).toHaveLength(1);
     // …and the scope is persisted so disk agrees (saved as hidden).
     expect(invokeMock).toHaveBeenCalledWith(
-      "save_tab_layout",
+      "workspace_sync",
       expect.objectContaining({ localFile: "/p/project.json" }),
     );
   });
@@ -339,7 +339,7 @@ describe("detached host (#42)", () => {
     handlers.get(DETACHED_CLOSE)!({ payload: { scope: "p", groupId } });
 
     expect(invokeMock).toHaveBeenCalledWith(
-      "save_tab_layout",
+      "workspace_sync",
       expect.objectContaining({ localFile: "/p/project.json" }),
     );
   });
@@ -358,7 +358,7 @@ describe("detached host (#42)", () => {
     );
     expect(useTabsStore.getState().detachedGroupsByScope.p).toHaveLength(1);
     expect((useTabsStore.getState().layout as GroupNode).tabKeys).not.toContain(bKey);
-    expect(invokeMock).not.toHaveBeenCalledWith("save_tab_layout", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("workspace_sync", expect.anything());
   });
 
   it("keeps reopening a popout the display switch kills again and again, never docking it", async () => {
@@ -384,17 +384,43 @@ describe("detached host (#42)", () => {
     }
   });
 
-  it("docks a popout that keeps giving up on its seed, so its tabs stay reachable", async () => {
+  it("keeps a popout that gives up on its seed during a display switch detached", async () => {
+    // Disconnecting a screen stalls the main window; a respawned popout then
+    // gives up on its seed a few times in a row. Three in a minute used to dock
+    // it into the main window.
     const { label, bKey } = detachSecond();
     await listenDetachedHost();
     vi.useFakeTimers();
     try {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 4; i++) {
         handlers.get(DETACHED_GAVE_UP)!({ payload: { label } });
         handlers.get(DETACHED_WINDOW_DESTROYED)!({ payload: { label } });
-        await vi.advanceTimersByTimeAsync(detachedRespawnDelay(i + 1));
+        await vi.advanceTimersByTimeAsync(8_000 + detachedRespawnDelay(i + 1));
       }
-      expect(useTabsStore.getState().detachedGroupsByScope.p ?? []).toHaveLength(0);
+      expect(useTabsStore.getState().detachedGroupsByScope.p).toHaveLength(1);
+      expect((useTabsStore.getState().layout as GroupNode).tabKeys).not.toContain(bKey);
+      // It rendered again: a later death ends the streak.
+      handlers.get(DETACHED_WINDOW_DESTROYED)!({ payload: { label } });
+      await vi.advanceTimersByTimeAsync(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("docks a popout that keeps giving up on its seed for minutes, so its tabs stay reachable", async () => {
+    const { label, bKey } = detachSecond();
+    await listenDetachedHost();
+    vi.useFakeTimers();
+    try {
+      let docked = -1;
+      for (let i = 0; i < 8 && docked < 0; i++) {
+        handlers.get(DETACHED_GAVE_UP)!({ payload: { label } });
+        handlers.get(DETACHED_WINDOW_DESTROYED)!({ payload: { label } });
+        if (!(useTabsStore.getState().detachedGroupsByScope.p ?? []).length) docked = i;
+        await vi.advanceTimersByTimeAsync(38_000);
+      }
+      // Not before three minutes of nothing but give-ups.
+      expect(docked).toBeGreaterThanOrEqual(5);
       expect(orderedTabKeys(useTabsStore.getState().layout)).toContain(bKey);
     } finally {
       vi.useRealTimers();
@@ -420,7 +446,7 @@ describe("detached host (#42)", () => {
 
     // The scope is persisted (so detached:true + bounds reach disk for restore).
     expect(invokeMock).toHaveBeenCalledWith(
-      "save_tab_layout",
+      "workspace_sync",
       expect.objectContaining({ localFile: "/p/project.json" }),
     );
     // The popout's OS window is destroyed (closed, not stranded on screen).
@@ -449,7 +475,7 @@ describe("detached host (#42)", () => {
     await shutdownDetachedWindows();
 
     expect(invokeMock).toHaveBeenCalledWith(
-      "save_tab_layout",
+      "workspace_sync",
       expect.objectContaining({ projectId: "p", localFile: "" }),
     );
     expect(destroyed).toContain(label);

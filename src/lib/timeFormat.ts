@@ -16,7 +16,7 @@ import { useOsClockStore } from "./osClock";
  * clock, the alarm popup and every task readout behind.
  *
  * **Unset follows the OS.** The user has already told their desktop which
- * clock they read — its panel clock is right there beside Eldrun — so an unset
+ * clock they read — its panel clock is right there beside Tabtivity — so an unset
  * setting takes that answer (`lib/osClock.ts`) instead of guessing from the UI
  * language: an English UI on a German desktop still reads 17:00. Only when the
  * OS has no opinion (or has not answered yet) does the language decide. Setting
@@ -29,7 +29,7 @@ import { useOsClockStore } from "./osClock";
  * The convention a language implies — the last resort, used only while nothing
  * is set and the OS gave no answer.
  *
- * A language, not a region: Eldrun has no region setting, and the five languages
+ * A language, not a region: Tabtivity has no region setting, and the five languages
  * it speaks split cleanly here — English is the AM/PM one, German, Spanish,
  * French and Italian all write 17:00. (Regional exceptions exist — Australian
  * and Irish English lean 24-hour in print — but a *default* only has to be right

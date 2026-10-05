@@ -1,13 +1,17 @@
-//! Eldrun-owned agent homes: one persistent `$HOME` per scope.
+//! Tabtivity-owned agent homes: one persistent `$HOME` per scope.
 //!
 //! Every locally-run agent tab sees `<state_dir>/agent-homes/<scope>/` as its
 //! home directory instead of the user's (bound over `$HOME` by the Linux
 //! fence, `HOME=` on macOS and Windows). A scope is a project, a box
 //! (`box:<id>`) or the root console (`root`); the Host session has its own
-//! home, `host`, which no fence ever mounts. Homes are per scope rather than
+//! home, `host`, which no fence ever mounts. A scope's local-model tabs
+//! (`ollama launch <agent>`, Mistral) get a home of their own beside it,
+//! `<scope>.local`, so what an Ollama launch writes into an agent's config and
+//! the sessions a local model runs never mix with the scope's own agents'.
+//! Homes are per scope rather than
 //! per CLI so that config written by an agent in one project (hooks, MCP
 //! servers, skills) can only ever run in that project; what the user wants in
-//! every project comes from the Eldrun-wide layer (`services::agent_global`),
+//! every project comes from the Tabtivity-wide layer (`services::agent_global`),
 //! which no agent can write. Each home holds the
 //! agent's own config, transcripts, session stores and trust answers; logins
 //! are not kept here but hard-linked in from the per-CLI store
@@ -31,9 +35,15 @@ pub const HOMES_DIR: &str = "agent-homes";
 /// The scope key of the Host session's home. A project id is a UUID and a box
 /// scope is `box:<id>`, so it collides with neither; `root` is the console's.
 pub const HOST_SCOPE_KEY: &str = "host";
+/// What a scope's local-model home appends to the scope's key. A key is made
+/// of `[A-Za-z0-9_-]` only (`storage::project_key`), so no scope's own home
+/// can carry it.
+const LOCAL_MODEL_SUFFIX: &str = ".local";
 /// Written once a home has been seeded, so the one-time imports (an existing
 /// per-scope Codex store, the scope's Claude transcripts) never run twice.
-const SEEDED_MARKER: &str = ".eldrun-home";
+/// Its mtime is also when the seeding ran: `services::token_stats` counts no
+/// Claude record older than it, so seeded history is not counted per home.
+pub(crate) const SEEDED_MARKER: &str = crate::brand::AGENT_HOME_MARKER;
 
 /// `<state_dir>/agent-homes/`.
 pub fn homes_root_in(state_dir: &Path) -> PathBuf {
@@ -54,6 +64,18 @@ pub fn scope_home_in(state_dir: &Path, scope_id: &str) -> PathBuf {
 /// [`prepare_scope_home`] for the directory itself.
 pub fn scope_home(scope_id: Option<&str>) -> PathBuf {
     scope_home_in(&storage::state_dir(), scope_id.unwrap_or(storage::ROOT_SCOPE))
+}
+
+/// The home of `scope_id`'s local-model tabs under `state_dir`: the scope's
+/// own home's key with [`LOCAL_MODEL_SUFFIX`].
+pub fn local_model_home_in(state_dir: &Path, scope_id: &str) -> PathBuf {
+    homes_root_in(state_dir).join(format!("{}{LOCAL_MODEL_SUFFIX}", storage::project_key(scope_id)))
+}
+
+/// The local-model home of a scope (`None` is the root console). A path only;
+/// see [`prepare_local_model_home`].
+pub fn local_model_home(scope_id: Option<&str>) -> PathBuf {
+    local_model_home_in(&storage::state_dir(), scope_id.unwrap_or(storage::ROOT_SCOPE))
 }
 
 /// The Host session's home.
@@ -95,15 +117,25 @@ pub struct PreparedHome {
 }
 
 /// Create (or reuse) the home of `scope_id` and bring it up to date: seeded
-/// once ([`seed_home`]), the Eldrun-wide config layer laid in
-/// (`services::agent_global`), Eldrun's session hooks registered, the shared logins
+/// once ([`seed_home`]), the Tabtivity-wide config layer laid in
+/// (`services::agent_global`), Tabtivity's session hooks registered, the shared logins
 /// linked in, the `.cache` mount point present. `roots` are the scope's
 /// writable roots, used only by the one-time transcript seeding. Called at
 /// every local agent spawn.
 pub fn prepare_scope_home(scope_id: &str, roots: &[PathBuf]) -> io::Result<PreparedHome> {
     let state_dir = storage::state_dir();
     let home = scope_home_in(&state_dir, scope_id);
-    prepare_home_in(&state_dir, &home, scope_id, roots, true)
+    prepare_home_in(&state_dir, &home, scope_id, roots, Seed::Scope)
+}
+
+/// The home of the scope's local-model tabs: same preparation, seeded with
+/// only Claude's identity and the scope's folder trust — the scope's Codex
+/// and Copilot stores stay its own home's to adopt, and no transcript of the
+/// user's is copied in for a model that never wrote one.
+pub fn prepare_local_model_home(scope_id: &str, roots: &[PathBuf]) -> io::Result<PreparedHome> {
+    let state_dir = storage::state_dir();
+    let home = local_model_home_in(&state_dir, scope_id);
+    prepare_home_in(&state_dir, &home, scope_id, roots, Seed::LocalModel)
 }
 
 /// The Host session's home: same preparation, but nothing is seeded from a
@@ -111,7 +143,18 @@ pub fn prepare_scope_home(scope_id: &str, roots: &[PathBuf]) -> io::Result<Prepa
 pub fn prepare_host_home() -> io::Result<PreparedHome> {
     let state_dir = storage::state_dir();
     let home = host_home_in(&state_dir);
-    prepare_home_in(&state_dir, &home, HOST_SCOPE_KEY, &[], false)
+    prepare_home_in(&state_dir, &home, HOST_SCOPE_KEY, &[], Seed::Nothing)
+}
+
+/// What a new home's one-time seeding ([`seed_home`]) brings in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seed {
+    /// A scope's own home: everything.
+    Scope,
+    /// A scope's local-model home: Claude's identity and folder trust only.
+    LocalModel,
+    /// The Host session's: nothing of a fenced scope's.
+    Nothing,
 }
 
 fn prepare_home_in(
@@ -119,13 +162,18 @@ fn prepare_home_in(
     home: &Path,
     scope_id: &str,
     roots: &[PathBuf],
-    seed_scope_state: bool,
+    seed: Seed,
 ) -> io::Result<PreparedHome> {
     create_private_dir(&homes_root_in(state_dir))?;
+    // A home an older build seeded carries its markers under the old name:
+    // bring it to the current names first, or it would count as fresh and be
+    // seeded a second time. The launch does this for every home; this covers
+    // a home that appeared since. Not reached while the name is unchanged.
+    crate::services::brand_migration::agent_homes::migrate_home_at_spawn(&crate::brand::PAIR, state_dir, home);
     let fresh = !home.join(SEEDED_MARKER).is_file();
     create_private_dir(home)?;
     if fresh {
-        seed_home(state_dir, home, scope_id, roots, seed_scope_state);
+        seed_home(state_dir, home, scope_id, roots, seed);
         std::fs::write(home.join(SEEDED_MARKER), b"")?;
     }
     // Before the logins are linked and the hooks registered: both write
@@ -141,16 +189,19 @@ fn prepare_home_in(
         }
         let _ = HomeDir::open(home, ".cache");
     }
-    // The user's Eldrun-wide instructions, skills, hooks and MCP servers,
-    // before Eldrun's own hooks so a merge never displaces those.
+    // The user's Tabtivity-wide instructions, skills, hooks and MCP servers,
+    // before Tabtivity's own hooks so a merge never displaces those.
     if let Err(e) = crate::services::agent_global::apply_to_home(state_dir, home) {
         eprintln!("agent_home: apply the global agent config to {}: {e}", home.display());
     }
     crate::services::agent_session::register_hooks_in_home(home);
     // Copilot signs in through a keyring the fence hides: its home gets the
-    // plain-text token setting Eldrun's keeper collects from (`copilot_auth`).
+    // plain-text token setting Tabtivity's keeper collects from (`copilot_auth`).
+    // That is the scope's own home; Copilot drives no local model.
     #[cfg(target_os = "linux")]
-    let _ = crate::services::copilot_auth::prepare_home(scope_id);
+    if seed != Seed::LocalModel {
+        let _ = crate::services::copilot_auth::prepare_home(scope_id);
+    }
     crate::services::agent_auth::link_into_home(state_dir, home);
     Ok(PreparedHome {
         dir: home.to_path_buf(),
@@ -160,7 +211,7 @@ fn prepare_home_in(
 
 /// One-time seeding of a new home:
 ///
-/// - the scope's existing Eldrun-kept Codex store (`codex-state/<key>`) and
+/// - the scope's existing Tabtivity-kept Codex store (`codex-state/<key>`) and
 ///   Copilot home (`copilot-home/<key>`) move in as `.codex` / `.copilot`, so
 ///   sessions those tabs had keep resuming;
 /// - the Claude transcripts of the scope's own roots are **copied** from the
@@ -171,11 +222,16 @@ fn prepare_home_in(
 ///   install and keeps the folder trust it already had.
 ///
 /// Instructions, skills, hooks and MCP entries of the user's home are not
-/// brought in here: they reach every home through the Eldrun-wide layer
-/// (`services::agent_global`) once the user imports them there.
-fn seed_home(state_dir: &Path, home: &Path, scope_id: &str, roots: &[PathBuf], scope_state: bool) {
+/// brought in here: they reach every home through the Tabtivity-wide layer
+/// (`services::agent_global`) once the user imports them there. A
+/// local-model home gets only the `.claude.json` seed ([`Seed`]).
+fn seed_home(state_dir: &Path, home: &Path, scope_id: &str, roots: &[PathBuf], seed: Seed) {
     let user_home = crate::paths::home_dir();
-    if scope_state {
+    let root_strings = || roots.iter().map(|r| r.to_string_lossy().into_owned()).collect::<Vec<String>>();
+    if seed == Seed::LocalModel {
+        seed_claude_json(&user_home.join(".claude.json"), home, &root_strings());
+    }
+    if seed == Seed::Scope {
         let key = storage::project_key(scope_id);
         for (legacy, into) in [("codex-state", ".codex"), ("copilot-home", ".copilot")] {
             let src = state_dir.join(legacy).join(&key);
@@ -186,7 +242,7 @@ fn seed_home(state_dir: &Path, home: &Path, scope_id: &str, roots: &[PathBuf], s
                 }
             }
         }
-        let roots: Vec<String> = roots.iter().map(|r| r.to_string_lossy().into_owned()).collect();
+        let roots = root_strings();
         seed_claude_transcripts(&user_home.join(".claude").join("projects"), home, &roots);
         seed_claude_json(&user_home.join(".claude.json"), home, &roots);
     }
@@ -194,7 +250,7 @@ fn seed_home(state_dir: &Path, home: &Path, scope_id: &str, roots: &[PathBuf], s
 
 /// Where the old fence bound a scope's staged config copies (`--symlink`ed
 /// from the store); gone with the per-scope homes.
-const LEGACY_STAGE_MOUNT: &str = "/run/eldrun-agent-config";
+const LEGACY_STAGE_MOUNT: &str = concat!("/run/", crate::legacy_slug!(), "-agent-config");
 
 /// Drop what the old fence left in an adopted store. Until the per-scope
 /// homes, the fence bind-mounted the user's own `~/.codex/<file>`s over the
@@ -335,11 +391,14 @@ pub(crate) fn filtered_claude_json(value: &serde_json::Value, roots: &[String]) 
     serde_json::Value::Object(out)
 }
 
-/// Remove a scope's home for good — a project forgotten or deleted.
+/// Remove a scope's homes for good — a project forgotten or deleted: its own
+/// and its local-model tabs'.
 pub fn delete_scope_home(scope_id: &str) -> io::Result<()> {
-    let home = scope_home_in(&storage::state_dir(), scope_id);
-    if home.exists() {
-        std::fs::remove_dir_all(&home)?;
+    let state_dir = storage::state_dir();
+    for home in [scope_home_in(&state_dir, scope_id), local_model_home_in(&state_dir, scope_id)] {
+        if home.exists() {
+            std::fs::remove_dir_all(&home)?;
+        }
     }
     Ok(())
 }
@@ -370,6 +429,10 @@ mod tests {
         assert_eq!(scope_home_in(state, "box:b1"), PathBuf::from("/s/agent-homes/box_b1"));
         assert_eq!(host_home_in(state), PathBuf::from("/s/agent-homes/host"));
         assert_ne!(scope_home_in(state, "host"), host_home_in(state).join("x"));
+        assert_eq!(local_model_home_in(state, "root"), PathBuf::from("/s/agent-homes/root.local"));
+        assert_eq!(local_model_home_in(state, "box:b1"), PathBuf::from("/s/agent-homes/box_b1.local"));
+        // No scope's own key can spell a local-model home.
+        assert_ne!(scope_home_in(state, "root.local"), local_model_home_in(state, "root"));
     }
 
     #[test]
@@ -444,6 +507,25 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
     }
 
+    /// A local-model home leaves the scope's Codex store where it is, for the
+    /// scope's own home to adopt.
+    #[test]
+    fn a_local_model_home_never_adopts_the_scopes_codex_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let legacy = state.join("codex-state").join(storage::project_key("p1"));
+        std::fs::create_dir_all(&legacy).unwrap();
+        let local = local_model_home_in(state, "p1");
+        std::fs::create_dir_all(&local).unwrap();
+        seed_home(state, &local, "p1", &[], Seed::LocalModel);
+        assert!(legacy.is_dir());
+        assert!(!local.join(".codex").exists());
+        let own = scope_home_in(state, "p1");
+        std::fs::create_dir_all(&own).unwrap();
+        seed_home(state, &own, "p1", &[], Seed::Scope);
+        assert!(own.join(".codex").is_dir());
+    }
+
     /// The old fence's mount points (empty, read-only) and stage link go;
     /// Codex's own files — empty but writable, or read-only with content —
     /// stay, and the hook registration then lands in a plain `config.toml`.
@@ -472,7 +554,7 @@ mod tests {
         std::fs::write(codex.join("installation_id"), b"abc").unwrap();
         read_only("installation_id");
 
-        prepare_home_in(state, &home, "p1", &[], true).unwrap();
+        prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
 
         for name in ["version.json", "session_index.jsonl", "auth.json", ".sandbox_migration"] {
             assert!(!codex.join(name).exists(), "{name}");
@@ -485,7 +567,7 @@ mod tests {
         // Already seeded: the scrub still runs on the next spawn.
         std::fs::write(codex.join("models_cache.json"), b"").unwrap();
         read_only("models_cache.json");
-        prepare_home_in(state, &home, "p1", &[], true).unwrap();
+        prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
         assert!(!codex.join("models_cache.json").exists());
     }
 
@@ -497,13 +579,13 @@ mod tests {
         std::fs::create_dir_all(&legacy).unwrap();
         std::fs::write(legacy.join("state_5.sqlite"), "db").unwrap();
         let home = scope_home_in(state, "p1");
-        let first = prepare_home_in(state, &home, "p1", &[], true).unwrap();
+        let first = prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
         assert!(first.fresh);
         assert!(home.join(".codex/state_5.sqlite").is_file());
         assert!(!legacy.exists());
         assert!(home.join(".cache").is_dir());
         assert!(home.join(SEEDED_MARKER).is_file());
-        let again = prepare_home_in(state, &home, "p1", &[], true).unwrap();
+        let again = prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
         assert!(!again.fresh);
         assert!(existing_homes_in(state).contains(&home));
     }

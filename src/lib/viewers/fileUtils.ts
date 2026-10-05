@@ -1,5 +1,6 @@
 import type { TranslationKey } from "../i18n";
 import { relativePathWithin } from "../paths";
+import { LEGACY_BRAND } from "../brand";
 
 export interface FileEntry {
   name: string;
@@ -32,12 +33,12 @@ export const INTERNAL_PROJECT_FILES = new Set([
   "open_apps.json",
   "project.json",
   "project_default_apps.json",
-  ".eldrun_colors.json",
+  `.${LEGACY_BRAND.slug}_colors.json`,
 ]);
 
 export type SortKey = "name" | "type" | "size" | "created" | "modified";
 
-/** Which built-in Eldrun viewer can render a file in-tab (drag from the right
+/** Which built-in Tabtivity viewer can render a file in-tab (drag from the right
  *  panel onto a tab bar). Independent of any external default app. */
 export type InternalViewer =
   | "pdf"
@@ -71,7 +72,7 @@ export type InternalViewer =
   // A BibTeX/BibLaTeX bibliography (`.bib`) as a list of cards — one per entry,
   // with its `field = {value}` pairs (see BibCards). Falls back to the plain code
   // editor when opted out, the way the YAML tree does: turning the cards off is a
-  // vote against the cards, not against editing a `.bib` in Eldrun.
+  // vote against the cards, not against editing a `.bib` in Tabtivity.
   | "bib"
   // The native presenter's deck sidecar (`*.eldeck.json`, EXPERIMENTAL — see
   // `docs/deck_presenter_plan.md`). A deck is JSON, so this must be matched by
@@ -117,9 +118,11 @@ const TEXT_EXTS = new Set([
   ".txt", ".text", ".log", ".csv", ".tsv", ".json", ".jsonc", ".json5",
   ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".properties",
   ".xml", ".svg", ".html", ".htm", ".css", ".scss", ".sass", ".less",
-  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".rs", ".py", ".pyi",
-  ".rb", ".go", ".c", ".h", ".cpp", ".cc", ".hpp", ".cxx", ".java", ".kt",
-  ".kts", ".swift", ".m", ".mm", ".cs", ".php", ".pl", ".lua", ".r",
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".rs", ".py",
+  ".pyi", ".pyw", ".rb", ".rake", ".gemspec", ".go", ".c", ".h", ".cpp", ".cc",
+  ".hpp", ".cxx", ".hh", ".hxx", ".ipp", ".inl", ".ino", ".cu", ".cuh",
+  ".java", ".kt", ".kts", ".swift", ".m", ".mm", ".cs", ".php", ".pl", ".pm",
+  ".lua", ".r", ".jl", ".zig", ".nim", ".proto", ".tf", ".hcl", ".cmake",
   ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".sql", ".graphql", ".gql",
   ".vue", ".svelte", ".astro", ".dart", ".ex", ".exs", ".erl", ".hs", ".elm",
   ".clj", ".scala", ".groovy", ".gradle", ".dockerfile", ".gitignore",
@@ -131,7 +134,8 @@ const TEXT_FILENAMES = new Set([
   "dockerfile", "makefile", "license", "licence", "readme", "authors",
   "contributing", "changelog", "notice", "copying", "install", ".gitignore",
   ".gitattributes", ".editorconfig", ".env", ".npmrc", ".nvmrc", ".prettierrc",
-  ".eslintrc", ".babelrc",
+  ".eslintrc", ".babelrc", "gnumakefile", "gemfile", "rakefile", "vagrantfile",
+  ".bashrc", ".zshrc", ".profile",
 ]);
 
 /**
@@ -150,7 +154,7 @@ export function internalViewerFor(
   // through to the external-app path (commitFileDrop routes it via embedExec) —
   // unless the type has a native fallback that is itself still enabled. YAML is
   // the case: turning off its tree is a vote against the *tree*, not against
-  // editing YAML in Eldrun at all, so it drops back to the plain code editor
+  // editing YAML in Tabtivity at all, so it drops back to the plain code editor
   // (which is where .yaml opened before the tree existed).
   if (viewer && disabled?.has(viewer)) {
     const fallback = VIEWER_FALLBACK[viewer];
@@ -309,7 +313,7 @@ export const VIEWER_PREF_TYPES: ViewerTypeMeta[] = [
   {
     id: "text",
     labelKey: "viewerType.text",
-    extensions: [".txt", ".toml", ".py", ".rs", ".ts", ".ini", "…"],
+    extensions: [".txt", ".py", ".ts", ".cpp", ".rs", ".java", ".toml", "…"],
     autocomplete: true,
   },
   {
@@ -633,8 +637,25 @@ export function fileIconKind(ext: string | null): FileIconKind {
     case ".rs":
     case ".ts":
     case ".tsx":
+    case ".mts":
+    case ".cts":
     case ".js":
-    case ".jsx": return "code";
+    case ".jsx":
+    case ".mjs":
+    case ".cjs":
+    case ".go":
+    case ".c":
+    case ".h":
+    case ".cpp":
+    case ".cc":
+    case ".hpp":
+    case ".java":
+    case ".kt":
+    case ".cs":
+    case ".swift":
+    case ".rb":
+    case ".php":
+    case ".lua": return "code";
     case ".md": return "text";
     case ".json": return "data";
     case ".bib": return "book";

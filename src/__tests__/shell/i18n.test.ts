@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { translate, normalizeLang, LANGUAGES } from "../../lib/i18n";
+import { translate, normalizeLang, dateLocale, LANGUAGES, enSource, type TranslationKey } from "../../lib/i18n";
+import { BRAND } from "../../lib/brand";
 // The aggregator also registers every lazy dictionary, so `translate` below
 // answers in all five languages without awaiting a chunk.
 import { TRANSLATIONS } from "../../lib/i18nDicts/all";
@@ -92,5 +93,62 @@ describe("i18n", () => {
       }
     }
     expect(mismatched).toEqual([]);
+  });
+
+  it("fills {app} with the brand name in every language, with and without params", () => {
+    // The dictionaries spell the app's name `{app}`; it is filled where a
+    // dictionary is loaded, so the no-params early return in `translate` must
+    // never leak the literal placeholder.
+    const keys = (Object.keys(enSource) as TranslationKey[]).filter((k) =>
+      (enSource[k] as string).includes("{app}"),
+    );
+    expect(keys.length).toBeGreaterThan(100);
+    const leaked: string[] = [];
+    for (const { value } of LANGUAGES) {
+      for (const key of keys) {
+        for (const text of [translate(value, key), translate(value, key, { unused: "x" })]) {
+          // A translation may leave the name out where English has it.
+          const named = value !== "en" || text.includes(BRAND.display);
+          if (text.includes("{app}") || !named) {
+            leaked.push(`${value}/${key}`);
+          }
+        }
+      }
+    }
+    expect(leaked).toEqual([]);
+  });
+
+  it("fills {slug} with the lowercase name in every language, with and without params", () => {
+    // Paths and file names a text mentions (`~/{slug}/projects`) carry the
+    // lowercase form; it is filled at the same place as `{app}`.
+    const keys = (Object.keys(enSource) as TranslationKey[]).filter((k) =>
+      (enSource[k] as string).includes("{slug}"),
+    );
+    expect(keys.length).toBeGreaterThan(5);
+    const leaked: string[] = [];
+    for (const { value } of LANGUAGES) {
+      for (const key of keys) {
+        for (const text of [translate(value, key), translate(value, key, { unused: "x" })]) {
+          const named = value !== "en" || text.includes(BRAND.slug);
+          if (text.includes("{slug}") || !named) leaked.push(`${value}/${key}`);
+        }
+      }
+    }
+    expect(leaked).toEqual([]);
+  });
+
+  it("spells the app's name only as {app} or {slug} in dictionary values", () => {
+    const spelled: string[] = [];
+    for (const [key, text] of Object.entries(enSource)) {
+      if ((text as string).toLowerCase().includes(BRAND.slug)) spelled.push(key);
+    }
+    expect(spelled).toEqual([]);
+  });
+
+  it("spells dates in the app language, keeping the browser's region when it matches", () => {
+    expect(dateLocale("de", "de-AT")).toBeUndefined();
+    expect(dateLocale("en", "en-GB")).toBeUndefined();
+    expect(dateLocale("de", "en-US")).toBe("de");
+    expect(dateLocale("fr", undefined)).toBe("fr");
   });
 });

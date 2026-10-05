@@ -1,4 +1,4 @@
-# ProjectEldrun — Known Issues
+# Tabtivity — Known Issues
 
 ## Open
 
@@ -20,7 +20,7 @@
 ### ISSUE-002: Left panel shows all desktop apps, not project-scoped
 
 **Phase:** 6.C (future)  
-All normal windows appear in "OPEN APPS" regardless of which project is active. Should filter to only windows whose process cwd is under `~/eldrun/<current-project>/`.
+All normal windows appear in "OPEN APPS" regardless of which project is active. Should filter to only windows whose process cwd is under `~/tabtivity/<current-project>/`.
 
 ---
 
@@ -93,7 +93,7 @@ When a new agent is added, the active project should remain unchanged. Instead, 
 
 **Phase:** Project lifecycle polish  
 **Severity:** Medium — active project UI can remain inconsistent after closing the current project  
-When the current project is closed with the `x` button, Eldrun should switch back to the root project/session. Because the closed project is no longer active, the right project panel should also close or be hidden.
+When the current project is closed with the `x` button, Tabtivity should switch back to the root project/session. Because the closed project is no longer active, the right project panel should also close or be hidden.
 
 **Expected behavior:** Closing the active project selects the root project/session, clears the current project selection from the bottom switcher, and hides the right project panel because there is no active project for it to display.
 
@@ -105,7 +105,7 @@ When the current project is closed with the `x` button, Eldrun should switch bac
 
 **Phase:** Project lifecycle polish  
 **Severity:** Medium — project close lands in an invalid workspace state  
-After closing a project, the project panel now closes, but Eldrun does not switch to the root project/session. The root item in the bottom switcher does not receive the blue active border, and the center panel is left on an empty agent tab that says no project is selected.
+After closing a project, the project panel now closes, but Tabtivity does not switch to the root project/session. The root item in the bottom switcher does not receive the blue active border, and the center panel is left on an empty agent tab that says no project is selected.
 
 **Expected behavior:** Closing the current project should activate the root session, select root in the bottom switcher with the blue border, and show the root agent/terminal rather than an empty no-project placeholder.
 
@@ -117,7 +117,7 @@ After closing a project, the project panel now closes, but Eldrun does not switc
 
 **Phase:** Agent/session lifecycle polish  
 **Severity:** Medium — empty tab state is broken and confusing  
-When all tabs are closed, Eldrun currently creates a new terminal implicitly. That terminal appears to be hidden, and the tab bar breaks instead of presenting a clear empty state.
+When all tabs are closed, Tabtivity currently creates a new terminal implicitly. That terminal appears to be hidden, and the tab bar breaks instead of presenting a clear empty state.
 
 **Expected behavior:** If all tabs are closed, do not create an implicit replacement terminal. Show an empty center page explaining that no tab is open and that a new agent or terminal can be created by right-clicking the tab bar.
 
@@ -154,7 +154,7 @@ Under high CPU load, a reddish flicker can appear as a short-height band spannin
 **How to diagnose if it recurs:**
 
 1. Check `project.json` → `tab_layout` for the affected tab. If `"env": {}` or env is missing `VIBE_HOME`, the env was lost.
-2. Check `~/.local/share/eldrun/vibe_local/<model-alias>/config.toml` — if this file exists and has the correct `active_model`, the fix is to re-populate the tab env.
+2. Check `~/.local/share/tabtivity/vibe_local/<model-alias>/config.toml` — if this file exists and has the correct `active_model`, the fix is to re-populate the tab env.
 3. The tab label will be correct (`deepcoder:latest`) but inside the terminal vibe shows the global model.
 
 **Fix applied (src/components/layout/CenterPanel.tsx, src/stores/tabs.ts, src/components/tabs/TabBar.tsx):**

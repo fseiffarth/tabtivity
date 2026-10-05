@@ -52,7 +52,7 @@ pub struct SkillCatalogEntry {
 
 /// A skill already present in a target's `.claude/skills/<name>/`, whether it
 /// got there via install or was hand-authored. `list_installed` is the only
-/// source of truth — there is no separate Eldrun-tracked "is this installed"
+/// source of truth — there is no separate Tabtivity-tracked "is this installed"
 /// flag, and asking a target is the only way to know what it holds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledSkill {

@@ -42,10 +42,9 @@ const DEFAULT_MAX_RESULTS: usize = 500;
 /// Vendor/build directories never worth searching. Mirrors
 /// `fs::should_skip_ending_scan_dir`.
 fn should_skip_dir(name: &str) -> bool {
-    matches!(
+    crate::brand::is_project_dir(name) || matches!(
         name,
         ".git"
-            | ".eldrun"
             | "node_modules"
             | "target"
             | "dist"

@@ -14,7 +14,7 @@
     at all, and lockstep silently corrupted a linked worktree. Phases 0–2 of that
     plan are implemented — blocking defects, the data-loss set (D1–D4), and
     locality/containment (a worktree now lives only under
-    `<root>/.eldrun/worktrees/`, and a remote project chooses host vs. mirror).
+    `<root>/.tabtivity/worktrees/`, and a remote project chooses host vs. mirror).
     Everything is code-complete and covered by tests but **not live-verified**.
 
     Deferred, with the plan's own phases: worktree-aware tab groups (Phase 3) and
@@ -27,7 +27,7 @@
     Claude's `/rename`. Restart-resume in a worktree is fixed alongside:
     `loadFromLayout` reset every agent cwd to the project root, so a worktree
     Claude's `--resume` ran from the root and found no session — a cwd under
-    this root's `.eldrun/worktrees/` is now kept (`lib/agents/agentWorktrees.ts`).
+    this root's `.tabtivity/worktrees/` is now kept (`lib/agents/agentWorktrees.ts`).
     Local projects and the mirror side only; the host side of a remote project
     (and the mobile "+ agent") still land at the root.
 

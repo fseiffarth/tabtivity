@@ -46,6 +46,7 @@ import {
   paletteFromColors,
 } from "../../components/layout/ThemeCustomizer";
 import { readAppStylesheet } from "../helpers/cssCorpus";
+import { storageDashKey } from "../../lib/brand";
 
 const rootStyle = () => document.documentElement.style;
 
@@ -123,11 +124,11 @@ describe("applyThemeVars", () => {
 
   it("caches only the validated map for the pre-paint script", () => {
     applyThemeVars({ "--bg-panel": "#101820", "--bogus": "#fff" });
-    expect(JSON.parse(localStorage.getItem("eldrun-theme-vars") ?? "{}")).toEqual({
+    expect(JSON.parse(localStorage.getItem(storageDashKey("theme-vars")) ?? "{}")).toEqual({
       "--bg-panel": "#101820",
     });
     applyThemeVars({});
-    expect(localStorage.getItem("eldrun-theme-vars")).toBeNull();
+    expect(localStorage.getItem(storageDashKey("theme-vars"))).toBeNull();
   });
 });
 

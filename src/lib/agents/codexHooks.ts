@@ -4,13 +4,13 @@ import { AGENT_ITEMS, buildStaticTabSpec } from "../../components/tabs/newTabIte
 import { translate, useI18nStore } from "../i18n";
 
 /**
- * Whether Codex is actually running Eldrun's `SessionStart` hook — the precise
+ * Whether Codex is actually running Tabtivity's `SessionStart` hook — the precise
  * way to follow a tab's *current* conversation (it survives `/clear`, and it
  * can't confuse two Codex tabs sharing a directory). Mirrors the backend's
  * `CodexHookState` (`services::agent_session`).
  *
  * Codex gates user-level hooks behind a one-time trust approval, and an
- * untrusted hook silently never fires. Eldrun still resumes Codex tabs without
+ * untrusted hook silently never fires. Tabtivity still resumes Codex tabs without
  * it — `services::codex_bind` reconstructs the session from Codex's own rollout
  * logs — but that is a heuristic, so it's worth one nudge to switch the exact
  * path on.
@@ -43,7 +43,7 @@ export function codexHookNeedsTrust(state: CodexHookState | null): boolean {
  * Same policy as `runInstallInTab` — a command the user needs run is *run*, never
  * handed over to be copy-pasted. `TerminalView` submits `initialInput` once the
  * agent is up, and `buildStaticTabSpec` is reused so this is an ordinary Codex
- * tab (uid minted, `ELDRUN_TAB_UID` set) that merely opens on a slash command.
+ * tab (uid minted, `TABTIVITY_TAB_UID` set) that merely opens on a slash command.
  *
  * It opens in the **root** scope: the hook lives in `~/.codex/config.toml` and is
  * machine-global, not project-scoped. The active project is left alone — yanking

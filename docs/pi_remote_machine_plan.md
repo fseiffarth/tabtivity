@@ -1,8 +1,8 @@
-# Raspberry Pi as an Eldrun Remote Machine (+ HDD-backed project storage)
+# Raspberry Pi as a Tabtivity Remote Machine (+ HDD-backed project storage)
 
 Status: **plan only** — nothing here has been executed or verified.
 
-Scope: stand a Raspberry Pi on the LAN up as a first-class Eldrun **remote
+Scope: stand a Raspberry Pi on the LAN up as a first-class Tabtivity **remote
 project** host, with the project trees living on an attached **HDD** rather than
 the SD card. Two halves that can be done in either order, but Part B's mount
 must be in place *before* any project tree is created on it (see B4, the
@@ -14,10 +14,10 @@ This repo is public; do not commit real hostnames, IPs or usernames into it
 
 ## Why this shape
 
-Eldrun's remote projects are **mount-free**: agent/terminal tabs run on the host
+Tabtivity's remote projects are **mount-free**: agent/terminal tabs run on the host
 over `ssh -tt`, file I/O rides `ssh -s sftp`, and git runs *on the host*
 (`docs/context/remote_projects.md`). Everything is the system `ssh` binary, so
-the Pi needs no Eldrun-specific software at all — only a well-behaved sshd, and
+the Pi needs no Tabtivity-specific software at all — only a well-behaved sshd, and
 whatever tools the tabs you open expect to find (B7 / A5).
 
 Because git runs on the host, the **HDD holds the authoritative working tree and
@@ -31,7 +31,7 @@ work in Part B load-bearing rather than housekeeping.
 
 ## A1. OS baseline
 
-- **Raspberry Pi OS Lite (64-bit)** — no desktop; every Eldrun surface is
+- **Raspberry Pi OS Lite (64-bit)** — no desktop; every Tabtivity surface is
   headless. 64-bit matters for anything you'll run under an agent tab (node,
   rust toolchains, modern Python wheels).
 - Flash with Raspberry Pi Imager, and in its settings pane pre-set: hostname,
@@ -48,7 +48,7 @@ work in Part B load-bearing rather than housekeeping.
 
 ## A2. Stable address
 
-Eldrun stores `host` verbatim in the project's `remote` spec and resolves it
+Tabtivity stores `host` verbatim in the project's `remote` spec and resolves it
 through `~/.ssh/config` via `ssh -G` (`ssh_common.rs:resolve_host_port`). So any
 of these work as the Host field — pick one and make it stable:
 
@@ -65,8 +65,8 @@ of these work as the Host field — pick one and make it stable:
        IdentitiesOnly yes
        ServerAliveInterval 30
    ```
-   Then the Eldrun Host field is just `pi`, and re-addressing the Pi later is a
-   one-line edit that every Eldrun surface picks up, because none of them pass
+   Then the Tabtivity Host field is just `pi`, and re-addressing the Pi later is a
+   one-line edit that every Tabtivity surface picks up, because none of them pass
    `-F` or bypass the config.
 
 A static IP configured *on the Pi* is the option I'd avoid — it drifts out of
@@ -108,7 +108,7 @@ sudo ufw allow from <LAN-CIDR> to any port 22 proto tcp
 sudo ufw enable
 ```
 
-**Key-only auth is not just hygiene here** — it is what unlocks Eldrun's
+**Key-only auth is not just hygiene here** — it is what unlocks Tabtivity's
 auto-connect. A connect that used no password records `remote.key_auth` on the
 project (`src-tauri/src/schema/project.rs`), which is one of the two conditions
 that make the **auto-connect** toggle available (the other being a saved
@@ -116,7 +116,7 @@ password, which you then never need). See `docs/context/remote_autoconnect.md`.
 
 ## A4. sshd concurrency — the one non-obvious setting
 
-An active Eldrun remote project multiplexes over **one pooled ControlMaster**
+An active Tabtivity remote project multiplexes over **one pooled ControlMaster**
 (`ControlMaster=auto`, `ControlPersist=600`, shared `cm-%C` socket), so tabs,
 SFTP and git ride a single TCP connection. That keeps you well under any sane
 limit. But if you ever run **multiple remote projects** on the same Pi, or add it
@@ -149,7 +149,7 @@ sudo apt install -y tmux git ripgrep python3-venv
 Note the Pi is ARM64 and modest: agent tabs *run* there fine, but a heavy build
 will be slow. The point of this host is storage + always-on, not compute.
 
-## A6. Register it in Eldrun
+## A6. Register it in Tabtivity
 
 New remote project → the remote section (`RemoteProjectSection.tsx`) asks for:
 
@@ -169,7 +169,7 @@ A3, so it connects on launch and on activation with no prompt.
 
 ## A7. Reaching it from outside the LAN (optional)
 
-Eldrun is transport-agnostic here — it only needs the host to be reachable by
+Tabtivity is transport-agnostic here — it only needs the host to be reachable by
 plain `ssh`. Two workable shapes:
 
 - **Tailscale** — `curl -fsSL https://tailscale.com/install.sh | sh` on the Pi,
@@ -177,7 +177,7 @@ plain `ssh`. Two workable shapes:
   Nothing port-forwarded, works behind CGNAT. Add `sudo ufw allow in on tailscale0`.
 - **WireGuard** (self-hosted) — forward UDP only; `HostName` becomes the wg address.
 
-**Caveat:** the project's `openvpn` field is OpenVPN-specific. Eldrun cannot
+**Caveat:** the project's `openvpn` field is OpenVPN-specific. Tabtivity cannot
 bring a Tailscale/WireGuard tunnel up for you, so there's no "unreachable →
 start tunnel" recovery on that path — it just shows a red lamp. Both are
 boot-enabled systemd services, so in practice the tunnel is simply always up.
@@ -252,11 +252,11 @@ sudo mount -a && findmnt /mnt/projects
 ## B4. The empty-mount hazard — do not skip this
 
 With `nofail`, a disk that fails to appear leaves `/mnt/projects` as an **empty
-directory on the SD card**. Eldrun then connects successfully, SFTP lists an
+directory on the SD card**. Tabtivity then connects successfully, SFTP lists an
 empty tree, and git on the host sees a non-repo. That is not a harmless "no
 files" state: byte-sync and lockstep are designed around the host being
 authoritative for the remote project, and an apparently-emptied host tree is
-the worst possible input to a sync pass. Eldrun does record destructive
+the worst possible input to a sync pass. Tabtivity does record destructive
 outcomes (`services::local_loss`, `LocalLossDialog` — see
 `docs/context/git_sync.md`), but the correct move is to make the bad state
 impossible to write into.
@@ -298,7 +298,7 @@ mkdir -p /mnt/projects/<name>
 cd /mnt/projects/<name> && git init
 ```
 
-Then set the Eldrun project's **Remote path** to `/mnt/projects/<name>` (A6).
+Then set the Tabtivity project's **Remote path** to `/mnt/projects/<name>` (A6).
 
 Keep one directory per project. Do not nest a project inside another project's
 tree — the file tree, search and sync all take the remote path as the root.
@@ -307,7 +307,7 @@ tree — the file tree, search and sync all take the remote path as the root.
 
 - **Disable aggressive spin-down.** A parked drive costs 5–10 s on the first
   access, and that lands on your first file-tree expansion or first git call,
-  which reads as Eldrun hanging. If the drive supports it:
+  which reads as Tabtivity hanging. If the drive supports it:
   ```bash
   sudo apt install -y hdparm
   sudo hdparm -S 0 /dev/sdX          # never spin down
@@ -360,11 +360,11 @@ Run through this once, end to end, before trusting the setup with real work.
    with permission denied (B4's immutable guard). Remount afterwards.
 8. `sudo reboot`, then re-check 5 — the fstab entry survives a reboot.
 
-**Eldrun** (needs a running instance — the user drives this, not an agent)
+**Tabtivity** (needs a running instance — the user drives this, not an agent)
 9. Project connects from the pill's connection lamp; SSH lamp goes green.
 10. File tree expands the remote path and shows the HDD contents.
 11. A shell tab opens; `df -h .` inside it reports the HDD, not the SD card.
-12. Close Eldrun, reopen — the shell tab **reattaches** its tmux session.
+12. Close Tabtivity, reopen — the shell tab **reattaches** its tmux session.
 13. Auto-connect: relaunch with the project active — it connects with no prompt.
 14. Commit on the Pi, confirm lockstep brings it to the local mirror.
 

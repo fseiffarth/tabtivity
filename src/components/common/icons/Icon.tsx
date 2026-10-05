@@ -1,5 +1,5 @@
 /**
- * Eldrun's shared line-icon set — the replacement for colour emoji in the
+ * Tabtivity's shared line-icon set — the replacement for colour emoji in the
  * chrome. Same rounded `currentColor` outline as {@link SaveIcon} /
  * {@link PrinterIcon} / the edge-rail icons (24-grid, 1.4 stroke), so every
  * icon follows the theme, dims with its row, and reads as one family.
@@ -24,7 +24,7 @@ function Frame({ className, size = "1.2em", children }: IconProps & { children: 
       width={size}
       height={size}
       fill="none"
-      className={className ? `eldrun-icon ${className}` : "eldrun-icon"}
+      className={className ? `app-icon ${className}` : "app-icon"}
       style={{ verticalAlign: "-0.2em", flexShrink: 0 }}
       aria-hidden="true"
       focusable="false"
@@ -570,6 +570,16 @@ export function SquareIcon(p: IconProps) {
   );
 }
 
+/** A laser dot with rays — the presentation laser pointer. */
+export function LaserIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+    </Frame>
+  );
+}
+
 /** A flat-top hexagon — a box of projects, in the shape of the logo's nodes. */
 export function HexagonIcon(p: IconProps) {
   return (
@@ -625,6 +635,17 @@ export function TerminalIcon(p: IconProps) {
       <rect x="3" y="4.5" width="18" height="15" rx="2" />
       <path d="M7.5 9.5l3 2.5-3 2.5" />
       <path d="M12.5 15h4" />
+    </Frame>
+  );
+}
+
+/** A keyboard — keyboard steering is on. */
+export function KeyboardIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M6.5 13.5h.01M17.5 13.5h.01" />
+      <path d="M9.5 14h5" />
     </Frame>
   );
 }

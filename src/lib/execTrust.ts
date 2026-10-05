@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { translate, useI18nStore } from "./i18n";
 import { useExecTrustStore } from "../stores/execTrust";
+import { NAMES } from "./brand";
 
 /**
  * Frontend half of `services::exec_trust`: a gated backend command (commit,
- * push, publish, TeX build, format) fails with `eldrun-trust-required:<json>`
+ * push, publish, TeX build, format) fails with `tabtivity-trust-required:<json>`
  * when it would run project-supplied code the user has not approved in its
  * current form. {@link withExecTrust} shows that request, records the approval
  * and re-runs the action; a decline surfaces as an ordinary error.
@@ -27,7 +28,7 @@ export interface TrustRequest {
   items: TrustItem[];
 }
 
-const PREFIX = "eldrun-trust-required:";
+const PREFIX = NAMES.trustRequiredPrefix;
 
 export function parseTrustRequest(err: unknown): TrustRequest | null {
   const text = typeof err === "string" ? err : err instanceof Error ? err.message : null;

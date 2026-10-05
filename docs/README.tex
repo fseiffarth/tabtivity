@@ -1,4 +1,4 @@
-% Eldrun — Detailed README (LaTeX edition)
+% Tabtivity — Detailed README (LaTeX edition)
 % Compile with: pdflatex README.tex  (run twice for the table of contents)
 \documentclass[11pt,a4paper]{article}
 
@@ -15,11 +15,11 @@
 \usepackage{titlesec}
 \usepackage{fancyhdr}
 \usepackage{listings}
-\usepackage[hidelinks,colorlinks=true,linkcolor=eldrunblue,urlcolor=eldrunblue]{hyperref}
+\usepackage[hidelinks,colorlinks=true,linkcolor=tabtivityblue,urlcolor=tabtivityblue]{hyperref}
 
 % ---- Colours ---------------------------------------------------------------
-\definecolor{eldrunblue}{HTML}{2D6CDF}
-\definecolor{eldrungray}{HTML}{4A4A4A}
+\definecolor{tabtivityblue}{HTML}{2D6CDF}
+\definecolor{tabtivitygray}{HTML}{4A4A4A}
 \definecolor{codebg}{HTML}{F4F5F7}
 \definecolor{donegreen}{HTML}{1B7F3B}
 \definecolor{openorange}{HTML}{B5651D}
@@ -41,13 +41,13 @@
 }
 
 % ---- Headings --------------------------------------------------------------
-\titleformat{\section}{\Large\bfseries\color{eldrunblue}}{\thesection}{0.6em}{}
-\titleformat{\subsection}{\large\bfseries\color{eldrungray}}{\thesubsection}{0.6em}{}
+\titleformat{\section}{\Large\bfseries\color{tabtivityblue}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{tabtivitygray}}{\thesubsection}{0.6em}{}
 
 \pagestyle{fancy}
 \fancyhf{}
-\rhead{\small\color{eldrungray}Eldrun}
-\lhead{\small\color{eldrungray}Detailed README}
+\rhead{\small\color{tabtivitygray}Tabtivity}
+\lhead{\small\color{tabtivitygray}Detailed README}
 \rfoot{\small\thepage}
 
 % ---- Helper macros ---------------------------------------------------------
@@ -57,7 +57,7 @@
 
 \setlist{itemsep=2pt,topsep=3pt}
 
-\title{\vspace{-1.2cm}\textbf{\color{eldrunblue}Eldrun}\\[0.3em]
+\title{\vspace{-1.2cm}\textbf{\color{tabtivityblue}Tabtivity}\\[0.3em]
 \large A project-centric desktop workspace for AI-assisted development}
 \author{Detailed technical README}
 \date{Version 0.1.0 \quad\textbullet\quad Tauri~2 + React + TypeScript}
@@ -77,7 +77,7 @@ in the noise.
 
 \smallskip
 \noindent
-\textbf{Eldrun's model:} you do not open applications, you open \emph{projects}.
+\textbf{Tabtivity's model:} you do not open applications, you open \emph{projects}.
 Selecting a project swaps the whole desktop to that project's context --- its
 windows come forward, the previous project's windows are parked out of the way,
 the downloads folder and default-app mappings re-route, and time tracking
@@ -91,17 +91,17 @@ switches. One project visible at a time, everything else cleanly out of sight.
 \section{Concept and Vision}
 % ===========================================================================
 
-Inside each project, Eldrun is an operational cockpit: a root control terminal
+Inside each project, Tabtivity is an operational cockpit: a root control terminal
 for managing the workspace, one or more agent terminals scoped to the project
 (Claude, Codex, Gemini, or a local Ollama model), a persistent project bar, a
 hover-revealed file panel, and cross-project app controls that stay available as
 you move between projects.
 
-Eldrun is a \emph{project-centric desktop layer}, not just an app that launches
+Tabtivity is a \emph{project-centric desktop layer}, not just an app that launches
 or embeds other apps. The user-facing model is:
 
 \begin{quote}
-\itshape Select a project $\rightarrow$ Eldrun restores that project's working
+\itshape Select a project $\rightarrow$ Tabtivity restores that project's working
 context.
 \end{quote}
 
@@ -113,25 +113,25 @@ notes, AI/task metadata, layout, and workflow state.
 
 The current implementation targets Linux (X11 and KDE Wayland) because that
 provides the fastest path to reliable window control. The longer-term direction
-is a stable Eldrun core with desktop/compositor backends for Cinnamon~X11,
+is a stable Tabtivity core with desktop/compositor backends for Cinnamon~X11,
 KDE/KWin, Hyprland, GNOME Shell, i3, Sway, and other Wayland environments.
 
-\subsection{How Eldrun compares}
+\subsection{How Tabtivity compares}
 
 \begin{description}[leftmargin=1.2em,style=nextline]
   \item[Agent orchestrators] (Vibe Kanban, Conductor, Claude Squad, the Claude
   Code desktop app) manage agent \emph{processes inside a repo} --- task
   delegation, git worktrees, diff review, merge flow. They have no notion of
   your desktop: they will not move your windows, re-route downloads, or switch
-  default apps when you change focus. Eldrun is \emph{complementary} --- you can
-  run one inside an Eldrun project terminal.
+  default apps when you change focus. Tabtivity is \emph{complementary} --- you can
+  run one inside a Tabtivity project terminal.
   \item[Manual approaches] cover only one slice each: KDE Activities and one
   virtual desktop per project handle windows but have no project model and no
   restore; tmux and scripts like \code{workon} restore terminal layouts but
   ignore everything outside the terminal.
 \end{description}
 
-Eldrun occupies the gap none of them fill: project ownership of \emph{windows
+Tabtivity occupies the gap none of them fill: project ownership of \emph{windows
 and desktop context}, with agent terminals built in.
 
 \subsection{Layout sketch}
@@ -189,16 +189,16 @@ npm install
 \subsection{Run}
 
 \begin{lstlisting}[language=bash]
-./start-eldrun-tauri.sh          # packaged app
+./start-tabtivity-tauri.sh          # packaged app
 npm run tauri dev                # dev build with hot-reload
 \end{lstlisting}
 
-The desktop launchers are \code{Eldrun.desktop} (packaged) and
-\code{EldrunHotReload.desktop} (hot reload). They already point at this
+The desktop launchers are \code{Tabtivity.desktop} (packaged) and
+\code{TabtivityHotReload.desktop} (hot reload). They already point at this
 checkout's scripts:
 
 \begin{lstlisting}[language=bash]
-cp Eldrun*.desktop ~/.local/share/applications/
+cp Tabtivity*.desktop ~/.local/share/applications/
 update-desktop-database ~/.local/share/applications/
 \end{lstlisting}
 
@@ -215,12 +215,12 @@ update-desktop-database ~/.local/share/applications/
   \item[External window tracking] file opens use \code{xdg-open}; launched
   windows are tracked by PID and shown in the right panel instead of embedded in
   the UI.
-  \item[Downloads routing] \code{\textasciitilde/eldrun/downloads} symlink always
+  \item[Downloads routing] \code{\textasciitilde/tabtivity/downloads} symlink always
   points to the active project's \code{tmp/downloads/}; Firefox and Chromium
   preferences are updated automatically.
   \item[Default app mapping] file extensions use per-project overrides, global
   defaults, system MIME defaults, or a manual ``Open With'' picker.
-  \item[Time tracking] Eldrun records active project sessions and shows today's
+  \item[Time tracking] Tabtivity records active project sessions and shows today's
   elapsed time on project pills.
 \end{description}
 
@@ -236,7 +236,7 @@ update-desktop-database ~/.local/share/applications/
   into a new pane, or onto its center to move the tab in. Splits resize with
   draggable dividers, each subwindow keeps its own tab bar, and the whole tree
   is persisted per project.
-  \item[Root control terminal] opens in \code{\textasciitilde/eldrun/root/} with
+  \item[Root control terminal] opens in \code{\textasciitilde/tabtivity/root/} with
   workspace-level context files.
   \item[Project terminals] each active project gets a PTY tab scoped to its
   directory, with best-effort project-local XDG sandbox paths.
@@ -268,7 +268,7 @@ update-desktop-database ~/.local/share/applications/
 
 Optionally point a project at a remote host. Enter an SSH address
 (\code{user@host[:port]}), connect, and browse the remote filesystem in-app to
-pick the project root. Eldrun \code{sshfs}-mounts it locally so the file tree,
+pick the project root. Tabtivity \code{sshfs}-mounts it locally so the file tree,
 terminal cwd, and git work unchanged. Terminal and agent tabs run \textbf{on the
 remote host} over \code{ssh -tt} (multiplexed over a ControlMaster socket), with
 the agent CLI auto-detected/bootstrapped on the remote and authenticated with
@@ -336,10 +336,10 @@ remote calls, ever.
 \begin{description}[leftmargin=1.2em,style=nextline]
   \item[Network indicator] probes connectivity and shows online/offline plus
   wired or wireless state.
-  \item[Keyboard shortcuts] Eldrun opens fullscreen by default; \code{F11}
+  \item[Keyboard shortcuts] Tabtivity opens fullscreen by default; \code{F11}
   toggles fullscreen; \code{Super} toggles all panels.
   \item[Crash logging] Rust panic hook appends to
-  \code{\textasciitilde/.local/share/eldrun/crash.log}.
+  \code{\textasciitilde/.local/share/tabtivity/crash.log}.
   \item[Packaging] Debian \code{.deb} and AppImage targets.
 \end{description}
 
@@ -347,9 +347,9 @@ remote calls, ever.
 \section{Agent Support}
 % ===========================================================================
 
-Eldrun launches agents in xterm.js PTY tabs. The active agent command
+Tabtivity launches agents in xterm.js PTY tabs. The active agent command
 (\code{claude}, \code{codex}, \code{gemini}, or \code{vibe}) is set in Settings.
-If the configured command is not in \code{\$PATH}, Eldrun falls back to the
+If the configured command is not in \code{\$PATH}, Tabtivity falls back to the
 system shell.
 
 \begin{longtable}{@{}p{4.6cm}p{1.6cm}p{1.4cm}p{6.2cm}@{}}
@@ -371,16 +371,16 @@ Grok CLI                     & No  & No      & Not integrated. \\
 
 Project-bound terminals receive a best-effort project sandbox: the child process
 runs in the project directory with project-local XDG config, cache, data, state,
-and temp locations under \code{<project>/.eldrun/sandbox/}. The root
+and temp locations under \code{<project>/.tabtivity/sandbox/}. The root
 orchestration terminal keeps the normal workspace environment.
 
 \subsection{Session resume}
 
 Claude and Codex tabs that carry a session id are persisted across restarts and
-respawned with their prior conversation. Eldrun installs a \code{SessionStart}
+respawned with their prior conversation. Tabtivity installs a \code{SessionStart}
 hook (into \code{\textasciitilde/.claude/settings.json} and
 \code{\textasciitilde/.codex/config.toml}) that records each tab's live session
-id keyed by an \code{ELDRUN\_TAB\_UID} env var, so resume follows the live
+id keyed by an \code{TABTIVITY\_TAB\_UID} env var, so resume follows the live
 session even across a \code{/clear}.
 
 \begin{itemize}
@@ -416,12 +416,12 @@ macOS                  & Experimental shell  & Null workspace backend. No native
 % ===========================================================================
 
 Managed projects live under
-\code{\textasciitilde/eldrun/projects/<sanitized-name>/}. Imported projects can
+\code{\textasciitilde/tabtivity/projects/<sanitized-name>/}. Imported projects can
 also be registered in place. Remote (SSH) projects are sshfs-mounted under
-\code{\textasciitilde/.local/share/eldrun/mounts/<project-id>/}.
+\code{\textasciitilde/.local/share/tabtivity/mounts/<project-id>/}.
 
-\noindent Global Eldrun state lives in
-\code{\textasciitilde/.local/share/eldrun/}:
+\noindent Global Tabtivity state lives in
+\code{\textasciitilde/.local/share/tabtivity/}:
 
 \begin{longtable}{@{}p{4.8cm}p{9.8cm}@{}}
 \toprule
@@ -519,7 +519,7 @@ always restore on relaunch; resumable Claude/Codex agent tabs (carrying a
 
 \noindent\textbf{Hot-reload note.} Frontend (\code{src/}) edits hot-reload in a
 running instance --- no restart needed. Only backend (\code{src-tauri/}) changes
-require a rebuild/restart. Do not open a second Eldrun instance: it can corrupt
+require a rebuild/restart. Do not open a second Tabtivity instance: it can corrupt
 workspace state.
 
 % ===========================================================================
@@ -530,7 +530,7 @@ Work items are tracked in \code{docs/open\_ideas.md} with globally stable
 numbers (1--65) collected into lettered groups. Status is tracked on three axes:
 \done{} (code-complete / compiles), \textbf{Automated} (a vitest or
 \code{cargo test} exercises it), and \textbf{Manual} (runtime QA in a live
-Eldrun). A feature is fully tested only when both test boxes are ticked ---
+Tabtivity). A feature is fully tested only when both test boxes are ticked ---
 currently no manual box is ticked yet.
 
 \begin{longtable}{@{}p{1.6cm}p{7.2cm}p{5.4cm}@{}}
@@ -554,7 +554,7 @@ J  & Web \& mail surfaces (in-app mail/browser, routing) & \open{} \\
 \begin{description}[leftmargin=1.2em,style=nextline]
   \item[Project box containers (\#41)] open a box as a single \emph{merged}
   workspace spanning its member projects: a multi-root right-panel file tree, a
-  \code{\textasciitilde/eldrun/boxes/<name>/} box folder as the cwd for box
+  \code{\textasciitilde/tabtivity/boxes/<name>/} box folder as the cwd for box
   agents, agent tabs seeded with each member's \code{CLAUDE.md}/\code{AGENTS.md}
   hints, and directed inter-project relation edges (``a change in A may
   influence B'') tied into git-status markers. Schema groundwork is in place;
@@ -590,7 +590,7 @@ J  & Web \& mail surfaces (in-app mail/browser, routing) & \open{} \\
 
 \vfill
 \begin{center}
-\small\color{eldrungray}
+\small\color{tabtivitygray}
 See \code{docs/VISION.md} for the full strategy and platform rationale, and
 \code{DOCUMENTATION.md} for detailed architecture, data schemas, and behavior
 notes.

@@ -1,6 +1,6 @@
 # Full project export / import
 
-Moving one Eldrun project to another computer. Backend:
+Moving one Tabtivity project to another computer. Backend:
 `src-tauri/src/commands/project_transfer.rs`. UI:
 `src/components/projects/ProjectExportDialog.tsx` (pill menu → "Export
 project…") and `src/components/projects/ProjectImportBundleDialog.tsx`
@@ -9,7 +9,7 @@ project…") and `src/components/projects/ProjectImportBundleDialog.tsx`
 ## Why it exists
 
 A project is not a folder. Copying the folder to a second machine and importing
-it there gives you the files and **nothing else** — every question Eldrun ever
+it there gives you the files and **nothing else** — every question Tabtivity ever
 asked about that project has to be answered again, because the answers live in
 four other places, all keyed by project id:
 
@@ -25,11 +25,11 @@ Export packs all five; import puts them back and re-points every path.
 
 ## The bundle
 
-A `.eldrunproj` file is a zip (the `zip` crate was already in the tree for
+A `.tabtivityproj` file is a zip (the `zip` crate was already in the tree for
 `commands::fs`'s dropped-archive extraction):
 
 ```
-eldrun-export.json   the manifest — everything that is not a file
+tabtivity-export.json   the manifest — everything that is not a file
 dir/…                a local project's folder
 state/…              a remote project's local state dir (project.json only)
 mirror/…             a remote project's local mirror tree
@@ -44,8 +44,8 @@ about is exactly how a "full" export quietly stops being full.
 
 ## The trust split — the one design decision here
 
-The manifest is written by Eldrun. But a bundle is a *file*: it can be mailed,
-dropped in a shared folder, fetched from anywhere. So "written by Eldrun" is a
+The manifest is written by Tabtivity. But a bundle is a *file*: it can be mailed,
+dropped in a shared folder, fetched from anywhere. So "written by Tabtivity" is a
 claim, and import treats the whole file as untrusted:
 
 - the tab layout goes through the same sanitizer a cloned repository's does
@@ -70,8 +70,16 @@ The user still has to switch to the project and press something.
 
 ## What deliberately does not travel
 
+- **Phone access** (`MOBILE_ACCESS_KEY`, its per-phone list
+  `MOBILE_DEVICES_KEY`, and the access key's old-brand spelling). Mobile
+  access is consent given on one machine to the phones paired with it, and a
+  per-phone list names device ids that mean nothing elsewhere. Export strips
+  them from the manifest's entry and import drops them from the entry and the
+  rewritten `project.json` (`project_transfer::mobile_keys`) — before this,
+  import adopted the entry's extras wholesale, so a bundle exported with
+  Mobile on opened the project to every phone here without being asked.
 - **Passwords and access tokens.** They live in the OS keychain keyed by host
-  (`services::remote_credentials`), never in a file Eldrun writes. The remote
+  (`services::remote_credentials`), never in a file Tabtivity writes. The remote
   spec travels; the secret is re-entered on the far side. The export dialog says
   so before the file is written.
 - **Host-bound sync state** (`sync.json`, `git_peer.json`). Both describe a
@@ -100,7 +108,7 @@ save dialog returns a path.
 
 `REBUILDABLE_DIRS` is a near-twin of `commands::search`'s and `commands::fs`'s
 skip lists and deliberately not shared with them: those two also skip `.git` and
-`.eldrun` unconditionally, and both of those must be exportable.
+`.tabtivity` unconditionally, and both of those must be exportable.
 
 ## Identity on the far side
 

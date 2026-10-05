@@ -55,7 +55,7 @@ export interface HintCtx {
   projectCount: number;
   /** The current project scope, or null at root / no active project. */
   activeId: string | null;
-  /** A Codex tab is open and Codex is refusing to run Eldrun's session hook, so
+  /** A Codex tab is open and Codex is refusing to run Tabtivity's session hook, so
    *  resume is on the rollout-scanning fallback. Optional: absent means "not
    *  probed" (no Codex tab open), which is never eligible. */
   codexHookNeedsTrust?: boolean;

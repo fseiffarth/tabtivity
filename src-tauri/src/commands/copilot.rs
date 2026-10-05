@@ -255,7 +255,7 @@ pub async fn copilot_stop(project_id: String) {
     sessions().stop(&project_id).await;
 }
 
-/// `RunEvent::Exit`: no language server outlives Eldrun.
+/// `RunEvent::Exit`: no language server outlives Tabtivity.
 pub async fn stop_all_for_exit() {
     sessions().stop_all().await;
 }

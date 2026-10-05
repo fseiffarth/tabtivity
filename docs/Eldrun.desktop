@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Eldrun
-Comment=Terminal workspace manager
-Exec=/path/to/projecteldrun/start-eldrun-tauri.sh
-Icon=/path/to/projecteldrun/src-tauri/icons/128x128.png
-Terminal=false
-Categories=Utility;TerminalEmulator;Development;
-StartupWMClass=eldrun

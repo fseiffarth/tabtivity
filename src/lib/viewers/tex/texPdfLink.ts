@@ -15,7 +15,7 @@ import { useTabsStore, type TabEntry } from "../../../stores/tabs";
  *   - The coupling is already implied by the paths (`<dir>/<stem>.tex` ↔
  *     `<dir>/<stem>.pdf`), so recording it again would be a second source of
  *     truth that a rename, a restart or a hand-opened PDF could contradict.
- *   - Deriving it means it also holds for pairs Eldrun never opened together —
+ *   - Deriving it means it also holds for pairs Tabtivity never opened together —
  *     a PDF opened straight from the file tree next to an already-open source
  *     is marked exactly like a freshly compiled one.
  *   - Nothing has to be cleaned up when either tab closes: the partner simply
@@ -31,7 +31,7 @@ const TEX_VIEWERS = new Set(["texworkspace", "tex"]);
 const PDF_VIEWERS = new Set(["pdf"]);
 
 /** `path` with its final extension removed, lowercased for the comparison — file
- *  systems Eldrun runs on are case-insensitive (Windows, macOS) often enough
+ *  systems Tabtivity runs on are case-insensitive (Windows, macOS) often enough
  *  that a `Paper.tex` / `paper.pdf` pair should still read as one document. */
 function stemKey(path: string, ext: string): string | null {
   const lower = path.toLowerCase();

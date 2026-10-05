@@ -7,7 +7,9 @@
  * falls back to the project root if it has since been deleted).
  */
 
-const LAST_KEY = "eldrun.sendToProject.last";
+import { storageKey } from "../brand";
+
+const LAST_KEY = storageKey("sendToProject.last");
 
 /** The remembered destination: a project id plus a project-relative folder
  *  (`""` = the project root). */

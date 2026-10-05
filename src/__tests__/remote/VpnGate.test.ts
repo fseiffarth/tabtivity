@@ -1,6 +1,6 @@
 /**
  * The VPN gate for network accounts (`lib/remote/vpn/vpnGate.ts`): a `require_vpn` account
- * is skipped while no tunnel Eldrun knows about is up, and the hook the
+ * is skipped while no tunnel Tabtivity knows about is up, and the hook the
  * schedulers use for their catch-up says *nothing* — `null` — until the store
  * has reconciled against the backend once, so a tunnel that was up all along is
  * never mistaken for one that just came up.

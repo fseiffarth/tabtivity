@@ -1,7 +1,7 @@
-- make eldrun repo public publish check
+- make tabtivity repo public publish check
 - replace public / private by local / remote (public, private)
 - add a no scaffold option for importing
-- redraw eldrun logo in svg
+- redraw tabtivity logo in svg
 - fix issue: files opened in one project are not securely passed to hidden workspace on switching (x11)
 - workspace switching in x11 MUST be stable (fix all issues regarding this)
 - workspace switching keep/store window z-order 
@@ -28,12 +28,12 @@
 - restore/resume agent sessions (possible?)
 - include ssh based projects, i.e. remote path but claude running on this machine is this possible?
 - add a save modes for project importing adding with different security stages highest, only local models allowed no pushing of gits (optional no git, scaffolds), all models allowed (list of models checkable) no pushing of gits (optional no git, scaffolds), lowest everything allowed (add to project settings, security area)
-- automatic reload (from disk with diff check) for eldrun native text viewer
-- native mail, browser (weigh up security issues) in eldrun
+- automatic reload (from disk with diff check) for tabtivity native text viewer
+- native mail, browser (weigh up security issues) in tabtivity
 - tex viewer turn of preview by default — DONE: the inline PDF preview pane was
   removed; compile now always opens (or refreshes) the PDF in its own tab.
 - add auto-complete for all native text viewers (using pre-defined model)
-- fix tab to project mapping seems to be broken currently i see in the projecteldrun main window a TODO.md tab containing to another project (this should never occur)
+- fix tab to project mapping seems to be broken currently i see in the projecttabtivity main window a TODO.md tab containing to another project (this should never occur)
 - right click on tabs automatically start renaming
 - add undo redo to native text/tex viewers
 - save icon instead of save/saved text in tex/text viewer (autosave regurlarly?)
@@ -46,7 +46,7 @@
 - add native .odt/.xlsx viewer (useful?, already given by tauri?)
 - improve image viewer scroll (should scroll to mouse curser)
 - make images from image viewer drag/droppable also with tabs, e.g. if I want to upload txt file drag its tab and drop it to the browser
-- add better navigation inside eldrun app, needs design choices, i.e. fast fullscreen mode for tabs, keyboard switching between projects, tabs in subwindow, subwindows, e.g. shift + arrows for switching focusing subwindows, shift+tab for switching tab in subwindow, shift + ctrl + tab for switching projects, closing tabs, closing subwindows, ... everything needs to be fastly steered with keyboard, best is if no mouse used at all 
+- add better navigation inside tabtivity app, needs design choices, i.e. fast fullscreen mode for tabs, keyboard switching between projects, tabs in subwindow, subwindows, e.g. shift + arrows for switching focusing subwindows, shift+tab for switching tab in subwindow, shift + ctrl + tab for switching projects, closing tabs, closing subwindows, ... everything needs to be fastly steered with keyboard, best is if no mouse used at all
 - tex compiled output pdf in new tab, it is a file, add compiler options to tex viewer (out folder for compiler, ...)
-- change download behaviour reset standard browser download path to user Downloads do not change within eldrun app for now (it may be a security risk if something is downloaded to a project and then pushed)
+- change download behaviour reset standard browser download path to user Downloads do not change within tabtivity app for now (it may be a security risk if something is downloaded to a project and then pushed)
 - toggle to turn on remote control on off per project default off (claude, ...)

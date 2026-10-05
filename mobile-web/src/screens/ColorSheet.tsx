@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { ApiError, setTabColor, type TabRow } from "../api";
 import { TAB_COLORS, TAB_COLOR_IDS, TAB_COLOR_LABELS } from "../tabColors";
+import { useT } from "../../../src/lib/i18n";
+import { isUntested } from "../../../src/lib/untested";
 
 /** Paint one tab from the phone, or clear its colour (#264).
  *
  * `RenameSheet`'s sibling, and deliberately shaped like it: the tab is named by
  * its opaque id, the desktop owns the tab layout, and nothing here works
- * without desktop Eldrun open — which is why the failure says so rather than
+ * without desktop Tabtivity open — which is why the failure says so rather than
  * "request failed".
  *
  * It commits on the tap instead of holding a Save button. A colour is a label
@@ -20,6 +22,7 @@ export function ColorSheet({ tab, onClose, onColored }: {
   onClose: () => void;
   onColored: (color: string | undefined) => void;
 }) {
+  const t = useT();
   const [current, setCurrent] = useState<string | undefined>(tab.color);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -36,20 +39,20 @@ export function ColorSheet({ tab, onClose, onColored }: {
       onColored(stored ?? undefined);
     } catch (cause) {
       setError(cause instanceof ApiError && (cause.status === 503 || cause.code === "desktop_unavailable")
-        ? "Open desktop Eldrun to colour a tab."
-        : "The colour could not be set.");
+        ? t("mobile.color.needsDesktop")
+        : t("mobile.color.failed"));
     } finally {
       setBusy(false);
     }
   };
 
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
-    <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={`Colour ${tab.label}`} onClick={(event) => event.stopPropagation()}>
+    <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.project.colorTab", { label: tab.label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label="Close">✕</button><h2>Tab colour <small>Untested</small></h2><span className="sheet-close" aria-hidden="true" /></header>
-      <p className="sheet-note">The colour is the desktop's own tab colour — picking one here paints “{tab.label}” in the Eldrun window too.</p>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("mobile.color.title")} {isUntested("mobile.sheet.color") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <p className="sheet-note">{t("mobile.color.note", { label: tab.label })}</p>
       {error && <p className="sheet-note error" role="alert">{error}</p>}
-      <div className="tab-color-grid" role="group" aria-label="Tab colour">
+      <div className="tab-color-grid" role="group" aria-label={t("mobile.color.title")}>
         <button
           type="button"
           className={`tab-color-chip none${current ? "" : " is-current"}`}
@@ -58,7 +61,7 @@ export function ColorSheet({ tab, onClose, onColored }: {
           onClick={() => void pick(null)}
         >
           <span className="tab-color-chip-dot none" aria-hidden="true" />
-          None
+          {t("mobile.color.none")}
         </button>
         {TAB_COLOR_IDS.map((id) => (
           <button
@@ -70,13 +73,13 @@ export function ColorSheet({ tab, onClose, onColored }: {
             onClick={() => void pick(id)}
           >
             <span className="tab-color-chip-dot" style={{ background: TAB_COLORS[id] }} aria-hidden="true" />
-            {TAB_COLOR_LABELS[id] ?? id}
+            {TAB_COLOR_LABELS[id] ? t(TAB_COLOR_LABELS[id]) : id}
           </button>
         ))}
       </div>
       <div className="mobile-schedule-form">
         <div className="mobile-schedule-actions">
-          <button disabled={busy} onClick={onClose}>{busy ? "Saving…" : "Done"}</button>
+          <button disabled={busy} onClick={onClose}>{busy ? t("common.saving") : t("mobile.gitSheet.done")}</button>
         </div>
       </div>
     </section>

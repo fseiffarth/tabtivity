@@ -5,7 +5,7 @@
   Old duplicate assignments now open Codex's session picker in the conflicting
   tab; choose its intended conversation. Verify close/reopen and trusted-hook
   tracking too. Automated regression covers duplicate binding within one poll
-  and reservation of saved resume targets; no live Eldrun restart performed.
+  and reservation of saved resume targets; no live Tabtivity restart performed.
 
 *New feature. Generalizes the existing single "Local Model" tab (Mistral `vibe`)
 into a family of local, Ollama-backed agent tabs — Claude Code, Hermes, OpenClaw,
@@ -31,7 +31,7 @@ then launches it**. `ollama launch --help` lists (among others): `claude`
 (Claude Code), `hermes`, `openclaw`, `opencode`, plus `codex`, `copilot`, `cline`,
 `qwen`, `droid`, `kimi`, `pi`. This removes the bespoke per-agent config the vibe
 path needs (`prepare_local_agent` writing `VIBE_HOME/config.toml`): for these
-agents Eldrun just spawns `ollama launch <id> --model <model>` in a PTY. `vibe`
+agents Tabtivity just spawns `ollama launch <id> --model <model>` in a PTY. `vibe`
 is **not** an `ollama launch` integration, so it keeps its current dedicated path
 unchanged; the new agents are additive.
 
@@ -237,7 +237,7 @@ unchanged; the new agents are additive.
     model on an APU machine onto the CPU with nothing in the API to say so but a
     `size_vram` of 0 — which is also exactly what a model too large to fit looks
     like. Three parts, all shipped:
-    - `ensure_ollama_running` sets `OLLAMA_IGPU_ENABLE=1` on the server **Eldrun
+    - `ensure_ollama_running` sets `OLLAMA_IGPU_ENABLE=1` on the server **Tabtivity
       itself** spawns (an explicit value in the environment is left alone — a
       user who set `0` meant it). A systemd-managed server is out of reach from
       app code and needs the drop-in the notice offers.
@@ -268,7 +268,7 @@ unchanged; the new agents are additive.
       - [ ] ❌ Doesn't work on macOS
 
 201. **The runtime is not something to be assumed either.** Ollama is not a
-    choice Eldrun made; it is a fact wired into 33 `#[tauri::command]`s across
+    choice Tabtivity made; it is a fact wired into 33 `#[tauri::command]`s across
     `commands/ollama.rs` (4 350 lines), 18 `invoke` sites in `src/`, four
     `settings.json` keys, and a literal `TcpStream::connect("127.0.0.1:11434")`
     in `ollama_http` (`:54`). Surveyed 2026-07-29. **The verdict is not
@@ -302,13 +302,13 @@ unchanged; the new agents are additive.
     - **Direction of travel.** Reported through 2026: a closed-source desktop
       GUI (later relicensed), a pivot toward hosted proprietary models, a $65M
       Series B, and repeated CVEs including one in the GGUF loader rated 9.1.
-      None of this breaks Eldrun today, and none of it should be treated as
+      None of this breaks Tabtivity today, and none of it should be treated as
       settled fact without checking — but a hard dependency with no seam is how
       a vendor's roadmap becomes ours.
 
     **Explicitly out of scope:** vLLM (multi-user GPU serving — the wrong shape
     for a desktop app), MLX (Apple-only, and Ollama already uses it there), and
-    LM Studio (proprietary, GUI-first; Eldrun already owns the UI, so the `lms`
+    LM Studio (proprietary, GUI-first; Tabtivity already owns the UI, so the `lms`
     CLI would buy only a second model manager).
 
     Four parts, in increasing size. **201a is independent and worth doing on its
@@ -364,7 +364,7 @@ unchanged; the new agents are additive.
       remote refused without the opt-in and accepted with it, a header-injecting
       host refused, and `addr_is_loopback` for the ensure-running gate.
     - [ ] 🖐️ Manual test — verified live against a second `ollama serve` on
-      11500 via `ELDRUN_STATE_DIR` + `examples/ollama_probe.rs` (2026-07-29):
+      11500 via `TABTIVITY_STATE_DIR` + `examples/ollama_probe.rs` (2026-07-29):
       the configured port returns that server's own model list (a different set
       from the systemd server's, which is the proof it did not fall back), a
       port with nothing listening reports `not_running` instead of quietly
@@ -378,7 +378,7 @@ unchanged; the new agents are additive.
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-    **201b — name the seam.** A `LocalRuntime` trait over the ~6 questions Eldrun
+    **201b — name the seam.** A `LocalRuntime` trait over the ~6 questions Tabtivity
     actually asks: is it up, list models, model capabilities, load/unload,
     what is resident, pull. Ollama becomes the first implementation, not the
     only shape. Deliberately **do not** abstract what is genuinely Ollama's —
@@ -565,7 +565,7 @@ unchanged; the new agents are additive.
         spawn, so an acceptance made inside a tab was gone before the next one
         started and the dialog came back forever. Now: `claude_folder_trusted`
         is asked before the auto-type and the rename is skipped while the
-        question is pending, and the answer is remembered in Eldrun's own
+        question is pending, and the answer is remembered in Tabtivity's own
         `<state_dir>/agent_trust.json` and re-applied to each staged copy for
         paths inside that tab's roots — the host file is still never written.)
       - [ ] The same folder asked about only ONCE: answer `Yes, I trust`, then
@@ -612,10 +612,10 @@ unchanged; the new agents are additive.
 - [ ] **Shift+Tab reaches a Codex tab.** xterm.js has no kitty keyboard
   protocol and no `modifyOtherKeys`, so Shift+Tab left it as the legacy backtab
   `ESC [ Z` — which codex-cli 0.151.0 does not bind to anything, so the key was
-  inert in every Eldrun Codex tab while its own footer advertised "shift+tab to
+  inert in every Tabtivity Codex tab while its own footer advertised "shift+tab to
   cycle". Fixed 2026-08-31: `terminalControl.shiftTabForAgent` re-encodes it as
   the CSI-u form `ESC [ 9 ; 2 u` for Codex panes only (Claude/Qwen read the
-  backtab), on the desktop pane and on Eldrun Mobile's mode walk alike. Verified
+  backtab), on the desktop pane and on Tabtivity Mobile's mode walk alike. Verified
   in a bare PTY: `ESC [ Z` changed nothing, `ESC [ 9 ; 2 u` stepped the mode.
   QA:
       - [ ] Shift+Tab in a Codex tab steps to Plan mode and back.
@@ -730,7 +730,7 @@ unchanged; the new agents are additive.
     to them. `ScheduledAgentPrompt.preface` carries them (Rust + TS), and
     `AgentScheduleHost` waits for the tab to go quiet between submissions
     (capped, since the occurrence is already claimed).
-  - **Eldrun still chooses nothing.** There is a model pick and deliberately no
+  - **Tabtivity still chooses nothing.** There is a model pick and deliberately no
     permission/plan mode: the composer types what the user picked into the
     agent's own CLI, which is the same line AGENTS.md draws around agent
     authority. No flag is injected at launch, here or anywhere.
@@ -838,7 +838,7 @@ unchanged; the new agents are additive.
       `renameTab`, keeping the detached-popout forwarding path intact.
     - **The prompt text.** In both the collected and the sent lists the prompt
       was a bare `<span>` among the metadata lines, so the one thing the user
-      wrote read as one more line of Eldrun's record of it. It is now quoted —
+      wrote read as one more line of Tabtivity's record of it. It is now quoted —
       an accent rule down the left, indented off it, on the panel ground rather
       than the row's control fill (`.agent-prompts-message`).
     Frontend: `components/agents/AgentSchedulesView.tsx`, `stores/tabs.ts`,
@@ -1048,7 +1048,7 @@ unchanged; the new agents are additive.
       did. The only persisted trace is `TabEntry.autoContinue`, one boolean that
       rides the ordinary layout persistence, so the switch survives a relaunch.
       The *armed time* is deliberately live-only: a stored one would fire against
-      a window that had already turned over while Eldrun was closed.
+      a window that had already turned over while Tabtivity was closed.
     - **It chooses nothing about the agent.** One word, submitted through
       `lib/agents/scheduledAgentInput` — the same path a scheduled prompt takes — so the
       permission mode stays the agent's own and the idle/decision/settle gate
@@ -1081,7 +1081,7 @@ unchanged; the new agents are additive.
       `continue` lands about a minute later, that the tab was idle when it did,
       that a Sent-prompts row records it, and that the row re-arms on the next
       window rather than stopping. Turn it on for a Gemini tab and confirm it
-      says the CLI publishes no usage panel. Restart Eldrun and confirm the
+      says the CLI publishes no usage panel. Restart Tabtivity and confirm the
       switch comes back on and re-arms.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -1172,7 +1172,7 @@ unchanged; the new agents are additive.
     `read agent_prompts.json: unknown field commit`. Blame (#255) added
     `commit`/`branch`/`files` to the history rows, and `AgentPromptsFile` and
     both of its row structs carried `deny_unknown_fields`: any build older than
-    that field — a packaged Eldrun, a frozen `package:dev` snapshot, whatever
+    that field — a packaged Tabtivity, a frozen `package:dev` snapshot, whatever
     started before the rebuild — refused the **whole** file rather than the one
     key it did not know, so the entire library and its history went dark on a
     machine where several builds legitimately read the same state.
@@ -1188,7 +1188,7 @@ unchanged; the new agents are additive.
     - [x] 🤖 Automated test — `schema::agent_prompts` (a file with unknown keys
       at the top level, on a collected prompt and on a history row loads with
       its known fields intact; `ProjectAgentPromptInput` still rejects one).
-    - [ ] 🖐️ Manual test — with an Eldrun restarted on this tree, open the side
+    - [ ] 🖐️ Manual test — with a Tabtivity restarted on this tree, open the side
       panel's Agents view and confirm the collected prompts and the Sent list
       come back with no error banner, and that a prompt's commit/branch still
       shows on its sent row.
@@ -1582,7 +1582,7 @@ unchanged; the new agents are additive.
       - [ ] 🖐️ Manual test — **closed strands** (after restarting): send a
         prompt from a Claude tab, close that tab, open a new Claude tab and
         send another: the old rows sit on a greyed closed strand of their own,
-        not on the new tab's strand. Relaunch Eldrun with a resumed Claude tab
+        not on the new tab's strand. Relaunch Tabtivity with a resumed Claude tab
         and type `/clear` in it: its rows before and after stay on that tab's
         strand.
         - [ ] ✅ Works on Linux (X11)
@@ -1593,7 +1593,7 @@ unchanged; the new agents are additive.
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
-      - [ ] 🖐️ Manual test — **snapping in a :30 zone**: start Eldrun with
+      - [ ] 🖐️ Manual test — **snapping in a :30 zone**: start Tabtivity with
         `TZ=Asia/Kolkata`, drop a draft on the Month view (60-min snap): it is
         scheduled on a local whole hour (e.g. 14:00, not 14:30).
         - [ ] ✅ Works on Linux (X11)
@@ -1674,7 +1674,7 @@ unchanged; the new agents are additive.
 264. **Agents view: the last prompt beside each tab, typed in the terminal
     included — and adopted into the prompt chart.** The row under a tab's times
     now says `last prompt: …` whatever route the prompt took: the composer, a
-    schedule, or the user's own typing into the terminal, which Eldrun never
+    schedule, or the user's own typing into the terminal, which Tabtivity never
     sees as a prompt (keystrokes reach the PTY, the TUI's input box edits them,
     only the agent knows what was submitted). So it is read from the same
     transcript tail the model tag comes from (`agent_tab_last_prompt` →
@@ -1687,7 +1687,7 @@ unchanged; the new agents are additive.
     on the prompt history as delivered to that tab — the row the chart draws a
     sent card from — unless the tab's newest history row already says it, so a
     composer or scheduled send is never recorded twice; the first read of a tab
-    is a baseline, never a record. An agent whose transcript Eldrun cannot read
+    is a baseline, never a record. An agent whose transcript Tabtivity cannot read
     (Gemini, Qwen, Codex 0.153.4 whose thread store keeps no messages, a custom
     command) gets the prompt echoed on the pane's own screen instead
     (`lib/agents/prompt/echo` over `lib/terminal/terminalRegistry`, parsed by the phone's
@@ -1722,8 +1722,8 @@ unchanged; the new agents are additive.
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-265. **Agent CLI version drift: what is installed vs. what Eldrun was verified
-    against.** Eldrun reads other people's CLIs at a level of detail that only
+265. **Agent CLI version drift: what is installed vs. what Tabtivity was verified
+    against.** Tabtivity reads other people's CLIs at a level of detail that only
     holds for the release someone sat down and checked — a `--resume` flag, a
     session-log key, the numbered rows of an approval menu, the two steps of a
     `/model` sheet. Those checks were recorded in prose
@@ -1736,7 +1736,7 @@ unchanged; the new agents are additive.
     toolchain on the GNOME host) — CI compiles it.
     - **The notes now exist as data.** `services::agent_versions::VERIFIED` holds
       one row per *check*, not per agent: Codex's three surfaces keep their three
-      releases, because the oldest of them is the weakest assumption Eldrun
+      releases, because the oldest of them is the weakest assumption Tabtivity
       rests on and collapsing them to one number would throw away the only part
       that says where to look. Re-verifying means bumping the row **and** the
       prose note in one commit.
@@ -1774,7 +1774,7 @@ unchanged; the new agents are additive.
       dismissal sends the version the user saw, a matching release says nothing,
       an unsupported CLI says so instead of offering a re-check.
     - [ ] 🖐️ Manual desktop QA — open Settings → Manage Agents: each installed
-      CLI shows its version; Claude and Codex show the amber "not the one Eldrun
+      CLI shows its version; Claude and Codex show the amber "not the one Tabtivity
       was verified against" line naming the stale sections, Copilot shows
       "no note yet records which release", an agent with no recipe says nobody
       has checked it. Click Dismiss on one and confirm the warning goes while the
@@ -1863,7 +1863,7 @@ unchanged; the new agents are additive.
     - [x] 🤖 Automated test — `CustomAgents`
     - [ ] 🖐️ Manual test — Agents panel: Muse Code shows an install card; the
       one-click install opens a tab and puts `muse` in `~/.local/bin`; the new-tab
-      menu then offers Muse and it launches. Relaunch Eldrun → the Muse tab is not
+      menu then offers Muse and it launches. Relaunch Tabtivity → the Muse tab is not
       resumed (expected).
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -1950,7 +1950,7 @@ unchanged; the new agents are additive.
       turn that ends with a `run_in_background` shell still running (or a Codex
       exec left open) used to light "finished" while the job ran on.
       `services::agent_turn` now holds that `done` back as `working` while a tool
-      shell carrying the tab's `ELDRUN_TAB_UID` is alive (read from
+      shell carrying the tab's `TABTIVITY_TAB_UID` is alive (read from
       `/proc/<pid>/environ` — the agent sits under the tmux server, not the PTY),
       re-sends it every 8 s so the store's 20 s silence rule does not retire it,
       and sends `done` within ~2 s of the last one exiting. Scheduled prompts wait
@@ -1994,7 +1994,7 @@ unchanged; the new agents are additive.
       - [ ] 🖐️ Manual test — Settings → Agents lists the six new cards and no
         longer lists Mentat/GPT Engineer/OpenHands; an installed Kiro finally
         reports as installed; installing Grok yields `grok --version` 1.0.x
-        (xAI), not 0.0.34. Open a Droid tab, send a prompt, restart Eldrun: the
+        (xAI), not 0.0.34. Open a Droid tab, send a prompt, restart Tabtivity: the
         tab comes back on `droid --resume` with its conversation.
         - [ ] ✅ Works on Linux (X11)
         - [ ] ❌ Doesn't work on Linux (X11)
@@ -2054,7 +2054,7 @@ unchanged; the new agents are additive.
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
-2335. **Agents live only in Eldrun: Eldrun-owned homes, one login per CLI,
+2335. **Agents live only in Tabtivity: Tabtivity-owned homes, one login per CLI,
     fence-only, and a Host session (implemented 2026-09-25, never run live).** "cursor cli needs
     login for every new tab … it is also the fence … same probably for mistral
     and antigravity (that makes the fence useless as everyone will turn it off)"
@@ -2064,7 +2064,7 @@ unchanged; the new agents are additive.
     `~/.vibe/.env` never arrive (`sandbox::CONTINUE_AGENT_SESSION_STORES` carries
     only their session dirs), and a login done *inside* a fenced tab lands in the
     tmpfs and dies with it. Target end state (user): all agents live only in
-    Eldrun. Decided with the user: fence is the only mode; login once per CLI,
+    Tabtivity. Decided with the user: fence is the only mode; login once per CLI,
     shared across projects; `~/.cache` throwaway; import copies credentials
     only; deleting a project deletes its agent home; a shell-typed agent is
     fenced too; unfenced work goes through an explicit Host session.
@@ -2111,7 +2111,7 @@ unchanged; the new agents are additive.
       Qwen encrypted stores key on them — bwrap does not unshare UTS today).
       Never set Amp's `nativeSecretsStorage` (keyring-only, deletes the file).
       Copilot persists a headless login only with `"storeTokenPlaintext": true`
-      in `~/.copilot/config.json` — **open:** may Eldrun seed that in its *own*
+      in `~/.copilot/config.json` — **open:** may Tabtivity seed that in its *own*
       scope home (arguably not "another app's config" any more), or does the
       user answer `y` once?
     - **Where each CLI keeps its login** (Linux; survey 2026-09-25, bundles
@@ -2135,7 +2135,7 @@ unchanged; the new agents are additive.
       (+`.auth`); muse `~/.config/muse/auth.json`. Several mix auth with config
       (cn `config.yaml`, qwen `settings.json` env block, crush, aider `.env`)
       and need rule (1) checked per entry before sharing.
-    - **Phase 3 — Eldrun-owned installs.** Run each `install_cmd` with
+    - **Phase 3 — Tabtivity-owned installs.** Run each `install_cmd` with
       `HOME=<state_dir>/agents/install`, `NPM_CONFIG_PREFIX`, `BUN_INSTALL`,
       `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` pointed there; verify per installer and
       add a per-entry override where one ignores them. Mount the tree read-only
@@ -2144,10 +2144,10 @@ unchanged; the new agents are additive.
       `updatable_install_dirs`, `native_launcher`, `private_launcher_dir`
       (#861). Keep detecting host installs until the user reinstalls.
     - **Phase 4 — import credentials only.** One click copies the host's files at
-      each CLI's `auth_paths` into `agent-auth/<cli-id>/` (host → Eldrun is the
+      each CLI's `auth_paths` into `agent-auth/<cli-id>/` (host → Tabtivity is the
       safe direction). Instructions, skills and MCP entries are not imported.
       Logins the host keeps in a keyring (agy ≤1.0.0, Junie, Goose, Vibe, Droid)
-      cannot be imported — log in once in Eldrun.
+      cannot be imported — log in once in Tabtivity.
     - **Phase 5 — fence-only.** Drop the per-project/global "fence off"
       (`fence_effective`, the Settings toggle); `FenceDecision::NotApplicable
       { reason: "off" }` goes. **Shell tabs:** today never fenced
@@ -2155,15 +2155,15 @@ unchanged; the new agents are additive.
       shell, or in a persistent agent tab's fallback login shell, runs it
       unfenced with the real home. Put one shim per registry CLI in
       `agent_bin::bin_dir()` (read-only in the fence) at the front of shell
-      tabs' PATH; the shim asks Eldrun for the fence argv over the channel
-      `eldrun-send` already uses and execs it in place — same scope home, same
-      shared login as an agent tab. It only launches Eldrun-installed CLIs and
+      tabs' PATH; the shim asks Tabtivity for the fence argv over the channel
+      `tabtivity-send` already uses and execs it in place — same scope home, same
+      shared login as an agent tab. It only launches Tabtivity-installed CLIs and
       has no bypass flag; running the binary by absolute path stays possible
-      (the user's own shell, real home, no Eldrun logins — not an escape, fences
+      (the user's own shell, real home, no Tabtivity logins — not an escape, fences
       cannot write the real home). **macOS:** Seatbelt cannot redirect, so set
       `HOME=<scope home>` with pass-throughs `GIT_CONFIG_GLOBAL`, `CARGO_HOME`,
       `RUSTUP_HOME`, `DOCKER_CONFIG` (ssh reads `~` from passwd). **Windows:**
-      no fence; tabs use the same Eldrun homes and shared logins via
+      no fence; tabs use the same Tabtivity homes and shared logins via
       `HOME`/`USERPROFILE`.
     - **Phase 6 — Host session.** For work that is not a project's: repairing
       Firefox, the printer, the machine. A fence cannot do it (bubblewrap sets
@@ -2174,15 +2174,15 @@ unchanged; the new agents are additive.
       so nothing fenced can plant config it runs. Never auto-resumes after a
       restart (a paused "Resume?" instead), cannot be started from the phone.
       Uses the shared logins (credential files only, rule (1)). The CLI's own
-      permission prompts apply; Eldrun injects no mode. Later, optional: a fenced
+      permission prompts apply; Tabtivity injects no mode. Later, optional: a fenced
       tab with one extra path granted for that tab (e.g. `~/.mozilla`).
     - **What goes away** once the host home is out of the loop:
       `CLAUDE_UNMOUNTED`, `CODEX_UNMOUNTED`, `GEMINI_*`, `AGENT_READ_ONLY`,
       `staged_config_mounts`, `CONTINUE_AGENT_SESSION_STORES` (they protect the
       host's uncontained CLI); the AGENTS.md hook exception to "never edits
-      another app's config" (hooks are registered in Eldrun's own homes). **Stays:**
+      another app's config" (hooks are registered in Tabtivity's own homes). **Stays:**
       read-only `state_dir/hooks` and `agent_bin`, per-scope `live_sessions`,
-      local-model control files, and treating everything Eldrun parses back from
+      local-model control files, and treating everything Tabtivity parses back from
       a home as attacker-controlled (transcripts, Codex SQLite, Copilot adoption).
     - **Gaps found in review (2026-09-25).**
       - *X11 blocks Phase 6.* Fenced tabs still reach the host's abstract X11
@@ -2197,7 +2197,7 @@ unchanged; the new agents are additive.
         shares logins, send its conversations there. The swap guard (rule 3)
         covers this only for CLIs whose auth file names an account; the rest
         stay open. Needed: a guard for those too (e.g. the host copy is written
-        only from an Eldrun-driven login, fenced writes stay per scope until
+        only from a Tabtivity-driven login, fenced writes stay per scope until
         confirmed), or those CLIs log in per scope.
       - *Hard links vs rename.* The Phase 1 draft (`services/agent_home.rs`,
         untracked) says logins are **hard-linked** in from `agent-auth/`. CLIs
@@ -2234,7 +2234,7 @@ unchanged; the new agents are additive.
       for all 30 CLIs, `services::agent_install` (install HOME + prefixes,
       PATH, read-only in the fence, `DISABLE_AUTOUPDATER` for Claude, legacy
       mirror migration), `services::agent_shim` + shims in `agent_bin`
-      (`eldrun --agent-shim`, `ELDRUN_SCOPE` on every tab), fence-only
+      (`tabtivity --agent-shim`, `TABTIVITY_SCOPE` on every tab), fence-only
       (`fence_effective`/`policy_*`/"off"/`set_project_agent_fence`, the
       Settings toggle and the pill toggle are gone), `PtyOptions.host_session`
       + the root console's "Host session — unfenced" group, HOST badge and
@@ -2249,7 +2249,7 @@ unchanged; the new agents are additive.
       (`storeTokenPlaintext` is seeded in the scope home, so no `y`); the swap
       guard covers Codex and Claude only (other files name no account);
       per-installer verification of the install prefixes; a login the host
-      keeps in a keyring cannot be imported (log in once in Eldrun); the
+      keeps in a keyring cannot be imported (log in once in Tabtivity); the
       Claude transcript copy on a scope's first spawn can take seconds for a
       big project; a project container on a **Windows** host no longer gets
       the POSIX hook twin (the home's `settings.json` carries the PowerShell
@@ -2260,7 +2260,7 @@ unchanged; the new agents are additive.
       the decision matrix's Host session case, the sandbox transcript-belongs
       test; `AgentFence.test.ts` (2026-09-25, all green).
     - [ ] 🖐️ Manual test — log in to Cursor in a fenced tab of project A; open a
-      new Cursor tab in project B: no login. Close all tabs, restart Eldrun: still
+      new Cursor tab in project B: no login. Close all tabs, restart Tabtivity: still
       logged in. Type `cursor-agent` in a project shell: it is fenced (cannot
       write outside the project). Open a Host session: `sudo -v` works.
       - [ ] ✅ Works on Linux (X11)
@@ -2272,18 +2272,18 @@ unchanged; the new agents are additive.
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-2336. **One global Eldrun agent config instead of losing it per project
+2336. **One global Tabtivity agent config instead of losing it per project
     (implemented 2026-09-25, never run live).** "instead of loosing it can you
-    make it one global eldrun instead of per project?" (user, 2026-09-25) —
+    make it one global tabtivity instead of per project?" (user, 2026-09-25) —
     after #2335 fenced tabs no longer saw the global CLAUDE.md, the RTK hook
     or the Codex MCP config. Decided with the user: keep the per-scope homes
-    (gap 7) and add an Eldrun-wide layer that no agent can write.
+    (gap 7) and add a Tabtivity-wide layer that no agent can write.
     `services::agent_global`: `<state_dir>/agent-global/` (home-shaped) is
     copied into every home at every spawn and merged into
     `.claude/settings.json`, `.claude.json`, `.codex/config.toml`,
     `.gemini/settings.json` with exact take-back through a per-home manifest;
     Settings → Agent fence → Global agent config imports from `~/.claude`,
-    `~/.codex`, `~/.gemini` (minus logins, state, folder trust, Eldrun's own
+    `~/.codex`, `~/.gemini` (minus logins, state, folder trust, Tabtivity's own
     hooks) and opens the folder. Rationale: `docs/context/agent_authority.md`.
     **Still open:** a hook script named by an absolute `~/.claude/…` path
     works under the Linux fence (the home sits at the user's home path) but
@@ -2384,7 +2384,7 @@ unchanged; the new agents are additive.
       idle Claude composer → no mark. (5) Esc on a permission prompt → marked
       interrupted. (6) Same with Codex (Esc mid-turn), and a Gemini tab (bytes
       only). (7) A popped-out agent tab and a tab in a hidden subwindow show the
-      same mark. (8) With a Claude tab mid-turn, quit Eldrun and start it
+      same mark. (8) With a Claude tab mid-turn, quit Tabtivity and start it
       again → that tab comes back marked interrupted; a tab that had finished
       comes back unmarked.
       - [ ] ✅ Works on Linux (X11)
@@ -2395,3 +2395,220 @@ unchanged; the new agents are additive.
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+- [~] **Agent conversation as a chat on the desktop** (2026-09-30; ✅ code-complete, ❌ never
+  live-verified — `UntestedTag` id `terminal.reader`): the phone's Focus chat
+  (its Reader) as an optional view of a desktop Claude / Codex / OpenCode tab — the prompt
+  strip's **Chat** switch covers the terminal (still running underneath)
+  with the stored conversation (`agent_tab_transcript`, polled while shown)
+  and a composer that sends like the prompt box. Files:
+  `components/terminal/TerminalReaderView.tsx`, `lib/agents/agentReader.ts`,
+  `stores/agents/agentReader.ts`, `lib/agents/readerLive.ts` (live
+  question buttons + working row / Stop), a lesson step in
+  `lib/lessons.ts` (install-agent), `TerminalPromptStrip.tsx`,
+  `TerminalView.tsx`, `subwindows.css`. Not done: opening a subagent's
+  conversation, the phone's read-aloud, held prompts.
+  - [x] 🤖 Automated test — `TerminalReaderView.test.tsx`
+  - [ ] 🖐️ Manual test — (1) In a Claude tab with a few turns, click
+    **Chat** on the prompt row → the chat shows prompts right, formatted
+    answers left, `/model …` as a rule, day chip and times. (2) Type a prompt,
+    Enter → it shows as Sending…, the agent answers, both appear as bubbles
+    without the list jumping. (3) Send again while the agent works → queued
+    by the CLI, recorded once it takes it. (4) Esc in the box → terminal back
+    with keyboard focus; **Chat** again → chat back. (5) Open a new Claude
+    tab → it opens as a chat; a Codex tab still opens on its terminal.
+    (6) Show earlier turns on a long session keeps the view in place.
+    (7) A Gemini tab shows no Chat switch. (7a) Ask Claude for a file
+    edit without auto-accept → the permission prompt shows under the chat
+    with the file and Yes / Yes-allow-all / No buttons; clicking one answers
+    it and the buttons go. (7b) While it works → the working row with its
+    timer; Stop interrupts the turn. (7c) Same with Codex's approval prompt. (8) `/clear` in the terminal →
+    the Undo-clear card shows over the chat, and the chat follows the
+    new conversation.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **Subagents in the chat: list only, and their own working row** (2026-10-01;
+  ✅ code-complete, automated tests passing — `TerminalReaderView.test.tsx`,
+  `MobileTerminalSubagents.test.tsx`, `agent_transcript` test; ❌ never
+  live-verified — pills `terminal.reader.subagentWorking`,
+  `mobile.subagent.working`). The desktop chat no longer draws the session's
+  subagents as cards (the **Subagents (n)** list above it names them, with
+  dots on the ones still at work); a subagent's own chat keeps its cards for
+  nested ones. An open subagent still at work shows its own working row
+  naming its model (`Haiku is working…`) on the desktop and the phone. The
+  backend marks an `agent` entry `running` while Claude's spawn call has no
+  result, and each read carries the `model` its records name. Limits: Claude
+  only (Codex/OpenCode subagents never show running); a background agent
+  (`run_in_background`) returns at once, so it reads as finished.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — backend changed: `npm run backend:stale`, and the
+    phone needs `npm run mobile:bundle` + a rebuilt binary. In a Claude tab
+    on Chat, ask for two parallel Explore agents with a Haiku model. (1) No
+    subagent cards in the chat; **Subagents (2)** list has working dots on
+    both while they run. (2) Open one → `Haiku is working…` (not Opus)
+    under its conversation, with Stop; gone once it reports back. (3) Same
+    on the phone's Reader.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **Token stats in the usage recap** (2026-10-01; ✅ code-complete,
+  automated tests passing — `token_stats` cargo tests, `TokenStats.test.ts`;
+  ❌ never live-verified — pill `stats.sectionTokens`). Plan:
+  `docs/token_stats_plan.md`. The recap's **Tokens** section (under Agents)
+  shows per CLI fresh in · cache write · cache read · output and the output
+  share for the Day/Week/Month window, with a Per model toggle. Derived from
+  Claude transcripts and Codex rollouts in the agent homes
+  (`services::token_stats`, cache `token_stats.json`); other CLIs say "not
+  reported". The first scan of a big history is budgeted, so the recap shows
+  "still counting…" and asks again up to five times.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — Token stats in the recap match `/usage` / `/status`.
+    Backend changed: `npm run backend:stale`, then rebuild/restart the window.
+    In a fresh Claude tab do a turn or two, then click the header clock (the
+    usage recap) → Day: the Claude row's Per model numbers match what `/usage` (Claude)
+    reports for that session; same for a Codex tab against `/status`. A
+    Gemini/OpenCode tab used today shows "Not reported: …", never 0.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **Token stats for more CLIs** (2026-10-01; follow-up to the item above).
+  `services::token_stats` reads only Claude and Codex; add a source per CLI
+  (and its name to `SOURCES`) as their records allow, with fixtures:
+  - [ ] OpenCode — per-message `tokens` in its storage.
+  - [ ] Gemini CLI — `chats/session-*.json` `tokens`.
+  - [ ] Copilot, Antigravity (`agy`) and others — check what their session
+    records carry before promising a split.
+
+- [ ] **Nested `claude --resume` guard for the Windows hook** (2026-10-03;
+  follow-up to 9d949ec2). The POSIX hook refuses a foreign `clear`/`resume`
+  start sent by a `claude` with another `claude` above it among the tab's
+  processes (`/proc` environ walk, any `*_TAB_UID`); the PowerShell twin in
+  `services::agent_session::hook_script_body` takes it, so a `claude -p
+  --resume` run from a Windows tab's Bash tool moves the tab's record (Reader
+  chat + Changes panel show that run) until the tab's next Stop heals it.
+  Windows can't read another process's environment, so the bound has to be
+  the process tree instead: one `Get-CimInstance Win32_Process` snapshot
+  (Windows PowerShell 5.1 runs the hook — no `Get-Process .Parent`), walk
+  `ParentProcessId` from `$PID`, count `claude.exe` ancestors, stop at the
+  app's own executable (name baked into the script when it is written), refuse
+  at two. Only on a foreign `clear`/`resume`, so the CIM cost stays off the
+  common path. A wrong guard refuses the tab's own `/clear` — worse than the
+  self-healing gap — so build it only with a Windows box to test on.
+  - [ ] 🤖 Automated test — the walk over a canned process table.
+  - [ ] 🖐️ Manual test — In a Windows Claude tab, ask the agent to run
+    `claude -p "hi" --resume <another session id>` from its Bash tool: the
+    Reader keeps showing the tab's own conversation. Then type `/clear` in the
+    tab: the Reader follows the new conversation and "Undo clear" is offered.
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+
+- [~] **API keys for agent CLIs** (2026-10-04; ✅ code-complete, automated
+  tests passing — `agent_api_keys` / `api_proxy` / `tmux_local` /
+  `launch_prep` cargo tests, `AgentApiKeys.test.tsx`, `MobileLaunchOptions`,
+  `MobileSignInTab`; Claude 2.1.288 checked against the proxy and a stub
+  provider (`api_proxy::tests::claude_cli_talks_to_the_proxy`, ignored); ❌
+  never live-verified — pills `settings.agentApiKeys`,
+  `settings.agentApiKeys.claude`, `.gemini`, `.limit`, `mobile.signIn.apiKey`,
+  `mobile.signIn.apiBudgetReached`; C3's spending limit: `api_prices` /
+  `api_meter` / `api_usage` cargo tests, budget cases in
+  `AgentApiKeys.test.tsx` and the phone tests). Plan:
+  `docs/api_chat_plan.md` Parts A and C. Settings → Agent sandbox → API keys
+  keeps one key per provider (Anthropic, Gemini) in the OS keyring; a keyed
+  tab of a CLI switched on there gets a per-tab token for Tabtivity's loopback
+  API proxy (`services::api_proxy`), never the key. Mistral Vibe and OpenCode
+  were dropped in C2 (no env variable points them at the proxy). Backend
+  changed: run `npm run backend:stale` and use a rebuilt binary; the phone also
+  needs `npm run mobile:bundle`.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — a fenced Claude tab runs on the key through the
+    proxy. Save an Anthropic key (a spend-limited one), switch on Claude, open
+    a NEW local Claude tab: no "Detected a custom API key" question; `/status`
+    shows `Anthropic base URL: http://127.0.0.1:<port>/anthropic` and the
+    `ANTHROPIC_AUTH_TOKEN` credential, no Remote Control failure notice; a
+    prompt is answered and streams in as it is written. In the tab (`!`):
+    `env | grep -c <first 12 chars of the key>` is 0 and `env | grep -c
+    AGENT_SECRET` is 0. `ps -eo args | grep -c <first 12 chars of the key>`
+    finds only the grep, and `<state_dir>/tmux-launch/` holds neither key nor
+    token. `tmux show-options -g update-environment` lists the two
+    `<APP>_AGENT_SECRET_*` carriers at 8636–8637. Close the tab, then `curl -s
+    -o /dev/null -w '%{http_code}' -H "Authorization: Bearer <the old token>"
+    -X POST http://127.0.0.1:<port>/anthropic/v1/messages` answers 401.
+    Switch projects away and back (tmux tab re-attached): the agent still
+    answers. Remove the key: the open tab's next prompt says Tabtivity has no
+    key saved. Repeat in a root-console Host session; typing `claude` into a
+    shell tab gets no key (its own login). Switch Claude off → a new tab is
+    back on the subscription. Restart: the key is still saved. Lock the
+    keyring: Save refuses with the locked message, the rows say "keyring
+    locked", Unlock works.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Gemini on a key: save a Gemini key, switch on
+    Gemini, open a new Gemini tab, pick "Use Gemini API key" in `/auth`: it
+    answers without a Google login, through the proxy (`!env | grep
+    GOOGLE_GEMINI_BASE_URL` shows `http://127.0.0.1:<port>/gemini`; the
+    key's first chars are in no `env`).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — the monthly spending limit (C3). Remove the
+    Anthropic key, then paste it again: the limit field shows 20 and Save is
+    greyed out while it is empty or 0; save with 1. Ask a keyed Claude tab a
+    short question: within seconds of the answer the row reads "$0.0x of $1.00
+    spent this month" (reopen Manage CLIs to refresh) and, ~5 s later,
+    `<state_dir>/agent-api-usage.json` holds the month, the spend and the
+    model's tokens (no key, no token). Compare with the provider console's
+    usage for that request — the same order of magnitude (the table is an
+    estimate). Set the limit to 0.01 (Set limit): the next prompt is refused
+    at once with "… monthly API budget for Anthropic reached — raise it in
+    Manage CLIs …", without retries; the row says "budget reached … until
+    <next month's 1st>" and the shared-logins row "API budget reached" (on the
+    phone: ＋ → Sign in to an agent shows "API budget reached"). Start a long
+    answer, lower the limit below the spend while it streams: it finishes,
+    the next one is refused. Raise the limit: the next prompt works with no
+    restart. `/context` or a token count still works at the limit. Quit and
+    restart: the spend is still there. Write garbage into
+    `agent-api-usage.json` with Tabtivity closed, start it: the API keys
+    section says the record could not be read and restarted, and
+    `agent-api-usage.corrupt.json` holds the garbage. Repeat the limit part
+    with Gemini (its error reads RESOURCE_EXHAUSTED with the budget text).
+    Cancel a long answer with Esc after ~10 s: the row still grows (an
+    estimate by time — a cancelled turn costs a little more here than on the
+    provider's bill, never nothing).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

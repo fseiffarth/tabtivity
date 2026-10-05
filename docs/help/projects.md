@@ -4,7 +4,7 @@ title: Projects
 keywords: [project, create, new, import, folder, clone, github, gitlab, fork, scaffold, pill, workspace, publish]
 ---
 
-A project is a folder Eldrun manages as one workspace: its own pill in the
+A project is a folder Tabtivity manages as one workspace: its own pill in the
 header, its own tabs and layout, its own file tree and git view. Switching
 pills swaps all of that at once.
 
@@ -18,7 +18,7 @@ pills swaps all of that at once.
    or push to GitHub/GitLab as private or public.
 5. Optional: **Where this project runs** — on this machine (default), inside a
    Docker container, or inside a virtual machine. See `containers-boxes`.
-6. Click **Create**. Eldrun creates `~/eldrun/projects/<name>/` (the Location
+6. Click **Create**. Tabtivity creates `~/tabtivity/projects/<name>/` (the Location
    picker changes it), writes starter files, initializes git and makes a
    first commit. Tick "Skip scaffolding" to start empty.
 
@@ -34,9 +34,9 @@ overwritten.
    repository to fork into your account and then clone. Forking uses the
    provider's CLI (`gh` or `glab`) and its login.
 3. For a folder, **Import mode**: keep it where it is, or copy/move it into
-   Eldrun's projects folder. Eldrun does not modify the folder's contents; it
+   Tabtivity's projects folder. Tabtivity does not modify the folder's contents; it
    only adds missing starter files.
-4. Check **Where this project runs**. For imported code Eldrun recommends the
+4. Check **Where this project runs**. For imported code Tabtivity recommends the
    strictest tier this machine supports — a virtual machine for a cloned
    repository when the VM prerequisites are present, otherwise a Docker
    container when Docker is available, otherwise this machine — so build
@@ -70,7 +70,7 @@ guided SLURM wizard. See `remote-projects`.
 - **In the project folder**: `project.json` (name, tasks, file-hiding rules)
   and the starter files. Everything inside a project folder is treated as
   untrusted: tab state and apps are never read from it.
-- **In Eldrun's state directory**: the project index (`projects.json`) and the
+- **In Tabtivity's state directory**: the project index (`projects.json`) and the
   tab layout (`sessions/<id>/terminals.json`).
 - **Tabs after a restart**: shell and file tabs come back. Agent tabs come back
   when their CLI can resume (see `agent-clis`).
@@ -79,7 +79,7 @@ guided SLURM wizard. See `remote-projects`.
 
 1. Right-click the pill → **Publish to GitHub / GitLab…**.
 2. Choose the provider and public or private.
-3. Eldrun runs `gh` or `glab` to create the repository and push. The chosen
+3. Tabtivity runs `gh` or `glab` to create the repository and push. The chosen
    CLI must be installed and signed in, or a token must be saved under
    Settings → Git Hosting.
 

@@ -1,4 +1,4 @@
-# Safe for everyone plan — Eldrun for people who aren't security experts
+# Safe for everyone plan — Tabtivity for people who aren't security experts
 
 Plan for TODO Group O #2321–#2333 (`todo/group-o-security.md`, section
 "Safe for everyone"). Written 2026-09-24 from `docs/threat_model.md` as re-checked
@@ -6,7 +6,7 @@ against HEAD `d73da93e`. Verify each fact against code before acting on it.
 
 ## Who this is for
 
-Today Eldrun is safe for its author. It is not yet safe to hand to:
+Today Tabtivity is safe for its author. It is not yet safe to hand to:
 
 - **a typical software engineer**, who uses agents in auto-approve mode, clones
   random repos and never reads a trust prompt twice, or
@@ -18,7 +18,7 @@ Today Eldrun is safe for its author. It is not yet safe to hand to:
 
 **The threat model marks about 15 rows "⚠️ yours". Each is a decision it
 leaves to an expert.** A non-expert can't make those calls. Each "yours" row
-must become a safe default, something Eldrun handles itself, or a warning the
+must become a safe default, something Tabtivity handles itself, or a warning the
 user can't miss. Behind that sits a second problem: almost every defence is
 "fixed, not live-verified". Telling non-experts it is safe needs proof, not a
 code read.
@@ -52,7 +52,7 @@ Three rules follow:
   open the Updates panel (`UpdatesPanel.tsx` `runCheck` on mount). The signing
   key is a GitHub secret, so a compromised CI run can still sign.
 - **Engine:** WebKitGTK and GStreamer come from the system. Their security
-  depends on the user updating them; Eldrun never checks.
+  depends on the user updating them; Tabtivity never checks.
 - **Prompts:** `exec_trust` asks once per project program (latexmkrc, prettier,
   git hooks). The question is correct, but a non-expert says yes.
 - **No `SECURITY.md`** and no stated disclosure path.
@@ -113,7 +113,7 @@ Three rules follow:
   listed in the Safety panel and can be revoked.
 - **#2326 Unfenced-and-bypass badge.** When an unfenced tab's CLI reports a
   bypass/auto-approve mode (the hook already records the mode), show a red
-  badge on the tab. **Display only:** AGENTS.md forbids Eldrun choosing or
+  badge on the tab. **Display only:** AGENTS.md forbids Tabtivity choosing or
   changing the mode, and this plan keeps that.
 - **#2327 Windows containment.** Pick one (**your call**):
   (a) in Standard, agents run in the project container (Docker Desktop/WSL2)
@@ -121,7 +121,7 @@ Three rules follow:
   (b) Windows stays unfenced and Standard asks the user to accept "agents on
   this computer run with your full rights" once.
   (a) is the honest one; (b) ships sooner.
-- **#2328 Planted `commondir` warning.** Eldrun's own git ignores it (#862), but
+- **#2328 Planted `commondir` warning.** Tabtivity's own git ignores it (#862), but
   the user's own terminal git follows it. Detect a `commondir` inside a main
   `.git` and offer to remove it.
 
@@ -168,13 +168,13 @@ Three rules follow:
    stable to audit.
 
 **Realistic outcome:** after steps 1–4, a typical engineer is well covered.
-Recommending Eldrun to a teacher needs Standard as the default, #2327 settled
+Recommending Tabtivity to a teacher needs Standard as the default, #2327 settled
 on Windows, and #2333's outside audit done. macOS can't be compiled locally
 (see the OS-support notes), so "safe on macOS" waits on CI plus a real Mac.
 
 ## Non-goals (kept invariants)
 
-- Eldrun does not pick or change an agent's permission mode (#2326 only shows
+- Tabtivity does not pick or change an agent's permission mode (#2326 only shows
   it).
 - Updates are never installed on their own.
 - Out of scope stays out of scope: malware already running as your user, a

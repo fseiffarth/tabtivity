@@ -7,6 +7,7 @@ const rendered = vi.hoisted(() => ({ html: "" }));
 vi.mock("../../lib/viewers/markdown", () => ({ renderMarkdown: () => rendered.html }));
 
 import { answerHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { BRAND } from "../../lib/brand";
 
 function dom(html: string): HTMLElement {
   rendered.html = html;
@@ -15,7 +16,7 @@ function dom(html: string): HTMLElement {
   return host;
 }
 
-describe("Eldrun Mobile Focus answer allowlist", () => {
+describe(`${BRAND.display} Mobile Focus answer allowlist`, () => {
   it("drops script, handlers, frames, forms and styles sheets, keeping text", () => {
     const host = dom([
       '<p onclick="alert(1)">hi<script>alert(2)</script></p>',
@@ -30,6 +31,21 @@ describe("Eldrun Mobile Focus answer allowlist", () => {
     expect(host.querySelector("[onclick], [onbegin], [onerror], [href], [src], [action]")).toBeNull();
     expect(host.querySelector("p")?.textContent).toBe("hi");
     expect(host.textContent).toContain("link");
+    expect(host.querySelector("[data-href]")).toBeNull();
+  });
+
+  it("lets a link carry only a plain web address, and nothing else carry one", () => {
+    const host = dom([
+      '<a href="https://ok.example/a?b=1&amp;c=2">ok</a>',
+      '<a href="data:text/html,x">data</a>',
+      '<a href="file:///etc/passwd">file</a>',
+      '<a href="https://bank.example@evil.example/">creds</a>',
+      '<a href="/relative">rel</a>',
+      '<span class="md-link" data-href="javascript:alert(1)">forged</span>',
+      '<p data-href="https://evil.example">para</p>',
+    ].join(""));
+    expect([...host.querySelectorAll("[data-href]")].map((node) => node.getAttribute("data-href")))
+      .toEqual(["https://ok.example/a?b=1&c=2"]);
   });
 
   it("keeps only the renderer's own classes and a cell's alignment", () => {

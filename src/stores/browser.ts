@@ -55,7 +55,7 @@ import type {
  * refusal, and `allowed: true` *with* a `reason` means "reachable, but this is a
  * loopback / private / link-local / internal-name address and you should be told
  * before it is opened". Treating that second case as a plain allow is how a page
- * on your own machine — or, through a VPN tunnel Eldrun is holding, on a network
+ * on your own machine — or, through a VPN tunnel Tabtivity is holding, on a network
  * your real browser cannot see — gets fetched with nobody deciding to.
  *
  * So it is parked here and rendered as a question with a real button. The

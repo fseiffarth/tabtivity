@@ -1,20 +1,20 @@
-//! The shell-tab agent shim: `eldrun --agent-shim <cli> [args…]`.
+//! The shell-tab agent shim: `tabtivity --agent-shim <cli> [args…]`.
 //!
 //! Shell tabs are the user's terminals and are never fenced, so typing
 //! `cursor-agent` into one used to run it against the user's real home. Every
 //! shell tab now has one shim per registry CLI at the front of its PATH
 //! (`services::agent_bin`), a tiny script that execs this entry point. It
 //! builds the same fence a tab of the tab's scope would get — the scope's
-//! Eldrun-owned home, the shared logins, the project roots — and runs it as
+//! Tabtivity-owned home, the shared logins, the project roots — and runs it as
 //! its child on the same terminal, draining the terminal's input queue once
 //! it has exited and before the shell reads again ([`run`]). There is no
-//! bypass flag: it launches the CLI Eldrun would launch, fenced, or refuses.
+//! bypass flag: it launches the CLI Tabtivity would launch, fenced, or refuses.
 //! Running the binary by absolute path stays the user's own shell, real
-//! home, no Eldrun logins.
+//! home, no Tabtivity logins.
 //!
-//! The scope comes from `ELDRUN_SCOPE`, which every tab Eldrun spawns carries
-//! (`commands::terminal::pty_spawn`); outside an Eldrun tab the shim refuses.
-//! Inside a fence (`ELDRUN_AGENT_FENCE`) the script never reaches here — it
+//! The scope comes from `TABTIVITY_SCOPE`, which every tab Tabtivity spawns carries
+//! (`commands::terminal::pty_spawn`); outside a Tabtivity tab the shim refuses.
+//! Inside a fence (`TABTIVITY_AGENT_FENCE`) the script never reaches here — it
 //! execs the real CLI from the rest of PATH instead.
 
 use std::collections::HashMap;
@@ -26,14 +26,14 @@ pub fn plan(cli: &str, env: &HashMap<String, String>) -> Result<(Option<String>,
     if cli.is_empty() || cli.contains('/') || cli.contains('\\') {
         return Err("agent shim: a registry CLI name, not a path".into());
     }
-    if env.contains_key("ELDRUN_AGENT_FENCE") {
+    if env.contains_key(crate::app_env!("AGENT_FENCE")) {
         return Err("agent shim: already inside the agent sandbox".into());
     }
     let scope = env
-        .get("ELDRUN_SCOPE")
+        .get(crate::app_env!("SCOPE"))
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            "agent shim: not an Eldrun tab (no ELDRUN_SCOPE); open the CLI from an Eldrun tab".to_string()
+            concat!("agent shim: not a ", crate::app_name!(), " tab (no ", crate::app_upper!(), "_SCOPE); open the CLI from a ", crate::app_name!(), " tab").to_string()
         })?;
     let project_id = (scope != crate::storage::ROOT_SCOPE).then(|| scope.clone());
     let cwd = std::env::current_dir().map_err(|e| format!("agent shim: cwd: {e}"))?;
@@ -75,6 +75,7 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         tmux_session: None,
         tmux_attach: None,
         host_bound_uid: None,
+        local_model: false,
         schedule_target_id: None,
         host_session: false,
     };
@@ -118,7 +119,7 @@ fn drain_terminal_input() {
     }
 }
 
-/// The entry point behind `eldrun --agent-shim`. Runs the fenced CLI as a
+/// The entry point behind `tabtivity --agent-shim`. Runs the fenced CLI as a
 /// child, on the same terminal, and waits for it — rather than `exec`ing
 /// into it — so the terminal can be drained between the fenced process and
 /// the shell that continues on it. Every failure is printed and becomes the
@@ -164,7 +165,7 @@ pub fn run(cli: &str, args: &[String]) -> i32 {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (cli, args);
-        eprintln!("agent shim: no agent sandbox on this platform; open the CLI from an Eldrun agent tab");
+        eprintln!(concat!("agent shim: no agent sandbox on this platform; open the CLI from a ", crate::app_name!(), " agent tab"));
         1
     }
 }
@@ -177,13 +178,13 @@ mod tests {
     fn the_shim_refuses_outside_a_tab_inside_a_fence_and_for_paths() {
         let mut env = HashMap::new();
         assert!(plan("claude", &env).is_err());
-        env.insert("ELDRUN_SCOPE".into(), "root".into());
+        env.insert(crate::app_env!("SCOPE").into(), "root".into());
         let (project, _) = plan("claude", &env).unwrap();
         assert_eq!(project, None);
-        env.insert("ELDRUN_SCOPE".into(), "p1".into());
+        env.insert(crate::app_env!("SCOPE").into(), "p1".into());
         assert_eq!(plan("claude", &env).unwrap().0.as_deref(), Some("p1"));
         assert!(plan("/usr/bin/claude", &env).is_err());
-        env.insert("ELDRUN_AGENT_FENCE".into(), "1".into());
+        env.insert(crate::app_env!("AGENT_FENCE").into(), "1".into());
         assert!(plan("claude", &env).is_err());
     }
 }

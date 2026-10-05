@@ -6,7 +6,7 @@ import { useT } from "../../lib/i18n";
 /**
  * "Sign in in a terminal" — the **non-headless login, switched on per connect**.
  *
- * Headless mode is the default and normally the better one: Eldrun feeds the secret
+ * Headless mode is the default and normally the better one: Tabtivity feeds the secret
  * to the backend and the dialog stays a dialog. But it can only ask what it has
  * fields for — an SSH password, an OpenVPN password and key passphrase — and a host
  * or a tunnel is free to ask something else: a keyboard-interactive challenge, a
@@ -18,12 +18,12 @@ import { useT } from "../../lib/i18n";
  * the ordinary path is untouched, and the escape hatch is one click away instead of
  * being a settings trip. Flipping it on swaps the password fields for the same
  * embedded login terminal `connections_headless: false` uses, where the server asks
- * its own questions and the user answers them directly (Eldrun still never sees the
+ * its own questions and the user answers them directly (Tabtivity still never sees the
  * secret). It is per connect: the global setting is never written, because a mode is
- * the user's statement about how Eldrun should behave, not something one host's
+ * the user's statement about how Tabtivity should behave, not something one host's
  * handshake gets to decide for them.
  *
- * Not offered on **Windows**, where it would be a promise Eldrun can't keep: there is
+ * Not offered on **Windows**, where it would be a promise Tabtivity can't keep: there is
  * no ssh ControlMaster socket to ride, so a terminal login authenticates a session
  * nothing else can reuse (the same reason `winManual` exists).
  *

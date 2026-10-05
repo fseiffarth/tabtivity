@@ -7,7 +7,7 @@ rationale that isn't discoverable from the code.
 ## A VM project IS a remote project
 
 The one architectural decision everything follows from: the VM boots, exposes
-SSH on a forwarded loopback port, and from that moment Eldrun sees an ordinary
+SSH on a forwarded loopback port, and from that moment Tabtivity sees an ordinary
 `RemoteSpec { host: "127.0.0.1", port, key_auth: true, vm: true }`. The pooled
 ControlMaster/SFTP session, `ssh -tt` tabs, tmux survival, agent resume, the
 lamps and dialogs — all apply verbatim, already tested. `services::vm` owns
@@ -43,7 +43,7 @@ frontend from building a local spawn (overriding even a stored
 `location: "local"`, which lives in agent-writable layout state), and
 `commands::terminal::vm_spawn_refusal` refuses at the backend against the
 state-dir record an in-VM agent cannot write. A down VM refuses with the
-`ELDRUN_VM_DOWN` sentinel rather than downgrading to a host shell.
+`TABTIVITY_VM_DOWN` sentinel rather than downgrading to a host shell.
 
 ## Egress is a knob because pretending otherwise is theater
 
@@ -123,5 +123,5 @@ not hidden backend downloads: the fetch is checksum-verified against the
 release's own SHA256SUMS, and the bake boots the stock image once with
 `-serial stdio` so cloud-init's own console output *is* the build progress,
 powers off via `power_state`, and converts the overlay into
-`eldrun-base-<ver>.qcow2`. A VM boots from the stock image when no baked one
+`tabtivity-base-<ver>.qcow2`. A VM boots from the stock image when no baked one
 exists — the bake only adds the agent toolchain.

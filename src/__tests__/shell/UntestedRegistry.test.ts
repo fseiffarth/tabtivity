@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error node:child_process has no type declarations in this project (no @types/node)
 import { spawnSync } from "node:child_process";
-import { UNTESTED, isUntested, untestedEntries, type UntestedEntry } from "../../lib/untested";
+import { UNTESTED, isUntested, setUntestedTagsVisible, untestedEntries, type UntestedEntry } from "../../lib/untested";
 
 describe("the untested register", () => {
   it("matches the pills in the source", () => {
@@ -39,5 +39,15 @@ describe("the untested register", () => {
   it("keeps an unknown id visible rather than silently clearing it", () => {
     expect(isUntested("nothing.claims.this.id")).toBe(true);
     expect(Object.keys(UNTESTED).length).toBeGreaterThan(100);
+  });
+
+  it("hides every registered and unknown tag when visibility is off", () => {
+    try {
+      setUntestedTagsVisible(false);
+      expect(isUntested("nothing.claims.this.id")).toBe(false);
+      expect(isUntested(untestedEntries()[0].id)).toBe(false);
+    } finally {
+      setUntestedTagsVisible(true);
+    }
   });
 });

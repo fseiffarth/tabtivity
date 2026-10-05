@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { parseAddressInput, routeUri, type RouteContext } from "../../lib/linkTarget";
+import { BRAND } from "../../lib/brand";
 
 const ctx = (over: Partial<RouteContext> = {}): RouteContext => ({
   setting: "external",
@@ -35,7 +36,7 @@ describe("routeUri — schemes", () => {
       "ms-msdt:/id",
       "search-ms:query=x",
       "intent://x#Intent;end",
-      "eldrun-nonsense://x",
+      `${BRAND.slug}-nonsense://x`,
       "view-source:https://example.com/",
     ]) {
       expect(routeUri(uri, ctx()).kind, uri).toBe("refuse");
@@ -75,17 +76,17 @@ describe("routeUri — schemes", () => {
 });
 
 describe("routeUri — the decision order", () => {
-  it("always sends Eldrun's own URLs to the external browser", () => {
+  it(`always sends ${BRAND.display}'s own URLs to the external browser`, () => {
     // An auth flow routed into a fresh, ephemeral profile just means logging in
     // again in the wrong place. This wins over the setting AND over a gesture.
     for (const setting of ["in_app", "ask", "external"] as const) {
-      expect(routeUri("https://example.com/oauth", ctx({ origin: "eldrun", setting }))).toEqual({
+      expect(routeUri("https://example.com/oauth", ctx({ origin: "app", setting }))).toEqual({
         kind: "external",
         url: "https://example.com/oauth",
       });
     }
     expect(
-      routeUri("https://example.com/oauth", { ...ctx({ origin: "eldrun" }), explicit: "in_app" }),
+      routeUri("https://example.com/oauth", { ...ctx({ origin: "app" }), explicit: "in_app" }),
     ).toMatchObject({ kind: "external" });
   });
 

@@ -15,7 +15,7 @@ A remote project has two real working trees:
 
 | Side | Where | Who writes it |
 |---|---|---|
-| **Mirror** (local) | `~/eldrun/projects-ssh/<name>/` by default; `extra["mirror"]` in `projects.json` overrides it; legacy fallback `<state_dir>/remote-projects/<id>/mirror/` | local agent tabs, local shells, your editor, and both transports below |
+| **Mirror** (local) | `~/tabtivity/projects-ssh/<name>/` by default; `extra["mirror"]` in `projects.json` overrides it; legacy fallback `<state_dir>/remote-projects/<id>/mirror/` | local agent tabs, local shells, your editor, and both transports below |
 | **Host** (remote) | `host:remote_path` from the project's `RemoteSpec` | remote tabs (`ssh -tt`), anything else on the host, and both transports |
 
 Two independent engines keep them in step. They **split the tree by git**:
@@ -114,11 +114,11 @@ gets the *Large folders* census once at setup for the same reason.
 ### 2.4 The background pass (`sync_auto::reconcile_pass`)
 
 Runs every 25 s and ~1.5 s after a write inside the mirror (writes under
-`.git/` and `.eldrun/` do not count — those are lockstep's and the runtime's).
+`.git/` and `.tabtivity/` do not count — those are lockstep's and the runtime's).
 Per pass:
 
 1. Candidates = auto-marked files ∪ host walk of each auto folder ∪ mirror walk
-   of each auto folder. Symlinks, nested repositories, `.git`, `.eldrun` are
+   of each auto folder. Symlinks, nested repositories, `.git`, `.tabtivity` are
    never walked.
 2. Drop anything whose effective auto is off, then drop the git-tracked set if
    lockstep is on.
@@ -214,7 +214,7 @@ Every pass is one of: the 12 s poll, a `.git` write on the mirror, *Sync now* /
    (refs + HEAD + dirty bit) changed. `Sync now` bypasses it.
 4. **Transfer mirror → host, then host → mirror.** Each leg: thin bundle of the
    source's branches and tags, minus the shas the dest already has and the
-   source knows; SFTP it across; `git fetch` it into `refs/eldrun/incoming/*`;
+   source knows; SFTP it across; `git fetch` it into `refs/tabtivity/incoming/*`;
    classify each branch (`decide`) and apply:
 
 | Classification | Applied as |
@@ -224,7 +224,7 @@ Every pass is one of: the 12 s poll, a `.git` write on the mirror, *Sync now* /
 | dest can fast-forward, branch checked out there | `git merge --ff-only` (refuses on a dirty tree or an untracked collision) |
 | dest can fast-forward, branch not checked out | `update-ref` with old-value guard |
 | dest is ahead | nothing (the other leg carries it) |
-| diverged | reported; the peer's tip is parked at `refs/eldrun/peer/<branch>` so you can merge by hand |
+| diverged | reported; the peer's tip is parked at `refs/tabtivity/peer/<branch>` so you can merge by hand |
 
    A branch checked out in a **linked worktree** on the dest is left alone and
    reported, but only when the pass would actually have written it.
@@ -269,12 +269,12 @@ When both sides committed on the same branch:
 - **Use local** / **Use remote** (`git_peer_resolve`): the chosen side wins;
   every diverged branch, and every branch where the loser is ahead, is reset
   to the winner's commit after the overwritten tip is saved to
-  `refs/eldrun/backup/<ts>/<branch>`. A checked-out loser branch is
+  `refs/tabtivity/backup/<ts>/<branch>`. A checked-out loser branch is
   `reset --hard` (the mirror side logs what that deleted). The reset is refused
   if an **untracked** file on the loser differs from the incoming tree — those
   were never git objects and no backup could cover them.
 - **Resolve in terminal**: opens a shell in the mirror; the host's tip is at
-  `refs/eldrun/peer/<branch>`, so `git merge refs/eldrun/peer/main` or a rebase
+  `refs/tabtivity/peer/<branch>`, so `git merge refs/tabtivity/peer/main` or a rebase
   works as usual, and the next pass fast-forwards the host.
 - **Backups**: lists both sides' safety refs and restores one; a restore backs
   up the current tip first and deliberately leaves the sides diverged for you
@@ -287,7 +287,7 @@ Each pass writes inside the mirror's `.git` (bundle, incoming refs, fetched
 objects), which is the same directory the watcher observes. A burst that leaves
 the mirror's ref signature exactly as the previous pass left it is treated as
 the pass's own tail and skipped; the 12 s poll still covers anything real that
-arrives in that window. Byte-sync's watcher ignores `.git` and `.eldrun`
+arrives in that window. Byte-sync's watcher ignores `.git` and `.tabtivity`
 altogether.
 
 ## 4. Workers (multi-host)
@@ -309,10 +309,10 @@ into the mirror.
 | `<state_dir>/remote-projects/<id>/git_peer.json` | lockstep state (enabled, status, last observed heads, early-out signatures) |
 | `<state_dir>/remote-projects/<id>/local_loss.json` | what lockstep/sync destroyed on the mirror, until acknowledged |
 | `<state_dir>/remote-projects/<id>/workers/<host>.json` | each worker's last pushed head |
-| `<mirror>/.git/eldrun-lockstep.bundle`, `<host>/.git/eldrun-lockstep.bundle` | transient bundle files, removed after each pass |
-| `refs/eldrun/incoming/*` | transient fetch namespace on the receiving side |
-| `refs/eldrun/peer/<branch>` | the other side's tip while a branch is diverged |
-| `refs/eldrun/backup/<ts>/<branch>` | tips overwritten by a resolve, pairing or restore |
+| `<mirror>/.git/tabtivity-lockstep.bundle`, `<host>/.git/tabtivity-lockstep.bundle` | transient bundle files, removed after each pass |
+| `refs/tabtivity/incoming/*` | transient fetch namespace on the receiving side |
+| `refs/tabtivity/peer/<branch>` | the other side's tip while a branch is diverged |
+| `refs/tabtivity/backup/<ts>/<branch>` | tips overwritten by a resolve, pairing or restore |
 
 ## 6. Symptom → cause → fix
 
@@ -339,7 +339,7 @@ proven live: `src-tauri/examples/lockstep_drv.rs` drives the same service
 entry points the commands call against a real host —
 
 ```bash
-ELDRUN_PROJECT=<project-id> cargo run --example lockstep_drv -- <script>
+TABTIVITY_PROJECT=<project-id> cargo run --example lockstep_drv -- <script>
 ```
 
 — and `docs/git_lockstep_case_matrix.md` is the case list it walks. Point it at

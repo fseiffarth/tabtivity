@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { storageKey } from "../../lib/brand";
 
 /**
  * The TeX editor's two chrome switches — the beamer overlay bar (#tex-beamer)
@@ -28,7 +29,7 @@ export interface TexViewPref {
 }
 
 /** Where the per-project choices are remembered across relaunches. */
-const STORAGE_KEY = "eldrun.texViewByProject";
+const STORAGE_KEY = storageKey("texViewByProject");
 
 /** Bound on the persisted map — a project the user never opens again must not
  *  keep a row forever. Oldest insertions are dropped first. */

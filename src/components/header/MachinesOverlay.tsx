@@ -5,6 +5,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { MachinesGlyph } from "./HeaderGlyphs";
+import { storageKey } from "../../lib/brand";
 
 /**
  * The **Machines overlay**'s chrome — what a click on the header's Machines
@@ -26,7 +27,7 @@ export function MachinesOverlayFrame({ children }: { children: ReactNode }) {
   const t = useT();
   const close = () => useMachinesOverlayStore.getState().close();
   const { frameRef, frameStyle, frameClass, barProps, grips, fillButton } =
-    useFloatingFrame("eldrun.machinesOverlayFrame");
+    useFloatingFrame(storageKey("machinesOverlayFrame"));
   // The move hint on the mark alone, as the Models overlay places it.
   const { title: moveHint, ...barRest } = barProps;
 

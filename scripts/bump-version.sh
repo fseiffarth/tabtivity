@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Bump the Eldrun version across the four files that must stay in lockstep:
+# Bump the app's version across the four files that must stay in lockstep:
 #   - package.json
 #   - src-tauri/Cargo.toml   (the [package] version)
 #   - src-tauri/tauri.conf.json
@@ -60,15 +60,21 @@ awk -v v="$new" '
   { print }
 ' "$cargo" >"$tmp" && mv "$tmp" "$cargo"
 
-# Cargo.lock — only the `eldrun` [[package]] block's version line. Matched on the
+# Cargo.lock — only the app's own [[package]] block's version line (the block
+# named like Cargo.toml's [package]). Matched on the
 # block's own `name`, never on the version string: a dependency that happens to
 # sit at the same version must not be rewritten along with us. Absent lockfile is
 # not an error (it is generated), so a fresh clone can still bump.
 if [ -f "$lock" ]; then
+  crate="$(awk '
+    /^\[/ { section = $0 }
+    section == "[package]" && /^name[[:space:]]*=/ { gsub(/^[^"]*"|".*$/, ""); print; exit }
+  ' "$cargo")"
+  [ -n "$crate" ] || { echo "bump-version: no [package] name in $cargo" >&2; exit 1; }
   tmp="$(mktemp)"
-  awk -v v="$new" '
+  awk -v v="$new" -v ours_line="name = \"$crate\"" '
     /^\[\[package\]\]/ { ours = 0 }
-    /^name[[:space:]]*=[[:space:]]*"eldrun"$/ { ours = 1 }
+    $0 == ours_line { ours = 1 }
     ours && /^version[[:space:]]*=/ && !done {
       sub(/"[^"]*"/, "\"" v "\""); done = 1
     }

@@ -1,4 +1,4 @@
-# HPC workspaces in Eldrun — the layout, and the plan around it
+# HPC workspaces in Tabtivity — the layout, and the plan around it
 
 Status: Phases 0, 1 and 2 implemented (untested on a cluster); Phase 3 proposed.
 Companion to `docs/quirky-knitting-umbrella` (the SLURM pipeline) and TODO group
@@ -19,10 +19,10 @@ expensive in a way nothing in the UI would otherwise mention:
   `hpc-workspace` tooling: `ws_allocate <name> <days>`, `ws_list`, `ws_find`,
   `ws_extend`, `ws_release`. Bulk input, output and temporary data belong here.
 
-Eldrun's remote projects have exactly **one** host root (`RemoteSpec.remote_path`),
+Tabtivity's remote projects have exactly **one** host root (`RemoteSpec.remote_path`),
 from which every transport is derived — SFTP upload, byte-sync, git lockstep, the
 file tree, the run tabs. So "where does the project root go" is not a cosmetic
-choice: it decides which of the two filesystems everything Eldrun does lands on.
+choice: it decides which of the two filesystems everything Tabtivity does lands on.
 Before Phase 0 the pipeline browsed to a folder (i.e. `$HOME`) and made that the
 root, which pointed every one of those transports at the quota.
 
@@ -30,7 +30,7 @@ root, which pointed every one of those transports at the quota.
 
 ```
   the parallel filesystem (expires)              home (persistent, backed up, quota'd)
-  /<fs>/<user>-<ws>/                             ~/eldrun/<project>/
+  /<fs>/<user>-<ws>/                             ~/tabtivity/<project>/
   └── <project>/        ← PROJECT ROOT           ├── logs/          ← #SBATCH --output
       ├── code, job.slurm   (git lockstep)       ├── workspace ->  /<fs>/<user>-<ws>
       └── data/, outputs/   (byte-sync)          └── workspaces.txt  (append-only record)
@@ -47,10 +47,10 @@ Three reasons, in order of weight:
    lstat-typed and **skips** it (guard G3), so the mirror never sees a single
    file under it. Visible but unsynced is worse than absent: it reads as covered.
 2. **The durable copy of the code is the local mirror + git, not the host tree.**
-   Eldrun already treats the host side as a working copy that lockstep can rebuild.
+   Tabtivity already treats the host side as a working copy that lockstep can rebuild.
    So expiry costs a re-pair, not the work — provided outputs were pulled, which
    Phase 2 is about.
-3. **Quota safety becomes structural.** Nothing Eldrun does — sync, upload, job
+3. **Quota safety becomes structural.** Nothing Tabtivity does — sync, upload, job
    output, checkpoints — can fill home, instead of that being a rule the user has
    to remember at every step.
 
@@ -68,12 +68,12 @@ Accepted costs, stated rather than hidden:
 A workspace path (`/<fs>/<user>-<ws>`) is unmemorable, and once the workspace is
 gone the only thing that can recover it is its **name**, which by then nobody
 remembers. So each HPC project keeps a *small* folder in home — nothing that can
-grow, and nothing Eldrun syncs:
+grow, and nothing Tabtivity syncs:
 
 | Entry | Why it is there |
 |-------|-----------------|
 | `logs/` | `#SBATCH --output` points here, so the record of *what was run* outlives the workspace and is backed up. Small by nature — logs only, never artifacts. |
-| `workspace` → the workspace path | `cd ~/eldrun/<project>/workspace` from any login node, and a job script can reach it without hardcoding a site path. Goes dangling at expiry, which is itself a signal. |
+| `workspace` → the workspace path | `cd ~/tabtivity/<project>/workspace` from any login node, and a job script can reach it without hardcoding a site path. Goes dangling at expiry, which is itself a signal. |
 | `workspaces.txt` | Append-only: date, workspace id, filesystem, path, requested duration, the project name, and the **local mirror path** (which machine holds the durable copy). This is the file that makes `ws_restore` possible, and the one that answers "which workspace held the Q3 runs?" a year later. |
 
 The anchor is *host-side navigation and provenance*. It is deliberately outside
@@ -108,7 +108,7 @@ the project root, so no walker, manifest or census ever touches it.
    mirrored into the `projects.json` entry's `extra` like `run_host` is. Nothing
    else can be re-derived after the workspace is gone.
 3. Wizard: a checkbox in the Workspace step (default on when a workspace was
-   chosen), with the anchor path shown and editable (`eldrun/<project>`).
+   chosen), with the anchor path shown and editable (`tabtivity/<project>`).
 4. Wire the logs: the starter script's `--output` becomes
    `<logs_dir>/slurm-%j.out` (a `spliceDirective` call, so it stays an ordinary
    edit), and `slurm_job_out`'s fallback for a job `scontrol` has forgotten
@@ -180,7 +180,7 @@ Everything variable is *asked*, never assumed:
 
 - **Which filesystems exist** → `ws_list -l` (including which is the default).
 - **How long a workspace may live** → the site caps `ws_allocate`'s duration and
-  its refusal is surfaced verbatim; Eldrun only bounds the input to 1–3650 days
+  its refusal is surfaced verbatim; Tabtivity only bounds the input to 1–3650 days
   so a typo cannot ask for a millennium.
 - **Where a workspace actually is** → `ws_find`, never a path pattern.
 - **What `ws_list` output looks like** → parsed by keyword, with the `ws_find`
@@ -207,5 +207,5 @@ decides which mean anything.
   stays opt-in per path (the manifest) and the big-folder census still prices a
   subtree before it is marked. Making the workspace the root does not change that.
 - **No second host root.** The anchor is not a second project tree — it holds
-  logs, a link and a text file, none of which Eldrun syncs, so no walker, manifest
+  logs, a link and a text file, none of which Tabtivity syncs, so no walker, manifest
   or census needs to learn about two roots.

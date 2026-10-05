@@ -1,9 +1,9 @@
 //! The phone → project drop box behind the Focus composer's **+**.
 //!
-//! A file picked on the phone lands in the project's own `.eldrun/inbox/` —
+//! A file picked on the phone lands in the project's own `.tabtivity/inbox/` —
 //! a directory the desktop already git-ignores, hides from the tree and skips
 //! in sync — and the phone gets back a *project-relative* reference
-//! (`.eldrun/inbox/<file>`) to put after an `@` in the message. That relative
+//! (`.tabtivity/inbox/<file>`) to put after an `@` in the message. That relative
 //! reference is the one deliberate exception to "paths never cross the browser
 //! API": it carries no host component, resolves only from inside the session's
 //! own working directory, and is exactly what the agent needs to read the
@@ -11,13 +11,16 @@
 //!
 //! The project tree is attacker-controlled by policy (`AGENTS.md`), so the
 //! write is defensive: the file name is rebuilt from a safe alphabet and
-//! stamped, the file is created with `create_new` (never overwriting), and the
-//! inbox directory must canonicalize *below* the project root — a planted
-//! `.eldrun` symlink cannot redirect the bytes elsewhere.
+//! stamped, the file is created with `create_new` semantics (never
+//! overwriting), and the inbox is reached from the project root one held
+//! folder at a time — each missing one made with `mkdirat`, each opened with
+//! `openat(O_NOFOLLOW)` relative to the one before (`files::ProjectDir`) — so a
+//! planted or swapped-in `.tabtivity`/`inbox` link cannot redirect the bytes
+//! elsewhere, before the check or after it.
 //!
 //! The **global inbox** (`<state_dir>/inbox/`) is the same drop box for a file
 //! that belongs to no project — the phone's *Send to desktop*. It lives in
-//! Eldrun's own state, never in a project folder, so nothing is filed into a
+//! Tabtivity's own state, never in a project folder, so nothing is filed into a
 //! project without the user moving it there; the desktop lists, opens and
 //! deletes it by leaf name through the functions below.
 
@@ -28,15 +31,18 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use super::files::{FilesError, ProjectDir};
+use super::outbox::{self, OutboxError, OutboxFile};
+
 /// Project-relative directory the phone's files land in.
-pub const INBOX_DIR: &str = ".eldrun/inbox";
+pub const INBOX_DIR: &str = crate::brand::INBOX_DIR;
 /// State-dir-relative directory of the global inbox (no project).
 pub const GLOBAL_INBOX_DIR: &str = "inbox";
 /// One file the phone may send. A phone photo is a few MiB; a short video
 /// clip fits; a movie does not belong in an agent prompt.
 pub const MAX_INBOX_FILE: usize = 24 * 1024 * 1024;
 /// What one inbox may hold in total before uploads are refused — the inbox is
-/// never pruned by Eldrun, so the cap is what keeps a forgotten one bounded.
+/// never pruned by Tabtivity, so the cap is what keeps a forgotten one bounded.
 pub const MAX_INBOX_TOTAL: u64 = 1024 * 1024 * 1024;
 /// Characters kept of the phone's file name, stem and extension together.
 const MAX_NAME: usize = 80;
@@ -59,7 +65,8 @@ pub enum InboxError {
     TooLarge,
     /// The inbox already holds `MAX_INBOX_TOTAL`.
     Full,
-    /// The project root is gone, or the inbox does not resolve below it.
+    /// The project root is gone, or something on the way to the inbox is not
+    /// a plain folder (a link, a file).
     Unavailable,
     Io(String),
 }
@@ -143,20 +150,36 @@ fn stamp(now: SystemTime) -> String {
     )
 }
 
-fn inbox_total(dir: &Path) -> Result<u64, InboxError> {
-    let mut total = 0u64;
-    for entry in fs::read_dir(dir).map_err(|e| InboxError::Io(e.to_string()))? {
-        let entry = entry.map_err(|e| InboxError::Io(e.to_string()))?;
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() {
-                total = total.saturating_add(meta.len());
-            }
-        }
-    }
-    Ok(total)
+/// The bytes of the regular files in the held inbox `dir` (links and folders
+/// are not followed or counted).
+fn inbox_total(dir: &ProjectDir) -> Result<u64, InboxError> {
+    let entries = dir.entries().map_err(|e| match e {
+        FilesError::Io(e) => InboxError::Io(e),
+        _ => InboxError::Unavailable,
+    })?;
+    Ok(entries
+        .into_iter()
+        .filter(|(_, is_dir)| !is_dir)
+        .filter_map(|(name, _)| dir.open_file(&name))
+        .fold(0u64, |total, (_, meta)| total.saturating_add(meta.len())))
 }
 
-/// Writes `bytes` into `root/.eldrun/inbox/` under a stamped, sanitized,
+/// `rel` below `root`, held open: each missing folder made relative to the
+/// one before (`mkdirat`), each opened without following a link. A link, a
+/// file or a folder that vanished on the way is `Unavailable`.
+fn make_drop_dir(root: &Path, rel: &str) -> Result<ProjectDir, InboxError> {
+    let mut dir = ProjectDir::open_root(root).map_err(|_| InboxError::Unavailable)?;
+    for name in rel.split('/') {
+        dir.create_dir(name).map_err(|e| InboxError::Io(e.to_string()))?;
+        dir = match dir.lookup_dir(name) {
+            Ok(Some(next)) => next,
+            Ok(None) | Err(()) => return Err(InboxError::Unavailable),
+        };
+    }
+    Ok(dir)
+}
+
+/// Writes `bytes` into `root/.tabtivity/inbox/` under a stamped, sanitized,
 /// unique name. `root` must be the project's canonical directory.
 pub fn store(root: &Path, raw_name: &str, bytes: &[u8]) -> Result<Stored, InboxError> {
     store_at(root, INBOX_DIR, raw_name, bytes, SystemTime::now())
@@ -184,34 +207,37 @@ fn store_at(
     if !root.is_dir() {
         return Err(InboxError::Unavailable);
     }
-    let dir = root.join(rel_dir);
-    fs::create_dir_all(&dir).map_err(|e| InboxError::Io(e.to_string()))?;
-    // A `.eldrun` or `inbox` link planted in the tree must not carry the
-    // bytes out of the project.
-    let canonical_root = root.canonicalize().map_err(|_| InboxError::Unavailable)?;
-    let canonical_dir = dir.canonicalize().map_err(|_| InboxError::Unavailable)?;
-    if !canonical_dir.starts_with(&canonical_root) {
-        return Err(InboxError::Unavailable);
-    }
-    if inbox_total(&canonical_dir)?.saturating_add(bytes.len() as u64) > MAX_INBOX_TOTAL {
+    // A `.tabtivity` or `inbox` link planted in the tree — or swapped in
+    // after this walk — must not carry the bytes out of the project: every
+    // step below works on the folder this holds.
+    let dir = make_drop_dir(root, rel_dir)?;
+    if inbox_total(&dir)?.saturating_add(bytes.len() as u64) > MAX_INBOX_TOTAL {
         return Err(InboxError::Full);
     }
     let base = format!("{}-{}", stamp(now), safe_name(raw_name));
-    let (stem, ext) = match base.rsplit_once('.') {
+    let (mut stem, ext) = match base.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
         _ => (base.clone(), String::new()),
     };
+    // `safe_name` bounds characters; one file name holds 255 bytes (Linux,
+    // `files::plain_segment`). Cut the stem at a character so the stamp, the
+    // extension and a `-1000` suffix still fit.
+    let room = 255 - "-1000".len() - ext.len();
+    while stem.len() > room {
+        stem.pop();
+    }
+    let base = format!("{stem}{ext}");
     for attempt in 0u32..1_000 {
         let name = if attempt == 0 {
             base.clone()
         } else {
             format!("{stem}-{}{ext}", attempt + 1)
         };
-        let path: PathBuf = canonical_dir.join(&name);
-        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        match dir.create_file(&name) {
             Ok(mut file) => {
                 if let Err(error) = file.write_all(bytes).and_then(|()| file.flush()) {
-                    let _ = fs::remove_file(&path);
+                    drop(file);
+                    let _ = dir.remove_file(&name);
                     return Err(InboxError::Io(error.to_string()));
                 }
                 return Ok(Stored {
@@ -225,6 +251,64 @@ fn store_at(
         }
     }
     Err(InboxError::Io("no free name in the inbox".into()))
+}
+
+/// The longest project-inbox leaf the read side admits: a stamp, an
+/// `MAX_NAME`-character name of up to four UTF-8 bytes each, a `-N` suffix.
+const MAX_STORED_NAME: usize = 16 + MAX_NAME * 4 + 8;
+/// How many leaves one [`describe`] call looks at — a chat's worth.
+pub const MAX_DESCRIBED: usize = 64;
+
+/// Whether `name` is a leaf [`store`] could have written: [`safe_name`]'s
+/// alphabet (letters of any script, digits, `.`, `-`, `_`), never a dot first,
+/// no separator, bounded. Nothing else in the inbox is read back to the phone.
+pub fn valid_stored_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_STORED_NAME
+        && !name.starts_with('.')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+/// The project-inbox files among `names` (leaves the phone read out of its own
+/// `@` references), described as the outbox describes its own — kind by the
+/// bytes, size, mtime, the name it was sent as — in the order asked. A leaf
+/// that is not a servable file is left out: the phone then shows it gone.
+pub fn describe(root: &Path, names: &[&str]) -> Result<Vec<OutboxFile>, OutboxError> {
+    let Some(dir) = outbox::drop_dir(root, INBOX_DIR)? else {
+        return Ok(Vec::new());
+    };
+    Ok(names
+        .iter()
+        .take(MAX_DESCRIBED)
+        .filter_map(|name| {
+            let (_file, meta, kind) = outbox::probe_as(&dir, name, valid_stored_name)?;
+            Some(OutboxFile {
+                name: (*name).to_string(),
+                original: outbox::sent_name(name).to_string(),
+                kind,
+                size: meta.len(),
+                modified: meta.modified().map(outbox::unix_secs).unwrap_or(0),
+                from_tab: false,
+                source: None,
+            })
+        })
+        .collect())
+}
+
+/// One project-inbox file's bytes and media type, by its leaf — the phone's
+/// preview of what it sent. Read exactly as the outbox serves its own.
+pub fn read(root: &Path, name: &str) -> Result<(Vec<u8>, &'static str), OutboxError> {
+    let Some(dir) = outbox::drop_dir(root, INBOX_DIR)? else {
+        return Err(OutboxError::NotFound);
+    };
+    outbox::read_probed(&dir, name, valid_stored_name)
+}
+
+/// The media type of one project-inbox file by its leaf, as [`read`] would
+/// type it, without reading the rest — `None` for a leaf it would not serve.
+pub fn kind(root: &Path, name: &str) -> Option<&'static str> {
+    let dir = outbox::drop_dir(root, INBOX_DIR).ok()??;
+    outbox::probe_as(&dir, name, valid_stored_name).map(|(_, _, kind)| kind)
 }
 
 /// One file waiting in the global inbox, as the desktop lists it.
@@ -340,13 +424,30 @@ mod tests {
         assert_eq!(name.chars().count(), MAX_NAME);
     }
 
+    /// 80 characters of a non-Latin script are more bytes than one file name
+    /// holds once stamped (255 on Linux, `files::plain_segment`'s bound): the
+    /// stem is cut at a character so the upload still lands, read back by leaf.
+    #[test]
+    fn a_long_name_in_a_wide_script_still_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for raw in ["写".repeat(80), format!("{}.pdf", "写".repeat(90)), "😀".repeat(80)] {
+            let stored = store_at(root, INBOX_DIR, &raw, b"x", at(T0)).unwrap();
+            assert!(stored.name.len() <= 255 - "-1000".len(), "{}", stored.name);
+            assert!(stored.name.starts_with("20260831-120000-"));
+            assert_eq!(raw.ends_with(".pdf"), stored.name.ends_with(".pdf"));
+            assert_eq!(fs::read(root.join(&stored.reference)).unwrap(), b"x");
+            assert!(valid_stored_name(&stored.name));
+        }
+    }
+
     #[test]
     fn a_file_lands_stamped_in_the_inbox_and_is_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let first = store_at(root, INBOX_DIR, "IMG_1.jpg", b"one", at(T0)).unwrap();
         assert_eq!(first.name, "20260831-120000-IMG_1.jpg");
-        assert_eq!(first.reference, ".eldrun/inbox/20260831-120000-IMG_1.jpg");
+        assert_eq!(first.reference, concat!(".", crate::app_slug!(), "/inbox/20260831-120000-IMG_1.jpg"));
         assert_eq!(first.size, 3);
         assert_eq!(fs::read(root.join(&first.reference)).unwrap(), b"one");
 
@@ -383,13 +484,82 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
-        fs::create_dir_all(root.join(".eldrun")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join(".eldrun").join("inbox")).unwrap();
+        fs::create_dir_all(root.join(concat!(".", crate::app_slug!()))).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join(concat!(".", crate::app_slug!())).join("inbox")).unwrap();
         assert_eq!(
             store_at(&root, INBOX_DIR, "leak.txt", b"x", at(T0)),
             Err(InboxError::Unavailable)
         );
         assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
+
+    /// Gap 12: a `.tabtivity` link (or file) is refused for the write and
+    /// for the read-back, and nothing lands where it points.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_project_dir_is_refused_for_writes_and_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let project_dir = concat!(".", crate::app_slug!());
+        let foreign = outside.path().join(INBOX_DIR);
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("20260831-120000-secret.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
+        let root = dir.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(outside.path().join(project_dir), root.join(project_dir)).unwrap();
+
+        assert_eq!(store_at(&root, INBOX_DIR, "leak.txt", b"x", at(T0)), Err(InboxError::Unavailable));
+        assert_eq!(fs::read_dir(&foreign).unwrap().count(), 1);
+        assert_eq!(describe(&root, &["20260831-120000-secret.png"]), Err(OutboxError::Unavailable));
+        assert_eq!(read(&root, "20260831-120000-secret.png"), Err(OutboxError::Unavailable));
+        assert_eq!(kind(&root, "20260831-120000-secret.png"), None);
+
+        let plain = dir.path().join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(plain.join(project_dir), b"not a folder").unwrap();
+        assert_eq!(store_at(&plain, INBOX_DIR, "a.txt", b"x", at(T0)), Err(InboxError::Unavailable));
+    }
+
+    /// Gap 12: an `inbox` link is refused for the read-back too, even one
+    /// pointing at another folder of the same project.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_inbox_is_not_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/20260831-120000-a.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
+        fs::create_dir_all(root.join(concat!(".", crate::app_slug!()))).unwrap();
+        std::os::unix::fs::symlink(root.join("docs"), root.join(INBOX_DIR)).unwrap();
+        assert_eq!(describe(root, &["20260831-120000-a.png"]), Err(OutboxError::Unavailable));
+        assert_eq!(read(root, "20260831-120000-a.png"), Err(OutboxError::Unavailable));
+        assert_eq!(store_at(root, INBOX_DIR, "b.txt", b"x", at(T0)), Err(InboxError::Unavailable));
+        assert_eq!(fs::read_dir(root.join("docs")).unwrap().count(), 1);
+    }
+
+    /// Gap 12, the race: once the write holds the inbox, a `.tabtivity`
+    /// swapped for a link does not move the new file out of the project.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_dir_swapped_for_a_link_after_the_walk_keeps_the_write_inside() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let project_dir = concat!(".", crate::app_slug!());
+        fs::create_dir_all(outside.path().join(INBOX_DIR)).unwrap();
+        let held = make_drop_dir(dir.path(), INBOX_DIR).unwrap();
+        fs::rename(dir.path().join(project_dir), dir.path().join("moved")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join(project_dir), dir.path().join(project_dir)).unwrap();
+
+        held.create_file("note.txt").unwrap().write_all(b"x").unwrap();
+        assert_eq!(fs::read(dir.path().join("moved/inbox/note.txt")).unwrap(), b"x");
+        assert!(fs::read_dir(outside.path().join(INBOX_DIR)).unwrap().next().is_none());
+        // `create_new`: never an existing name, and never a link's target.
+        assert_eq!(held.create_file("note.txt").unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        std::os::unix::fs::symlink(outside.path().join("planted"), dir.path().join("moved/inbox/link.txt")).unwrap();
+        assert!(held.create_file("link.txt").is_err());
+        assert!(!outside.path().join("planted").exists());
+        // A fresh upload stops at the link.
+        assert_eq!(store_at(dir.path(), INBOX_DIR, "a.txt", b"x", at(T0)), Err(InboxError::Unavailable));
     }
 
     #[test]
@@ -430,5 +600,44 @@ mod tests {
         assert_eq!(global_file(dir.path(), "link.txt"), None);
         assert_eq!(remove_global(dir.path(), "link.txt"), Ok(false));
         assert!(target.is_file());
+    }
+
+    #[test]
+    fn a_stored_file_reads_back_by_its_leaf_and_nothing_else_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let photo = store_at(root, INBOX_DIR, "Größe Foto.png", png, at(T0)).unwrap();
+        let note = store_at(root, INBOX_DIR, "note.txt", b"hello", at(T0 + 1)).unwrap();
+        fs::write(root.join(INBOX_DIR).join(".hidden.png"), png).unwrap();
+        let files = describe(root, &[&note.name, "missing.png", ".hidden.png", "../x", &photo.name]).unwrap();
+        let named: Vec<_> = files.iter().map(|f| (f.name.as_str(), f.kind, f.original.as_str())).collect();
+        assert_eq!(named, vec![
+            (note.name.as_str(), "text/plain; charset=utf-8", "note.txt"),
+            (photo.name.as_str(), "image/png", "Größe_Foto.png"),
+        ]);
+        assert_eq!(read(root, &photo.name).unwrap(), (png.to_vec(), "image/png"));
+        assert_eq!(read(root, ".hidden.png"), Err(OutboxError::NotFound));
+        assert_eq!(read(root, "../note.txt"), Err(OutboxError::NotFound));
+    }
+
+    #[test]
+    fn a_project_without_an_inbox_describes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(describe(dir.path(), &["a.png"]), Ok(Vec::new()));
+        assert_eq!(read(dir.path(), "a.png"), Err(OutboxError::NotFound));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_in_the_inbox_is_not_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        let inbox = dir.path().join(INBOX_DIR);
+        fs::create_dir_all(&inbox).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), inbox.join("link.txt")).unwrap();
+        assert_eq!(describe(dir.path(), &["link.txt"]), Ok(Vec::new()));
+        assert_eq!(read(dir.path(), "link.txt"), Err(OutboxError::NotFound));
     }
 }

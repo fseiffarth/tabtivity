@@ -233,7 +233,7 @@ impl UsageWatchState {
 /// holds a project's files is a backend fact (the mirror path is derived, not
 /// stored on the project), and the frontend has no business knowing it.
 ///
-/// The **root scope** resolves the same way, to `~/eldrun/root`. It is not in
+/// The **root scope** resolves the same way, to `~/tabtivity/root`. It is not in
 /// `projects.json` — it has no entry to look up and never will — so the id is
 /// matched literally, exactly as `storage::project_key` and the tab-session
 /// files already treat it. Without this the one scope whose whole purpose is
@@ -425,7 +425,7 @@ mod tests {
 
     // ── watch_root_for ─────────────────────────────────────────────────────
 
-    /// The root scope is watched at `~/eldrun/root`, like a local project is
+    /// The root scope is watched at `~/tabtivity/root`, like a local project is
     /// watched at its own directory. It is in no project list, so it can only
     /// be matched literally — before the lookup, which would answer `None` and
     /// leave the one scope built for files-without-a-project uncounted.

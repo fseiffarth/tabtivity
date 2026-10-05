@@ -197,7 +197,7 @@ export function RemoteProjectSection({
   // the login section. They belong to the *host*, not to how you happen to be signing
   // in this time: switching to the terminal login must not make a saved credential
   // look discarded (and must certainly never delete it — only unticking does that,
-  // and only by the user's own click). A terminal login is one Eldrun never sees, so
+  // and only by the user's own click). A terminal login is one Tabtivity never sees, so
   // nothing *new* is stored from it; the saved credential is simply kept for the
   // connects that can use it, which the hint says rather than leaving it to be
   // guessed.

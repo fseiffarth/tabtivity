@@ -17,12 +17,12 @@
 
 use std::path::PathBuf;
 
-use eldrun_lib::commands::mail as mail_cmd;
-use eldrun_lib::services::mail_crypt::{self, Unlock};
-use eldrun_lib::services::mail_store::MailStore;
+use app_lib::commands::mail as mail_cmd;
+use app_lib::services::mail_crypt::{self, Unlock};
+use app_lib::services::mail_store::MailStore;
 
 fn mail_dir() -> PathBuf {
-    eldrun_lib::storage::state_dir().join("mail")
+    app_lib::storage::state_dir().join("mail")
 }
 
 #[tokio::main(flavor = "current_thread")]

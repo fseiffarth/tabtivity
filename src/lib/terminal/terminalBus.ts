@@ -1,4 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { parseDetachedParam } from "../../stores/detached";
 
 /**
  * Single global subscription per PTY-lifecycle event, fanned out to per-id
@@ -40,11 +42,27 @@ const exitHandlers = new Map<string, Set<ExitHandler>>();
 
 let started = false;
 
+/**
+ * The name this window hears a stream event under. Tauri evaluates an emit in
+ * every webview that listens for its name, so a popout listening on the plain
+ * name parsed every chunk of every PTY the main window streams. The backend
+ * (`emit_output` in `terminal/mod.rs`) sends the main window every chunk under
+ * the plain name and each popout only its own PTYs under `<event>:<label>`.
+ */
+export function streamEventName(event: string): string {
+  try {
+    if (parseDetachedParam(window.location.search) === null) return event;
+    return `${event}:${getCurrentWindow().label}`;
+  } catch {
+    return event;
+  }
+}
+
 function ensureStarted() {
   if (started) return;
   started = true;
 
-  listen<TerminalOutput>("terminal-output", (ev) => {
+  listen<TerminalOutput>(streamEventName("terminal-output"), (ev) => {
     const set = outputHandlers.get(ev.payload.id);
     if (!set) return;
     const range =
@@ -58,7 +76,7 @@ function ensureStarted() {
   // (visible-only streaming). A separate event from `terminal-output` on
   // purpose: replayed output is STALE output written late, and the pane must
   // route it through its strip-terminal-queries path, never a bare write.
-  listen<TerminalOutput>("terminal-replay", (ev) => {
+  listen<TerminalOutput>(streamEventName("terminal-replay"), (ev) => {
     const set = replayHandlers.get(ev.payload.id);
     if (!set) return;
     const range =

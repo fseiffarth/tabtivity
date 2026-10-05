@@ -1,7 +1,7 @@
 /**
  * Python Run/Debug arguments (#py) are kept PER FILE — keyed by absolute path in
  * global settings — not per tab, so every viewer of the same script shares one
- * set of args and they survive an Eldrun restart (settings.json). These tests
+ * set of args and they survive a Tabtivity restart (settings.json). These tests
  * lock the store action that owns that map: set, share-by-path, and clear-prunes.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";

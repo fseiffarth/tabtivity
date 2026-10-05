@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::commands::apps::InstalledApp;
 
-/// The IDEs Eldrun can tell apart. `id()` is the stable string the frontend
+/// The IDEs Tabtivity can tell apart. `id()` is the stable string the frontend
 /// and `settings.ide_launchers` key on, and what the enum serializes as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IdeId {

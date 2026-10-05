@@ -1,11 +1,12 @@
 import { create } from "zustand";
 import type { ConnState } from "./remoteStatus";
+import { storageKey } from "../../lib/brand";
 
 /** Which side of a remote project a file view is showing. */
 export type FileSourceSide = "local" | "remote";
 
 /** Where an explicit Local/Remote choice is remembered across relaunches. */
-const STORAGE_KEY = "eldrun.fileSourceByProject";
+const STORAGE_KEY = storageKey("fileSourceByProject");
 
 /** Bound on the persisted map — a project the user never opens again must not
  *  keep a row forever. Oldest insertions are dropped first. */

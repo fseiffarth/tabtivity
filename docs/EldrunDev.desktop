@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Eldrun (dev)
-Comment=Frozen build of the working tree — no hot reload
-Exec=/path/to/projecteldrun/start-eldrun-dev-build.sh
-Icon=/path/to/projecteldrun/src-tauri/icons/128x128.png
-Terminal=false
-Categories=Utility;TerminalEmulator;Development;
-StartupWMClass=eldrun

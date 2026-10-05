@@ -13,7 +13,7 @@
  * it are both wrong: treating any `reason` as a block makes a developer's own
  * dev server unreachable, and treating `allowed: true` as a green light fetches
  * a loopback or private address with nobody deciding to — through, possibly, a
- * VPN tunnel Eldrun is holding into a network the user's real browser cannot
+ * VPN tunnel Tabtivity is holding into a network the user's real browser cannot
  * see. What must happen is: park it, ask, and only then act.
  *
  * These tests drive the store directly with a faked invoke surface, so they

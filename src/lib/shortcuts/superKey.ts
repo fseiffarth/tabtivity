@@ -1,7 +1,7 @@
 /**
- * Who owns the lone Super/Meta key — the desktop shell, or Eldrun?
+ * Who owns the lone Super/Meta key — the desktop shell, or Tabtivity?
  *
- * Eldrun's panel toggle is the bare Super key on Linux. That only works on a
+ * Tabtivity's panel toggle is the bare Super key on Linux. That only works on a
  * desktop that leaves the key to the focused window; Cinnamon does, which is
  * where the binding was written. GNOME does not: Super opens the Activities
  * overview, and every `Super+<key>` shell shortcut delivers a lone `Meta`

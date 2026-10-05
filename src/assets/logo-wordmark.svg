@@ -1,13 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 640" width="200" height="250" fill="none" role="img" aria-label="Eldrun">
-  <title>Eldrun</title>
-  <!-- Eldrun logo lockup: the standard mark with its name beneath it. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 640" width="200" height="250" fill="none" role="img" aria-label="Tabtivity">
+  <title>Tabtivity</title>
+  <!-- Tabtivity logo lockup: the standard mark with its name beneath it. -->
   <g transform="translate(0 8) scale(.96875)" stroke="#000000" stroke-linecap="round" stroke-linejoin="round" fill="none">
     <path d="M 165 190 L 165 238 L 233 306 L 233 470.74 A 20 20 0 0 1 209.07 490.35 A 239 239 0 1 1 302.93 490.35 A 20 20 0 0 1 279 470.74 L 279 306 L 347 238 L 347 190" stroke-width="13" />
     <path d="M 256 161 L 256 499" stroke-width="13" />
-    <g id="eldrun-wordmark-branches">
+    <g id="tabtivity-wordmark-branches">
       <path d="M 98 249 L 98 289 L 135.2 326.2 M 174.8 365.8 L 233 424" stroke-width="13" />
     </g>
-    <use href="#eldrun-wordmark-branches" transform="translate(512,0) scale(-1,1)" />
+    <use href="#tabtivity-wordmark-branches" transform="translate(512,0) scale(-1,1)" />
     <path d="M 183.98 353.76 L 162.76 374.98 L 133.79 367.21 L 126.02 338.24 L 147.24 317.02 L 176.21 324.79 Z" fill="#EB8182" stroke-width="10" />
     <path d="M 128 221 L 113 246.98 L 83 246.98 L 68 221 L 83 195.02 L 113 195.02 Z" fill="#ED946C" stroke-width="10" />
     <path d="M 195 162 L 180 187.98 L 150 187.98 L 135 162 L 150 136.02 L 180 136.02 Z" fill="#E7B369" stroke-width="10" />
@@ -16,5 +16,5 @@
     <path d="M 385.98 338.24 L 378.21 367.21 L 349.24 374.98 L 328.02 353.76 L 335.79 324.79 L 364.76 317.02 Z" fill="#80A3F0" stroke-width="10" />
     <path d="M 256 52 L 265 87 L 284 73 L 270 92 L 305 101 L 270 110 L 284 129 L 265 115 L 256 150 L 247 115 L 228 129 L 242 110 L 207 101 L 242 92 L 228 73 L 247 87 Z" fill="#C79A45" stroke="none" />
   </g>
-  <text x="256" y="592" fill="#000000" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="68" font-weight="700" letter-spacing="2" text-anchor="middle">Eldrun</text>
+  <text x="256" y="592" fill="#000000" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="68" font-weight="700" letter-spacing="2" text-anchor="middle">Tabtivity</text>
 </svg>

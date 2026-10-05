@@ -29,7 +29,7 @@
 //!
 //! The report flags `busy` when the host looks like someone (or something)
 //! else is already using it: high CPU, high memory, a busy GPU, or any other
-//! logged-in session. That last signal is best-effort, not exact — an Eldrun
+//! logged-in session. That last signal is best-effort, not exact — a Tabtivity
 //! terminal tab connected to the same host allocates a remote PTY (`ssh -tt`)
 //! and shows up in `who` exactly like a human login, so a project with its
 //! own open terminal to that host will also read as "in use". There's no

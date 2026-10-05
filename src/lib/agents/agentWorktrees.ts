@@ -5,6 +5,7 @@
  * store→component→store cycle that would make) into its graph.
  */
 import type { TabKind } from "../../stores/tabs";
+import { NAMES } from "../brand";
 
 /** Mirrors `commands::git::Worktree` (serde field names). */
 export interface GitWorktree {
@@ -21,7 +22,7 @@ export interface GitWorktree {
 }
 
 /** The one place a worktree may live, relative to the project root. */
-export const WORKTREES_SUBDIR = ".eldrun/worktrees";
+export const WORKTREES_SUBDIR = NAMES.worktreesDir;
 
 function stripTrailingSep(p: string): string {
   return p.replace(/[/\\]+$/, "");
@@ -29,7 +30,7 @@ function stripTrailingSep(p: string): string {
 
 /**
  * Is `cwd` a linked worktree of the project at `projectDir` — i.e. exactly one
- * directory under `<projectDir>/.eldrun/worktrees/`? The name must be a single
+ * directory under `<projectDir>/.tabtivity/worktrees/`? The name must be a single
  * plain segment: a `..` or an empty name is not a worktree, and neither is the
  * worktrees folder itself. Both separators are accepted so a Windows layout
  * round-trips.
@@ -44,6 +45,22 @@ export function isProjectWorktreeCwd(cwd: string, projectDir: string): boolean {
   if (!c.startsWith(prefix)) return false;
   const name = c.slice(prefix.length);
   return name.length > 0 && !name.includes("/") && name !== "." && name !== "..";
+}
+
+/** A linked worktree's folder as the agents keep them: Tabtivity's own
+ * (`.tabtivity/worktrees/<name>`), Claude Code's `--worktree` ones
+ * (`.claude/worktrees/<name>`), or any other dot-folder's `worktrees`. */
+const WORKTREE_IN_PATH = /[/\\]\.[^/\\]+[/\\]worktrees[/\\]([^/\\]+)/u;
+
+/**
+ * The name of the linked worktree `path` lies in, or undefined for a path that
+ * is in none — read off the path alone, so it names what the agent's folder
+ * is without asking git. The Reader's facts row shows it beside the path.
+ */
+export function worktreeOfPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const name = WORKTREE_IN_PATH.exec(path)?.[1];
+  return name && name !== "." && name !== ".." ? name : undefined;
 }
 
 /** Same directory, modulo a trailing separator and separator style. */

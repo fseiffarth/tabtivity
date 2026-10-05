@@ -19,7 +19,7 @@ export function tokenPageUrl(provider: GitProvider, profileUrl: string): string 
     : `https://${host}/settings/tokens`;
 }
 
-/** One row of the guide: the literal scope/permission name plus what Eldrun does
+/** One row of the guide: the literal scope/permission name plus what Tabtivity does
  *  with it. The name is never translated — it has to match the provider's own
  *  checkbox label for the reader to find it. */
 type Scope = { name: string; descKey: TranslationKey };
@@ -47,7 +47,7 @@ const GITLAB: Scope[] = [
  * which permissions that needs — shown under the token field in Settings → Git
  * Hosting and in a project's per-project hosting dialog.
  *
- * The four things Eldrun does with the token (clone/push over https, create the
+ * The four things Tabtivity does with the token (clone/push over https, create the
  * repo on publish, flip its visibility, fork) are what the lists are derived
  * from; nothing here asks for more than those. Deleting a hosted repo is
  * deliberately absent — unpublishing only drops the `origin` remote.

@@ -50,6 +50,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 
@@ -68,15 +69,16 @@ function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-/** The outbox poll, the stored-session read and the usage read the screen
- * runs on mount answer empty here and stay out of the counted calls — these
- * tests are about the inbox. */
+/** The outbox poll, the stored-session read, the usage read, the markup
+ * questions poll and the inbox previews' description the screen runs answer
+ * empty here and stay out of the counted calls — these tests are about the
+ * inbox drop. */
 function routeOutbox(inner: (url: string, init?: RequestInit) => Promise<Response>) {
-  return (url: string, init?: RequestInit) => url.endsWith("/outbox")
-    ? Promise.resolve(jsonResponse(200, { images: [] }))
+  return (url: string, init?: RequestInit) => url.endsWith("/outbox") || url.includes("/inbox?names=")
+    ? Promise.resolve(jsonResponse(200, { images: [], files: [] }))
     : url.includes("/transcript")
       ? Promise.resolve(jsonResponse(200, { transcript: { available: false, reason: "no_session", entries: [], truncated: false } }))
-      : url.endsWith("/status")
+      : url.endsWith("/status") || url.includes("/markup/questions")
         ? Promise.resolve(jsonResponse(503, { error: "desktop_unavailable" }))
         : inner(url, init);
 }
@@ -84,13 +86,31 @@ function routeOutbox(inner: (url: string, init?: RequestInit) => Promise<Respons
 const fileInput = () => screen.getByTestId("inbox-file-input") as HTMLInputElement;
 const composer = () => screen.getByLabelText("Message agent") as HTMLTextAreaElement;
 
+/** The landed files waiting beside the composer, by their thumbnail's name. */
+const landed = () => Array.from(document.querySelectorAll(".composer-thumb:not(.sending)")).map((thumb) => thumb.getAttribute("title") ?? "");
+/** The files still on their way, likewise. */
+const sending = () => Array.from(document.querySelectorAll(".composer-thumb.sending")).map((thumb) => thumb.getAttribute("title") ?? "");
+/** The prompt the phone reported as sent — the words that went out. */
+const reportedPrompt = (fetchMock: ReturnType<typeof vi.fn>) => {
+  const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/prompt"));
+  return call ? (JSON.parse(String((call[1] as RequestInit).body)) as { message: string }).message : undefined;
+};
+
 function pick(files: File[]) {
   const input = fileInput();
   Object.defineProperty(input, "files", { configurable: true, value: files });
   fireEvent.change(input);
 }
 
-describe("Eldrun Mobile composer + and the frozen reading view", () => {
+/** The composer's status line — not the Focus chat's "starting" row, which a
+ * blank agent tab shows over the empty screen. */
+function composerStatus(): HTMLElement {
+  const rows = screen.getAllByRole("status").filter((row) => row.dataset.testid !== "session-starting");
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
+describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () => {
   beforeEach(() => {
     // The composer's draft is kept on the phone now (`drafts.ts`), and the
     // unmount that flushes it runs in Testing Library's own cleanup — after this
@@ -101,8 +121,8 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     // These read the Focus view; the phone opens on Terminal until the
     // reader chose Focus for the agent, so the stored choice is preset.
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
-    localStorage.setItem("eldrun.mobile.view.shell", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
+    localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 
@@ -136,7 +156,7 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
 
   it("offers the gallery as its own entry: a media-only picker over the same inbox drop", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, {
-      attachment: { name: "20260917-120000-IMG_0099.jpg", reference: ".eldrun/inbox/20260917-120000-IMG_0099.jpg", size: 3 },
+      attachment: { name: "20260917-120000-IMG_0099.jpg", reference: `${NAMES.inboxDir}/20260917-120000-IMG_0099.jpg`, size: 3 },
     }));
     vi.stubGlobal("fetch", routeOutbox(fetchMock));
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -159,12 +179,12 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
     fireEvent.change(gallery);
     await settle(0);
     expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/tabs/tab-7/inbox?name=IMG_0099.jpg");
-    expect(composer().value).toContain("@.eldrun/inbox/20260917-120000-IMG_0099.jpg");
+    expect(landed().some((text) => text.includes("IMG_0099.jpg"))).toBe(true);
   });
 
-  it("sends a picked file into the project inbox and writes the desktop's reference into the draft", async () => {
+  it("sends a picked file into the project inbox and puts the desktop's reference after the message on Send", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, {
-      attachment: { name: "20260831-120000-IMG_0042.jpg", reference: ".eldrun/inbox/20260831-120000-IMG_0042.jpg", size: 3 },
+      attachment: { name: "20260831-120000-IMG_0042.jpg", reference: `${NAMES.inboxDir}/20260831-120000-IMG_0042.jpg`, size: 3 },
     }));
     vi.stubGlobal("fetch", routeOutbox(fetchMock));
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -172,7 +192,7 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
     fireEvent.change(composer(), { target: { value: "look at this" } });
 
     pick([new File(["abc"], "IMG_0042.jpg", { type: "image/jpeg" })]);
-    expect(screen.getByRole("status").textContent).toContain("IMG_0042.jpg");
+    expect(sending()).toEqual(["IMG_0042.jpg"]);
     await settle(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -183,11 +203,73 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("image/jpeg");
     expect(init.body).toBeInstanceOf(File);
 
-    // Delivered: the reference is in the draft and the pending row is gone.
-    expect(composer().value).toBe("look at this @.eldrun/inbox/20260831-120000-IMG_0042.jpg ");
-    expect(screen.queryByRole("status")).toBeNull();
+    // Delivered: the draft is left alone — the reader may still be typing —
+    // and the file waits as a thumbnail beside it, never as `@` text in it.
+    expect(composer().value).toBe("look at this");
+    expect(landed()).toHaveLength(1);
+    expect(landed()[0]).toContain("IMG_0042.jpg");
     // The picker is reset so the same photo can be picked again.
     expect(fileInput().value).toBe("");
+
+    fireEvent.change(composer(), { target: { value: "look at this, the left one" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle(0);
+    expect(reportedPrompt(fetchMock)).toBe(`look at this, the left one @${NAMES.inboxDir}/20260831-120000-IMG_0042.jpg `);
+    expect(composer().value).toBe("");
+    expect(landed()).toHaveLength(0);
+  });
+
+  it("never touches the draft while a file is on its way, and holds Send until it lands", async () => {
+    let answer: (response: Response) => void = () => {};
+    const fetchMock = vi.fn((url: string) => url.includes("/inbox?")
+      ? new Promise<Response>((resolve) => { answer = resolve; })
+      : Promise.resolve(jsonResponse(200, {})));
+    vi.stubGlobal("fetch", routeOutbox(fetchMock));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+
+    pick([new File(["abc"], "plan.pdf", { type: "application/pdf" })]);
+    fireEvent.change(composer(), { target: { value: "half a sent" } });
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    // Enter does not slip past the disabled button either.
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    expect(reportedPrompt(fetchMock)).toBeUndefined();
+
+    await act(async () => {
+      answer(jsonResponse(201, { attachment: { name: "20261002-090000-plan.pdf", reference: `${NAMES.inboxDir}/20261002-090000-plan.pdf`, size: 3 } }));
+    });
+    await settle(0);
+    expect(composer().value).toBe("half a sent");
+    expect(send.disabled).toBe(false);
+
+    // ✕ leaves a landed file out of the message; the words alone still go.
+    fireEvent.click(screen.getByRole("button", { name: "Leave plan.pdf out of the message" }));
+    expect(landed()).toHaveLength(0);
+    fireEvent.click(send);
+    await settle(0);
+    expect(reportedPrompt(fetchMock)).toBe("half a sent");
+  });
+
+  it("keeps a landed file with the saved draft and brings it back as a thumbnail, not as @ text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, {
+      attachment: { name: "20261002-090000-a.png", reference: `${NAMES.inboxDir}/20261002-090000-a.png`, size: 3 },
+    }));
+    vi.stubGlobal("fetch", routeOutbox(fetchMock));
+    const view = render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.change(composer(), { target: { value: "see" } });
+    pick([new File(["abc"], "a.png", { type: "image/png" })]);
+    await settle(0);
+    view.unmount();
+
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    expect(composer().value).toBe("see ");
+    expect(landed()).toEqual(["a.png"]);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await settle(0);
+    expect(reportedPrompt(fetchMock)).toBe(`see @${NAMES.inboxDir}/20261002-090000-a.png `);
   });
 
   it("reports a refused or oversized file and keeps the draft untouched", async () => {
@@ -221,7 +303,7 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
         { id: "0123456789abcdef0123456789abcdef", name: "Screenshot_2026-09-03.png", source: "Screenshots", size: 1_300_000, age_secs: 200 },
       ] }))
       .mockResolvedValueOnce(jsonResponse(201, {
-        attachment: { name: "20260903-100000-Screenshot_2026-09-03.png", reference: ".eldrun/inbox/20260903-100000-Screenshot_2026-09-03.png", size: 1_300_000 },
+        attachment: { name: "20260903-100000-Screenshot_2026-09-03.png", reference: `${NAMES.inboxDir}/20260903-100000-Screenshot_2026-09-03.png`, size: 1_300_000 },
       }));
     vi.stubGlobal("fetch", routeOutbox(fetchMock));
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -242,8 +324,9 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Screenshot_2026-09-03\.png/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    // A pending row names the file while the desktop copies it.
-    expect(screen.getByRole("status").textContent).toContain("Copying from the desktop");
+    // A pending thumbnail names the file while the desktop copies it.
+    expect(sending()).toEqual(["Screenshot_2026-09-03.png"]);
+    expect(composerStatus().textContent).toContain("Copying from the desktop");
     await settle(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -251,8 +334,8 @@ describe("Eldrun Mobile composer + and the frozen reading view", () => {
     expect(url).toBe("/api/v1/tabs/tab-7/desktop-images");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ image_id: "0123456789abcdef0123456789abcdef" });
-    expect(composer().value).toBe("fix this @.eldrun/inbox/20260903-100000-Screenshot_2026-09-03.png ");
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(composer().value).toBe("fix this");
+    expect(landed().some((text) => text.includes("Screenshot_2026-09-03.png"))).toBe(true);
   });
 
   it("says when the desktop has nothing to attach, and names a copy that failed", async () => {

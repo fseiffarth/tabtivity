@@ -676,8 +676,9 @@ export function MailPane({ visible }: MailPaneProps) {
               lit — so, like the priority group, it carries an "All accounts"
               scope label and each row names its account. Selecting it lists them
               the way a folder lists messages; a draft opens in the composer
-              (switching to its account), never sends. Every draft, orphans
-              included, is also a row in the title bar's ✓ Approvals panel. */}
+              (switching to its account), never sends. A draft lands here only
+              once approved in the title bar's ✓ Approvals panel (`filed`); an
+              agent's later edit sends it back there. */}
           {(agentDrafts.length > 0 || draftsOpen) && (
             <div className="mail-rail-agent-section">
               <div className="mail-rail-title">

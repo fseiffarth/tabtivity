@@ -406,7 +406,7 @@ export function ProjectFilesSettingsDialog({
           </>
         )}
 
-        {/* Step-by-step migration of an old project to the current Eldrun
+        {/* Step-by-step migration of an old project to the current Tabtivity
             state (scaffold files, agent-doc templates, .gitignore defaults,
             registry fields) — the reviewed, per-step counterpart of the pill's
             all-at-once "Repair scaffold files". */}

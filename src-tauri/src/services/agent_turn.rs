@@ -12,9 +12,9 @@
 //! agent's habit and broke another's reading. The agents themselves know
 //! exactly when a turn starts (`UserPromptSubmit`), pauses on the user
 //! (`Notification` with `permission_prompt`), resumes (`PostToolUse`) and ends
-//! (`Stop`), and both Claude Code and Codex run Eldrun's hook script on those
+//! (`Stop`), and both Claude Code and Codex run Tabtivity's hook script on those
 //! events already (see `services::agent_session`). The script writes one small
-//! record per tab, `<live_sessions>/<ELDRUN_TAB_UID>.turn`, holding the state
+//! record per tab, `<live_sessions>/<TABTIVITY_TAB_UID>.turn`, holding the state
 //! word; this module watches that directory and hands the state to the
 //! frontend's activity store, which treats it as the authority for the tab and
 //! keeps the byte heuristic only for agents that fire no hooks (Gemini, Qwen,
@@ -28,7 +28,7 @@
 //! slice is mounted at the shared root's path, so on the host the file lands
 //! in `<live_sessions>/<project>/`; the watch is recursive for that reason.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -109,6 +109,7 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> bool {
     bindings().lock().unwrap().insert(uid.to_string(), pty_id.to_string());
     states().lock().unwrap().remove(uid);
     jobs().lock().unwrap().remove(uid);
+    settled().lock().unwrap().remove(uid);
     let cut_off = records_hold_turn_in_flight(&record_paths(uid, project_id));
     clear_record(uid, project_id);
     cut_off
@@ -135,9 +136,11 @@ pub fn on_tab_gone(pty_id: &str) {
     drop(b);
     let mut states = states().lock().unwrap();
     let mut jobs = jobs().lock().unwrap();
+    let mut settled = settled().lock().unwrap();
     for uid in gone {
         states.remove(&uid);
         jobs.remove(&uid);
+        settled.remove(&uid);
     }
 }
 
@@ -233,6 +236,43 @@ const JOB_POLL: Duration = Duration::from_secs(2);
 /// worth; within this window the last scan's answer is reused.
 const JOB_SCAN_MAX_AGE: Duration = Duration::from_millis(500);
 
+/// How often the scan still runs when every tab it would ask about is
+/// [`settled`]: a backstop for a job that starts without any hook saying so,
+/// not the cadence anything relies on.
+const JOB_POLL_SETTLED: Duration = Duration::from_secs(30);
+
+/// uids whose last scan found nothing to report while their turn was over
+/// (`done`) or paused on the user (`decision`). Such a tab cannot grow a job
+/// until its agent acts again, and an agent acting is a hook record — which
+/// [`note_state`] turns into an unsettle — so the idle 2 s walk of `/proc` is
+/// skipped while every tab is settled (see [`job_poll_due`]). A fleet of agent
+/// tabs sitting finished is the resting state of the app; this is what makes
+/// it cost no process-table walks.
+fn settled() -> &'static Mutex<HashSet<String>> {
+    static S: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Whether the timer-driven scan has anything to find: some tab whose hooks
+/// have spoken is not [`settled`], or the backstop interval is up.
+fn job_poll_due() -> bool {
+    let last = *last_scan().lock().unwrap();
+    let bound: Vec<String> = bindings().lock().unwrap().keys().cloned().collect();
+    let states = states().lock().unwrap();
+    let settled = settled().lock().unwrap();
+    poll_due(
+        last,
+        bound.iter().filter(|uid| states.contains_key(*uid)).map(|uid| settled.contains(uid)),
+    )
+}
+
+/// The rule of [`job_poll_due`]: look when no scan is on record or the last
+/// one is older than [`JOB_POLL_SETTLED`], or when any asked-about tab (one
+/// `bool` each: is it settled) is not settled.
+fn poll_due(last_scan: Option<Instant>, mut settled_flags: impl Iterator<Item = bool>) -> bool {
+    last_scan.is_none_or(|at| at.elapsed() >= JOB_POLL_SETTLED) || settled_flags.any(|s| !s)
+}
+
 /// uid → whether a shell of that agent's was running at the last scan.
 fn jobs() -> &'static Mutex<HashMap<String, bool>> {
     static J: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
@@ -257,6 +297,8 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
 /// Record what the hooks just said about `uid`. `Idle` is the session's end:
 /// its state and job flag go with it.
 fn note_state(uid: &str, state: TurnState) {
+    // Whatever the agent just did, the next timer tick must look again.
+    settled().lock().unwrap().remove(uid);
     if state == TurnState::Idle {
         states().lock().unwrap().remove(uid);
         jobs().lock().unwrap().remove(uid);
@@ -316,6 +358,18 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
     // A tab that is gone takes its flag with it (`on_tab_gone` does the same for
     // one closed between scans).
     jobs.retain(|uid, _| want.contains_key(uid.as_str()));
+    // Settle every tab this scan cleared whose agent is not mid-turn. Taken
+    // while `states` is still held, so a record noted after the walk (which
+    // unsettles) cannot be overwritten by this scan's stale verdict.
+    let mut settled = settled().lock().unwrap();
+    settled.retain(|uid| want.contains_key(uid.as_str()));
+    for (uid, state) in &want {
+        if !live.contains(*uid) && matches!(state, TurnState::Done | TurnState::Decision) {
+            settled.insert((*uid).to_string());
+        } else {
+            settled.remove(*uid);
+        }
+    }
     out
 }
 
@@ -368,7 +422,7 @@ fn is_background_job(cmdline: &str, state: TurnState) -> bool {
 fn environ_uid(environ: &[u8]) -> Option<String> {
     environ
         .split(|b| *b == 0)
-        .find_map(|kv| kv.strip_prefix(&b"ELDRUN_TAB_UID="[..]))
+        .find_map(|kv| kv.strip_prefix(concat!(crate::app_env!("TAB_UID"), "=").as_bytes()))
         .and_then(|v| std::str::from_utf8(v).ok())
         .map(str::to_string)
 }
@@ -381,7 +435,7 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
 ///
 /// The PTY's process tree cannot answer this — an agent tab runs under tmux, so
 /// the agent hangs off the tmux server, not the tab's PTY — but every process
-/// under the tab inherits `ELDRUN_TAB_UID`, fenced ones included (bubblewrap
+/// under the tab inherits `TABTIVITY_TAB_UID`, fenced ones included (bubblewrap
 /// moves the pid namespace, not the owner, so the host still reads their
 /// environ). Linux reads `/proc`; elsewhere no tab ever reports a job. A
 /// contained agent's shells belong to the container's user and a remote one's
@@ -497,6 +551,9 @@ pub fn start(app: AppHandle) {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    if !job_poll_due() {
+                        continue;
+                    }
                     for (pty, st, job) in refresh_jobs(None) {
                         emit(pty, st, job);
                     }
@@ -536,7 +593,7 @@ mod tests {
 
     #[test]
     fn binding_maps_a_record_to_its_pty_and_a_gone_pty_unbinds() {
-        let dir = std::env::temp_dir().join(format!("eldrun-turn-{}-{}", std::process::id(), line!()));
+        let dir = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-turn-{}-{}"), std::process::id(), line!()));
         std::fs::create_dir_all(&dir).unwrap();
         let uid = "turn-test-uid-1";
         let pty = "proj-a:agent-turn-1";
@@ -560,7 +617,7 @@ mod tests {
 
     #[test]
     fn a_leftover_record_mid_turn_reads_as_cut_off() {
-        let dir = std::env::temp_dir().join(format!("eldrun-turn-{}-{}", std::process::id(), line!()));
+        let dir = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-turn-{}-{}"), std::process::id(), line!()));
         std::fs::create_dir_all(&dir).unwrap();
         let root = dir.join("a.turn");
         let slice = dir.join("b.turn");
@@ -621,9 +678,9 @@ mod tests {
 
     #[test]
     fn environ_match_is_exact_on_the_uid() {
-        let env = b"HOME=/h\0ELDRUN_TAB_UID=aaaa-1\0PATH=/bin\0";
+        let env = concat!("HOME=/h\0", crate::app_env!("TAB_UID"), "=aaaa-1\0PATH=/bin\0").as_bytes();
         assert_eq!(environ_uid(env).as_deref(), Some("aaaa-1"));
-        assert_eq!(environ_uid(b"X_ELDRUN_TAB_UID=aaaa-1\0"), None);
+        assert_eq!(environ_uid(concat!("X_", crate::app_env!("TAB_UID"), "=aaaa-1\0").as_bytes()), None);
         assert_eq!(environ_uid(b"HOME=/h\0"), None);
     }
 
@@ -665,7 +722,7 @@ mod tests {
         let fg_uid = format!("job-fg-{}", std::process::id());
         let bg_pty = "proj-j:agent-bg";
         let fg_pty = "proj-j:agent-fg";
-        let tmp = std::env::temp_dir().join(format!("eldrun-job-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-job-{}"), std::process::id()));
         let snap = tmp.join("shell-snapshots");
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
@@ -687,7 +744,7 @@ mod tests {
                     snapshot.display(),
                     cwd_file.display(),
                 ))
-                .env("ELDRUN_TAB_UID", uid)
+                .env(crate::app_env!("TAB_UID"), uid)
                 .spawn()
                 .unwrap()
         };
@@ -729,6 +786,49 @@ mod tests {
         on_tab_gone(bg_pty);
         on_tab_gone(fg_pty);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn the_idle_scan_runs_only_while_some_tab_is_unsettled_or_the_backstop_is_up() {
+        let now = Some(Instant::now());
+        assert!(!poll_due(now, [true, true].into_iter()));
+        assert!(!poll_due(now, std::iter::empty()));
+        assert!(poll_due(now, [true, false].into_iter()));
+        assert!(poll_due(None, [true].into_iter()));
+        let stale = Instant::now().checked_sub(JOB_POLL_SETTLED + Duration::from_secs(1));
+        if stale.is_some() {
+            assert!(poll_due(stale, [true].into_iter()));
+        }
+    }
+
+    #[test]
+    fn a_finished_tab_with_no_job_settles_until_its_agent_speaks_again() {
+        let _guard = scan_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let uid = format!("job-settle-{}", std::process::id());
+        let pty = "proj-j:agent-settle";
+        let is_settled = |uid: &str| settled().lock().unwrap().contains(uid);
+        bind_tab(&uid, pty, None);
+        // Mid-turn the tab is never settled: a job can start at any moment.
+        note_state(&uid, TurnState::Working);
+        rescan();
+        refresh_jobs(None);
+        assert!(!is_settled(&uid));
+        // Its turn over and nothing of its own running: settled.
+        note_state(&uid, TurnState::Done);
+        rescan();
+        refresh_jobs(None);
+        assert!(is_settled(&uid));
+        // Any hook record — the agent acting again — unsettles at once, before
+        // any scan has run.
+        note_state(&uid, TurnState::Working);
+        assert!(!is_settled(&uid));
+        note_state(&uid, TurnState::Decision);
+        rescan();
+        refresh_jobs(None);
+        assert!(is_settled(&uid));
+        // A gone tab takes its mark with it.
+        on_tab_gone(pty);
+        assert!(!is_settled(&uid));
     }
 
     #[test]

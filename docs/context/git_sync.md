@@ -92,7 +92,7 @@ the *why*.
   - **The giant folders are asked about once, at setup, on both sides**
     (`services::big_folders` → `BigFolderExcludeDialog`). Pricing one folder on the
     click that syncs it is too late for a project whose `node_modules/`, `.venv/`,
-    `data/` or `checkpoints/` was there before Eldrun was: nothing else in the app
+    `data/` or `checkpoints/` was there before Tabtivity was: nothing else in the app
     would ever mention them, since byte-sync doesn't read `.gitignore`. So a
     project newly created/imported as remote, or **extended** to a host, gets one
     census — the local mirror walked directly, the host in one `du -ak` round trip
@@ -108,7 +108,7 @@ the *why*.
     host walker's exact regular-file list (NUL-delimited), rather than widening
     a folder pull back to the raw subtree. That keeps the confirmation preview,
     manifest accounting, and transferred bytes on the same path set: `.git`,
-    `.eldrun`, nested repositories, and symlinks remain outside byte-sync even
+    `.tabtivity`, nested repositories, and symlinks remain outside byte-sync even
     when rsync is available on both ends. If that allowlist cannot be confined
     to the requested subtree, the transfer falls back to the SFTP path.
 - **Concurrent writers are serialized at their ownership boundary.** Every
@@ -130,13 +130,13 @@ the *why*.
   no side is picked: the pass reconciles refs only and `head_mismatch` reports
   it, exactly as for any other case where there is no principled follower.
 - **A pass must not wake itself.** Every pass writes inside the mirror's `.git`
-  (bundle, `refs/eldrun/*`, fetched objects, `index`) — the directory the
+  (bundle, `refs/tabtivity/*`, fetched objects, `index`) — the directory the
   lockstep watcher observes. While green the D5 early-out absorbed that; while
   red nothing did, so a diverged or blocked project re-ran the full SSH pass
   every debounce window. `poll_loop` now records the mirror's ref signature
   after each pass and skips a watcher burst that leaves it unchanged
   (`watcher_burst_is_own`); the 12 s poll still covers anything real in that
-  window. Byte-sync's mirror watcher ignores `.git`/`.eldrun` outright
+  window. Byte-sync's mirror watcher ignores `.git`/`.tabtivity` outright
   (`event_touches_synced_bytes`) — it never moves a byte of either, and every
   lockstep pass used to cost it a host walk.
 - **Lockstep-owned rows are not stat'd** (`sync_status`). The pairing seed puts

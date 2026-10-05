@@ -15,7 +15,7 @@
 //! ref/commit transfer + missing-ref creation; coordinated checkout that pauses file
 //! auto-sync and re-stamps its bases so checkout writes don't become false conflicts;
 //! and **detection + display** of a desynchronized state (diverged history / dirty
-//! peer). Full Use-local/Use-remote resolution with `refs/eldrun/backup/*` and messy
+//! peer). Full Use-local/Use-remote resolution with `refs/tabtivity/backup/*` and messy
 //! initial-pairing authority are deferred to Phase 2/3.
 //!
 //! **Hardening (#28p).** Byte-sync (`sync_auto`) and this module are two transports
@@ -247,9 +247,10 @@ impl Peer {
             // Hardened, hooks off: lockstep runs `status`/`checkout`/`merge`/
             // `commit` in the background, in a tree a fenced agent can write — its
             // `.git/config` and `.git/hooks/` included.
-            Peer::Local(dir) => crate::commands::git::hookless_git_command_in(dir, args)
-                .output()
-                .map_err(|e| e.to_string()),
+            // Bounded (#2349): a FIFO the agent planted must not hang lockstep.
+            Peer::Local(dir) => {
+                crate::services::git_bounded::output(crate::commands::git::hookless_git_command_in(dir, args))
+            }
             Peer::Remote(spec) => {
                 let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
                 ssh_exec::run_git_remote(spec, &owned)
@@ -400,11 +401,11 @@ fn is_empty_bundle_error(stderr: &str) -> bool {
 }
 
 /// The two refspecs that import a bundle's refs into the receiver's isolated
-/// `refs/eldrun/incoming/*` namespace — never touching real `refs/heads`/`refs/tags`.
+/// `refs/tabtivity/incoming/*` namespace — never touching real `refs/heads`/`refs/tags`.
 pub fn incoming_fetch_refspecs() -> [String; 2] {
     [
-        "refs/heads/*:refs/eldrun/incoming/heads/*".to_string(),
-        "refs/tags/*:refs/eldrun/incoming/tags/*".to_string(),
+        format!("refs/heads/*:{}/heads/*", crate::brand::GIT_REF_INCOMING),
+        format!("refs/tags/*:{}/tags/*", crate::brand::GIT_REF_INCOMING),
     ]
 }
 
@@ -466,7 +467,7 @@ fn files_changed_by_moves(dest: &Peer, moves: &[(Option<String>, String)]) -> us
 /// A timestamped safety-ref name for a to-be-overwritten branch (Phase 2 uses it to
 /// back up the losing side before a reset; Phase 1 only names it).
 pub fn backup_ref_name(branch_short: &str, now_secs: u64) -> String {
-    format!("refs/eldrun/backup/{now_secs}/{branch_short}")
+    format!("{}/{now_secs}/{branch_short}", crate::brand::GIT_REF_BACKUP)
 }
 
 /// The ref a diverged branch's *peer* tip is parked at on this side (#28p D8), so the
@@ -474,10 +475,10 @@ pub fn backup_ref_name(branch_short: &str, now_secs: u64) -> String {
 /// pick-a-winner. The objects are already local (the bundle brought them), so keeping
 /// the ref is free.
 pub fn peer_ref_name(branch_short: &str) -> String {
-    format!("refs/eldrun/peer/{branch_short}")
+    format!("{}/{branch_short}", crate::brand::GIT_REF_PEER)
 }
 
-/// What to do with a branch's `refs/eldrun/peer/*` ref after classifying it (#28p D8):
+/// What to do with a branch's `refs/tabtivity/peer/*` ref after classifying it (#28p D8):
 /// park the peer tip only while the branch is genuinely diverged and unresolved;
 /// otherwise clear a stale one so the ref never outlives the divergence it documents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -958,7 +959,7 @@ pub fn pairing_collisions(
 
 // ── Backup refs (#28p D6) ───────────────────────────────────────────────────
 
-/// One `refs/eldrun/backup/<ts>/<branch>` safety ref, as listed for the Backups UI.
+/// One `refs/tabtivity/backup/<ts>/<branch>` safety ref, as listed for the Backups UI.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRef {
@@ -973,7 +974,7 @@ pub struct BackupRef {
 
 /// Inverse of [`backup_ref_name`]. Pure.
 pub fn parse_backup_ref_name(refname: &str) -> Option<(u64, String)> {
-    let rest = refname.strip_prefix("refs/eldrun/backup/")?;
+    let rest = refname.strip_prefix(crate::brand::GIT_REF_BACKUP)?.strip_prefix('/')?;
     let (ts, branch) = rest.split_once('/')?;
     if branch.is_empty() {
         return None;
@@ -982,7 +983,7 @@ pub fn parse_backup_ref_name(refname: &str) -> Option<(u64, String)> {
 }
 
 /// Parse `for-each-ref --format='%(objectname)%09%(refname)%09%(contents:subject)'`
-/// over `refs/eldrun/backup`. Pure.
+/// over `refs/tabtivity/backup`. Pure.
 pub fn parse_backup_refs(peer: &str, stdout: &str) -> Vec<BackupRef> {
     let mut out: Vec<BackupRef> = stdout
         .lines()
@@ -1198,7 +1199,7 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
 /// the very fast-forward that would have delivered it properly.
 ///
 /// NUL-delimited so paths with spaces/quotes survive verbatim (no `core.quotePath`
-/// escaping). `.git` is never listed by `ls-files`; a gitignored `.eldrun` won't be
+/// escaping). `.git` is never listed by `ls-files`; a gitignored `.tabtivity` won't be
 /// either — both stay out of byte-sync, as elsewhere. Empty set on any failure, which
 /// degrades to today's (racy but working) behaviour rather than silently syncing nothing.
 pub fn tracked_paths(project_id: &str) -> HashSet<String> {
@@ -1241,10 +1242,10 @@ pub fn non_ignored_paths(project_id: &str) -> Option<HashSet<String>> {
 fn local_bundle_path(project_id: &str) -> PathBuf {
     mirror_dir(project_id)
         .join(".git")
-        .join("eldrun-lockstep.bundle")
+        .join(crate::brand::LOCKSTEP_BUNDLE)
 }
 fn remote_bundle_path(spec: &RemoteSpec) -> String {
-    remote_sync::join_remote(&spec.remote_path, ".git/eldrun-lockstep.bundle")
+    remote_sync::join_remote(&spec.remote_path, &format!(".git/{}", crate::brand::LOCKSTEP_BUNDLE))
 }
 
 fn sha_of<'a>(snap: &'a PeerSnapshot, kind: RefKind, name: &str) -> Option<&'a str> {
@@ -1270,7 +1271,7 @@ enum RefKind {
 /// When `force` is set (the Use-local/Use-remote resolution, #28n Phase 2), `source`
 /// is the user-chosen authority: a diverged branch or one where `dest` is *ahead* is
 /// reset to `source`'s sha after saving the overwritten tip to a timestamped
-/// `refs/eldrun/backup/*` safety ref (a checked-out loser branch is `reset --hard`,
+/// `refs/tabtivity/backup/*` safety ref (a checked-out loser branch is `reset --hard`,
 /// moving ref + working tree). Tags conflicting on sha are likewise force-moved with
 /// a backup. `force` never widens what history *transfers*, only how `dest` applies it.
 async fn transfer_and_apply(
@@ -1379,7 +1380,7 @@ async fn transfer_and_apply(
     }
 
     // 4. Apply safe updates per branch. One shared timestamp so every safety ref this
-    //    forced pass creates sorts under the same `refs/eldrun/backup/<ts>/` batch.
+    //    forced pass creates sorts under the same `refs/tabtivity/backup/<ts>/` batch.
     let head_branch = match &dest.head {
         Some(HeadRef::Branch { name, .. }) => Some(name.clone()),
         _ => None,
@@ -1859,7 +1860,7 @@ async fn stale_byte_sync_residue(
 /// the incoming fetch just deposited, wrote exactly this content at some point
 /// (#28p D10). `git cat-file -e` checks object *existence*, not reachability from any
 /// ref, so this is true for an object the bundle fetch just brought into
-/// `refs/eldrun/incoming/*` even before any ref points at it.
+/// `refs/tabtivity/incoming/*` even before any ref points at it.
 fn object_already_known(peer: &Peer, path: &str) -> bool {
     let Some(hash) = peer
         .run(&["hash-object", "--", path])
@@ -1965,7 +1966,7 @@ fn audit_local_head_move(project_id: &str, from_sha: &str, op: &str) {
 }
 
 /// Force-move `dest`'s `branch` from `dst_sha` to the authority's `src_sha` during a
-/// resolution, after saving the overwritten tip to a timestamped `refs/eldrun/backup/*`
+/// resolution, after saving the overwritten tip to a timestamped `refs/tabtivity/backup/*`
 /// safety ref so nothing is lost. When the branch is the dest's checked-out HEAD, a
 /// `reset --hard` moves the ref *and* the working tree; otherwise the ref is force-set
 /// with `update-ref`'s old-value guard. Best-effort (each step ignores its own error;
@@ -2012,13 +2013,13 @@ async fn move_bundle(
     }
 }
 
-/// Delete the `refs/eldrun/incoming/*` tracking refs on a peer after applying.
+/// Delete the `refs/tabtivity/incoming/*` tracking refs on a peer after applying.
 fn cleanup_incoming(peer: &Peer) {
     // `for-each-ref` then delete each; best-effort.
     if let Ok(out) = peer.run(&[
         "for-each-ref",
         "--format=%(refname)",
-        "refs/eldrun/incoming",
+        crate::brand::GIT_REF_INCOMING,
     ]) {
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let r = line.trim();
@@ -2031,6 +2032,10 @@ fn cleanup_incoming(peer: &Peer) {
 
 async fn cleanup_bundles(pool: &RemotePoolState, project_id: &str, spec: &RemoteSpec) {
     let _ = std::fs::remove_file(local_bundle_path(project_id));
+    // What an interrupted transfer of an older build left under the old name.
+    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::LOCKSTEP_BUNDLE) {
+        let _ = std::fs::remove_file(mirror_dir(project_id).join(".git").join(old));
+    }
     if let Some(sftp) = crate::services::remote::pooled_sftp(pool, project_id).await {
         let _ = sftp::remove_file_on(&sftp, &remote_bundle_path(spec)).await;
     }
@@ -2069,7 +2074,7 @@ async fn init_pairing(
 
     // Defense-in-depth: init_pairing's contract is that `dest` is the *empty* side.
     // If a misprobe/race routed us here with a dest that actually already holds
-    // commits, back every existing branch tip up to `refs/eldrun/backup/*` BEFORE the
+    // commits, back every existing branch tip up to `refs/tabtivity/backup/*` BEFORE the
     // `reset --hard` below can move them — so an unexpected non-empty dest is always
     // recoverable rather than silently wiped. Truly-empty dests probe clean and skip.
     let pre = probe(&dest_peer);
@@ -2083,7 +2088,7 @@ async fn init_pairing(
 
     // The host root must exist before any remote git can run: every remote command is
     // `cd '<remote_path>' && git …`, so a missing directory fails ALL of them — including
-    // the `git init` below. Eldrun only `mkdir -p`s the root at create/extend time, which
+    // the `git init` below. Tabtivity only `mkdir -p`s the root at create/extend time, which
     // leaves a host whose directory is later removed (or whose creation was refused back
     // then — it is best-effort there) permanently unpairable. Idempotent, so re-pairing an
     // existing host costs one cheap round trip.
@@ -2315,7 +2320,7 @@ fn hash_objects(peer: &Peer, paths: &[String]) -> HashMap<String, String> {
 /// `init_pairing` was hardened against for a not-yet-a-repo dest (D3) — but
 /// `resolve`'s and `restore_backup`'s force-reset of an *existing* repo's checked-out
 /// branch had no equivalent guard. A path git never tracked is invisible to the
-/// `refs/eldrun/backup/*` safety net (that only saves refs), so without this check it
+/// `refs/tabtivity/backup/*` safety net (that only saves refs), so without this check it
 /// is destroyed with no way back. Conservative like `pairing_collisions`: an
 /// unprovable hash counts as a difference. Reuses `hash_objects`, so it costs no new
 /// primitive.
@@ -2832,7 +2837,7 @@ async fn checkout_lockstep_inner(
             ));
         }
         // #28q: a checkout deletes the tracked files the target commit doesn't carry.
-        // Audited only when Eldrun ran it — `already_checked_out` means the user ran
+        // Audited only when Tabtivity ran it — `already_checked_out` means the user ran
         // `git checkout` themselves in a terminal, where git already said so.
         if initiating_local {
             audit_local_head_move(project_id, &old_local_sha, &format!("checkout '{target}'"));
@@ -2925,7 +2930,7 @@ pub fn winner_is_local(authority: &str) -> bool {
 /// chosen `authority` (`"local"` or `"remote"`) becomes the source of truth: every
 /// diverged branch — and every branch where the *losing* side is ahead — is reset to
 /// the winner's commit, after the overwritten tip is saved to a timestamped
-/// `refs/eldrun/backup/*` safety ref so nothing is discarded irrecoverably. Conflicting
+/// `refs/tabtivity/backup/*` safety ref so nothing is discarded irrecoverably. Conflicting
 /// tags are force-moved the same way. File auto-sync is paused for the duration and its
 /// tracked-file bases are re-stamped afterward (a losing local branch is `reset --hard`,
 /// rewriting the mirror tree), then a normal reconcile recomputes the (now
@@ -3040,12 +3045,12 @@ const BACKUP_KEEP_N: usize = 20;
 /// …and keep anything younger than this regardless of the count.
 const BACKUP_MAX_AGE: u64 = 30 * 24 * 60 * 60;
 
-/// Every `refs/eldrun/backup/*` safety ref on one peer, newest first.
+/// Every `refs/tabtivity/backup/*` safety ref on one peer, newest first.
 fn backups_on(peer: &Peer, label: &str) -> Vec<BackupRef> {
     peer.run(&[
         "for-each-ref",
         "--format=%(objectname)%09%(refname)%09%(contents:subject)",
-        "refs/eldrun/backup",
+        crate::brand::GIT_REF_BACKUP,
     ])
     .ok()
     .filter(|o| o.status.success())
@@ -3081,7 +3086,7 @@ pub async fn restore_backup(
     if !connected(pool, project_id).await {
         return Err("Not connected to the remote host".to_string());
     }
-    let (_, branch) = parse_backup_ref_name(refname).ok_or("Not an Eldrun backup ref")?;
+    let (_, branch) = parse_backup_ref_name(refname).ok_or(concat!("Not a ", crate::app_name!(), " backup ref"))?;
     let peer = if peer_label == "remote" {
         Peer::Remote(spec.clone())
     } else {
@@ -3305,7 +3310,7 @@ pub async fn start(
     // probe every 12 s for as long as the project is open is exactly the standing
     // load a login node's rules ask you not to put there. Lockstep's manual
     // reconcile (and the local `.git` watcher's push) still work — what stops is
-    // Eldrun asking the cluster, unprompted, forever.
+    // Tabtivity asking the cluster, unprompted, forever.
     if crate::services::hpc_mode::is_hpc_spec(&target.spec) {
         return;
     }
@@ -3403,7 +3408,7 @@ async fn poll_loop(
 
     // The mirror's signature as this task last left it — what tells a watcher burst
     // caused by *our own* `.git` writes apart from one caused by the user. Every pass
-    // writes inside `.git` (the bundle file, `refs/eldrun/*`, the objects a fetch
+    // writes inside `.git` (the bundle file, `refs/tabtivity/*`, the objects a fetch
     // deposits, `index`/`ORIG_HEAD` from a merge), and each of those trips the very
     // watcher that queues the next pass. While green the D5 early-out absorbed that;
     // while red — diverged, blocked, a pairing refusal — nothing did, and the loop
@@ -3581,6 +3586,7 @@ pub async fn detect_and_sync(
 
 #[cfg(test)]
 mod tests {
+    use crate::brand::SLUG;
     use super::*;
 
     #[tokio::test]
@@ -3617,7 +3623,7 @@ mod tests {
     fn probe_missing_local_dir_is_clean_empty_not_error() {
         // A local dir that does not exist is a legitimately-empty side (nothing to
         // destroy) — it must NOT flag `probe_error`, so pairing can still create it.
-        let missing = std::path::PathBuf::from("/definitely/not/a/real/eldrun/dir/xyz");
+        let missing = std::path::PathBuf::from(concat!("/definitely/not/a/real/", crate::app_slug!(), "/dir/xyz"));
         let snap = probe(&Peer::Local(missing));
         assert!(!snap.is_repo);
         assert!(!snap.probe_error, "missing dir must read as clean-empty");
@@ -3778,12 +3784,12 @@ mod tests {
     #[test]
     fn incoming_refspecs_are_namespaced() {
         let specs = incoming_fetch_refspecs();
-        assert!(specs[0].ends_with(":refs/eldrun/incoming/heads/*"));
-        assert!(specs[1].ends_with(":refs/eldrun/incoming/tags/*"));
+        assert!(specs[0].ends_with(concat!(":refs/", crate::app_slug!(), "/incoming/heads/*")));
+        assert!(specs[1].ends_with(concat!(":refs/", crate::app_slug!(), "/incoming/tags/*")));
         // Never target real refs/heads or refs/remotes on the receiver.
         assert!(specs.iter().all(|s| {
             let dst = s.split(':').nth(1).unwrap();
-            dst.starts_with("refs/eldrun/incoming/") && !dst.contains("refs/remotes")
+            dst.starts_with(concat!("refs/", crate::app_slug!(), "/incoming/")) && !dst.contains("refs/remotes")
         }));
     }
 
@@ -3820,13 +3826,13 @@ mod tests {
     fn backup_ref_name_format() {
         assert_eq!(
             backup_ref_name("feature/x", 1735689600),
-            "refs/eldrun/backup/1735689600/feature/x"
+            concat!("refs/", crate::app_slug!(), "/backup/1735689600/feature/x")
         );
         // Tag conflicts back up under a `tags/` prefix so a branch and a same-named tag
         // never collide in the safety-ref namespace.
         assert_eq!(
             backup_ref_name("tags/v1", 1735689600),
-            "refs/eldrun/backup/1735689600/tags/v1"
+            concat!("refs/", crate::app_slug!(), "/backup/1735689600/tags/v1")
         );
     }
 
@@ -4853,16 +4859,16 @@ mod tests {
         }
         assert_eq!(parse_backup_ref_name("refs/heads/main"), None);
         assert_eq!(
-            parse_backup_ref_name("refs/eldrun/backup/notanumber/x"),
+            parse_backup_ref_name(concat!("refs/", crate::app_slug!(), "/backup/notanumber/x")),
             None
         );
     }
 
     #[test]
     fn parse_backup_refs_reads_for_each_ref_output() {
-        let out = "aaa\trefs/eldrun/backup/100/main\tOld tip\n\
-                   bbb\trefs/eldrun/backup/200/feature/x\tNewer tip\n\
-                   ccc\trefs/heads/main\tnot a backup\n";
+        let out = concat!("aaa\trefs/", crate::app_slug!(), "/backup/100/main\tOld tip\n\
+                   bbb\trefs/", crate::app_slug!(), "/backup/200/feature/x\tNewer tip\n\
+                   ccc\trefs/heads/main\tnot a backup\n");
         let refs = parse_backup_refs("local", out);
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].ts, 200, "newest first");
@@ -4877,7 +4883,7 @@ mod tests {
         let day = 24 * 60 * 60;
         let mk = |ts: u64| BackupRef {
             peer: "local".into(),
-            refname: format!("refs/eldrun/backup/{ts}/main"),
+            refname: format!("refs/{SLUG}/backup/{ts}/main"),
             ts,
             branch: "main".into(),
             sha: "a".into(),
@@ -4948,7 +4954,7 @@ mod tests {
         assert_eq!(peer_ref_op(RefAction::DestAhead, false), PeerRefOp::Delete);
         // A forced pass RESOLVES the divergence, so it clears rather than parks.
         assert_eq!(peer_ref_op(RefAction::Diverged, true), PeerRefOp::Delete);
-        assert_eq!(peer_ref_name("feature/x"), "refs/eldrun/peer/feature/x");
+        assert_eq!(peer_ref_name("feature/x"), concat!("refs/", crate::app_slug!(), "/peer/feature/x"));
     }
 
     // ── #28p D9: force-reset collisions ──────────────────────────────────────

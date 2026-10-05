@@ -3,7 +3,7 @@ interface SaveIconProps {
 }
 
 /**
- * Eldrun's save mark. Its rounded current-color outline deliberately matches
+ * Tabtivity's save mark. Its rounded current-color outline deliberately matches
  * {@link PrinterIcon}, so the two file actions read as one toolbar family.
  */
 export function SaveIcon({ className }: SaveIconProps) {

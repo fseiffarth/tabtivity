@@ -37,7 +37,7 @@ export const sameWindowState = (a: WindowState, b: WindowState): boolean =>
  * keep the last floating rect and only flip the flag.
  *
  * The exception is the very first run, when there is no floating rect at all
- * (Eldrun opens maximized, and the user may never un-maximize it). Storing nothing
+ * (Tabtivity opens maximized, and the user may never un-maximize it). Storing nothing
  * would mean never learning WHICH MONITOR the window is on — the whole point of
  * the feature. So we record the maximized rect: it is a correct monitor hint, and
  * it self-corrects into a true restore rect the first time the user un-maximizes.

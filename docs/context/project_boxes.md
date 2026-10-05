@@ -101,13 +101,13 @@ A first-class persisted scope, disjoint from project ids and `"root"`:
 The box folder carries one symlink per member (`./<member>/`, Unix only) so
 agent CLIs launched there can traverse into every member's tree — that is the
 whole reason the box folder is a useful agent cwd. Ownership is the subtle
-part: `.eldrun-box-links.json` records exactly which names Eldrun created, so
+part: `.tabtivity-box-links.json` records exactly which names Tabtivity created, so
 regeneration removes only manifest-owned entries that are *still symlinks* and
 whose member vanished or moved. A user file shadowing a member's natural name
 is never replaced — the member re-links under a `-1`/`-2` suffix. Dangling
-targets are still linked (a member's folder may not exist yet). Eldrun's own
+targets are still linked (a member's folder may not exist yet). Tabtivity's own
 confinement deliberately does not follow the links; the multi-root Files view
-is Eldrun's file surface, and the allowed-roots sets are explicit.
+is Tabtivity's file surface, and the allowed-roots sets are explicit.
 
 ## What stays out of scope (v1)
 

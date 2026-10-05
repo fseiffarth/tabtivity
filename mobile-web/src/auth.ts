@@ -1,7 +1,11 @@
 import { ApiError, api, traceConnect } from "./api";
 import { classifyUnavailable, unavailableDetail, type UnavailableReason } from "./connection";
+import { LEGACY_NAMES, NAMES } from "../../src/lib/brand";
+import { adoptLegacyDatabase, databaseHost, databasePort } from "../../src/lib/brandMigration";
 
-const DB = "eldrun-mobile-auth";
+const DB = NAMES.mobileAuthDb;
+/** The database an older build of the phone app kept the device key in. */
+const LEGACY_DB = LEGACY_NAMES.mobileAuthDb;
 const STORE = "keys";
 const DEVICE = "device";
 
@@ -12,7 +16,22 @@ function b64url(bytes: ArrayBuffer): string {
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/** The device key an older build stored under the app's old name is copied
+ * over once, before the database is first used — so the phone stays paired
+ * across a rename. A failed copy keeps the old database for the next start. */
+let adopted: Promise<unknown> | null = null;
+
 export async function openAuthDatabase(): Promise<IDBDatabase> {
+  if (LEGACY_DB !== DB) {
+    adopted ??= adoptLegacyDatabase(databaseHost(indexedDB), LEGACY_DB, DB, async () =>
+      databasePort(await openCurrentAuthDatabase()),
+    ).catch(() => undefined);
+    await adopted;
+  }
+  return openCurrentAuthDatabase();
+}
+
+function openCurrentAuthDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB, 2);
     request.onupgradeneeded = () => {
@@ -115,30 +134,70 @@ const AUTH_REQUEST_TIMEOUT = 5_000;
  * attempt opens a fresh connection and goes through. That was "every second
  * unlock fails, Retry works", with the Retry press as the second attempt. The
  * browser also drops what is in flight when the network changes under it,
- * which is what the Tailscale app bringing its tunnel back looks like. A 5xx
- * the proxy wrote itself (see `classifyUnavailable`) is the sidecar
- * restarting behind Tailscale Serve, which also clears within a second or two.
+ * which is what the Tailscale app bringing its tunnel back looks like.
  */
 function transient(reason: unknown): boolean {
-  if (!(reason instanceof ApiError)) return false;
-  if (reason.status === 0) return true;
-  return reason.status >= 502 && reason.status <= 504 && reason.code === "request_failed";
+  return reason instanceof ApiError && reason.status === 0;
 }
+
+/**
+ * A 5xx the proxy wrote itself (see `classifyUnavailable`): Tailscale Serve
+ * reached the machine but nothing listens behind it. That is the sidecar
+ * restarting, which clears within a second or two — or, far more often, the
+ * desktop app closed, which stops the sidecar and clears never. Riding it out
+ * with the rest kept "Connecting…" up for the whole retry schedule, about
+ * 9 s, before the splash said the desktop app isn't running.
+ */
+function proxyDown(reason: unknown): boolean {
+  return reason instanceof ApiError && reason.status >= 502 && reason.status <= 504 && reason.code === "request_failed";
+}
+/** Further attempts after a proxy-written 5xx. Three ride the schedule's first
+ * pauses, 300 + 800 + 1,500 ms: the last goes out about 2.6 s after the
+ * first, past a sidecar restart, and a closed desktop reaches its splash
+ * then instead of after the whole window. */
+const PROXY_DOWN_RETRIES = 3;
+
+/**
+ * The sidecar keeps its challenges in memory, so one that restarted between
+ * the challenge and the session post answers `invalid_challenge`. The retry
+ * repeats the whole exchange with a fresh nonce, which the new sidecar has.
+ * Two at most: every try costs two of the device's sign-in attempts per
+ * minute (`AUTH_ATTEMPT_BUDGET`, 30), and a challenge that keeps failing is
+ * not a restart. A rejected device (`unknown_device`, `invalid_signature`)
+ * is never retried — it goes to pairing at once.
+ */
+function staleChallenge(reason: unknown): boolean {
+  return reason instanceof ApiError && reason.status === 401 && reason.code === "invalid_challenge";
+}
+const STALE_CHALLENGE_RETRIES = 2;
 
 const pause = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
-/** `login`, tried again while the failure is `transient` and the window lasts.
- * The whole exchange repeats, never just its second half: a nonce the host may
- * already have spent cannot be sent twice. */
+/** `login`, tried again while the failure is `transient` and the window lasts,
+ * or a `proxyDown`/`staleChallenge` one within its own smaller budget. Every
+ * try counts against the one schedule, so there are never more than its
+ * length plus one. The whole exchange repeats, never just its second half: a
+ * nonce the host may already have spent cannot be sent twice. */
 async function loginWithRetry(record: AuthRecord): Promise<void> {
   const started = Date.now();
+  let proxyRetries = 0;
+  let challengeRetries = 0;
   for (let attempt = 0; ; attempt += 1) {
     try {
       await login(record);
       return;
     } catch (reason) {
       const delay = RESUME_RETRY_DELAYS[attempt];
-      if (delay === undefined || !transient(reason) || Date.now() - started >= RESUME_RETRY_WINDOW) throw reason;
+      if (delay === undefined || Date.now() - started >= RESUME_RETRY_WINDOW) throw reason;
+      if (proxyDown(reason)) {
+        proxyRetries += 1;
+        if (proxyRetries > PROXY_DOWN_RETRIES) throw reason;
+      } else if (staleChallenge(reason)) {
+        challengeRetries += 1;
+        if (challengeRetries > STALE_CHALLENGE_RETRIES) throw reason;
+      } else if (!transient(reason)) {
+        throw reason;
+      }
       await pause(delay);
     }
   }

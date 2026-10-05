@@ -62,7 +62,7 @@ pub const MAX_HTML_BYTES: usize = 5 * 1024 * 1024;
 /// Element budget of the sanitized output. Over this the body is truncated with
 /// a marker. This is a **WebKitGTK responsiveness** requirement as much as a
 /// security one: the message frame renders on the same GTK main loop as
-/// Eldrun's UI, so a 100k-node body janks the whole window (plan B §2.8).
+/// Tabtivity's UI, so a 100k-node body janks the whole window (plan B §2.8).
 pub const MAX_ELEMENTS: usize = 20_000;
 
 /// Nesting budget of the *input*, enforced before the parser sees it.
@@ -91,7 +91,7 @@ const MAX_LINK_TEXT: usize = 200;
 pub struct SanitizedBody {
     pub html: String,
     pub links: Vec<MailLink>,
-    /// How many remote references were dropped, for the "Eldrun blocked n
+    /// How many remote references were dropped, for the "Tabtivity blocked n
     /// remote images" banner.
     pub remote_refs: u32,
     pub truncated: bool,
@@ -313,6 +313,13 @@ struct LinkCollector {
 /// or `style` element, and a link table the frontend renders as a separate,
 /// explicitly-confirmed clickable surface.
 pub fn sanitize_message_html(raw: &str) -> Result<SanitizedBody, SanitizeError> {
+    sanitize_within(raw, MAX_SANITIZE)
+}
+
+/// [`sanitize_message_html`] with the wall-clock budget as a parameter, so the
+/// complexity tests can bound CPU time instead: a parallel `cargo test` can
+/// leave this thread runnable but off-CPU for seconds.
+fn sanitize_within(raw: &str, budget: std::time::Duration) -> Result<SanitizedBody, SanitizeError> {
     if raw.len() > MAX_HTML_BYTES {
         return Err(SanitizeError::TooLarge { bytes: raw.len() });
     }
@@ -387,7 +394,7 @@ pub fn sanitize_message_html(raw: &str) -> Result<SanitizedBody, SanitizeError> 
         links.push(link_info(lid as u32, href, &anchor_text_at(&html, at)));
     }
 
-    if started.elapsed() > MAX_SANITIZE {
+    if started.elapsed() > budget {
         return Err(SanitizeError::Timeout);
     }
 
@@ -888,6 +895,30 @@ pub use crate::services::web_safety::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    /// CPU time this thread has used — what the complexity tests bound. Wall
+    /// time is not theirs to bound: in a 24-thread `cargo test` the sanitize
+    /// of the link-heavy body spent 0.8 s on-CPU across 6 s of wall clock.
+    #[cfg(unix)]
+    fn thread_cpu_time() -> Duration {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `now` is a valid, writable timespec for the call's duration.
+        let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+        assert_eq!(rc, 0, "clock_gettime(CLOCK_THREAD_CPUTIME_ID)");
+        Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+    }
+
+    /// Wall clock where no per-thread CPU clock is wired up (Windows CI runs
+    /// few enough test threads for it to hold).
+    #[cfg(not(unix))]
+    fn thread_cpu_time() -> Duration {
+        static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        ORIGIN.get_or_init(std::time::Instant::now).elapsed()
+    }
 
     /// Applied to **every** sanitizer fixture's output, not only the case it
     /// was written for. A payload that slips past its own assertion but trips
@@ -1148,13 +1179,13 @@ mod tests {
     #[test]
     fn a_hundred_thousand_unclosed_divs_returns_quickly_without_overflowing() {
         let input = "<div>".repeat(100_000);
-        let started = std::time::Instant::now();
-        let out = sanitize_message_html(&input).expect("must return, not overflow");
+        let started = thread_cpu_time();
+        let out = sanitize_within(&input, Duration::MAX).expect("must return, not overflow");
+        let spent = thread_cpu_time() - started;
         assert!(out.truncated, "the nesting cap must have fired");
         assert!(
-            started.elapsed() < MAX_SANITIZE,
-            "took {:?}, which is what the input caps exist to prevent",
-            started.elapsed()
+            spent < MAX_SANITIZE,
+            "took {spent:?} of CPU, which is what the input caps exist to prevent"
         );
         assert!(count_elements(&out.html) <= MAX_ELEMENTS + 1);
     }
@@ -1163,7 +1194,8 @@ mod tests {
     #[test]
     fn a_body_over_the_element_budget_is_truncated_and_says_so() {
         let input = "<p>x</p>".repeat(MAX_ELEMENTS);
-        let out = sanitize_message_html(&input).unwrap();
+        // Truncation, not speed, is under test: no wall-clock budget.
+        let out = sanitize_within(&input, Duration::MAX).unwrap();
         assert!(out.truncated);
         assert!(count_elements(&out.html) <= MAX_ELEMENTS + 1);
     }
@@ -1188,9 +1220,9 @@ mod tests {
             "the fixture must not be refused early"
         );
 
-        let started = std::time::Instant::now();
-        let out = sanitize_message_html(&input).expect("must not time out");
-        let elapsed = started.elapsed();
+        let started = thread_cpu_time();
+        let out = sanitize_within(&input, Duration::MAX).expect("must not time out");
+        let elapsed = thread_cpu_time() - started;
 
         assert!(
             elapsed < MAX_SANITIZE,

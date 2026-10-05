@@ -1,6 +1,6 @@
-## Group Z — Eldrun Server: one server, several users, thin clients
+## Group Z — Tabtivity Server: one server, several users, thin clients
 
-*Plan only; nothing is built. Design: [`docs/eldrun_hosted_plan.md`](../docs/eldrun_hosted_plan.md).
+*Plan only; nothing is built. Design: [`docs/tabtivity_hosted_plan.md`](../docs/tabtivity_hosted_plan.md).
 One Linux server runs every user's projects, terminals and agents. Desktop
 browsers and the phone PWA are thin clients. Each user gets a daemon under
 their own uid and signs in to their own agent CLIs (the admin may offer API
@@ -20,7 +20,8 @@ added here once §12 Q1, Q3 and Q4 are answered.*
 ### Z.0 — Prerequisites and pre-existing debt (#169–#172)
 
 *Kept from the removed sync-server design because each is worth doing on its
-own. #171 and #172 are P0 of the new plan.*
+own. #171 and #172 are H0 of [`docs/headless_owner_plan.md`](../docs/headless_owner_plan.md),
+the desktop groundwork the hosted plan's P1 builds on.*
 
 169. **Live-test the CalDAV push work.** *Code-complete as of 2026-07-29 (still
     uncommitted at time of writing).* `caldav_push` / `caldav_delete` /
@@ -41,7 +42,7 @@ own. #171 and #172 are P0 of the new plan.*
       the store-level gate and the refused-delete rejection
       (`src/__tests__/calendar/CalDavPushGate.test.ts`).
     - [ ] 🖐️ Manual test — Radicale in a container + Thunderbird: create/edit/
-      delete an event and a task from Eldrun and see them in Thunderbird; a
+      delete an event and a task from Tabtivity and see them in Thunderbird; a
       concurrent edit from Thunderbird surfaces as a named conflict rather than
       being overwritten; a recurring series' "this occurrence only" edit
       round-trips.
@@ -79,11 +80,11 @@ own. #171 and #172 are P0 of the new plan.*
 
 171. **Compare-and-swap on `calendar.json` writes.** `write_data`
     (`commands/calendar.rs:44-51`) is whole-file read-modify-write with no
-    revision check, so **two Eldrun windows already lose the loser's edit
+    revision check, so **two Tabtivity windows already lose the loser's edit
     silently, today, on one machine** — the board writes on every drag, from a
     second window as well. Add a per-record `rev` and make writes CAS. Worth
     doing on its own merits and a hard prerequisite for anything multi-writer.
-    - [ ] 🤖 Automated test — two interleaved read-modify-write sequences: the
+    - [x] 🤖 Automated test — two interleaved read-modify-write sequences: the
       second write is rejected and retried against fresh state rather than
       clobbering.
     - [ ] 🖐️ Manual test — two windows, same board, drag a card in each within a
@@ -101,14 +102,83 @@ own. #171 and #172 are P0 of the new plan.*
     then `fs::rename(tmp, path)` with **no `sync_all()` on either the file or the
     parent directory**, so the rename can be ordered ahead of the data. An
     accepted trade on a desktop; a data-loss path on a machine defined by being
-    unplugged rather than shut down. **Must land before any Eldrun-authored JSON
+    unplugged rather than shut down. **Must land before any Tabtivity-authored JSON
     is ever written server-side**, and it is a two-line change worth making
     regardless.
-    - [ ] 🤖 Automated test — the write path calls `sync_all` on the temp file and
+    - [x] 🤖 Automated test — the write path calls `sync_all` on the temp file and
       on the parent directory handle before returning (assert via a seam, not by
       pulling the power).
     - [ ] 🖐️ Manual test — n/a beyond "nothing regressed"; correctness here is not
       observable without a crash rig.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2339. **Serve the agent MCP servers from the Mobile host (headless spawns).**
+    The schedule, git-push, help and root MCP listener and the per-run tokens
+    it checks live in the window process (`services::root_mcp::runtime()`).
+    An agent tab the phone creates with no window open, or that the sidecar's
+    scheduler restarts (`docs/headless_owner_handoff.md`, H3 parity gaps),
+    therefore starts without `tabtivity-schedule` / `-git` / `-help`, and
+    keeps running without them after a window attaches. Move the listener and
+    token minting into the sidecar (it becomes the per-user daemon in
+    [`docs/tabtivity_hosted_plan.md`](../docs/tabtivity_hosted_plan.md) P1),
+    keeping the window as the place approval cards appear; until then, a tab
+    started headless needs a restart from a window to get its tools.
+    - Phase 1 done (2026-10-02, never live; `docs/headless_mcp_plan.md`,
+      handoff `docs/headless_mcp_handoff.md`): each process serves the tabs it
+      spawns — the Mobile host runs its own schedule/git/help listener and
+      token store (no root lane), the window keeps its own. A headless tab's
+      `git_push` / `git_release` answer `window_required` (the host never
+      reads the keychain); queuing them for the window's card is phase 2.
+    - [x] 🤖 Automated test — a headless `Create` of a Claude tab records
+      `PtyOptions` carrying the schedule/help MCP config and a token the
+      sidecar's listener accepts; a token minted by one process is refused by
+      the other's listener after a restart.
+      (`host.rs` `a_headless_claude_tab_is_handed_the_hosts_mcp_servers`: the
+      host's `start_headless` publishes its runtime; a headless create runs
+      `root_mcp::grant_lanes` — the call `launch_prep::prepare` makes, not
+      `prepare` itself, whose fence and tmux steps need a live host —
+      against the fixture's state dir through the real gates and gets the
+      schedule, git and help servers; the bound listener admits the tokens
+      over HTTP and a fresh store refuses them; root and reader lanes are
+      withheld; the phone's close revokes them. `commands::root_mcp`
+      `a_token_is_admitted_only_by_the_listener_whose_process_minted_it`.)
+    - [ ] 🖐️ Manual test — with no window open, create a Claude tab from the
+      phone; in it, `/mcp` lists `tabtivity-schedule` and `tabtivity-help`;
+      a schedule proposal waits for approval and the card appears once a
+      window opens.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2340. **Show on the phone why a new tab could not be opened.** (2026-10-02,
+    found in the headless owner's live test.) A failed ＋ shows only a short
+    red flash: `Project.tsx`'s create `catch` sets the error and then calls
+    `load()`, whose success path clears it again (`setError("")`). Keep the
+    error until the user dismisses it or starts another action. Also say
+    *why*: the Mobile host only sends `launch_failed` / `persist_failed` and logs the
+    reason to the journal (`host.rs`, "a create with no window failed"), so
+    the phone can only say "The desktop could not open that tab." Add a short
+    fixed set of reason codes the phone maps to text (e.g. the agent
+    sandbox is unavailable, a remote project needs the window, the agent
+    failed to start). Never send the raw message: it carries paths and
+    commands, which must not cross the browser API (`services::mobile_control`).
+    - [ ] 🤖 Automated test — a create that fails leaves the error visible
+      after the follow-up reload; each new reason code has phone text.
+    - [ ] 🖐️ Manual test — with the window closed and the cause still
+      present (or one forced), ＋ → Claude on the phone shows a lasting
+      message naming the reason.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)

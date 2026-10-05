@@ -3,6 +3,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { TrashIcon } from "../common/icons/Icon";
+import { type LaserPoint, paintLaserFrame } from "./laserPaint";
 
 /**
  * A presentation / walkthrough aid layered over EVERY native viewer (image,
@@ -56,8 +57,6 @@ const MAX_WIDTH = 48;
 const MARKER_ALPHA = 0.38;
 const MIN_ALPHA = 0.1;
 const MAX_ALPHA = 1;
-/** How long a laser trail point lives, in ms. */
-const LASER_LIFETIME = 420;
 
 export function PresentationOverlay() {
   const t = useT();
@@ -77,7 +76,7 @@ export function PresentationOverlay() {
   // The in-progress marker stroke (mutated during a drag; committed on release).
   const drawing = useRef<Stroke | null>(null);
   // Transient laser trail: recent pointer samples with a birth timestamp.
-  const trail = useRef<Array<{ x: number; y: number; t: number }>>([]);
+  const trail = useRef<LaserPoint[]>([]);
   // The laser's current resting position (pane-local px). Kept separate from the
   // fading trail so the dot stays lit while the pointer is STILL; null once the
   // cursor leaves the pane.
@@ -183,54 +182,7 @@ export function PresentationOverlay() {
     }
     const tick = () => {
       const c = laserRef.current;
-      const ctx = c?.getContext("2d");
-      if (c && ctx) {
-        const dpr = window.devicePixelRatio || 1;
-        const now = performance.now();
-        trail.current = trail.current.filter((p) => now - p.t < LASER_LIFETIME);
-        ctx.clearRect(0, 0, c.width, c.height);
-        ctx.save();
-        for (const p of trail.current) {
-          const age = (now - p.t) / LASER_LIFETIME; // 0 fresh → 1 gone
-          const a = 1 - age;
-          const r = (4 + 6 * a) * dpr;
-          ctx.globalAlpha = a * 0.5;
-          ctx.fillStyle = colorRef.current;
-          ctx.beginPath();
-          ctx.arc(p.x * dpr, p.y * dpr, r, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // The dot rests at the last known position, not the newest trail point,
-        // so it stays lit while the pointer is motionless (the trail fades out
-        // behind it but the head does not vanish).
-        const head = laserPos.current ?? trail.current[trail.current.length - 1];
-        if (head) {
-          // The glow is three concentric fills at decreasing alpha, NOT
-          // `ctx.shadowBlur`. A canvas shadow is a real Gaussian, recomputed
-          // every frame over a full-window canvas, and this repo renders in
-          // software (DMABUF is disabled — see the animated-box-shadow note in
-          // themes.css). Paying for that at 60fps on the machine also driving a
-          // second webview for the projector is the one place a stutter is
-          // guaranteed to be noticed.
-          ctx.fillStyle = colorRef.current;
-          for (const [r, a] of [
-            [16, 0.12],
-            [11, 0.22],
-            [7, 1],
-          ] as const) {
-            ctx.globalAlpha = a;
-            ctx.beginPath();
-            ctx.arc(head.x * dpr, head.y * dpr, r * dpr, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          ctx.fillStyle = "#ffffff";
-          ctx.globalAlpha = 0.9;
-          ctx.beginPath();
-          ctx.arc(head.x * dpr, head.y * dpr, 2.5 * dpr, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.restore();
-      }
+      if (c) trail.current = paintLaserFrame(c, trail.current, laserPos.current, colorRef.current, performance.now());
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);

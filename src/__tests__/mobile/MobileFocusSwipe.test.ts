@@ -7,10 +7,11 @@ import {
   classifySwipe,
   installFocusSwipe,
 } from "../../../mobile-web/src/terminal/focusSwipe";
+import { BRAND } from "../../lib/brand";
 
 const at = (x: number, y = 300, t = 0) => ({ x, y, t });
 
-describe("Eldrun Mobile Focus swipe classification", () => {
+describe(`${BRAND.display} Mobile Focus swipe classification`, () => {
   it("exposes the documented thresholds", () => {
     expect([SWIPE_MIN_DISTANCE, SWIPE_AXIS_RATIO, SWIPE_MAX_DURATION_MS, SWIPE_EDGE_GUARD]).toEqual([56, 2, 700, 16]);
   });
@@ -63,7 +64,7 @@ function stubScroll(element: HTMLElement, box: { scrollLeft: number; clientWidth
   element.style.overflowX = "auto";
 }
 
-describe("Eldrun Mobile Focus swipe listeners", () => {
+describe(`${BRAND.display} Mobile Focus swipe listeners`, () => {
   let host: HTMLDivElement;
   let row: HTMLDivElement;
   let now = 10_000;
@@ -127,11 +128,16 @@ describe("Eldrun Mobile Focus swipe listeners", () => {
       expect(onSwipeRight).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores mouse and pen drags", () => {
+    it("ignores mouse drags", () => {
       install();
       swipe(row, 100, 260, { pointerType: "mouse" });
-      swipe(row, 100, 260, { pointerType: "pen" });
       expect(onSwipeRight).not.toHaveBeenCalled();
+    });
+
+    it("reads a pen (the iPad's Pencil) like a finger", () => {
+      install();
+      swipe(row, 100, 260, { pointerType: "pen" });
+      expect(onSwipeRight).toHaveBeenCalledTimes(1);
     });
 
     it("ignores a drag that is too short, too slow or mostly vertical", () => {

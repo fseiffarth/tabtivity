@@ -83,7 +83,7 @@ describe("persistScope — box scope payload", () => {
       "box:b1",
     );
     await useTabsStore.getState().persistScope("box:b1", "");
-    const call = mockInvoke.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "workspace_sync");
     expect(call).toBeTruthy();
     const payload = call![1] as Record<string, unknown>;
     expect(payload.projectId).toBe("box:b1");
@@ -97,7 +97,7 @@ describe("restoreBoxScope", () => {
     useTabsStore.getState().setScope("box:b1");
     mockInvoke.mockImplementation((cmd: string) =>
       Promise.resolve(
-        cmd === "load_tab_session"
+        cmd === "workspace_snapshot"
           ? {
               tabLayout: [
                 { key: "s1", label: "sh", cmd: "", cwd: "/boxes/b1/sub", kind: "shell" },
@@ -122,7 +122,7 @@ describe("restoreBoxScope", () => {
     useTabsStore.getState().setScope("box:b1");
     mockInvoke.mockImplementation((cmd: string) =>
       Promise.resolve(
-        cmd === "load_tab_session"
+        cmd === "workspace_snapshot"
           ? {
               tabLayout: [
                 { key: "a1", label: "Claude — P", cmd: "claude", cwd: "/members/p", kind: "agent", sessionId: "11111111-1111-1111-1111-111111111111" },
@@ -140,7 +140,7 @@ describe("restoreBoxScope", () => {
   it("seeds one shell at the box folder when nothing restorable was saved", async () => {
     useTabsStore.getState().setScope("box:b1");
     mockInvoke.mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "load_tab_session" ? { tabLayout: [] } : undefined),
+      Promise.resolve(cmd === "workspace_snapshot" ? { tabLayout: [] } : undefined),
     );
     await restoreBoxScope("box:b1");
     const tabs = useTabsStore.getState().tabsByScope["box:b1"];
@@ -153,7 +153,7 @@ describe("restoreBoxScope", () => {
     // The scope in the tabs store is NOT the box scope any more.
     useTabsStore.getState().setScope("p");
     mockInvoke.mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "load_tab_session" ? { tabLayout: [] } : undefined),
+      Promise.resolve(cmd === "workspace_snapshot" ? { tabLayout: [] } : undefined),
     );
     await restoreBoxScope("box:b1");
     expect(useTabsStore.getState().tabsByScope["box:b1"]).toBeUndefined();
@@ -164,7 +164,7 @@ describe("restoreBoxScope", () => {
     useTabsStore.getState().addTab({ label: "live", cmd: "", cwd: "/boxes/b1", kind: "shell" });
     mockInvoke.mockImplementation((cmd: string) =>
       Promise.resolve(
-        cmd === "load_tab_session"
+        cmd === "workspace_snapshot"
           ? { tabLayout: [{ key: "x", label: "stale", cmd: "", cwd: "/stale", kind: "shell" }] }
           : undefined,
       ),
@@ -207,7 +207,7 @@ describe("openBox — reopening closed members box-locally", () => {
       Promise.resolve(
         cmd === "ensure_box_folder"
           ? "/boxes/b1"
-          : cmd === "load_tab_session"
+          : cmd === "workspace_snapshot"
             ? { tabLayout: [{ key: "t1", label: "sh", cmd: "", cwd: "/q", kind: "shell" }] }
             : undefined,
       ),

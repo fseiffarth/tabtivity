@@ -3,7 +3,7 @@
 //   node scripts/parse-qa.mjs [repo-root] [--os x11|wayland|windows|macos]
 //                                            → writes ./qa-items.json
 //
-// The items feed the "Eldrun QA Runner" page (see docs/start-qa-runner.sh):
+// The items feed the "Tabtivity QA Runner" page (see docs/start-qa-runner.sh):
 // replace its <script id="qa-data" type="application/json"> block with this
 // output, escaping "<" as \u003c. A box carries a "✅ Works on <platform>" and
 // a "❌ Doesn't work on <platform>" child per platform; it is open on every
@@ -40,9 +40,9 @@ const NEED_RX = [
   ["gpu/ollama", /ollama|\bgpu\b/i],
   ["mail", /\bmail\b|\bimap\b|\bsmtp\b|inbox|\bpgp\b/i],
   ["caldav", /caldav/i],
-  ["phone", /\bphone\b|eldrun mobile|\bpwa\b|handset/i],
+  ["phone", /\bphone\b|tabtivity mobile|\bpwa\b|handset/i],
   ["2nd screen", /second (screen|monitor|display)|two (monitors|screens|displays)|projector|external (monitor|display)/i],
-  ["server", /eldrun server/i],
+  ["server", /tabtivity server/i],
   ["presenter", /presenter|\bdeck\b/i],
   ["skills", /\bskills?\b/i],
   ["install", /fresh install|clean install|\binstaller\b|appimage/i],

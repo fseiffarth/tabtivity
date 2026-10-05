@@ -1,5 +1,5 @@
 //! A small in-memory clipboard for PDF *pages*, so pages can move between two
-//! Eldrun windows.
+//! Tabtivity windows.
 //!
 //! A detached subwindow (#42) is a separate WebView with its own JS heap, so a drag
 //! payload cannot simply be a JavaScript object — the bytes have to cross the
@@ -12,7 +12,7 @@
 //! The same slot backs copy/paste of pages between windows, which is the same
 //! problem without the pointer.
 //!
-//! This is a *transfer* buffer, not the OS clipboard: it holds only what Eldrun put
+//! This is a *transfer* buffer, not the OS clipboard: it holds only what Tabtivity put
 //! there, it is not readable by other apps, and it dies with the process. Entries are
 //! kept only until `MAX_ENTRIES` newer ones push them out, which bounds the memory a
 //! long session can accumulate.

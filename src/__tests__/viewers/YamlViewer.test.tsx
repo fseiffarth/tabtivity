@@ -658,6 +658,29 @@ describe("card view (#yaml-grid)", () => {
     expect(document.querySelector(".yaml-card")).toBeNull();
   });
 
+  it("asks again whether there is anything to card once Source typing settles", async () => {
+    vi.resetModules();
+    const { FileViewerPane } = await import("../../components/embed/FileViewerPane");
+    await act(async () => {
+      render(<FileViewerPane viewer="yaml" path="/p/config.yaml" projectId="proj" />);
+    });
+    await screen.findByRole("button", { name: "Collapse server" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    });
+    // Entering Source keeps the toggle's answer for the live text — no flicker.
+    expect(screen.getByRole("button", { name: "Cards" })).toBeTruthy();
+    const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    // Typing away every nesting level: the whole-file parse is not re-run per
+    // keystroke, so the toggle stays for now ...
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: "debug: false\n" } });
+    });
+    expect(screen.getByRole("button", { name: "Cards" })).toBeTruthy();
+    // ... and goes once the typing has settled.
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Cards" })).toBeNull());
+  });
+
   it("switches to the card view, drilling into records", async () => {
     await renderCards();
     // The Cards toggle is now active, and cards (not tree rows) render.

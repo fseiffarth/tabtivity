@@ -3,18 +3,18 @@
 //! Windows exposes a documented virtual desktop affinity API for top-level
 //! windows (`IVirtualDesktopManager`), but no supported API for creating or
 //! switching arbitrary virtual desktops (that needs the undocumented, build-
-//! fragile `IVirtualDesktopManagerInternal`). Eldrun therefore mirrors the X11
+//! fragile `IVirtualDesktopManagerInternal`). Tabtivity therefore mirrors the X11
 //! two-desktop "parking" model (see x11.rs) without a real second desktop: the
 //! previous project's tracked windows are HIDDEN with `SW_HIDE` (the logical
 //! "parked desktop"), and the current project's tracked windows are restored and
 //! raised. The documented `MoveWindowToDesktop` is kept as a best-effort defense
-//! (pull a window the user dragged onto another real desktop back onto Eldrun's),
+//! (pull a window the user dragged onto another real desktop back onto Tabtivity's),
 //! but parking never depends on it.
 //!
-//! Every X11 safety invariant holds: Eldrun's own window is never hidden
+//! Every X11 safety invariant holds: Tabtivity's own window is never hidden
 //! (protected by owning-process identity AND the structural main-window guard),
 //! protected shell/system windows are never hidden, the parkable override lets a
-//! detached subwindow (#42) opt in, and cleanup restores everything Eldrun hid.
+//! detached subwindow (#42) opt in, and cleanup restores everything Tabtivity hid.
 //! The pure decision logic lives FFI-free in `super::windows_park` so it is unit
 //! tested on any OS.
 
@@ -48,10 +48,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub struct WindowsBackend {
     /// Pure parking state: parkable override, main-window guard, parked set.
     state: Mutex<WindowsParkState>,
-    /// Eldrun's own process id, captured at construction. The structural backbone
-    /// of the "never hide Eldrun" invariant: every Eldrun-owned top-level (the
+    /// Tabtivity's own process id, captured at construction. The structural backbone
+    /// of the "never hide Tabtivity" invariant: every Tabtivity-owned top-level (the
     /// main window AND detached subwindows) shares this pid, exactly as they share
-    /// the `eldrun` WM_CLASS on X11.
+    /// the `tabtivity` WM_CLASS on X11.
     self_pid: u32,
     /// Idempotency latch for `cleanup` (mirrors x11.rs `cleaned_up`).
     cleaned_up: Mutex<bool>,
@@ -71,8 +71,8 @@ impl WindowsBackend {
     }
 
     /// Whether `hwnd` must NEVER be hidden. Combines owning-process identity (any
-    /// Eldrun-owned window) with the protected-process-name list (desktop shell +
-    /// Eldrun-named helpers). The Windows analog of x11.rs `is_protected`. The
+    /// Tabtivity-owned window) with the protected-process-name list (desktop shell +
+    /// Tabtivity-named helpers). The Windows analog of x11.rs `is_protected`. The
     /// parkable override is consulted by callers BEFORE this gate (see
     /// show/hide_window), identical to X11's ordering.
     fn is_protected(&self, hwnd: HWND) -> bool {
@@ -80,7 +80,7 @@ impl WindowsBackend {
             // No owning pid — be conservative and treat it as protected.
             return true;
         };
-        // (a) Eldrun's own window (main or detached): the `eldrun` WM_CLASS analog.
+        // (a) Tabtivity's own window (main or detached): the `tabtivity` WM_CLASS analog.
         if pid == self.self_pid {
             return true;
         }
@@ -91,7 +91,7 @@ impl WindowsBackend {
         // real guarantee is the tracked-set invariant — `hide_window` is only
         // ever called with ids from the active project's tracked window set, and
         // such system windows never enter it (they cannot pass
-        // `is_candidate_window`). Eldrun's own windows are independently shielded
+        // `is_candidate_window`). Tabtivity's own windows are independently shielded
         // by `self_pid`, so the name list is a defense-in-depth backstop for
         // user-session shell windows, not the primary safety mechanism.
         match process_exe_basename(pid) {
@@ -122,7 +122,7 @@ impl WorkspaceBackend for WindowsBackend {
         if !is_window(hwnd) {
             return Ok(());
         }
-        // Override-before-protected, exactly like x11.rs: a detached Eldrun
+        // Override-before-protected, exactly like x11.rs: a detached Tabtivity
         // subwindow (same self_pid, normally protected) is still restored when it
         // has been opted in. The main window can never be in the override
         // (structural guard in `add_parkable`).
@@ -130,9 +130,9 @@ impl WorkspaceBackend for WindowsBackend {
             return Ok(());
         }
         // Best-effort defense: pull a window the user dragged onto another real
-        // desktop back onto Eldrun's. Focus-stealing semantics differ from X11's
+        // desktop back onto Tabtivity's. Focus-stealing semantics differ from X11's
         // StackMode::Above raise (SetForegroundWindow frequently no-ops unless
-        // Eldrun is already foreground), but the restore is what matters.
+        // Tabtivity is already foreground), but the restore is what matters.
         if let Ok(desktop_id) = current_desktop_id() {
             let _ = move_window_to_desktop(hwnd, desktop_id);
         }
@@ -147,9 +147,9 @@ impl WorkspaceBackend for WindowsBackend {
             return Ok(());
         }
         // See show_window: the override lets a detached subwindow park; the main
-        // window can never be in the override (structural guard). Because Eldrun
+        // window can never be in the override (structural guard). Because Tabtivity
         // windows are protected by self_pid and the main window id can never enter
-        // the override, the main Eldrun window can NEVER be SW_HIDE'd here.
+        // the override, the main Tabtivity window can NEVER be SW_HIDE'd here.
         if !self.is_parkable(window_id) && self.is_protected(hwnd) {
             return Ok(());
         }
@@ -160,9 +160,9 @@ impl WorkspaceBackend for WindowsBackend {
         Ok(())
     }
 
-    fn make_sticky(&self, _eldrun_pid: u32) -> Result<(), String> {
+    fn make_sticky(&self, _app_pid: u32) -> Result<(), String> {
         // Documented Windows APIs do not expose "show on all desktops" for an
-        // app-owned window. Leave Eldrun on the user-selected desktop.
+        // app-owned window. Leave Tabtivity on the user-selected desktop.
         Ok(())
     }
 
@@ -211,7 +211,7 @@ impl WorkspaceBackend for WindowsBackend {
         *cleaned_up = true;
         drop(cleaned_up);
 
-        // Restore exactly the windows Eldrun hid (the SW_HIDE analog of x11.rs
+        // Restore exactly the windows Tabtivity hid (the SW_HIDE analog of x11.rs
         // cleanup moving PARKED_DESKTOP windows back to ACTIVE_DESKTOP).
         let parked = self.state.lock().unwrap().drain_parked();
         for window_id in parked {
@@ -319,7 +319,7 @@ pub fn find_new_window(before: &[u64], attempts: usize) -> Option<u64> {
     for attempt in 0..attempts {
         if let Some(hwnd) = enumerate_windows()
             .into_iter()
-            // Mirror x11.rs's `!w.protected` filter: never latch onto Eldrun's
+            // Mirror x11.rs's `!w.protected` filter: never latch onto Tabtivity's
             // own or a protected shell window (explorer/dwm/…) that happens to
             // appear during the poll — only a genuinely new app window.
             .filter(|&hwnd| !is_protected_owner(hwnd))
@@ -358,7 +358,7 @@ pub fn frontmost_window_under_cursor() -> Option<u64> {
     }
 }
 
-/// Whether `hwnd`'s owning process is Eldrun itself or a protected shell/system
+/// Whether `hwnd`'s owning process is Tabtivity itself or a protected shell/system
 /// process. Free helper (no `&self`) so `find_new_window` can drop such windows
 /// before they ever enter a tracked set — the FFI-side analog of x11.rs's
 /// `w.protected` flag. Owning-process identity (self) is checked directly here;
@@ -368,7 +368,7 @@ fn is_protected_owner(hwnd: HWND) -> bool {
         return true; // no owner → conservatively protected
     };
     if pid == unsafe { GetCurrentProcessId() } {
-        return true; // Eldrun's own window
+        return true; // Tabtivity's own window
     }
     match process_exe_basename(pid) {
         Some(basename) => is_protected_process_name(&basename),
@@ -409,7 +409,7 @@ fn virtual_desktop_manager() -> Result<IVirtualDesktopManager, String> {
 }
 
 /// Initialize COM for the calling thread exactly once per thread, for the
-/// thread's lifetime. This is the only COM init Eldrun's Windows backend needs
+/// thread's lifetime. This is the only COM init Tabtivity's Windows backend needs
 /// (the best-effort `MoveWindowToDesktop` defense); parking never touches COM.
 ///
 /// We deliberately do NOT pair this with `CoUninitialize`: the apartment is
@@ -498,7 +498,7 @@ fn window_pid(hwnd: HWND) -> Option<u32> {
 /// reliably succeeds only for same-session user processes; cross-session or
 /// secured processes (e.g. `dwm.exe`, elevated apps) are access-denied. Callers
 /// treat `None` as NOT protected, which is safe because such windows are never
-/// in the tracked set passed to `hide_window`, and Eldrun's own windows are
+/// in the tracked set passed to `hide_window`, and Tabtivity's own windows are
 /// independently shielded by `self_pid`.
 fn process_exe_basename(pid: u32) -> Option<String> {
     // SAFETY: the handle is closed before returning regardless of the query

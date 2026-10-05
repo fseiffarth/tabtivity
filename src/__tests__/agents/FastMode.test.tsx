@@ -104,9 +104,19 @@ describe("a withdrawn surface (the header resource readout)", () => {
     setSettings({ fast_mode: false });
     render(<AppResourceDisplay />);
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage");
+      expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true });
     });
     await screen.findByText(/12/);
+  });
+
+  it("asks for no GPU reading while the GPU row is hidden", async () => {
+    // The backend skips its Ollama/GPU reads on `gpu: false`; a readout that
+    // never shows the row must not pay for them every 2.5 s.
+    setSettings({ fast_mode: false, show_gpu_usage: false });
+    render(<AppResourceDisplay />);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: false });
+    });
   });
 
   it("renders nothing AND asks the backend nothing when fast mode is on", async () => {
@@ -126,7 +136,7 @@ describe("a withdrawn surface (the header resource readout)", () => {
 
     setSettings({ fast_mode: false });
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage");
+      expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true });
     });
     await screen.findByText(/12/);
   });

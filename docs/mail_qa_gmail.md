@@ -22,7 +22,7 @@ doesn't**, so a surprise is reportable rather than just confusing.
    Verification enabled. Your normal password will not work; Google retired basic
    auth. Make one *for this test* so you can revoke it in Phase 7.
 4. **Take a baseline.** In Gmail on the web, note your **unread count** and open
-   one message you will later open in Eldrun, leaving it **unread**. Phase 2
+   one message you will later open in Tabtivity, leaving it **unread**. Phase 2
    checks both are untouched.
 
 Use a secondary account if you have one. Not because reading is risky — it is
@@ -77,7 +77,7 @@ and readable by any agent you run.
 12. Open several messages, including the one you left unread in Phase 0.
 13. **Now go back to Gmail on the web and reload.**
     - **Expect: your unread count is unchanged, and the message you opened in
-      Eldrun is still unread.** Reads use `BODY.PEEK`, never `BODY`, so nothing
+      Tabtivity is still unread.** Reads use `BODY.PEEK`, never `BODY`, so nothing
       you look at should be marked read on the server.
     - *If anything got marked read, stop testing and report immediately.* That
       would mean the peek discipline broke somewhere.
@@ -197,10 +197,10 @@ care about.
 
 ## Phase 7 — cleanup
 
-30. Delete the account in Eldrun. **Expect** its local mail to go with it — the
+30. Delete the account in Tabtivity. **Expect** its local mail to go with it — the
     saved password does not, by design (it is keyed by server target and may be
     shared; "Forget saved password" is its own verb).
-31. Check `~/.local/share/eldrun/mail/` — `mail.db` and `blobs/` should be
+31. Check `~/.local/share/tabtivity/mail/` — `mail.db` and `blobs/` should be
     `0600`, the directory `0700`.
 32. **Revoke the app password** at `myaccount.google.com/apppasswords`.
 

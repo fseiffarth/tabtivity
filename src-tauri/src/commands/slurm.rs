@@ -1,7 +1,7 @@
 //! SLURM run/watch core for HPC projects (`docs/quirky-knitting-umbrella` plan).
 //!
 //! A SLURM cluster forbids real computation on the login node — everything heavy
-//! goes through the scheduler (`sbatch`/`srun`). Eldrun already connects to such a
+//! goes through the scheduler (`sbatch`/`srun`). Tabtivity already connects to such a
 //! host as a remote project;
 //! this module lets the user submit/query/cancel jobs without memorizing the
 //! commands, and the frontend turns the resulting log files and interactive shells
@@ -313,7 +313,7 @@ pub async fn slurm_queue(
     .await
 }
 
-/// Resolve a job's stdout path via `scontrol` — for **Watch** on a job Eldrun did
+/// Resolve a job's stdout path via `scontrol` — for **Watch** on a job Tabtivity did
 /// not submit this session (so the session store has no path for it). Returns the
 /// absolute `StdOut`, or a `slurm-<id>.out` fallback when scontrol is silent (a
 /// job that already finished). The id is validated numeric.

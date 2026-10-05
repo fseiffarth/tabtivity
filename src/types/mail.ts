@@ -61,7 +61,7 @@ export interface MailAccount {
   signature?: string;
   check_interval_min?: number;
   /** **VPN-only, default false.** While set, the backend opens no socket to
-   *  this account unless an OpenVPN tunnel Eldrun knows about is up, and the
+   *  this account unless an OpenVPN tunnel Tabtivity knows about is up, and the
    *  header's interval check skips it quietly instead of failing — then checks
    *  it the moment a tunnel comes up (`lib/remote/vpn/vpnGate.ts`). */
   require_vpn?: boolean;
@@ -244,7 +244,7 @@ export interface MailHeader {
   folder_id: string;
   uid: number;
   /**
-   * The sender's RFC 5322 `Message-ID`. Distinct from `id`, which is Eldrun's
+   * The sender's RFC 5322 `Message-ID`. Distinct from `id`, which is Tabtivity's
    * own `{folder_id}-{uid}` store key and means nothing to any other mail
    * system — a reply that puts the store key in `In-Reply-To` fabricates a
    * reference that threads nowhere. Absent when the message carried none.
@@ -318,7 +318,7 @@ export type MailPrioritySource = "user" | "filter" | "model";
  *
  * The honest cost, stated here because the UI has to say it too: a mark is
  * **this machine's**. No other mail client sees it, and a mailbox re-synced onto
- * another Eldrun install starts unmarked.
+ * another Tabtivity install starts unmarked.
  */
 export type MailPriority = "important" | "urgent";
 
@@ -590,6 +590,9 @@ export interface MailDraft {
   /** Addresses a root agent suggested. Never in `to` and never read by a send:
    *  the composer offers each as a pill the user adds with a click. */
   suggested_to?: string[];
+  /** An agent draft the user approved in ✓ Approvals, so it sits in the
+   *  "Drafted by agents" folder. An agent's update unsets it again. */
+  filed?: boolean;
 }
 
 export interface MailSendResult {

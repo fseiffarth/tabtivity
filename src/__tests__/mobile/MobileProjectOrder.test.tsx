@@ -2,7 +2,7 @@
  * Arranging the phone's project list by hand.
  *
  * Unlike the tab order this one never leaves the phone: it is a `localStorage`
- * preference, so a drag needs no desktop and the Eldrun window's own project
+ * preference, so a drag needs no desktop and the Tabtivity window's own project
  * pills are left where their owner put them. Three things are worth pinning:
  * the remembered order wins over the host's while the host's stays the fallback
  * for a project that has never been placed, a move survives the re-mount every
@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Home } from "../../../mobile-web/src/screens/Home";
 import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../../../mobile-web/src/projectOrder";
 import { readOrder, writeOrder } from "../../../mobile-web/src/prefs";
+import { storageKey } from "../../lib/brand";
 
 describe("Mobile scope caption", () => {
   it("names a box and the root console instead of a status, and counts root's waiting proposals", () => {
@@ -55,9 +56,9 @@ describe("Mobile project order — the list surgery", () => {
   it("reads a stored order back, and treats a spoilt one as nothing placed", () => {
     writeOrder("projectOrder", ["p2", "p1"]);
     expect(readOrder("projectOrder")).toEqual(["p2", "p1"]);
-    localStorage.setItem("eldrun.mobile.projectOrder", "{\"p1\":1}");
+    localStorage.setItem(storageKey("mobile.projectOrder"), "{\"p1\":1}");
     expect(readOrder("projectOrder")).toEqual([]);
-    localStorage.setItem("eldrun.mobile.projectOrder", "[\"p1\",7]");
+    localStorage.setItem(storageKey("mobile.projectOrder"), "[\"p1\",7]");
     expect(readOrder("projectOrder")).toEqual([]);
   });
 });
@@ -102,7 +103,7 @@ describe("Mobile home — arranging projects by hand", () => {
     fireEvent.keyDown(screen.getByLabelText("Move Alpha"), { key: "ArrowDown" });
     await waitFor(() => expect(listed()).toEqual(["Beta", "Alpha", "Gamma"]));
     // Stored, not sent: no request left the phone for this.
-    expect(JSON.parse(localStorage.getItem("eldrun.mobile.projectOrder") ?? "[]")).toEqual(["p2", "p1", "p3"]);
+    expect(JSON.parse(localStorage.getItem(storageKey("mobile.projectOrder")) ?? "[]")).toEqual(["p2", "p1", "p3"]);
     expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method)).toBe(false);
 
     // The last row has nowhere below it: nothing moves.

@@ -1,11 +1,11 @@
-//! Edge-case and invariant tests for the Eldrun schema types.
+//! Edge-case and invariant tests for the Tabtivity schema types.
 //!
 //! These complement schema_roundtrip.rs (which tests real fixtures) by
 //! covering degenerate inputs, default values, and Python-rollback invariants
 //! that can be constructed inline without fixture files.
 
-use eldrun_lib::schema::project::TabEntry;
-use eldrun_lib::schema::{
+use app_lib::schema::project::TabEntry;
+use app_lib::schema::{
     DefaultApps, Project, ProjectEntry, Settings, TerminalSession, TimeLogEntry, WindowSession,
 };
 
@@ -23,9 +23,9 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str) -> T {
 // ── Settings ───────────────────────────────────────────────────────────────
 
 #[test]
-fn settings_default_color_scheme_is_plain_dark() {
+fn settings_default_color_scheme_is_light_lavender() {
     let s = Settings::default();
-    assert_eq!(s.color_scheme(), "dark");
+    assert_eq!(s.color_scheme(), "light_lavender");
 }
 
 #[test]

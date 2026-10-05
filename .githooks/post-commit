@@ -24,7 +24,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 check="$ROOT/scripts/backend-stale.sh"
 # Not for the version bump pre-push commits mid-push: the phone's staleness is
 # independent of the push, and printed there it reads as the push failing.
-if [ -x "$check" ] && [ -z "${ELDRUN_VERSION_BUMP:-}" ]; then
+# Either name of the switch: the app's current name, or the one it had before
+# the rename (brand-check: allow — a hook cannot source scripts/lib/brand.sh).
+if [ -x "$check" ] && [ -z "${TABTIVITY_VERSION_BUMP:-${ELDRUN_VERSION_BUMP:-}}" ]; then
   # Before the rebuild below is queued, so this reports the drift the commit
   # was made against rather than the one the queued build is already fixing.
   if ! report="$("$check" --mobile-only 2>/dev/null)"; then
@@ -32,10 +34,10 @@ if [ -x "$check" ] && [ -z "${ELDRUN_VERSION_BUMP:-}" ]; then
   fi
 fi
 
-# Move the frozen "Eldrun (dev)" snapshot to what was just committed (user,
+# Move the frozen "Tabtivity (dev)" snapshot to what was just committed (user,
 # 2026-09-03). Returns at once — the build runs detached, nice'd, and coalesces
 # with any other commit's — and never launches anything. Off:
-# `git config eldrun.autoDevBuild false`, or ELDRUN_NO_AUTO_DEV_BUILD=1 for one
+# `git config tabtivity.autoDevBuild false`, or TABTIVITY_NO_AUTO_DEV_BUILD=1 for one
 # commit.
 freeze="$ROOT/scripts/package-dev-auto.sh"
 [ -x "$freeze" ] && "$freeze" --queue || true

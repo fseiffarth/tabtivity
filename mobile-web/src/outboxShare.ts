@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 
-import { viewerFileUrl, type OutboxFile, type ViewerScope } from "./api";
+import { sentName, viewerFileUrl, type OutboxFile, type ViewerScope } from "./api";
 
 /** The extension a kind the sidecar sniffs travels under. */
 const EXTENSION: Record<string, string> = {
@@ -34,8 +34,10 @@ export function shareAs(file: OutboxFile): { name: string; type: string } | null
   if (!canShareFiles()) return null;
   const type = file.kind.split(";")[0].trim();
   const extension = EXTENSION[type];
-  const names = [file.name];
-  if (extension && !file.name.toLowerCase().endsWith(`.${extension}`)) names.push(`${file.name}.${extension}`);
+  // Shared under the name it was sent as, not the stamped leaf it is kept by.
+  const sent = sentName(file);
+  const names = [sent];
+  if (extension && !sent.toLowerCase().endsWith(`.${extension}`)) names.push(`${sent}.${extension}`);
   for (const name of names) {
     try {
       if (navigator.canShare({ files: [new File([], name, { type })] })) return { name, type };

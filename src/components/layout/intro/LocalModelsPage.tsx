@@ -221,7 +221,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
   };
 
   const openSettings = (panel: string) => {
-    window.dispatchEvent(new CustomEvent("eldrun:open-settings", { detail: panel }));
+    window.dispatchEvent(new CustomEvent("app:open-settings", { detail: panel }));
     onClose();
   };
 

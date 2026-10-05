@@ -17,6 +17,10 @@ pub fn lock() -> MutexGuard<'static, ()> {
 // set_caldav_identity_at writes precisely these two fields. The fetch merge
 // also replaces content; that content MUST participate in the precondition.
 pub const SYNC_FIELDS: &[&str] = &["caldav_etag", "caldav_href"];
+/// The store's own bookkeeping on a row (`rev`, #171): never part of what an
+/// agent proposes, so it is ignored when a row is compared and carried from
+/// the current row when one is written, exactly like the sync fields.
+const STORE_FIELDS: &[&str] = &["rev"];
 const CONFLICT: &str = "This entry changed since the agent looked at it";
 /// An automatic write (`destructive` level) that could not be stored for a
 /// reason other than a stale precondition: the store was unreadable, the disk
@@ -225,7 +229,7 @@ fn row_at(data: &Value, kind: &str, id: &Value) -> Option<Value> {
 }
 fn comparable(mut row: Value) -> Value {
     if let Some(obj) = row.as_object_mut() {
-        for key in SYNC_FIELDS {
+        for key in SYNC_FIELDS.iter().chain(STORE_FIELDS) {
             obj.remove(*key);
         }
     }
@@ -281,19 +285,14 @@ pub fn apply_rows(
 ) -> Result<Vec<Change>, String> {
     for expected in calendars {
         let actual = row_at(data, "calendar", &expected["id"]);
-        if actual.as_ref() != Some(expected) || expected["readonly"] == true {
+        if actual.map(comparable) != Some(comparable(expected.clone())) || expected["readonly"] == true {
             return Err(CONFLICT.into());
         }
     }
     let mut effects = Vec::new();
     for r in rows {
         let current = row_at(data, &r.kind, &r.post["id"]);
-        let matches = if matches!(r.kind.as_str(), "event" | "task") {
-            same(&r.pre, &current)
-        } else {
-            r.pre == current
-        };
-        if !matches {
+        if !same(&r.pre, &current) {
             return Err(CONFLICT.into());
         }
         if r.kind == "calendar" && r.op == "delete" {
@@ -311,13 +310,18 @@ pub fn apply_rows(
         if let Some(current) = current {
             // Deletions address today's resource. Ordinary edits keep fresh
             // push metadata; a relocation deliberately drops the old address.
-            if r.op == "delete" || current["calendar_id"] == post["calendar_id"] {
-                for key in SYNC_FIELDS {
-                    if let Some(v) = current.get(*key) {
-                        post[*key] = v.clone();
-                    } else {
-                        post.as_object_mut().unwrap().remove(*key);
-                    }
+            // The store's own revision rides along whatever the edit is: the
+            // write path stamps the next one from it.
+            let carried: Vec<&str> = if r.op == "delete" || current["calendar_id"] == post["calendar_id"] {
+                SYNC_FIELDS.iter().chain(STORE_FIELDS).copied().collect()
+            } else {
+                STORE_FIELDS.to_vec()
+            };
+            for key in carried {
+                if let Some(v) = current.get(key) {
+                    post[key] = v.clone();
+                } else if let Some(obj) = post.as_object_mut() {
+                    obj.remove(key);
                 }
             }
         }
@@ -401,7 +405,7 @@ fn capture(before: &Value, after: &Value, changes: &[Change]) -> Result<Vec<Row>
         let key = array_key(kind)?;
         for post in after[key].as_array().ok_or("Invalid calendar store")? {
             let pre = row_at(&cursor, kind, &post["id"]);
-            if pre.as_ref() != Some(post) {
+            if !same(&pre, &Some(post.clone())) {
                 // A card the seeding merely filed into a column is not part of
                 // the write: the store derives that placement on every read
                 // once the board exists, so the proposal carries only the
@@ -434,6 +438,7 @@ fn capture(before: &Value, after: &Value, changes: &[Change]) -> Result<Vec<Row>
 /// `post` is `pre` with a column and rank filled in where there was none.
 fn placement_backfill(pre: &Value, post: &Value) -> bool {
     let unplaced = pre["column"].as_str().is_none_or(str::is_empty);
+    let (pre, post) = (comparable(pre.clone()), comparable(post.clone()));
     let (Some(a), Some(b)) = (pre.as_object(), post.as_object()) else { return false };
     unplaced && a.iter().all(|(k, v)| k == "column" || k == "rank" || b.get(k) == Some(v))
         && b.iter().all(|(k, v)| k == "column" || k == "rank" || a.get(k) == Some(v))
@@ -813,6 +818,23 @@ pub fn on_spawn_gone(state: &Path, token: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A store minus the revisions the write path stamps (#171), top level
+    /// and per row — the content a proposal describes.
+    fn strip_revs(mut data: Value) -> Value {
+        if let Some(obj) = data.as_object_mut() {
+            obj.remove("rev");
+        }
+        for key in ["calendars", "events", "tasks"] {
+            if let Some(rows) = data[key].as_array_mut() {
+                for row in rows {
+                    if let Some(obj) = row.as_object_mut() {
+                        obj.remove("rev");
+                    }
+                }
+            }
+        }
+        data
+    }
     struct Fixture {
         dir: tempfile::TempDir,
         calendar: PathBuf,
@@ -860,6 +882,12 @@ mod tests {
         }
         fn mode(&self, mode: &str) {
             storage::write_json_atomic(&self.settings, &json!({"root_mcp_review": mode})).unwrap();
+        }
+        /// The store's content: what a proposal describes, minus the
+        /// revisions the write path stamps (#171) — an undo is a further
+        /// write, so the file is never byte-identical to before it.
+        fn content(&self) -> Value {
+            strip_revs(data_at(&self.calendar).unwrap())
         }
         fn write_real(&self, data: Value) {
             storage::write_json_atomic(&self.calendar, &data).unwrap();
@@ -952,11 +980,11 @@ mod tests {
             f.call("root:a", "todo_list", json!({}))["cards"][0]["column"],
             "doing"
         );
-        let expected = data_at(&sandbox(f.dir.path(), "root:a")).unwrap();
+        let expected = strip_revs(data_at(&sandbox(f.dir.path(), "root:a")).unwrap());
         for p in f.proposals() {
             f.approve(&p);
         }
-        assert_eq!(data_at(&f.calendar).unwrap(), expected);
+        assert_eq!(f.content(), expected);
     }
     #[test]
     fn every_write_applies_exactly_the_tool_result_including_board_side_effects() {
@@ -966,6 +994,7 @@ mod tests {
             let mut covered = std::collections::HashSet::new();
             let mut run = |name: &str, args: Value| {
                 let before = std::fs::read(&f.calendar).unwrap();
+                let before_content = f.content();
                 let v = f.call("root:a", name, args);
                 covered.insert(name.to_string());
                 let automatic = mode == "destructive"
@@ -978,14 +1007,14 @@ mod tests {
                         "{name} escaped the sandbox"
                     );
                 }
-                let expected = data_at(&sandbox(f.dir.path(), "root:a")).unwrap();
+                let expected = strip_revs(data_at(&sandbox(f.dir.path(), "root:a")).unwrap());
                 let p = f.proposals().last().unwrap().clone();
                 assert_eq!(p.tool, name);
                 if automatic {
                     assert_eq!(p.status, "applied");
                     assert!(p.undo);
                     decide(&f.stores(), &p.id, &digest(&p), "undo").unwrap();
-                    assert_eq!(std::fs::read(&f.calendar).unwrap(), before, "undo {name}");
+                    assert_eq!(f.content(), before_content, "undo {name}");
                     // Reapply these same reviewed rows so subsequent operations use
                     // precisely the minted identities, without rerunning the tool.
                     calendar::apply_change_at(&f.calendar, &p.rows, &p.calendars).unwrap();
@@ -997,7 +1026,7 @@ mod tests {
                     if automatic { "undone" } else { "applied" },
                     "{name}"
                 );
-                assert_eq!(data_at(&f.calendar).unwrap(), expected, "{name}");
+                assert_eq!(f.content(), expected, "{name}");
                 v
             };
             let cal = run("calendar_create", json!({"name":"Work"}));
@@ -1154,13 +1183,13 @@ mod tests {
     fn destructive_level_matches_annotations_and_undo_is_conditional() {
         let f = Fixture::new();
         f.mode("destructive");
-        let before = std::fs::read(&f.calendar).unwrap();
+        let before = f.content();
         f.call("root:a", "todo_add", json!({"title":"A"}));
         let p = f.proposals()[0].clone();
         assert_eq!(p.status, "applied");
         assert!(p.undo);
         decide(&f.stores(), &p.id, &digest(&p), "undo").unwrap();
-        assert_eq!(std::fs::read(&f.calendar).unwrap(), before);
+        assert_eq!(f.content(), before);
         let a = f.call("root:a", "todo_add", json!({"title":"B"}));
         let p = f.proposals().last().unwrap().clone();
         let mut data = data_at(&f.calendar).unwrap();

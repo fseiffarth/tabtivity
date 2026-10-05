@@ -1,4 +1,4 @@
-//! "Check for a new Eldrun" against the project's GitHub releases.
+//! "Check for a new Tabtivity" against the project's GitHub releases.
 //!
 //! Deliberately *not* the Tauri updater plugin: that wants a `latest.json`
 //! published next to the artifacts. This reads the same public releases page a
@@ -8,11 +8,11 @@
 //! Three rules hold the trust boundary, because this ends with *running a
 //! downloaded executable*:
 //!
-//! 1. Every asset URL is checked against [`DOWNLOAD_PREFIX`] before it is
+//! 1. Every asset URL is checked by [`is_repo_download_url`] before it is
 //!    fetched and again before anything is installed. The release JSON comes
 //!    off the network, so `browser_download_url` is attacker-controlled input
-//!    until it has been proven to live under this repository's release
-//!    downloads.
+//!    until it has been proven to be a release download of one of
+//!    [`RELEASE_OWNERS`]' repositories.
 //! 2. The frontend never names a path. `stage_download` remembers what it wrote
 //!    in [`STAGED`], and `install` acts on *that*, so no renderer-supplied
 //!    string can select what gets executed.
@@ -32,26 +32,31 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// The repository releases are published from. Any change here must also change
-/// [`DOWNLOAD_PREFIX`] and [`RELEASES_PAGE`].
-pub const REPO: &str = "fseiffarth/ProjectEldrun";
+/// [`LATEST_API`] and [`RELEASES_PAGE`].
+pub const REPO: &str = crate::brand::REPO;
 
 /// The one API endpoint. `/releases/latest` skips drafts and pre-releases,
 /// which is exactly the "latest" the README's link points at.
-const LATEST_API: &str = "https://api.github.com/repos/fseiffarth/ProjectEldrun/releases/latest";
+const LATEST_API: &str = concat!("https://api.github.com/repos/", crate::app_repo!(), "/releases/latest");
 
 /// Where a human goes when the in-app path can't finish the job.
-pub const RELEASES_PAGE: &str = "https://github.com/fseiffarth/ProjectEldrun/releases/latest";
+pub const RELEASES_PAGE: &str = concat!("https://github.com/", crate::app_repo!(), "/releases/latest");
 
-/// The only prefix a downloadable asset may have. GitHub serves release assets
-/// from this exact shape; anything else in the JSON is not our release.
-const DOWNLOAD_PREFIX: &str = "https://github.com/fseiffarth/ProjectEldrun/releases/download/";
+/// Where GitHub serves release assets from: `<owner>/<repo>/releases/download/…`
+/// under this host.
+const DOWNLOAD_HOST: &str = "https://github.com/";
+
+/// The GitHub accounts whose release downloads are accepted, whatever the
+/// repository is called — so a renamed repository strands no installed client.
+/// An account belongs here only while we control it, and the list is final for
+/// every build that ships with it: a client rejects each later release
+/// published under an owner it does not know.
+const RELEASE_OWNERS: &[&str] = &["fseiffarth"];
 
 /// Identify ourselves — GitHub rejects API requests with no `User-Agent`.
-const USER_AGENT: &str = concat!(
-    "Eldrun/",
-    env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/fseiffarth/ProjectEldrun)"
-);
+fn user_agent() -> String {
+    format!("{} (+https://github.com/{REPO})", crate::brand::user_agent())
+}
 
 const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -66,19 +71,19 @@ const RELEASE_PUBLIC_KEY_PEM: &str = include_str!("../../release-signing.pub.pem
 /// A checksum list or signature is a few hundred bytes.
 const MAX_SUMS_BYTES: u64 = 64 * 1024;
 
-/// Refuse absurd downloads. The largest Eldrun artifact is well under 200 MB;
+/// Refuse absurd downloads. The largest Tabtivity artifact is well under 200 MB;
 /// this only exists so a wrong or hostile `Content-Length` can't fill a disk.
 const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 
 /// How the *running* build can apply an update, which is not the same question
-/// as which artifact exists. A `.deb`-installed Eldrun can download the new
+/// as which artifact exists. A `.deb`-installed Tabtivity can download the new
 /// `.deb` but must not try to install it itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InstallKind {
     /// Linux AppImage: swap the file we are running from, then restart.
     Appimage,
-    /// Windows: run the NSIS installer, which offers to close Eldrun first.
+    /// Windows: run the NSIS installer, which offers to close Tabtivity first.
     Nsis,
     /// macOS: open the `.dmg` and let the user drag it to Applications.
     Dmg,
@@ -198,7 +203,7 @@ pub fn version_from_tag(tag: &str) -> String {
 /// On Linux the deciding fact is the `APPIMAGE` environment variable, which the
 /// AppImage runtime sets to the path of the `.AppImage` itself. A `.deb`
 /// install or a `cargo build` binary has no such thing, and overwriting either
-/// from inside the app would be Eldrun editing a package manager's files.
+/// from inside the app would be Tabtivity editing a package manager's files.
 pub fn install_kind_for_running_build() -> InstallKind {
     if cfg!(target_os = "windows") {
         return InstallKind::Nsis;
@@ -329,7 +334,7 @@ fn verify_sums(
 /// The lowercase hex SHA-256 a verified checksum list gives `asset_name`.
 ///
 /// `version` is the release being installed: the asset name must carry it
-/// (`Eldrun_<version>_amd64.AppImage`), so a signed list from an older release
+/// (`Tabtivity_<version>_amd64.AppImage`), so a signed list from an older release
 /// cannot vouch for a downgrade published under a newer tag.
 fn expected_digest(sums: &str, asset_name: &str, version: &str) -> Result<String, String> {
     if version.is_empty() || !asset_name.contains(&format!("_{version}_")) {
@@ -367,7 +372,7 @@ fn sha256_hex(digest: impl AsRef<[u8]>) -> String {
 /// Fetch a small release file (the checksum list or its signature).
 async fn fetch_small(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     if !is_repo_download_url(url) {
-        return Err("refusing to fetch a file from outside the Eldrun releases".to_string());
+        return Err(concat!("refusing to fetch a file from outside the ", crate::app_name!(), " releases").to_string());
     }
     let mut response = client
         .get(url)
@@ -409,13 +414,34 @@ async fn verified_digest(
     expected_digest(sums, &asset.name, version)
 }
 
-/// Whether a URL is a release download from *this* repository.
+/// Whether a URL is a release download from one of *our* repositories:
+/// `https://github.com/<owner>/<repo>/releases/download/<file…>` with `<owner>`
+/// in [`RELEASE_OWNERS`] and `<repo>` exactly one path segment.
 ///
-/// The check is on the whole prefix, not the host: `https://github.com/` alone
-/// would accept any repository's assets, which is the exact substitution this
-/// guards against.
+/// The owner is checked, not just the host: `https://github.com/` alone would
+/// accept anyone's assets, which is the exact substitution this guards against.
+/// The repository name is left open so the repository can be renamed; the
+/// signed `SHA256SUMS` stays the trust anchor either way.
 pub fn is_repo_download_url(url: &str) -> bool {
-    url.starts_with(DOWNLOAD_PREFIX) && !url[DOWNLOAD_PREFIX.len()..].is_empty()
+    let Some(rest) = url.strip_prefix(DOWNLOAD_HOST) else {
+        return false;
+    };
+    let mut parts = rest.splitn(3, '/');
+    let (Some(owner), Some(repo), Some(tail)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    // GitHub's own repository-name alphabet; `.` and `..` would walk the path.
+    let repo_ok = !repo.is_empty()
+        && repo != "."
+        && repo != ".."
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    RELEASE_OWNERS.contains(&owner)
+        && repo_ok
+        && tail
+            .strip_prefix("releases/download/")
+            .is_some_and(|file| !file.is_empty())
 }
 
 /// Parse a GitHub release JSON body into a check result.
@@ -487,7 +513,7 @@ fn client() -> Result<reqwest::Client, String> {
     // when no process default is installed — see `browser_engine::reader_client`.
     crate::services::mail_engine::install_crypto_provider();
     reqwest::Client::builder()
-        .user_agent(USER_AGENT)
+        .user_agent(user_agent())
         .timeout(CHECK_TIMEOUT)
         .referer(false)
         .build()
@@ -497,8 +523,15 @@ fn client() -> Result<reqwest::Client, String> {
 /// Ask GitHub for the latest release.
 pub async fn check() -> Result<UpdateCheck, String> {
     let kind = install_kind_for_running_build();
+    let body = fetch_latest(LATEST_API).await?;
+    parse_release(&body, current_version(), kind)
+}
+
+/// Fetch the latest-release JSON. Redirects are followed: after a repository
+/// rename or transfer GitHub answers the old API path with a 301.
+async fn fetch_latest(url: &str) -> Result<String, String> {
     let response = client()?
-        .get(LATEST_API)
+        .get(url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
@@ -510,15 +543,14 @@ pub async fn check() -> Result<UpdateCheck, String> {
     if !response.status().is_success() {
         return Err(format!("GitHub answered {}", response.status()));
     }
-    let body = response
+    response
         .text()
         .await
-        .map_err(|e| format!("update check failed: {e}"))?;
-    parse_release(&body, current_version(), kind)
+        .map_err(|e| format!("update check failed: {e}"))
 }
 
 /// Where downloads are staged. Outside the project tree, next to the rest of
-/// Eldrun's own state.
+/// Tabtivity's own state.
 pub fn staging_dir() -> PathBuf {
     crate::storage::state_dir().join("updates")
 }
@@ -534,7 +566,7 @@ fn safe_file_name(name: &str) -> String {
         .collect();
     let cleaned = cleaned.trim_matches('.').to_string();
     if cleaned.is_empty() {
-        "eldrun-update".to_string()
+        concat!(crate::app_slug!(), "-update").to_string()
     } else {
         cleaned
     }
@@ -552,7 +584,7 @@ pub async fn stage_download(
     mut on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<Staged, String> {
     if !is_repo_download_url(&asset.url) {
-        return Err("refusing to download an asset from outside the Eldrun releases".to_string());
+        return Err(concat!("refusing to download an asset from outside the ", crate::app_name!(), " releases").to_string());
     }
     let dir = staging_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("update staging dir: {e}"))?;
@@ -649,7 +681,7 @@ pub fn staged() -> Option<Staged> {
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallOutcome {
-    /// Whether Eldrun must be restarted by the user for the update to take.
+    /// Whether Tabtivity must be restarted by the user for the update to take.
     pub restart_required: bool,
     /// Whether an external installer was launched and now owns the process.
     pub installer_launched: bool,
@@ -684,14 +716,14 @@ pub fn install() -> Result<InstallOutcome, String> {
             })
         }
         InstallKind::Nsis => {
-            // The Tauri NSIS installer detects a running Eldrun and offers to
+            // The Tauri NSIS installer detects a running Tabtivity and offers to
             // close it, so handing it over mid-session is the supported flow.
             // A plain `Command`, deliberately not `paths::command_no_window`:
             // this child is meant to put a window on screen, and suppressing a
             // console for an installer is the opposite of what is wanted here.
             let mut cmd = std::process::Command::new(&staged.path);
             // Run it from the directory it landed in, so nothing resolves
-            // against whatever Eldrun's cwd happens to be.
+            // against whatever Tabtivity's cwd happens to be.
             if let Some(parent) = staged.path.parent() {
                 cmd.current_dir(parent);
             }
@@ -800,6 +832,72 @@ mod tests {
         assert!(!is_repo_download_url(
             "https://github.com/fseiffarth/ProjectEldrun/releases/download/"
         ));
+    }
+
+    #[test]
+    fn a_renamed_repository_of_the_same_owner_is_still_accepted() {
+        assert!(is_repo_download_url(
+            "https://github.com/fseiffarth/renamed-repo/releases/download/v0.3.0/App_0.3.0_amd64.deb"
+        ));
+        // The repository is exactly one path segment.
+        for url in [
+            "https://github.com/fseiffarth//releases/download/v1/x",
+            "https://github.com/fseiffarth/../releases/download/v1/x",
+            "https://github.com/fseiffarth/./releases/download/v1/x",
+            "https://github.com/fseiffarth/a/b/releases/download/v1/x",
+            "https://github.com/fseiffarth/a%2Fb/releases/download/v1/x",
+            "https://github.com/fseiffarth/releases/download/v1/x",
+            // Not a release download at all.
+            "https://github.com/fseiffarth/renamed-repo/archive/refs/heads/main.zip",
+            "https://github.com/fseiffarth/renamed-repo/releases/downloadx/v1/x",
+            // An owner that merely starts or ends like ours.
+            "https://github.com/fseiffarth-evil/ProjectEldrun/releases/download/v1/x",
+            "https://github.com/evil/fseiffarth/releases/download/v1/x",
+            "https://github.com/FSEIFFARTH@evil.example.org/x/releases/download/v1/x",
+        ] {
+            assert!(!is_repo_download_url(url), "{url}");
+        }
+    }
+
+    /// Serve `responses` one per connection on a loopback port.
+    async fn serve_once_each(responses: Vec<String>) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut seen = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    seen.extend_from_slice(&buf[..n]);
+                }
+                stream.write_all(response.as_bytes()).await.unwrap();
+                let _ = stream.shutdown().await;
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn the_update_check_follows_a_renamed_repositorys_redirect() {
+        let body = r#"{"tag_name":"v9.9.9"}"#;
+        let addr = serve_once_each(vec![
+            "HTTP/1.1 301 Moved Permanently\r\nLocation: /repositories/1/releases/latest\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        ])
+        .await;
+        let fetched = fetch_latest(&format!("http://{addr}/repos/old/name/releases/latest"))
+            .await
+            .unwrap();
+        assert_eq!(fetched, body);
     }
 
     // ── signed checksums (#160) ──────────────────────────────────────────
@@ -973,8 +1071,8 @@ zWKrqHHacn3R/vU4reeTtE+MP1CZrcNAOYOmswDjH92r/YoK3ZxNK3NjBg==
     fn an_untrusted_asset_name_cannot_choose_where_the_file_lands() {
         assert_eq!(safe_file_name("../../.bashrc"), "bashrc");
         assert_eq!(safe_file_name("a/b/c.AppImage"), "abc.AppImage");
-        assert_eq!(safe_file_name(""), "eldrun-update");
-        assert_eq!(safe_file_name("..."), "eldrun-update");
+        assert_eq!(safe_file_name(""), concat!(crate::app_slug!(), "-update"));
+        assert_eq!(safe_file_name("..."), concat!(crate::app_slug!(), "-update"));
         assert_eq!(
             safe_file_name("Eldrun_0.1.53_amd64.AppImage"),
             "Eldrun_0.1.53_amd64.AppImage"

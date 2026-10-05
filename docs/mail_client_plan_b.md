@@ -6,7 +6,7 @@
 > surface exists and names commands only by their contract.
 >
 > Verification gates for everything below: `npx tsc --noEmit` and
-> `cargo test --manifest-path src-tauri/Cargo.toml`. **Never launch Eldrun to verify.**
+> `cargo test --manifest-path src-tauri/Cargo.toml`. **Never launch Tabtivity to verify.**
 > Provider presets in this plan are public consumer/hosting providers only — no
 > institutional hostnames anywhere in code, tests, fixtures, or defaults.
 
@@ -74,7 +74,7 @@ mail-builder = "0.4"
 # `ring`, which needs no cmake on the Windows runner.
 mail-send = { version = "0.6", default-features = false, features = ["builder", "ring", "tls12"] }
 # IMAP. `default-features = false` is load-bearing: the crate's default runtime is
-# async-std, and `runtime-tokio` puts it on the runtime Eldrun already has. The
+# async-std, and `runtime-tokio` puts it on the runtime Tabtivity already has. The
 # `compress` feature is deliberately NOT enabled — COMPRESS=DEFLATE lets a hostile
 # server hand us a decompression bomb (§3.6).
 async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
@@ -127,7 +127,7 @@ Acceptance for this commit: `cargo test` passes and a new test
    Google's desktop client type issues a "secret" anyway and expects it in the token
    request; it is a public identifier, not a secret, and shipping it in a public repo
    is exactly what Thunderbird does. That is tolerable but must be a conscious,
-   documented choice, and the value must be a **generic Eldrun-project** credential.
+   documented choice, and the value must be a **generic Tabtivity-project** credential.
 4. **Refresh-token storage** — a long-lived bearer credential for the user's entire
    mailbox, which must live in the same keychain, under the same locked-keychain rules.
 5. **XOAUTH2** wire framing: `AUTH XOAUTH2 <base64("user=" user "\x01auth=Bearer " tok "\x01\x01")>`
@@ -171,7 +171,7 @@ Reasoning:
 - The account record carries `auth_method: MailAuth` and an
   `oauth: Option<OAuthConfig>` field, serialized and round-tripped even though unused.
 - Provider presets carry an `oauth_required: bool`. When true, the account setup UI
-  says *"This provider requires OAuth sign-in, which Eldrun does not support yet"*
+  says *"This provider requires OAuth sign-in, which Tabtivity does not support yet"*
   and refuses to create the account — **it must not** present a password field that
   will fail with an opaque `AUTHENTICATIONFAILED`. Outlook.com/Office 365 presets ship
   with `oauth_required: true` and are visible-but-disabled. That honest dead end is
@@ -181,12 +181,12 @@ Reasoning:
 
 ## 1. Threat model
 
-An embedded mail client inverts Eldrun's normal trust posture. Every other input the
+An embedded mail client inverts Tabtivity's normal trust posture. Every other input the
 app handles is something the user chose: a file they opened, a repo they cloned, a
 host they configured. **Mail is the first input stream where an anonymous remote party
 decides what bytes arrive and when.** Every rule below follows from that one sentence.
 
-Two structural facts about Eldrun make the mitigations cheaper than they'd otherwise be,
+Two structural facts about Tabtivity make the mitigations cheaper than they'd otherwise be,
 and both must be preserved rather than eroded:
 
 - **The webview already cannot reach the internet.** The app CSP in
@@ -212,7 +212,7 @@ and both must be preserved rather than eroded:
 | **T5** | **Malicious attachments** — `invoice.pdf.exe`, macro documents, `.lnk`/`.scf`/`.hta`, HTML attachments that open with app privileges | Never auto-written to disk, never auto-opened, stored under content-addressed opaque names, extracted only via an explicit native save dialog per file, executable/script extensions blocked from the in-app Open action entirely. (§3) |
 | **T6** | **MIME parser memory-safety bugs** — the classic mail-client RCE class | `mail-parser` is 100% safe Rust, continuously fuzzed and MIRI-checked; no `unsafe` in our own parsing glue. Enforce structural caps (nesting depth 32, part count 512, header line 64 KB, message 50 MB) *above* the parser so a pathological message is refused, not merely survived. Parsing runs on a `spawn_blocking` worker with a wall-clock bound. (§3.6, §7) |
 | **T7** | **Homograph / spoofed sender display** — `From: "support@bank.example" <a@evil.example>`, RLO in a display name, duplicate `From:` headers, unicode confusables | The address list UI **always renders the addr-spec**, never the display name alone. Display names are stripped of bidi/format controls and rendered in a visually distinct weight. A display name that itself contains `@` or looks like an address gets a "this is a name, not an address" marker. Duplicate `From:`/`Sender:` headers → the message is flagged *"malformed sender headers"* and all values shown. (§7 fixtures) |
-| **T8** | **HTML injection into Eldrun's own DOM** — the catastrophic case: sanitizer escape becomes app-origin XSS with full Tauri IPC access | The message body is **never** rendered into the app document. There is exactly one `dangerouslySetInnerHTML`-free path: `iframe.srcdoc`, `sandbox=""`. Every other mail-derived string (subject, sender, filename, folder name) reaches React as a **plain text node** — no `dangerouslySetInnerHTML` anywhere under the mail feature, enforced by a source-scanning test (§7.4). |
+| **T8** | **HTML injection into Tabtivity's own DOM** — the catastrophic case: sanitizer escape becomes app-origin XSS with full Tauri IPC access | The message body is **never** rendered into the app document. There is exactly one `dangerouslySetInnerHTML`-free path: `iframe.srcdoc`, `sandbox=""`. Every other mail-derived string (subject, sender, filename, folder name) reaches React as a **plain text node** — no `dangerouslySetInnerHTML` anywhere under the mail feature, enforced by a source-scanning test (§7.4). |
 | **T9** | **Path traversal via attachment filename** — `../../.ssh/authorized_keys`, `..\..\Startup\x.lnk`, RTL-override `invoice⁠\u202Egnp.exe`, `CON`, absolute paths, UNC paths | A single `sanitize_attachment_name()` with 13 enumerated rules (§3.3), applied to *every* filename before it is used in any position, plus the structural guarantee that the internal store never uses the supplied name at all (content-addressed blobs), plus the save path being chosen by the OS dialog rather than by us. Path traversal therefore has to defeat three independent things. |
 | **T10** | **Zip / decompression bombs** | IMAP `COMPRESS=DEFLATE` **not enabled** (the crate feature is off) — this is the only compression channel a server controls. MIME nesting/part caps stop `message/rfc822` depth bombs. Archive attachments are **never auto-extracted**; if the user extracts one it goes through `commands::fs::extract_archive`, which must gain an expansion-ratio and total-size cap (it has neither today — see §3.6). |
 | **T11** | **IMAP/SMTP MITM** — passive interception, STARTTLS stripping, STARTTLS command/response injection, downgrade to plaintext | Implicit TLS ports only in v1 (993/465). No plaintext fallback exists in the code — the transport constructor returns a `TlsStream`, so there is no type a cleartext connection could inhabit. Certificate validation via the OS trust store, hostname-verified, TLS ≥ 1.2, **no bypass of any kind**. (§4) |
@@ -301,7 +301,7 @@ a tripwire for a backend regression, not a second sanitizer.
 |---|---|
 | `allow-scripts` | Enables JS in the body. The single most important omission. |
 | `allow-same-origin` | Gives the frame the app's origin → `parent.document`, `localStorage`, and `__TAURI__` access. **`allow-scripts` + `allow-same-origin` together is a total escape.** |
-| `allow-top-navigation` / `-by-user-activation` | A body could navigate the whole Eldrun window away. |
+| `allow-top-navigation` / `-by-user-activation` | A body could navigate the whole Tabtivity window away. |
 | `allow-popups` / `allow-popups-to-escape-sandbox` | Window-open based phishing and sandbox laundering. |
 | `allow-forms` | Credential-harvesting forms that POST out. |
 | `allow-modals` | `alert`/`prompt` spoofing app dialogs (needs scripts too, but omit anyway). |
@@ -559,7 +559,7 @@ kind of state that gets left on. Instead:
    `SanitizedBody.remote_refs: Vec<(placeholder_id, url)>` and sets
    `blocked_remote: n`. The body shows a placeholder box per image (sized from `width`/
    `height` when given, so layout doesn't jump) and a banner:
-   *"Eldrun blocked n remote images. Loading them tells the sender you opened this
+   *"Tabtivity blocked n remote images. Loading them tells the sender you opened this
    message."* with buttons **Load images once** / **Always for this sender**.
 2. On **Load images once**, the frontend calls
    `mail_load_remote_images(account_id, message_id)`. The backend fetches each URL with
@@ -614,8 +614,8 @@ Because the frame has an opaque origin, `blob:` will not work — inline as `dat
 | `sandbox` attribute tokens | Supported | Supported | `sandbox=""` behaves identically. This is the one control we can rely on equally. |
 | Opaque-origin `blob:` loads | Blocked | Blocked | Consistent — hence `data:` for inline images on both. |
 | `srcdoc` with multi-MB content | Works; attribute parsing is the cost | Works | Set `srcdoc` via the **DOM property** on a ref rather than as a React attribute for bodies > ~256 KB, to avoid re-serializing the string through React's attribute path on every render. Memoize the doc string. |
-| Very large / deeply nested DOM | WebKitGTK is the slower of the two; a 100k-node body can jank the whole GTK main loop, which is the *same* loop Eldrun's UI runs on | Runs the frame off-process | Enforce the backend node cap (§3.6) — it is a **Linux responsiveness** requirement, not only a security one. |
-| Default scrollbars inside web content | Ignores page `scrollbar-color`; Eldrun already injects a GTK CSS provider to recolor them (`webkit2gtk` + `gtk` deps) | N/A | The message frame inherits that existing treatment; nothing new needed. |
+| Very large / deeply nested DOM | WebKitGTK is the slower of the two; a 100k-node body can jank the whole GTK main loop, which is the *same* loop Tabtivity's UI runs on | Runs the frame off-process | Enforce the backend node cap (§3.6) — it is a **Linux responsiveness** requirement, not only a security one. |
+| Default scrollbars inside web content | Ignores page `scrollbar-color`; Tabtivity already injects a GTK CSS provider to recolor them (`webkit2gtk` + `gtk` deps) | N/A | The message frame inherits that existing treatment; nothing new needed. |
 | Text selection / context menu inside a sandboxed frame | Available | Available | Provide our own context menu suppression only if the default exposes "Open link" — with no `href` present it does not. Verify by inspection, not by launching. |
 | `-webkit-` CSS that can fetch (`-webkit-image-set`, `cursor: url()`) | Present | Present-ish | Vendor-prefixed properties are not on the CSS allowlist; `img-src data:` blocks the fetch regardless. |
 | Printing a message | `window.print` in a sandboxed frame is unavailable | Same | Printing routes through the existing `printHtmlBody` path in `src/lib/viewers/print.ts` with the **sanitized** HTML — and that path uses a same-origin srcdoc frame, so it must re-apply the same restrictions. Flag as a follow-up; v1 can omit message printing. |
@@ -654,7 +654,7 @@ OS-native dialog.* Everything in this section implements that sentence.
   attachments, saving them is eight dialogs. This is deliberate friction at the exact
   point where the boundary is crossed, and it is the difference between "the user
   exported three files" and "a message wrote eight files somewhere".
-- No drag-out of attachments in v1 (Eldrun has `tauri-plugin-drag` for file drag-out;
+- No drag-out of attachments in v1 (Tabtivity has `tauri-plugin-drag` for file drag-out;
   wiring it to attachments would be a silent multi-file export path — defer, and if
   added later, gate it behind the same per-file confirm).
 - The write is a plain `fs::write` of the already-decoded blob to the dialog's path. We
@@ -846,7 +846,7 @@ fn tls_config() -> Arc<rustls::ClientConfig> {
 
 ### 4.3 Certificate validation — no escape hatch
 
-**There is no "accept this certificate anyway" control in Eldrun's mail client. Not
+**There is no "accept this certificate anyway" control in Tabtivity's mail client. Not
 hidden, not behind a setting, not behind a dev flag.**
 
 This is enforceable rather than aspirational because of the trust-store choice: using
@@ -880,7 +880,7 @@ override buttons:
 
 Because trust is CA-based, not TOFU, there is no first-contact prompt — a valid chain is
 accepted silently and an invalid one is refused without an override. That is the correct
-default and it differs deliberately from Eldrun's SSH `guard_first_contact` (SSH has no
+default and it differs deliberately from Tabtivity's SSH `guard_first_contact` (SSH has no
 CA infrastructure, so TOFU is the only option there; mail does not have that excuse).
 
 We nonetheless **record**, on each account's first successful connect, the SHA-256 of the
@@ -910,11 +910,11 @@ un-pin path, and an un-pin path is an escape hatch by another name.
 - `XOAUTH2` is added in Phase 2 as an additional allowed mechanism, never as a fallback.
 - The mechanism is **chosen by us from the post-TLS capability list**, not negotiated
   down by the server. If neither `PLAIN` nor `LOGIN` is offered post-TLS, we fail with
-  *"This server doesn't offer a password mechanism Eldrun supports; it may require OAuth"*
+  *"This server doesn't offer a password mechanism Tabtivity supports; it may require OAuth"*
   — which is the honest message for Outlook.com.
 - On `AUTHENTICATIONFAILED`, **do not retry**. One attempt per user action. A retry loop
   against a provider lockout policy is how accounts get locked, and it is also how a
-  saved-credential bug becomes a lockout (Eldrun already learned this from
+  saved-credential bug becomes a lockout (Tabtivity already learned this from
   `remote_credentials`).
 
 ### 4.6 Timeouts, and the reason every one of them exists
@@ -941,7 +941,7 @@ as the locked-keychain hang documented in `docs/context/remote_credentials.md`.
 ### 5.1 Layout
 
 ```
-~/.local/share/eldrun/               (storage::state_dir(), existing)
+~/.local/share/tabtivity/               (storage::state_dir(), existing)
 └── mail/                            0700 on Unix
     ├── mail.db                      SQLite (rusqlite, already a dependency)
     └── <account-id>/
@@ -950,7 +950,7 @@ as the locked-keychain hang documented in `docs/context/remote_credentials.md`.
 ```
 
 `mail.db` schema (all with a `schema_version` row, migrated forward like any other
-Eldrun store):
+Tabtivity store):
 
 - `accounts` — id, display label, email address, IMAP/SMTP host+port, auth method,
   `remember_password: bool`, TLS pin (SPKI hash + issuer DN), sync settings.
@@ -982,10 +982,10 @@ it can be argued with rather than assumed:
 - The threat encryption addresses is *offline access to the disk*. Against that,
   FileVault / BitLocker / LUKS is the correct and complete answer, and it protects the
   rest of the user's data too. An app-level encrypted mailbox on an unencrypted disk
-  next to unencrypted SSH keys, project files, and `~/.local/share/eldrun/*.json` is
+  next to unencrypted SSH keys, project files, and `~/.local/share/tabtivity/*.json` is
   security theatre.
 - The key would have to live somewhere. The only sensible place is the OS keychain — and
-  **Eldrun has a documented, painful hazard exactly there**: a locked Secret Service
+  **Tabtivity has a documented, painful hazard exactly there**: a locked Secret Service
   collection reads identically to an empty one, and reads against it used to hang
   forever (`docs/context/remote_credentials.md`). Making the *entire mailbox* unreadable
   when the keychain is locked is a strictly worse user-facing failure than an unencrypted
@@ -1003,7 +1003,7 @@ it can be argued with rather than assumed:
 - **Phase 2, opt-in:** SQLCipher (rusqlite has a `sqlcipher` feature) or an age-encrypted
   blob store, keyed by a **user-entered passphrase prompted at unlock time** — explicitly
   *not* keychain-derived, precisely to avoid the locked-keychain failure. Opt-in, with
-  the trade-off ("you will be asked for this passphrase every time Eldrun starts")
+  the trade-off ("you will be asked for this passphrase every time Tabtivity starts")
   stated up front.
 
 ### 5.3 Credentials
@@ -1098,7 +1098,7 @@ refusal.
 | Deferred | Why | What a later phase needs |
 |---|---|---|
 | **PGP / S-MIME** | Cryptographic UI is the one place where a *half*-implementation is worse than none: a green checkmark that means "the bytes were signed by some key" while the user reads it as "this is really from my bank" is a new attack, not a mitigation. Key discovery, trust models, expiry, revocation, and the sign-vs-encrypt distinction are each their own design problem. | `rpgp` (pure-Rust OpenPGP) or `cms`/`x509-cert` for S-MIME; a key store with its own at-rest story; WKD/Autocrypt discovery; a verification UI that distinguishes *valid signature* from *key I have a reason to trust*; a decryption path that never writes plaintext to the cache in §5. |
-| **Calendar / iCalendar invites** | `text/calendar` is another untrusted-input parser, and RSVP is an *outbound side effect triggered by attacker-controlled content* (T19). Eldrun already has a calendar, which makes the integration tempting and therefore exactly the thing that needs a deliberate design pass rather than a quick wire-up. | An iCalendar parser with the same fixture discipline as §7.2; an RSVP flow where every send is an explicit click; a rule that an invite never mutates the local calendar without confirmation; free/busy left out. |
+| **Calendar / iCalendar invites** | `text/calendar` is another untrusted-input parser, and RSVP is an *outbound side effect triggered by attacker-controlled content* (T19). Tabtivity already has a calendar, which makes the integration tempting and therefore exactly the thing that needs a deliberate design pass rather than a quick wire-up. | An iCalendar parser with the same fixture discipline as §7.2; an RSVP flow where every send is an explicit click; a rule that an invite never mutates the local calendar without confirmation; free/busy left out. |
 | **Contacts / CardDAV sync** | A second protocol, a second auth surface, a second credential in the keychain, and a second store — for a convenience feature. | A CardDAV client, a contacts store, and a decision about whether a contact's presence is ever used as a trust signal (it must not be — "known sender" is a phishing amplifier). |
 | **HTML compose editor** | Composing HTML means *generating* HTML that other clients must trust, plus an outbound sanitization problem, plus a rich-text editor. Plain-text compose sidesteps all of it and is what a developer tool's users mostly want anyway. | A constrained editor emitting a small, fixed subset; outbound sanitization; a `multipart/alternative` builder; and a quoting scheme that can't be used to smuggle markup into the recipient. |
 | **Threading beyond `References` / `In-Reply-To`** | Subject-based ("Jamie Zawinski") threading merges unrelated conversations, and — worse — **any threading is spoofable**: an attacker sets `References` to a header they observed and their mail appears inside a trusted thread. | If added: keep threading a *display* grouping only, never a trust signal; never render "part of your conversation with X" as provenance; consider showing a marker when a message joins a thread from a sender not otherwise in it. |
@@ -1339,7 +1339,7 @@ Redirect test: a public URL that 302s to `http://169.254.169.254/` is rejected a
 - Existing traversal behaviour (`../`, absolute, drive-prefixed entries) still skipped —
   keep/extend the existing coverage.
 
-### 7.9 Manual QA (cannot be unit-tested; do **not** launch Eldrun to satisfy these —
+### 7.9 Manual QA (cannot be unit-tested; do **not** launch Tabtivity to satisfy these —
 they are for the user's own session after a rebuild)
 
 - A real HTML newsletter renders legibly with images blocked and the count shown.

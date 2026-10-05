@@ -41,11 +41,11 @@ fn fence_args(executable: &Path, installation: &Path, project: &Path) -> Vec<std
         "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
         "--unshare-user", "--cap-drop", "ALL", "--clearenv",
         "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
-        "--dir", "/run/eldrun-copilot/config/github-copilot/auth.db",
-        "--setenv", "XDG_CONFIG_HOME", "/run/eldrun-copilot/config",
-        "--setenv", "XDG_CACHE_HOME", "/run/eldrun-copilot/cache",
-        "--setenv", "XDG_STATE_HOME", "/run/eldrun-copilot/state",
-        "--setenv", "COPILOT_HOME", "/run/eldrun-copilot/copilot",
+        "--dir", concat!("/run/", crate::app_slug!(), "-copilot/config/github-copilot/auth.db"),
+        "--setenv", "XDG_CONFIG_HOME", concat!("/run/", crate::app_slug!(), "-copilot/config"),
+        "--setenv", "XDG_CACHE_HOME", concat!("/run/", crate::app_slug!(), "-copilot/cache"),
+        "--setenv", "XDG_STATE_HOME", concat!("/run/", crate::app_slug!(), "-copilot/state"),
+        "--setenv", "COPILOT_HOME", concat!("/run/", crate::app_slug!(), "-copilot/copilot"),
         "--setenv", "TMPDIR", "/tmp", "--setenv", "PATH", "/usr/bin:/bin",
         "--setenv", "LANG", "C.UTF-8",
     ].iter().map(Into::into).collect();
@@ -90,9 +90,7 @@ impl ManagedProcess {
         #[cfg(not(target_os = "linux"))]
         let mut command = {
             let _ = (&executable, &installation, &project);
-            return Err("copilot_unsupported_platform".into());
-            #[allow(unreachable_code)]
-            tokio::process::Command::new("")
+            Err::<tokio::process::Command, _>("copilot_unsupported_platform")?
         };
         command.env_clear().current_dir(&installation).stdin(Stdio::piped()).stdout(Stdio::piped())
             .stderr(Stdio::null()).kill_on_drop(true);

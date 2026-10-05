@@ -286,7 +286,7 @@ function UpdateAction({
 export function AgentChips({ agent: a, wiredClis }: { agent: HubAgentInfo; wiredClis: string[] | null }) {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();
-  // The agent Eldrun picks on its own when a feature needs exactly one and the
+  // The agent Tabtivity picks on its own when a feature needs exactly one and the
   // user hasn't chosen per-instance (today: scaffold-fill "Agent choice"; more
   // features are expected to read this same setting rather than each growing
   // its own agent picker). Falls back to Claude, matching every existing reader.
@@ -901,7 +901,7 @@ export function LocalModelsSection({
                       onUpdate={() => updateModel(m.name)}
                       t={t}
                     />
-                    {/* Load this model into memory on every Eldrun start. */}
+                    {/* Load this model into memory on every Tabtivity start. */}
                     <button
                       type="button"
                       className={`local-model-role-chip local-model-autostart-chip${

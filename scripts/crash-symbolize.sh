@@ -3,7 +3,7 @@
 #
 # The signal handler in src-tauri/src/lib.rs writes a glibc backtrace as
 # `module(+offset) [abs]` lines — no symbols, because resolving them is not
-# async-signal-safe. This turns each Eldrun frame into `function at file:line`
+# async-signal-safe. This turns each Tabtivity frame into `function at file:line`
 # with addr2line against the executable named on the crash's `exe=` line (the
 # offsets are only valid for that exact binary — a re-frozen dev build shifts
 # them), and each system-library frame into `function` via its exported symbols.
@@ -21,10 +21,10 @@
 # for a crash in none of them; 2026-09-17). The kernel appends `(deleted)` to
 # `/proc/self/exe` once the file has been replaced under the running process,
 # and a binary whose mtime is newer than the crash was installed after it. On
-# either, Eldrun frames are left unresolved unless `--force`; system-library
+# either, Tabtivity frames are left unresolved unless `--force`; system-library
 # frames resolve regardless, since those come from packages, not this build.
 # So each installed dev build is also kept under
-# `<state dir>/dev-builds/eldrun-<commit>` (scripts/retain-dev-build.sh, from
+# `<state dir>/dev-builds/tabtivity-<commit>` (scripts/retain-dev-build.sh, from
 # package-dev.sh and the launcher), and the crash header records
 # `commit=<short sha>`: when the recorded path is stale, the retained copy for
 # that commit is used instead. Rebuilding the commit is NOT a substitute — a
@@ -34,9 +34,13 @@
 # only be mapped by launch time via package-dev-auto.log, and stay unresolved.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The app's names (scripts/lib/brand.sh): $APP_DISPLAY, $APP_SLUG, $APP_BIN_NAME, …
+. "$ROOT/scripts/lib/brand.sh"
+
 nth=1
 force=0
-log="${ELDRUN_STATE_DIR:-$HOME/.local/share/eldrun}/crash.log"
+log="$(app_env STATE_DIR "$APP_SHARE_DIR")/crash.log"
 while [ $# -gt 0 ]; do
   case "$1" in
     -n) nth="$2"; shift 2 ;;
@@ -83,13 +87,13 @@ fi
 commit=$(printf '%s' "$ctx" | sed -n 's/.* commit=\([^ ]*\).*/\1/p' | head -1)
 retained=""
 if [ -n "$commit" ] && [ "$commit" != unknown ] && [ -n "$exe_recorded" ]; then
-  for cand in "$(dirname "$exe_recorded")/dev-builds/eldrun-$commit" \
-              "$(dirname "$exe_recorded")/dev-builds/eldrun-$commit+local"; do
+  for cand in "$(dirname "$exe_recorded")/dev-builds/$APP_SLUG-$commit" \
+              "$(dirname "$exe_recorded")/dev-builds/$APP_SLUG-$commit+local"; do
     if [ -r "$cand" ]; then retained="$cand"; break; fi
   done
 fi
 if [ -n "$retained" ] && { [ -n "$stale" ] || [ ! -r "$exe" ]; }; then
-  echo "note: the recorded binary is stale; resolving Eldrun frames against the retained" >&2
+  echo "note: the recorded binary is stale; resolving $APP_DISPLAY frames against the retained" >&2
   echo "      build of commit $commit: $retained" >&2
   case "$retained" in
     *+local) echo "      (a dirty-tree freeze of that commit — only right if the crash ran that freeze)" >&2 ;;
@@ -99,15 +103,15 @@ if [ -n "$retained" ] && { [ -n "$stale" ] || [ ! -r "$exe" ]; }; then
 fi
 
 if [ -n "$exe" ] && [ ! -r "$exe" ]; then
-  echo "note: $exe is gone or unreadable; Eldrun frames stay unresolved" >&2
+  echo "note: $exe is gone or unreadable; $APP_DISPLAY frames stay unresolved" >&2
   exe=""
 elif [ -n "$stale" ]; then
   if [ "$force" = 1 ]; then
-    echo "WARNING: $stale — every Eldrun name below is resolved against a different" >&2
+    echo "WARNING: $stale — every $APP_DISPLAY name below is resolved against a different" >&2
     echo "         layout and is almost certainly wrong (--force was passed)." >&2
   else
     echo "note: $stale, so its offsets no longer name anything in it." >&2
-    echo "      Eldrun frames stay unresolved; --force resolves them anyway." >&2
+    echo "      $APP_DISPLAY frames stay unresolved; --force resolves them anyway." >&2
     exe=""
   fi
 fi
@@ -119,7 +123,7 @@ printf '%s\n' "$block" | grep -E '^[^ ].*\(\+0x[0-9a-f]+\)' | while IFS= read -r
   if [ -z "$exe" ] && [ "$module" = "$exe_recorded" ]; then
     resolved="?? (not resolved: the binary on disk is not this build)"
   elif [ "$module" = "$exe_recorded" ]; then
-    # Eldrun's own frames: against the recorded file, or the retained copy.
+    # Tabtivity's own frames: against the recorded file, or the retained copy.
     resolved=$(addr2line -e "$exe" -f -C -i -p "$offset" 2>/dev/null | head -3 | paste -sd '|' -)
     [ -n "$resolved" ] || resolved="?? (no symbols in $exe)"
   elif [ -r "$module" ]; then

@@ -9,7 +9,7 @@ as a later second backend**; **macOS = deny-default Seatbelt profile**.
 ## 1. Context
 
 The Linux fence (`src-tauri/src/services/agent_fence.rs`, bubblewrap) is
-Eldrun's main agent boundary. It gives:
+Tabtivity's main agent boundary. It gives:
 
 - (L1) a read wall: `$HOME` replaced by the scope's agent home, other projects
   and the private state dir masked;
@@ -54,7 +54,7 @@ closed, and document every gap that remains.
 | **Microsoft MXC** (MIT, Build 2026) | `sandbox_init` SBPL, deny default | AppContainer in 3 tiers (the new OS `CreateProcessInSandbox`, Brokered File System, DACL), job UI limits, Win32k lockdown, firewall rules per package SID. The README says it is "not a security boundary" yet. | bwrap/LXC |
 | **SandVault** | A separate macOS user (`sudo -u`) **plus** `sandbox-exec` | — | — |
 
-Conclusions for Eldrun:
+Conclusions for Tabtivity:
 
 1. **Windows:** a dedicated local account is the one approach that gives a read
    wall, a write wall and working loopback without AppContainer. Both big
@@ -66,10 +66,10 @@ Conclusions for Eldrun:
    - ConPTY cannot be passed through `CreateProcessWithLogonW` (microsoft/terminal
      #11865). The runner running as the account must own its **own** ConPTY
      and relay it, the same way Codex's command-runner does.
-2. **Eldrun needs something neither project needs:** isolation *between*
+2. **Tabtivity needs something neither project needs:** isolation *between*
    projects. Codex and srt use one account for one workspace. With one shared
    account, project A's agent could read project B wherever B's ACL grants
-   that account. So Eldrun uses **a small pool of accounts, one leased per
+   that account. So Tabtivity uses **a small pool of accounts, one leased per
    fence scope** (§4.2).
 3. **macOS:** everyone serious uses `(deny default)` plus a mach allowlist.
    `sandbox-exec` is deprecated but still the only unprivileged, unsigned
@@ -90,11 +90,11 @@ Conclusions for Eldrun:
 - **D3 Network parity with Linux** (L8): shared network, no egress filter.
   WFP/firewall rules are out of scope; they would be a separate, cross-OS
   "offline fence" feature.
-- **D4 Additive, recorded ACL changes only** (Windows). Every ACE Eldrun adds
+- **D4 Additive, recorded ACL changes only** (Windows). Every ACE Tabtivity adds
   is written to a ledger in the state dir, and project removal, account
-  eviction and uninstall take it back. Eldrun never rewrites an existing DACL
-  and never removes inheritance. This is how srt does it, and it keeps "Eldrun
-  never edits another app's config" honest: the grants are Eldrun's own,
+  eviction and uninstall take it back. Tabtivity never rewrites an existing DACL
+  and never removes inheritance. This is how srt does it, and it keeps "Tabtivity
+  never edits another app's config" honest: the grants are Tabtivity's own,
   reversible, and listed in Settings.
 - **D5 WSL2 later** (§6). It gets its own phase once the native backend ships.
   The go/no-go checks in #2327 (c) stay the gate.
@@ -103,25 +103,25 @@ Conclusions for Eldrun:
 
 ### 4.1 One-time setup (elevated, one UAC prompt)
 
-`eldrun.exe --fence-setup` is started via `ShellExecuteW("runas")`. It is a new
+`tabtivity.exe --fence-setup` is started via `ShellExecuteW("runas")`. It is a new
 module `src-tauri/src/services/agent_fence_win/setup.rs`, AppHandle-free. It:
 
-1. Creates the local group `EldrunAgents` and a pool of N accounts
-   `EldrunAgent01..N` (N = 8, `Settings::agent_fence_pool_size`). Each gets a
+1. Creates the local group `TabtivityAgents` and a pool of N accounts
+   `TabtivityAgent01..N` (N = 8, `Settings::agent_fence_pool_size`). Each gets a
    random 32-byte password, and all are hidden from the sign-in screen
    (`SpecialAccounts\UserList`).
 2. Grants the pool "Allow log on locally". When a domain GPO strips that right,
    setup detects it and reports a clear failure (Codex #1385). It does not
    leave a half-installed state.
-3. Hands the passwords back to the unelevated Eldrun over an anonymous pipe.
-   Eldrun stores them encrypted with DPAPI (CurrentUser) under
+3. Hands the passwords back to the unelevated Tabtivity over an anonymous pipe.
+   Tabtivity stores them encrypted with DPAPI (CurrentUser) under
    `<state_dir>/fence-win/accounts.json`. The state dir lives under the real
    profile, which no pool account can read.
 4. `--fence-uninstall` (also elevated) deletes the accounts, group and
    profiles. The unelevated side first walks the ledger and removes every ACE.
 
-Eldrun's main process never runs elevated. The setup binary is the same
-`eldrun.exe` with a flag, so there is nothing extra to sign or ship.
+Tabtivity's main process never runs elevated. The setup binary is the same
+`tabtivity.exe` with a flag, so there is nothing extra to sign or ship.
 
 ### 4.2 Account lease per scope
 
@@ -147,7 +147,7 @@ into ACE sets instead of bind mounts. There is a new pure function
 |---|---|
 | roots rw | inheriting `MODIFY` ACE for **the scope's account**, with `FILE_DELETE_CHILD` withheld at the root itself (srt) |
 | agent home over `$HOME` | `MODIFY` on `<state_dir>/agent-homes/<key>` for the scope's account. Env: `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP` all point inside it (per-scope temp = L5). |
-| CLI installs, `bin/`, hooks ro | `READ\|EXECUTE` for the **`EldrunAgents` group** (shared, stamped once) |
+| CLI installs, `bin/`, hooks ro | `READ\|EXECUTE` for the **`TabtivityAgents` group** (shared, stamped once) |
 | `agent_fence_paths` allowlist ro | same group RX grant, but only for paths **under the user's profile** that the user confirmed in the setup dialog (toolchains: `.cargo`, `.rustup`, nvm/fnm, Scoop, `pip --user`). This is how srt limitation 2 is solved; the dialog lists each path. |
 | `~/.gitconfig` ro | copied read-only into the scope home at spawn (no ACE on the user's own file), with `GIT_CONFIG_GLOBAL` pointing at the copy |
 | private state masked | nothing to do: the state dir is inside the real profile, and the pool has no rights there (the read wall comes free) |
@@ -168,10 +168,10 @@ fence pill; do not refuse.
 ### 4.4 Launch: runner relay (ConPTY cannot cross users)
 
 ```
-Eldrun ConPTY (portable-pty, as you)
-  └─ eldrun.exe --fence-runner <spec>        relays bytes + resize, as you
-       └─ CreateProcessWithLogonW(EldrunAgentNN, LOGON_WITH_PROFILE)
-            └─ eldrun.exe --fence-inner <spec>   as EldrunAgentNN
+Tabtivity ConPTY (portable-pty, as you)
+  └─ tabtivity.exe --fence-runner <spec>        relays bytes + resize, as you
+       └─ CreateProcessWithLogonW(TabtivityAgentNN, LOGON_WITH_PROFILE)
+            └─ tabtivity.exe --fence-inner <spec>   as TabtivityAgentNN
                  ├─ job object: KILL_ON_JOB_CLOSE, UILIMIT_{HANDLES,READCLIPBOARD,
                  │   WRITECLIPBOARD,GLOBALATOMS,SYSTEMPARAMETERS,DESKTOP}
                  ├─ private desktop (CreateDesktopW), as Codex does by default
@@ -180,7 +180,7 @@ Eldrun ConPTY (portable-pty, as you)
                  └─ pipes to runner: framed {data, resize, exit}
 ```
 
-- The spec is a JSON file written by Eldrun into a per-tab dir that only the
+- The spec is a JSON file written by Tabtivity into a per-tab dir that only the
   account can read (argv, env, cwd, size). No secrets go on the command line.
 - The runner forwards console input (it sets raw mode) and
   `WINDOW_BUFFER_SIZE_EVENT` → `resize`. This is the same double-ConPTY shape
@@ -193,13 +193,13 @@ Eldrun ConPTY (portable-pty, as you)
   The Exit teardown (`RunEvent::Exit`) covers the runners like any other PTY.
 - **Why a separate user and not only a restricted token:** anything the agent
   starts through a surrogate (Task Scheduler, BITS, out-of-process COM, WMI)
-  runs as `EldrunAgentNN` and stays fenced (srt's argument). It also cannot
-  `OpenProcess` Eldrun or other tabs, and it has its own HKCU, DPAPI and
+  runs as `TabtivityAgentNN` and stays fenced (srt's argument). It also cannot
+  `OpenProcess` Tabtivity or other tabs, and it has its own HKCU, DPAPI and
   Credential Manager. That is the Windows twin of L4: the user's saved secrets
   sit behind the user's DPAPI key.
 - **URL opening:** on a private desktop `start <url>` is invisible. Set
-  `BROWSER` and add an `eldrun-open` shim in `<state_dir>/bin` (the same shape
-  as `eldrun-send`) that asks the window to open the URL through the existing
+  `BROWSER` and add a `tabtivity-open` shim in `<state_dir>/bin` (the same shape
+  as `tabtivity-send`) that asks the window to open the URL through the existing
   token-protected loopback endpoint. Agents' OAuth callbacks reach
   `127.0.0.1`, because user-based isolation does not cut loopback.
 
@@ -322,9 +322,9 @@ loopback works under mirrored networking). Then:
 
 - a project flag "Run agents in WSL" picks `wsl.exe -d <distro> -- <the Linux
   fence argv>`, reusing `bwrap_args` unchanged;
-- `C:\` ↔ `/mnt/c` mapping sits in one helper used by `eldrun-send`, git MCP
+- `C:\` ↔ `/mnt/c` mapping sits in one helper used by `tabtivity-send`, git MCP
   and mobile control;
-- Eldrun-owned Linux agent installs go inside the distro.
+- Tabtivity-owned Linux agent installs go inside the distro.
 
 It is a second backend under the same `decide()`, never a silent fallback for
 the native one.
@@ -390,11 +390,11 @@ the native one.
   - cannot `open -a` or `osascript` (macOS);
   - loses its whole subtree on `kill`;
   - can reach a loopback HTTP server.
-- **Live checks for the user** (Eldrun is never launched by the agent):
+- **Live checks for the user** (Tabtivity is never launched by the agent):
   - Windows: accept setup → UAC once → open a Claude tab in project A → `type
     C:\Users\<you>\.ssh\id_ed25519` fails, `dir ..\B` fails, `git commit` in
     A works, the MCP help tool answers, closing the tab leaves no
-    `EldrunAgentNN` process in Task Manager.
+    `TabtivityAgentNN` process in Task Manager.
   - macOS: open a Claude tab → `open -a Terminal` fails, `security
     find-generic-password -s "Claude Code-credentials"` fails, the agent is
     still signed in.

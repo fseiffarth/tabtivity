@@ -32,6 +32,20 @@ pub struct OllamaModelInfo {
     /// on a re-pull), and it is the *same* value the registry answers for
     /// `<name>:<tag>`, which is what makes an update check one HEAD request.
     pub digest: String,
+    /// Bytes the model holds while resident (`/api/ps` `size`, which is not
+    /// the disk size: it includes the KV cache). `0` unless `running`.
+    pub loaded_size: u64,
+    /// `/api/ps` `expires_at`, verbatim. `None` unless `running`.
+    pub expires_at: Option<String>,
+    /// Resident with no expiry in sight — the `keep_alive: -1` loads, which
+    /// Ollama reports as an `expires_at` centuries away. See [`keep_alive_of`].
+    pub pinned: bool,
+    /// Whole seconds until Ollama unloads it; `None` when pinned, idle, or the
+    /// expiry is unreadable or already past.
+    pub expires_in_secs: Option<u64>,
+    /// An Ollama cloud model (its `/api/tags` entry names a `remote_host` /
+    /// `remote_model`): listed, but there is nothing on this machine to load.
+    pub remote: bool,
 }
 
 /// An entry in the built-in catalog of installable models.
@@ -122,11 +136,11 @@ pub(crate) fn resolve_ollama_addr(raw: Option<&str>, allow_remote: bool) -> Resu
     } else if let Some(r) = raw.strip_prefix("https://") {
         let _ = r;
         return Err(format!(
-            "Ollama host `{raw}` asks for HTTPS, which Eldrun's Ollama transport \
+            "Ollama host `{raw}` asks for HTTPS, which {app}'s Ollama transport \
              cannot speak — it would have to connect in the clear instead, and \
              sending prompts unencrypted to an address written as `https://` is \
              not something to do quietly. Use `http://` (or drop the scheme) for \
-             a server on this machine."
+             a server on this machine.", app = crate::brand::DISPLAY
         ));
     } else if let Some((scheme, _)) = raw.split_once("://") {
         return Err(format!(
@@ -327,7 +341,7 @@ use crate::paths::binary_on_path;
 /// True when the `ollama` binary is available. Checks PATH first, then (on
 /// Windows) the well-known per-user install location, since winget/the GUI
 /// installer drop `ollama.exe` under `%LOCALAPPDATA%\Programs\Ollama` and a
-/// running Eldrun's inherited PATH won't pick it up until a new session.
+/// running Tabtivity's inherited PATH won't pick it up until a new session.
 #[tauri::command]
 pub async fn ollama_is_installed() -> bool {
     if binary_on_path("ollama") {
@@ -483,7 +497,7 @@ pub async fn install_ollama(app: tauri::AppHandle) -> Result<String, String> {
 pub struct OllamaInstallStrategy {
     /// "windows" | "macos" | "linux" | "unknown".
     pub os: String,
-    /// The exact command Eldrun runs / the user can copy-paste.
+    /// The exact command Tabtivity runs / the user can copy-paste.
     pub command: String,
     /// Whether one-click `install_ollama` is supported on this OS.
     pub auto: bool,
@@ -546,7 +560,7 @@ pub fn vibe_install_cmd() -> &'static str {
 
 /// True when the `vibe` binary is reachable. Checks `PATH` (cross-platform, via
 /// `where`/`which`) and the well-known user install locations the installer uses,
-/// since Eldrun's inherited `PATH` may omit `~/.local/bin` even when a login shell
+/// since Tabtivity's inherited `PATH` may omit `~/.local/bin` even when a login shell
 /// would include it.
 #[tauri::command]
 pub async fn vibe_is_installed() -> bool {
@@ -675,7 +689,7 @@ pub async fn install_vibe(app: tauri::AppHandle) -> Result<String, String> {
 pub struct VibeInstallStrategy {
     /// "windows" | "macos" | "linux" | "unknown".
     pub os: String,
-    /// The exact command Eldrun runs / the user can copy-paste.
+    /// The exact command Tabtivity runs / the user can copy-paste.
     pub command: String,
     /// Whether one-click `install_vibe` is supported on this OS.
     pub auto: bool,
@@ -842,47 +856,141 @@ pub async fn list_ollama_models_detailed() -> Result<Vec<OllamaModelInfo>, Strin
     let tags: serde_json::Value =
         serde_json::from_str(&tags_body).map_err(|e| format!("tags json: {e}"))?;
 
-    // Build name→size_vram map for running models; ignore /api/ps errors.
-    let running: std::collections::HashMap<String, u64> = ollama_http("GET", "/api/ps", None)
-        .ok()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["models"].as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|m| {
-            let name = m["name"].as_str()?.to_owned();
-            let vram = m["size_vram"].as_u64().unwrap_or(0);
-            Some((name, vram))
-        })
-        .collect();
+    // What is resident, keyed by name; an /api/ps error reads as "nothing".
+    let running = ollama_http("GET", "/api/ps", None)
+        .map(|b| ps_entries(&b))
+        .unwrap_or_default();
 
     let models = tags["models"]
         .as_array()
         .ok_or("no models field in /api/tags")?;
 
+    let now = chrono::Utc::now();
     Ok(models
         .iter()
         .map(|m| {
             let name = m["name"].as_str().unwrap_or("").to_owned();
             let size = m["size"].as_u64().unwrap_or(0);
             let details = &m["details"];
-            let size_vram = running.get(&name).copied().unwrap_or(0);
+            let ps = running.get(&name);
             let digest = m["digest"].as_str().unwrap_or("").to_owned();
             // One `/api/show` per model on a cold cache, none afterwards.
             let capabilities = model_capabilities(&name, &digest);
+            let expires_at = ps.and_then(|p| p.expires_at.clone());
+            let (pinned, expires_in_secs) = match ps {
+                Some(_) => keep_alive_of(expires_at.as_deref(), now),
+                None => (false, None),
+            };
             OllamaModelInfo {
                 size,
                 parameter_size: details["parameter_size"].as_str().map(String::from),
                 quantization: details["quantization_level"].as_str().map(String::from),
                 family: details["family"].as_str().map(String::from),
-                running: running.contains_key(&name),
-                size_vram,
+                running: ps.is_some(),
+                size_vram: ps.map_or(0, |p| p.vram),
                 capabilities,
                 digest,
+                loaded_size: ps.map_or(0, |p| p.size),
+                expires_at,
+                pinned,
+                expires_in_secs,
+                remote: is_remote_entry(m),
                 name,
             }
         })
         .collect())
+}
+
+/// One resident model as `/api/ps` reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PsEntry {
+    /// `size_vram`: the bytes of it on the GPU.
+    vram: u64,
+    /// `size`: the bytes it holds in memory overall.
+    size: u64,
+    /// `expires_at`, verbatim (RFC 3339).
+    expires_at: Option<String>,
+}
+
+/// The resident models in an `/api/ps` body, keyed by name. A body that is not
+/// one reads as "nothing resident". Pure + tested.
+fn ps_entries(ps_body: &str) -> std::collections::HashMap<String, PsEntry> {
+    serde_json::from_str::<serde_json::Value>(ps_body)
+        .ok()
+        .and_then(|v| v["models"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            let name = m["name"].as_str()?.to_owned();
+            Some((
+                name,
+                PsEntry {
+                    vram: m["size_vram"].as_u64().unwrap_or(0),
+                    size: m["size"].as_u64().unwrap_or(0),
+                    expires_at: m["expires_at"].as_str().map(String::from),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// An expiry further out than this is "stays loaded": Ollama has no "never" in
+/// `/api/ps` and reports a `keep_alive: -1` load as expiring centuries away.
+const PINNED_AFTER_SECS: i64 = 365 * 24 * 60 * 60;
+
+/// `(pinned, seconds left)` for a resident model's `expires_at`. More than a
+/// year away is pinned; a past or unreadable expiry is `(false, None)` — say
+/// nothing rather than a wrong countdown. Pure + tested.
+fn keep_alive_of(
+    expires_at: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (bool, Option<u64>) {
+    let Some(at) = expires_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) else {
+        return (false, None);
+    };
+    let secs = (at.with_timezone(&chrono::Utc) - now).num_seconds();
+    if secs > PINNED_AFTER_SECS {
+        (true, None)
+    } else if secs > 0 {
+        (false, Some(secs as u64))
+    } else {
+        (false, None)
+    }
+}
+
+/// Whether an `/api/tags` entry is an Ollama cloud model: one that names the
+/// remote it runs on. Nothing about it is on this machine to load. Pure + tested.
+fn is_remote_entry(entry: &serde_json::Value) -> bool {
+    ["remote_host", "remote_model"]
+        .iter()
+        .any(|k| entry[*k].as_str().is_some_and(|s| !s.trim().is_empty()))
+}
+
+/// The installed model `wanted` names, as `/api/tags` lists it: an exact match,
+/// or `wanted:latest` for an untagged name — never a prefix (`qwen3` is not
+/// `qwen3.5:9b`). `Err("model_not_installed")` when nothing matches (an
+/// unreadable body included: fail closed), `Err("model_not_local")` for a cloud
+/// entry. Returning the *listed* spelling matters: it is the key the load's
+/// progress events carry. Pure + tested.
+fn installed_match(tags_body: &str, wanted: &str) -> Result<String, &'static str> {
+    let tags = serde_json::from_str::<serde_json::Value>(tags_body)
+        .map_err(|_| "model_not_installed")?;
+    let entries = tags["models"].as_array().ok_or("model_not_installed")?;
+    // Untagged means no `:` in the last path segment — a registry's port
+    // (`reg:5000/ns/m`) is not a tag, and a digest ref (`m@sha256:…`) is never
+    // given one.
+    let leaf = wanted.rsplit('/').next().unwrap_or(wanted);
+    let latest = (!leaf.contains(':')).then(|| format!("{wanted}:latest"));
+    let found = entries.iter().find(|m| {
+        m["name"]
+            .as_str()
+            .is_some_and(|n| n == wanted || latest.as_deref() == Some(n))
+    });
+    match found {
+        None => Err("model_not_installed"),
+        Some(m) if is_remote_entry(m) => Err("model_not_local"),
+        Some(m) => Ok(m["name"].as_str().unwrap_or(wanted).to_owned()),
+    }
 }
 
 /// Unload a model from memory without deleting it (sets keep_alive=0).
@@ -894,7 +1002,7 @@ pub async fn stop_ollama_model(model: String) -> Result<(), String> {
 }
 
 // ── Interrupted-pull tracking ─────────────────────────────────────────────
-// A pull that is in flight is recorded in a small JSON file so that if Eldrun
+// A pull that is in flight is recorded in a small JSON file so that if Tabtivity
 // exits or crashes mid-download the model can be resumed on the next launch
 // (Ollama's /api/pull continues a partially-fetched model). The entry is added
 // when a pull starts and removed only on success; a caught error or a crash
@@ -925,7 +1033,7 @@ fn mark_pending_pull(model: &str, active: bool) {
     let _ = crate::storage::write_json(&pending_pulls_path(), &list);
 }
 
-/// Model refs whose download was interrupted (Eldrun closed/crashed mid-pull).
+/// Model refs whose download was interrupted (Tabtivity closed/crashed mid-pull).
 /// The UI reconciles these against the installed list and offers to resume them.
 #[tauri::command]
 pub async fn list_pending_ollama_pulls() -> Vec<String> {
@@ -958,7 +1066,7 @@ fn ollama_blob_dirs() -> Vec<std::path::PathBuf> {
     .into_iter()
     .map(|dir| dir.join("blobs"))
     .collect::<Vec<_>>();
-    // The user's configured dir belongs here too: it is where a server *Eldrun*
+    // The user's configured dir belongs here too: it is where a server *Tabtivity*
     // spawns downloads to, but it is not on this process's `OLLAMA_MODELS`, so
     // the env-var candidate above would miss it and a paused download in the
     // custom dir would have no resumable partial to find.
@@ -1300,6 +1408,14 @@ pub async fn load_ollama_model(
     model: String,
     device: Option<LoadDevice>,
 ) -> Result<(), String> {
+    run_load(&app, &model, device.unwrap_or_default())
+}
+
+/// The load itself, shared by [`load_ollama_model`] and
+/// [`load_installed_ollama_model`]: `ollama-load-progress` `loading`, the
+/// blocking warm-up with `keep_alive: -1`, then `success`/`error` — all keyed by
+/// `model` exactly as given.
+fn run_load(app: &tauri::AppHandle, model: &str, device: LoadDevice) -> Result<(), String> {
     use tauri::Emitter;
 
     let _ = app.emit(
@@ -1307,7 +1423,7 @@ pub async fn load_ollama_model(
         serde_json::json!({ "model": model, "status": "loading" }),
     );
     let mut payload = serde_json::json!({"model": model, "keep_alive": -1});
-    if let Some(n) = device.unwrap_or_default().num_gpu() {
+    if let Some(n) = device.num_gpu() {
         payload["options"] = serde_json::json!({ "num_gpu": n });
     }
     let body = payload.to_string();
@@ -1321,6 +1437,88 @@ pub async fn load_ollama_model(
     );
     result?;
     Ok(())
+}
+
+/// Models a phone-started load ([`load_installed_ollama_model`]) is warming
+/// right now. A second request for one of them starts nothing, which bounds the
+/// blocking threads a phone can hold open (each may sit in a 600 s read) at one
+/// per installed model.
+fn phone_loads() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// A claim on one [`phone_loads`] entry, released on drop — so a load that
+/// errors or panics can never leave its model stuck as "already loading".
+struct PhoneLoadClaim(String);
+
+impl PhoneLoadClaim {
+    /// Claim `model`, or `None` when a phone load of it is already running.
+    fn claim(model: &str) -> Option<Self> {
+        let mut set = phone_loads()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        set.insert(model.to_owned())
+            .then(|| PhoneLoadClaim(model.to_owned()))
+    }
+}
+
+impl Drop for PhoneLoadClaim {
+    fn drop(&mut self) {
+        phone_loads()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// Load an **installed** model into memory (Ollama picks the device, kept
+/// resident with `keep_alive: -1`) without waiting for it: the answer comes as
+/// soon as the request checks out, and the load runs on a detached thread,
+/// reporting through the same `ollama-load-progress` events as
+/// [`load_ollama_model`]. Made for the phone, whose bridge deadline is seconds
+/// while a load can take minutes.
+///
+/// The name must be one `/api/tags` lists (see [`installed_match`]) — that is the
+/// no-download guarantee: whatever Ollama might do with an unknown name, this
+/// never sends one. Refusals are bare codes: `ollama_not_running`,
+/// `model_not_installed`, `model_not_local`. A model a phone load is already
+/// warming is not loaded twice. Returns the name as listed (`llama3` →
+/// `llama3:latest`), the key the progress events use.
+///
+/// Exit does not wait for the load thread; an owned server torn down at exit
+/// makes its read fail.
+#[tauri::command]
+pub async fn load_installed_ollama_model(
+    app: tauri::AppHandle,
+    model: String,
+) -> Result<String, String> {
+    validate_model_name(&model)?;
+    let wanted = model.trim().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let tags = ollama_http("GET", "/api/tags", None).map_err(|e| {
+            if e == "not_running" {
+                "ollama_not_running".to_owned()
+            } else {
+                e
+            }
+        })?;
+        let listed = installed_match(&tags, &wanted).map_err(str::to_owned)?;
+        if let Some(claim) = PhoneLoadClaim::claim(&listed) {
+            let name = listed.clone();
+            std::thread::Builder::new()
+                .name("ollama-phone-load".into())
+                .spawn(move || {
+                    let _claim = claim;
+                    let _ = run_load(&app, &name, LoadDevice::Auto);
+                })
+                .map_err(|e| format!("could not start the load: {e}"))?;
+        }
+        Ok(listed)
+    })
+    .await
+    .map_err(|e| format!("load task failed: {e}"))?
 }
 
 /// Pull (download or update) a model from the Ollama registry, streaming
@@ -1579,10 +1777,48 @@ fn wanted_updates(models: Vec<(String, String)>) -> Vec<OllamaModelUpdate> {
 // `ollama --version`) and read whenever the menu opens; the **latest** version
 // is a network request and happens only when the user clicks.
 
-/// Where the newest published version is read from. GitHub's release API rather
-/// than ollama.com: it is the same source the project's own installer consults,
-/// it is unauthenticated, and it answers with a plain tag we can compare.
+/// Where the newest published version is read from: GitHub's releases rather
+/// than ollama.com (whose `/api/version` answers `0.0.0`) — the same source the
+/// project's own installer consults. The release page's redirect comes first
+/// (`agent_latest::github_latest_page`): the REST API's unauthenticated quota is
+/// 60 an hour per IP, and once spent every check failed with "couldn't reach the
+/// release feed" (2026-10-02). The API stays as the fallback.
+const OLLAMA_REPO: &str = "ollama/ollama";
 const OLLAMA_RELEASES_URL: &str = "https://api.github.com/repos/ollama/ollama/releases/latest";
+
+/// The newest Ollama release tag, e.g. `v0.35.1`: the release page's redirect,
+/// else the API. `None` when neither answered with one.
+fn latest_ollama_tag() -> Option<String> {
+    use crate::services::agent_latest::{github_latest_page, tag_from_release_redirect};
+    let from_redirect = crate::paths::command_no_window("curl")
+        .args(["-sSI", "--max-time", "15", &github_latest_page(OLLAMA_REPO)])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| header_value(&String::from_utf8_lossy(&out.stdout), "location"))
+        .and_then(|location| tag_from_release_redirect(&location));
+    if from_redirect.is_some() {
+        return from_redirect;
+    }
+    // GitHub rejects a request with no User-Agent, so one is sent. It names
+    // the app and nothing else — no token, no account, no machine detail.
+    crate::paths::command_no_window("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "15",
+            "-H",
+            concat!("User-Agent: ", crate::app_name!()),
+            "-H",
+            "Accept: application/vnd.github+json",
+            OLLAMA_RELEASES_URL,
+        ])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+        .and_then(|v| v["tag_name"].as_str().map(String::from))
+}
 
 /// The installed and newest-published Ollama versions.
 #[derive(serde::Serialize, Clone, Default)]
@@ -1703,36 +1939,14 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
             return status;
         }
 
-        // GitHub rejects a request with no User-Agent, so one is sent. It names
-        // the app and nothing else — no token, no account, no machine detail.
-        match crate::paths::command_no_window("curl")
-            .args([
-                "-fsSL",
-                "--max-time",
-                "15",
-                "-H",
-                "User-Agent: Eldrun",
-                "-H",
-                "Accept: application/vnd.github+json",
-                OLLAMA_RELEASES_URL,
-            ])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                let tag = serde_json::from_slice::<serde_json::Value>(&out.stdout)
-                    .ok()
-                    .and_then(|v| v["tag_name"].as_str().map(String::from))
-                    .unwrap_or_default();
-                match parse_version(&tag) {
-                    Some(latest) => {
-                        status.update_available =
-                            version_is_newer(&latest, &status.current).unwrap_or(false);
-                        status.latest = latest;
-                    }
-                    None => status.error = Some("couldn't read the latest version".to_string()),
-                }
+        match latest_ollama_tag().as_deref().map(parse_version) {
+            Some(Some(latest)) => {
+                status.update_available =
+                    version_is_newer(&latest, &status.current).unwrap_or(false);
+                status.latest = latest;
             }
-            _ => status.error = Some("couldn't reach the release feed".to_string()),
+            Some(None) => status.error = Some("couldn't read the latest version".to_string()),
+            None => status.error = Some("couldn't reach the release feed".to_string()),
         }
         status
     })
@@ -2356,7 +2570,7 @@ const IGPU_ENABLE_VAR: &str = "OLLAMA_IGPU_ENABLE";
 /// it.
 #[derive(serde::Serialize, Clone, Default)]
 pub struct OllamaGpuStatus {
-    /// This machine has at least one GPU Eldrun can read (`gpustat`). The
+    /// This machine has at least one GPU Tabtivity can read (`gpustat`). The
     /// frontend gates the whole CPU/GPU choice on this: with no GPU there is no
     /// choice to offer.
     pub gpu_present: bool,
@@ -2379,7 +2593,7 @@ pub struct OllamaGpuStatus {
     /// unit — a shell export or a login-session variable would not be read.
     pub systemd_service: bool,
     /// The one-click fix, for `runInstallInTab`. Empty when we have nothing
-    /// honest to offer (no supported flag, or a server Eldrun itself spawns and
+    /// honest to offer (no supported flag, or a server Tabtivity itself spawns and
     /// already sets the variable for), in which case the UI states the variable
     /// rather than running something that would not help.
     pub fix_cmd: String,
@@ -2423,7 +2637,7 @@ fn igpu_flag_supported() -> bool {
 #[cfg(target_os = "linux")]
 fn igpu_fix_command(systemd: bool) -> (String, String) {
     if !systemd {
-        // Eldrun's own `ollama serve` already sets the variable (see
+        // Tabtivity's own `ollama serve` already sets the variable (see
         // `ensure_ollama_running`), so there is nothing to install — restarting
         // the server is the whole fix, and that is not ours to do behind the
         // user's back while their models are resident.
@@ -2433,8 +2647,13 @@ fn igpu_fix_command(systemd: bool) -> (String, String) {
         format!(
             "sudo mkdir -p /etc/systemd/system/ollama.service.d && \
              printf '[Service]\\nEnvironment=\"{IGPU_ENABLE_VAR}=1\"\\n' | \
-             sudo tee /etc/systemd/system/ollama.service.d/eldrun-igpu.conf && \
-             sudo systemctl daemon-reload && sudo systemctl restart ollama"
+             sudo tee /etc/systemd/system/ollama.service.d/{dropin} && \
+             {drop_old}sudo systemctl daemon-reload && sudo systemctl restart ollama",
+            dropin = crate::brand::OLLAMA_IGPU_DROPIN,
+            drop_old = crate::services::brand_migration::compat::ollama_dropin_cleanup(
+                &crate::brand::PAIR,
+                crate::brand::Name::OLLAMA_IGPU_DROPIN,
+            ),
         ),
         "bash".to_string(),
     )
@@ -2528,7 +2747,7 @@ pub async fn ollama_gpu_status() -> OllamaGpuStatus {
 /// escaped through three nested quoting layers (shell → `printf` → systemd
 /// `Environment="…"`, where `%` is a specifier): such a path is not a real
 /// Ollama models directory, so the honest answer is to withhold the drop-in and
-/// leave the setting itself — which reaches an Eldrun-spawned server through a
+/// leave the setting itself — which reaches a Tabtivity-spawned server through a
 /// plain `Command::env`, with no shell — unaffected.
 fn models_path_is_safe(path: &str) -> bool {
     !path.is_empty()
@@ -2544,7 +2763,7 @@ fn sh_single_quote(s: &str) -> String {
 
 /// The terminal command that points the **running service** at `path`, plus the
 /// shell it needs. Empty when there is nothing to run — no service (a server
-/// Eldrun spawns already honours the setting via `ensure_ollama_running`), or a
+/// Tabtivity spawns already honours the setting via `ensure_ollama_running`), or a
 /// path too exotic to embed (`models_path_is_safe`).
 ///
 /// A systemd drop-in, mirroring `igpu_fix_command`: additive, survives the
@@ -2565,9 +2784,14 @@ fn models_dir_service_command(path: &str, systemd: bool) -> (String, String) {
              svc_user=${{svc_user:-ollama}}; \
              sudo mkdir -p /etc/systemd/system/ollama.service.d && \
              printf '[Service]\\nEnvironment=\"OLLAMA_MODELS=%s\"\\n' {q} | \
-             sudo tee /etc/systemd/system/ollama.service.d/eldrun-models.conf && \
+             sudo tee /etc/systemd/system/ollama.service.d/{dropin} && \
              sudo mkdir -p {q} && sudo chown \"$svc_user\": {q} && \
-             sudo systemctl daemon-reload && sudo systemctl restart ollama"
+             {drop_old}sudo systemctl daemon-reload && sudo systemctl restart ollama",
+            dropin = crate::brand::OLLAMA_MODELS_DROPIN,
+            drop_old = crate::services::brand_migration::compat::ollama_dropin_cleanup(
+                &crate::brand::PAIR,
+                crate::brand::Name::OLLAMA_MODELS_DROPIN,
+            ),
         ),
         "bash".to_string(),
     )
@@ -2638,17 +2862,17 @@ fn ollama_listening() -> bool {
         .unwrap_or(false)
 }
 
-// ── What Eldrun started, and therefore may stop ───────────────────────────
+// ── What Tabtivity started, and therefore may stop ───────────────────────────
 
 /// How the Ollama server currently answering came to be running — recorded by
 /// [`ensure_ollama_running`] and read by nothing but [`shutdown_owned_server`].
 ///
 /// The whole point is the *absence* of a third variant: a server that was
-/// already listening when Eldrun asked, or one running on another machine, is
+/// already listening when Tabtivity asked, or one running on another machine, is
 /// never recorded, so exit-time teardown cannot reach it. Ollama is a machine
-/// service as often as it is an Eldrun detail — a terminal running `ollama run`,
+/// service as often as it is a Tabtivity detail — a terminal running `ollama run`,
 /// another editor's completion plugin, a unit the user enabled at boot — and
-/// killing one Eldrun merely *used* would take those down with it.
+/// killing one Tabtivity merely *used* would take those down with it.
 enum OwnedServer {
     /// An `ollama serve` this process spawned (`spawn_reaped`, so the pid is
     /// ours and its subtree is walkable).
@@ -2672,7 +2896,7 @@ fn record_owned_server(owned: OwnedServer) {
 }
 
 /// Stop the Ollama server **this run started**, if any. Called once from
-/// `RunEvent::Exit`; a server Eldrun only talked to is left alone (see
+/// `RunEvent::Exit`; a server Tabtivity only talked to is left alone (see
 /// [`OwnedServer`]).
 ///
 /// A spawned server is TERMed with its whole subtree — the `ollama runner` child
@@ -2732,9 +2956,54 @@ fn systemd_ollama_active() -> bool {
 /// is torn down again at exit — see [`shutdown_owned_server`].
 #[tauri::command]
 pub async fn ensure_ollama_running() -> Result<(), String> {
+    ensure_running(true)
+}
+
+/// [`ensure_ollama_running`] for a start nobody is sitting at the desktop for
+/// (the phone): the systemd step runs `systemctl --no-ask-password start`, so it
+/// fails rather than popping a polkit dialog, and the owned `ollama serve`
+/// fallback — torn down at exit like any other — takes over. Runs off the async
+/// runtime: it can block for 16 s or more.
+#[tauri::command]
+pub async fn ensure_ollama_running_unattended() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| ensure_running(false))
+        .await
+        .map_err(|e| format!("start task failed: {e}"))?
+}
+
+/// The `systemctl` arguments that start the Ollama unit. Without
+/// `ask_password`, `--no-ask-password` makes a start that needs authorization
+/// fail instead of prompting. Pure + tested.
+#[cfg(target_os = "linux")]
+fn systemctl_start_args(ask_password: bool) -> &'static [&'static str] {
+    if ask_password {
+        &["start", "ollama"]
+    } else {
+        &["--no-ask-password", "start", "ollama"]
+    }
+}
+
+/// Held across a whole [`ensure_running`]. Without it two starts that overlap
+/// (the autoload store and a local tab at launch, or a phone Start racing a
+/// desktop one) both see nothing listening and both spawn `ollama serve`; the
+/// loser exits on the taken port, but its pid replaces the winner's in
+/// [`OWNED_SERVER`], and the live server then outlives the quit. Serialized,
+/// the second caller waits and finds the first one's server listening.
+static START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The core of [`ensure_ollama_running`] / [`ensure_ollama_running_unattended`].
+/// `ask_password` only matters to the Linux systemd step.
+fn ensure_running(ask_password: bool) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = ask_password;
+
     // Resolve first, so a misconfigured `ollama_host` reports *that* instead of
     // "started but did not become reachable" eight seconds later.
     let addr = ollama_addr()?;
+
+    let _one_start = START_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     if ollama_listening() {
         return Ok(());
@@ -2746,7 +3015,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
     if !addr_is_loopback(&addr) {
         return Err(format!(
             "No Ollama server is answering at {addr}. It is on another machine, \
-             so Eldrun cannot start it — start it there."
+             so {app} cannot start it — start it there.", app = crate::brand::DISPLAY
         ));
     }
 
@@ -2759,7 +3028,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
     if addr == DEFAULT_OLLAMA_ADDR {
         let was_active = systemd_ollama_active();
         let service_started = std::process::Command::new("systemctl")
-            .args(["start", "ollama"])
+            .args(systemctl_start_args(ask_password))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -2791,7 +3060,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
         .stderr(std::process::Stdio::null());
 
     // The user's chosen download location wins over the system dir: they asked
-    // for it explicitly, and this is the one server whose `OLLAMA_MODELS` Eldrun
+    // for it explicitly, and this is the one server whose `OLLAMA_MODELS` Tabtivity
     // controls. Create it first — Ollama would otherwise fail its first pull
     // against a directory that does not exist. A systemd-managed server never
     // reaches this branch (it is started via the unit above), which is what the
@@ -2813,7 +3082,7 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
     // Ollama ≥0.32 drops **integrated** GPUs unless this is set, and answers on
     // the CPU instead — which on a machine whose only GPU is the APU turns every
     // model that ran on the GPU yesterday into a CPU one after an update, with
-    // nothing but a `size_vram: 0` to say so. A server *Eldrun* starts is one we
+    // nothing but a `size_vram: 0` to say so. A server *Tabtivity* starts is one we
     // are entitled to configure, so it opts in. An explicit value in the
     // environment is left alone: a user who set `0` meant it (an iGPU that is
     // genuinely slower than the CPU is a real machine, just not this one).
@@ -2841,6 +3110,24 @@ pub async fn ensure_ollama_running() -> Result<(), String> {
 /// checks — including a bracketed IPv6 literal.
 fn addr_is_loopback(addr: &str) -> bool {
     split_host_port(addr).is_some_and(|(host, _)| host_is_loopback(host))
+}
+
+/// `"local"` or `"remote"` for an already-resolved address. Pure + tested.
+fn server_kind(addr: &str) -> &'static str {
+    if addr_is_loopback(addr) {
+        "local"
+    } else {
+        "remote"
+    }
+}
+
+/// Whether the configured Ollama server is on this machine (`"local"`) or
+/// another (`"remote"`); a bad `ollama_host` is the `Err`. Lets the phone
+/// bridge tell a stopped local server (startable) from one it can do nothing
+/// about, without re-implementing [`resolve_ollama_addr`].
+#[tauri::command]
+pub async fn ollama_server_kind() -> Result<&'static str, String> {
+    Ok(server_kind(&ollama_addr()?))
 }
 
 fn wait_for_ollama(deadline: Instant) -> bool {
@@ -3479,7 +3766,7 @@ pub struct LocalAgentPrep {
 
 /// Prepare a dedicated per-model VIBE_HOME for a local Ollama tab.
 ///
-/// Creates `~/.local/share/eldrun/vibe_local/{alias}/config.toml` with:
+/// Creates `~/.local/share/tabtivity/vibe_local/{alias}/config.toml` with:
 /// - `active_model = "{alias}"` so vibe selects the correct model even when
 ///   the `VIBE_ACTIVE_MODEL` env var is shadowed by the global `~/.vibe/config.toml`.
 /// - `enabled_tools = ["__no_tools__"]` to disable tool calls for local models.
@@ -3493,7 +3780,7 @@ pub struct LocalAgentPrep {
 pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String> {
     validate_model_name(&model)?;
     let alias = sanitize_alias(&model);
-    let vibe_home = eldrun_vibe_local_dir_for(&alias)?;
+    let vibe_home = app_vibe_local_dir_for(&alias)?;
     std::fs::create_dir_all(&vibe_home).map_err(|e| format!("create vibe_local dir: {e}"))?;
 
     let config_path = vibe_home.join("config.toml");
@@ -3806,7 +4093,7 @@ fn non_thinking_override(driver: &LocalDriver, thinking: Option<bool>) -> &[&'st
 //
 // OpenCode's `ollama` provider lists whatever models its config names — a list
 // that goes stale the moment another model is loaded (`ollama launch opencode`
-// appends to it and never prunes). Eldrun never edits OpenCode's config, so an
+// appends to it and never prunes). Tabtivity never edits OpenCode's config, so an
 // OpenCode spawn gets `OPENCODE_CONFIG_CONTENT` instead: an inline config
 // OpenCode deep-merges over the user's own, naming the models resident in
 // Ollama right now and whitelisting only those.
@@ -3894,12 +4181,12 @@ pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<S
     Some(opencode_ollama_config(&addr, &loaded, requested))
 }
 
-/// One local-model driver plus whether Eldrun currently has a way to launch it.
+/// One local-model driver plus whether Tabtivity currently has a way to launch it.
 #[derive(serde::Serialize)]
 pub struct LocalDriverInfo {
     pub id: String,
     pub label: String,
-    /// True when the agent's binary is installed, Eldrun has a way to wire it to
+    /// True when the agent's binary is installed, Tabtivity has a way to wire it to
     /// the local model (`ollama launch` supports it, or a direct fallback
     /// exists), **and** the model given to [`list_local_drivers`] can actually
     /// drive it. The menu hides drivers that aren't available.
@@ -4087,7 +4374,7 @@ fn local_catalog_args(model: &str, thinking: Option<bool>) -> Vec<String> {
 
 /// `-c model_catalog_json=<toml string>` for `path`. A JSON string literal is
 /// a valid TOML basic string, and serde does the escaping — the path is
-/// Eldrun's own but it descends from `$HOME`, which we do not get to assume is
+/// Tabtivity's own but it descends from `$HOME`, which we do not get to assume is
 /// free of quotes or backslashes.
 fn catalog_arg_pair(path: &std::path::Path) -> Vec<String> {
     vec![
@@ -4101,16 +4388,13 @@ fn catalog_arg_pair(path: &std::path::Path) -> Vec<String> {
 
 /// Where [`write_local_catalog`] keeps `model`'s catalog.
 fn local_catalog_path(model: &str) -> std::path::PathBuf {
-    crate::paths::home_dir()
-        .join(".local")
-        .join("share")
-        .join("eldrun")
+    crate::storage::home_share_dir()
         .join("codex_local")
         .join(sanitize_alias(model))
         .join("model.json")
 }
 
-/// Write the model-metadata catalog Codex asks for, into **Eldrun's own** state
+/// Write the model-metadata catalog Codex asks for, into **Tabtivity's own** state
 /// dir — never `~/.codex`, which is another application's to manage.
 ///
 /// Without it Codex prints `Model metadata for '<model>' not found. Defaulting
@@ -4234,14 +4518,11 @@ fn validate_model_name(model: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Return the per-model VIBE_HOME path: `~/.local/share/eldrun/vibe_local/{alias}/`.
+/// Return the per-model VIBE_HOME path: `~/.local/share/tabtivity/vibe_local/{alias}/`.
 /// Each Ollama tab gets its own subdirectory so the configs are independent
 /// and `active_model` is always unambiguous.
-fn eldrun_vibe_local_dir_for(alias: &str) -> Result<std::path::PathBuf, String> {
-    Ok(crate::paths::home_dir()
-        .join(".local")
-        .join("share")
-        .join("eldrun")
+fn app_vibe_local_dir_for(alias: &str) -> Result<std::path::PathBuf, String> {
+    Ok(crate::storage::home_share_dir()
         .join("vibe_local")
         .join(alias))
 }
@@ -4254,7 +4535,7 @@ fn dirs_vibe_config() -> Result<std::path::PathBuf, String> {
 }
 
 /// The `vibe` provider stanza. `api_base` follows `ollama_host`, because a
-/// config file naming 11434 while Eldrun's own reads go to 11500 is the same
+/// config file naming 11434 while Tabtivity's own reads go to 11500 is the same
 /// class of bug as the setting doing nothing — it just fails one layer further
 /// out, inside the agent, where the message is somebody else's.
 fn ollama_provider_block() -> String {
@@ -4833,7 +5114,7 @@ mod tests {
     }
 
     #[test]
-    fn a_persisted_local_launch_line_must_be_one_eldrun_builds() {
+    fn a_persisted_local_launch_line_must_be_one_app_builds() {
         let v = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
         let m = "qwen3-coder:30b";
         // `ollama launch`, for a driver that has it.
@@ -4849,7 +5130,7 @@ mod tests {
         .unwrap();
         assert!(local_launch_line_ok("codex", m, "codex", &codex.args));
         // Codex's catalog pair rides after either form, and only the path
-        // Eldrun writes it to.
+        // Tabtivity writes it to.
         let mut with_catalog = codex.args.clone();
         with_catalog.extend(catalog_arg_pair(&local_catalog_path(m)));
         assert!(local_launch_line_ok("codex", m, "codex", &with_catalog));
@@ -5462,7 +5743,7 @@ mod tests {
     #[test]
     fn service_command_is_a_drop_in_only_under_systemd() {
         let path = "/data/ollama/models";
-        // No service to reconfigure → nothing to run (an Eldrun-spawned server
+        // No service to reconfigure → nothing to run (a Tabtivity-spawned server
         // already honours the setting).
         assert_eq!(
             models_dir_service_command(path, false),
@@ -5471,7 +5752,7 @@ mod tests {
 
         let (cmd, shell) = models_dir_service_command(path, true);
         assert_eq!(shell, "bash");
-        assert!(cmd.contains("ollama.service.d/eldrun-models.conf"));
+        assert!(cmd.contains(concat!("ollama.service.d/", crate::app_slug!(), "-models.conf")));
         assert!(cmd.contains("OLLAMA_MODELS=%s")); // path arrives as a printf arg
         assert!(cmd.contains(&sh_single_quote(path)));
         assert!(cmd.contains("systemctl restart ollama"));
@@ -5642,5 +5923,144 @@ mod tests {
             .as_array()?
             .iter()
             .find_map(|m| Some(m["name"].as_str()?.to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod phone_control_tests {
+    use super::*;
+
+    /// The body shape the live server (0.34.4) answers, trimmed.
+    const PS_BODY: &str = r#"{"models":[{"name":"nemotron-3.5-lightning:30b","model":"nemotron-3.5-lightning:30b","size":26783818710,"digest":"e7a6","details":{"parameter_size":"32.9B","quantization_level":"Q4_K_M"},"expires_at":"2319-01-14T10:20:46.070730299+01:00","size_vram":26783818710,"context_length":262144},{"name":"qwen3:8b","size":7100000000,"size_vram":0}]}"#;
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn ps_entries_reads_name_size_vram_and_expiry() {
+        let ps = ps_entries(PS_BODY);
+        assert_eq!(ps.len(), 2);
+        assert_eq!(
+            ps["nemotron-3.5-lightning:30b"],
+            PsEntry {
+                vram: 26_783_818_710,
+                size: 26_783_818_710,
+                expires_at: Some("2319-01-14T10:20:46.070730299+01:00".into()),
+            }
+        );
+        assert_eq!(
+            ps["qwen3:8b"],
+            PsEntry { vram: 0, size: 7_100_000_000, expires_at: None }
+        );
+        assert!(ps_entries("garbage").is_empty());
+        assert!(ps_entries(r#"{"models":[]}"#).is_empty());
+    }
+
+    #[test]
+    fn keep_alive_tells_pinned_from_a_countdown() {
+        let now = at("2026-10-04T12:00:00Z");
+        // `keep_alive: -1`, as the live server reports it.
+        assert_eq!(
+            keep_alive_of(Some("2319-01-14T10:20:46.070730299+01:00"), now),
+            (true, None)
+        );
+        assert_eq!(keep_alive_of(Some("2026-10-04T12:04:00Z"), now), (false, Some(240)));
+        assert_eq!(
+            keep_alive_of(Some("2026-10-04T14:04:00+02:00"), now),
+            (false, Some(240)),
+            "the offset is honoured"
+        );
+        assert_eq!(keep_alive_of(Some("2026-10-04T11:59:00Z"), now), (false, None));
+        assert_eq!(keep_alive_of(None, now), (false, None));
+        assert_eq!(keep_alive_of(Some("soon"), now), (false, None));
+    }
+
+    const TAGS_BODY: &str = r#"{"models":[
+        {"name":"llama3:latest","model":"llama3:latest","size":1},
+        {"name":"qwen3.5:9b","model":"qwen3.5:9b","size":2},
+        {"name":"hf.co/u/m:q4","size":3},
+        {"name":"reg.example:5000/ns/m:latest","size":5},
+        {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443","size":4}
+    ]}"#;
+
+    #[test]
+    fn installed_match_is_exact_or_latest_never_a_prefix() {
+        assert_eq!(installed_match(TAGS_BODY, "qwen3.5:9b"), Ok("qwen3.5:9b".into()));
+        assert_eq!(installed_match(TAGS_BODY, "hf.co/u/m:q4"), Ok("hf.co/u/m:q4".into()));
+        // An untagged name means `:latest`, and the listed spelling comes back.
+        assert_eq!(installed_match(TAGS_BODY, "llama3"), Ok("llama3:latest".into()));
+        assert_eq!(installed_match(TAGS_BODY, "llama3:latest"), Ok("llama3:latest".into()));
+        // A registry port is not a tag.
+        assert_eq!(
+            installed_match(TAGS_BODY, "reg.example:5000/ns/m"),
+            Ok("reg.example:5000/ns/m:latest".into())
+        );
+        assert_eq!(installed_match(TAGS_BODY, "hf.co/u/m"), Err("model_not_installed"));
+        // No prefix match, in either direction.
+        assert_eq!(installed_match(TAGS_BODY, "qwen3"), Err("model_not_installed"));
+        assert_eq!(installed_match(TAGS_BODY, "qwen3.5"), Err("model_not_installed"));
+        assert_eq!(installed_match(TAGS_BODY, "llama3:8b"), Err("model_not_installed"));
+        assert_eq!(installed_match(TAGS_BODY, "mistral"), Err("model_not_installed"));
+        // A cloud model is listed but has nothing here to load.
+        assert_eq!(installed_match(TAGS_BODY, "gpt-oss:120b-cloud"), Err("model_not_local"));
+        // An unreadable list fails closed.
+        assert_eq!(installed_match("garbage", "llama3"), Err("model_not_installed"));
+        assert_eq!(installed_match("{}", "llama3"), Err("model_not_installed"));
+    }
+
+    #[test]
+    fn remote_entries_name_a_remote() {
+        assert!(is_remote_entry(&serde_json::json!({"name":"a","remote_host":"https://x"})));
+        assert!(is_remote_entry(&serde_json::json!({"name":"a","remote_model":"b"})));
+        assert!(!is_remote_entry(&serde_json::json!({"name":"a"})));
+        assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":""})));
+        assert!(!is_remote_entry(&serde_json::json!({"name":"a","remote_host":null})));
+    }
+
+    #[test]
+    fn server_kind_judges_the_resolved_literal() {
+        for local in ["127.0.0.1:11434", "localhost:11434", "[::1]:11434", "127.0.0.1:11500"] {
+            assert_eq!(server_kind(local), "local", "{local}");
+        }
+        for remote in ["192.0.2.7:11434", "gpu-box:11434", "[2001:db8::1]:11434"] {
+            assert_eq!(server_kind(remote), "remote", "{remote}");
+        }
+        // What the resolver hands over for the default and for bind-all.
+        assert_eq!(server_kind(&resolve_ollama_addr(None, false).unwrap()), "local");
+        assert_eq!(server_kind(&resolve_ollama_addr(Some("0.0.0.0:11434"), false).unwrap()), "local");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unattended_start_never_asks_for_a_password() {
+        assert!(systemctl_start_args(false).contains(&"--no-ask-password"));
+        assert!(!systemctl_start_args(true).contains(&"--no-ask-password"));
+        for ask in [false, true] {
+            assert!(systemctl_start_args(ask).ends_with(&["start", "ollama"]));
+        }
+    }
+
+    #[test]
+    fn a_phone_load_claim_dedupes_and_releases_on_drop() {
+        let model = "phone-claim-test:1b";
+        let first = PhoneLoadClaim::claim(model).expect("a free model can be claimed");
+        assert!(PhoneLoadClaim::claim(model).is_none(), "a running load is not started twice");
+        let other = PhoneLoadClaim::claim("phone-claim-test:2b");
+        assert!(other.is_some(), "claims are per model");
+        drop(first);
+        assert!(
+            PhoneLoadClaim::claim(model).is_some(),
+            "the entry goes with the claim, whatever ended the load"
+        );
+
+        // A panicking load thread releases it too.
+        let claim = PhoneLoadClaim::claim(model).unwrap();
+        let _ = std::thread::spawn(move || {
+            let _claim = claim;
+            panic!("load blew up");
+        })
+        .join();
+        assert!(PhoneLoadClaim::claim(model).is_some());
     }
 }

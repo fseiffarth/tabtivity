@@ -109,7 +109,7 @@ describe("saveLayout — persists viewer embeds, drops external ones", () => {
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     expect(call).toBeTruthy();
     const arg = call![1] as {
       tabs: { kind: string; label: string; embedPath?: string; embedExec?: string; viewer?: string }[];

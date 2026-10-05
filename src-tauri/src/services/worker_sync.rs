@@ -7,7 +7,7 @@
 //!
 //! 1. On the mirror, `git bundle` the current HEAD (incremental `--not <last_head>`
 //!    when we know what the worker already has).
-//! 2. Ship the bundle to `worker:<remote_path>/.eldrun-worker.bundle` over the
+//! 2. Ship the bundle to `worker:<remote_path>/.tabtivity-worker.bundle` over the
 //!    worker's pooled SFTP session.
 //! 3. On the worker: `git init` (idempotent), `git fetch` the bundle, then
 //!    `git reset --hard FETCH_HEAD` — **tracked files only, never `git clean`**.
@@ -35,7 +35,7 @@ use crate::storage;
 /// The bundle filename shipped into a worker's `remote_path`. A relative name, so
 /// the worker-side script (which runs `cd <remote_path> && …`) never has to
 /// interpolate a path.
-const WORKER_BUNDLE: &str = ".eldrun-worker.bundle";
+const WORKER_BUNDLE: &str = crate::brand::WORKER_BUNDLE;
 
 /// In-memory fan-out registry: the `(project, host)` keys currently syncing, used
 /// as a crude in-flight lock so a commit-triggered and a connect-triggered push to
@@ -167,8 +167,13 @@ fn worker_apply_script() -> String {
         "git init -q && \
          git fetch -q --no-tags {bundle} && \
          git -c advice.detachedHead=false reset -q --hard FETCH_HEAD && \
-         rm -f {bundle}",
-        bundle = WORKER_BUNDLE
+         rm -f {bundle}{legacy_bundle}",
+        bundle = WORKER_BUNDLE,
+        // A bundle an interrupted sync of an older build left behind.
+        legacy_bundle = crate::brand::PAIR
+            .legacy(crate::brand::Name::WORKER_BUNDLE)
+            .map(|old| format!(" {old}"))
+            .unwrap_or_default(),
     )
 }
 
@@ -732,7 +737,7 @@ mod tests {
         // reports a non-empty bundle and that the untracked file is irrelevant to it
         // (git bundle carries objects + HEAD only, never the worktree's untracked
         // bytes — the read half of the "outputs survive" guarantee).
-        let tmp = std::env::temp_dir().join(format!("eldrun-ws-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-ws-{}"), std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let git = |args: &[&str]| Peer::Local(tmp.clone()).run(args).unwrap();

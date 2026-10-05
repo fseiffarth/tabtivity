@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 /**
- * The jobs this Eldrun session submitted, per project — so the Jobs view can show
+ * The jobs this Tabtivity session submitted, per project — so the Jobs view can show
  * a freshly-submitted job (and re-open its log) *before* the next `squeue` poll
  * catches up, and can resolve a job id back to the output file it should tail.
  *

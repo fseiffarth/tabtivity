@@ -45,7 +45,9 @@
 # hostnames. One case-insensitive fixed string per line; `#` starts a comment.
 # Read from every one of these that exists:
 #   $(git rev-parse --git-common-dir)/info/privacy-denylist   per clone, never pushed
-#   ${XDG_CONFIG_HOME:-~/.config}/eldrun/privacy-denylist     per user
+#   ${XDG_CONFIG_HOME:-~/.config}/tabtivity/privacy-denylist  per user
+#     (and the same file under the app's old name: a list made before the
+#     rename must keep blocking what it lists)
 #   $PRIVACY_CHECK_DENYLIST                                   a file path
 #   $PRIVACY_CHECK_DENYLIST_TEXT                              the entries inline (a CI secret)
 # A denylist hit is final: no scrub rule, allow marker or noreply exemption
@@ -202,9 +204,11 @@ load_denylist() {
   done
 }
 common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-for f in "${common_dir:+$common_dir/info/privacy-denylist}" \
-  "${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/eldrun/privacy-denylist" \
-  "${PRIVACY_CHECK_DENYLIST:-}"; do
+config_dir="${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}"
+denylists=("${common_dir:+$common_dir/info/privacy-denylist}" "$config_dir/tabtivity/privacy-denylist")
+# brand-check: allow — the per-user list made under the app's old name
+denylists+=("$config_dir/eldrun/privacy-denylist" "${PRIVACY_CHECK_DENYLIST:-}")
+for f in "${denylists[@]}"; do
   if [ -n "$f" ] && [ -f "$f" ]; then load_denylist < "$f"; fi
 done
 if [ -n "${PRIVACY_CHECK_DENYLIST_TEXT:-}" ]; then
@@ -505,7 +509,8 @@ done < <("${DIFF[@]}" --numstat --no-renames --diff-filter=d "${diff_args[@]}" "
 # --- 4 + 5. commits -----------------------------------------------------------
 noreply_identity() {
   [[ "$1" =~ ^([0-9]+\+)?[A-Za-z0-9._-]+@users\.noreply\.github\.com$ ]] \
-    || [ "$1" = "noreply@github.com" ] || [ "$1" = "eldrun@local" ]
+    || [ "$1" = "noreply@github.com" ] \
+    || [ "$1" = "eldrun@local" ] # brand-check: allow — the identity of one commit already in history
 }
 commit_count=0
 if [ "$mode" = range ]; then

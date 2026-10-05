@@ -64,7 +64,7 @@ export function useRowDrag(
   const rowRefs = useRef(new Map<string, HTMLElement>());
   const rowBoxes = (): RowBox[] => keys.flatMap((key) => {
     const rect = rowRefs.current.get(key)?.getBoundingClientRect();
-    return rect ? [{ id: key, top: rect.top, bottom: rect.bottom }] : [];
+    return rect ? [{ id: key, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right }] : [];
   });
   const [drag, setDrag] = useState<DragState | null>(null);
 
@@ -78,9 +78,10 @@ export function useRowDrag(
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
     let pointerY = event.clientY;
-    let slot = dropSlot(rowBoxes(), key, pointerY);
+    let pointerX = event.clientX;
+    let slot = dropSlot(rowBoxes(), key, pointerY, pointerX);
     let frame = 0;
-    const track = () => { slot = dropSlot(rowBoxes(), key, pointerY); setDrag({ key, slot }); };
+    const track = () => { slot = dropSlot(rowBoxes(), key, pointerY, pointerX); setDrag({ key, slot }); };
     const edgeScroll = () => {
       frame = 0;
       const dy = pointerY < EDGE_MARGIN ? -EDGE_STEP : pointerY > window.innerHeight - EDGE_MARGIN ? EDGE_STEP : 0;
@@ -91,6 +92,7 @@ export function useRowDrag(
     };
     const onMove = (pointer: PointerEvent) => {
       pointerY = pointer.clientY;
+      pointerX = pointer.clientX;
       track();
       if (!frame) edgeScroll();
     };
@@ -127,9 +129,11 @@ export function useRowDrag(
     gripProps: (key) => ({
       onPointerDown: (event) => startDrag(event, key),
       onKeyDown: (event) => {
-        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        // Left and right too: on a wide screen the cards stand two to a line.
+        const step = event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : 0;
+        if (!step) return;
         event.preventDefault();
-        if (enabled) nudge(key, event.key === "ArrowUp" ? -1 : 1);
+        if (enabled) nudge(key, step);
       },
     }),
   };

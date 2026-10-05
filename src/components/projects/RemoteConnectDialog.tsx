@@ -33,10 +33,10 @@ import { TerminalIcon } from "../common/icons/Icon";
  * project's known `remote` spec.
  *
  * Two paths, matching the `connections_headless` setting (default ON):
- *  - headless → Eldrun feeds the password to the backend (SSH password + VPN
+ *  - headless → Tabtivity feeds the password to the backend (SSH password + VPN
  *    passphrase fields, a live handshake log for VPN), and
  *  - non-headless → embedded login terminals where the user types the secret
- *    directly and Eldrun never handles it.
+ *    directly and Tabtivity never handles it.
  * Both drive `useRemoteReconnect`, so the shared SSH/VPN lamp state (and the
  * pooled `remote_connect`) is identical to the header lamps. The modal
  * auto-closes once SSH reaches "connected".
@@ -234,7 +234,7 @@ function RemoteConnectDialogInner({
   // the login section. They belong to the *host*, not to how you happen to be signing
   // in this time: switching to the terminal login must not make a saved password look
   // discarded (and must certainly never delete it — only unticking does that, and only
-  // by the user's own click). A terminal login is one Eldrun never sees, so nothing
+  // by the user's own click). A terminal login is one Tabtivity never sees, so nothing
   // *new* is stored from it; the saved credential is simply kept for the connects that
   // can use it, which the hint says out loud rather than leaving to be guessed.
   // The shared row (`SavePasswordRow`), which also carries the locked-keyring
@@ -286,7 +286,7 @@ function RemoteConnectDialogInner({
   const submitVpn = () => void connectVpnHeadless(vpnPassword, vpnKeyPassphrase, rememberArg(vpnRemember));
 
   // What the "Paste …" row above each login terminal offers (see `CredentialPasteBar`).
-  // A terminal login is one Eldrun never sees — but a credential the user saved from a
+  // A terminal login is one Tabtivity never sees — but a credential the user saved from a
   // headless connect is still sitting in the keychain, and retyping it into every
   // terminal login is exactly the friction the keychain exists to remove. The login
   // *name* is pasted from here (it is on screen already, in a plain text field); the
@@ -774,7 +774,7 @@ function RemoteConnectDialogInner({
                 </span>
               </label>
               {/* Auto-connect never prompts — so if it can reach for the VPN, this
-                  line is the user's only chance to know that launching Eldrun may
+                  line is the user's only chance to know that launching Tabtivity may
                   reroute their machine before they've clicked anything. */}
               {autoConnectEligible && autoConnect && vpnEnabled && (
                 <div className="remote-connect-vpn-warning">
@@ -862,7 +862,7 @@ function RemoteConnectDialogInner({
               )}
               {/* Auto-connect, non-headless flavour. It is offered here with no
                   eligibility gate because there is nothing to be eligible against:
-                  Eldrun holds no passwords in this mode, so "connect on launch" means
+                  Tabtivity holds no passwords in this mode, so "connect on launch" means
                   this same login opens in the root terminal for you to authenticate —
                   the substitution `autoConnectInteractive` (stores/projects) makes,
                   and the one the header's "Connect on launch" already makes for a
@@ -919,7 +919,7 @@ function RemoteConnectDialogInner({
               kind of machine even when they belong to the same cluster. */}
           <CarefulHostToggle target={carefulTarget} />
           {/* The stronger statement about the same machine: careful is how much
-              Eldrun reads, this is what it is allowed to do (`lib/remote/hpc/hpcHost.ts`). */}
+              Tabtivity reads, this is what it is allowed to do (`lib/remote/hpc/hpcHost.ts`). */}
           <HpcHostToggle target={carefulTarget} />
         </div>
 

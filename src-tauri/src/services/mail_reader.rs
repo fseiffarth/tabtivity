@@ -38,7 +38,7 @@ pub fn refusal(f: &BoxFacts) -> Option<String> {
         return Some("this project is not a mail reader".into());
     };
     let Some(booted) = f.booted_egress else {
-        return Some("this project's VM was not booted by this Eldrun; boot it from Eldrun first".into());
+        return Some(concat!("this project's VM was not booted by this ", crate::app_name!(), "; boot it from ", crate::app_name!(), " first").into());
     };
     for egress in [spec.egress, booted] {
         match egress {
@@ -130,7 +130,7 @@ mod tests {
             ("github", spec(|s| s.allow_github = true), "allows GitHub"),
             ("custom host", spec(|s| s.allow_hosts = vec!["evil.example".into()]), "extra hosts"),
             ("temp allow", BoxFacts { live_temp_allows: 1, ..narrow() }, "temporarily allowed"),
-            ("not ours", BoxFacts { booted_egress: None, ..narrow() }, "not booted by this Eldrun"),
+            ("not ours", BoxFacts { booted_egress: None, ..narrow() }, concat!("not booted by this ", crate::app_name!())),
             ("no proxy", BoxFacts { live_allow: None, ..narrow() }, "proxy is not running"),
             (
                 "live list drifted",

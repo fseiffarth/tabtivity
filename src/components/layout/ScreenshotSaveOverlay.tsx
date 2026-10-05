@@ -6,7 +6,8 @@ import { useProjectsStore } from "../../stores/projects";
 import { useScreenshotPendingStore } from "../../stores/screenshotPending";
 import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
-import { ELDRUN_SCREENSHOTS_DIR } from "../../lib/window/screenshot";
+import { APP_SCREENSHOTS_DIR } from "../../lib/window/screenshot";
+import { useGeneratedDirName } from "../../lib/generatedDir";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
 
@@ -19,11 +20,11 @@ import { ErrorNote } from "../common/ErrorNote";
  * routinely have public git remotes: a screen grab holds whatever was on the
  * screen — another project's window, mail, a token in a terminal — and a
  * `git add -A` publishes it. So the shot waits in a staging area outside every
- * project tree until this overlay is answered, and `eldrun-screenshots/` is in
+ * project tree until this overlay is answered, and `tabtivity-screenshots/` is in
  * the scaffold's `.gitignore` defaults — and the backend ensures that line
  * before it writes — so even a saved shot is ignored by default.
  *
- * The folder is `eldrun-`prefixed because the bare name is one a project itself
+ * The folder is `tabtivity-`prefixed because the bare name is one a project itself
  * may own: ignoring a repo's own `screenshots/` of documentation images would
  * hide the user's files from git.
  *
@@ -43,7 +44,7 @@ export function ScreenshotSaveOverlay() {
   const activeId = useProjectsStore((s) => s.activeId);
 
   const [projectId, setProjectId] = useState<string>("");
-  const [folder, setFolder] = useState(ELDRUN_SCREENSHOTS_DIR);
+  const [folder, setFolder] = useState(APP_SCREENSHOTS_DIR);
   const [name, setName] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -75,7 +76,7 @@ export function ScreenshotSaveOverlay() {
     if (!pending) return;
     setError(null);
     setBusy(false);
-    setFolder(ELDRUN_SCREENSHOTS_DIR);
+    setFolder(APP_SCREENSHOTS_DIR);
     setName(pending.name);
     const hinted = pending.hintDir
       ? savable.find((p) => p.dir === pending.hintDir)
@@ -119,6 +120,18 @@ export function ScreenshotSaveOverlay() {
   }, [pending]);
 
   const dir = savable.find((p) => p.id === projectId)?.dir ?? "";
+
+  // The folder defaults to the one the chosen project already has: a project
+  // filed into before a rename keeps its old-named folder. A name the user
+  // typed is theirs and is left alone.
+  const projectFolder = useGeneratedDirName(pending ? dir : "", "screenshots");
+  const [typedFolder, setTypedFolder] = useState(false);
+  useEffect(() => {
+    setTypedFolder(false);
+  }, [pending]);
+  useEffect(() => {
+    if (pending && !typedFolder) setFolder(projectFolder);
+  }, [pending, typedFolder, projectFolder]);
   const relPath = [folder.trim().replace(/^\/+|\/+$/g, ""), name.trim()]
     .filter(Boolean)
     .join("/");
@@ -214,7 +227,10 @@ export function ScreenshotSaveOverlay() {
                 value={folder}
                 disabled={busy}
                 spellCheck={false}
-                onChange={(e) => setFolder(e.target.value)}
+                onChange={(e) => {
+                  setTypedFolder(true);
+                  setFolder(e.target.value);
+                }}
                 onKeyDown={(e) => e.key === "Enter" && void save()}
               />
             </label>

@@ -7,6 +7,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { clampView, FIT, readTextPreview, zoomAbout } from "../../../mobile-web/src/components/OutboxViewer";
+import { BRAND } from "../../lib/brand";
 
 const MIB = 1024 * 1024;
 
@@ -22,7 +23,7 @@ function streamOf(chunks: Uint8Array[], onCancel = vi.fn()): Response {
   return new Response(body, { status: 200 });
 }
 
-describe("Eldrun Mobile outbox text preview", () => {
+describe(`${BRAND.display} Mobile outbox text preview`, () => {
   it("returns the whole text of a small file", async () => {
     // Cancelling an already-closed stream is a no-op per spec, so `cancel` is
     // not observable here; the cap test below is where it must fire.

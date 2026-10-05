@@ -7,7 +7,7 @@ import { UntestedTag } from "./UntestedTag";
 /**
  * The one-time acceptance a fence-less platform (Windows) asks for before the
  * first local agent tab starts: agents there run with the user's full rights,
- * and Eldrun says so instead of starting one silently. Mounted once per window
+ * and Tabtivity says so instead of starting one silently. Mounted once per window
  * (AppShell and DetachedApp) like the HPC guard; `stores/unfencedPlatformPrompt`
  * owns the lifecycle and remembers the answer in settings.
  */

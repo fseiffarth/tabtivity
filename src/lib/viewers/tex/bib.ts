@@ -712,7 +712,7 @@ export const BIB_FIELD_NAMES = [
 ] as const;
 
 /** Entry types offered on a card's type control — the common BibTeX set plus the
- *  BibLaTeX additions people actually use. Free text either way (a type Eldrun
+ *  BibLaTeX additions people actually use. Free text either way (a type Tabtivity
  *  doesn't list is still valid). */
 export const BIB_ENTRY_TYPES = [
   "article", "book", "booklet", "inbook", "incollection", "inproceedings",

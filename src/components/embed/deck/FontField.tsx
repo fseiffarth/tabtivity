@@ -10,7 +10,7 @@
  *
  * The machine's font list is fetched **once per app run** and shared, because a
  * directory walk per deck tab (or per re-render of a panel) is pure waste for a
- * list that does not change while Eldrun is open.
+ * list that does not change while Tabtivity is open.
  */
 
 import { useEffect, useState } from "react";

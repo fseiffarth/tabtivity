@@ -5,6 +5,7 @@ import {
   summarizeScaffoldRepair,
   type ProjectScaffoldRepair,
 } from "../../components/projects/scaffold";
+import { BRAND } from "../../lib/brand";
 
 describe("scaffold repair summaries", () => {
   it("reports an empty report as already up to date", () => {
@@ -57,7 +58,7 @@ describe("scaffold repair summaries", () => {
     const repair: ProjectScaffoldRepair = {
       projectId: "abc",
       name: "MyProject",
-      targetDir: "/home/u/eldrun/projects/myproject",
+      targetDir: `/home/u/${BRAND.slug}/projects/myproject`,
       report: { createdFiles: ["TODO.md"], gitignoreLinesAdded: [], gitInitialized: false },
     };
     expect(describeScaffoldRepair(repair)).toBe("MyProject: added TODO.md");

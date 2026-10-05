@@ -248,12 +248,61 @@ pub(crate) fn wifi_ssid_blocking() -> String {
     if cfg!(target_os = "linux") {
         wifi_ssid_linux(Path::new("/sys/class/net"))
     } else if cfg!(target_os = "windows") {
-        wifi_ssid_windows()
+        ssid_memo(None, SSID_MAX_AGE_UNKEYED, wifi_ssid_windows)
     } else if cfg!(target_os = "macos") {
-        wifi_ssid_macos()
+        ssid_memo(None, SSID_MAX_AGE_UNKEYED, wifi_ssid_macos)
     } else {
         String::new()
     }
+}
+
+/// How long a read SSID is reused while the link it was read on is unchanged.
+/// The header asks every 10 s (30 s quiesced) and each answer costs one to three
+/// process spawns — and `nmcli dev wifi` may also kick off a Wi-Fi scan. The
+/// link key ([`wifi_ssid_linux`]) catches a reconnect at once; this only bounds
+/// how long a change the key cannot see (none known) could go unnoticed.
+const SSID_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60);
+/// The same where no link key exists (Windows, macOS): a switch of network shows
+/// within this, not within the 10 s poll.
+const SSID_MAX_AGE_UNKEYED: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The last SSID read: the link key it was read under, when, and the answer.
+type SsidMemo = Option<(Option<String>, std::time::Instant, String)>;
+static SSID_MEMO: Mutex<SsidMemo> = Mutex::new(None);
+
+/// Whether a memo taken under `memo_key` at `memo_at` still answers for `key`
+/// at `now`. Pure.
+fn ssid_memo_fresh(
+    memo_key: &Option<String>,
+    memo_at: std::time::Instant,
+    key: &Option<String>,
+    now: std::time::Instant,
+    max_age: std::time::Duration,
+) -> bool {
+    memo_key == key && now.saturating_duration_since(memo_at) < max_age
+}
+
+/// The SSID from the memo when it is fresh for `key`, else from `read` (and
+/// remembered — an empty answer too, so a box with none of the tools does not
+/// spawn three failing probes per poll).
+fn ssid_memo(key: Option<String>, max_age: std::time::Duration, read: impl FnOnce() -> String) -> String {
+    let now = std::time::Instant::now();
+    if let Some((memo_key, at, ssid)) = SSID_MEMO.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if ssid_memo_fresh(memo_key, *at, &key, now, max_age) {
+            return ssid.clone();
+        }
+    }
+    let ssid = read();
+    *SSID_MEMO.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, now, ssid.clone()));
+    ssid
+}
+
+/// What identifies one association of `iface`: its name plus the kernel's
+/// `carrier_changes` counter, which moves on every link drop — and joining
+/// another network drops the link first. A plain sysfs read, no spawn.
+fn wireless_link_key(net_dir: &Path, iface: &str) -> String {
+    let changes = std::fs::read_to_string(net_dir.join(iface).join("carrier_changes")).unwrap_or_default();
+    format!("{iface}:{}", changes.trim())
 }
 
 /// The first up wireless interface, by the same walk (and the same ordering)
@@ -283,22 +332,33 @@ fn wifi_ssid_linux(net_dir: &Path) -> String {
     let Some(iface) = active_wireless_iface(net_dir) else {
         return String::new();
     };
+    let key = wireless_link_key(net_dir, &iface);
+    ssid_memo(Some(key), SSID_MAX_AGE, || probe_ssid_linux(&iface))
+}
+
+/// Ask the tools on the box for `iface`'s SSID. Spawns; see [`ssid_memo`].
+fn probe_ssid_linux(iface: &str) -> String {
     // Three tools because no single one is everywhere: `iwgetid` is the cheapest
     // and needs no daemon but ships in wireless-tools, which modern desktops
     // drop; `nmcli` is on every NetworkManager box but on none without it; `iw`
     // is what a bare kernel userland always has.
-    if let Some(out) = probe_output_capped("iwgetid", &[iface.as_str(), "-r"]) {
+    if let Some(out) = probe_output_capped("iwgetid", &[iface, "-r"]) {
         let ssid = out.trim();
         if !ssid.is_empty() {
             return ssid.to_string();
         }
     }
-    if let Some(out) = probe_output_capped("nmcli", &["-t", "-f", "active,ssid", "dev", "wifi"]) {
+    // `--rescan no`: list what NetworkManager already knows. Left to `auto`,
+    // `nmcli dev wifi` starts a fresh scan whenever the last one is older than
+    // 30 s — on every poll, a radio scan nobody asked for.
+    if let Some(out) =
+        probe_output_capped("nmcli", &["-t", "-f", "active,ssid", "dev", "wifi", "list", "--rescan", "no"])
+    {
         if let Some(ssid) = parse_nmcli_ssid(&out) {
             return ssid;
         }
     }
-    if let Some(out) = probe_output_capped("iw", &["dev", iface.as_str(), "link"]) {
+    if let Some(out) = probe_output_capped("iw", &["dev", iface, "link"]) {
         if let Some(ssid) = parse_iw_ssid(&out) {
             return ssid;
         }
@@ -497,9 +557,14 @@ pub(crate) fn parse_proc_default_gateway(text: &str) -> Option<String> {
 }
 
 /// The opaque id [`NetworkIdentity::gateway_id`] carries for a MAC.
+///
+/// The hash's context string is pinned to the one the app had when these ids
+/// were first stored (`PINNED_…`): it is an input of every remembered
+/// network's id, so a context that followed a rename would forget them all.
+/// It is never shown or written anywhere.
 pub(crate) fn gateway_id_of(mac: &str) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(format!("eldrun-gateway:{}", mac.to_ascii_lowercase()));
+    let digest = Sha256::digest(format!("{}{}", crate::brand::PINNED_GATEWAY_ID_CONTEXT, mac.to_ascii_lowercase()));
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
@@ -545,7 +610,7 @@ pub(crate) fn detect_conn_type_linux(net_dir: &Path) -> String {
 fn detect_conn_type_windows() -> String {
     // Check for an active Wi-Fi connection via `netsh wlan show interfaces`.
     // `command_no_window` (inside `probe_output_capped`) keeps these probes
-    // from flashing a console window on every poll (Eldrun is a windowed app
+    // from flashing a console window on every poll (Tabtivity is a windowed app
     // with no console).
     if let Some(text) = probe_output_capped("netsh", &["wlan", "show", "interfaces"]) {
         let text = text.to_lowercase();
@@ -588,6 +653,29 @@ pub(crate) fn detect_conn_type_macos() -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn an_ssid_memo_answers_only_for_its_own_link_and_age() {
+        let at = std::time::Instant::now();
+        let later = |s| at + std::time::Duration::from_secs(s);
+        let key = Some("wlan0:4".to_string());
+        assert!(ssid_memo_fresh(&key, at, &key, later(59), SSID_MAX_AGE));
+        assert!(!ssid_memo_fresh(&key, at, &key, later(60), SSID_MAX_AGE));
+        // A reconnect moves the carrier counter: re-read at once.
+        assert!(!ssid_memo_fresh(&key, at, &Some("wlan0:6".into()), later(1), SSID_MAX_AGE));
+        assert!(!ssid_memo_fresh(&key, at, &Some("wlan1:4".into()), later(1), SSID_MAX_AGE));
+        assert!(ssid_memo_fresh(&None, at, &None, later(29), SSID_MAX_AGE_UNKEYED));
+    }
+
+    #[test]
+    fn the_link_key_follows_the_carrier_counter() {
+        let tmp = tempfile::tempdir().unwrap();
+        mk(tmp.path(), "wlan0", true, true);
+        fs::write(tmp.path().join("wlan0").join("carrier_changes"), "4\n").unwrap();
+        assert_eq!(wireless_link_key(tmp.path(), "wlan0"), "wlan0:4");
+        fs::write(tmp.path().join("wlan0").join("carrier_changes"), "6\n").unwrap();
+        assert_eq!(wireless_link_key(tmp.path(), "wlan0"), "wlan0:6");
+    }
 
     fn mk(dir: &std::path::Path, iface: &str, up: bool, wireless: bool) {
         let iface_dir = dir.join(iface);

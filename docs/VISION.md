@@ -1,12 +1,12 @@
-# Eldrun / Eltron Desktop Strategy Summary
+# Tabtivity / Eltron Desktop Strategy Summary
 
 ## Core vision
 
-Eldrun should not be “an app that controls apps.”
+Tabtivity should not be “an app that controls apps.”
 
 It should be a project-centric desktop layer:
 
-> User selects a project → Eldrun restores the complete project context.
+> User selects a project → Tabtivity restores the complete project context.
 
 A project owns:
 
@@ -81,11 +81,11 @@ Avoid dynamically creating/deleting workspaces during switching.
 
 ## Important architecture
 
-Do not build Eldrun as an X11 hack.
+Do not build Tabtivity as an X11 hack.
 
 Build:
 
-Eldrun Core
+Tabtivity Core
 - project model
 - app launcher
 - window registry
@@ -122,9 +122,9 @@ Wayland is becoming standard.
 
 This means:
 
-> Eldrun should not depend permanently on X11 tools like wmctrl, xdotool, xprop.
+> Tabtivity should not depend permanently on X11 tools like wmctrl, xdotool, xprop.
 
-On Wayland, Eldrun must integrate with the compositor:
+On Wayland, Tabtivity must integrate with the compositor:
 
 - KDE → KWin scripting/plugin
 - Hyprland → hyprctl / IPC
@@ -153,7 +153,7 @@ KDE is promising because:
 - strong power-user culture
 - KWin exposes useful scripting/window APIs
 - Wayland future is strong
-- easier than GNOME for Eldrun-style orchestration
+- easier than GNOME for Tabtivity-style orchestration
 
 ---
 
@@ -161,7 +161,7 @@ KDE is promising because:
 
 Hyprland is not an app; it is a Wayland compositor.
 
-It is promising for Eldrun because:
+It is promising for Tabtivity because:
 
 - very automation-friendly
 - has IPC
@@ -178,7 +178,7 @@ GNOME Wayland is harder.
 
 Normal apps cannot control other apps’ windows.
 
-Eldrun would need a GNOME Shell extension, meaning JavaScript code running inside GNOME Shell/Mutter with access to window/workspace APIs.
+Tabtivity would need a GNOME Shell extension, meaning JavaScript code running inside GNOME Shell/Mutter with access to window/workspace APIs.
 
 ---
 
@@ -195,13 +195,13 @@ i3 is also a good technical fit:
 
 ## Own compositor idea
 
-Eldrun could eventually become its own Wayland compositor:
+Tabtivity could eventually become its own Wayland compositor:
 
 Apps
 ↓
 Wayland
 ↓
-Eldrun Compositor
+Tabtivity Compositor
 ↓
 Linux
 
@@ -254,7 +254,7 @@ the same first pillar — are assessed in
 
 ## Strategic conclusion
 
-Do not define Eldrun as a window controller.
+Do not define Tabtivity as a window controller.
 
 Define it as:
 
@@ -278,4 +278,4 @@ Ultimate vision:
 >
 > The user opens projects.
 >
-> Eldrun restores the entire working context automatically.
+> Tabtivity restores the entire working context automatically.

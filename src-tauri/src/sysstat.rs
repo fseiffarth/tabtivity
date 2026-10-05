@@ -17,6 +17,7 @@
 //! `busy_secs = ticks / clk_tck()` formula is correct on every backend (Linux
 //! jiffies + USER_HZ; Windows 100-ns units + 10_000_000).
 
+use crate::brand::UPPER;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,7 +68,7 @@ pub struct LoginSession {
     pub user: String,
     pub tty: String,
     pub detail: String,
-    /// Whether this session belongs to the account Eldrun is sampling *as* (the
+    /// Whether this session belongs to the account Tabtivity is sampling *as* (the
     /// host's `ME` line — see [`parse_who`]). The pane marks the row "you"; it is
     /// also what lets the sampling account appear at all on a host where `who`
     /// has no record of it (the synthesized row below).
@@ -200,7 +201,7 @@ static DESCENDANT_CACHE: Mutex<Vec<DescendantCache>> = Mutex::new(Vec::new());
 const CACHE_ENTRIES: usize = 4;
 
 /// Upper bound on cache reuse even if no spawn/death bumped the generation: a
-/// process tree can grow/shrink without Eldrun spawning the PTY directly (an
+/// process tree can grow/shrink without Tabtivity spawning the PTY directly (an
 /// agent forking children), so a short TTL keeps the readout from going stale.
 const CACHE_TTL: Duration = Duration::from_millis(1500);
 
@@ -224,7 +225,7 @@ pub fn clk_tck() -> u64 {
 /// the result is cached keyed by the (sorted) root set. The cache is reused while
 /// (a) the spawn/death generation counter is unchanged — the PTY layer calls
 /// [`invalidate_descendant_cache`] on every spawn/death — and (b) the entry is
-/// younger than [`CACHE_TTL`], a backstop for tree changes Eldrun didn't trigger
+/// younger than [`CACHE_TTL`], a backstop for tree changes Tabtivity didn't trigger
 /// directly (an agent forking its own children).
 pub fn descendant_pids(roots: &[u32]) -> Vec<u32> {
     if roots.is_empty() {
@@ -627,7 +628,7 @@ fn username_for(uid: u32, map: &HashMap<u32, String>) -> String {
 /// [`parse_who`]). Not a terminal name, because there is no terminal: it is the
 /// pooled SSH connection this very sample arrived over.
 const SELF_SESSION_TTY: &str = "ssh";
-const SELF_SESSION_DETAIL: &str = "(this Eldrun connection — no tty)";
+const SELF_SESSION_DETAIL: &str = concat!("(this ", crate::app_name!(), " connection — no tty)");
 
 /// Parse `who` output into one [`LoginSession`] per non-blank line. Each line is
 /// `user  tty  <login-time> (<origin>)`; the first two whitespace fields are the
@@ -820,12 +821,12 @@ fn pick_cpu_temp(channels: &[(Option<String>, f64)]) -> Option<f64> {
 /// passes the machine's stored mode on every poll ([`remote_snapshot_script`]),
 /// and careful is the default for every remote machine — so the probe matters
 /// only for a caller with no answer to pass. That is why the script reads
-/// `ELDRUN_CAREFUL` *before* probing, and why an explicit `0` has to be honoured
+/// `TABTIVITY_CAREFUL` *before* probing, and why an explicit `0` has to be honoured
 /// as well as an explicit `1`: without it, a machine the user owns and told
-/// Eldrun to read fully would still be redacted the moment it happened to have a
+/// Tabtivity to read fully would still be redacted the moment it happened to have a
 /// scheduler installed.
-pub const REMOTE_SNAPSHOT_SCRIPT: &str = r#"
-_careful="${ELDRUN_CAREFUL:-}"
+pub const REMOTE_SNAPSHOT_SCRIPT: &str = concat!(r#"
+_careful="${"#, crate::app_upper!(), r#"_CAREFUL:-}"
 if [ -z "$_careful" ]; then
   if command -v sbatch >/dev/null 2>&1 || command -v sinfo >/dev/null 2>&1 \
      || command -v squeue >/dev/null 2>&1; then _careful=1; else _careful=0; fi
@@ -969,12 +970,12 @@ BEGIN {
 if [ -n "$_uids" ]; then getent passwd $_uids 2>/dev/null; fi
 fi
 :
-"#;
+"#);
 
 /// [`REMOTE_SNAPSHOT_SCRIPT`] with careful mode pinned by the caller, or left to
 /// the host to decide.
 ///
-/// `Some(true)`/`Some(false)` pin `ELDRUN_CAREFUL`, so the script skips its own
+/// `Some(true)`/`Some(false)` pin `TABTIVITY_CAREFUL`, so the script skips its own
 /// `sbatch` probe entirely; `None` leaves the probe in place. **Both** directions
 /// are pinnable, which is the change the per-machine switch needed: careful is
 /// now the default for every remote machine (`src/lib/remote/carefulHost.ts`), so the
@@ -982,14 +983,14 @@ fi
 /// to outrank host-side detection. That answer is the *user's*, recorded per SSH
 /// target and deliberate — the asymmetry the old force-on-only signature encoded
 /// (a probe must never talk a cluster down) applies to a guess, not to a person
-/// telling Eldrun whose machine it is.
+/// telling Tabtivity whose machine it is.
 ///
 /// `None` is now only for a caller with no stored answer to pass on, where the
 /// host's own SLURM check is still the best available signal.
 pub fn remote_snapshot_script(careful: Option<bool>) -> String {
     match careful {
-        Some(true) => format!("ELDRUN_CAREFUL=1\n{REMOTE_SNAPSHOT_SCRIPT}"),
-        Some(false) => format!("ELDRUN_CAREFUL=0\n{REMOTE_SNAPSHOT_SCRIPT}"),
+        Some(true) => format!("{UPPER}_CAREFUL=1\n{REMOTE_SNAPSHOT_SCRIPT}"),
+        Some(false) => format!("{UPPER}_CAREFUL=0\n{REMOTE_SNAPSHOT_SCRIPT}"),
         None => REMOTE_SNAPSHOT_SCRIPT.to_string(),
     }
 }
@@ -1123,7 +1124,7 @@ pub fn parse_remote_snapshot(raw: &str) -> SystemSnapshot {
             careful = rest.trim() == "1";
             continue;
         }
-        // Who Eldrun is on this host — the account the "Logged in" panel would
+        // Who Tabtivity is on this host — the account the "Logged in" panel would
         // otherwise be the only one never to mention (see `parse_who`).
         if let Some(rest) = line.strip_prefix("ME\t") {
             me = rest.trim().to_string();
@@ -3307,9 +3308,9 @@ R\t78\t4096\n\
         // A caller with an answer pins it in either direction; `None` leaves the
         // script's own SLURM probe to decide.
         let forced = remote_snapshot_script(Some(true));
-        assert!(forced.starts_with("ELDRUN_CAREFUL=1\n"));
+        assert!(forced.starts_with(concat!(crate::app_upper!(), "_CAREFUL=1\n")));
         assert!(forced.ends_with(REMOTE_SNAPSHOT_SCRIPT));
-        assert!(remote_snapshot_script(Some(false)).starts_with("ELDRUN_CAREFUL=0\n"));
+        assert!(remote_snapshot_script(Some(false)).starts_with(concat!(crate::app_upper!(), "_CAREFUL=0\n")));
         assert_eq!(remote_snapshot_script(None), REMOTE_SNAPSHOT_SCRIPT);
         // The host-side detection and every collection branch it gates.
         assert!(REMOTE_SNAPSHOT_SCRIPT.contains("command -v sbatch"));

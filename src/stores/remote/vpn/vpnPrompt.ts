@@ -108,7 +108,7 @@ interface VpnPromptState {
    * the non-headless flow, switched on for **this connect only** (the global
    * `connections_headless` setting is untouched).
    *
-   * This is the escape hatch for a config Eldrun cannot log in to on its own: a
+   * This is the escape hatch for a config Tabtivity cannot log in to on its own: a
    * server that answers with a challenge/OTP prompt, or any handshake whose real
    * question never reaches these two password fields. The symptom is the sequence
    * this modal was showing — the saved-credential connect errors, the prompt opens,

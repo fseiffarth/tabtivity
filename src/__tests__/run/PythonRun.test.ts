@@ -9,6 +9,7 @@ import {
   shellQuote,
   systemInterpreter,
 } from "../../lib/terminal/pythonRun";
+import { BRAND } from "../../lib/brand";
 
 describe("shellQuote", () => {
   it("single-quotes on unix and escapes an embedded quote", () => {
@@ -129,7 +130,7 @@ describe("fileSideLocation", () => {
     // Only a path we can PROVE is the host's may be sent to a shell on the host:
     // otherwise it either fails there or names a different file that happens to
     // exist at the same path.
-    expect(fileSideLocation("/state/eldrun/p/mirror/main.py", HOST)).toBe("local");
+    expect(fileSideLocation(`/state/${BRAND.slug}/p/mirror/main.py`, HOST)).toBe("local");
     expect(fileSideLocation("/tmp/elsewhere/main.py", HOST)).toBe("local");
     // A sibling directory sharing the root's prefix is NOT inside it.
     expect(fileSideLocation("/scratch/me/proj2/main.py", HOST)).toBe("local");
@@ -138,8 +139,8 @@ describe("fileSideLocation", () => {
 
 describe("pythonRunPlan", () => {
   const HOST = "/scratch/me/proj";
-  const DIR = "/state/eldrun/p";
-  const MIRROR = "/state/eldrun/p/mirror";
+  const DIR = `/state/${BRAND.slug}/p`;
+  const MIRROR = `/state/${BRAND.slug}/p/mirror`;
   const remote = { projectDir: DIR, remotePath: HOST, localRoot: MIRROR };
 
   it("leaves a local project's runs alone (no machine axis)", () => {

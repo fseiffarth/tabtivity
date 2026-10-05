@@ -99,6 +99,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-3", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 
@@ -120,7 +121,7 @@ const sentText = () => socket().sent.filter((value): value is string => typeof v
 const sentBytes = () => socket().sent.filter((value) => typeof value !== "string");
 const sentAgentInput = () => sentBytes().map((value) => new TextDecoder().decode(value as Uint8Array)).join("");
 
-describe("Eldrun Mobile terminal pipeline", () => {
+describe(`${BRAND.display} Mobile terminal pipeline`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     terminalState.rows = 5;
@@ -130,8 +131,8 @@ describe("Eldrun Mobile terminal pipeline", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     // These read the Focus view; the phone opens on Terminal until the
     // reader chose Focus for the agent, so the stored choice is preset.
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
-    localStorage.setItem("eldrun.mobile.view.shell", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
+    localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 

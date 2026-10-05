@@ -3,6 +3,7 @@ import { chatTurns, isPromptEcho } from "../../../mobile-web/src/terminal/chatTu
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import type { ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { BRAND } from "../../lib/brand";
 
 // Screen shapes of the agent CLIs other than Claude Code, each taken from the
 // published bundle rather than a live capture (docs/mobile_focus_cli_survey.md).
@@ -16,7 +17,7 @@ const cut = (...texts: string[]) => {
   return screen.slice(0, inputFrameStart(screen)).map((row) => row.text);
 };
 
-describe("Eldrun Mobile Focus chat turns beyond Claude Code", () => {
+describe(`${BRAND.display} Mobile Focus chat turns beyond Claude Code`, () => {
   it("reads Gemini CLI's ✦ answer as an answer, marker removed", () => {
     const turns = chatTurns(lines(
       " > fix the flaky test",
@@ -49,7 +50,7 @@ describe("Eldrun Mobile Focus chat turns beyond Claude Code", () => {
   });
 });
 
-describe("Eldrun Mobile input line beyond Claude Code", () => {
+describe(`${BRAND.display} Mobile input line beyond Claude Code`, () => {
   it("does not take a markdown bullet at the bottom of the screen for a YOLO prompt", () => {
     const screen = rows("Here is the plan:", "* read the parser", "* fix the off-by-one");
     expect(sessionStatus(screen)).toBeNull();
@@ -69,7 +70,7 @@ describe("Eldrun Mobile input line beyond Claude Code", () => {
   });
 });
 
-describe("Eldrun Mobile Gemini CLI approval mode", () => {
+describe(`${BRAND.display} Mobile Gemini CLI approval mode`, () => {
   const family = ["default", "accept edits", "plan", "yolo"];
 
   it("reads the mode from the row above the input box", () => {

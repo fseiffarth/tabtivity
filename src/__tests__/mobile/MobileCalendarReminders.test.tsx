@@ -7,6 +7,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Calendar } from "../../../mobile-web/src/screens/Calendar";
+import { BRAND } from "../../lib/brand";
 
 const calendar = { month: "2026-09", week_start: 1, calendars: [], events: [], truncated: false };
 /** 65 bytes, base64url: the shape of an uncompressed P-256 key. */
@@ -105,7 +106,7 @@ describe("Mobile push notifications", () => {
     requestPermission.mockResolvedValueOnce("denied");
     await openSheet();
     fireEvent.click(await group("Agents").findByRole("button", { name: /^Also when one finishes a turn/ }));
-    await screen.findByText(/blocked for Eldrun Mobile/);
+    await screen.findByText(new RegExp(String.raw`blocked for ${BRAND.display} Mobile`));
     expect(subscribe).not.toHaveBeenCalled();
     expect(writes).toHaveLength(0);
   });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { chatTurns, isPromptEcho } from "../../../mobile-web/src/terminal/chatTurns";
+import { chatTurns, isLiveEcho, isPromptEcho } from "../../../mobile-web/src/terminal/chatTurns";
+import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import type { ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { readSelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
+import { BRAND } from "../../lib/brand";
 
 let seq = 0;
 const line = (text: string, className?: string): ReadableLine => ({
@@ -10,7 +13,7 @@ const line = (text: string, className?: string): ReadableLine => ({
 });
 const lines = (...texts: string[]) => texts.map((text) => line(text));
 
-describe("Eldrun Mobile chat turns", () => {
+describe(`${BRAND.display} Mobile chat turns`, () => {
   it("puts the echoed prompt in a user turn and the answer in an agent turn", () => {
     const turns = chatTurns(lines(
       "> fix the failing test",
@@ -184,7 +187,7 @@ describe("Eldrun Mobile chat turns", () => {
       "  ⎿  Available Libraries (top matches):",
       "     - Title: React",
       "",
-      "⏺ mcp__github__list_issues (MCP)(repo: \"eldrun\")",
+      `⏺ mcp__github__list_issues (MCP)(repo: "${BRAND.slug}")`,
       "  ⎿  []",
       "",
       "● claude-in-chrome - tabs_context (MCP)",
@@ -241,6 +244,46 @@ describe("Eldrun Mobile chat turns", () => {
     expect(isPromptEcho({ text: "❯ Opus 4.1" })).toBe(false);
     expect(isPromptEcho({ text: "❯ Resume this session" })).toBe(false);
     expect(chatTurns(lines("Select a model:", "❯ Opus 4.1", "  Sonnet 4.5")).map((turn) => turn.role)).toEqual(["agent"]);
+  });
+
+  it("cuts a live screen at Claude Code's painted `❯` echo, never at a picker's cursor", () => {
+    const painted = (text: string): ReadableLine => ({ key: `l${seq += 1}`, text, spans: [{ text, background: "#5b6273" }] });
+    expect(isLiveEcho(painted("❯ Add search to phone file viewer"))).toBe(true);
+    expect(isLiveEcho(line("> fix the failing test"))).toBe(true);
+    expect(isLiveEcho(line("❯ Opus 4.1"))).toBe(false);
+    expect(isLiveEcho(painted("❯ 1. Yes"))).toBe(false);
+
+    // The fullscreen frame an agent's question was drawn onto: the banner,
+    // two prompts, the turn's work — the question's context was all of it.
+    const screen = [
+      line("▐▛███▜▌   Claude Code v2.1.288"),
+      line("▝▜█████▛▘  Opus 5.5 with high effort · Claude Max"),
+      line("  ▘▘ ▝▝    ~/projects/app"),
+      painted("❯ /clear"),
+      painted("❯ Add search to phone file viewer"),
+      line("  Ran 4 shell commands"),
+      line(""),
+      line("←  ☐ Search  ✔ Submit  →"),
+      line(""),
+      line("Which search do you mean for the phone's files?"),
+      line(""),
+      line("❯ 1. Find files by name"),
+      line("     A search box in the Files drawer."),
+      line("  2. Filter this folder"),
+      line("     Narrows only the folder you're in."),
+      line("  3. Type something."),
+      line(""),
+      line("Enter to select · ↑/↓ to navigate · Esc to cancel"),
+    ];
+    let start = 0;
+    screen.forEach((row, index) => { if (isLiveEcho(row, "Claude")) start = index + 1; });
+    const tail = screen.slice(start);
+    const question = readSelectPrompt(tail, "Claude");
+    expect(question).not.toBeNull();
+    const parts = questionParts(tail, question!);
+    expect(parts.tabs.map((tab) => tab.label)).toEqual(["Search"]);
+    expect(parts.ask.map((row) => row.text)).toEqual(["Which search do you mean for the phone's files?"]);
+    expect(parts.context.map((row) => row.text.trim())).toEqual(["Ran 4 shell commands"]);
   });
 
   it("never reads the empty box's own placeholder as a prompt", () => {
@@ -380,7 +423,7 @@ describe("Eldrun Mobile chat turns", () => {
     // `classify` reads a branch out of the same segment as the path before it,
     // so counting *fields* scored this sentence two and handed the prompt to
     // the agent. A status row is two or more columns, not two fields.
-    const turns = chatTurns(lines("> where am I?", "", "~/eldrun/projects/app (main)"));
+    const turns = chatTurns(lines("> where am I?", "", `~/${BRAND.slug}/projects/app (main)`));
     expect(turns.map((turn) => turn.role)).toEqual(["user", "agent"]);
     expect(turns[0].prompt?.map((row) => row.text)).toEqual(["where am I?"]);
     const ran = chatTurns(lines("> what did you run?", "", "Running /usr/bin/foo (again) now"));

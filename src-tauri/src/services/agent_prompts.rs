@@ -45,12 +45,40 @@ const MAX_LINKS_PER_PROJECT: usize = 256;
 
 static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+/// The in-process mutex plus the file's `FileLock`: the Mobile sidecar
+/// writes this file too (a fired schedule's history row, headless owner
+/// plan H2), so the transaction has to hold across processes.
+struct Guard {
+    _file: Option<storage::FileLock>,
+    _mutex: std::sync::MutexGuard<'static, ()>,
+}
+
+fn lock() -> Guard {
+    let mutex = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    Guard { _file: storage::FileLock::exclusive(&path()).ok(), _mutex: mutex }
+}
+
+/// `<state_dir>/agent_prompts.json`.
+pub fn file_path(state_dir: &std::path::Path) -> std::path::PathBuf {
+    state_dir.join(FILE_NAME)
 }
 
 fn path() -> std::path::PathBuf {
-    storage::state_dir().join(FILE_NAME)
+    file_path(&storage::state_dir())
+}
+
+fn read_at(path: &std::path::Path) -> Result<AgentPromptsFile, String> {
+    if !path.exists() {
+        return Ok(AgentPromptsFile::default());
+    }
+    storage::read_json(path).map_err(|e| format!("read {FILE_NAME}: {e}"))
+}
+
+fn write_at(path: &std::path::Path, file: &AgentPromptsFile) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create state directory: {e}"))?;
+    }
+    storage::write_json_atomic(path, file).map_err(|e| format!("write {FILE_NAME}: {e}"))
 }
 
 fn read() -> Result<AgentPromptsFile, String> {
@@ -124,11 +152,15 @@ fn validate_input(input: ProjectAgentPromptInput) -> Result<ProjectAgentPromptIn
         }
         None => None,
     };
+    if let Some(device) = &input.phone_device {
+        validate_id("phone device", device)?;
+    }
     Ok(ProjectAgentPromptInput {
         id: input.id,
         message,
         tags,
         target,
+        phone_device: input.phone_device,
     })
 }
 
@@ -154,6 +186,11 @@ fn apply_upsert(
             if let Some(target) = input.target {
                 prompts[index].target = Some(target).filter(|value| !value.is_empty());
             }
+            // A phone's edit takes the prompt over (#2348); the desktop's
+            // names no phone and keeps the stored one.
+            if input.phone_device.is_some() {
+                prompts[index].phone_device = input.phone_device;
+            }
         }
         None => {
             if prompts.len() >= MAX_PROMPTS_PER_PROJECT {
@@ -168,6 +205,7 @@ fn apply_upsert(
                 updated_at: now.to_string(),
                 tags: input.tags.unwrap_or_default(),
                 target: input.target.filter(|value| !value.is_empty()),
+                phone_device: input.phone_device,
             });
         }
     }
@@ -689,6 +727,19 @@ pub fn list(project_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
         .unwrap_or_default())
 }
 
+/// [`list`] read from `state_dir` by a process that only reads this file —
+/// the Mobile sidecar answering a phone with no window open.
+pub fn list_at(state_dir: &std::path::Path, project_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
+    validate_id("project id", project_id)?;
+    let path = state_dir.join(FILE_NAME);
+    let file: AgentPromptsFile = if path.exists() {
+        storage::read_json(&path).map_err(|e| format!("read {FILE_NAME}: {e}"))?
+    } else {
+        AgentPromptsFile::default()
+    };
+    Ok(file.projects.get(project_id).cloned().unwrap_or_default())
+}
+
 pub fn upsert(
     project_id: &str,
     input: ProjectAgentPromptInput,
@@ -700,6 +751,47 @@ pub fn upsert(
     let result = apply_upsert(&mut file, project_id, input, &storage::iso_now())?;
     write(&file)?;
     Ok(result)
+}
+
+/// [`upsert`] on `state_dir`'s file by a process that shares it (the Mobile
+/// sidecar editing a phone's collected prompt with no window open, headless
+/// owner plan H3), under the file's lock alone.
+pub fn upsert_at(
+    state_dir: &std::path::Path,
+    project_id: &str,
+    input: ProjectAgentPromptInput,
+) -> Result<Vec<ProjectAgentPrompt>, String> {
+    validate_id("project id", project_id)?;
+    let input = validate_input(input)?;
+    let path = file_path(state_dir);
+    let _lock = storage::FileLock::exclusive(&path).ok();
+    let mut file = read_at(&path)?;
+    let result = apply_upsert(&mut file, project_id, input, &storage::iso_now())?;
+    write_at(&path, &file)?;
+    Ok(result)
+}
+
+/// [`archive`] on `state_dir`'s file by a process that shares it (the
+/// sidecar's send-now with no window open), under the file's lock alone.
+/// The live session and the repo head are still read where the process's
+/// own state dir says (the sidecar's is the same one).
+pub fn archive_at(
+    state_dir: &std::path::Path,
+    project_id: &str,
+    prompt_id: &str,
+    input: SentAgentPromptInput,
+) -> Result<Vec<ProjectAgentPrompt>, String> {
+    validate_id("project id", project_id)?;
+    validate_id("prompt id", prompt_id)?;
+    let input = validate_sent(input)?;
+    let (input, roll) = resolve_live_session(project_id, input);
+    let head = prompt_blame::head(project_id);
+    let path = file_path(state_dir);
+    let _lock = storage::FileLock::exclusive(&path).ok();
+    let mut file = read_at(&path)?;
+    apply_archive(&mut file, project_id, prompt_id, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
+    write_at(&path, &file)?;
+    Ok(file.projects.get(project_id).cloned().unwrap_or_default())
 }
 
 pub fn delete(project_id: &str, prompt_id: &str) -> Result<Vec<ProjectAgentPrompt>, String> {
@@ -797,6 +889,55 @@ pub fn record(
     project_id: &str,
     entry: RecordedAgentPromptInput,
 ) -> Result<Vec<SentAgentPrompt>, String> {
+    let (entry, input, head, roll) = prepare_record(project_id, entry)?;
+    let _guard = lock();
+    let mut file = read()?;
+    apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
+    write(&file)?;
+    Ok(file.history.get(project_id).cloned().unwrap_or_default())
+}
+
+/// [`record`] on `state_dir`'s file by a process that shares it — the Mobile
+/// sidecar writing the history row of a schedule it fired with no window
+/// open (headless owner plan, H2) — under the file's lock alone. The live
+/// session and the repo head are still read where the process's own state
+/// dir says (the sidecar's is the same one).
+pub fn record_at(
+    state_dir: &std::path::Path,
+    project_id: &str,
+    entry: RecordedAgentPromptInput,
+) -> Result<Vec<SentAgentPrompt>, String> {
+    let (entry, input, head, roll) = prepare_record(project_id, entry)?;
+    let path = file_path(state_dir);
+    let _lock = storage::FileLock::exclusive(&path).ok();
+    let mut file = read_at(&path)?;
+    apply_record(&mut file, project_id, &entry, &input, head.as_ref(), roll.as_deref(), &storage::iso_now());
+    write_at(&path, &file)?;
+    Ok(file.history.get(project_id).cloned().unwrap_or_default())
+}
+
+/// [`delete`] on `state_dir`'s file (the sidecar retiring the collected
+/// prompt a fired one-time rule carried), under the file's lock alone.
+pub fn delete_at(
+    state_dir: &std::path::Path,
+    project_id: &str,
+    prompt_id: &str,
+) -> Result<Vec<ProjectAgentPrompt>, String> {
+    validate_id("project id", project_id)?;
+    validate_id("prompt id", prompt_id)?;
+    let path = file_path(state_dir);
+    let _lock = storage::FileLock::exclusive(&path).ok();
+    let mut file = read_at(&path)?;
+    apply_delete(&mut file, project_id, prompt_id);
+    write_at(&path, &file)?;
+    Ok(file.projects.get(project_id).cloned().unwrap_or_default())
+}
+
+type PreparedRecord = (RecordedAgentPromptInput, SentAgentPromptInput, Option<RepoHead>, Option<String>);
+
+/// The validation and the reads outside the lock that [`record`] and
+/// [`record_at`] share.
+fn prepare_record(project_id: &str, entry: RecordedAgentPromptInput) -> Result<PreparedRecord, String> {
     validate_id("project id", project_id)?;
     validate_id("history entry id", &entry.id)?;
     let message = sanitize_message(&entry.message);
@@ -810,19 +951,7 @@ pub fn record(
     let (input, roll) = resolve_live_session(project_id, input);
     let entry = RecordedAgentPromptInput { message, ..entry };
     let head = prompt_blame::head(project_id);
-    let _guard = lock();
-    let mut file = read()?;
-    apply_record(
-        &mut file,
-        project_id,
-        &entry,
-        &input,
-        head.as_ref(),
-        roll.as_deref(),
-        &storage::iso_now(),
-    );
-    write(&file)?;
-    Ok(file.history.get(project_id).cloned().unwrap_or_default())
+    Ok((entry, input, head, roll))
 }
 
 /// Record which files a delivered prompt touched, from the delivery (or
@@ -915,6 +1044,7 @@ mod tests {
             message: message.into(),
             tags: None,
             target: None,
+            phone_device: None,
         }
     }
 
@@ -1005,6 +1135,35 @@ mod tests {
         let prompts = apply_upsert(&mut file, "p", aimed("b", "x", ""), "t4").unwrap();
         assert_eq!(prompts[1].target, None);
         assert!(validate_input(aimed("c", "x", "bad\u{1}id")).is_err());
+    }
+
+    /// #2348: a phone's create or edit names the phone (it takes a desktop
+    /// prompt over); a desktop edit names none and keeps it.
+    #[test]
+    fn a_phone_edit_takes_a_prompt_over_and_a_desktop_edit_keeps_it() {
+        let by = |id: &str, message: &str, phone: &str| ProjectAgentPromptInput {
+            phone_device: Some(phone.into()),
+            ..input(id, message)
+        };
+        let mut file = AgentPromptsFile::default();
+        let prompts = apply_upsert(&mut file, "p", input("desk", "one"), "t1").unwrap();
+        assert_eq!(prompts[0].phone_device, None);
+        assert!(!serde_json::to_string(&prompts[0]).unwrap().contains("phone_device"));
+        let prompts = apply_upsert(&mut file, "p", by("desk", "two", "phone-a"), "t2").unwrap();
+        assert_eq!(prompts[0].phone_device.as_deref(), Some("phone-a"));
+        let prompts = apply_upsert(&mut file, "p", input("desk", "three"), "t3").unwrap();
+        assert_eq!(prompts[0].phone_device.as_deref(), Some("phone-a"), "the desktop's edit keeps it");
+        let prompts = apply_upsert(&mut file, "p", by("desk", "four", "phone-b"), "t4").unwrap();
+        assert_eq!(prompts[0].phone_device.as_deref(), Some("phone-b"));
+        let prompts = apply_upsert(&mut file, "p", by("new", "x", "phone-a"), "t5").unwrap();
+        assert_eq!(prompts[1].phone_device.as_deref(), Some("phone-a"));
+        assert!(validate_input(by("c", "x", "bad\u{1}id")).is_err());
+        // An older build's row (no field) reads back as desktop-made.
+        let old: ProjectAgentPrompt = serde_json::from_str(
+            r#"{"id":"o","message":"m","created_at":"t","updated_at":"t"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.phone_device, None);
     }
 
     #[test]

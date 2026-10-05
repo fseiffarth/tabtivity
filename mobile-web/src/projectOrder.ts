@@ -1,9 +1,11 @@
+import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
+
 /**
  * The home list's hand-arranged project order.
  *
  * Unlike a tab order, this one is the phone's alone: it is kept in
  * `localStorage` (`prefs.ts`) and never crosses the bridge, so arranging the
- * list needs no desktop and leaves the Eldrun window's own project pills where
+ * list needs no desktop and leaves the Tabtivity window's own project pills where
  * their owner put them. The two surfaces are read for different things — the
  * desktop pills are a switcher the whole day's work runs through, the phone list
  * is a handful of rows reached with one thumb.
@@ -64,8 +66,20 @@ export function mergeProjectOrder(stored: readonly string[], listed: readonly st
  * says how many of its agents' proposals wait — a count only, because deciding
  * them is the desktop's alone. */
 export function scopeCaption(row: { kind?: "project" | "box" | "root"; status: string; pending_reviews?: number }): string {
-  if (row.kind === "box") return "⬡ box";
-  if (row.kind !== "root") return row.status;
+  const lang = useI18nStore.getState().lang;
+  if (row.kind === "box") return `⬡ ${translate(lang, "mobile.home.scopeBox")}`;
+  if (row.kind !== "root") {
+    // The catalog's status is a protocol word; the two it sends are worded
+    // here, and anything newer reads as itself rather than as nothing.
+    const status = STATUS_KEYS[row.status];
+    return status ? translate(lang, status) : row.status;
+  }
   const waiting = row.pending_reviews ?? 0;
-  return waiting > 0 ? `★ root · ${waiting} awaiting approval at the desk` : "★ root";
+  const root = `★ ${translate(lang, "mobile.home.scopeRoot")}`;
+  return waiting > 0 ? `${root} · ${translate(lang, "mobile.home.awaitingApproval", { count: waiting })}` : root;
 }
+
+const STATUS_KEYS: Record<string, TranslationKey | undefined> = {
+  active: "mobile.home.statusActive",
+  inactive: "mobile.home.statusInactive",
+};

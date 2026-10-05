@@ -13,7 +13,7 @@ export type LogLine = { id: number; text: string };
 const COPIED_MS = 1600;
 
 /**
- * Read-only live log of a headless OpenVPN handshake. Eldrun feeds the password
+ * Read-only live log of a headless OpenVPN handshake. Tabtivity feeds the password
  * itself (no typing), so this is purely a progress view: it renders the lines
  * the backend forwards (`openvpn-progress`) and auto-scrolls to the newest so a
  * connect reads as live work rather than an opaque spinner. Shared by the

@@ -6,6 +6,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
 import { openLinkedFile } from "../embed/FileViewerPane";
 import { WarningIcon } from "../common/icons/Icon";
+import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 
 /** Mirrors `commands::git_pull::PullPreview`. */
@@ -57,6 +58,7 @@ function openInMergeView(repoDir: string, rel: string) {
  */
 export function GitPullPanel({
   projectDir,
+  worktree,
   projectId,
   branch,
   canOpenFiles,
@@ -64,6 +66,7 @@ export function GitPullPanel({
   onDone,
 }: {
   projectDir: string;
+  worktree?: GitWorktreeSelection | null;
   projectId: string | null;
   branch: string | null;
   canOpenFiles: boolean;
@@ -84,18 +87,18 @@ export function GitPullPanel({
     // A failed fetch (offline, auth) still leaves a useful preview against the
     // tracking refs as of the last fetch — say so rather than show nothing.
     try {
-      await invoke("git_fetch", { projectDir, projectId });
+      await invoke("git_fetch", { projectDir, ...gitWorktreeArgs(worktree), projectId });
     } catch (e) {
       setFetchError(String(e));
     }
     try {
-      setPreview(await invoke<PullPreview>("git_pull_preview", { projectDir, branch }));
+      setPreview(await invoke<PullPreview>("git_pull_preview", { projectDir, ...gitWorktreeArgs(worktree), branch }));
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [projectDir, projectId, branch]);
+  }, [projectDir, projectId, branch, worktree]);
 
   useEffect(() => {
     void load();
@@ -106,7 +109,7 @@ export function GitPullPanel({
     setBusy(true);
     setError(null);
     try {
-      await invokeTrusted("git_pull_apply", { projectDir, branch: preview.branch, merge });
+      await invokeTrusted("git_pull_apply", { projectDir, ...gitWorktreeArgs(worktree), branch: preview.branch, merge });
       onDone();
       onClose();
     } catch (e) {
@@ -177,7 +180,7 @@ export function GitPullPanel({
                   // describes the checked-out branch.
                   disabled={!canOpenFiles || !preview.is_current}
                   title={f.both ? t("gitPull.bothTitle", { path: f.path }) : f.path}
-                  onClick={() => openInMergeView(projectDir, f.path)}
+                  onClick={() => openInMergeView(worktree?.path || projectDir, f.path)}
                 >
                   <span className={`git-pull-status git-pull-status--${f.status}`}>{f.status}</span>
                   <span className="git-pull-path">{f.path}</span>
@@ -219,11 +222,13 @@ export function GitPullPanel({
  */
 export function GitMergeBar({
   projectDir,
+  worktree,
   state,
   canOpenFiles,
   onChanged,
 }: {
   projectDir: string;
+  worktree?: GitWorktreeSelection | null;
   state: MergeState;
   canOpenFiles: boolean;
   onChanged: () => void;
@@ -237,7 +242,7 @@ export function GitMergeBar({
     setBusy(true);
     setError(null);
     try {
-      await (trusted ? invokeTrusted(cmd, { projectDir }) : invoke(cmd, { projectDir }));
+      await (trusted ? invokeTrusted(cmd, { projectDir, ...gitWorktreeArgs(worktree) }) : invoke(cmd, { projectDir, ...gitWorktreeArgs(worktree) }));
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -283,7 +288,7 @@ export function GitMergeBar({
                   className="git-pull-file"
                   disabled={!canOpenFiles}
                   title={rel}
-                  onClick={() => openInMergeView(projectDir, rel)}
+                  onClick={() => openInMergeView(worktree?.path || projectDir, rel)}
                 >
                   <span className="git-pull-status git-pull-status--U">U</span>
                   <span className="git-pull-path">{rel}</span>

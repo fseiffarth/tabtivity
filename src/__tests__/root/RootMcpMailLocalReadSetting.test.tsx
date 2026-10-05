@@ -4,6 +4,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockRejectedValue(new E
 import { SettingsDialog } from "../../components/layout/SettingsPanel";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 // Local-model mail reads (`Settings::root_mcp_mail_local_read`): the one way a
 // root tab reads mail. The backend enforces it per request; these pin where the
@@ -38,7 +39,7 @@ describe("mail tools: local models may read shared mails", () => {
     expect(localRead().disabled).toBe(true);
   });
 
-  it("stays disabled while Eldrun's tools are off, even with mail on", async () => {
+  it(`stays disabled while ${BRAND.display}'s tools are off, even with mail on`, async () => {
     useSettings({ root_mcp: false, root_mcp_mail: true });
     await openRootConsolePage();
     expect(localRead().disabled).toBe(true);

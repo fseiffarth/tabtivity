@@ -8,7 +8,7 @@ use crate::storage;
 
 // ── Legacy append-only model ───────────────────────────────────────────────
 
-/// One session record in the legacy `~/.local/share/eldrun/time_log.json`.
+/// One session record in the legacy `~/.local/share/tabtivity/time_log.json`.
 ///
 /// Kept for backward-compatible migration: older installs (and, until it is
 /// migrated too, `commands::timer`) write an unbounded `Vec` of these. The
@@ -47,7 +47,7 @@ pub const LEGACY_LOG_FILE: &str = "time_log.json";
 /// {
 ///   "version": 1,
 ///   "migrated": true,
-///   "days": { "2026-06-22": { "<project-id>": 1234.0, "__eldrun__": 999.0 } }
+///   "days": { "2026-06-22": { "<project-id>": 1234.0, "__tabtivity__": 999.0 } }
 /// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,7 +144,7 @@ fn lock_summary() -> std::sync::MutexGuard<'static, ()> {
 ///
 /// Backward compatibility: an install that only ever wrote the legacy log will
 /// have its history preserved on first load here; the legacy file is left in
-/// place untouched (so a rollback to an older Eldrun still sees its data).
+/// place untouched (so a rollback to an older Tabtivity still sees its data).
 fn load_summary_migrating_unlocked() -> Result<TimeSummary, String> {
     let path = summary_path();
     let mut summary: TimeSummary = if path.exists() {

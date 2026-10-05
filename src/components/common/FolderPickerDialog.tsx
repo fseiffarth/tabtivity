@@ -54,7 +54,7 @@ interface Props {
 }
 
 /**
- * An in-app ("native to Eldrun") folder-browser popup — an alternative to the OS
+ * An in-app ("native to Tabtivity") folder-browser popup — an alternative to the OS
  * folder-chooser dialog. Browses the local filesystem via the unconfined
  * `list_dirs` command: click a folder to descend, ⬆ to go up, then confirm to
  * return the current directory. Follows the app modal convention (portal +

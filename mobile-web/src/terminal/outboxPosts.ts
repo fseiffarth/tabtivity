@@ -1,7 +1,7 @@
 import type { OutboxFile, TranscriptEntry } from "../api";
 
 /**
- * The files the agent sent (`eldrun-send`, the project's `.eldrun/outbox/`)
+ * The files the agent sent (`tabtivity-send`, the project's `.tabtivity/outbox/`)
  * as messages in the stored-session chat, the way a messenger shows them: one
  * picture is one message, and what one send put out together — a plot and its
  * table, three screenshots — is one message holding all of it. The gallery
@@ -13,7 +13,7 @@ import type { OutboxFile, TranscriptEntry } from "../api";
  * Placement is by time: every stored record carries one (`TranscriptEntry.at`)
  * and every file its mtime, so a post goes after the last record written at or
  * before it — between the "I'll send it" and the "sent" the agent wrote around
- * its `eldrun-send` call. A record without a time stands at the one before it.
+ * its `tabtivity-send` call. A record without a time stands at the one before it.
  *
  * A file older than the first shown record is left to the gallery: it belongs
  * to a turn not shown (the answer was truncated) or to another session in the
@@ -22,7 +22,7 @@ import type { OutboxFile, TranscriptEntry } from "../api";
  * from positions is what Focus never does.
  *
  * Files whose mtimes lie within `POST_GAP` of each other, with no record
- * between them, are one post: `eldrun-send a b c` publishes all three within
+ * between them, are one post: `tabtivity-send a b c` publishes all three within
  * the same second, and an agent sending them one call after another does so
  * seconds apart. A post is keyed by its oldest file, so a shown post keeps its
  * place as later posts and records arrive.
@@ -52,7 +52,9 @@ export function outboxPosts(entries: readonly TranscriptEntry[], files: readonly
   const posts = new Map<number, OutboxPost[]>();
   if (files.length === 0 || entries.length === 0) return posts;
   let last: number | null = null;
-  const times = entries.map((entry) => (last = entrySeconds(entry) ?? last));
+  // A prompt still queued on the desktop stands at the end with its send's
+  // time: nothing the agent sent meanwhile belongs below it.
+  const times = entries.map((entry) => (entry.queued ? null : (last = entrySeconds(entry) ?? last)));
   const oldestFirst = [...files].sort((a, b) => a.modified - b.modified || a.name.localeCompare(b.name));
   let open: { index: number; post: OutboxPost; last: number } | null = null;
   for (const file of oldestFirst) {

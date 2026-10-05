@@ -40,7 +40,7 @@ pub struct SecurityState {
     /// is the homograph attack and the ASCII form alone is unreadable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub punycode_warning: Option<String>,
-    /// Whether an OpenVPN tunnel Eldrun knows about is up. Browser traffic goes
+    /// Whether an OpenVPN tunnel Tabtivity knows about is up. Browser traffic goes
     /// through it exactly like every other process on the machine; this is here
     /// so that is *visible* rather than surprising.
     pub vpn_active: bool,
@@ -108,7 +108,7 @@ pub struct ReaderPage {
     pub security: SecurityState,
     /// The body hit the element budget and was cut.
     pub truncated: bool,
-    /// How many remote references the sanitizer dropped, for the "Eldrun
+    /// How many remote references the sanitizer dropped, for the "Tabtivity
     /// blocked n remote images" banner.
     pub blocked_remote_assets: u32,
 }

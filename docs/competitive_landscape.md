@@ -1,6 +1,6 @@
 # Competitive landscape
 
-Where Eldrun sits relative to tools that claim overlapping ground. One section
+Where Tabtivity sits relative to tools that claim overlapping ground. One section
 per contender, newest first; the short list of partial-overlap tools lives at
 the bottom.
 
@@ -28,7 +28,7 @@ teams.
 
 ### The shared thesis
 
-This is the closest thing to Eldrun's first pillar that anyone is shipping, and
+This is the closest thing to Tabtivity's first pillar that anyone is shipping, and
 the framing is nearly word-for-word ours:
 
 - one local workspace instead of scattered apps and terminals
@@ -41,7 +41,7 @@ framing as contested, not owned.
 
 ### Where the bets diverge
 
-| | **Eldrun** | **PandaOS** (per vendor) |
+| | **Tabtivity** | **PandaOS** (per vendor) |
 |---|---|---|
 | Core abstraction | Project = a *desktop*. Owns real OS windows (X11 / KWin / Win32 parking), default-app mapping, time tracking | Project = a workspace *inside* one app; editor, terminal, browser, DB embedded |
 | Second pillar | Project = *any machine*. SSH-native without FUSE, multi-host, SLURM/HPC, containers, VMs — four trust tiers | Connected cloud stack: GitHub, Vercel, Supabase, Gmail, Slack; business edition adds Jira, Notion, HubSpot, Postgres, Outlook |
@@ -51,19 +51,19 @@ framing as contested, not owned.
 | Licensing | MIT OR Apache-2.0, public repo | Proprietary, freemium, waitlist |
 | Audience | Researcher / multi-machine / cluster developer | Web "vibe stack" builder; second SKU for business operations |
 
-### What PandaOS markets that Eldrun genuinely does not have
+### What PandaOS markets that Tabtivity genuinely does not have
 
 Two things, and they are real gaps rather than framing differences:
 
-1. **A persistent project knowledge graph.** Eldrun's memory is *state* — layout,
+1. **A persistent project knowledge graph.** Tabtivity's memory is *state* — layout,
    tabs, git, open apps, session ids. It is not *knowledge*: nothing accumulates
    a queryable model of a project's infrastructure that an agent can consult.
    The Agent Skills library is the nearest surface, and it is manual and static.
-2. **Third-party service connectors.** Eldrun has mail, CalDAV calendar, and a
+2. **Third-party service connectors.** Tabtivity has mail, CalDAV calendar, and a
    browser — self-hosted-shaped surfaces it renders itself. It has no GitHub,
    Jira, Notion, CI, or deploy-platform connectors at all. The loop PandaOS
    sells ("agent checks Vercel, pulls context from Gmail, deploys the fix") has
-   no Eldrun equivalent.
+   no Tabtivity equivalent.
 
 Whether either is worth adopting is a separate question. Connectors in
 particular pull a local-first product toward stored OAuth tokens and cloud
@@ -71,7 +71,7 @@ round-trips, which cuts against the sandbox trust tiers and the
 no-foreign-app-paths, no-password-by-default posture this codebase is built
 around. Wanting the capability does not settle the design.
 
-### What Eldrun has that PandaOS shows no sign of
+### What Tabtivity has that PandaOS shows no sign of
 
 Real window management and per-project desktop swapping — PandaOS reads as a
 container application, not a desktop layer. Remote execution of any kind.
@@ -80,19 +80,19 @@ layout and native file viewers. And auditability: the whole thing is readable.
 
 ### Strategic read
 
-PandaOS is not really a competitor to Eldrun's differentiator. It is competing
+PandaOS is not really a competitor to Tabtivity's differentiator. It is competing
 with Cursor, Warp, and Coder for developers whose stack is a web app plus a few
-SaaS dashboards. Eldrun's second pillar — the project carries the machine it
+SaaS dashboards. Tabtivity's second pillar — the project carries the machine it
 runs on, SSH-native, cluster in the same cockpit — is a segment PandaOS is not
 in, and one that is otherwise poorly served.
 
 The collision is on the first pillar, and there the asymmetry runs the other
 way: PandaOS is further along in *attention* (launch video, business SKU,
-waitlist) while Eldrun is further along in *depth* but unlaunched, with a large
+waitlist) while Tabtivity is further along in *depth* but unlaunched, with a large
 backlog of features that are code-complete and never live-verified.
 
 The defensible conclusion is not "we are ahead" or "we are behind." It is that
-first-pillar framing alone will not distinguish Eldrun, and the remote/HPC
+first-pillar framing alone will not distinguish Tabtivity, and the remote/HPC
 pillar has to carry the positioning.
 
 ---
@@ -100,7 +100,7 @@ pillar has to carry the positioning.
 ## Partial-overlap tools
 
 None of these attempt the whole model; each covers one slice. Kept short on
-purpose — expand an entry only when one of them moves onto Eldrun's ground.
+purpose — expand an entry only when one of them moves onto Tabtivity's ground.
 
 | Tool | Slice it covers | What it does not attempt |
 |---|---|---|
@@ -112,6 +112,6 @@ purpose — expand an entry only when one of them moves onto Eldrun's ground.
 | Warp | AI-native terminal | Windows, files, project switching |
 | Coder | Governed remote dev workspaces | Local desktop context; server-provisioned, not project-carried |
 
-The combination Eldrun claims — project ownership of apps *and* windows,
+The combination Tabtivity claims — project ownership of apps *and* windows,
 desktop-wide context restoration, AI-native workflows, *and* the machine the
 project runs on — is still uncontested as a whole.

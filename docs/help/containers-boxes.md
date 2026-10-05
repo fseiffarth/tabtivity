@@ -59,8 +59,8 @@ A project can be in several boxes; deleting a box never deletes its projects.
    Alt-drag one pill onto another to box the two, or Ctrl-click several pills
    → **Box these…**.
 3. Click a box pill to open the **box scope**: its own tabs, a file view with
-   every member, and a box folder under `~/eldrun/boxes/<name>/` whose
-   `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` link each member (Eldrun edits only the
+   every member, and a box folder under `~/tabtivity/boxes/<name>/` whose
+   `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` link each member (Tabtivity edits only the
    marked block in them). The `+` menu offers per-member Files, Shell and
    Claude rows.
 4. Right-click a box pill for Open, Rename, Edit box, Members or Delete.

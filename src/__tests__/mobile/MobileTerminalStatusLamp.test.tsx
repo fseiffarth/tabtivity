@@ -48,6 +48,7 @@ class FakeWebSocket {
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import type { AgentStatus, TabRow } from "../../../mobile-web/src/api";
+import { BRAND } from "../../lib/brand";
 
 const tab = (agent_status?: AgentStatus): TabRow =>
   ({ id: "tab-9", label: "Claude", kind: "agent", agent_status, available: true, viewer_busy: false });
@@ -55,7 +56,7 @@ const tab = (agent_status?: AgentStatus): TabRow =>
 const lampClass = () =>
   screen.getByRole("button", { name: "Status" }).querySelector(".fact-lamp")?.className;
 
-describe("Eldrun Mobile — the composer's status lamp", () => {
+describe(`${BRAND.display} Mobile — the composer's status lamp`, () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);

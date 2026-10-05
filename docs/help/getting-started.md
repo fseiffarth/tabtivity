@@ -1,10 +1,10 @@
 ---
 id: getting-started
-title: Getting started with Eldrun
+title: Getting started with Tabtivity
 keywords: [start, first run, welcome, intro, overview, setup, onboarding, tour, lessons]
 ---
 
-Eldrun keeps AI-assisted development in one window: projects in the header,
+Tabtivity keeps AI-assisted development in one window: projects in the header,
 terminals and AI agent tabs in the middle, a file panel at the edge. This page
 is the shortest path from a fresh install to a working agent tab.
 
@@ -18,7 +18,7 @@ is the shortest path from a fresh install to a working agent tab.
 - **File panel** — push the cursor to the right edge to reveal the project's
   file tree; click the pin to dock it.
 - **Root console** (Ctrl+Shift+R) — a terminal that belongs to no project, in
-  Eldrun's root folder (`~/eldrun/root`). It floats over whatever is open.
+  Tabtivity's root folder (`~/tabtivity/root`). It floats over whatever is open.
 
 ## First steps
 
@@ -33,9 +33,9 @@ is the shortest path from a fresh install to a working agent tab.
 4. **Optional: add a local model.** Install Ollama and pull a small model to
    run on your own machine. See `local-models`.
 5. **Find your files.** Reveal the file panel at the right edge; double-click
-   a file to open it in Eldrun's built-in viewer.
+   a file to open it in Tabtivity's built-in viewer.
 
-## Learning more inside Eldrun
+## Learning more inside Tabtivity
 
 - **How to start** — the first-run introduction; reopen it from the Settings
   menu (gear) or Settings → General → Hints & onboarding.
@@ -44,10 +44,10 @@ is the shortest path from a fresh install to a working agent tab.
 - **Lessons** — narrated step-by-step walkthroughs, one per task (add a
   project, add a tab, install an agent, pull a local model, SSH projects, …).
 - **Feature Guide** — Settings → General → Feature Guide lists what each part
-  of Eldrun does.
+  of Tabtivity does.
 - **F1** — the keyboard shortcut cheat sheet.
-- **Ask Eldrun** — agent tabs can query this help corpus through the
-  `eldrun-help` tools. See `ask-eldrun`.
+- **Ask Tabtivity** — agent tabs can query this help corpus through the
+  `tabtivity-help` tools. See `ask-tabtivity`.
 
 ## Platforms
 

@@ -23,7 +23,7 @@ use crate::schema::project::OpenApp;
 ///    entry of `default_apps.json` / the per-project `default_apps` map / the
 ///    installed-application scan.
 ///
-/// Nothing in Eldrun writes `open_apps` any more (see the `commands::apps` module
+/// Nothing in Tabtivity writes `open_apps` any more (see the `commands::apps` module
 /// doc — it is legacy best-effort restore metadata), so the filter can be strict:
 /// the worst outcome for a legitimate user is that a stale entry is not reopened.
 ///
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn exec_inside_the_project_is_refused_even_if_it_matches_a_registered_app() {
-        let base = std::env::temp_dir().join(format!("eldrun-restore-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-restore-{}"), std::process::id()));
         let proj = base.join("proj");
         std::fs::create_dir_all(&proj).unwrap();
         // A payload named exactly like a registered app, living in the project.
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn traversal_out_of_the_project_does_not_escape_the_root_check() {
-        let base = std::env::temp_dir().join(format!("eldrun-restore-t-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-restore-t-{}"), std::process::id()));
         let proj = base.join("proj");
         std::fs::create_dir_all(proj.join("sub")).unwrap();
         let payload = proj.join("sub").join("pwn.sh");

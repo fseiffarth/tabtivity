@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Home } from "../../../mobile-web/src/screens/Home";
 import type { ActivityTab } from "../../../mobile-web/src/api";
+import { storageKey } from "../../lib/brand";
 
 const fetchMock = vi.fn();
 
@@ -139,7 +140,7 @@ describe("Mobile home — agents mode", () => {
     fireEvent.change(screen.getByLabelText("Sort agent tabs"), { target: { value: "lastDone" } });
     expect(rowLabels()).toEqual(["Busy", "Finished", "Recent", "Asking"]);
     expect(screen.getByText(/gpt-5-codex/).textContent).toContain("finished 3m ago");
-    expect(localStorage.getItem("eldrun.mobile.agentsSort")).toBe("lastDone");
+    expect(localStorage.getItem(storageKey("mobile.agentsSort"))).toBe("lastDone");
 
     // The sidecar's own order (waiting first, finished last) is still on offer.
     fireEvent.change(screen.getByLabelText("Sort agent tabs"), { target: { value: "native" } });

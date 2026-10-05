@@ -1,14 +1,14 @@
-# ProjectEldrun — Agents
+# Tabtivity — Agents
 
 Canonical instructions for every AI coding agent here; `CLAUDE.md` and
 `GEMINI.md` `@import` this file. Write guidance **here**. Keep it to rules an
 agent would otherwise get wrong — no overviews, no history (that goes in
-`docs/context/`). Eldrun is a Tauri 2 + React/TS desktop workspace (`src/`
+`docs/context/`). Tabtivity is a Tauri 2 + React/TS desktop workspace (`src/`
 frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Running
 
-- **Never start or stop Eldrun** — no launcher script, `tauri:dev`, or
+- **Never start or stop Tabtivity** — no launcher script, `tauri:dev`, or
   `package:dev` launch, not even "to check one thing"; a running window holds
   the user's live tabs. To verify live, give the user exact steps to click
   through; otherwise report the gates and say plainly it was not run live.
@@ -24,7 +24,8 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Gates
 
-Run before calling work done; all are CI gates and all sit at zero warnings:
+Run before calling work done; all are CI gates and all sit at zero warnings
+except `npm run lint` (see below):
 
 ```
 npm run build        # the ONLY type-check (tsc + both bundles); vitest/eslint don't type-check
@@ -32,9 +33,14 @@ npm test
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run lint
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 ```
 
 CI clippy is latest stable; a stale local toolchain can pass what CI fails.
+`npm run lint` fails only on errors. Its `react-hooks/exhaustive-deps`
+warnings are advisory and mostly deliberate omissions (mount-only effects,
+timer `tick`s): don't add a dependency just to silence one, since that can
+restart a terminal or refetch on every render. Add no new warnings; no new `any`.
 `cargo fmt` is not enforced. Without the RTK hook, keep output short:
 `cargo test -q`, `npm test -- --reporter=dot`, `npm run build 2>&1 | tail -40`. `git diff --check` for whitespace. If a gate's
 tool is unavailable, say so — never skip silently.
@@ -62,8 +68,8 @@ tool is unavailable, say so — never skip silently.
   is: grep `docs/filemap_rationale/` (frozen, verify against code).
 - Design rationale, one file per subsystem in `docs/context/` — open only the
   one you're touching: agent_authority, agent_schedule_mcp, agent_sessions,
-  caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
-  multi_host_remote, openvpn, project_boxes, project_transfer,
+  brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
+  markup_mcp, mobile_access, multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
   tmux_sessions, usage_stats, vm_projects.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
@@ -77,6 +83,14 @@ tool is unavailable, say so — never skip silently.
 ## Conventions
 
 - Match surrounding style; small focused changes; `rg` for search.
+- Never spell the app's name in code. Rust: `crate::brand` constants and
+  `app_name!`/`app_slug!` macros; TS (desktop and phone): `src/lib/brand.ts`
+  (`BRAND`, `NAMES`, `storageKey`, …); dictionaries: `{app}`/`{slug}`; shell:
+  source `scripts/lib/brand.sh`. Comments and docs may name it — the current
+  name only; the old one (Eldrun) belongs to history prose and `LEGACY_*`.
+  Something an older build may have written under the old name is looked up
+  through `brand::PAIR.legacy(Name::…)` and counted with `brand::legacy_hit`;
+  nothing is ever *written* under it.
 - All user-facing strings via `src/lib/i18n.ts` (`useT()`); English holds
   every key. Never hardcode display text.
 - Tag new, not-live-verified features with the `UntestedTag` pill, and give it
@@ -91,9 +105,9 @@ tool is unavailable, say so — never skip silently.
 - Persisted JSON must round-trip existing user state (Python-era shapes too).
 - Install flows are one-click open-a-tab-and-run, never copy-it-yourself.
 - Box agent docs: edit only outside the
-  `<!-- eldrun:box-links:start/end -->` generated blocks.
-- Eldrun never edits another app's paths or config. (The agent-session hooks
-  go into Eldrun's own agent homes, so they are no longer an exception.)
+  `<!-- tabtivity:box-links:start/end -->` generated blocks.
+- Tabtivity never edits another app's paths or config. (The agent-session hooks
+  go into Tabtivity's own agent homes, so they are no longer an exception.)
 
 ## Invariants
 
@@ -109,7 +123,7 @@ Security / data loss:
 - Local git verbs that can run repo-configured programs (status, diff, add,
   commit, checkout, merge, push, …) never run bare: use
   `commands::git::hardened_git_command_in` (the `hookless_` variant for
-  background work). Project code Eldrun runs on the
+  background work). Project code Tabtivity runs on the
   host (git hooks, `latexmkrc`, a project's prettier) is gated by
   `services::exec_trust`; what runs or where comes from `projects.json`, never
   the in-folder `project.json`.
@@ -118,14 +132,14 @@ Security / data loss:
   or global "off"); the one unfenced local agent is the root console's explicit
   Host session (`PtyOptions.host_session`, its own `agent-homes/host`). A CLI
   typed into a shell tab runs through the `agent_bin` shim, fenced.
-- Agents live only in Eldrun: every local agent tab's `$HOME` is its scope's
+- Agents live only in Tabtivity: every local agent tab's `$HOME` is its scope's
   `<state_dir>/agent-homes/<key>` (`services::agent_home`), never the user's.
   Logins are shared per CLI through `services::agent_auth` (credential files
-  only, hard-linked into every home); config, skills, hooks and MCP entries
-  are per scope. What the user wants everywhere lives in the Eldrun-wide layer
+  only, copied into every home and kept in step); config, skills, hooks and MCP entries
+  are per scope. What the user wants everywhere lives in the Tabtivity-wide layer
   `<state_dir>/agent-global` (`services::agent_global`), copied/merged into
   each home at every spawn and never mounted into a fence — no agent may be
-  able to write it. Eldrun registers its session hooks in those homes, not in
+  able to write it. Tabtivity registers its session hooks in those homes, not in
   the user's own CLI config.
 - `services::mobile_control`: raw project ids, paths, commands, tmux targets
   never cross the browser API.
@@ -146,11 +160,11 @@ Remote & sync:
 - `hpc_hosts` gates background behaviour and outranks `careful_hosts`.
 
 Agents:
-- An agent's permission mode is its own CLI's. Eldrun injects no mode flag and
+- An agent's permission mode is its own CLI's. Tabtivity injects no mode flag and
   has no mode toggle; `agent_session` only re-applies the mode Claude's hook
-  recorded on `--resume`. Don't grow that into a mode Eldrun chooses. (The
+  recorded on `--resume`. Don't grow that into a mode Tabtivity chooses. (The
   Manage CLIs Codex auto-review switch only edits the user's own Codex config
-  in the Eldrun-wide layer; it is off unless the user turns it on.)
+  in the Tabtivity-wide layer; it is off unless the user turns it on.)
 
 Frontend:
 - Gate remote/SFTP/git probes on connected — a sync command against a dead
@@ -165,4 +179,4 @@ Frontend:
 - Experimental features use `useExperimental`.
 - Menus/dialogs use the one shared scheme; portaled dialogs set an explicit
   `color` (`body` has none → black text).
-- To show the user a file on their phone: `eldrun-send <file>`.
+- To show the user a file on their phone: `tabtivity-send <file>`.

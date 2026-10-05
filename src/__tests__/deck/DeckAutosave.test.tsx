@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { serializeDeck } from "../../lib/viewers/deck/sidecar";
 import { emptyDeck, blankSlide } from "../../lib/viewers/deck/model";
+import { BRAND, NAMES } from "../../lib/brand";
 
 /** Files this fake backend holds, by absolute path. */
 const files = new Map<string, string>();
@@ -48,7 +49,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       // `writeFileBytes`. The fake backend mirrors that shape rather than the old
       // `{path, content}` one, so the test exercises the real call.
       case "write_file_bytes": {
-        const path = decodeURIComponent(options?.headers?.["x-eldrun-path"] ?? "");
+        const path = decodeURIComponent(options?.headers?.[NAMES.filePathHeader] ?? "");
         const text = new TextDecoder().decode(args as Uint8Array);
         files.set(path, text);
         writes.push({ path, text });
@@ -189,7 +190,7 @@ describe("the deck autosave (V #93 / #94)", () => {
     await mountDeck();
 
     expect(screen.getByText("Not saving")).toBeTruthy();
-    expect(document.body.textContent).toContain("newer Eldrun");
+    expect(document.body.textContent).toContain(`newer ${BRAND.display}`);
 
     await act(async () => {
       vi.advanceTimersByTime(3000);
@@ -211,7 +212,7 @@ describe("the deck autosave (V #93 / #94)", () => {
       await Promise.resolve();
     });
     // The banner is gone and the label is back to the ordinary state — the write
-    // is now the author's decision rather than Eldrun's.
+    // is now the author's decision rather than Tabtivity's.
     expect(screen.queryByText("Not saving")).toBeNull();
   });
 

@@ -119,7 +119,7 @@ export interface PageStripProps {
 
   // ── Cross-viewer / cross-window page transfer (optional) ───────────────────
   // Supplying these three turns the strip into a drag SOURCE and a drop TARGET for
-  // other strips — in this window and in other Eldrun windows. The print preview
+  // other strips — in this window and in other Tabtivity windows. The print preview
   // omits them, so its strip only ever reorders within itself.
 
   /** Stable id identifying this strip among all mounted ones. Required for transfer. */

@@ -31,6 +31,7 @@ vi.mock("../../stores/settings", () => {
 
 import { useProjectsStore } from "../../stores/projects";
 import { SidePanel } from "../../components/layout/SidePanel";
+import { BRAND } from "../../lib/brand";
 
 const mockUseProjectsStore = vi.mocked(useProjectsStore);
 
@@ -161,7 +162,7 @@ describe("file tree navigation", () => {
     expect(document.querySelector(".file-tree-crumb[title='Project root']")).toBeTruthy();
   });
 
-  it("#1 'New File' from the context menu asks in Eldrun's dialog and calls create_file", async () => {
+  it(`#1 'New File' from the context menu asks in ${BRAND.display}'s dialog and calls create_file`, async () => {
     const user = userEvent.setup();
     await renderPanel();
 

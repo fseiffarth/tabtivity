@@ -33,6 +33,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const paper: ProjectEntry = {
   id: "p-paper",
@@ -41,11 +42,11 @@ const paper: ProjectEntry = {
   position: 1,
   local_file: "/projects/paper/project.json",
   directory: "/projects/paper",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
-const BUSY_TMUX = "eldrun-p_paper--agent-111111111";
-const QUIET_TMUX = "eldrun-p_paper--agent-222222222";
+const BUSY_TMUX = `${BRAND.slug}-p_paper--agent-111111111`;
+const QUIET_TMUX = `${BRAND.slug}-p_paper--agent-222222222`;
 
 /** Oldest first, the way the transcript reads and the backend answers. */
 const TAIL = [
@@ -56,7 +57,7 @@ const TAIL = [
 interface PromptRow { tmux_session: string; prompts: { text: string; at?: string }[] }
 
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   deliver({ payload: request });
@@ -141,7 +142,7 @@ describe("Mobile bridge — what a session was last asked", () => {
   });
 
   it("says nothing about a project whose Mobile switch is off", async () => {
-    useProjectsStore.setState({ projects: [{ ...paper, eldrun_mobile_access: false }], activeId: paper.id, loaded: true });
+    useProjectsStore.setState({ projects: [{ ...paper, [MOBILE_ACCESS_KEY]: false }], activeId: paper.id, loaded: true });
     const answer = await ask({ type: "catalog", request_id: "r5", project_id: paper.id });
     expect(answer.prompts).toEqual([]);
   });

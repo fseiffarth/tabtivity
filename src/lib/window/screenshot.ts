@@ -15,7 +15,9 @@
  * to run. First visible viewer wins — the flag is checked before it is set, so
  * two viewers on screen never both arm.
  */
-export const SCREENSHOT_CAPTURE_EVENT = "eldrun:screenshot-capture";
+import { NAMES } from "../brand";
+
+export const SCREENSHOT_CAPTURE_EVENT = "app:screenshot-capture";
 
 export type ScreenshotCaptureDetail = { claimed: boolean };
 
@@ -29,14 +31,14 @@ export function requestInAppCapture(): boolean {
 }
 
 /** The project folder a saved screen grab lands in, mirroring the backend's
- *  `commands::projects::SCREENSHOTS_DIR`. `eldrun-`prefixed on purpose: a repo
+ *  `commands::projects::SCREENSHOTS_DIR`. `tabtivity-`prefixed on purpose: a repo
  *  may own a `screenshots/` of its own documentation images, and the scaffold
  *  ignores this folder — ignoring theirs would hide their files from git. */
-export const ELDRUN_SCREENSHOTS_DIR = "eldrun-screenshots";
+export const APP_SCREENSHOTS_DIR = NAMES.screenshotsDir;
 
 /** `Screenshot-YYYYMMDD-HHMMSS.png` in UTC — the exact shape the backend's
  *  `capture_project_screenshot` writes, so in-app shots sort beside tool shots
- *  in the same `eldrun-screenshots/` folder. */
+ *  in the same `tabtivity-screenshots/` folder. */
 export function screenshotFilename(now: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return (

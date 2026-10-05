@@ -25,7 +25,7 @@ import { translate, useI18nStore } from "../../lib/i18n";
 
 /**
  * The native calendar's store: one global set of calendars, events and tasks,
- * backed by `~/.local/share/eldrun/calendar.json`.
+ * backed by `~/.local/share/tabtivity/calendar.json`.
  *
  * The store is deliberately *global*, not per-project — a calendar tab opened
  * from any scope shows the same events, and an edit in one is seen live by the

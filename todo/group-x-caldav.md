@@ -141,7 +141,7 @@ shared with you. The invariants that make it worth having: [`docs/context/caldav
       refusal (`services::caldav::an_update_with_no_known_etag_is_refused…`), and
       the local gate (`commands::caldav::a_write_needs_both_the_users_opt_in_and_the_servers`).
     - [ ] 🖐️ Manual test — Radicale in a container + Thunderbird: create/edit/
-      delete an event and a task from Eldrun and see them in Thunderbird; a
+      delete an event and a task from Tabtivity and see them in Thunderbird; a
       concurrent edit from Thunderbird surfaces as a named conflict rather than
       being overwritten; a recurring series' "this occurrence only" edit
       round-trips. **Nothing in the CalDAV stack has ever spoken to a real
@@ -162,7 +162,7 @@ shared with you. The invariants that make it worth having: [`docs/context/caldav
     `IcsImportReviewDialog` shows it before anything is written. Explicitly **not**
     a scanner — an `.ics` cannot run anything here — but every one of those is
     dropped or cleaned in silence today, and the dialog is the difference between
-    "Eldrun ignored it" and "you knew it was there". Raised only when there is
+    "Tabtivity ignored it" and "you knew it was there". Raised only when there is
     something to say, so an ordinary export still imports in one click.
     - [x] 🤖 Automated test — `IcsSafety.test.ts`, both directions: every finding
       is detected, and an ordinary calendar export (including a `LOCATION: Room 3:
@@ -208,7 +208,7 @@ shared with you. The invariants that make it worth having: [`docs/context/caldav
 824. **VPN-only CalDAV account.** `require_vpn` on `CalDavAccount`, the mail
     account's switch (#823) for a calendar server inside an institutional
     network. `CalDavSyncHost` never makes the account due while no OpenVPN
-    tunnel Eldrun knows about is up, and makes it due — and syncs it on the spot
+    tunnel Tabtivity knows about is up, and makes it due — and syncs it on the spot
     rather than at the next 60 s wake-up — when one comes up, on the same
     reconciled rising edge as mail. Enforced in `commands::caldav::credentials`,
     the step every network-bound command takes first, so fetch, push, delete
@@ -293,7 +293,7 @@ shared with you. The invariants that make it worth having: [`docs/context/caldav
     model can only reduce (`BYHOUR`, `BYSETPOS` over several days, several or
     negative `BYMONTHDAY`s, `20MO` in a year…) keeps its text in
     `Rrule.ics_value`, written back verbatim while the rule still reads the same,
-    so a push no longer rewrites a server rule Eldrun cannot draw — it still
+    so a push no longer rewrites a server rule Tabtivity cannot draw — it still
     *displays* those reduced. `EventDialog` gains a "Repeats on" choice for
     monthly/yearly (day of month / nth weekday / last weekday, derived from the
     start), and a save that leaves the rule alone keeps the stored rule object.

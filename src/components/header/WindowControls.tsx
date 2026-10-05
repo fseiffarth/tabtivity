@@ -46,7 +46,7 @@ export function WindowControls() {
   const t = useT();
   const fullscreen = useFullscreenMode((s) => s.on);
   // macOS draws native traffic-light buttons (top-left) via the Overlay title-bar
-  // style configured in tauri.macos.conf.json, so Eldrun's own controls would be
+  // style configured in tauri.macos.conf.json, so Tabtivity's own controls would be
   // redundant — and on the wrong side. Render nothing there.
   if (IS_MAC) return null;
 

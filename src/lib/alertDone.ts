@@ -6,7 +6,7 @@ import { useTodoStore } from "../stores/todo";
 
 /**
  * **What the Alerts strip's ✓ does**, in one place, because two surfaces now
- * press it: the side panel's group (`files/AlertsSection`) and Eldrun Mobile's
+ * press it: the side panel's group (`files/AlertsSection`) and Tabtivity Mobile's
  * own Alerts rows, which reach it through the desktop bridge
  * (`mobile/MobileBridgeHost`). A second copy on the phone side would be a
  * second answer to "what does Done mean for a meeting", and the two would drift

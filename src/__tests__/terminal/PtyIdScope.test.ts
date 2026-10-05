@@ -26,6 +26,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock
 import { BOX_SCOPE_PREFIX, splitPtyId } from "../../lib/terminal/ptyId";
 import { useTabsStore, isDetachedPtyId, type GroupNode, type SplitNode } from "../../stores/tabs";
 import { splitPtyId as splitPtyIdFromActivity } from "../../stores/activity";
+import { BRAND } from "../../lib/brand";
 
 describe("splitPtyId", () => {
   it("keeps a box scope whole", () => {
@@ -82,7 +83,7 @@ describe("isDetachedPtyId in a box scope", () => {
 
   it("recognises a detached box tab, so its popped-out PTY is not killed", () => {
     const t = (label: string) =>
-      ({ label, cmd: "bash", cwd: "/home/u/eldrun/boxes/b", kind: "shell" as const });
+      ({ label, cmd: "bash", cwd: `/home/u/${BRAND.slug}/boxes/b`, kind: "shell" as const });
     const a = useTabsStore.getState().addTab(t("a"));
     const b = useTabsStore.getState().addTab(t("b"));
     const rootGid = (useTabsStore.getState().layout as GroupNode).id;

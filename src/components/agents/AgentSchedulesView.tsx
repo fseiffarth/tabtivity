@@ -19,6 +19,7 @@ import { GitPushProposals } from "./GitPushMcp";
 import { isPromptTargetTab } from "./PromptChartTab";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
+import { storageKey } from "../../lib/brand";
 
 interface Props { scope: string; active: boolean }
 const EMPTY_TABS: TabEntry[] = [];
@@ -27,7 +28,7 @@ type AgentState = "working" | "decision" | "done" | "idle";
 
 /** The list's order is the reader's, kept across relaunches; the phone keeps
  * its own copy of the same choice (`mobile-web/src/prefs.ts`). */
-const SORT_STORAGE_KEY = "eldrun.agentsSort";
+const SORT_STORAGE_KEY = storageKey("agentsSort");
 function readAgentSort(): AgentSort {
   try {
     const stored = localStorage.getItem(SORT_STORAGE_KEY);

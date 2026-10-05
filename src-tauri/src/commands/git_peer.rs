@@ -123,7 +123,7 @@ pub async fn git_peer_pair_confirm(
     Ok(state)
 }
 
-/// List both peers' `refs/eldrun/backup/*` safety refs, newest first (#28p D6).
+/// List both peers' `refs/tabtivity/backup/*` safety refs, newest first (#28p D6).
 #[tauri::command]
 pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, String> {
     let rt = remote_target_for(&project_id)
@@ -206,7 +206,7 @@ pub async fn git_peer_checkout(
 
 /// Resolve a divergence by choosing an authority: `authority` is `"local"` or
 /// `"remote"`. The winner's history is force-applied to the loser (its overwritten
-/// tips backed up to `refs/eldrun/backup/*` first), file-sync bases are re-stamped,
+/// tips backed up to `refs/tabtivity/backup/*` first), file-sync bases are re-stamped,
 /// and the recomputed status is emitted. The Use-local / Use-remote action (#28n
 /// Phase 2), only offered when the state is `Desynchronized`.
 #[tauri::command]

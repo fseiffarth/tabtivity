@@ -1,11 +1,11 @@
 //! Directory-handle-relative I/O inside an agent-writable home.
 //!
-//! Eldrun prepares every agent home **unfenced** — laying in the Eldrun-wide
+//! Tabtivity prepares every agent home **unfenced** — laying in the Tabtivity-wide
 //! layer, registering its hooks, reconciling logins, scrubbing leftovers —
 //! while a fenced agent of that scope may be rewriting the same tree. A path
 //! checked and then used is a race: between `lstat(~/.claude)` and
 //! `rename(tmp, ~/.claude/settings.json)` the agent can swap `.claude` for a
-//! link to the user's real home, and Eldrun's write lands there. Exclusive
+//! link to the user's real home, and Tabtivity's write lands there. Exclusive
 //! temporaries and a `O_NOFOLLOW` on the final component do not close that
 //! window; only doing every operation relative to a directory handle does.
 //!
@@ -18,11 +18,17 @@
 //! all go through the handle. The home itself sits under the state dir,
 //! which no agent can write, so opening it by name is safe.
 //!
+//! The same handles serve a project's git dir, which a fenced agent can
+//! write too: `services::git_guard` reads and writes `info/exclude` through
+//! them, with the git dir as the root (#2347).
+//!
 //! Windows has no fence, so its agents run with the user's full rights
 //! anyway; that build keeps the path-based checks behind the same API.
 //! AppHandle-free and unit-testable.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -93,7 +99,7 @@ impl HomeDir {
 
     #[cfg(unix)]
     fn open_root(path: &Path) -> io::Result<Self> {
-        // The home's own path is Eldrun's (under the state dir); a link in the
+        // The home's own path is Tabtivity's (under the state dir); a link in the
         // middle of *that* path — a symlinked temp dir on macOS, say — is the
         // user's own doing, so the root itself is opened by name.
         let c = cstr(path.as_os_str())?;
@@ -230,6 +236,7 @@ pub struct HomeFile {
     name: OsString,
 }
 
+#[cfg(unix)]
 static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl HomeFile {
@@ -372,9 +379,24 @@ impl HomeFile {
     /// relative to the handle, so a link at the name is replaced rather than
     /// followed and a reader never sees half a file.
     pub fn write(&self, bytes: &[u8]) -> io::Result<()> {
+        self.write_as(bytes, 0o600, None)
+    }
+
+    /// [`HomeFile::write`] for a file another program owns (git's
+    /// `info/exclude`): the result gets exactly `keep` — the replaced file's
+    /// permission bits — or, for a new file (`None`), `0644` less the umask.
+    pub fn write_keeping_mode(&self, bytes: &[u8], keep: Option<u32>) -> io::Result<()> {
+        self.write_as(bytes, 0o644, keep)
+    }
+
+    /// The temporary is created with `create_mode` (less the umask), then
+    /// set to exactly `keep` on its descriptor before it is renamed in.
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    fn write_as(&self, bytes: &[u8], create_mode: u32, keep: Option<u32>) -> io::Result<()> {
         use std::io::Write;
         #[cfg(unix)]
         {
+            use std::os::unix::fs::PermissionsExt;
             let name = self.name.to_string_lossy();
             let pid = std::process::id();
             for _ in 0..32 {
@@ -383,17 +405,21 @@ impl HomeFile {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.subsec_nanos())
                     .unwrap_or(0);
-                let tmp = OsString::from(format!(".{name}.eldrun-{pid}-{n}-{nanos:x}.tmp"));
+                let tmp = OsString::from(format!(".{name}.{}-{pid}-{n}-{nanos:x}.tmp", crate::brand::SLUG));
                 let mut file = match self.open_at(
                     &tmp,
                     libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW,
-                    0o600,
+                    create_mode as libc::c_uint,
                 ) {
                     Ok(file) => file,
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                     Err(e) => return Err(e),
                 };
-                let written = file.write_all(bytes).and_then(|()| file.flush());
+                let moded = match keep {
+                    Some(mode) => file.set_permissions(std::fs::Permissions::from_mode(mode & 0o7777)),
+                    None => Ok(()),
+                };
+                let written = moded.and_then(|()| file.write_all(bytes)).and_then(|()| file.flush());
                 drop(file);
                 let result = written.and_then(|()| self.rename_in_dir(&tmp, &self.name));
                 if result.is_err() {
@@ -547,12 +573,12 @@ mod tests {
         std::fs::rename(home.join(".claude"), home.join(".claude.moved")).unwrap();
         std::os::unix::fs::symlink(&outside, home.join(".claude")).unwrap();
 
-        file.write(b"eldrun").unwrap();
+        file.write(crate::app_slug!().as_bytes()).unwrap();
         file.set_exec_bits(0o111).unwrap();
 
         assert_eq!(std::fs::read_to_string(outside.join("settings.json")).unwrap(), "host");
-        assert_eq!(std::fs::read_to_string(home.join(".claude.moved/settings.json")).unwrap(), "eldrun");
-        assert_eq!(file.read().unwrap(), b"eldrun");
+        assert_eq!(std::fs::read_to_string(home.join(".claude.moved/settings.json")).unwrap(), crate::app_slug!());
+        assert_eq!(file.read().unwrap(), crate::app_slug!().as_bytes());
         file.remove().unwrap();
         assert!(outside.join("settings.json").exists());
         assert!(!home.join(".claude.moved/settings.json").exists());

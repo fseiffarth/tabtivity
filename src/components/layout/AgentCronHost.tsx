@@ -6,6 +6,8 @@ import {
   scheduledAgentCmds,
 } from "../../lib/agents/agentCron";
 import { runAgentCronWarmup } from "../../lib/agents/agentCronRun";
+import { holdsTimerLease } from "../../stores/timerLease";
+import { storageKey } from "../../lib/brand";
 
 /** How often "is a slot due?" is asked. A minute is finer than the grace window
  *  (`AGENT_CRON_GRACE_MIN`) by five, so no slot can fall between two ticks; the
@@ -18,7 +20,7 @@ const TICK_MS = 60_000;
  *  file back — recording one there would rewrite it twice a day and race every
  *  other setting written meanwhile. It only has to survive a window reload,
  *  which is exactly what localStorage is for. */
-const FIRED_KEY = "eldrun.agentCron.fired";
+const FIRED_KEY = storageKey("agentCron.fired");
 
 function readFired(): Set<string> {
   try {
@@ -94,6 +96,9 @@ export function AgentCronHost() {
 
     const tick = () => {
       if (inFlight.current) return;
+      // Another Tabtivity window holds the timer lease: it sends the morning's
+      // message, this one does not (headless owner plan, H2 interim).
+      if (!holdsTimerLease()) return;
       const now = new Date();
       const record = fired.current ?? new Set<string>();
       // Re-read the settings rather than closing over `cron`: a schedule edited

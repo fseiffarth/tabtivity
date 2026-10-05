@@ -28,6 +28,7 @@ import type { TranslationKey } from "../i18n";
 // One byte formatter, not two: a queued job's size reads exactly like a mail
 // attachment's, and the mail module is where that definition already lives.
 import { formatSize } from "../mail";
+import { NAMES } from "../brand";
 
 export { formatSize };
 
@@ -87,7 +88,7 @@ export async function printPdfNative(
     return outcome === "sent" || outcome === "opened" ? outcome : "cancelled";
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg === "eldrun-native-print-unsupported" || /print_pdf_native.*not found/i.test(msg)) {
+    if (msg === NAMES.nativePrintUnsupported || /print_pdf_native.*not found/i.test(msg)) {
       return "unsupported";
     }
     throw new Error(msg);

@@ -23,8 +23,8 @@ export function displayName(name: string): string {
 
 /**
  * The header's inbox — files the phone sent with **Send to desktop**, which
- * belong to no project and wait in Eldrun's own `<state_dir>/inbox/`, never in
- * a project folder (a project's own inbox is `.eldrun/inbox/`, fed by the
+ * belong to no project and wait in Tabtivity's own `<state_dir>/inbox/`, never in
+ * a project folder (a project's own inbox is `.tabtivity/inbox/`, fed by the
  * Focus composer).
  *
  * `TodoIndicator`'s shape: a `.global-apps-menu` wrapper whose hover lists the

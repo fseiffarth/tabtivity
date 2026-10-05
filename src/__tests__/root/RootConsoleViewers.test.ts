@@ -24,10 +24,11 @@ import { openFileEntry } from "../../components/files/openFileEntry";
 import { openLinkedFile } from "../../components/embed/FileViewerPane";
 import { openTabInScope } from "../../components/tabs/tabScopeContext";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
+import { BRAND } from "../../lib/brand";
 
 const pdf: FileEntry = {
   name: "paper.pdf",
-  path: "/home/u/eldrun/root/paper.pdf",
+  path: `/home/u/${BRAND.slug}/root/paper.pdf`,
   is_dir: false,
   size: 10,
   extension: ".pdf",
@@ -56,7 +57,7 @@ describe("opening a viewer from the root console", () => {
   it("lands the viewer tab in root, not in the active project", () => {
     openFileEntry({
       entry: pdf,
-      projectDir: "/home/u/eldrun/root",
+      projectDir: `/home/u/${BRAND.slug}/root`,
       projectId: null,
       origin: "test",
       external: false,
@@ -74,7 +75,7 @@ describe("opening a viewer from the root console", () => {
     const open = () =>
       openFileEntry({
         entry: pdf,
-        projectDir: "/home/u/eldrun/root",
+        projectDir: `/home/u/${BRAND.slug}/root`,
         projectId: null,
         origin: "test",
         external: false,
@@ -98,12 +99,12 @@ describe("opening a viewer from the root console", () => {
     const md = openTabInScope("root", {
       label: "notes.md",
       cmd: "",
-      cwd: "/home/u/eldrun/root",
+      cwd: `/home/u/${BRAND.slug}/root`,
       kind: "embed",
-      embedPath: "/home/u/eldrun/root/notes.md",
+      embedPath: `/home/u/${BRAND.slug}/root/notes.md`,
       viewer: "markdown",
     });
-    openLinkedFile(md.key, "/home/u/eldrun/root", { path: pdf.path, viewer: "pdf", label: "paper.pdf" });
+    openLinkedFile(md.key, `/home/u/${BRAND.slug}/root`, { path: pdf.path, viewer: "pdf", label: "paper.pdf" });
     expect(tabsOf("p1").some((t) => t.kind === "embed")).toBe(false);
     expect(tabsOf("root").some((t) => t.viewer === "pdf" && t.embedPath === pdf.path)).toBe(true);
   });

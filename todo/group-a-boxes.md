@@ -23,8 +23,8 @@
       project's **stored state** (its `project.json` tree layout / file metadata)
       rather than re-walking only one root. Reuse the existing per-project file
       model so each member keeps its own git markers, hidden-file sections, etc.
-    - **A box folder in the eldrun root.** Create a `~/eldrun/boxes/<box-name>/`
-      (or similar under the eldrun root) directory per box to host box-scoped
+    - **A box folder in the tabtivity root.** Create a `~/tabtivity/boxes/<box-name>/`
+      (or similar under the tabtivity root) directory per box to host box-scoped
       state and serve as the cwd for the box's terminals/agents.
     - **Agent tabs rooted in the box, hinted to each member.** Start the box's
       agent tabs rooted in the box folder, seeding each agent with hints/pointers
@@ -63,7 +63,7 @@
       agent-tab cwd + env. Scope to be refined when picked.
     > **Phase 2 (#41 groundwork) DONE (🤖 covered):** full box schema stored
     > (`folder`, `relations` via `set_box_relations`), lazy
-    > `~/eldrun/boxes/<name>/` creation (`ensure_box_folder`, idempotent +
+    > `~/tabtivity/boxes/<name>/` creation (`ensure_box_folder`, idempotent +
     > name-collision-safe against reserved `folder`s and on-disk dirs), boxes in
     > the project search (`.project-search-row.is-box`, opt-in — members stay
     > searchable), and opt-in box activation (`openBox` → `box:<id>` scope rooted
@@ -93,8 +93,8 @@
     > pill-menu Boxes group, Ctrl-click multi-select → "Box these…",
     > `BoxEditorDialog` (rename/members/dissolve/trust notice), Alt-drag kept
     > additive. Box folder gains a **member symlink farm** (Unix,
-    > `.eldrun-box-links.json` ownership manifest, never clobbers user paths;
-    > Eldrun confinement doesn't follow the links). Box "+" menu offers
+    > `.tabtivity-box-links.json` ownership manifest, never clobbers user paths;
+    > Tabtivity confinement doesn't follow the links). Box "+" menu offers
     > per-member Files/Shell/Claude rows (member-cwd, resume-safe); PDF merge
     > picker is multi-root in a box scope; disconnected remote members gate
     > behind a connect prompt; local box shells get tmux persistence. See

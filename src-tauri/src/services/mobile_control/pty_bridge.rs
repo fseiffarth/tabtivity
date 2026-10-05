@@ -5,7 +5,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, PoisonError,
+        Arc, Condvar, Mutex, PoisonError,
     },
 };
 
@@ -18,31 +18,55 @@ use super::protocol::{
     TerminalControl, TerminalEvent, MAX_COLS, MAX_INPUT_FRAME, MAX_OUTPUT_QUEUE, MAX_ROWS,
     MIN_COLS, MIN_ROWS,
 };
-use super::{auth::AuthStore, discovery::CatalogCache};
+use super::{
+    auth::AuthStore,
+    discovery::{Catalog, CatalogCache},
+};
+
+/// One tab's viewer, as the registry knows it.
+#[derive(Default)]
+struct ViewerSlot {
+    /// A newer viewer asked for the tab; this one leaves on its next tick.
+    evicted: AtomicBool,
+    /// The phone said its page is not in front of anyone
+    /// (`TerminalControl::Visibility`). A phone that never says — an older
+    /// bundle — counts as watching, which is what holding the slot used to
+    /// mean for every viewer.
+    hidden: AtomicBool,
+}
+
+type ViewerSlots = Arc<Mutex<HashMap<String, Arc<ViewerSlot>>>>;
 
 #[derive(Clone, Default)]
 pub struct TerminalRegistry {
-    busy: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    busy: ViewerSlots,
 }
 
 struct BusyGuard {
     name: String,
-    evicted: Arc<AtomicBool>,
-    busy: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    slot: Arc<ViewerSlot>,
+    busy: ViewerSlots,
 }
 impl BusyGuard {
     fn evicted(&self) -> bool {
-        self.evicted.load(Ordering::Acquire)
+        self.slot.evicted.load(Ordering::Acquire)
+    }
+    fn hidden(&self) -> bool {
+        self.slot.hidden.load(Ordering::Acquire)
+    }
+    /// Record what the phone reported; `true` when that changed anything.
+    fn set_visible(&self, visible: bool) -> bool {
+        self.slot.hidden.swap(!visible, Ordering::AcqRel) == visible
     }
 }
 impl Drop for BusyGuard {
     fn drop(&mut self) {
         let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
         // Only clear the slot if it is still ours: an evicting acquire may
-        // already have installed its own flag under this name.
+        // already have installed its own slot under this name.
         if busy
             .get(&self.name)
-            .is_some_and(|flag| Arc::ptr_eq(flag, &self.evicted))
+            .is_some_and(|slot| Arc::ptr_eq(slot, &self.slot))
         {
             busy.remove(&self.name);
         }
@@ -58,6 +82,19 @@ impl TerminalRegistry {
         self.busy.lock().unwrap_or_else(PoisonError::into_inner).contains_key(name)
     }
 
+    /// A phone has this tab open *and in front of someone*. `is_busy` alone
+    /// stays true for a pocketed phone — the page is hidden, not gone, and its
+    /// socket lives on for as long as throttled pings arrive (or `IDLE_TIMEOUT`
+    /// after they stop) — which is exactly when its reader needs the "finished"
+    /// or "needs your answer" notice that an attached tab does not get.
+    pub fn is_watched(&self, name: &str) -> bool {
+        self.busy
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .is_some_and(|slot| !slot.hidden.load(Ordering::Acquire))
+    }
+
     /// Claims the tab, displacing an existing viewer if there is one.
     ///
     /// A phone that is backgrounded before its `detached` frame flushes leaves
@@ -71,15 +108,15 @@ impl TerminalRegistry {
                 let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
                 match busy.get(name) {
                     None => {
-                        let evicted = Arc::new(AtomicBool::new(false));
-                        busy.insert(name.to_string(), evicted.clone());
+                        let slot = Arc::new(ViewerSlot::default());
+                        busy.insert(name.to_string(), slot.clone());
                         return Ok(BusyGuard {
                             name: name.into(),
-                            evicted,
+                            slot,
                             busy: self.busy.clone(),
                         });
                     }
-                    Some(incumbent) => incumbent.store(true, Ordering::Release),
+                    Some(incumbent) => incumbent.evicted.store(true, Ordering::Release),
                 }
             }
             if tokio::time::Instant::now() >= deadline {
@@ -92,7 +129,7 @@ impl TerminalRegistry {
 
 fn tmux_attach_command(tmux_name: &str) -> CommandBuilder {
     // The sidecar is a headless service with a bare inherited PATH, so tmux is
-    // resolved on Eldrun's effective PATH (Homebrew's on a Mac, `~/.local/bin`)
+    // resolved on Tabtivity's effective PATH (Homebrew's on a Mac, `~/.local/bin`)
     // and the child gets that PATH too — the same tmux the desktop's sessions
     // were started by, since tmux refuses a client of another protocol version.
     // Absolute, so neither std's nor portable-pty's PATH lookup semantics matter.
@@ -121,14 +158,14 @@ fn tmux_attach_command(tmux_name: &str) -> CommandBuilder {
 
 /// A tmux attach only redraws its current screen. Capture the pane first so a
 /// phone's xterm buffer actually contains the shell history it is asked to
-/// scroll. One number with the tmux retention Eldrun sets on its sessions
+/// scroll. One number with the tmux retention Tabtivity sets on its sessions
 /// (`ssh_exec::TMUX_HISTORY_LINES`) and the browser terminal's `scrollback`
 /// (`PHONE_SCROLLBACK` in `mobile-web`): what tmux retains is what the replay
 /// carries and what the phone can hold.
 const MOBILE_SCROLLBACK_LINES: usize = crate::services::ssh_exec::TMUX_HISTORY_LINES as usize;
 
 fn tmux_capture_command(tmux_name: &str) -> Command {
-    // Eldrun's effective PATH, as for the attach (see `tmux_attach_command`).
+    // Tabtivity's effective PATH, as for the attach (see `tmux_attach_command`).
     let mut command = crate::paths::command_no_window("tmux");
     command.args([
         "-u",
@@ -258,13 +295,23 @@ fn replay_frames(history: &[u8]) -> Vec<Vec<u8>> {
 /// A phone that reads slower than a flooding pane fills this. It used to be a
 /// channel whose full state ended the reader thread and closed the socket
 /// with 1013, and the phone then reconnected into a replay of the very flood
-/// that had closed it. The link is kept instead: the oldest queued bytes are
-/// shed, and the newest — the screen the pane is drawing now — go out. A
-/// terminal is a repaint stream, so what a shed costs is a screen the next
-/// redraw replaces, not a connection.
+/// that had closed it. Then it shed its oldest bytes — on the theory that the
+/// next redraw replaces them. It does not: tmux sends a client only the cells
+/// it believes changed, so every dropped byte left cells on the phone's screen
+/// that tmux never repainted (a long-gone diff interleaved with an agent's
+/// question card), and a cut could land inside an escape sequence.
+///
+/// So a full queue *blocks* the reader instead. The PTY then stops draining,
+/// the client's output backs up inside tmux, and tmux's own slow-client path
+/// (`tty_block_maybe`) discards it and redraws the whole screen once the
+/// client catches up — the one party that knows what the phone holds decides
+/// what to resend. The link stays open throughout.
 struct OutputQueue {
     state: Mutex<OutputState>,
     ready: Notify,
+    /// Wakes a reader parked on a full queue: a chunk went out, or the queue
+    /// was closed.
+    space: Condvar,
 }
 
 #[derive(Default)]
@@ -273,8 +320,6 @@ struct OutputState {
     bytes: usize,
     /// The reader has stopped: the PTY reached EOF or the queue was closed.
     closed: bool,
-    /// Bytes were dropped at least once.
-    shed: bool,
 }
 
 impl OutputQueue {
@@ -282,31 +327,33 @@ impl OutputQueue {
         Arc::new(Self {
             state: Mutex::new(OutputState::default()),
             ready: Notify::new(),
+            space: Condvar::new(),
         })
     }
 
-    /// Queue one chunk, shedding the oldest ones past the byte budget.
-    fn push(&self, chunk: Vec<u8>) {
+    /// Queue one chunk, waiting while the queue is past its byte budget.
+    /// Blocking — call it from the reader thread only. `false` once the queue
+    /// is closed: the chunk is dropped and the reader should stop.
+    fn push(&self, chunk: Vec<u8>) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        while !state.closed && state.bytes > 0 && state.bytes + chunk.len() > MAX_OUTPUT_QUEUE {
+            state = self.space.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        if state.closed {
+            return false;
+        }
         state.bytes += chunk.len();
         state.chunks.push_back(chunk);
-        while state.bytes > MAX_OUTPUT_QUEUE && state.chunks.len() > 1 {
-            if let Some(oldest) = state.chunks.pop_front() {
-                state.bytes -= oldest.len();
-                state.shed = true;
-            }
-        }
         drop(state);
         self.ready.notify_one();
+        true
     }
 
+    /// Stop the queue: a parked `push` returns, and `pop` ends once drained.
     fn close(&self) {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).closed = true;
         self.ready.notify_one();
-    }
-
-    fn shed(&self) -> bool {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).shed
+        self.space.notify_all();
     }
 
     /// The next chunk; `None` once the reader has stopped and nothing is left.
@@ -316,6 +363,7 @@ impl OutputQueue {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if let Some(chunk) = state.chunks.pop_front() {
                     state.bytes -= chunk.len();
+                    self.space.notify_all();
                     return Some(chunk);
                 }
                 if state.closed {
@@ -357,6 +405,18 @@ fn input_report_due(last: Option<std::time::Instant>, now: std::time::Instant) -
     last.is_none_or(|at| now.duration_since(at) >= INPUT_REPORT_INTERVAL)
 }
 
+/// Whether a close for `reason` tells the phone to come back. `replaced` means
+/// another viewer took over; that client must not fight its way back in a
+/// reconnect loop. `session_expired` retries through the phone's silent
+/// re-login. `catalog_unavailable` is the bridge not being able to *ask*
+/// whether the tab is still granted — nothing was revoked, so the phone
+/// reconnects and the upgrade route decides; `access_revoked` is the catalog
+/// answering no (the project's phone access switched off, the tab or its
+/// session gone), and stays final.
+fn closing_retries(reason: &str) -> bool {
+    matches!(reason, "idle_timeout" | "session_expired" | "catalog_unavailable")
+}
+
 /// The acknowledgement for the phone's `seq`-th input frame on this socket.
 fn ack_frame(seq: u64) -> String {
     TerminalEvent::Ack { seq }.to_frame()
@@ -382,11 +442,15 @@ struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     output_task: tokio::task::JoinHandle<()>,
     window_task: tokio::task::JoinHandle<()>,
+    output: Arc<OutputQueue>,
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Kill and reap first. The reader is parked in a blocking read on a
+        // A reader parked on a full queue never sees the PTY close: wake it
+        // first, or its blocking thread outlives the attach.
+        self.output.close();
+        // Kill and reap. The reader is parked in a blocking read on a
         // cloned master fd, so it unblocks only once the child is gone and the
         // remaining write ends close; `abort()` cannot interrupt a blocking task.
         let _ = self.child.kill();
@@ -409,6 +473,10 @@ pub async fn attach(
     // `INPUT_REPORT_INTERVAL`). A callback rather than a desktop call of its
     // own, so this module keeps knowing nothing about the desktop socket.
     on_input: impl Fn(),
+    // Called at each moment the screen was last, or is again, in front of
+    // somebody: when the phone reports its page hidden or visible, and at
+    // detach unless the page was hidden by then (see `host::terminal`).
+    on_seen: impl Fn(),
 ) -> Result<(), String> {
     let guard = registry.acquire(&tmux_name).await?;
     // Do this before the live attach starts redrawing. The browser receives it
@@ -453,7 +521,9 @@ pub async fn attach(
                 break;
             }
             bytes.truncate(read);
-            reader_queue.push(bytes);
+            if !reader_queue.push(bytes) {
+                break;
+            }
         }
         reader_queue.close();
     });
@@ -486,6 +556,7 @@ pub async fn attach(
         child,
         output_task,
         window_task,
+        output: output.clone(),
     };
     let (mut ws_tx, mut ws_rx) = socket.split();
     // An explicit replay boundary. The client keeps its last rendered screen
@@ -496,6 +567,9 @@ pub async fn attach(
     if let Some((cols, rows)) = initial_window {
         opening.push(TerminalEvent::Window { cols, rows }.to_frame());
     }
+    // Last, and only ever read by a phone that knows the name: what this
+    // bridge accepts beyond the base controls.
+    opening.push(TerminalEvent::Features { visibility: true }.to_frame());
     for frame in opening {
         if !deliver(&mut ws_tx, Message::Text(frame.into())).await {
             return Ok(());
@@ -533,19 +607,30 @@ pub async fn attach(
                 // within 5 seconds instead of 1, for a fifth of the steady
                 // per-viewer fork rate.
                 if tick.is_multiple_of(5) {
-                    let (authorized, key) = {
+                    // The session's phone: a session never changes device, so
+                    // this is the phone the upgrade route checked, and the
+                    // per-phone list is re-read for it below.
+                    let (device, key) = {
                         let mut auth = auth.lock().unwrap_or_else(PoisonError::into_inner);
-                        (auth.authenticate(&token).is_some(), auth.host_key().to_vec())
+                        (auth.authenticate(&token), auth.host_key().to_vec())
                     };
                     // Two different facts, told apart on the wire: a session
                     // that ran out (a sidecar restart, the idle window) is the
                     // phone's to renew silently and come back; a tab the
                     // catalog no longer grants is not.
-                    if !authorized { break Err("session_expired".into()); }
-                    let still_allowed = catalog.lock().unwrap_or_else(PoisonError::into_inner).load(&state_dir, &key).ok()
-                        .and_then(|catalog| catalog.tab(&tab_id).map(|(_, tab)| tab.public.available && tab.tmux_name == tmux_name))
-                        .unwrap_or(false);
-                    if !still_allowed { break Err("access_revoked".into()); }
+                    let Some(device) = device else { break Err("session_expired".into()); };
+                    // Off the async workers: a load past the TTL forks `tmux ls`
+                    // and waits on the catalog mutex behind whoever else does.
+                    let loaded = {
+                        let (catalog, state_dir) = (catalog.clone(), state_dir.clone());
+                        tokio::task::spawn_blocking(move || {
+                            catalog.lock().unwrap_or_else(PoisonError::into_inner).load(&state_dir, &key)
+                        })
+                        .await
+                    };
+                    if let Err(reason) = recheck(loaded.ok().and_then(Result::ok), &device, &tab_id, &tmux_name) {
+                        break Err(reason.into());
+                    }
                 }
                 tick = tick.wrapping_add(1);
             }
@@ -555,7 +640,7 @@ pub async fn attach(
             chunk = output.pop() => match chunk {
                 Some(bytes) => if !deliver(&mut ws_tx, Message::Binary(bytes.into())).await { break Ok(()); },
                 // The pane's output ended: tmux detached the client, or the
-                // session is gone. A shed on the way is not a reason to close.
+                // session is gone.
                 None => break Ok(()),
             },
             incoming = ws_rx.next() => match incoming {
@@ -591,6 +676,13 @@ pub async fn attach(
                         TerminalControl::Ping => { if !deliver(&mut ws_tx, Message::Text(TerminalEvent::Pong.to_frame().into())).await { break Ok(()); } }
                         TerminalControl::Detached => break Ok(()),
                         TerminalControl::Ready => {}
+                        // Both edges are a moment the reader's eyes were on the
+                        // screen — the last one before it went dark, the first
+                        // after it came back — so both stamp the tab read, and
+                        // what finishes in between stays unread.
+                        TerminalControl::Visibility { visible } => {
+                            if guard.set_visible(visible) { on_seen(); }
+                        }
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break Ok(()),
@@ -601,24 +693,38 @@ pub async fn attach(
     // Tell the phone *why*. Without this every rejection arrived as a bare
     // close and was rendered as "reconnecting…" forever, including revocation.
     if let Err(reason) = &result {
-        // `replaced` means another viewer took over; that client must not fight
-        // its way back in a reconnect loop. `session_expired` retries through
-        // the phone's silent re-login.
-        let retry = reason == "idle_timeout" || reason == "session_expired";
         let frame = TerminalEvent::Closing {
             reason: reason.clone(),
-            retry,
+            retry: closing_retries(reason),
         }
         .to_frame();
         let _ = deliver(&mut ws_tx, Message::Text(frame.into())).await;
+    }
+    // Detaching is the last moment the screen was in front of somebody —
+    // unless the page had already gone dark, and that moment was stamped then.
+    if !guard.hidden() {
+        on_seen();
     }
     // Kill first, then release the remaining write ends so the reader unblocks.
     drop(session);
     drop(writer);
     drop(master);
-    // Observable in tests only: a shed is a repaint the next redraw covers.
-    let _ = output.shed();
     result
+}
+
+/// The periodic re-check's verdict on one catalog load, for the phone paired
+/// as `device`: the tab is still granted to it, or the close reason. A catalog
+/// that could not be read at all is not a revocation: that close retries
+/// (`closing_retries`). A tmux that merely could not be asked never gets this
+/// far — the cache carries its last answer forward — so a tab the catalog no
+/// longer lists for this phone (its switch off, or a per-phone list narrowed
+/// past it) is the catalog saying no.
+fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
+    match loaded.map(|catalog| catalog.for_device(device).grants(tab_id, tmux_name)) {
+        Some(true) => Ok(()),
+        Some(false) => Err("access_revoked"),
+        None => Err("catalog_unavailable"),
+    }
 }
 
 #[cfg(test)]
@@ -628,7 +734,7 @@ mod tests {
         tmux_window_size_command, MOBILE_SCROLLBACK_LINES,
     };
     use super::{
-        ack_frame, deliver, input_report_due, replay_frames, OutputQueue, IDLE_TIMEOUT,
+        ack_frame, closing_retries, deliver, input_report_due, replay_frames, OutputQueue, IDLE_TIMEOUT,
         INPUT_REPORT_INTERVAL, REPLAY_CHUNK, WRITE_TIMEOUT,
     };
     use crate::services::mobile_control::protocol::{TerminalControl, TerminalEvent, MAX_OUTPUT_QUEUE};
@@ -638,6 +744,19 @@ mod tests {
         pin::Pin,
         task::{Context, Poll},
     };
+
+    /// Narrowing a scope's per-phone list past the phone holding the terminal
+    /// detaches it like switching access off does; the listed phone keeps it.
+    #[test]
+    fn narrowing_the_phone_list_detaches_an_open_terminal() {
+        use crate::services::mobile_control::discovery::{fixture_scope, Catalog};
+        let with = |devices: Option<Vec<String>>| Catalog { projects: vec![fixture_scope("t", "tmux-t", devices)] };
+        assert_eq!(super::recheck(Some(with(None)), "d1", "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d1".into()]))), "d1", "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(None, "d1", "t", "tmux-t"), Err("catalog_unavailable"));
+    }
 
     #[test]
     fn the_desktop_hears_the_first_keystroke_of_a_burst_and_not_the_rest() {
@@ -658,12 +777,12 @@ mod tests {
     async fn a_reconnecting_viewer_evicts_the_previous_one() {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
-        let first = registry.acquire("eldrun-p--agent-1").await.expect("first");
-        assert!(registry.is_busy("eldrun-p--agent-1"));
+        let first = registry.acquire(concat!(crate::app_slug!(), "-p--agent-1")).await.expect("first");
+        assert!(registry.is_busy(concat!(crate::app_slug!(), "-p--agent-1")));
         assert!(!first.evicted());
         let waiter = {
             let registry = registry.clone();
-            tokio::spawn(async move { registry.acquire("eldrun-p--agent-1").await })
+            tokio::spawn(async move { registry.acquire(concat!(crate::app_slug!(), "-p--agent-1")).await })
         };
         // The incumbent is asked to leave; releasing hands the slot over.
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -671,17 +790,65 @@ mod tests {
         drop(first);
         let second = waiter.await.expect("join").expect("second viewer");
         assert!(!second.evicted());
-        assert!(registry.is_busy("eldrun-p--agent-1"));
+        assert!(registry.is_busy(concat!(crate::app_slug!(), "-p--agent-1")));
         drop(second);
-        assert!(!registry.is_busy("eldrun-p--agent-1"));
+        assert!(!registry.is_busy(concat!(crate::app_slug!(), "-p--agent-1")));
+    }
+
+    /// A pocketed phone keeps its socket and its slot; what it gives up is
+    /// "somebody is looking", which is what holds an agent notice back.
+    #[tokio::test]
+    async fn a_hidden_viewer_holds_the_tab_but_is_not_watching_it() {
+        use super::TerminalRegistry;
+        let registry = TerminalRegistry::default();
+        assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")), "nobody attached");
+        let viewer = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3")).await.expect("viewer");
+        // A phone that never reports (an older bundle) counts as watching.
+        assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
+        assert!(!viewer.hidden());
+        // Only a change is an edge: the same state twice stamps nothing twice.
+        assert!(!viewer.set_visible(true));
+        assert!(viewer.set_visible(false));
+        assert!(!viewer.set_visible(false));
+        assert!(viewer.hidden());
+        assert!(registry.is_busy(concat!(crate::app_slug!(), "-p--agent-3")), "the slot is still held");
+        assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
+        assert!(viewer.set_visible(true));
+        assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
+        // The state belongs to the viewer, not the tab: the next one starts
+        // out watching whatever the last one reported.
+        viewer.set_visible(false);
+        drop(viewer);
+        assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
+        let next = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3")).await.expect("next viewer");
+        assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
+        drop(next);
+    }
+
+    #[test]
+    fn only_a_close_the_phone_can_recover_from_asks_it_back() {
+        for reason in ["idle_timeout", "session_expired", "catalog_unavailable"] {
+            assert!(closing_retries(reason), "{reason}");
+        }
+        for reason in [
+            "access_revoked",
+            "replaced",
+            "session_busy",
+            "invalid_terminal_control",
+            "invalid_terminal_size",
+            "input_frame_too_large",
+            "resize_failed",
+        ] {
+            assert!(!closing_retries(reason), "{reason}");
+        }
     }
 
     #[tokio::test]
     async fn an_incumbent_that_never_leaves_still_yields_session_busy() {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
-        let _held = registry.acquire("eldrun-p--agent-2").await.expect("first");
-        match registry.acquire("eldrun-p--agent-2").await {
+        let _held = registry.acquire(concat!(crate::app_slug!(), "-p--agent-2")).await.expect("first");
+        match registry.acquire(concat!(crate::app_slug!(), "-p--agent-2")).await {
             Ok(_) => panic!("a held slot must not be handed over"),
             Err(reason) => assert_eq!(reason, "session_busy"),
         }
@@ -689,11 +856,11 @@ mod tests {
 
     #[test]
     fn tmux_attach_uses_a_non_alternate_screen_mobile_client() {
-        let command = tmux_attach_command("eldrun-project--shell-test");
+        let command = tmux_attach_command(concat!(crate::app_slug!(), "-project--shell-test"));
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("vt100")));
         assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
         let argv = command.get_argv();
-        // The program is tmux resolved on Eldrun's PATH (absolute when installed).
+        // The program is tmux resolved on Tabtivity's PATH (absolute when installed).
         let program = std::path::Path::new(&argv[0]);
         assert_eq!(
             program.file_stem().and_then(OsStr::to_str),
@@ -702,7 +869,7 @@ mod tests {
         );
         assert_eq!(
             &argv[1..],
-            &["-u", "attach-session", "-t", "eldrun-project--shell-test"].map(OsStr::new)
+            &["-u", "attach-session", "-t", concat!(crate::app_slug!(), "-project--shell-test")].map(OsStr::new)
         );
     }
 
@@ -711,16 +878,16 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_tmux_spawns_use_eldrun_path() {
+    fn sidecar_tmux_spawns_use_app_path() {
         let expected = crate::paths::extra_path_dirs()[0].clone();
 
-        let attach = tmux_attach_command("eldrun-project--shell-test");
+        let attach = tmux_attach_command(concat!(crate::app_slug!(), "-project--shell-test"));
         let attach_path = attach.get_env("PATH").expect("attach carries PATH");
         assert_eq!(first_path_dir(attach_path), expected);
 
         for command in [
-            tmux_capture_command("eldrun-project--shell-test"),
-            tmux_window_size_command("eldrun-project--shell-test"),
+            tmux_capture_command(concat!(crate::app_slug!(), "-project--shell-test")),
+            tmux_window_size_command(concat!(crate::app_slug!(), "-project--shell-test")),
         ] {
             let path = command
                 .get_envs()
@@ -733,7 +900,7 @@ mod tests {
 
     #[test]
     fn tmux_capture_replays_the_same_depth_as_mobile_xterm() {
-        let command = tmux_capture_command("eldrun-project--shell-test");
+        let command = tmux_capture_command(concat!(crate::app_slug!(), "-project--shell-test"));
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
             [
@@ -747,7 +914,7 @@ mod tests {
                 "-E",
                 "-1",
                 "-t",
-                "eldrun-project--shell-test",
+                concat!(crate::app_slug!(), "-project--shell-test"),
             ]
             .map(OsStr::new)
         );
@@ -755,7 +922,7 @@ mod tests {
 
     #[test]
     fn capture_stops_above_the_visible_screen_the_attach_will_redraw() {
-        let command = tmux_capture_command("eldrun-project--shell-test");
+        let command = tmux_capture_command(concat!(crate::app_slug!(), "-project--shell-test"));
         let args: Vec<_> = command
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
@@ -768,7 +935,7 @@ mod tests {
 
     #[test]
     fn window_size_is_probed_from_the_window_not_the_client() {
-        let command = tmux_window_size_command("eldrun-project--shell-test");
+        let command = tmux_window_size_command(concat!(crate::app_slug!(), "-project--shell-test"));
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
             [
@@ -776,7 +943,7 @@ mod tests {
                 "display-message",
                 "-p",
                 "-t",
-                "eldrun-project--shell-test",
+                concat!(crate::app_slug!(), "-project--shell-test"),
                 "#{window_width}x#{window_height}",
             ]
             .map(OsStr::new)
@@ -805,6 +972,10 @@ mod tests {
         assert_eq!(
             TerminalEvent::Closing { reason: "access_revoked".into(), retry: false }.to_frame(),
             r#"{"type":"closing","reason":"access_revoked","retry":false}"#
+        );
+        assert_eq!(
+            TerminalEvent::Features { visibility: true }.to_frame(),
+            r#"{"type":"features","visibility":true}"#
         );
     }
 
@@ -841,30 +1012,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_flooding_pane_sheds_its_oldest_output_and_keeps_the_link() {
+    async fn a_flooding_pane_waits_for_the_phone_and_loses_nothing() {
         let queue = OutputQueue::new();
         let chunk = vec![b'x'; 16 * 1024];
         let fits = MAX_OUTPUT_QUEUE / chunk.len();
         for _ in 0..fits {
-            queue.push(chunk.clone());
+            assert!(queue.push(chunk.clone()));
         }
-        assert!(!queue.shed(), "within budget nothing is dropped");
-        // The phone stalls; the pane keeps painting.
-        for _ in 0..3 {
-            queue.push(vec![b'y'; chunk.len()]);
-        }
-        assert!(queue.shed());
-        {
-            let state = queue.state.lock().unwrap();
-            assert!(state.bytes <= MAX_OUTPUT_QUEUE);
-            assert_eq!(state.chunks.len(), fits);
-            // The newest bytes — the screen as it is now — are what is kept.
-            assert_eq!(state.chunks.back().unwrap()[0], b'y');
-        }
-        // …and the link is still open: the consumer drains rather than closes.
-        assert!(queue.pop().await.is_some());
+        // The phone stalls; the pane keeps painting. The reader parks rather
+        // than dropping bytes tmux believes the phone already has.
+        let (pushed_tx, pushed_rx) = std::sync::mpsc::channel();
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || {
+                let pushed = queue.push(vec![b'y'; 16 * 1024]);
+                pushed_tx.send(pushed).expect("report");
+            })
+        };
+        assert!(
+            pushed_rx.recv_timeout(std::time::Duration::from_millis(100)).is_err(),
+            "a full queue blocks the reader"
+        );
+        // The phone takes one chunk: the reader goes on, and every byte is
+        // still there, in order.
+        assert_eq!(queue.pop().await.as_deref(), Some(&chunk[..]));
+        assert_eq!(pushed_rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true));
+        reader.join().expect("reader");
+        let mut drained = Vec::new();
         queue.close();
-        while queue.pop().await.is_some() {}
+        while let Some(next) = queue.pop().await {
+            drained.push(next[0]);
+        }
+        assert_eq!(drained.len(), fits);
+        assert_eq!(drained.last(), Some(&b'y'));
+    }
+
+    #[test]
+    fn closing_wakes_a_reader_parked_on_a_full_queue() {
+        let queue = OutputQueue::new();
+        let chunk = vec![b'x'; MAX_OUTPUT_QUEUE];
+        assert!(queue.push(chunk.clone()), "one oversized chunk always fits an empty queue");
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || queue.push(chunk))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        queue.close();
+        assert!(!reader.join().expect("reader"), "a closed queue tells the reader to stop");
     }
 
     #[tokio::test]

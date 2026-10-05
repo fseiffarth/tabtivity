@@ -83,7 +83,7 @@ export function LocalModelMenu() {
   useEffect(() => initLocalModelEvents(), []);
 
   // Detect whether Ollama is installed. Poll while it's still missing so that
-  // installing Ollama mid-session is picked up without restarting Eldrun; stop
+  // installing Ollama mid-session is picked up without restarting Tabtivity; stop
   // once detected (it won't be uninstalled live, and `ollama_status` polling
   // takes over from here — see below).
   useEffect(() => {
@@ -150,7 +150,7 @@ export function LocalModelMenu() {
 
   // "Manage CLIs…" → the Agents & CLIs tab, to install AI coding-agent CLIs
   // (Claude, Codex, Gemini, Google Antigravity, Mistral, Aider, OpenCode,
-  // Cursor, Copilot, Grok, Qwen) that Eldrun can then launch as agent tabs.
+  // Cursor, Copilot, Grok, Qwen) that Tabtivity can then launch as agent tabs.
   const openAgents = () => {
     setOpen(false);
     useModelsOverlayStore.getState().openOverlay("agents");
@@ -248,7 +248,7 @@ export function LocalModelMenu() {
   // whether or not anyone opens it — so while one is up, a flip of the shared
   // status poll to "loaded" is the cue that *something* became resident, and it
   // may well be the model the notice claims is missing (loaded from the settings
-  // panel, or by a process that isn't Eldrun). One read, then the notice narrows
+  // panel, or by a process that isn't Tabtivity). One read, then the notice narrows
   // or disappears. `noteResident` is a no-op when nothing moved, so this cannot
   // loop on its own dependencies.
   useEffect(() => {

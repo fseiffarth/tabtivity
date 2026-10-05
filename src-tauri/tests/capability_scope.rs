@@ -11,9 +11,9 @@
 //! ```
 //!
 //! So a `windows: ["main", …]` grant is not a grant to *the* webview in that
-//! window — it is a grant to every webview that window will ever hold. Eldrun's
+//! window — it is a grant to every webview that window will ever hold. Tabtivity's
 //! `default.json` used to be written that way. Nothing exploited it, because
-//! Eldrun creates exactly one webview per window, but it meant the day someone
+//! Tabtivity creates exactly one webview per window, but it meant the day someone
 //! added a second webview to `main` (an embedded browser pane being the obvious
 //! candidate) that webview would silently inherit `core:default`,
 //! `dialog:default`, `drag:default` and `notification:default` — with only
@@ -23,7 +23,7 @@
 //! `WebviewWindowBuilder::new(app, label, url)` builds both the window *and* its
 //! webview with that same label (`tauri::webview::webview_window` — the builder
 //! forwards `&label` to `WindowBuilder::new` and `WebviewBuilder::new`), and
-//! every window Eldrun creates goes through it — `main` from `tauri.conf.json`,
+//! every window Tabtivity creates goes through it — `main` from `tauri.conf.json`,
 //! `detached-*` from `commands::subwindow`, `present-*` from
 //! `commands::presenter`. This test pins that the re-scope stays done.
 //!

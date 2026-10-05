@@ -102,6 +102,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND } from "../../lib/brand";
 
 const ESC = String.fromCharCode(27);
 const DOWN = `${ESC}[B`;
@@ -121,7 +122,7 @@ const STORED = {
  * session that has not been prompted yet put its whole startup header here. */
 const BANNER = [
   "> Claude Code v2.1.278",
-  "  cwd: ~/eldrun/projects/projecteldrun",
+  `  cwd: ~/${BRAND.slug}/projects/project${BRAND.slug}`,
   "",
   "Tip: run /doctor to check your setup",
 ];
@@ -170,7 +171,7 @@ const CODEX_TAB = { ...TAB, id: "tab-codex", label: "Codex", agent_label: "Codex
 const CODEX_QUESTION = [
   ">_ OpenAI Codex (v0.155.1)",
   "model:     gpt-6-astra high   /model to change",
-  "directory: ~/eldrun/projects/projecteldrun",
+  `directory: ~/${BRAND.slug}/projects/project${BRAND.slug}`,
   "",
   "⚠ clamping SessionEnd hook timeout to 3s in /home/user/.codex/config.toml",
   "",
@@ -213,7 +214,7 @@ const settle = async (ms: number) => {
 const question = () => screen.getByRole("group", { name: "Waiting for your answer" });
 const rows = () => Array.from(question().querySelectorAll(".option-list button"), (row) => row.textContent ?? "");
 
-describe("Eldrun Mobile Focus — the question an agent is waiting on", () => {
+describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     terminalState.type = "normal";
@@ -336,6 +337,26 @@ describe("Eldrun Mobile Focus — the question an agent is waiting on", () => {
       "Type something.",
       "Chat about this",
     ]);
+  });
+
+  it("answers the free-text row with words typed under it, not a bare Enter", async () => {
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    await paint(AGENT_QUESTION);
+
+    FakeWebSocket.sent = [];
+    // A tap opens the row's field instead of pressing Enter on an empty one.
+    fireEvent.click(within(question()).getByText("Type something."));
+    await settle(400);
+    expect(FakeWebSocket.sent).toEqual([]);
+    const field = within(question()).getByRole("textbox", { name: "Your answer…" });
+    // Nothing to send yet.
+    expect(within(question()).getByRole("button", { name: "Send" })).toHaveProperty("disabled", true);
+    fireEvent.change(field, { target: { value: "  Push only   my fix " } });
+    fireEvent.click(within(question()).getByRole("button", { name: "Send" }));
+    await settle(600);
+    // Two rows down onto the field, the words as one line, then Enter.
+    expect(FakeWebSocket.sent).toEqual([DOWN, DOWN, "Push only my fix", "\r"]);
   });
 
   it("gives the list back when the answer never lands", async () => {

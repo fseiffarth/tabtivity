@@ -63,11 +63,11 @@ const nextDialogTermId = (kind: string) => `dialog-${kind}-${++dialogTermSeq}`;
 export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   const t = useT();
   // Mirrors the global `connections_headless` setting (default ON): headless →
-  // the password/passphrase is typed into Eldrun's own fields and the backend
+  // the password/passphrase is typed into Tabtivity's own fields and the backend
   // connects directly (`connectSsh`/`connectVpn`), same as activation's
   // `ensureVpnIfNeeded`. Off → the integrated login terminal is used instead, so
   // the user types the secret into a visible terminal embedded right here and
-  // Eldrun never handles it.
+  // Tabtivity never handles it.
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   // Whether this is a remote (SSH) project. The whole SSH section — address,
   // password, connect, and the remote browser — only appears when this is on.
@@ -118,8 +118,8 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // when you're already on the right network, so the VPN section stays collapsed
   // (and no config is stored on the project) until the user turns this on.
   const [vpnEnabled, setVpnEnabled] = useState(false);
-  // `vpnConfig` holds the Eldrun-stored `.ovpn` path (the picked file is copied
-  // into Eldrun on selection). The password is transient — never persisted.
+  // `vpnConfig` holds the Tabtivity-stored `.ovpn` path (the picked file is copied
+  // into Tabtivity on selection). The password is transient — never persisted.
   // A tunnel is "used" only when the toggle is on AND a config is selected.
   const [vpnConfig, setVpnConfig] = useState("");
   // Auth username for `auth-user-pass` configs (server-side username+password
@@ -423,7 +423,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   }, [vpnConfig]);
 
   // Select one of the previously-stored configs (its path is already an
-  // Eldrun-stored copy, so it's used as-is — no re-copy needed).
+  // Tabtivity-stored copy, so it's used as-is — no re-copy needed).
   const selectVpnConfig = (path: string) => {
     setVpnConfig(path);
     setVpnStatus("idle");
@@ -431,7 +431,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
     setVpnLog([]); // drop the previous config's handshake output
   };
 
-  // Pick a `.ovpn` config and copy it into Eldrun so the project no longer
+  // Pick a `.ovpn` config and copy it into Tabtivity so the project no longer
   // depends on the original file's location (stored on first use). The new copy
   // joins the recent-configs list for future reuse.
   const browseVpnConfig = async () => {
@@ -507,7 +507,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // Non-headless: bring the OpenVPN tunnel up in a terminal embedded in the
   // dialog. The connect command (`pkexec openvpn … --auth-nocache`) runs
   // interactively so the user types the passphrase in that visible terminal —
-  // Eldrun never handles it. The PTY persists past the dialog so the tunnel
+  // Tabtivity never handles it. The PTY persists past the dialog so the tunnel
   // stays up for the new project; we pre-mark the dedupe key so activation's
   // root-terminal fallback (`ensureVpnIfNeeded`) is suppressed.
   const startVpnTerm = async () => {

@@ -5,12 +5,13 @@
  *  - zoom is TAB-LOCAL: A+/A− (and Ctrl +/−) persist the new size on the tab's
  *    `viewerState.fontSize` — NOT the global per-type `viewer_prefs` — so zooming
  *    one tab never resizes other viewers of the same type, and the size survives
- *    an Eldrun restart (re-seeded from the persisted viewerState);
+ *    a Tabtivity restart (re-seeded from the persisted viewerState);
  *  - until the tab is zoomed it tracks the per-type `viewer_prefs[type].font_size`
  *    default reactively.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { BRAND } from "../../lib/brand";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
@@ -137,7 +138,7 @@ describe("editor text-size control", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it("restores the persisted tab size across an Eldrun restart", async () => {
+  it(`restores the persisted tab size across a ${BRAND.display} restart`, async () => {
     // First session: zoom this tab up to 13, which persists on its viewerState.
     await renderTextView();
     await waitFor(() =>

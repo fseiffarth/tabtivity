@@ -4,8 +4,8 @@ import { OutboxGrid } from "./OutboxGrid";
 import { isUntested } from "../../../src/lib/untested";
 
 /**
- * Everything the agent sent this tab (`eldrun-send`, the project's
- * `.eldrun/outbox/`), as a sheet of its own: a grid of thumbnails for the
+ * Everything the agent sent this tab (`tabtivity-send`, the project's
+ * `.tabtivity/outbox/`), as a sheet of its own: a grid of thumbnails for the
  * pictures and a card for every other file, newest first.
  *
  * The files stay out of the chat — a picture pushed between the turns buries

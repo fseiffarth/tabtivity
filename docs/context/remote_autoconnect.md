@@ -14,7 +14,7 @@ and brings the tunnel up only when the host is genuinely *unreachable*, never wh
 it merely rejected a credential.
 
 With **`connections_headless` off** the promise is kept differently, because it
-cannot be kept that way at all: Eldrun persists no passwords in that mode, so the
+cannot be kept that way at all: Tabtivity persists no passwords in that mode, so the
 eligibility gate above can never pass and auto-connect used to reject every project
 and do nothing, silently. There, "auto-connect" means what it means for a tunnel
 armed in the header (`lib/remote/vpn/vpnAutoConnect`): the connect command opens in the **root

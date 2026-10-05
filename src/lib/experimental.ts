@@ -4,8 +4,8 @@
  * Most experimental features are **off for everyone and on in debug mode**: the
  * flag is a tri-state, and when it is unset the answer is `settings.debug`. That
  * is the whole point of the gate — a feature that is still moving needs to be
- * invisible to someone using Eldrun to work, and present *by default* for someone
- * using Eldrun to build Eldrun, without them having to re-tick a list of toggles
+ * invisible to someone using Tabtivity to work, and present *by default* for someone
+ * using Tabtivity to build Tabtivity, without them having to re-tick a list of toggles
  * every time a new one lands. `terminal_webgl` is the exception: it exercises the
  * GPU/driver path and must be explicitly opted into even in Debug mode.
  *

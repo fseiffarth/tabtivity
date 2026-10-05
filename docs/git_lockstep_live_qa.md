@@ -30,7 +30,7 @@ the byte-sync half of every BS+LS case would have had to be *reimplemented* in t
 driver — and a reimplementation proves nothing about the code that ships.
 
 **Subject under test:** project `SSH Git Test` —
-mirror `~/eldrun/projects/ssh-git-test` ↔ `<remote-host>:~/projects/ssh-git-test`.
+mirror `~/tabtivity/projects/ssh-git-test` ↔ `<remote-host>:~/projects/ssh-git-test`.
 Baseline for every group: both sides clean on `master` at the same commit.
 
 ## Reading the timings
@@ -119,11 +119,11 @@ Re-running the *same* still-diverged repo against the fix:
 ```
 sync    → status=Desynchronized  local=master@945db032  remote=master@39918242
           detail: Diverged: master
-mirror  refs/eldrun/peer/master -> 3991824      # host's tip parked locally
-host    refs/eldrun/peer/master -> 945db03      # mirror's tip parked on the host
+mirror  refs/tabtivity/peer/master -> 3991824      # host's tip parked locally
+host    refs/tabtivity/peer/master -> 945db03      # mirror's tip parked on the host
         …and neither head moved.
 resolve local → green; host reset to 945db03, its f15-host.txt gone from the worktree,
-                overwritten tip preserved at refs/eldrun/backup/1783938132/master.
+                overwritten tip preserved at refs/tabtivity/backup/1783938132/master.
 ```
 
 ---

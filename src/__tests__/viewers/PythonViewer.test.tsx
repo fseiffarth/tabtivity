@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
+import { envName } from "../../lib/brand";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
@@ -226,7 +227,7 @@ describe("python run/debug (#py)", () => {
       {
         key: "old",
         kind: "shell",
-        env: { ELDRUN_PY_TARGET: "/p/main.py", ELDRUN_PY_MODE: "run" },
+        env: { [envName("PY_TARGET")]: "/p/main.py", [envName("PY_MODE")]: "run" },
       },
     ];
     await renderViewer();

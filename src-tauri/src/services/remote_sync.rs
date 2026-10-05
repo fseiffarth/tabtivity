@@ -2,7 +2,7 @@
 //!
 //! SSH-sync Phase 1 (`docs/ssh_sync_plan.md`). Every remote project has a local
 //! paired **mirror** — by default a `<name>` subfolder of the top-level
-//! `eldrun/projects-ssh/` root
+//! `tabtivity/projects-ssh/` root
 //! (legacy/fallback: `<state_dir>/remote-projects/<id>/mirror/`), relocatable per
 //! project via `extra["mirror"]` (see [`mirror_dir`]) — that starts empty and is
 //! populated only by **explicit, user-chosen** sync. This module is
@@ -21,6 +21,7 @@
 //!   [`SyncManifestState`] serializes every mutation (G7), and SFTP transfers run
 //!   with the lock released.
 
+use crate::brand::SLUG;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -158,7 +159,7 @@ pub fn default_mirror_dir_in(state_dir: &Path, project_id: &str) -> PathBuf {
 
 /// A remote project's explicitly-chosen mirror root, read from the always-local
 /// `projects.json` entry's flattened `extra["mirror"]` (written at import — where
-/// it defaults to a `<name>` subfolder of the top-level `eldrun/projects-ssh/` root — and rewritten
+/// it defaults to a `<name>` subfolder of the top-level `tabtivity/projects-ssh/` root — and rewritten
 /// when the user relocates a deleted mirror). `None` when unset. Read from the
 /// global list rather than the per-project `project.json` for the same reason as
 /// `remote::remote_target_for`: the global list is always on the local disk.
@@ -627,11 +628,11 @@ async fn walk_inner(
         return Ok(());
     }
     for entry in entries {
-        // Skip Eldrun's internal runtime dir, mirroring the local/remote listers.
+        // Skip Tabtivity's internal runtime dir, mirroring the local/remote listers.
         // `.git` is likewise never byte-mirrored: git state is kept in step
         // *semantically* by `services::git_peer` (lockstep), so copying its bytes
         // would fight that layer and risk corrupting a repo mid-write.
-        if entry.name == ".eldrun" || entry.name == ".git" {
+        if crate::brand::is_project_dir(&entry.name) || entry.name == ".git" {
             continue;
         }
         let child_rel = join_rel(rel, &entry.name);
@@ -818,7 +819,7 @@ pub fn rsync_pull_args(
         "-c".to_string(),
         "--no-links".to_string(),
         "--exclude=/.git".to_string(),
-        "--exclude=.eldrun".to_string(),
+        format!("--exclude={}", crate::brand::PROJECT_DIR),
         "--exclude=.git".to_string(),
         "--from0".to_string(),
         format!("--files-from={}", files_from.to_string_lossy()),
@@ -870,9 +871,9 @@ pub fn rsync_available_local() -> bool {
 pub fn rsync_available_host(spec: &crate::schema::project::RemoteSpec) -> bool {
     match crate::services::ssh_exec::run_remote_shell(
         spec,
-        "command -v rsync >/dev/null 2>&1 && echo eldrun-rsync-yes",
+        concat!("command -v rsync >/dev/null 2>&1 && echo ", crate::app_slug!(), "-rsync-yes"),
     ) {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).contains("eldrun-rsync-yes"),
+        Ok(out) => String::from_utf8_lossy(&out.stdout).contains(concat!(crate::app_slug!(), "-rsync-yes")),
         Err(_) => false,
     }
 }
@@ -1004,7 +1005,7 @@ pub async fn push_file_atomic(
         static PUSH_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
         PUSH_TMP_SEQ.fetch_add(1, Ordering::Relaxed)
     };
-    let tmp = format!("{host_abs}.eldrun-sync-tmp.{}.{seq}", std::process::id());
+    let tmp = format!("{host_abs}.{SLUG}-sync-tmp.{}.{seq}", std::process::id());
     sftp::write_file_on(sftp, &tmp, &bytes).await?;
     sftp::rename_on(sftp, &tmp, host_abs).await?;
     // Re-stat the host to capture the new base (mtime is the host's, post-write).
@@ -1087,9 +1088,9 @@ fn walk_mirror_inner(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(
         if ft.is_symlink() {
             continue; // G3: never follow symlinks out of the mirror
         }
-        // `.git`/`.eldrun` are never byte-mirrored (git is kept in step semantically
-        // by `services::git_peer`; `.eldrun` is Eldrun's own runtime dir).
-        if entry.file_name() == *".git" || entry.file_name() == *".eldrun" {
+        // `.git`/`.tabtivity` are never byte-mirrored (git is kept in step semantically
+        // by `services::git_peer`; `.tabtivity` is Tabtivity's own runtime dir).
+        if entry.file_name() == *".git" || entry.file_name().to_str().is_some_and(crate::brand::is_project_dir) {
             continue;
         }
         if ft.is_dir() {
@@ -1317,7 +1318,7 @@ mod tests {
 
     #[test]
     fn rsync_pull_args_build_target_and_flags() {
-        let files_from = Path::new("/tmp/eldrun-rsync-files");
+        let files_from = Path::new(concat!("/tmp/", crate::app_slug!(), "-rsync-files"));
         let args = rsync_pull_args(
             &Some("alice".to_string()),
             "host.example",
@@ -1331,11 +1332,11 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--no-links"));
         assert!(args.iter().any(|arg| arg == "--exclude=/.git"));
         assert!(args.iter().any(|arg| arg == "--exclude=.git"));
-        assert!(args.iter().any(|arg| arg == "--exclude=.eldrun"));
+        assert!(args.iter().any(|arg| arg == concat!("--exclude=.", crate::app_slug!())));
         assert!(args.iter().any(|arg| arg == "--from0"));
         assert!(args
             .iter()
-            .any(|arg| arg == "--files-from=/tmp/eldrun-rsync-files"));
+            .any(|arg| arg == concat!("--files-from=/tmp/", crate::app_slug!(), "-rsync-files")));
         let transport = args.iter().position(|arg| arg == "-e").unwrap();
         assert!(args[transport + 1].contains("ControlPath="));
         assert_eq!(args[transport + 2], "alice@host.example:/srv/p/");

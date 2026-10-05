@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { readSpeechLang, speechLangLabel, speechTag, SPEECH_LANGS, writeSpeechLang } from "../../../mobile-web/src/speechLang";
+import { BRAND, storageKey } from "../../lib/brand";
 
-describe("Eldrun Mobile voice language", () => {
+describe(`${BRAND.display} Mobile voice language`, () => {
   beforeEach(() => {
     localStorage.clear();
   });
@@ -24,14 +25,14 @@ describe("Eldrun Mobile voice language", () => {
   it("asks for a region-tagged language once one is chosen", () => {
     writeSpeechLang("de");
     expect(readSpeechLang()).toBe("de");
-    expect(localStorage.getItem("eldrun.mobile.speechLang")).toBe("de");
+    expect(localStorage.getItem(storageKey("mobile.speechLang"))).toBe("de");
     // The phone's own language no longer decides it.
     expect(speechTag(readSpeechLang(), { language: "en-GB" })).toBe("de-DE");
     expect(speechTag("fr")).toBe("fr-FR");
   });
 
   it("falls back to the phone when the stored value is not a language", () => {
-    localStorage.setItem("eldrun.mobile.speechLang", "kl");
+    localStorage.setItem(storageKey("mobile.speechLang"), "kl");
     expect(readSpeechLang()).toBe("auto");
   });
 });

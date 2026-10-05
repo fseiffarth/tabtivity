@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-/// `~/.local/share/eldrun/default_apps.json` — global file-extension→command map.
+/// `~/.local/share/tabtivity/default_apps.json` — global file-extension→command map.
 /// Each project's `project.json["default_apps"]` uses the same structure.
 ///
 /// Keys are file extensions including the leading dot (e.g. `".md"`).

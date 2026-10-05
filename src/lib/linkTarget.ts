@@ -13,13 +13,13 @@
  *
  * Two rules in the table are load-bearing rather than conveniences:
  *
- *  1. **A URL Eldrun itself started is always external.** A git-hosting OAuth
+ *  1. **A URL Tabtivity itself started is always external.** A git-hosting OAuth
  *     page, a `gh`/`glab` device-login, a release link — the user's session
  *     lives in their real browser, and routing an auth flow into a fresh,
  *     ephemeral profile just means logging in again in the wrong place.
  *  2. **A URL that arrived from untrusted content opens in reader mode, and may
  *     not become a live page in one click.** A mail body, terminal output, an
- *     agent's answer and a viewed file are all content Eldrun already treats as
+ *     agent's answer and a viewed file are all content Tabtivity already treats as
  *     hostile when it chooses a destination (`docs/browser_plan_b.md` §8.5).
  *     Reader mode is inert, pre-sanitized HTML with no script, no forms and no
  *     network — the right default for a destination the user did not choose.
@@ -54,8 +54,8 @@ export type UriOrigin =
   /** A link in the file tree or a file viewer. */
   | "filetree"
   | "viewer"
-  /** Eldrun itself started this URL (OAuth, `gh`/`glab`, a release link). */
-  | "eldrun";
+  /** Tabtivity itself started this URL (OAuth, `gh`/`glab`, a release link). */
+  | "app";
 
 /** Origins a person named directly. Only these may offer the live-page control. */
 const TRUSTED_ORIGINS: ReadonlySet<UriOrigin> = new Set<UriOrigin>([
@@ -68,14 +68,14 @@ export function originIsTrusted(origin: UriOrigin): boolean {
 }
 
 export type LinkTarget =
-  /** Open an Eldrun browser tab. `mode` is what it opens as; `allowLive` is
+  /** Open a Tabtivity browser tab. `mode` is what it opens as; `allowLive` is
    *  whether it may offer the "Open live page" control at all. */
   | { kind: "in_app"; url: string; mode: BrowserOpenMode; allowLive: boolean }
   /** Launch the user's configured app for a role (`browser`, `mail`, …). */
   | { kind: "global_app"; role: string; url: string }
   /** Hand it to the OS default handler via `open_external_url`. */
   | { kind: "external"; url: string }
-  /** Open Eldrun's own mail composer, pre-addressed. */
+  /** Open Tabtivity's own mail composer, pre-addressed. */
   | { kind: "compose"; address: string }
   /** Show the chooser (`browser_link_target: "ask"`). */
   | { kind: "ask"; url: string }
@@ -140,9 +140,9 @@ export function routeUri(uri: string, ctx: RouteContext): LinkTarget {
     return { kind: "refuse", reason: scheme ? `scheme:${scheme}` : "not_a_url" };
   }
 
-  // 2. Eldrun's own URLs always go to the user's real browser, where their
+  // 2. Tabtivity's own URLs always go to the user's real browser, where their
   //    session already lives.
-  if (ctx.origin === "eldrun") return { kind: "external", url };
+  if (ctx.origin === "app") return { kind: "external", url };
 
   const allowLive = originIsTrusted(ctx.origin);
 
@@ -249,7 +249,7 @@ export interface DispatchHooks {
    *  falls back to `external` rather than offering an action that goes nowhere
    *  (the rule `FileTree`'s "Open in a new tab" already follows). */
   openBrowserTab?: (url: string, mode: BrowserOpenMode) => void;
-  /** Open Eldrun's mail composer pre-addressed. */
+  /** Open Tabtivity's mail composer pre-addressed. */
   openComposer?: (address: string) => void;
   /** Show the in-app/external chooser. */
   showChooser?: (url: string) => void;

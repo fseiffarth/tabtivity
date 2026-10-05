@@ -1,5 +1,6 @@
 import React from "react";
 import { forgetLastPlace } from "./lastPlace";
+import { useT } from "../../src/lib/i18n";
 
 /**
  * A render error anywhere used to leave a permanently blank PWA that only a
@@ -26,14 +27,21 @@ export class ErrorBoundary extends React.Component<
 
   render() {
     if (!this.state.failed) return this.props.children;
-    return (
-      <main className="screen splash">
-        <p>Eldrun Mobile hit an unexpected error and stopped drawing this screen.</p>
-        <button className="primary" onClick={() => this.setState({ failed: false })}>
-          Try again
-        </button>
-        <button onClick={() => location.reload()}>Reload</button>
-      </main>
-    );
+    return <CrashScreen retry={() => this.setState({ failed: false })} />;
   }
+}
+
+/** The boundary's own screen: a function component, since a class cannot use
+ * the translator hook. */
+function CrashScreen({ retry }: { retry: () => void }) {
+  const t = useT();
+  return (
+    <main className="screen splash">
+      <p>{t("mobile.app.crashed")}</p>
+      <button className="primary" onClick={retry}>
+        {t("mobile.app.tryAgain")}
+      </button>
+      <button onClick={() => location.reload()}>{t("common.reload")}</button>
+    </main>
+  );
 }

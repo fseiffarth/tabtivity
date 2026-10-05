@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createPortal } from "react-dom";
 
@@ -11,13 +11,28 @@ import {
   breakdown,
   dayKey,
   periodKeys,
+  sumCounters,
   totalOf,
   type Counters,
   type Period,
 } from "../../lib/usageRollup";
 import { formatBytes, type ByteCounts, type NetUsageReport } from "../monitoring/NetworkTrafficPane";
 import { Toggle } from "../common/Toggle";
+import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import {
+  fetchTokenReport,
+  foldTokens,
+  formatShare,
+  formatTokens,
+  grandTotal,
+  outputShare,
+  splitSum,
+  usedAgentClis,
+  type TokenReport,
+  type TokenRows,
+  type TokenSplit,
+} from "../../lib/tokenStats";
 
 /** Human duration, matching the header timer's phrasing. */
 function formatTime(secs: number): string {
@@ -63,7 +78,7 @@ function Bar({ label, value, max, suffix }: { label: string; value: number; max:
 
 /**
  * Per-hour sparkline over a day's 24 UTC hour buckets — hand-rolled SVG, like
- * every other graph in Eldrun (there is no chart dependency, and this is not the
+ * every other graph in Tabtivity (there is no chart dependency, and this is not the
  * place to add one). Only meaningful for the Day period.
  */
 function HourSparkline({
@@ -119,6 +134,137 @@ function HourSparkline({
   );
 }
 
+/** One CLI's or model's split, as the line under its bar: fresh in · cache
+ *  write · cache read · output · output share, or the unsplit total. */
+function splitText(s: TokenSplit, t: ReturnType<typeof useT>): string {
+  const parts: string[] = [];
+  if (splitSum(s) > 0 || s.total === 0) {
+    parts.push(
+      t("stats.tokensFresh", { count: formatTokens(s.fresh) }),
+      t("stats.tokensCacheWrite", { count: formatTokens(s.cacheWrite) }),
+      t("stats.tokensCacheRead", { count: formatTokens(s.cacheRead) }),
+      t("stats.tokensOutput", { count: formatTokens(s.output) }),
+    );
+    const share = outputShare(s);
+    if (share !== null) parts.push(t("stats.tokensOutputShare", { share: formatShare(share) }));
+  }
+  if (s.total > 0) {
+    parts.push(
+      t(splitSum(s) > 0 ? "stats.tokensUnsplitExtra" : "stats.tokensNoSplit", {
+        count: formatTokens(s.total),
+      }),
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * The Tokens section: one bar per CLI over the period's tokens, the split on
+ * the line beneath, per-model rows behind a toggle. Numbers come from the CLIs'
+ * own records (`usage_token_stats`); a CLI Tabtivity cannot read is named as not
+ * reported rather than shown as zero.
+ */
+function TokensSection({
+  rows,
+  sources,
+  loading,
+  counting,
+  partial,
+  failed,
+  t,
+}: {
+  rows: TokenRows | null;
+  sources: string[];
+  loading: boolean;
+  counting: boolean;
+  partial: boolean;
+  failed: boolean;
+  t: ReturnType<typeof useT>;
+}) {
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const toggle = (cli: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(cli)) next.delete(cli);
+      else next.add(cli);
+      return next;
+    });
+
+  const reported = rows?.reported ?? [];
+  const notReported = rows?.notReported ?? [];
+  const max = Math.max(0, ...reported.map((r) => grandTotal(r.split)));
+
+  return (
+    <>
+      <div className="settings-section-title">
+        {t("stats.sectionTokens")} <UntestedTag id="stats.sectionTokens" />
+      </div>
+      {failed ? (
+        <p className="settings-help">{t("stats.tokensUnavailable")}</p>
+      ) : (
+        <>
+          {(loading || counting) && <p className="settings-help">{t("stats.tokensCounting")}</p>}
+          {partial && !counting && <p className="settings-help">{t("stats.tokensPartial")}</p>}
+          {reported.length > 0 && (
+            <div className="stats-bars">
+              {reported.map((row) => {
+                const total = grandTotal(row.split);
+                const expanded = open.has(row.cli);
+                const modelMax = Math.max(0, ...row.models.map((m) => grandTotal(m.split)));
+                return (
+                  <Fragment key={row.cli}>
+                    <Bar label={agentLabel(row.cli)} value={total} max={max} suffix={formatTokens(total)} />
+                    <p className="settings-help stats-token-split">
+                      <span>{splitText(row.split, t)}</span>
+                      {row.models.length > 0 && (
+                        <button
+                          type="button"
+                          className="inline-link-btn"
+                          aria-expanded={expanded}
+                          onClick={() => toggle(row.cli)}
+                        >
+                          {t("stats.tokensPerModel")}
+                        </button>
+                      )}
+                    </p>
+                    {expanded && (
+                      <div className="stats-bars stats-token-models">
+                        {row.models.map((m) => {
+                          const mTotal = grandTotal(m.split);
+                          return (
+                            <Fragment key={m.model}>
+                              <Bar label={m.model} value={mTotal} max={modelMax} suffix={formatTokens(mTotal)} />
+                              <p className="settings-help stats-token-split">
+                                <span>{splitText(m.split, t)}</span>
+                              </p>
+                            </Fragment>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </div>
+          )}
+          {!loading && reported.length === 0 && notReported.length === 0 && (
+            <p className="settings-help">{t("stats.tokensNone")}</p>
+          )}
+          {notReported.length > 0 && (
+            <p className="settings-help">
+              {t("stats.tokensNotReported", {
+                clis: notReported.map(agentLabel).join(", "),
+                sources: sources.map(agentLabel).join(", "),
+              })}
+            </p>
+          )}
+          <p className="settings-help">{t("stats.tokensFootnote")}</p>
+        </>
+      )}
+    </>
+  );
+}
+
 interface Props {
   onClose: () => void;
   /** Which day the recap opens on. The startup recap anchors on yesterday — the
@@ -136,6 +282,9 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
   const [timeByDay, setTimeByDay] = useState<Record<string, Record<string, number>>>({});
   const [net, setNet] = useState<NetUsageReport>({ hours: {}, days: {} });
   const [git, setGit] = useState<GitStats | null>(null);
+  const [tokens, setTokens] = useState<TokenReport | null>(null);
+  const [tokensCounting, setTokensCounting] = useState(false);
+  const [tokensFailed, setTokensFailed] = useState(false);
 
   const report = useUsageStore((s) => s.report);
   const loadUsage = useUsageStore((s) => s.load);
@@ -152,6 +301,27 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
       .then(setNet)
       .catch(() => setNet({ hours: {}, days: {} }));
   }, [loadUsage]);
+
+  // Tokens are derived from the CLIs' records by a budgeted backend scan. The
+  // first scan of a long history comes back `partial`, so it is asked again a
+  // few times (bounded in `fetchTokenReport`) — never polled after that. The
+  // recap is a global view, like `usage_summary`: summed across every scope.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchTokenReport(
+      () => invoke<TokenReport>("usage_token_stats", { projectId: "" }),
+      (r, more) => {
+        setTokens(r);
+        setTokensCounting(more);
+      },
+      { isCancelled: () => cancelled },
+    ).catch(() => {
+      if (cancelled) return;
+      setTokensFailed(true);
+      setTokensCounting(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const keys = useMemo(() => periodKeys(period, anchorMs), [period, anchorMs]);
 
@@ -257,9 +427,21 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
     }
   }
 
+  // The same window as every other number in the dialog.
+  const tokenRows: TokenRows | null = useMemo(
+    () =>
+      tokens
+        ? foldTokens(sumCounters(tokens.days, keys), tokens.sources, usedAgentClis(counters))
+        : null,
+    [tokens, keys, counters],
+  );
+
   const label =
     period === "day" ? dayLabel(anchorMs, t) : period === "week" ? t("stats.thisWeek") : t("stats.thisMonth");
-  const empty = openedTabs + prompts + shellCommands + created + modified + deleted === 0 && autocomplete.size === 0;
+  const empty =
+    openedTabs + prompts + shellCommands + created + modified + deleted === 0 &&
+    autocomplete.size === 0 &&
+    !tokenRows?.reported.length;
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -324,6 +506,17 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
               />
             </div>
 
+            {/* ── Tokens ───────────────────────────────────────────────── */}
+            <TokensSection
+              rows={tokenRows}
+              sources={tokens?.sources ?? []}
+              loading={!tokens && !tokensFailed}
+              counting={tokensCounting}
+              partial={!!tokens?.partial}
+              failed={tokensFailed}
+              t={t}
+            />
+
             {/* ── Work per project ─────────────────────────────────────── */}
             <div className="settings-section-title">{t("stats.sectionWork")}</div>
             {rankedProjects.length > 0 ? (
@@ -342,7 +535,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle }: Props) 
               <p className="settings-help">{t("stats.noTrackedTime")}</p>
             )}
             <div className="stats-metrics">
-              <Metric label={t("stats.metricEldrunOpen")} value={formatTime(appSecs)} />
+              <Metric label={t("stats.metricAppOpen")} value={formatTime(appSecs)} />
               <Metric
                 label={t("stats.metricCommandsRun")}
                 value={String(shellCommands)}

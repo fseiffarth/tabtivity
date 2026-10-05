@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { ANY_FILE_ACCEPT, ApiError, MAX_INBOX_FILE, uploadToProjectInbox } from "../api";
+import { ANY_FILE_ACCEPT, ApiError, MAX_INBOX_FILE, pickPhoneFiles, uploadToProjectInbox } from "../api";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 
 /** Why a file did not reach the project's inbox, by the desktop's code. */
@@ -17,14 +17,14 @@ interface Upload {
   id: number;
   name: string;
   state: "sending" | "sent" | "failed";
-  /** The project-relative `.eldrun/inbox/<file>` once it landed. */
+  /** The project-relative `.tabtivity/inbox/<file>` once it landed. */
   reference?: string;
   failure?: string;
 }
 
 /**
  * The project screen's **＋ → Send a file from this phone**: a document into
- * the project's own inbox (`.eldrun/inbox/`, the same drop box the Focus
+ * the project's own inbox (`.tabtivity/inbox/`, the same drop box the Focus
  * composer's **+** fills), for whichever agent works here next — the screen
  * has no session to name, and a project with every tab closed still takes it.
  * `open` must run inside the tap that asked for it (the picker needs the
@@ -41,7 +41,7 @@ export function useProjectInbox(projectId: string): { open: () => void; view: Re
     setUploads((current) => current.map((upload) => upload.id === id ? { ...upload, ...patch } : upload));
   const dismiss = (id: number) => setUploads((current) => current.filter((upload) => upload.id !== id));
 
-  const send = (files: FileList | null) => {
+  const send = (files: ArrayLike<File> | null) => {
     if (!files) return;
     for (const file of Array.from(files)) {
       const id = ++seq.current;
@@ -80,5 +80,5 @@ export function useProjectInbox(projectId: string): { open: () => void; view: Re
     })}
   </>;
 
-  return { open: () => input.current?.click(), view };
+  return { open: () => pickPhoneFiles(input.current, send), view };
 }

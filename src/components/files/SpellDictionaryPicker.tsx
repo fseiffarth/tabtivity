@@ -3,11 +3,11 @@
  * (M#248): which installed Hunspell dictionary the editors' spelling check
  * reads (machine-wide — the language you write in is not per project), and a
  * download row that fetches any other language from the wooorm/dictionaries
- * collection into the dictionaries folder of Eldrun's data directory.
+ * collection into the dictionaries folder of Tabtivity's data directory.
  *
  * One backend round trip (`spell_dictionaries`) answers both rows; the split
  * into installed/downloadable, and every display name, is
- * `lib/spellDictionaries`. A dictionary Eldrun put there (or the user dropped
+ * `lib/spellDictionaries`. A dictionary Tabtivity put there (or the user dropped
  * in) can be removed again from the same row; a system one is the package
  * manager's and gets no × — the backend refuses anyway.
  */

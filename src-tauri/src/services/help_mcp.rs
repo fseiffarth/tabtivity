@@ -1,9 +1,9 @@
-//! **Eldrun's help MCP** — a read-only question-answering surface over the
+//! **Tabtivity's help MCP** — a read-only question-answering surface over the
 //! help corpus (`docs/help/*.md`), served to every local agent tab as the MCP
-//! server `eldrun-help` and to the window as `help_search` / `help_read` /
+//! server `tabtivity-help` and to the window as `help_search` / `help_read` /
 //! `help_topics`. Design: `docs/help_mcp_plan.md`, `docs/context/help_mcp.md`.
 //!
-//! The authority is deliberately the smallest one Eldrun hands out: the corpus
+//! The authority is deliberately the smallest one Tabtivity hands out: the corpus
 //! is compiled into the binary (`build.rs` → `HELP_CORPUS`), so no tool here
 //! reads a file, a store, a setting, a project or a path at call time. A
 //! [`Caller::Helper`] token (per spawn, like the schedule identity) reaches
@@ -29,11 +29,15 @@ mod corpus {
     include!(concat!(env!("OUT_DIR"), "/help_corpus.rs"));
 }
 
-pub const SERVER_NAME: &str = "eldrun-help";
-pub const INSTRUCTIONS: &str = "Eldrun's own user documentation, read-only. Use it to answer questions about using Eldrun (projects, tabs, agent CLIs, local models, remote projects, sync, mobile, mail/calendar, containers, troubleshooting). Start with eldrun_help_search, then eldrun_help_read the best topic or section; eldrun_help_topics lists everything. It knows nothing about the user's projects, files or settings.";
+pub const SERVER_NAME: &str = crate::brand::MCP_HELP_SERVER;
+pub const INSTRUCTIONS: &str = concat!(crate::app_name!(), "'s own user documentation, read-only. Use it to answer questions about using ", crate::app_name!(), " (projects, tabs, agent CLIs, local models, remote projects, sync, mobile, mail/calendar, containers, troubleshooting). Start with ", crate::app_slug!(), "_help_search, then ", crate::app_slug!(), "_help_read the best topic or section; ", crate::app_slug!(), "_help_topics lists everything. It knows nothing about the user's projects, files or settings.");
 
 /// The tools, in the order `tools/list` gives them.
-pub const TOOLS: &[&str] = &["eldrun_help_search", "eldrun_help_read", "eldrun_help_topics", "eldrun_help_status"];
+const TOOL_SEARCH: &str = crate::brand::HELP_TOOL_SEARCH;
+const TOOL_READ: &str = crate::brand::HELP_TOOL_READ;
+const TOOL_TOPICS: &str = crate::brand::HELP_TOOL_TOPICS;
+const TOOL_STATUS: &str = crate::brand::HELP_TOOL_STATUS;
+pub const TOOLS: &[&str] = &[TOOL_SEARCH, TOOL_READ, TOOL_TOPICS, TOOL_STATUS];
 /// Search hits per call: default and ceiling.
 pub const DEFAULT_RESULTS: usize = 5;
 pub const MAX_RESULTS: usize = 10;
@@ -44,7 +48,7 @@ pub const MAX_SECTION_BYTES: usize = 8 * 1024;
 pub const SNIPPET_CHARS: usize = 240;
 pub const MAX_QUERY_BYTES: usize = 256;
 pub const MAX_QUERY_TERMS: usize = 16;
-/// Topics `eldrun_help_topics` lists at most (the corpus is a few dozen).
+/// Topics `tabtivity_help_topics` lists at most (the corpus is a few dozen).
 pub const MAX_TOPICS: usize = 200;
 const TRUNCATED: &str = "\n\n[… truncated — read one section at a time with `section`]";
 
@@ -306,7 +310,7 @@ impl Index {
     pub fn read(&self, id: &str, section: Option<&str>) -> Result<Read, String> {
         let topic = self.topic(id).ok_or_else(|| {
             let near: Vec<String> = self.search(&id.replace('-', " "), 3).into_iter().map(|h| h.id).collect();
-            format!("unknown topic {:?}; call eldrun_help_topics for the list{}", clip(id, 64),
+            format!(concat!("unknown topic {:?}; call ", crate::app_slug!(), "_help_topics for the list{}"), clip(id, 64),
                 if near.is_empty() { String::new() } else { format!(" (closest: {})", near.join(", ")) })
         })?;
         let (text, cap) = match section {
@@ -402,7 +406,7 @@ pub fn index() -> &'static Index {
 pub fn status(index: &Index) -> Value {
     json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "commit": option_env!("ELDRUN_BUILD_COMMIT"),
+        "commit": option_env!(crate::app_env!("BUILD_COMMIT")),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "topics": index.topics.len(),
@@ -417,12 +421,12 @@ pub fn status(index: &Index) -> Value {
 fn schema(name: &str) -> Value {
     let object = |properties: Value, required: Value| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     match name {
-        "eldrun_help_search" => object(json!({
+        TOOL_SEARCH => object(json!({
             "query": {"type":"string","maxLength":MAX_QUERY_BYTES,"description":"What the user wants to know, in plain words (e.g. \"install a local model\", \"sync a remote project\")."},
             "limit": {"type":"integer","minimum":1,"maximum":MAX_RESULTS,"description":format!("How many hits, 1–{MAX_RESULTS}; default {DEFAULT_RESULTS}.")}
         }), json!(["query"])),
-        "eldrun_help_read" => object(json!({
-            "topic_id": {"type":"string","maxLength":64,"description":"A topic id from eldrun_help_search or eldrun_help_topics."},
+        TOOL_READ => object(json!({
+            "topic_id": {"type":"string","maxLength":64,"description":concat!("A topic id from ", crate::app_slug!(), "_help_search or ", crate::app_slug!(), "_help_topics.")},
             "section": {"type":"string","maxLength":96,"description":"Optional section id (from the hit or the topic's `sections`) to read just that part."}
         }), json!(["topic_id"])),
         _ => object(json!({}), json!([])),
@@ -431,10 +435,10 @@ fn schema(name: &str) -> Value {
 
 pub fn tools() -> Value {
     let describe = |name: &str| match name {
-        "eldrun_help_search" => "Search Eldrun's user documentation. Returns ranked topic sections with a snippet; follow up with eldrun_help_read.",
-        "eldrun_help_read" => "Read one Eldrun help topic (or one of its sections) as markdown. Output is capped; read by section for long topics.",
-        "eldrun_help_topics" => "List every Eldrun help topic with its sections and keywords.",
-        _ => "Which Eldrun build this is (version, OS) and which agent tabs have these help tools. No user data.",
+        TOOL_SEARCH => concat!("Search ", crate::app_name!(), "'s user documentation. Returns ranked topic sections with a snippet; follow up with ", crate::app_slug!(), "_help_read."),
+        TOOL_READ => concat!("Read one ", crate::app_name!(), " help topic (or one of its sections) as markdown. Output is capped; read by section for long topics."),
+        TOOL_TOPICS => concat!("List every ", crate::app_name!(), " help topic with its sections and keywords."),
+        _ => concat!("Which ", crate::app_name!(), " build this is (version, OS) and which agent tabs have these help tools. No user data."),
     };
     Value::Array(TOOLS.iter().map(|name| json!({
         "name": name,
@@ -447,22 +451,25 @@ pub fn tools() -> Value {
 /// One tool call against `index`. Arguments are schema-checked first
 /// (unknown fields refused, bounds enforced) — the registry's validator.
 pub fn call(index: &Index, name: &str, args: &Value) -> Result<Value, String> {
+    // A session that outlived a rename still calls the tools by the names it
+    // was listed; the list itself only ever carries the current ones.
+    let name = &*crate::services::brand_migration::compat::current_tool_name(&crate::brand::PAIR, name);
     if !security::tool(name).is_some_and(|t| t.serves(Caller::Helper)) { return Err("unknown tool".into()); }
     security::validate(&schema(name), args)?;
     match name {
-        "eldrun_help_search" => {
+        TOOL_SEARCH => {
             let query = args["query"].as_str().unwrap_or_default();
             let limit = args["limit"].as_u64().map_or(DEFAULT_RESULTS, |n| n as usize);
             let hits = index.search(query, limit);
             Ok(json!({"query": clip(query, 256), "results": hits,
-                "hint": if hits.is_empty() { "no match; try other words or eldrun_help_topics" } else { "eldrun_help_read(topic_id, section) for the full text" }}))
+                "hint": if hits.is_empty() { concat!("no match; try other words or ", crate::app_slug!(), "_help_topics") } else { concat!(crate::app_slug!(), "_help_read(topic_id, section) for the full text") }}))
         }
-        "eldrun_help_read" => {
+        TOOL_READ => {
             let read = index.read(args["topic_id"].as_str().unwrap_or_default(), args["section"].as_str())?;
             serde_json::to_value(read).map_err(|e| e.to_string())
         }
-        "eldrun_help_topics" => Ok(json!({"topics": index.list()})),
-        "eldrun_help_status" => Ok(status(index)),
+        TOOL_TOPICS => Ok(json!({"topics": index.list()})),
+        TOOL_STATUS => Ok(status(index)),
         _ => Err("unknown tool".into()),
     }
 }
@@ -514,7 +521,7 @@ mod tests {
 
     const LOCAL: &str = "---\nid: local-models\ntitle: Installing local models\nkeywords: [ollama, model, gpu, pull, offline]\n---\n\nRun models on your own machine.\n\n## Install Ollama\n\n1. Open Settings → Models.\n2. Click Install Ollama.\n\n## Pull a model\n\nPick a model and click Pull. Models need disk space.\n\n```sh\n## not a heading\nollama pull qwen\n```\n\n## Pull a model\n\nDuplicate heading.\n";
     const SYNC: &str = "---\nid: sync\ntitle: Syncing remote projects\nkeywords: [\"git\", 'lockstep', byte-sync]\n---\n## Lockstep\n\nTracked files follow git commits. A model of the peer is kept.\n\n## Byte sync\n\nOpt in per path.\n";
-    const PROJECTS: &str = "---\nid: projects\ntitle: Projects\nkeywords: [project, create, folder]\n---\n\n## What a project is\n\nA folder Eldrun manages.\n";
+    const PROJECTS: &str = concat!("---\nid: projects\ntitle: Projects\nkeywords: [project, create, folder]\n---\n\n## What a project is\n\nA folder ", crate::app_name!(), " manages.\n");
 
     fn fixture() -> Index {
         Index::build(&[("sync.md", SYNC), ("local-models.md", LOCAL), ("projects.md", PROJECTS), ("notes.txt", "ignored")])
@@ -579,10 +586,10 @@ mod tests {
         assert!(index.search("ollama", 3).iter().all(|h| h.snippet.chars().count() <= SNIPPET_CHARS));
         // The schema's bounds are enforced before any work.
         let long = "x".repeat(MAX_QUERY_BYTES + 1);
-        assert!(call(&index, "eldrun_help_search", &json!({"query": long})).is_err());
-        assert!(call(&index, "eldrun_help_search", &json!({"query": "a", "limit": 11})).is_err());
-        assert!(call(&index, "eldrun_help_search", &json!({"query": "a", "path": "/etc"})).is_err(), "unknown argument");
-        assert!(call(&index, "eldrun_help_topics", &json!({"x": 1})).is_err());
+        assert!(call(&index, concat!(crate::app_slug!(), "_help_search"), &json!({"query": long})).is_err());
+        assert!(call(&index, concat!(crate::app_slug!(), "_help_search"), &json!({"query": "a", "limit": 11})).is_err());
+        assert!(call(&index, concat!(crate::app_slug!(), "_help_search"), &json!({"query": "a", "path": "/etc"})).is_err(), "unknown argument");
+        assert!(call(&index, concat!(crate::app_slug!(), "_help_topics"), &json!({"x": 1})).is_err());
     }
 
     #[test]
@@ -602,8 +609,8 @@ mod tests {
     fn rpc_serves_only_the_helper_class() {
         let index = fixture();
         let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
-        let call_msg = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"eldrun_help_search","arguments":{"query":"ollama"}}});
-        for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher] {
+        let call_msg = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":concat!(crate::app_slug!(), "_help_search"),"arguments":{"query":"ollama"}}});
+        for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Marker] {
             let (_, s) = super::super::root_mcp::test_session(caller);
             assert_eq!(handle_with(&s, &index, &call_msg).unwrap()["error"]["message"], "access refused", "{caller:?}");
             super::super::root_mcp::revoke_tab(&s.identity.tab);
@@ -630,7 +637,7 @@ mod tests {
         for name in TOOLS {
             let policy = security::tool(name).unwrap();
             assert!(policy.serves(Caller::Helper) && !policy.write);
-            for other in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher] {
+            for other in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Marker] {
                 assert!(!policy.serves(other), "{name} {other:?}");
             }
         }

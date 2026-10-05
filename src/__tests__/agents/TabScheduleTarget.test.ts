@@ -66,7 +66,7 @@ describe("persisting the binding", () => {
     });
     useTabsStore.getState().loadFromLayout([agent("a")], "/tmp/p", "p");
     await persistScopeLayout("p");
-    const save = invokeMock.mock.calls.find(([command]) => command === "save_tab_layout");
+    const save = invokeMock.mock.calls.find(([command]) => command === "workspace_sync");
     expect(save).toBeDefined();
     const args = save?.[1] as { projectId: string; localFile: string; tabs: SavedTabEntry[] };
     expect(args.projectId).toBe("p");
@@ -86,6 +86,6 @@ describe("persisting the binding", () => {
       rule: { type: "daily", time: "09:00" },
     });
     await Promise.resolve();
-    expect(invokeMock.mock.calls.some(([command]) => command === "save_tab_layout")).toBe(true);
+    expect(invokeMock.mock.calls.some(([command]) => command === "workspace_sync")).toBe(true);
   });
 });

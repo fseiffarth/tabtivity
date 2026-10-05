@@ -55,7 +55,7 @@ export function SettingsHeader({
   );
 }
 
-/** Page ids inside the main settings panel. `eldrun:open-settings` may carry
+/** Page ids inside the main settings panel. `tabtivity:open-settings` may carry
  *  one as `{ panel, anchor }`, which is how a deep link from elsewhere in the
  *  app opens that page instead of the General one. */
 export const SETTINGS_ANCHORS = {
@@ -183,13 +183,31 @@ export function ToggleRow({
   onChange,
   disabled,
   title,
+  aside,
 }: {
   label: ReactNode;
   checked: boolean;
   onChange: ChangeEventHandler<HTMLInputElement>;
   disabled?: boolean;
   title?: string;
+  /** A control of the row's own before the switch (a compact `settings-btn
+   *  sm`). The row is then a `<div>` whose label points at the switch, so the
+   *  control is neither part of the switch's name nor a click on the label.
+   *  A row whose control comes and goes passes `null` while it is gone: the
+   *  row keeps its shape, so toggling never remounts the switch (and drops
+   *  its keyboard focus). */
+  aside?: ReactNode;
 }) {
+  const id = useId();
+  if (aside !== undefined) {
+    return (
+      <div className="settings-card-row">
+        <label className="settings-card-label" htmlFor={id}>{label}</label>
+        {aside}
+        <Toggle id={id} checked={checked} onChange={onChange} disabled={disabled} title={title} />
+      </div>
+    );
+  }
   return (
     <label className="settings-card-row">
       <span>{label}</span>

@@ -22,7 +22,7 @@ fn global_machines_path() -> std::path::PathBuf {
 /// `user`**. The export omits the username on purpose so the resulting file is
 /// shareable between people who each log in as themselves (import supplies one
 /// common username + password). `user` is still an *accepted* field on import so
-/// a hand-authored file can pin a per-machine login; a file Eldrun wrote never
+/// a hand-authored file can pin a per-machine login; a file Tabtivity wrote never
 /// has it. Passwords are never written to or read from this file — the whole
 /// point of the "one common password at import" flow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,7 +269,7 @@ pub fn global_machines_export(ids: Vec<String>, path: String) -> Result<(), Stri
 /// collects one shared username + password, then connects+adds each via the
 /// ordinary `ssh_connect` + `global_machine_add` pair (so status lamps and the
 /// idempotent-by-target de-dup both apply). Accepts either the
-/// [`MachineExportFile`] wrapper Eldrun writes or a bare `[MachineIo]` array.
+/// [`MachineExportFile`] wrapper Tabtivity writes or a bare `[MachineIo]` array.
 /// Entries are trimmed; those with an empty or shell-unsafe host/user are dropped
 /// (the same `validate_arg` gate `global_machine_add` applies), so a malformed
 /// file yields fewer rows rather than an unsafe add later.
@@ -564,7 +564,7 @@ mod tests {
     }
 
     /// An exported row omits every absent field — and `user` is `None` on the
-    /// way out by construction, so a file Eldrun wrote never names a login.
+    /// way out by construction, so a file Tabtivity wrote never names a login.
     #[test]
     fn machine_io_omits_absent_fields_on_export() {
         let row = MachineIo {

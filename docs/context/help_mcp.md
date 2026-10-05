@@ -1,7 +1,7 @@
 # Help MCP
 
-A read-only MCP server, `eldrun-help`,
-answering questions about Eldrun from its user docs (`docs/help/*.md`), handed
+A read-only MCP server, `tabtivity-help`,
+answering questions about Tabtivity from its user docs (`docs/help/*.md`), handed
 to every **local** agent tab. On by default (`Settings::help_mcp`, absent = on).
 
 Why it is shaped this way:
@@ -26,9 +26,11 @@ Why it is shaped this way:
   env, merged after the root/schedule wiring; other CLIs the env pair only.
   Never another app's config file.
 - **Local only.** Remote, worker, VM and container tabs are not wired: their
-  loopback is not Eldrun's, and a tunnel would expose the listener. The VM
+  loopback is not Tabtivity's, and a tunnel would expose the listener. The VM
   `guestfwd` address stays `Reader`-only.
-- **`eldrun_help_status` leaks nothing**: compile-time constants and OS/arch.
+- **`tabtivity_help_status` leaks nothing**: compile-time constants and OS/arch.
+- **Headless tabs too.** A tab the Mobile host starts with no window gets the
+  server from the host's own listener (`docs/headless_mcp_plan.md`).
 
 Frontend hooks: `root_mcp_status.help` (`enabled`, `wiredClis`, `topics`) and
 the Tauri commands `help_search`, `help_read`, `help_topics` (camelCase).

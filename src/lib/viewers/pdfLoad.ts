@@ -1,5 +1,5 @@
 import * as pdfjs from "pdfjs-dist";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, PDFWorker } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 // pdf.js parses and renders on a Web Worker; point it at the bundled worker
@@ -39,8 +39,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
  * `finally`, so `destroy()` always reaches the worker teardown, and it never
  * changes the error the caller sees.
  */
-export async function loadPdf(data: Uint8Array): Promise<PDFDocumentProxy> {
-  const task = pdfjs.getDocument({ data });
+export async function loadPdf(
+  data: Uint8Array,
+  /** A worker the caller owns (see {@link PdfWorkerSlot}). Without one the load
+   *  spawns a Worker of its own, which the document's task then owns. */
+  worker?: PDFWorker,
+): Promise<PDFDocumentProxy> {
+  const task = pdfjs.getDocument(worker ? { data, worker } : { data });
   try {
     return await task.promise;
   } catch (e) {
@@ -49,5 +54,60 @@ export async function loadPdf(data: Uint8Array): Promise<PDFDocumentProxy> {
     // nothing the caller can act on.
     void task.destroy().catch(() => {});
     throw e;
+  }
+}
+
+/** How long a {@link PdfWorkerSlot} waits for its documents' teardown before it
+ *  ends the worker under them anyway. */
+const WORKER_RELEASE_DEADLINE_MS = 10_000;
+
+/**
+ * One pdf.js Worker for an owner that opens document after document — the PDF
+ * viewer, which reloads its file on every LaTeX build (and up to thirteen times per
+ * build while the compiler is still writing it).
+ *
+ * Without it every one of those loads spawned a Worker of its own: a thread, a
+ * JavaScript VM with the 1.2 MB worker script parsed into it again (~18 MB), torn
+ * down a moment later when the next build replaced the document. pdf.js keeps any
+ * number of documents apart on one worker, and a document opened on a worker it
+ * was handed leaves that worker alone when its task is destroyed — so the owner
+ * holds one for its whole life and ends it once, in {@link dispose}.
+ *
+ * Started on first use. After {@link dispose} it hands out nothing, so a load that
+ * races the owner's unmount gets a Worker of its own, which its task ends.
+ */
+export class PdfWorkerSlot {
+  private worker: PDFWorker | null = null;
+  private disposed = false;
+
+  /** The slot's worker, started now if it is not running; `undefined` once disposed. */
+  get(): PDFWorker | undefined {
+    if (this.disposed) return undefined;
+    // A worker something else destroyed would fail every later load on it.
+    if (this.worker?.destroyed) this.worker = null;
+    this.worker ??= new pdfjs.PDFWorker();
+    return this.worker;
+  }
+
+  /**
+   * End the worker — after `pending`, the teardown of the documents still open on
+   * it, has settled (a document's `destroy()` is a round trip to the worker, and
+   * terminating first would leave it waiting forever), but no later than
+   * {@link WORKER_RELEASE_DEADLINE_MS}.
+   */
+  dispose(pending: readonly Promise<unknown>[] = []): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    const worker = this.worker;
+    this.worker = null;
+    if (!worker) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, WORKER_RELEASE_DEADLINE_MS);
+    });
+    void Promise.race([Promise.allSettled(pending), deadline]).then(() => {
+      clearTimeout(timer);
+      worker.destroy();
+    });
   }
 }

@@ -1,7 +1,5 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { PLATFORM } from "../../lib/window/dragPlatform";
 import { IS_MAC } from "../../lib/platform";
-import { trackWindowMove } from "../../stores/drag/windowMove";
+import { startWindowDrag } from "../../lib/window/startWindowDrag";
 import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
 import { MailIndicator } from "../header/MailIndicator";
@@ -12,8 +10,6 @@ import { SettingsMenu } from "../header/SettingsMenu";
 import { WindowControls } from "../header/WindowControls";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { LocalModelMenu } from "./LocalModelMenu";
-import { LogoIcon } from "./LogoIcon";
-import { useT } from "../../lib/i18n";
 
 const NON_DRAG_SELECTOR = [
   "button",
@@ -35,14 +31,7 @@ function handleDrag(e: React.MouseEvent) {
   // across WebKitGTK/Chromium/WKWebView and also ignores middle/right clicks.
   if (e.button !== 0) return;
   const target = e.target as HTMLElement;
-  if (!target.closest(NON_DRAG_SELECTOR)) {
-    // Windows: hide the heavy terminal panes for the duration of the OS move loop
-    // so WebView2 only composites the cheap frame and keeps up with the cursor
-    // (otherwise the canvases lag/swim behind the dragged window). Other engines
-    // drag the live content smoothly, so they skip the hide.
-    if (PLATFORM === "windows") trackWindowMove();
-    getCurrentWindow().startDragging().catch(() => {});
-  }
+  if (!target.closest(NON_DRAG_SELECTOR)) startWindowDrag();
 }
 
 export function HeaderBar() {
@@ -50,32 +39,18 @@ export function HeaderBar() {
   // `workspace-changed` listener unsubscribed the moment it resolved, used to
   // sit here. What the workspace backend can do is now said in Settings →
   // Layout, from `workspace_capabilities`.)
-  const t = useT();
 
   return (
     <header
       className={`app-header${IS_MAC ? " is-mac" : ""}`}
       onMouseDown={handleDrag}
     >
-      <div className="header-left" data-tauri-drag-region>
-        {/* Explicit window-move grip. The whole header is already a drag region
-            (`handleDrag`), but a crowded header can leave nothing obvious to grab —
-            this grip is an always-present handle. A plain (non-button) element in a
-            drag-eligible area, so its mousedown bubbles to `handleDrag` (it doesn't
-            match NON_DRAG_SELECTOR), driving the same `startDragging()`. */}
-        <span
-          className="app-drag-grip"
-          title={t("header.dragToMove")}
-          aria-hidden="true"
-        >
-          <span className="app-drag-grip-mark"><LogoIcon /></span>
-          <span className="app-drag-grip-dots">⠿</span>
-        </span>
-        <Clock />
-        <span className="project-switcher-separator" aria-hidden="true" />
-      </div>
-
-      {/* The center is the project strip and nothing else. It used to carry the
+      {/* The bar opens on the project strip itself: its leading box chip is the
+          leftmost thing in the window. Its Tabtivity logo is the window's move
+          handle (the ⠿ grip that stood ahead of it is gone; every empty
+          stretch of the bar still drags too) and its ▾ opens the root/box
+          list on hover. The clock moved to the far right, by the controls.
+          The center is the project strip and nothing else. It used to carry the
           six global buttons as well, which made "center" mean both *where am I*
           and *what else can I open* — and, worse, made the one elastic thing in
           the whole bar (the pill strip) share its track with six fixed-width
@@ -108,6 +83,9 @@ export function HeaderBar() {
         <SettingsMenu />
         <span className="header-right-gap" aria-hidden="true" />
         <StatusCluster />
+        {/* The clock sits between the cluster's chevron and the window
+            controls: machine-level, like the readouts it follows. */}
+        <Clock />
         <span className="project-switcher-separator" aria-hidden="true" />
         <WindowControls />
       </div>

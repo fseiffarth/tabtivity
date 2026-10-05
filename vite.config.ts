@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { NAMES } from "./src/lib/brand";
 
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -37,7 +38,7 @@ export default defineConfig(async () => ({
       // they are the BUILD's outputs, and `npm run build` is a mandated gate
       // (AGENTS.md) that anyone — a person or an agent — is expected to run
       // while a dev session is up. `mobile:build` writes mobile-dist/, the
-      // watcher sees files with no module-graph entry, and every open Eldrun
+      // watcher sees files with no module-graph entry, and every open Tabtivity
       // webview full-reloads: the main window and each popout, several times
       // per build. Observed in hotreload.log as three `page reload
       // mobile-dist/index.html` lines per gate run. Running the tests must not
@@ -45,7 +46,7 @@ export default defineConfig(async () => ({
       ignored: [
         "**/src-tauri/**",
         "**/target/**",
-        "**/.eldrun/**",
+        `**/${NAMES.projectDir}/**`,
         "**/src/__tests__/**",
         "**/dist/**",
         "**/mobile-dist/**",

@@ -1,9 +1,10 @@
+import { BRAND } from "../../lib/brand";
 interface LogoIconProps {
   className?: string;
 }
 
 /**
- * Eldrun logo — a circuit "tree of life" inside a ring, crowned by a gold
+ * Tabtivity logo — a circuit "tree of life" inside a ring, crowned by a gold
  * compass star. Same geometry as `src/assets/logo.svg`.
  * Inlined (vs. an <img> src) so the ring/branch strokes can use `currentColor`
  * and stay legible across themes; the hexagon nodes and the star keep their
@@ -16,10 +17,10 @@ export function LogoIcon({ className }: LogoIconProps) {
       viewBox="0 0 512 512"
       fill="none"
       role="img"
-      aria-label="Eldrun"
+      aria-label={BRAND.display}
       className={className}
     >
-      <title>Eldrun</title>
+      <title>{BRAND.display}</title>
       <g
         stroke="currentColor"
         strokeLinecap="round"

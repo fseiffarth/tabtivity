@@ -1,7 +1,7 @@
 //! Tripwire: **nothing may read executable intent out of the project tree.**
 //!
 //! `docs/sandbox_hardening_plan.md` Phase 1d. The audit found the same bug twice
-//! for the same reason: Eldrun's own control files live inside the project
+//! for the same reason: Tabtivity's own control files live inside the project
 //! container's writable mount (and inside any repository that gets cloned or
 //! imported as a project), while the host reads them back as commands to run —
 //! `project.json`'s `open_apps` became a host-side `spawn_reaped` on every
@@ -50,6 +50,9 @@ const DEFINING_FILES: &[&str] = &[
     // The migration shim and the adopt path: the *only* code allowed to read the
     // project-tree copy at all, and both sanitize what they read.
     "services/terminal_service.rs",
+    // The shared tab set's owner (headless owner plan, H1): it reads and writes
+    // the state-dir session by project id and never a project tree.
+    "services/workspace.rs",
 ];
 
 /// Put this on (or directly above) a line that names an intent field for a reason
@@ -175,9 +178,9 @@ fn no_executable_intent_is_read_from_the_project_tree() {
 #[test]
 fn the_session_dir_is_in_the_state_dir_and_is_one_component_deep() {
     let tmp = tempfile::TempDir::new().unwrap();
-    std::env::set_var("ELDRUN_STATE_DIR", tmp.path());
+    std::env::set_var(app_lib::app_env!("STATE_DIR"), tmp.path());
 
-    let state = eldrun_lib::storage::state_dir();
+    let state = app_lib::storage::state_dir();
     for id in [
         "plain-id",
         "../../etc",
@@ -187,7 +190,7 @@ fn the_session_dir_is_in_the_state_dir_and_is_one_component_deep() {
         "",
         "unicode-é",
     ] {
-        let dir = eldrun_lib::storage::project_session_dir(id);
+        let dir = app_lib::storage::project_session_dir(id);
         assert!(
             dir.starts_with(&state),
             "session dir for {id:?} escaped the state dir: {dir:?}"

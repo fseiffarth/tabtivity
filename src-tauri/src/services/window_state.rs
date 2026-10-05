@@ -5,10 +5,10 @@
 //! Tauri calls that consume the result live in `lib.rs`'s `setup`.
 //!
 //! The job is *not* "apply the saved rect". It is "apply the saved rect only if a
-//! currently-connected monitor can still host it". A user who saved Eldrun on an
+//! currently-connected monitor can still host it". A user who saved Tabtivity on an
 //! external display and then undocked would otherwise get a window mapped at
 //! x=2400 on a laptop whose only screen ends at 1920 — off-screen, unreachable,
-//! and indistinguishable from "Eldrun didn't start". Whenever we can't place the
+//! and indistinguishable from "Tabtivity didn't start". Whenever we can't place the
 //! rect confidently we return `None`, which means "leave the window exactly as
 //! `tauri.conf.json` configured it" (maximized, WM's choice of monitor) — i.e. we
 //! degrade to today's behaviour rather than to a broken one.
@@ -353,6 +353,24 @@ pub fn snap_detached_geometry(
         .then_some(fitted)
 }
 
+/// Where a popout goes whose own screen is gone: `w`×`h` (fitted to the
+/// screen) centred on `monitor` — the main window's, so it stays a separate
+/// window beside the main one rather than landing wherever the WM puts new
+/// windows. `None` for a degenerate size.
+pub fn center_on_monitor(w: u32, h: u32, monitor: MonitorRect) -> Option<WindowState> {
+    if w == 0 || h == 0 || monitor.w == 0 || monitor.h == 0 {
+        return None;
+    }
+    let (w, h) = (w.min(monitor.w), h.min(monitor.h));
+    Some(WindowState {
+        x: monitor.x + ((monitor.w - w) / 2) as i32,
+        y: monitor.y + ((monitor.h - h) / 2) as i32,
+        w,
+        h,
+        maximized: false,
+    })
+}
+
 /// The monitor whose centre is closest to the window's centre. Only consulted
 /// when the window overlaps none of them (its display was unplugged and the WM
 /// left it in the void), so "closest" is the best available notion of which
@@ -386,6 +404,21 @@ fn overlap_area(s: &WindowState, m: &MonitorRect) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_popout_without_its_screen_is_centred_on_the_main_windows() {
+        let laptop = MonitorRect { x: 0, y: 0, w: 1920, h: 1080 };
+        let g = center_on_monitor(1000, 600, laptop).unwrap();
+        assert_eq!((g.x, g.y, g.w, g.h), (460, 240, 1000, 600));
+        // Sized on a bigger external screen: shrunk to fit, never past an edge.
+        let g = center_on_monitor(2560, 1400, laptop).unwrap();
+        assert_eq!((g.x, g.y, g.w, g.h), (0, 0, 1920, 1080));
+        // A main window on a screen right of the primary.
+        let right = MonitorRect { x: 1920, y: 0, w: 1280, h: 1024 };
+        let g = center_on_monitor(800, 600, right).unwrap();
+        assert_eq!((g.x, g.y), (2160, 212));
+        assert!(center_on_monitor(0, 600, laptop).is_none());
+    }
 
     #[test]
     fn wayland_scope_parking_is_independent_and_idempotent() {
@@ -550,7 +583,7 @@ mod tests {
 
     #[test]
     fn window_on_the_secondary_monitor_is_returned_unchanged() {
-        // THE core case: Eldrun was on DP-7, it must come back on DP-7.
+        // THE core case: Tabtivity was on DP-7, it must come back on DP-7.
         let saved = ws(2200, 100, 1400, 900);
         assert_eq!(
             resolve_startup_geometry(Some(saved), &two_monitors()),

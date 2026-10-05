@@ -4,9 +4,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockRejectedValue(new E
 import { SettingsDialog } from "../../components/layout/SettingsPanel";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 // The mail tools' local-only companion (`Settings::root_mcp_mail_local_only`):
-// a switch under "Agents get Eldrun's mail tools" that the backend enforces
+// a switch under "Agents get Tabtivity's mail tools" that the backend enforces
 // per request. These pin the Settings side of it: where it sits, when it can
 // be flipped, and the one key it writes.
 
@@ -23,7 +24,7 @@ async function openRootConsolePage() {
   expect(document.getElementById("settings-anchor-rootConsole")).toBeTruthy();
 }
 
-const mailSwitch = () => screen.getByRole("checkbox", { name: /Agents get Eldrun's mail tools/ }) as HTMLInputElement;
+const mailSwitch = () => screen.getByRole("checkbox", { name: new RegExp(String.raw`Agents get ${BRAND.display}'s mail tools`) }) as HTMLInputElement;
 const mailLocalOnly = () => screen.getByRole("checkbox", { name: /Only local models get the mail tools/ }) as HTMLInputElement;
 
 beforeEach(() => {

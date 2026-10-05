@@ -8,7 +8,7 @@
  *    CLI's `/clear` or `/model` owns its whole line, so gluing the prompt onto
  *    one would make the command swallow it. `scheduledAgentInput` submits each
  *    entry on its own, in order, then the message.
- * 2. **Eldrun chooses nothing.** The model pick is typed as the agent's OWN
+ * 2. **Tabtivity chooses nothing.** The model pick is typed as the agent's OWN
  *    `/model <name>`; no flag is injected at launch and no permission/plan mode
  *    is offered here. That is the line AGENTS.md draws around agent authority —
  *    the composer types what the user picked into the agent's own CLI, which is

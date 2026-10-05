@@ -9,7 +9,7 @@
  * a *different* name — never purged anything. The cache accumulated every
  * bundle ever served, and the offline fallback below could still boot a
  * months-old shell out of it long after the desktop had upgraded. */
-const CACHE = "eldrun-mobile-shell-__ELDRUN_BUILD__";
+const CACHE = "tabtivity-mobile-shell-__APP_BUILD__";
 /* A stalled connection — the common mobile-data failure — is not a network
  * *error*, so a plain `.catch()` fallback left the user on a white screen for
  * the browser's full timeout with the cached shell sitting right there. */
@@ -23,14 +23,16 @@ const NETWORK_TIMEOUT = 3000;
  * replace. */
 /* Only stamped paths count: in dev (`mobile:dev` serves `public/` verbatim)
  * the placeholder is still here, and precaching *it* would fail the install. */
-const ASSETS = "__ELDRUN_ASSETS__".split(",").filter((asset) => asset.startsWith("/assets/"));
+const ASSETS = "__APP_ASSETS__".split(",").filter((asset) => asset.startsWith("/assets/"));
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"].concat(ASSETS);
 /* Take over on the next navigation rather than waiting for every client to
  * close. A phone PWA is rarely "closed", so waiting is what kept a superseded
  * worker — and the stale cache it answers from — alive for days. Dropping the
  * old cache out from under a running page is safe here because the build emits
- * one non-split bundle under immutable hashed URLs: a page already open holds
- * its JS in memory and asks the cache for nothing more. */
+ * one bundle under immutable hashed URLs: a page already open holds its JS in
+ * memory. The one lazy chunk is a non-English dictionary (the Language picker),
+ * fetched and cached like any asset; a stale page whose chunk is gone stays in
+ * English until it reloads. */
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
@@ -46,6 +48,10 @@ self.addEventListener("activate", (event) =>
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname === "/healthz") return;
+  /* The markup view's sealed pdf.js frame comes from the network only: its
+   * own framing policy rides on the answer, and the shell stand-in below must
+   * never land in a sandboxed frame. */
+  if (url.pathname === "/pdf-frame.html") return;
   if (event.request.method !== "GET") return;
   const isAsset = url.pathname.startsWith("/assets/");
   /* The index.html stand-in is for *navigations* only. It used to answer any
@@ -68,7 +74,7 @@ self.addEventListener("fetch", (event) => {
     /* A navigation the proxy answered *for* the sidecar is a miss, not a page:
      * with the desktop closed, Tailscale Serve answers 502 with its own error
      * page, and the phone rendered that instead of the app. The cached shell
-     * boots and then says, in the app's own words, that Eldrun Mobile isn't
+     * boots and then says, in the app's own words, that Tabtivity Mobile isn't
      * running on the desktop (`connection.ts`, `host_down`). The proxy's body
      * is never stored — `cacheable` above already needs `ok`. */
     if (navigation && (!response.ok || !isDocument)) {
@@ -111,7 +117,7 @@ self.addEventListener("push", (event) => {
   if (!data || typeof data !== "object") data = {};
   const title = typeof data.title === "string" && data.title ? data.title : fallbackTitle(data);
   const body = typeof data.body === "string" ? data.body : "";
-  const tag = typeof data.tag === "string" && OPAQUE_ID.test(data.tag) ? `eldrun-${data.tag}` : undefined;
+  const tag = typeof data.tag === "string" && OPAQUE_ID.test(data.tag) ? `tabtivity-${data.tag}` : undefined;
   const target = data.kind === "agent" && OPAQUE_ID.test(String(data.project)) && OPAQUE_ID.test(String(data.tab))
     ? { section: "projects", projectId: data.project, tabId: data.tab }
     : { section: data.kind === "agent" ? "projects" : "calendar" };
@@ -138,7 +144,7 @@ self.addEventListener("notificationclick", (event) => {
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
       for (const client of windows) {
         if (new URL(client.url).origin !== self.location.origin) continue;
-        client.postMessage({ type: "eldrun-open", section, projectId: params.get("project") || undefined, tabId: params.get("tab") || undefined });
+        client.postMessage({ type: "tabtivity-open", section, projectId: params.get("project") || undefined, tabId: params.get("tab") || undefined });
         return client.focus();
       }
       return self.clients.openWindow(`/?${params.toString()}`);

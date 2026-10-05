@@ -17,6 +17,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const paper: ProjectEntry = {
   id: "p-paper",
@@ -25,11 +26,11 @@ const paper: ProjectEntry = {
   position: 1,
   local_file: "/projects/paper/project.json",
   directory: "/projects/paper",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   invokeMock.mockClear();
@@ -90,7 +91,7 @@ describe("Mobile bridge — local-model agents", () => {
       tabsByScope: { [paper.id]: [] },
       hydrateThenCreateInScope: (opts: { spec: Omit<TabEntry, "key"> }) => {
         made(opts.spec);
-        return Promise.resolve({ ...opts.spec, key: "new", tmuxSession: "eldrun-new" } as TabEntry);
+        return Promise.resolve({ ...opts.spec, key: "new", tmuxSession: `${BRAND.slug}-new` } as TabEntry);
       },
     } as never);
     render(<MobileBridgeHost />);
@@ -123,7 +124,7 @@ describe("Mobile bridge — local-model agents", () => {
   });
 
   it("starts a driver on the model with its launch line recorded", async () => {
-    expect(await create({ local: "agent-local:claude" })).toMatchObject({ status: "created", tmux_session: "eldrun-new" });
+    expect(await create({ local: "agent-local:claude" })).toMatchObject({ status: "created", tmux_session: `${BRAND.slug}-new` });
     expect(made).toHaveBeenLastCalledWith(expect.objectContaining({
       label: "qwen3:8b · Claude Code",
       cmd: "ollama",

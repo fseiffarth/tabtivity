@@ -23,6 +23,7 @@ import { vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
 import { useTabsStore } from "../../stores/tabs";
+import { envName } from "../../lib/brand";
 
 describe("loadFromLayout — scope isolation", () => {
   beforeEach(() => {
@@ -317,18 +318,18 @@ describe("loadFromLayout — resume args", () => {
         sessionId: sid,
         // Older layouts omitted this field, while a malformed one could carry
         // the binding key from a different tab. Both must resolve to `sid`.
-        env: { ELDRUN_TAB_UID: "wrong-tab-key", KEEP_ME: "yes" },
+        env: { [envName("TAB_UID")]: "wrong-tab-key", KEEP_ME: "yes" },
       },
     ];
 
     useTabsStore.getState().loadFromLayout(layout, "/project-r-dir", "project-r");
 
     const tab = useTabsStore.getState().tabsByScope["project-r"]![0];
-    // Codex's sessionId is only the ELDRUN_TAB_UID key, not a Codex session id,
+    // Codex's sessionId is only the TABTIVITY_TAB_UID key, not a Codex session id,
     // so the frontend passes no resume args; the backend resolves the live id.
     expect(tab.args).toEqual([]);
     expect(tab.sessionId).toBe(sid);
-    expect(tab.env).toEqual({ ELDRUN_TAB_UID: sid, KEEP_ME: "yes" });
+    expect(tab.env).toEqual({ [envName("TAB_UID")]: sid, KEEP_ME: "yes" });
   });
 
   it("Claude agent without a sessionId gets no resume args", () => {
@@ -367,7 +368,7 @@ describe("loadFromLayout — resume args", () => {
     const tab = useTabsStore.getState().tabsByScope["project-r"]![0];
     expect(tab.args).toEqual(["--continue"]);
     expect(tab.sessionId).toBe("vibe-key-1");
-    expect(tab.env?.ELDRUN_TAB_UID).toBe("vibe-key-1");
+    expect(tab.env?.[envName("TAB_UID")]).toBe("vibe-key-1");
   });
 
   it("agent with no wired resume (aider) with a sessionId gets no resume args", () => {

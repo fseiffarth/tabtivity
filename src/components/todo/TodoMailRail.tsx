@@ -29,7 +29,7 @@ interface Props {
  * mailbox under them once a minute.
  *
  * The gate is checked **before the invoke**, not around the rendering: opening
- * the mail store creates `~/.local/share/eldrun/mail/` as a side effect, and a
+ * the mail store creates `~/.local/share/tabtivity/mail/` as a side effect, and a
  * todo board must not materialize a mail database for someone who has the mail
  * client switched off.
  */

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@xterm/xterm", () => ({
@@ -37,6 +37,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 /** A bubble's words, without the time a messenger puts in its corner. */
 function said(bubble: Element | null | undefined): string | null {
@@ -71,11 +72,11 @@ function sidecarFetch(files: unknown[], transcript?: unknown) {
   });
 }
 
-describe("Eldrun Mobile shows the files the agent sent in the chat and in the gallery", () => {
+describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and in the gallery`, () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     localStorage.clear();
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("WebSocket", FakeWebSocket);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
@@ -319,8 +320,12 @@ describe("Eldrun Mobile shows the files the agent sent in the chat and in the ga
     expect(Array.from(gallery.querySelectorAll(".outbox-entry strong")).map((name) => name.textContent))
       .toEqual(["paper.pdf", "plot.png"]);
     fireEvent.click(within(gallery).getByRole("button", { name: "Open paper.pdf" }));
-    // This host mints no ticket, so the plain URL opens.
-    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/tabs/tab-7/outbox/paper.pdf", "_blank", "noopener"));
+    // An agent tab's PDF opens in the app's page view, with Mark up there.
+    const viewer = await screen.findByRole("dialog", { name: "paper.pdf" });
+    expect(within(viewer).getByRole("button", { name: "Mark up paper.pdf" })).toBeTruthy();
+    expect(within(viewer).getByRole("link", { name: "Save" })).toBeTruthy();
+    expect(within(viewer).queryByRole("button", { name: "Open paper.pdf" })).toBeNull();
+    expect(open).not.toHaveBeenCalled();
     fireEvent.click(within(gallery).getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Terminal" }));

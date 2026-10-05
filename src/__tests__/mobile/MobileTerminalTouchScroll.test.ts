@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installTerminalTouchScroll } from "../../../mobile-web/src/terminal/touchScroll";
+import { BRAND } from "../../lib/brand";
 
-describe("Eldrun Mobile terminal touch scrolling", () => {
+describe(`${BRAND.display} Mobile terminal touch scrolling`, () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("scrolls xterm history from a captured phone pointer drag", () => {
@@ -171,6 +172,21 @@ describe("Eldrun Mobile terminal touch scrolling", () => {
     remove();
     xtermElement.dispatchEvent(new Event("touchmove", { bubbles: true }));
     expect(reachedXterm).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls a pen (the iPad's Pencil) drag like a finger's", () => {
+    vi.stubGlobal("PointerEvent", class PointerEvent {});
+    const host = document.createElement("div");
+    const scrollLines = vi.fn();
+    installTerminalTouchScroll(host, { scrollLines });
+    const down = new Event("pointerdown", { bubbles: true }) as PointerEvent;
+    Object.assign(down, { pointerId: 2, pointerType: "pen", clientY: 200 });
+    host.dispatchEvent(down);
+    const move = new Event("pointermove", { bubbles: true, cancelable: true }) as PointerEvent;
+    Object.assign(move, { pointerId: 2, pointerType: "pen", clientY: 144 });
+    host.dispatchEvent(move);
+    expect(scrollLines).toHaveBeenCalledWith(4);
+    expect(move.defaultPrevented).toBe(true);
   });
 
   it("leaves mouse pointers alone", () => {

@@ -1,12 +1,12 @@
 ---
 id: keyboard
-title: Keyboard shortcuts and steering mode
-keywords: [keyboard, shortcut, hotkey, keys, steering, chord, rebind, f1, cheat sheet, navigation]
+title: Keyboard shortcuts and Tabtivity navigation
+keywords: [keyboard, shortcut, hotkey, keys, tabtivity navigation, steering, chord, rebind, f1, cheat sheet, navigation]
 ---
 
-Every key below is a default — the steering-mode keys included. Rebind any
+Every key below is a default — the Tabtivity navigation keys included. Rebind any
 of them in Settings → General → Keyboard Shortcuts: click a key and press the
-new one, **×** turns a chord off (or drops one steering key), Reset brings the
+new one, **×** turns a chord off (or drops one Tabtivity navigation key), Reset brings the
 default back, and the panel warns about collisions. On macOS, ⌘ takes the
 place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 
@@ -27,7 +27,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | Alt+Shift+← | Previous project |
 | Ctrl+Shift+PageDown / PageUp | Next / previous box |
 | Ctrl+Shift+R | Open / close the root console |
-| Shift+Space | Enter keyboard steering mode |
+| Shift+Space | Enter Tabtivity navigation |
 | F1 | Shortcut help |
 
 ## Tabs and panes
@@ -63,7 +63,12 @@ To choose which agent each number opens, reorder them with ↑/↓ in
 its chord there. Once you have moved one, the list order is the numbering —
 Ctrl+1 is the top agent rather than the default one.
 
-## Steering mode
+Inside the mail, calendar or to-do window, Ctrl+1 … Ctrl+9 open no tab in the
+pane underneath: they dock that number's root-console agent in a column beside
+the app, numbered as the root console's `+` menu numbers them (only agents with
+the **Root** chip). See `mail-calendar`.
+
+## Tabtivity navigation
 
 Press **Shift+Space**. A legend appears at the bottom and the app answers
 single keys, even while a terminal has focus. (Mid-word, with Shift still held
@@ -73,22 +78,32 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | Key | Action |
 |---|---|
 | S F / ← → | Previous / next tab (on the subwindow level: subwindow; on the project level: project) |
-| E / ↑ | Up a level: tabs → subwindows → projects |
+| E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
 | D / ↓ | Back down a level |
 | 1–9 | Tabs: new agent tab. Projects: jump to a station (1 = root, 2 = first pill) |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
 | V | Toggle the pane's file viewer |
 | W | Close the active tab |
+| A | Walk the card over the active tab (Undo clear, a sign-in link) |
+| . | The right-click menu of the active tab (projects: of the project; in a panel: of the highlighted row) |
 | B | Open the side panel |
 | P | Toggle the side panels |
 | Q / R / X | Next tab waiting for an answer / working / done (Shift: previous) |
-| , | Open Settings (leaves the mode) |
-| ? | Open the cheat sheet (leaves the mode) |
-| Space / Esc / Enter | Leave steering mode (Esc inside a panel or menu backs out of it) |
+| , | Open Settings and walk it: ← → pages, E D controls |
+| ? | Open the cheat sheet: E D scroll it |
+| Space / Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it) |
 
-Each steering action takes up to two keys (a letter and its arrow, say),
-rebound in the same settings page under *Inside steering mode*, one list per
+Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
+New project dialog, a right-click menu, a top-bar menu, the root console — gets
+the highlight: E D go row to row, S F along a row, Enter presses, and Esc closes
+it the way its own Escape would. The mode then returns to where the dialog was
+opened. On the top bar, S F walk its buttons and D drops a button's menu.
+Enter on a text field leaves the mode so you can type there; Shift+Space brings
+it back on the same dialog.
+
+Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
+rebound in the same settings page under *Inside Tabtivity navigation*, one list per
 level. A letter can mean one thing on the projects level and another inside a
 pane; the legend and the cheat sheet always show the keys you have.
 

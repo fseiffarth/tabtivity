@@ -14,9 +14,11 @@ import type {
   ProjectEntry,
 } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
+import { exportExtensions } from "../../lib/brandMigration";
+import { useBoxesStore } from "../../stores/boxes";
 
 /**
- * "Import project file…" — register a `.eldrunproj` bundle written by
+ * "Import project file…" — register a `.tabtivityproj` bundle written by
  * `ProjectExportDialog`, on this or any other machine.
  *
  * Two-step on purpose: the bundle is read (manifest only, nothing unpacked)
@@ -53,7 +55,7 @@ export function ProjectImportBundleDialog({
       filters: [
         {
           name: t("transfer.bundleFilter"),
-          extensions: ["eldrunproj", "zip"],
+          extensions: [...exportExtensions(), "zip"],
         },
       ],
     });
@@ -96,6 +98,10 @@ export function ProjectImportBundleDialog({
       );
       setResult(imported);
       onProject(imported.entry);
+      // Joining boxes wrote `boxes.json` behind the store's back: reload it,
+      // or the box pills miss the new member and the store's next whole-list
+      // box save is refused as stale (the revisions moved on).
+      if (imported.boxesJoined.length > 0) void useBoxesStore.getState().load();
     } catch (e) {
       setError(String(e));
     } finally {

@@ -18,12 +18,18 @@ import userEvent from "@testing-library/user-event";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
+const { handlers } = vi.hoisted(() => ({
+  handlers: new Map<string, (e: { payload: unknown }) => void>(),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
+    handlers.set(event, handler);
+    return Promise.resolve(() => {});
+  }),
 }));
 
 import { LocalLossDialog } from "../../components/common/LocalLossDialog";
-import { useLocalLossStore } from "../../stores/localLoss";
+import { localLossEventConcerns, useLocalLossStore } from "../../stores/localLoss";
 import { useProjectsStore } from "../../stores/projects";
 
 const DELETED = {
@@ -130,5 +136,42 @@ describe("#28q local-loss warning", () => {
       useLocalLossStore.setState({ entries: [DELETED] as never, projectId: "proj1" });
     });
     expect(screen.queryByText("src/gone.rs")).toBeNull();
+  });
+
+  it("re-reads the log only for the active project's pass reports, not per synced file", async () => {
+    setLog([]);
+    await renderFor("proj1");
+    const reads = () =>
+      mockInvoke.mock.calls.filter(([cmd]) => cmd === "local_loss_list").length;
+    const before = reads();
+    const fire = async (event: string, payload: unknown) => {
+      await act(async () => {
+        handlers.get(event)?.({ payload });
+      });
+    };
+
+    // Another project's lockstep tick and auto-sync pass: not this dialog's news.
+    await fire("git-peer-status", { projectId: "proj2", state: {} });
+    await fire("auto-sync", { project_id: "proj2", pulled: 1, pushed: 0, skipped_amber: 0 });
+    // A byte-sync transfer: one event per file, only the bookends re-read.
+    await fire("sync-progress", { project_id: "proj1", phase: "start", rel_path: "", done: 0, total: 3 });
+    for (let i = 1; i <= 3; i++) {
+      await fire("sync-progress", { project_id: "proj1", phase: "file", rel_path: `f${i}`, done: i, total: 3 });
+    }
+    await fire("sync-progress", { project_id: "proj1", phase: "done", rel_path: "", done: 3, total: 3 });
+    expect(reads() - before).toBe(2);
+
+    // The active project's own lockstep pass still re-reads, and a loss it recorded shows.
+    setLog([DELETED]);
+    await fire("git-peer-status", { projectId: "proj1", state: {} });
+    expect(reads() - before).toBe(3);
+    expect(screen.getByText(/2 files deleted locally/i)).toBeTruthy();
+  });
+
+  it("re-reads on a payload it does not recognise rather than miss a loss", () => {
+    expect(localLossEventConcerns("auto-sync", null, "p")).toBe(true);
+    expect(localLossEventConcerns("git-peer-status", { state: {} }, "p")).toBe(true);
+    expect(localLossEventConcerns("sync-progress", { project_id: "p", phase: "file" }, "p")).toBe(false);
+    expect(localLossEventConcerns("sync-progress", { project_id: "q", phase: "done" }, "p")).toBe(false);
   });
 });

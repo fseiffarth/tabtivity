@@ -9,6 +9,7 @@
 // change nothing about the call site the lint is worried about.
 #![allow(clippy::too_many_arguments)]
 
+pub mod brand;
 pub mod commands;
 pub mod duscan;
 pub mod gpustat;
@@ -42,7 +43,7 @@ static CRASH_LOG_HANDLE: std::sync::atomic::AtomicIsize = std::sync::atomic::Ato
 /// records is gone by the time anyone looks, and the commit is what
 /// `scripts/crash-symbolize.sh` needs to find the retained copy
 /// (`scripts/retain-dev-build.sh`).
-const BUILD_COMMIT: &str = match option_env!("ELDRUN_BUILD_COMMIT") {
+const BUILD_COMMIT: &str = match option_env!(crate::app_env!("BUILD_COMMIT")) {
     Some(c) => c,
     None => "unknown",
 };
@@ -668,7 +669,7 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
                         "renderer unresponsive"
                     }
                     COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => {
-                        "browser process exited (WebView2 is gone; relaunch Eldrun)"
+                        concat!("browser process exited (WebView2 is gone; relaunch ", crate::app_name!(), ")")
                     }
                     _ => "helper process failed",
                 };
@@ -754,7 +755,7 @@ enum MacMenuItem {
     Services,
     Hide,
     HideOthers,
-    /// Eldrun's own "Quit Eldrun" (⌘Q, id [`MAC_MENU_QUIT_ID`]), not the
+    /// Tabtivity's own "Quit Tabtivity" (⌘Q, id [`MAC_MENU_QUIT_ID`]), not the
     /// predefined `terminate:` one.
     Quit,
     Undo,
@@ -769,10 +770,10 @@ enum MacMenuItem {
 }
 
 #[cfg(any(target_os = "macos", test))]
-const MAC_MENU_QUIT_ID: &str = "eldrun-quit";
+const MAC_MENU_QUIT_ID: &str = concat!(crate::app_slug!(), "-quit");
 
 /// The macOS menu bar: (submenu title, items). Tauri would otherwise install
-/// its default menu, and that one is wrong for Eldrun in two ways:
+/// its default menu, and that one is wrong for Tabtivity in two ways:
 ///
 /// - It binds **⌘W to Close Window**. The webview sees the key first, but from
 ///   a terminal or editor the frontend used to let it pass, and the menu then
@@ -791,7 +792,7 @@ fn macos_menu_plan() -> Vec<(&'static str, Vec<MacMenuItem>)> {
     use MacMenuItem::*;
     vec![
         (
-            "Eldrun",
+            crate::brand::DISPLAY,
             vec![About, Separator, Services, Separator, Hide, HideOthers, Separator, Quit],
         ),
         ("Edit", vec![Undo, Redo, Separator, Cut, Copy, Paste, SelectAll]),
@@ -816,7 +817,7 @@ fn build_macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<t
                 MacMenuItem::Quit => Box::new(MenuItem::with_id(
                     app,
                     MAC_MENU_QUIT_ID,
-                    "Quit Eldrun",
+                    concat!("Quit ", crate::app_name!()),
                     true,
                     Some("CmdOrCtrl+Q"),
                 )?),
@@ -874,20 +875,20 @@ fn with_macos_menu(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri:
 /// WebKitGTK draws the scrollbars INSIDE the web content with the native GTK
 /// theme, not the page's CSS — the standard `scrollbar-color` property is ignored
 /// on this WebKitGTK build (confirmed on 2.50.x). On a light GTK system theme
-/// that leaves a white trough + grey slider regardless of Eldrun's in-app theme.
+/// that leaves a white trough + grey slider regardless of Tabtivity's in-app theme.
 ///
 /// WebKit's scrollbar renderer queries the default screen's GTK style providers,
 /// so an APPLICATION-priority `GtkCssProvider` that recolors the `scrollbar`
 /// nodes is picked up for the in-content bars. We apply a theme-agnostic look —
 /// a translucent-grey trough (subtle on both light and dark surfaces) with a
-/// solid accent-blue slider — so it reads as "Eldrun blue" without having to
+/// solid accent-blue slider — so it reads as "Tabtivity blue" without having to
 /// follow the live in-app theme. Best-effort and behind an env opt-out: any
 /// failure simply leaves the native scrollbar untouched.
 #[cfg(target_os = "linux")]
 fn install_scrollbar_theme() {
     use gtk::prelude::*;
 
-    if std::env::var_os("ELDRUN_NO_SCROLLBAR_THEME").is_some() {
+    if crate::brand::env_os("NO_SCROLLBAR_THEME").is_some() {
         return;
     }
 
@@ -953,7 +954,7 @@ fn restore_main_window(app: &tauri::App) {
     // the window UNMOVABLE — KWin refuses the `_NET_WM_MOVERESIZE` that
     // `startDragging` sends, so the header title-bar drag silently no-ops. A
     // maximized window fills the monitor identically yet stays draggable and
-    // edge-snappable, so that is what Eldrun uses instead. macOS is excluded: real
+    // edge-snappable, so that is what Tabtivity uses instead. macOS is excluded: real
     // fullscreen (its own Space) is the platform-expected behaviour there, and
     // `AppShell.tsx` opts into it explicitly after load.
     #[cfg(not(target_os = "macos"))]
@@ -1020,12 +1021,26 @@ pub fn run() {
     }
 
     // WebKit's AT-SPI bridge aborts the web process on a stale text offset, and
-    // Eldrun's constantly rewriting UI produces those by the second whenever a
+    // Tabtivity's constantly rewriting UI produces those by the second whenever a
     // screen reader is attached (2026-09-17: two renderer SIGABRTs, both taking
     // the window's tabs with them). Opt out before the first webview is built;
-    // `ELDRUN_ENABLE_A11Y=1` keeps the bridge. See `services::webkit_a11y`.
+    // `TABTIVITY_ENABLE_A11Y=1` keeps the bridge. See `services::webkit_a11y`.
     #[cfg(target_os = "linux")]
     services::webkit_a11y::install();
+
+    // The main thread and every webview renderer's main thread ask rtkit for
+    // nice -10, so the compile and test jobs agent tabs start cannot starve
+    // typing (2026-10-01: 48 ms median / 440 ms worst to reach the renderer's
+    // JS at load 121). Best effort; see `services::ui_priority`.
+    #[cfg(target_os = "linux")]
+    services::ui_priority::install();
+
+    services::brand_migration::hits::install();
+    // Before anything creates or opens the state dir, and before the webview
+    // context exists: what an older build wrote under the app's old name moves
+    // to the current one (`services::brand_migration`). Returns at once while
+    // the name is unchanged.
+    services::brand_migration::run_at_launch();
 
     // First, so nothing below creates the state dir with the umask's mode.
     storage::ensure_private_state_dir();
@@ -1101,7 +1116,7 @@ pub fn run() {
         .manage(workspace)
         .manage(fs_watch)
         .manage(remote_pool)
-        // Carries PDF pages between two Eldrun windows: they are separate WebViews
+        // Carries PDF pages between two Tabtivity windows: they are separate WebViews
         // with separate JS heaps, so the bytes must cross the process boundary.
         .manage(commands::pdf_clip::PdfClipboard::default())
         .manage(sync_manifest)
@@ -1123,9 +1138,16 @@ pub fn run() {
             // than waiting for the next login. Off the main thread, bounded,
             // and a no-op when Mobile is off or the host is already up.
             commands::mobile_control::start_host_on_launch();
+            // Projects an older build worked in: bring what the app keeps
+            // inside each one to the current names, off the main thread.
+            // Returns at once while the name is unchanged.
+            services::brand_migration::project::sweep_at_launch();
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(_app.handle().clone());
+            // The provider API proxy (`services::api_proxy`): loopback, holds
+            // the stored API keys so a keyed agent tab gets only a token.
+            services::api_proxy::start();
             // A SIGTERM/SIGINT (the dev launcher's Ctrl+C, a `kill`, a session
             // logout) used to end the process with none of the teardown the
             // window's × runs: PTY subtrees, local tmux sessions, the Mobile
@@ -1187,7 +1209,7 @@ pub fn run() {
                 use tauri::Manager;
                 let workspace = _app.state::<WorkspaceStateArc>().inner().clone();
                 std::thread::spawn(move || {
-                    if let Some(id) = platform::x11::find_window_for_title("Eldrun", 30) {
+                    if let Some(id) = platform::x11::find_window_for_title(crate::brand::DISPLAY, 30) {
                         workspace.lock().unwrap().backend.set_main_window_id(id);
                     }
                 });
@@ -1232,7 +1254,7 @@ pub fn run() {
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(_app.handle().clone());
-            // Install the global Claude SessionStart hook so Eldrun can follow a
+            // Install the global Claude SessionStart hook so Tabtivity can follow a
             // tab's live session id across `/clear` (see services::agent_session).
             if let Err(e) = services::agent_bin::install() {
                 eprintln!("agent_bin: install commands: {e}");
@@ -1240,7 +1262,7 @@ pub fn run() {
             if let Err(e) = services::agent_session::install_session_start_hook() {
                 eprintln!("agent_session: install SessionStart hook: {e}");
             }
-            // Bring legacy `projects.json` entries (written by older Eldrun
+            // Bring legacy `projects.json` entries (written by older Tabtivity
             // versions) up to the current shape and refresh their scaffold, then
             // persist. Off-thread so file I/O never blocks startup; additive and
             // idempotent, so a race with the frontend's first load is benign.
@@ -1261,7 +1283,7 @@ pub fn run() {
             // fenced spawn can race it.
             services::sandbox::clear_stage();
             // The per-CLI login store (`services::agent_auth`): adopt the
-            // Claude mirror an older Eldrun kept, then keep every agent home's
+            // Claude mirror an older Tabtivity kept, then keep every agent home's
             // links in step with the store. One detached thread; dies with
             // the process.
             services::agent_install::migrate_legacy_stores();
@@ -1326,7 +1348,7 @@ pub fn run() {
             // Place the main window where it was last closed and MAKE IT VISIBLE.
             // Must stay last in `setup`: the window is created hidden (see
             // `restore_main_window`), so anything that returns early before this
-            // leaves Eldrun running with no window on screen.
+            // leaves Tabtivity running with no window on screen.
             restore_main_window(_app);
             Ok(())
         })
@@ -1340,6 +1362,8 @@ pub fn run() {
             // Per-tab scheduled agent prompts. Definitions and receipts live in
             // local-only agent_tasks.json; the frontend owns wall-clock delivery.
             commands::agent_tasks::agent_schedules_list,
+            commands::agent_tasks::timer_lease_acquire,
+            commands::agent_tasks::timer_lease_release,
             commands::agent_tasks::agent_schedule_upsert,
             commands::agent_tasks::agent_schedule_delete,
             commands::agent_tasks::agent_schedules_delete_target,
@@ -1362,6 +1386,7 @@ pub fn run() {
             commands::agent_prompts::agent_prompt_history_clear,
             // Updates (Settings → Updates): check the GitHub releases page,
             // download this platform's artifact, hand it to its installer.
+            commands::brand_migration::legacy_name_status,
             commands::app_update::check_app_update,
             commands::app_update::download_app_update,
             commands::app_update::install_app_update,
@@ -1371,6 +1396,7 @@ pub fn run() {
             commands::mobile_control::mobile_opaque_id,
             commands::mobile_control::mobile_prepare_phone_install_script,
             commands::mobile_control::mobile_admin,
+            commands::mobile_control::mobile_paired_devices,
             commands::mobile_control::mobile_host_status,
             commands::mobile_control::mobile_host_apply,
             commands::mobile_control::mobile_verify_tailscale_serve,
@@ -1383,6 +1409,7 @@ pub fn run() {
             commands::mobile_control::global_inbox_delete,
             commands::default_apps::get_default_apps,
             commands::default_apps::save_default_apps,
+            commands::default_apps::patch_default_apps,
             // Projects
             commands::projects::get_projects,
             commands::projects::save_projects,
@@ -1411,6 +1438,11 @@ pub fn run() {
             commands::root_mcp::git_push_mcp_proposals,
             commands::root_mcp::git_push_mcp_decide,
             commands::root_mcp::git_push_mcp_clear,
+            commands::markup_mcp::markup_mcp_list,
+            commands::markup_mcp::markup_mcp_ticks,
+            commands::markup_mcp::markup_mcp_answer,
+            commands::markup_mcp::markup_mcp_dismiss,
+            commands::markup_mcp::markup_mcp_reopen,
             commands::projects::set_project_mobile_access,
             commands::projects::sandbox_preflight,
             commands::python::python_interpreters,
@@ -1445,6 +1477,8 @@ pub fn run() {
             commands::projects::set_project_git_disabled,
             commands::projects::save_tab_layout,
             commands::projects::load_tab_session,
+            commands::projects::workspace_snapshot,
+            commands::projects::workspace_sync,
             commands::projects::adopt_folder_tab_layout,
             commands::projects::root_work_dir,
             commands::root_mcp::root_mcp_status,
@@ -1476,6 +1510,7 @@ pub fn run() {
             commands::projects::project_migration_apply,
             commands::projects::import_project,
             commands::projects::check_project_site,
+            commands::projects::project_folder_exists,
             commands::projects::extend_project_to_remote,
             commands::projects::detach_project_from_remote,
             commands::projects::get_time_today,
@@ -1520,6 +1555,7 @@ pub fn run() {
             commands::calendar::calendar_read_ics,
             commands::calendar::calendar_write_ics,
             commands::calendar::calendar_fetch_ics,
+            commands::calendar::calendar_alarms_claim,
             commands::markdown::markdown_remote_image,
             commands::calendar::calendar_replace_events,
             // CalDAV accounts (docs/caldav_plan.md, Phases 1-3).
@@ -1608,6 +1644,7 @@ pub fn run() {
             commands::mail::mail_draft_save,
             commands::mail::mail_agent_drafts,
             commands::mail::mail_draft_discard,
+            commands::mail::mail_agent_drafts_file,
             commands::mail::mail_agent_mark,
             commands::mail::mail_agent_mark_folder,
             commands::mail::mail_agent_mark_sender,
@@ -1704,6 +1741,7 @@ pub fn run() {
             // Usage counters + daily recap.
             commands::usage_stats::usage_bump,
             commands::usage_stats::usage_summary,
+            commands::usage_stats::usage_token_stats,
             commands::usage_stats::usage_watch_project,
             commands::usage_stats::usage_git_stats,
             commands::monitor::system_monitor_snapshot,
@@ -1792,6 +1830,7 @@ pub fn run() {
             commands::clipboard::copy_png_bytes_to_clipboard,
             commands::clipboard::copy_text_to_clipboard,
             commands::screenshot::capture_screenshot,
+            commands::projects::project_generated_dir,
             commands::screenshot::read_pending_screenshot,
             commands::screenshot::save_pending_screenshot,
             commands::screenshot::discard_pending_screenshot,
@@ -1810,6 +1849,10 @@ pub fn run() {
             commands::fs::write_file_bytes,
             commands::pdf_clip::pdf_clip_set,
             commands::pdf_clip::pdf_clip_get,
+            commands::pdf_markup::pdf_markup_submit,
+            commands::pdf_markup::pdf_markup_undo_settle,
+            commands::pdf_markup::pdf_markup_undo_preview,
+            commands::pdf_markup::pdf_markup_undo,
             commands::fs::file_mtime,
             commands::format::format_source,
             commands::format::formatter_available,
@@ -1856,7 +1899,7 @@ pub fn run() {
             commands::terminal::pty_unwatch,
             commands::terminal::local_tmux_list,
             commands::terminal::local_tmux_kill,
-            commands::terminal::local_tmux_kill_eldrun_sessions,
+            commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,
             commands::terminal::local_tmux_screen,
             commands::terminal::project_cpu_percent,
@@ -1898,6 +1941,7 @@ pub fn run() {
             commands::subwindow::detached_window_frontmost,
             commands::subwindow::desktop_coordinates_supported,
             commands::subwindow::snap_detached_window,
+            commands::subwindow::focus_detached_window,
             commands::subwindow::sync_detached_scope,
             commands::subwindow::detached_window_is_parked,
             commands::subwindow::detached_retire_ack,
@@ -1981,6 +2025,7 @@ pub fn run() {
             commands::skills::skills_list_installed,
             // Git worktrees (TODO Group E #23)
             commands::git::git_worktree_list,
+            commands::git::git_worktree_selection_supported,
             commands::git::git_worktree_add,
             commands::git::git_worktree_remove,
             commands::git::git_worktree_lock,
@@ -1993,6 +2038,11 @@ pub fn run() {
             commands::debug::app_build_commit,
             commands::debug::dev_build_status,
             commands::debug::dev_build_relaunch,
+            commands::debug::dev_build_set_paused,
+            commands::debug::dev_build_now,
+            commands::debug::dev_todo_groups,
+            commands::debug::dev_todo_read,
+            commands::debug::dev_todo_write,
             commands::debug::webview_rss_kib,
             commands::debug::webview_renderer_rss,
             commands::debug::webview_renderer_claim,
@@ -2005,6 +2055,8 @@ pub fn run() {
             commands::ollama::list_local_drivers,
             commands::ollama::prepare_local_launch,
             commands::ollama::ensure_ollama_running,
+            commands::ollama::ensure_ollama_running_unattended,
+            commands::ollama::ollama_server_kind,
             // Ollama model management
             commands::ollama::ollama_is_installed,
             commands::ollama::install_ollama,
@@ -2026,6 +2078,9 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::agent_api_keys_status,
+            commands::agents::agent_api_key_set,
+            commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,
             commands::agents::agent_global_import,
             commands::agents::agent_global_set_codex_auto_review,
@@ -2033,10 +2088,14 @@ pub fn run() {
             commands::agents::agent_usage,
             commands::agents::agent_versions,
             commands::agents::dismiss_agent_version,
+            commands::agents::check_agent_updates,
+            commands::agents::update_agent,
             commands::agents::agent_tab_model,
+            commands::agents::agent_tab_goal,
             commands::agents::agent_tab_last_prompt,
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
+            commands::agents::agent_tab_changes,
             commands::agents::agent_tab_undo_clear,
             commands::ollama::ollama_is_running,
             commands::ollama::ollama_status,
@@ -2047,6 +2106,7 @@ pub fn run() {
             commands::ollama::list_ollama_models_detailed,
             commands::ollama::stop_ollama_model,
             commands::ollama::load_ollama_model,
+            commands::ollama::load_installed_ollama_model,
             commands::ollama::list_pending_ollama_pulls,
             commands::ollama::clear_pending_ollama_pull,
             commands::ollama::list_orphan_partial_blobs,
@@ -2095,7 +2155,7 @@ pub fn run() {
             // A detached popout can die WITHOUT going through `attach_subwindow`
             // (seed-timeout self-destroy, last-tab close, the WM-close safety
             // net in DetachedApp). Free its registry footprint — display number
-            // ("Eldrun win-N"), TrackedWindow, parkable override — here, the one
+            // ("Tabtivity win-N"), TrackedWindow, parkable override — here, the one
             // choke point every destruction passes, so freed numbers get reused
             // and a lone popout is always "win-1". The dock-back path fires this
             // after `attach_subwindow` already freed; the release is idempotent.
@@ -2106,12 +2166,12 @@ pub fn run() {
             } = &event
             {
                 use tauri::{Emitter, Manager};
-                // The main window going away must take every other Eldrun window
+                // The main window going away must take every other Tabtivity window
                 // with it. Popouts, the deck presenter and live browser pages are
                 // siblings of `main` in this process, not children of it, so
                 // nothing closes them on their own: they would strand on screen
                 // and — since Tauri exits only on the LAST window — keep a
-                // windowless Eldrun running behind them. The shell's own
+                // windowless Tabtivity running behind them. The shell's own
                 // `shutdownDetachedWindows` already tears popouts down (before
                 // `destroy()`, so their bounds are persisted first); this is the
                 // net under it, for the windows it does not cover and for the
@@ -2177,7 +2237,10 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
-                // Stop the Eldrun Mobile host first: its lifetime is the app's
+                // Old-name lookups counted since the last write (nothing
+                // while the app's name is unchanged).
+                services::brand_migration::hits::flush();
+                // Stop the Tabtivity Mobile host first: its lifetime is the app's
                 // (started again at the next launch, see `setup`), and once the
                 // desktop is gone it can neither create tabs nor reach the
                 // sessions reaped below, so a host left running would only be a
@@ -2188,8 +2251,12 @@ pub fn run() {
                 // workers briefly, and drop every per-tab calendar copy so
                 // nothing of the endpoint outlives the quit.
                 commands::root_mcp::stop_for_exit();
+                // The API proxy: revoke every token, stop accepting, drain the
+                // streams in flight briefly. Before the PTY teardown below, so
+                // its tab-gone hooks find nothing left to sweep.
+                services::api_proxy::stop_for_exit();
                 // Abort every terminal's process subtree so no inner process (a
-                // dev server, a build, a training run) outlives Eldrun. Runs
+                // dev server, a build, a training run) outlives Tabtivity. Runs
                 // before the container teardown below, since a containerized
                 // tab's in-container process is TERMed via its still-live
                 // container. Dropping the registry alone would kill only the
@@ -2197,21 +2264,21 @@ pub fn run() {
                 _app.state::<RegistryState>().lock().unwrap().kill_all();
                 // The local tmux servers those PTYs were clients of survive the
                 // clients by design (that is what makes a crash resumable), so a
-                // clean quit ends Eldrun's own sessions explicitly. The window's
+                // clean quit ends Tabtivity's own sessions explicitly. The window's
                 // close handler already does this before `destroy()`; repeating
                 // it here is what covers the exits that never run frontend code
                 // — the dev launcher's Ctrl+C (SIGINT/SIGTERM → `app.exit`),
                 // an `app.exit()` from the backend. Idempotent: a second pass
                 // finds no server and returns.
-                if let Err(e) = services::tmux_local::kill_eldrun_sessions() {
+                if let Err(e) = services::tmux_local::kill_app_sessions() {
                     eprintln!("tmux_local: quit reap: {e}");
                 }
                 // Stop the Ollama server *this run started* — the spawned
                 // `ollama serve` (with the runner child holding the weights) or
-                // the systemd unit that was inactive until Eldrun asked for it.
+                // the systemd unit that was inactive until Tabtivity asked for it.
                 // A server that was already running, or one on another machine,
                 // is deliberately left alone: Ollama is a machine service as
-                // often as it is an Eldrun detail.
+                // often as it is a Tabtivity detail.
                 commands::ollama::shutdown_owned_server();
                 // The fenced Copilot language servers (one per consented project).
                 tauri::async_runtime::block_on(commands::copilot::stop_all_for_exit());
@@ -2235,7 +2302,7 @@ pub fn run() {
                 // via QMP, escalating to a kill after a short grace).
                 services::vm::down_all();
                 // Tear down pooled SSH/SFTP connections. This ends the `ssh`
-                // *clients* Eldrun spawned; the ControlMaster behind them is a
+                // *clients* Tabtivity spawned; the ControlMaster behind them is a
                 // separate backgrounded process (`ssh: … [mux]`, reparented to
                 // init) that `ControlPersist` keeps for its idle window whatever
                 // we do here, so it is deliberately left with its socket intact
@@ -2295,7 +2362,7 @@ mod tests {
     fn macos_menu_never_offers_close_window_and_keeps_edit() {
         let plan = macos_menu_plan();
         let titles: Vec<&str> = plan.iter().map(|(t, _)| *t).collect();
-        assert_eq!(titles, ["Eldrun", "Edit", "Window"]);
+        assert_eq!(titles, [crate::brand::DISPLAY, "Edit", "Window"]);
         // No item of any submenu is a window close (⌘W is the frontend's).
         for (_, items) in &plan {
             for item in items {
@@ -2307,7 +2374,7 @@ mod tests {
         for needed in [MacMenuItem::Copy, MacMenuItem::Paste, MacMenuItem::Cut, MacMenuItem::SelectAll] {
             assert!(edit.contains(&needed), "{needed:?}");
         }
-        // Exactly one Quit, in the app menu, and it is Eldrun's own.
+        // Exactly one Quit, in the app menu, and it is Tabtivity's own.
         let quits: usize = plan
             .iter()
             .map(|(_, items)| items.iter().filter(|i| **i == MacMenuItem::Quit).count())

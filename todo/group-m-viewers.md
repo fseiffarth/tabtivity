@@ -90,14 +90,14 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     [Copilot Language Server](https://github.com/github/copilot-language-server-release).
     Its documented editor protocol provides inline completions, browser device
     sign-in, cancellation, and shown/partial/full acceptance notifications.
-    Use its LSP interface over stdio for autocomplete. Eldrun's existing Copilot
+    Use its LSP interface over stdio for autocomplete. Tabtivity's existing Copilot
     agent-tab launcher is a separate integration.
 
     - [ ] **Verify the protocol in a standalone probe.** Initialize the server,
       sign in, synchronize an unsaved document, request an inline completion,
       and cancel it. Check credential persistence, content exclusions, workspace
       access, supported installation platforms and server-version compatibility.
-      Do not launch or restart Eldrun for the probe. Resolve credential storage
+      Do not launch or restart Tabtivity for the probe. Resolve credential storage
       before shipping; no tokens in settings, browser storage or logs, and no
       changes to another editor's configuration.
     - [ ] **Extract completion-provider adapters.** Move provider-specific work
@@ -138,7 +138,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       UTF-16 positions, convert compatible ranges into safe insertions, and
       reject replacements the current ghost UI cannot represent safely. Cycle
       actual returned candidates. The documented Copilot inline request has no
-      Eldrun Sentence/Block/Scope controls: hide unsupported controls rather
+      Tabtivity Sentence/Block/Scope controls: hide unsupported controls rather
       than implying they affect generation. Preserve original item metadata for
       shown and partial/full acceptance notifications; report acceptance once
       with correct offsets. Initially avoid reusing cached Copilot items across
@@ -396,7 +396,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     `CodeEditor` `gotoLine`). *Forward search:* after a compile, `synctex_view`
     maps the source caret to a PDF box that `PdfCanvas` scrolls to and flashes
     (via the `pdfSync` store). *Subtex wiring:* a successful compile records each
-    `\input`/`\include` child→root in `~/.local/share/eldrun/tex_roots.json`, and
+    `\input`/`\include` child→root in `~/.local/share/tabtivity/tex_roots.json`, and
     `resolve_tex_root` (magic `% !TEX root` comment → stored map → self) redirects
     a child's Compile to its main document. Adds a compile run animation
     (`.is-compiling` button sheen + header progress strip, reduced-motion aware).
@@ -458,7 +458,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
 
 69. **Persist viewer scroll/zoom across reopen + restart.** The in-app PDF, text,
     and image viewers remember the reader's position so reopening a file — or
-    restarting Eldrun — restores it instead of jumping to the top/default zoom.
+    restarting Tabtivity — restores it instead of jumping to the top/default zoom.
     A per-tab `ViewerState` (`scrollTop`/`scrollLeft`/`scale`/`offsetX`/`offsetY`,
     `src/stores/tabs.ts`) travels with the `embed` tab through
     `save_tab_layout`/`loadFromLayout` (round-tripped via the Rust `TabEntry`'s
@@ -526,7 +526,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
 80. **PDF page arranging + merging, on ONE code base with the print preview.**
     Turn the read-only PDF viewer into a page organiser: reorder, delete, turn,
     duplicate and merge pages, drag pages from one open PDF viewer into another,
-    and drag them **between two Eldrun windows**.
+    and drag them **between two Tabtivity windows**.
 
     The print preview already had half of this (a thumbnail strip that
     drag-reorders/deletes/turns pages) — it just never wrote a PDF. So rather than
@@ -592,7 +592,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
 
     - **Run / Debug open a terminal tab** (`lib/terminal/pythonRun.ts`) rather than a bespoke
       execution path — the same one-click-open-a-tab-and-run policy as
-      `installCommand.ts`. That is what makes them work everywhere Eldrun already
+      `installCommand.ts`. That is what makes them work everywhere Tabtivity already
       works, *for free*: a shell tab carries the project's locality and sandboxing,
       so Run on a **remote (SSH)** project runs on the host and Run on a
       **containerised** project runs inside the container, with no code of its own.
@@ -718,7 +718,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       a value refuses a child rather than silently destroy it.
     - Opting the viewer out (#48) falls back to the **plain code editor**, not the
       external app (`VIEWER_FALLBACK`) — turning off the tree is a vote against the
-      tree, not against editing YAML/JSON in Eldrun.
+      tree, not against editing YAML/JSON in Tabtivity.
     - [x] 🤖 Automated test (`YamlModel` — parse/edit ops: comments, quoting style,
       CRLF and no-trailing-newline round-trips, block scalars, `- key:` items,
       anchors, multi-doc; flow: inline and multi-line collections, nesting, add
@@ -1200,7 +1200,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       the file as a `/Text` annotation — the sticky note every reader draws — so
       what is saved here opens as a comment in Acrobat, Okular, a browser's viewer
       and whatever a colleague uses, and a comment written *there* opens here.
-      Nothing is stored beside the document, because a comment only Eldrun can see
+      Nothing is stored beside the document, because a comment only Tabtivity can see
       may as well not have been written. `Contents` is a hex (UTF-16BE) string, so
       a remark outside PDFDocEncoding survives; `/F` is `Print` and nothing else.
     - **The gesture is right-click, not an armed tool.** No mode to enter and none
@@ -1236,7 +1236,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     - [ ] 🖐️ Manual test — right-click a page, add a remark, Save, then open the
       file in **another** PDF viewer (Okular, Firefox, Acrobat) and confirm the
       note is there with its text; edit and delete it in that viewer, reopen here
-      and confirm Eldrun shows the change; then open a PDF that already carries
+      and confirm Tabtivity shows the change; then open a PDF that already carries
       comments, add one of your own and Save, and confirm both survive.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -1249,7 +1249,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
 
 96. **Selecting text in a PDF (#pdf-textselect).** ✅ Implemented · 🖐️ untested.
     The reader paints pages to a canvas, and a canvas has no text in it. Until
-    now the only way to get a sentence out of a PDF open in Eldrun was to retype
+    now the only way to get a sentence out of a PDF open in Tabtivity was to retype
     it, or to copy the *region* as an image (the ✂ tool, which is a picture of
     the words rather than the words) — while Ctrl+F could already find them, which
     is the same text, read for a different purpose.
@@ -1554,17 +1554,17 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     The PDF viewer's ✂ "select and copy as image" toolbar tool is gone; the
     same region capture is now armed by the header's global Screenshot button
     instead. Pressing Screenshot while a PDF viewer is visible offers the shot
-    to it first (claimable `eldrun:screenshot-capture` window event,
+    to it first (claimable `tabtivity:screenshot-capture` window event,
     `lib/window/screenshot.ts`; first visible viewer claims, so the OS region tool is
     only spawned when no PDF is on screen). The drag captures from the rendered
     page canvas (document-sharp, pending blackouts burned in), copies the PNG
-    to the clipboard AND files it as `eldrun-screenshots/Screenshot-….png` (was `screenshots/`, see #835) in the
+    to the clipboard AND files it as `tabtivity-screenshots/Screenshot-….png` (was `screenshots/`, see #835) in the
     PDF's own project (`write_project_file_bytes`) — the global screenshot's
     file-plus-clipboard contract. One press is one shot; Esc cancels.
     - [ ] 🤖 Automated test
     - [ ] 🖐️ Manual test — open a PDF, press the header Screenshot button:
       the capture bar should appear (no OS tool); drag a region and check the
-      clipboard paste and the new file under `eldrun-screenshots/`; press Screenshot
+      clipboard paste and the new file under `tabtivity-screenshots/`; press Screenshot
       with no PDF visible and check the OS region tool still runs; Esc while
       armed cancels without a shot.
       - [ ] ✅ Works on Linux (X11)
@@ -1756,6 +1756,51 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       second one opening. On a two-monitor machine, confirm it takes the *other*
       screen. With unsaved page changes, confirm the tooltip says so and the
       window shows the saved file.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+241a. **PDF present window: a bottom bar with a talk timer, laser and blanking.**
+    Implemented (2026-10-05, untested live) · `PdfPresentBar` over the bottom of
+    the present window; `H` hides and shows it (remembered per machine), and
+    with it hidden the old bottom-right `n / N` pill comes back. It carries:
+    - **Talk timer** from the first painted sheet (not the window: a slow open
+      is not part of the talk) — pause/resume (`T`), reset to 0:00 (`R`; a
+      paused reset stays armed at 0:00), and a target that cycles 5…90 min and
+      off, turning the clock amber in the last tenth and red past it, with the
+      time left (`−m:ss`, then `+m:ss` over). The clock is timestamps
+      (`present.ts` `TalkClock`), so it keeps counting while the bar is hidden;
+      the one-second tick runs only while the bar is up.
+    - Time on the current sheet, the wall clock (the app's 12/24 h setting), the
+      file name, first/prev/next/last and a thin progress line.
+    - **Black / white screen** (`B`/`.` and `W`/`,` — what clickers send): the
+      next turn only lifts the blank, back onto the same sheet; a digit jump
+      lifts it and goes; `Esc` lifts it before it closes the window.
+    - **Laser pointer** (`L`): the viewers' `PresentationOverlay` dot and trail,
+      its painting now shared through `embed/laserPaint.ts`; it never takes the
+      pointer (a click still turns the sheet) and goes dark over the bar.
+    - Fullscreen toggle and close. Bar buttons never take focus, so Space/Enter
+      after a press still turn sheets.
+    - i18n: `pdfPresent.{barLabel,…,laserOnTitle,laserOffTitle}` + the longer
+      `keyHint`, 24 strings × 5 languages. Untested pill `pdfPresent.barLabel`.
+    - [x] 🤖 Automated test (`src/__tests__/pdf/PdfPresent.test.ts` "talk
+      clock": banks across a pause, reset keeps run state, `m:ss`/`h:mm:ss`,
+      target cycle, amber/red thresholds)
+    - [ ] 🖐️ Manual test — present a PDF with `▶ Fullscreen`: the bar is at the
+      bottom and the timer starts at 0:00 with the first sheet. Turn sheets and
+      watch the progress line and the sheet time restart. `T` pauses (clock
+      greys), `R` resets, click the timer button until a target shows and
+      confirm the time left. `H` hides the bar (counter pill bottom-right) and
+      brings it back; close and re-present — the bar is as you left it. `B`
+      blacks out, `→` brings back the SAME sheet; `W` likewise. `L` turns on the
+      laser: a red dot follows the mouse over the sheet, vanishes over the bar,
+      clicking still advances. Click bar buttons and confirm no click reaches
+      the sheet (no extra page turn), and that Space afterwards turns a sheet.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)
@@ -2210,7 +2255,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       repeatedly. **Downloads:** in Project Settings › Native viewers, pick
       German under Add a language and Download — the row says it is working,
       the dictionary dropdown then lists "Deutsch (Deutschland) · de_DE" (in
-      the UI language) and has it selected, `~/.local/share/eldrun/
+      the UI language) and has it selected, `~/.local/share/tabtivity/
       dictionaries/de_DE.{aff,dic}` exist, and German prose in an open editor
       stops being marked within a second. The dropdown beside the Spelling
       chip in the editor header lists both dictionaries; switching there
@@ -2564,7 +2609,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     - [ ] 🖐️ Manual test — in a project with two `.tex` files (an `article`),
       click **Beamer** on in one: the other file's tab shows the bar at once.
       Switch **Preview** off there. Switch to another project and back, then
-      quit and relaunch Eldrun: both files still show the bar and Preview
+      quit and relaunch Tabtivity: both files still show the bar and Preview
       off; a different project's `.tex` is unaffected. A beamer document with
       no click still opens with the bar.
       - [ ] ✅ Works on Linux (X11)
@@ -2607,7 +2652,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
 829. **TeX: a latexmk exit code is not the document's verdict.** latexmk exits
     non-zero for things that are not document errors (a `latexmkrc` treating
     warnings as errors, `$max_repeat`, a failed bibtex/biber rule, a missing
-    `.bib`) while the engine still wrote a PDF; Eldrun reported a failed build,
+    `.bib`) while the engine still wrote a PDF; Tabtivity reported a failed build,
     withheld the PDF and titled the card "Use the -f option to force complete
     processing". A non-zero exit is now forgiven when the log has no engine error
     (`!` or `file:line:`) **and** this run's PDF is newer than the one it started
@@ -2738,11 +2783,11 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-835. **Screenshots and saved attachments land in `eldrun-`prefixed, always-ignored
+835. **Screenshots and saved attachments land in `tabtivity-`prefixed, always-ignored
     folders.** `screenshots/` is a name a project plausibly owns (docs images),
     so private captures were filed into a tracked folder, and ignoring it would
-    hide the project's own files. Saved shots now go to `eldrun-screenshots/`
-    and *Save to emails folder* to `eldrun-emails/`; both join
+    hide the project's own files. Saved shots now go to `tabtivity-screenshots/`
+    and *Save to emails folder* to `tabtivity-emails/`; both join
     `GITIGNORE_DEFAULT` (the old unprefixed names stay listed so already-filed
     data is not un-ignored). Scaffold repair runs only on request, so the write
     paths call `ensure_generated_dir_ignored` — append the one pattern (or write
@@ -2753,9 +2798,9 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     Implemented 2026-09-14 (`296c396`), **not live-tested; backend change.**
     - [ ] 🤖 Automated test
     - [ ] 🖐️ Manual test — in a git project with no `.gitignore` entry, take a
-      screenshot and save it to the project: it lands in `eldrun-screenshots/`,
+      screenshot and save it to the project: it lands in `tabtivity-screenshots/`,
       `.gitignore` gains that line before the file exists, and `git status` is
-      clean. Save a mail attachment to the emails folder → `eldrun-emails/`,
+      clean. Save a mail attachment to the emails folder → `tabtivity-emails/`,
       same. A project with no `.gitignore` gets a minimal one.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -2903,6 +2948,29 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     did not reproduce — dangerous because the obvious reading is "my change broke
     this".
     - [ ] 🤖 Automated test
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2341. **The desktop PDF viewer hints at an open markup question while marking
+    is off.** (✅ done 2026-10-03 in review 1: `usePdfMarkup` lists each agent
+    tab of the project while marking is off and on screen — `askWaiting`; the
+    button gets `is-armed` and a tooltip, and Mark up opens on the asking tab;
+    ⚠️ never run live.) The agent's markup questions (`docs/context/markup_mcp.md`,
+    `PdfMarkupQuestions.tsx`) show only while **✎ Mark up** is on, because the
+    target tab is chosen when the mode comes on. With the mode off nothing on
+    the toolbar says an ask is waiting, so a reader who closed the strip after
+    Submit never sees it. Give the Mark up button a dot (the phone's Mark up
+    carries one for unsent marks) when the PDF's project has an open ask for
+    this file, listed per agent tab of the project without choosing one, and
+    open the strip on the asking tab when clicked.
+    - [x] 🤖 Automated test (`PdfMarkupQuestions.test.tsx` "an ask waiting while marking is off")
     - [ ] 🖐️ Manual test
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)

@@ -12,7 +12,7 @@
  * when the pointer leaves the element.
  *
  * **A gesture edits local state and commits once, on pointerup.** The deck
- * autosaves (there is no save button and no close prompt anywhere in Eldrun), and
+ * autosaves (there is no save button and no close prompt anywhere in Tabtivity), and
  * `useEditableFile` writes on *every* change — so committing per `pointermove`
  * would issue a disk write per frame of a drag. `pending` holds the live object
  * list; `onObjectsChange` fires exactly once when the pointer goes up.

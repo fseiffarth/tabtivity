@@ -49,12 +49,13 @@ import {
 import { UntestedTag } from "../components/common/UntestedTag";
 import "./devPerf.css";
 import { TimerIcon } from "../components/common/icons/Icon";
+import { storageKey } from "../lib/brand";
 
 const RATE_WINDOW_MS = 60_000;
 const STALL_WINDOW_MS = 60_000;
 const IPC_ROWS_SHOWN = 14;
 const RESOURCE_POLL_MS = 2000;
-const FAB_HIDDEN_KEY = "eldrun.devPerf.fabHidden";
+const FAB_HIDDEN_KEY = storageKey("devPerf.fabHidden");
 
 const readFabHidden = () => {
   try {
@@ -73,7 +74,7 @@ const writeFabHidden = (hidden: boolean) => {
   }
 };
 
-const PERF_LAYER_ID = "eldrun-dev-perf-layer";
+const PERF_LAYER_ID = "app-dev-perf-layer";
 
 /**
  * The panel renders through a portal into a node appended to

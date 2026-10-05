@@ -22,6 +22,7 @@ import {
   wsTargetForProject,
   type HpcWorkspace,
 } from "../../lib/remote/hpc/hpcWorkspace";
+import { BRAND } from "../../lib/brand";
 
 const WS: HpcWorkspace = {
   id: "demo",
@@ -93,17 +94,17 @@ describe("defaultFilesystem", () => {
 });
 
 describe("the home anchor", () => {
-  it("defaults to eldrun/<safe-name> under the cluster home", () => {
-    expect(defaultAnchorRel("my-experiment")).toBe("eldrun/my-experiment");
+  it(`defaults to ${BRAND.slug}/<safe-name> under the cluster home`, () => {
+    expect(defaultAnchorRel("my-experiment")).toBe(`${BRAND.slug}/my-experiment`);
     // Anything the backend's path-segment validation would reject is folded out
     // here rather than surfacing as a remote error.
-    expect(defaultAnchorRel("my project!")).toBe("eldrun/my-project");
-    expect(defaultAnchorRel("")).toBe("eldrun/project");
+    expect(defaultAnchorRel("my project!")).toBe(`${BRAND.slug}/my-project`);
+    expect(defaultAnchorRel("")).toBe(`${BRAND.slug}/project`);
   });
 
   it("routes job logs into it with SLURM's own job-id token", () => {
-    expect(logOutputPattern("/home/u/eldrun/p/logs")).toBe("/home/u/eldrun/p/logs/slurm-%j.out");
-    expect(logOutputPattern("/home/u/eldrun/p/logs/")).toBe("/home/u/eldrun/p/logs/slurm-%j.out");
+    expect(logOutputPattern(`/home/u/${BRAND.slug}/p/logs`)).toBe(`/home/u/${BRAND.slug}/p/logs/slurm-%j.out`);
+    expect(logOutputPattern(`/home/u/${BRAND.slug}/p/logs/`)).toBe(`/home/u/${BRAND.slug}/p/logs/slurm-%j.out`);
   });
 });
 
@@ -176,8 +177,8 @@ describe("targets", () => {
   });
 
   it("a project target names the project, and a host only when it isn't the primary", () => {
-    expect(wsTargetForProject("/home/u/.local/share/eldrun/remote-projects/p")).toEqual({
-      projectDir: "/home/u/.local/share/eldrun/remote-projects/p",
+    expect(wsTargetForProject(`/home/u/.local/share/${BRAND.slug}/remote-projects/p`)).toEqual({
+      projectDir: `/home/u/.local/share/${BRAND.slug}/remote-projects/p`,
     });
     expect(wsTargetForProject("/dir", "worker-1")).toEqual({
       projectDir: "/dir",

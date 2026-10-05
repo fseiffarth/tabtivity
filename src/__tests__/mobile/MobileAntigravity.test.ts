@@ -8,6 +8,7 @@ import {
   readAntigravityPicker,
 } from "../../../mobile-web/src/terminal/antigravity";
 import type { ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
+import { BRAND } from "../../lib/brand";
 
 /**
  * Google Antigravity as the phone reads it. Every screen below is a real one:
@@ -81,7 +82,7 @@ const PICKER_NO_EFFORT = [
   "                                                       Gemini 3.6 Flash · medium",
 ];
 
-describe("Eldrun Mobile — Antigravity's model and effort", () => {
+describe(`${BRAND.display} Mobile — Antigravity's model and effort`, () => {
   it("reads the model and the effort out of the footer's right-hand column", () => {
     expect(sessionStatus(lines("The tests pass.", "", ...IDLE), LABEL))
       .toEqual({ model: "Gemini 3.8 Flash", effort: "high" });
@@ -105,7 +106,7 @@ describe("Eldrun Mobile — Antigravity's model and effort", () => {
     expect(antigravityFooter("Keyboard: ↑/↓ Navigate  ←/→ Effort  enter Select  esc Go Back")).toBeNull();
     expect(antigravityFooter("  ↑/↓ Navigate · enter Select · tab Complete")).toBeNull();
     // The banner's own rows: a path is not a model, and neither is an address.
-    expect(antigravityFooter("   ▄▀▀    ▀▀▄     ~/eldrun/projects/projecteldrun")).toBeNull();
+    expect(antigravityFooter(`   ▄▀▀    ▀▀▄     ~/${BRAND.slug}/projects/project${BRAND.slug}`)).toBeNull();
     expect(antigravityFooter("     ▀▀▀▀▀▀       someone@example.com (Antigravity Starter Quota)")).toBeNull();
   });
 

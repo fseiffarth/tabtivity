@@ -3,7 +3,9 @@
  * is the one shape of it the phone can read at all.
  *
  * Plain `opencode` is a full-screen (alternate-screen) TUI: it has no
- * scrollback, so Focus hands it to the Terminal view and nothing here applies.
+ * scrollback, so its conversation comes from OpenCode's session store, and
+ * only its composer — model, agent, the working hint — is read off the live
+ * frame (`openCodeComposer`, `openCodeFullFooter`, below).
  * `--mini` writes the conversation into ordinary scrollback and keeps a live
  * area — an input box and one status row — pinned under it. That live area is
  * drawn with absolute cursor moves and no input marker of its own, so none of
@@ -119,7 +121,7 @@ export interface OpenCodeStatus {
   /** The agent the session is in, lower-cased (`build`, `plan`, …) — what
    * `agentModes` calls a mode for every other family. */
   mode: string;
-  /** Context used, as the row prints it (`223.0K (21%)` → `21%`). */
+  /** Context left, from the share the row prints used (`223.0K (21%)` → `79%`). */
   context?: string;
   /** The model id from the row's notice slot, right after a switch. */
   model?: string;
@@ -140,9 +142,15 @@ const CHIP_ROW = /^ ([A-Z][A-Z0-9]*(?:[ ._-][A-Z0-9]+)*)(?:\s{2,}(\S.*?))?\s*$/u
  * line of output that happens to be shouting. */
 const MAX_CHIP = 24;
 /** `223.0K (21%)` — tokens used and the share of the window they are. The
- * percentage is what the chip shows, the same way Gemini CLI's `25% used`
- * does: it is what the session printed, not a figure this converts. */
+ * chip says what is *left*, so the share is flipped (`21%` → `79%`), the same
+ * way Gemini CLI's `25% used` is. */
 const CONTEXT = /(?:\d+(?:\.\d+)?[KM]?)\s*\((\d{1,3})%\)/u;
+
+/** The context left, from a row's `223.0K (21%)`. */
+function contextLeft(text: string): string | undefined {
+  const used = CONTEXT.exec(text)?.[1];
+  return used === undefined ? undefined : `${Math.max(0, 100 - Number(used))}%`;
+}
 /** The notice OpenCode shows in the status row after a model switch, its own
  * column: `model union-alpha`. */
 const MODEL_NOTICE = /(?:^|\s{2,})model\s+([A-Za-z0-9][\w.:/-]*)/u;
@@ -156,12 +164,120 @@ export function openCodeStatusRow(text: string): OpenCodeStatus | null {
   const status: OpenCodeStatus = { mode: chip.toLowerCase() };
   const tail = match[2];
   if (tail) {
-    const context = CONTEXT.exec(tail);
-    if (context) status.context = `${context[1]}%`;
+    const context = contextLeft(tail);
+    if (context) status.context = context;
     const model = MODEL_NOTICE.exec(tail);
     if (model) status.model = model[1];
   }
   return status;
+}
+
+/*
+ * The *full* TUI — what a plain `opencode` tab runs — draws no ` BUILD` row.
+ * Its composer box (`component/prompt/index.tsx`, unchanged from 1.18.31 to
+ * 1.18.34) ends in two rows of its own, the facts this reads:
+ *
+ *   `┃  Build · Muse Spark 1.3 Free OpenCode Zen · high`   inside the box: the
+ *                                                         agent (title case,
+ *                                                         `auto` after it in
+ *                                                         auto permission
+ *                                                         mode), the model,
+ *                                                         its provider, the
+ *                                                         variant
+ *   `╹▀▀▀▀▀▀▀▀`                                           the box's bottom
+ *                                                         edge, which
+ *                                                         `readableScreen`
+ *                                                         drops
+ *   ` ⬝⬝■■ esc interrupt     12.3K (5%) · $0.02  ctrl+p commands`
+ *                                                         under the box: the
+ *                                                         spinner and the
+ *                                                         interrupt hint while
+ *                                                         it works (the
+ *                                                         folder when idle),
+ *                                                         then context, cost
+ *                                                         and the palette key
+ *
+ * Source-read, not captured: no OpenCode binary runs inside the fence these
+ * were written in. Every shape is therefore held loosely — a row that does not
+ * match leaves the frame unread, the phone's state before this existed.
+ */
+
+/** The row under the full TUI's box: its palette hint (`ctrl+p commands`, the
+ * key as configured), or the shell-mode hint that stands in for it. Neither
+ * is anchored to the row's end — a wide pane draws the session's sidebar to
+ * the right of the composer. */
+const FULL_FOOTER = /\b(?:ctrl|alt|super|meta|shift)\+\S+\s+commands\b|\besc\s+exit shell mode\b/iu;
+/** The composer's agent row: the agent in title case, `auto` in auto
+ * permission mode, then ` · ` and the model phrase, and ` · ` and the variant.
+ * Shell mode prints `Shell` alone. Only its first column is read: anything two
+ * spaces further over is not the box's. */
+const COMPOSER_ROW = /^([A-Z][\w-]*(?: [A-Z][\w-]*){0,2})(?: (auto))?(?: · (\S.*?))?(?: · (\S+))?$/u;
+/** Longer than any model phrase the box prints; a longer one is prose. */
+const MAX_COMPOSER = 120;
+
+export interface OpenCodeComposer {
+  /** The agent, lower-cased (`build`, `plan`); absent in shell mode. */
+  mode?: string;
+  /** The model's display name — the provider cut off where its colour says
+   * the label ends, or the whole phrase where the row's colours are unknown. */
+  model?: string;
+  /** The model variant (`high`), OpenCode's reasoning-effort equivalent. */
+  variant?: string;
+}
+
+export interface OpenCodeFooter {
+  /** The session is working: the row carries the interrupt hint. */
+  busy: boolean;
+  /** Context left, from the share the row prints used (`12.3K (5%)` → `95%`). */
+  context?: string;
+}
+
+/** The row under the full TUI's composer, or `null` when the row is not it. */
+export function openCodeFullFooter(text: string): OpenCodeFooter | null {
+  if (!FULL_FOOTER.test(text)) return null;
+  const footer: OpenCodeFooter = { busy: /(?:^|\s)esc (?:again to )?interrupt\b/u.test(text) };
+  const context = contextLeft(text);
+  if (context) footer.context = context;
+  return footer;
+}
+
+/** The model phrase's own name: the phrase up to the first character drawn
+ * in another colour than its first. OpenCode prints the model in the text
+ * colour and the provider after it muted, with a single space between —
+ * nothing in the words says where one ends. */
+function modelName(
+  phrase: string,
+  offset: number,
+  row: { text: string; spans?: readonly { text: string; color?: string }[] },
+): string {
+  const spans = row.spans;
+  if (!spans || spans.map((span) => span.text).join("") !== row.text) return phrase;
+  const colors: (string | undefined)[] = [];
+  for (const span of spans) colors.push(...Array<string | undefined>(span.text.length).fill(span.color));
+  const first = colors[offset];
+  for (let index = 1; index < phrase.length; index += 1) {
+    if (phrase[index] === " " || colors[offset + index] === first) continue;
+    const name = phrase.slice(0, index).trim();
+    return name || phrase;
+  }
+  return phrase;
+}
+
+/** The composer's agent row, or `null` when the row is not it. */
+export function openCodeComposer(
+  row: { text: string; spans?: readonly { text: string; color?: string }[] },
+): OpenCodeComposer | null {
+  const lead = row.text.length - row.text.trimStart().length;
+  const column = row.text.trim().split(/\s{2,}/u)[0];
+  if (!column || column.length > MAX_COMPOSER) return null;
+  const match = COMPOSER_ROW.exec(column);
+  if (!match) return null;
+  const [, agent, , phrase, variant] = match;
+  const composer: OpenCodeComposer = {};
+  if (agent !== "Shell") composer.mode = agent.toLowerCase();
+  if (phrase) composer.model = modelName(phrase, lead + column.indexOf(" · ") + 3, row);
+  if (variant) composer.variant = variant;
+  return composer;
 }
 
 /** Where the block opening at `start` ends, exclusive: the next blank row, or

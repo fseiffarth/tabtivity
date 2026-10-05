@@ -121,7 +121,7 @@ export function useModelsHub(active: boolean) {
   // is on screen: the question it raises is "will the next model fit, and is
   // there anything left to run it with?" — which each model's `size_vram` (its
   // own share) cannot answer; only the device's free headroom and the machine
-  // load can. Both are machine-wide (Ollama is a separate process, so Eldrun's
+  // load can. Both are machine-wide (Ollama is a separate process, so Tabtivity's
   // own figures say nothing about it) and both carry no process table, so a tick
   // is a handful of small reads. They share ONE interval — same cadence, same
   // gating — rather than two timers firing a frame apart for no benefit.
@@ -345,7 +345,7 @@ export function useModelsHub(active: boolean) {
     closeHoverMenu();
   };
 
-  // "Load on Eldrun start": which models are warmed into memory at launch
+  // "Load on Tabtivity start": which models are warmed into memory at launch
   // (`settings.ollama_autoload_models`, honoured by `stores/agents/ollamaAutoload`).
   // A chip per model rather than one global switch, because the whole point is
   // that different jobs want different models resident.

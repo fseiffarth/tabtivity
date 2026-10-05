@@ -5,7 +5,7 @@ import { create } from "zustand";
  *
  * **No screenshot is written into a project without passing through here.** The
  * old flow filed every capture straight into the active project's
- * `eldrun-screenshots/` folder, which for a project with a public remote is a
+ * `tabtivity-screenshots/` folder, which for a project with a public remote is a
  * private-data leak one `git add -A` away — a screen grab holds whatever was on
  * the screen at the time, not only the thing being documented. So a capture now
  * lands in a staging area (`<state_dir>/screenshots-pending/`, outside every

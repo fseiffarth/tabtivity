@@ -10,7 +10,7 @@ import { useHostKeyPromptStore } from "../../stores/remote/hostKeyPrompt";
  * The first-contact host-key gate, from the frontend's side.
  *
  * The whole recovery flow hangs off one string: the backend's refusal carries
- * `ELDRUN_UNKNOWN_HOST_KEY <host:port>`, and the wrapper reads the target out of
+ * `TABTIVITY_UNKNOWN_HOST_KEY <host:port>`, and the wrapper reads the target out of
  * *the error itself* rather than from the call site. So the parse and the
  * retry-once-on-accept contract are what these cover.
  */

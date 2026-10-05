@@ -46,6 +46,8 @@ describe("scaffold agent fill guidance", () => {
     // The agent must not undo the pointer scheme it was handed.
     expect(prompt).toContain("canonical AGENTS.md");
     expect(prompt).toContain("`@AGENTS.md`");
+    // AGENTS.md is loaded every session: overviews belong elsewhere.
+    expect(prompt).toContain("Overviews and architecture go in README.md");
   });
 
   it("builds a concrete prompt for agent-filled project descriptions", () => {

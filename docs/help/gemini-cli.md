@@ -1,6 +1,6 @@
 ---
 id: gemini-cli
-title: Gemini CLI in Eldrun
+title: Gemini CLI in Tabtivity
 keywords: [gemini, google, gemini cli, npm, node, install, login, sign in, antigravity, agy]
 ---
 

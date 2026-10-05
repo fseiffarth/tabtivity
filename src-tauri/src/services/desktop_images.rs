@@ -4,7 +4,7 @@
 //! without a hunt through a file picker on the wrong device.
 //!
 //! The list is drawn from the user's own screenshot and picture folders
-//! (XDG user dirs on Linux, the platform defaults elsewhere) plus Eldrun's own
+//! (XDG user dirs on Linux, the platform defaults elsewhere) plus Tabtivity's own
 //! screenshot staging area, one level deep, newest first, capped. The system
 //! clipboard's image is the caller's to add on top (`CLIPBOARD_ID`): reading
 //! it needs a display connection, which this module deliberately has not.
@@ -68,6 +68,32 @@ impl ImageFolder {
             path,
         }
     }
+}
+
+/// The platform's screenshot and picture folders plus Tabtivity's own screenshot
+/// staging area under `state_dir`, where a shot taken through the Screenshot
+/// app waits for its filing answer. Linux honours `user-dirs.dirs`, so a
+/// localized `~/Bilder` is found. Shared by the desktop command and the
+/// Mobile sidecar's answer with no window (headless owner plan, H3).
+pub fn default_folders(state_dir: &Path) -> Vec<ImageFolder> {
+    let home = crate::paths::home_dir();
+    let user_dirs = if cfg!(target_os = "linux") {
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".config"));
+        fs::read_to_string(config.join("user-dirs.dirs"))
+            .map(|text| parse_user_dirs(&text, &home))
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    let mut folders = image_folders(crate::paths::OsKind::current(), &home, &user_dirs);
+    folders.push(ImageFolder {
+        label: concat!(crate::app_name!(), " screenshots").into(),
+        path: state_dir.join("screenshots-pending"),
+    });
+    folders
 }
 
 /// The `XDG_*_DIR` lines of `user-dirs.dirs`, `$HOME` expanded. Only the

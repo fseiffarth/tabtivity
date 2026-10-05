@@ -10,6 +10,10 @@ import { IS_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import { translate, useI18nStore, useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MobileAccessPicker, phoneReachLabel } from "./MobileAccessPicker";
+import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
+import { isMobileEligible, PairedDeviceAccess } from "./PairedDeviceAccess";
 
 /** `translate` at the live language, for code that runs outside a render: the
  *  module-level parser below and the async callbacks, whose `useCallback`
@@ -45,7 +49,7 @@ interface ServeVerification {
   verified: boolean;
   error?: string;
 }
-interface Device { id: string; name: string; created_at: number; last_seen_at?: number }
+type Device = PairedPhone;
 type AdminResponse =
   | { status: "pairing_code"; code: string; expires_at: number }
   | { status: "devices"; devices: Device[] }
@@ -131,7 +135,7 @@ export function MobileSettings() {
   const setBoxMobileAccess = useBoxesStore((state) => state.setBoxMobileAccess);
   const rootDir = useProjectsStore((state) => state.rootDir);
   const setProjectMobileAccess = useProjectsStore((state) => state.setProjectMobileAccess);
-  const stored = settings?.eldrun_mobile_host;
+  const stored = settings?.[MOBILE_HOST_KEY];
   // The sidecar's `discovery::root_open`, repeated so the switch can say why
   // root is missing from the phone while it is on.
   const [reviewEnforced, setReviewEnforced] = useState(true);
@@ -153,6 +157,13 @@ export function MobileSettings() {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
   const [serveStatus, setServeStatus] = useState<ServeStatus | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
+  // The paired phones off the device file (host up or down), for the access
+  // rows' "N phones" counts; re-read whenever the list below is refreshed
+  // (a revoke or Forget all changes what a list still reaches).
+  const { phones: pairedPhones } = usePairedPhones(devices);
+  const [phonePicker, setPhonePicker] = useState<
+    { kind: "project" | "box"; id: string; x: number; y: number } | null
+  >(null);
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -260,15 +271,15 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "stay_after_quit" | "shell_tabs" | "local_models", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
-        eldrun_mobile_host: {
+        [MOBILE_HOST_KEY]: {
           ...(stored ?? { enabled: false }),
-          // `mail_read` defaults on, so only its "off" is stored; the writes
-          // default off, so only their "on" is.
-          [gate]: gate === "mail_read" ? (on ? undefined : false) : on || undefined,
+          // `mail_read` and `local_models` default on, so only their "off" is
+          // stored; the rest default off, so only their "on" is.
+          [gate]: gate === "mail_read" || gate === "local_models" ? (on ? undefined : false) : on || undefined,
         },
       });
     } catch (reason) {
@@ -294,7 +305,7 @@ export function MobileSettings() {
         });
       }
       await updateSettings({
-        eldrun_mobile_host: {
+        [MOBILE_HOST_KEY]: {
           enabled,
           display_name: displayName.trim() || "Workstation",
           port: parsedPort || 8742,
@@ -304,6 +315,9 @@ export function MobileSettings() {
           mail_reply: stored?.mail_reply,
           root_access: stored?.root_access,
           project_files: stored?.project_files,
+          stay_after_quit: stored?.stay_after_quit,
+          shell_tabs: stored?.shell_tabs,
+          local_models: stored?.local_models,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -319,6 +333,34 @@ export function MobileSettings() {
   // Same one-click shape as every other install-via-command flow: the command
   // runs in a root terminal tab, watched in the root console floating over
   // Settings — never a scope switch away from the panel.
+  /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
+   *  a row whose access is on: opens the per-phone picker for it. */
+  const phoneScopeButton = (
+    kind: "project" | "box",
+    id: string,
+    name: string,
+    enabled: boolean,
+    list: unknown,
+  ) => {
+    // `null`, not `undefined`: the row keeps its shape while off (ToggleRow).
+    if (!enabled) return null;
+    const reach = phoneReach(true, list, pairedPhones);
+    return (
+      <button
+        type="button"
+        className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
+        aria-haspopup="menu"
+        title={t("mobile.phones.buttonTitle", { name })}
+        onClick={(event) => {
+          const r = event.currentTarget.getBoundingClientRect();
+          setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 });
+        }}
+      >
+        {phoneReachLabel(reach, t)} ▾
+      </button>
+    );
+  };
+
   const setUpInTerminal = () => {
     const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
     if (!window.confirm(tr("mobile.setUpConfirm", { command }))) return;
@@ -328,7 +370,7 @@ export function MobileSettings() {
   const installOnPhone = async () => {
     setError(null);
     try {
-      // The backend materializes its embedded source so a packaged Eldrun has
+      // The backend materializes its embedded source so a packaged Tabtivity has
       // the same handoff script as a checkout. It answers with the script's
       // path because the state dir differs per OS (XDG on Linux, Application
       // Support on macOS) and must not be re-derived here.
@@ -373,7 +415,7 @@ export function MobileSettings() {
       setOrigin(detected.origin);
       setServeVerification({ verified: true });
       await updateSettings({
-        eldrun_mobile_host: {
+        [MOBILE_HOST_KEY]: {
           enabled: stored?.enabled ?? false,
           display_name: detected.display_name,
           port: detected.port,
@@ -383,6 +425,9 @@ export function MobileSettings() {
           mail_reply: stored?.mail_reply,
           root_access: stored?.root_access,
           project_files: stored?.project_files,
+          stay_after_quit: stored?.stay_after_quit,
+          shell_tabs: stored?.shell_tabs,
+          local_models: stored?.local_models,
         },
       });
     } catch (reason) {
@@ -422,7 +467,7 @@ export function MobileSettings() {
       const response = await invoke<AdminResponse>("mobile_admin", { request: { type: "forget_all" } });
       if (response.status === "error") throw new Error(response.message);
       await updateSettings({
-        eldrun_mobile_host: {
+        [MOBILE_HOST_KEY]: {
           enabled: false,
           display_name: displayName.trim() || "Workstation",
           port: Number(port) || 8742,
@@ -432,6 +477,9 @@ export function MobileSettings() {
           mail_reply: stored?.mail_reply,
           root_access: stored?.root_access,
           project_files: stored?.project_files,
+          stay_after_quit: stored?.stay_after_quit,
+          shell_tabs: stored?.shell_tabs,
+          local_models: stored?.local_models,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -444,7 +492,8 @@ export function MobileSettings() {
     }
   };
 
-  const eligible = projects.filter((project) => !project.remote && !project.sandbox?.enabled && !project.vm?.enabled);
+  const eligible = projects.filter(isMobileEligible);
+  const eligibleIds = new Set(eligible.map((project) => project.id));
   const normalizedProjectSearch = projectSearch.trim().toLocaleLowerCase();
   const matchingEligible = normalizedProjectSearch
     ? eligible.filter((project) => project.name.toLocaleLowerCase().includes(normalizedProjectSearch))
@@ -605,6 +654,15 @@ export function MobileSettings() {
       {refreshError && <ErrorNote className="project-dialog-error" error={refreshError} />}
       {error && <ErrorNote className="project-dialog-error" error={error} />}
 
+      <div className="settings-subheader">{t("mobile.stayAfterQuitHeader")}</div>
+      <ToggleRow
+        label={<>{t("mobile.stayAfterQuit")} <UntestedTag id="mobile.stayAfterQuit" /></>}
+        checked={stored?.stay_after_quit ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("stay_after_quit", event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.stayAfterQuitHelp")}</p>
+
       <div className="settings-subheader">{t("mobile.mailWrites")}</div>
       <ToggleRow
         label={<>{t("mobile.mailRead")} <UntestedTag id="mobile.mailRead" /></>}
@@ -651,6 +709,20 @@ export function MobileSettings() {
         onChange={(event) => void setMailGate("project_files", event.target.checked)}
       />
       <p className="settings-help">{t("mobile.projectFilesHelp")}</p>
+      <ToggleRow
+        label={<>{t("mobile.noShells")} <UntestedTag id="mobile.noShells" /></>}
+        checked={stored?.shell_tabs !== true}
+        disabled={busy}
+        onChange={(event) => void setMailGate("shell_tabs", !event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.noShellsHelp")}</p>
+      <ToggleRow
+        label={<>{t("mobile.localModelsGate")} <UntestedTag id="mobile.localModelsGate" /></>}
+        checked={stored?.local_models !== false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("local_models", event.target.checked)}
+      />
+      <p className="settings-help">{t("mobile.localModelsGateHelp")}</p>
       {eligible.length > 0 && <input
         className="mobile-project-access-search"
         value={projectSearch}
@@ -663,11 +735,13 @@ export function MobileSettings() {
           <ToggleRow
             key={project.id}
             label={project.name}
-            checked={project.eldrun_mobile_access ?? false}
+            checked={project[MOBILE_ACCESS_KEY] ?? false}
             onChange={(event) => {
               setError(null);
-              void setProjectMobileAccess(project.id, event.target.checked).catch((reason) => setError(String(reason)));
+              // One click on = every phone; narrowing is the ▾ button's job.
+              void setProjectMobileAccess(project.id, event.target.checked, null).catch((reason) => setError(String(reason)));
             }}
+            aside={phoneScopeButton("project", project.id, project.name, project[MOBILE_ACCESS_KEY] ?? false, project[MOBILE_DEVICES_KEY])}
           />
         ))}
         {eligible.length === 0 && <p className="settings-help">{t("mobile.noEligibleProjects")}</p>}
@@ -682,28 +756,57 @@ export function MobileSettings() {
             <ToggleRow
               key={box.id}
               label={box.name}
-              checked={box.eldrun_mobile_access ?? false}
+              checked={box[MOBILE_ACCESS_KEY] ?? false}
               onChange={(event) => {
                 setError(null);
-                void setBoxMobileAccess(box.id, event.target.checked).catch((reason) => setError(String(reason)));
+                void setBoxMobileAccess(box.id, event.target.checked, null).catch((reason) => setError(String(reason)));
               }}
+              aside={phoneScopeButton("box", box.id, box.name, box[MOBILE_ACCESS_KEY] ?? false, box[MOBILE_DEVICES_KEY])}
             />
           ))}
           {matchingBoxes.length === 0 && <p className="settings-help">{t("mobile.noBoxesMatch", { query: projectSearch.trim() })}</p>}
         </div>
       </>}
 
+      {phonePicker && (() => {
+        const target = phonePicker.kind === "project"
+          ? projects.find((p) => p.id === phonePicker.id)
+          : boxes.find((b) => b.id === phonePicker.id);
+        if (!target) return null;
+        return (
+          <MobileAccessPicker
+            x={phonePicker.x}
+            y={phonePicker.y}
+            kind={phonePicker.kind}
+            enabled={target[MOBILE_ACCESS_KEY] ?? false}
+            devices={target[MOBILE_DEVICES_KEY]}
+            onApply={(enabled, list) => phonePicker.kind === "project"
+              ? setProjectMobileAccess(phonePicker.id, enabled, list)
+              : setBoxMobileAccess(phonePicker.id, enabled, list)}
+            onClose={() => setPhonePicker(null)}
+          />
+        );
+      })()}
+
       {devices.length > 0 && <div className="settings-subheader">{t("mobile.pairedDevices")}</div>}
       {devices.length > 0 && (
         <SettingsList boxed>
           {devices.map((device) => (
-            <div key={device.id} className="settings-row">
-              <span className="settings-list-label">{device.name}</span>
-              <button
-                type="button"
-                className="settings-btn sm danger"
-                onClick={() => void invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } }).then(refresh)}
-              >{t("mobile.revoke")}</button>
+            <div key={device.id} className="mobile-device">
+              <div className="settings-row">
+                <span className="settings-list-label">{device.name}</span>
+                <button
+                  type="button"
+                  className="settings-btn sm danger"
+                  onClick={() => void invoke<AdminResponse>("mobile_admin", { request: { type: "revoke", device_id: device.id } }).then(refresh)}
+                >{t("mobile.revoke")}</button>
+              </div>
+              <PairedDeviceAccess
+                device={device}
+                pairedIds={(pairedPhones ?? devices).map((phone) => phone.id)}
+                eligibleProjectIds={eligibleIds}
+                onChanged={() => void refresh()}
+              />
             </div>
           ))}
         </SettingsList>

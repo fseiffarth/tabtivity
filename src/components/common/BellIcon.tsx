@@ -5,7 +5,7 @@ interface BellIconProps {
 }
 
 /**
- * Eldrun's bell: the header's alerts switch (`header/AlertsToggle`) and every
+ * Tabtivity's bell: the header's alerts switch (`header/AlertsToggle`) and every
  * smaller "alerts" control that should read as the same thing. Drawn rather than
  * a bell emoji — monochrome, schematic, `currentColor` — so it follows the theme instead of
  * dropping a colour emoji into line art.

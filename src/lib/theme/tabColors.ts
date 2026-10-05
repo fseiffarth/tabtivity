@@ -1,6 +1,6 @@
 /**
  * A tab's user-set colour (#264): the palette a right-click (desktop) or a
- * ✻ Colour sheet (Eldrun Mobile) picks from.
+ * ✻ Colour sheet (Tabtivity Mobile) picks from.
  *
  * The palette is a **closed set of named hues**, not a free-form colour, and
  * that is the whole design:

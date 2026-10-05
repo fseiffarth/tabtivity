@@ -3,7 +3,7 @@
  *
  * Both buttons do the same structural thing: open a **terminal tab** in the
  * project and type a command into it. That is deliberate, and it is what makes
- * the feature work everywhere Eldrun already works, for free — a shell tab on a
+ * the feature work everywhere Tabtivity already works, for free — a shell tab on a
  * remote (SSH) project runs on the host, and one on a containerised project runs
  * inside the container, because the tab is the thing that carries locality and
  * sandboxing. A bespoke "run" IPC path would have to re-derive both and would get
@@ -31,6 +31,7 @@ import { basename, dirname, relativePathWithin } from "../paths";
 import { useTabsStore, isRemoteLocation, type TabEntry, type TabLocation } from "../../stores/tabs";
 import { guardLoginNodeRun } from "../remote/hpc/hpcGuard";
 import { translate, useI18nStore } from "../i18n";
+import { envName } from "../brand";
 
 /** How a run/debug tab is inserted into the layout. Given the built (keyless)
  *  tab, place it and return the created entry — or null when it streamed the tab
@@ -46,8 +47,8 @@ export type PyPlatform = "windows" | "unix";
  *  also how a re-run finds the tab it should replace — a tab has no free-form
  *  metadata, and matching on the label would collide across two `main.py`s in
  *  different directories. */
-export const PY_TARGET_ENV = "ELDRUN_PY_TARGET";
-export const PY_MODE_ENV = "ELDRUN_PY_MODE";
+export const PY_TARGET_ENV = envName("PY_TARGET");
+export const PY_MODE_ENV = envName("PY_MODE");
 
 export type PyRunMode = "run" | "debug";
 

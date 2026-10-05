@@ -49,7 +49,7 @@ html, body, #root {
 /* ── Launch splash ────────────────────────────────────────────────────── */
 /* The app shell mounts at once, but its initial settings/project reads are
    asynchronous. Keep a light, branded curtain over that otherwise empty
-   interval so launching Eldrun always has visible feedback. */
+   interval so launching Tabtivity always has visible feedback. */
 .startup-splash {
   position: fixed;
   inset: 0;
@@ -302,7 +302,7 @@ html, body, #root {
      - Any per-surface `scrollbar-width` or `::-webkit-scrollbar` SIZE rule below
        re-creates a real native bar on that surface and brings the second
        scrollbar back with it. Don't add one. To suppress the app's own thumb on
-       a strip, set `--eldrun-scrollbar: none` (see below) instead.
+       a strip, set `--app-scrollbar: none` (see below) instead.
 
    The ::-webkit-scrollbar half is inert on WebKitGTK whenever `scrollbar-width`
    is non-auto; it is kept so engines that do implement the pseudo-elements
@@ -323,7 +323,7 @@ html, body, #root {
    everywhere. Registered rather than used raw so it does NOT inherit: an
    opted-out strip must not silently mute the thumb of a scroll container that
    happens to sit inside it. */
-@property --eldrun-scrollbar {
+@property --app-scrollbar {
   syntax: "*";
   inherits: false;
   initial-value: auto;
@@ -350,14 +350,14 @@ html, body, #root {
    The layer spans the window and never eats a click; individual thumbs turn
    `pointer-events` back on only while they are actually shown, so a hidden
    thumb can't swallow a press meant for the content under it. */
-.eldrun-scrollbar-layer {
+.app-scrollbar-layer {
   position: fixed;
   inset: 0;
   z-index: var(--z-scrollbar, 9990);
   pointer-events: none;
 }
 
-.eldrun-scrollbar-thumb {
+.app-scrollbar-thumb {
   position: fixed;
   top: 0;
   left: 0;
@@ -372,21 +372,21 @@ html, body, #root {
   pointer-events: none;
 }
 
-.eldrun-scrollbar-vertical {
+.app-scrollbar-vertical {
   width: 8px;
 }
 
-.eldrun-scrollbar-horizontal {
+.app-scrollbar-horizontal {
   height: 8px;
 }
 
-.eldrun-scrollbar-thumb:hover,
-.eldrun-scrollbar-thumb.dragging {
+.app-scrollbar-thumb:hover,
+.app-scrollbar-thumb.dragging {
   background-color: var(--scrollbar-thumb-hover);
 }
 
 /* A drag that starts on the thumb must not select the text it passes over. */
-body.eldrun-scrollbar-dragging {
+body.app-scrollbar-dragging {
   user-select: none;
 }
 
@@ -401,11 +401,11 @@ body.eldrun-scrollbar-dragging {
    It is not a substitute for the static baseline: by the time this attribute is
    set the element already exists, and on WebKitGTK a scrollbar that exists is
    never rebuilt. It hides nothing that was not already hidden. */
-[data-eldrun-scrollbar] {
+[data-app-scrollbar] {
   scrollbar-width: none !important;
 }
 
-[data-eldrun-scrollbar]::-webkit-scrollbar {
+[data-app-scrollbar]::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
 }

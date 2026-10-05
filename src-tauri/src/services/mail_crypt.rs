@@ -126,7 +126,7 @@ impl std::fmt::Display for CryptError {
         match self {
             CryptError::NotAnEnvelope => f.write_str("not a sealed value"),
             CryptError::UnsupportedVersion(v) => {
-                write!(f, "sealed by a newer version of Eldrun (envelope v{v})")
+                write!(f, "sealed by a newer version of {app} (envelope v{v})", app = crate::brand::DISPLAY)
             }
             CryptError::UnsupportedAlgorithm(a) => {
                 write!(
@@ -328,6 +328,67 @@ pub fn name_digest(k_name: &Key, namespace: &str, value: &str) -> String {
 
 // ── The key hierarchy ───────────────────────────────────────────────────────
 
+/// The strings a store's keys are derived with: the root of the HKDF labels
+/// and the associated data of the wrapped master key. They are **key
+/// inputs** — a store written under one set opens under no other — and they
+/// carry the app's name, so a store remembers which set it was written with
+/// (`labels` in `key.json`) instead of following whatever the app is called.
+///
+/// A store with no `labels` entry was written by a build that knew only one
+/// set: the one under the app's old name. It keeps opening under that set and
+/// nothing in it is touched. A store created by this build is written under
+/// the current set. While the name is unchanged the two are the same set and
+/// no entry is ever written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelSet {
+    root: String,
+    wrap_aad: String,
+}
+
+impl LabelSet {
+    /// The set a build named `forms` writes.
+    pub fn of(forms: &crate::brand::Forms) -> Self {
+        LabelSet {
+            root: forms.name(crate::brand::Name::MAIL_LABEL_ROOT),
+            wrap_aad: forms.name(crate::brand::Name::MAIL_WRAP_AAD),
+        }
+    }
+
+    /// The set new stores are written under.
+    pub fn current(pair: &crate::brand::Pair) -> Self {
+        Self::of(&pair.cur)
+    }
+
+    /// The set a key file names. No entry means the old name's set; an entry
+    /// has to be one of the two sets this build knows — the file is editable
+    /// by anyone who can write the mail folder, and an arbitrary string here
+    /// could only ever make the store unopenable.
+    fn of_key_file(pair: &crate::brand::Pair, file: &MailKeyFile) -> Result<Self, String> {
+        let (current, legacy) = (Self::of(&pair.cur), Self::of(&pair.legacy));
+        match file.labels.as_deref() {
+            None => {
+                if legacy != current {
+                    crate::brand::legacy_hit("mail-labels");
+                }
+                Ok(legacy)
+            }
+            Some(root) if root == current.root => Ok(current),
+            Some(root) if root == legacy.root => Ok(legacy),
+            Some(_) => Err("the mail key file names a label set this build does not know".into()),
+        }
+    }
+
+    /// What `key.json` records for this set: nothing for the old name's set
+    /// (which is what every older build reads a missing entry as).
+    fn key_file_entry(&self, pair: &crate::brand::Pair) -> Option<String> {
+        (*self != Self::of(&pair.legacy)).then(|| self.root.clone())
+    }
+
+    fn label(&self, leaf: &str) -> Vec<u8> {
+        format!("{}{leaf}", self.root).into_bytes()
+    }
+}
+
 /// One master key, purpose-bound subkeys via HKDF-SHA256.
 ///
 /// Compromise of one subkey does not hand over the others, and a purpose string
@@ -338,6 +399,9 @@ pub struct MailKeys {
     /// Retained so the key file can be re-wrapped (switching unlock mode, or
     /// raising the Argon2 parameters) without re-encrypting the whole store.
     master: Key,
+    /// The label set these keys were derived with; a re-wrap keeps it.
+    /// Boxed: the keys travel by value inside [`Unlock`].
+    labels: Box<LabelSet>,
     /// SQLite field values.
     pub field: Key,
     /// Blob and staged-attachment payloads.
@@ -368,16 +432,29 @@ fn subkey(hk: &Hkdf<Sha256>, label: &[u8]) -> Key {
 }
 
 impl MailKeys {
+    /// The keys of a store written under the current label set.
     pub fn derive(master: Key) -> Self {
+        Self::derive_with(master, LabelSet::current(&crate::brand::PAIR))
+    }
+
+    /// The keys of a store written under `labels`.
+    pub fn derive_with(master: Key, labels: LabelSet) -> Self {
         let hk = Hkdf::<Sha256>::new(None, master.as_bytes());
         MailKeys {
-            field: subkey(&hk, b"eldrun/mail/v1/field"),
-            blob: subkey(&hk, b"eldrun/mail/v1/blob"),
-            addr: subkey(&hk, b"eldrun/mail/v1/addr"),
-            name: subkey(&hk, b"eldrun/mail/v1/name"),
-            wrap: subkey(&hk, b"eldrun/mail/v1/wrap"),
+            field: subkey(&hk, &labels.label("field")),
+            blob: subkey(&hk, &labels.label("blob")),
+            addr: subkey(&hk, &labels.label("addr")),
+            name: subkey(&hk, &labels.label("name")),
+            wrap: subkey(&hk, &labels.label("wrap")),
             master,
+            labels: Box::new(labels),
         }
+    }
+
+    /// Whether these keys belong to a store still written under the app's
+    /// old name's label set (always false while the name is unchanged).
+    pub fn on_legacy_labels(&self) -> bool {
+        *self.labels != LabelSet::current(&crate::brand::PAIR)
     }
 }
 
@@ -433,12 +510,16 @@ pub struct MailKeyFile {
     /// Base64 Argon2 salt. Present in both modes so a mode switch never has to
     /// invent one.
     pub salt: String,
-    /// Base64 of `seal(kek, WRAP_AAD, master)`.
+    /// Base64 of `seal(kek, <the label set's wrap AAD>, master)`.
     pub wrapped: String,
+    /// The root of the label set the store is written under ([`LabelSet`]).
+    /// Absent in every store an older build wrote, and in every store written
+    /// while the app's name is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<String>,
 }
 
 const KEY_FILE_VERSION: u32 = 1;
-const WRAP_AAD: &[u8] = b"eldrun/mail/v1/master";
 
 pub fn key_file_path(dir: &Path) -> PathBuf {
     dir.join("key.json")
@@ -506,7 +587,7 @@ fn derive_passphrase_kek(passphrase: &str, salt: &[u8], kdf: KdfParams) -> Resul
     // 3 passes) and well below what would hurt.
     const MAX_M_COST_KIB: u32 = 1024 * 1024;
     if kdf.m_cost > MAX_M_COST_KIB || kdf.t_cost > 16 || kdf.p_cost > 8 {
-        return Err("the key file asks for Argon2 parameters beyond what Eldrun accepts".into());
+        return Err(concat!("the key file asks for Argon2 parameters beyond what ", crate::app_name!(), " accepts").into());
     }
     let params = Params::new(kdf.m_cost, kdf.t_cost, kdf.p_cost, Some(32))
         .map_err(|e| format!("bad Argon2 parameters: {e}"))?;
@@ -571,7 +652,7 @@ pub fn unlock(dir: &Path) -> Unlock {
     };
     if file.version != KEY_FILE_VERSION {
         return Unlock::Unavailable(format!(
-            "this mailbox was encrypted by a newer version of Eldrun (key file v{})",
+            concat!("this mailbox was encrypted by a newer version of ", crate::app_name!(), " (key file v{})"),
             file.version
         ));
     }
@@ -591,10 +672,15 @@ pub fn unlock(dir: &Path) -> Unlock {
 }
 
 fn unwrap_master(kek: &Key, file: &MailKeyFile) -> Result<MailKeys, String> {
+    unwrap_master_for(&crate::brand::PAIR, kek, file)
+}
+
+fn unwrap_master_for(pair: &crate::brand::Pair, kek: &Key, file: &MailKeyFile) -> Result<MailKeys, String> {
+    let labels = LabelSet::of_key_file(pair, file)?;
     let wrapped = B64
         .decode(&file.wrapped)
         .map_err(|_| "the mail key file is corrupt".to_string())?;
-    let master = open(kek, WRAP_AAD, &wrapped).map_err(|_| {
+    let master = open(kek, labels.wrap_aad.as_bytes(), &wrapped).map_err(|_| {
         "the mail store key did not fit — wrong passphrase, or the key file belongs to another store"
             .to_string()
     })?;
@@ -602,11 +688,15 @@ fn unwrap_master(kek: &Key, file: &MailKeyFile) -> Result<MailKeys, String> {
         .as_slice()
         .try_into()
         .map_err(|_| "the mail key file is corrupt".to_string())?;
-    Ok(MailKeys::derive(Key::from_bytes(arr)))
+    Ok(MailKeys::derive_with(Key::from_bytes(arr), labels))
 }
 
 /// Open a passphrase store.
 pub fn unlock_with_passphrase(dir: &Path, passphrase: &str) -> Result<MailKeys, String> {
+    unlock_with_passphrase_for(&crate::brand::PAIR, dir, passphrase)
+}
+
+fn unlock_with_passphrase_for(pair: &crate::brand::Pair, dir: &Path, passphrase: &str) -> Result<MailKeys, String> {
     let file = read_key_file(dir)?.ok_or_else(|| "this mailbox is not encrypted".to_string())?;
     if file.mode != UnlockMode::Passphrase {
         return Err("this mailbox does not use a passphrase".into());
@@ -615,7 +705,7 @@ pub fn unlock_with_passphrase(dir: &Path, passphrase: &str) -> Result<MailKeys, 
         .decode(&file.salt)
         .map_err(|_| "the mail key file is corrupt".to_string())?;
     let kek = derive_passphrase_kek(passphrase, &salt, file.kdf)?;
-    unwrap_master(&kek, &file)
+    unwrap_master_for(pair, &kek, &file)
 }
 
 // ── Enabling, and changing how it unlocks ───────────────────────────────────
@@ -645,19 +735,26 @@ pub fn enable_with_keychain(dir: &Path) -> Result<MailKeys, String> {
     let master = Key::random()?;
     let kek = Key::random()?;
     write_keychain_kek(&kek)?;
+    let pair = crate::brand::PAIR;
+    let labels = LabelSet::current(&pair);
     let file = MailKeyFile {
         version: KEY_FILE_VERSION,
         mode: UnlockMode::Keychain,
         kdf: KdfParams::default(),
         salt: B64.encode(fresh_salt()?),
-        wrapped: B64.encode(seal(&kek, WRAP_AAD, master.as_bytes())),
+        wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
+        labels: labels.key_file_entry(&pair),
     };
     write_key_file(dir, &file)?;
-    Ok(MailKeys::derive(master))
+    Ok(MailKeys::derive_with(master, labels))
 }
 
 /// Turn on at-rest encryption with a **new** master key, unlocked by passphrase.
 pub fn enable_with_passphrase(dir: &Path, passphrase: &str) -> Result<MailKeys, String> {
+    enable_with_passphrase_for(&crate::brand::PAIR, dir, passphrase)
+}
+
+fn enable_with_passphrase_for(pair: &crate::brand::Pair, dir: &Path, passphrase: &str) -> Result<MailKeys, String> {
     if is_enabled(dir) {
         return Err("this mailbox is already encrypted".into());
     }
@@ -668,15 +765,17 @@ pub fn enable_with_passphrase(dir: &Path, passphrase: &str) -> Result<MailKeys, 
     let salt = fresh_salt()?;
     let kdf = KdfParams::default();
     let kek = derive_passphrase_kek(passphrase, &salt, kdf)?;
+    let labels = LabelSet::current(pair);
     let file = MailKeyFile {
         version: KEY_FILE_VERSION,
         mode: UnlockMode::Passphrase,
         kdf,
         salt: B64.encode(&salt),
-        wrapped: B64.encode(seal(&kek, WRAP_AAD, master.as_bytes())),
+        wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
+        labels: labels.key_file_entry(pair),
     };
     write_key_file(dir, &file)?;
-    Ok(MailKeys::derive(master))
+    Ok(MailKeys::derive_with(master, labels))
 }
 
 /// Re-wrap the **same** master key under a different unlock mode.
@@ -684,6 +783,14 @@ pub fn enable_with_passphrase(dir: &Path, passphrase: &str) -> Result<MailKeys, 
 /// Nothing in the store is re-encrypted — that is the point of the wrap
 /// indirection. Switching from keychain to passphrase and back is a key-file
 /// rewrite, not a re-seal of a hundred thousand rows.
+///
+/// **Not a passphrase change.** Nothing calls this yet. Because the master key
+/// survives, a copy of the old `key.json` (a backup, a synced folder) plus the
+/// old passphrase still opens everything sealed after the switch. A user who
+/// changes a passphrase because it leaked expects the old one to stop working,
+/// so that action needs a new master key: today the only way to get a new
+/// passphrase is `mail_encryption_reset`, which mints one. Wire this only to a
+/// mode switch that says it keeps the key, or re-seal the store first.
 pub fn rewrap(
     dir: &Path,
     keys: &MailKeys,
@@ -713,7 +820,10 @@ pub fn rewrap(
         mode,
         kdf,
         salt: B64.encode(&salt),
-        wrapped: B64.encode(seal(&kek, WRAP_AAD, keys.master.as_bytes())),
+        // The same master key, so the same label set: what the rest of the
+        // store is sealed under does not change with how it unlocks.
+        wrapped: B64.encode(seal(&kek, keys.labels.wrap_aad.as_bytes(), keys.master.as_bytes())),
+        labels: keys.labels.key_file_entry(&crate::brand::PAIR),
     };
     write_key_file(dir, &file)?;
     // Leaving a stale KEK behind when switching *away* from the keychain would
@@ -994,6 +1104,12 @@ mod tests {
     /// Everything else about the path — salt, wrap, file layout — is identical,
     /// which is what makes the assertions above mean anything.
     fn enable_with_cheap_kdf(dir: &Path, passphrase: &str) -> MailKeys {
+        enable_with_cheap_kdf_for(&crate::brand::PAIR, dir, passphrase)
+    }
+
+    /// The same for a build with the brand pair `pair`.
+    fn enable_with_cheap_kdf_for(pair: &crate::brand::Pair, dir: &Path, passphrase: &str) -> MailKeys {
+        let labels = LabelSet::current(pair);
         let master = Key::random().unwrap();
         let salt = fresh_salt().unwrap();
         let kdf = KdfParams {
@@ -1007,9 +1123,149 @@ mod tests {
             mode: UnlockMode::Passphrase,
             kdf,
             salt: B64.encode(&salt),
-            wrapped: B64.encode(seal(&kek, WRAP_AAD, master.as_bytes())),
+            wrapped: B64.encode(seal(&kek, labels.wrap_aad.as_bytes(), master.as_bytes())),
+            labels: labels.key_file_entry(pair),
         };
         write_key_file(dir, &file).unwrap();
-        MailKeys::derive(master)
+        MailKeys::derive_with(master, labels)
+    }
+
+    /// A build before the rename: both halves of its pair are the old name.
+    const BEFORE: crate::brand::Pair = crate::brand::Pair {
+        cur: crate::brand::LEGACY,
+        legacy: crate::brand::LEGACY,
+    };
+    /// A build after it, under an invented name.
+    const RENAMED: crate::brand::Pair = crate::brand::Pair {
+        cur: crate::brand::Forms { display: "Newname", slug: "newname", upper: "NEWNAME" },
+        legacy: crate::brand::LEGACY,
+    };
+
+    /// One value of each kind a store holds, sealed under `keys`.
+    fn sealed_records(keys: &MailKeys) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+        let field = field_aad("acct", "messages", "subject", "m1");
+        let blob_bytes = b"attachment bytes".to_vec();
+        let blob = blob_aad(&blob_id(&keys.addr, &blob_bytes));
+        vec![
+            ("field", field.clone(), seal(&keys.field, &field, b"Re: the contract")),
+            ("blob", blob.clone(), seal(&keys.blob, &blob, &blob_bytes)),
+            ("accounts", accounts_aad(), seal(&keys.field, &accounts_aad(), b"[{\"id\":\"acct\"}]")),
+            ("keyring", b"pgp".to_vec(), seal(&keys.wrap, b"pgp", b"secret key material")),
+        ]
+    }
+
+    fn opens_all(keys: &MailKeys, records: &[(&'static str, Vec<u8>, Vec<u8>)]) -> bool {
+        records.iter().all(|(kind, aad, sealed)| {
+            let key = match *kind {
+                "blob" => &keys.blob,
+                "keyring" => &keys.wrap,
+                _ => &keys.field,
+            };
+            open(key, aad, sealed).is_ok()
+        })
+    }
+
+    /// THE property of the label sets: a store an older build wrote opens,
+    /// every record of it, after the app was renamed — because its key file
+    /// names no set and that is read as the old name's. Nothing in the store
+    /// is rewritten to get there.
+    #[test]
+    fn a_store_written_before_a_rename_opens_after_it_untouched() {
+        use crate::services::brand_migration::hits;
+        let dir = tempfile::tempdir().unwrap();
+        let before = enable_with_cheap_kdf_for(&BEFORE, dir.path(), "pw");
+        let records = sealed_records(&before);
+        let name_digest_before = name_digest(&before.name, "acct", "INBOX");
+        let key_file = std::fs::read(key_file_path(dir.path())).unwrap();
+        assert!(!String::from_utf8_lossy(&key_file).contains("labels"));
+
+        let _ = hits::taken();
+        let after = unlock_with_passphrase_for(&RENAMED, dir.path(), "pw").expect("unlocks");
+        assert_eq!(hits::taken(), ["mail-labels"]);
+        assert!(opens_all(&after, &records));
+        assert_eq!(name_digest(&after.name, "acct", "INBOX"), name_digest_before);
+        assert_eq!(blob_id(&after.addr, b"x"), blob_id(&before.addr, b"x"));
+        assert_eq!(*after.labels, LabelSet::of(&crate::brand::LEGACY));
+        // Unlocking wrote nothing.
+        assert_eq!(std::fs::read(key_file_path(dir.path())).unwrap(), key_file);
+    }
+
+    /// A store the renamed build creates is written under the current set,
+    /// says so in its key file, and shares no subkey with the old set.
+    #[test]
+    fn a_store_created_after_a_rename_uses_the_current_labels() {
+        use crate::services::brand_migration::hits;
+        let dir = tempfile::tempdir().unwrap();
+        let created = enable_with_cheap_kdf_for(&RENAMED, dir.path(), "pw");
+        let file = read_key_file(dir.path()).unwrap().unwrap();
+        assert_eq!(file.labels.as_deref(), Some("newname/mail/v1/"));
+        let records = sealed_records(&created);
+
+        let _ = hits::taken();
+        let reopened = unlock_with_passphrase_for(&RENAMED, dir.path(), "pw").expect("unlocks");
+        assert!(hits::taken().is_empty());
+        assert!(opens_all(&reopened, &records));
+        assert_eq!(*reopened.labels, LabelSet::current(&RENAMED));
+
+        // The same master under the old set gives other keys altogether.
+        let master = || Key::from_bytes([3u8; 32]);
+        let old = MailKeys::derive_with(master(), LabelSet::of(&crate::brand::LEGACY));
+        let new = MailKeys::derive_with(master(), LabelSet::current(&RENAMED));
+        for (a, b) in [
+            (&old.field, &new.field),
+            (&old.blob, &new.blob),
+            (&old.addr, &new.addr),
+            (&old.name, &new.name),
+            (&old.wrap, &new.wrap),
+        ] {
+            assert_ne!(a.as_bytes(), b.as_bytes());
+        }
+        // And the build before the rename cannot open it by mistake: it does
+        // not know the set the file names.
+        assert!(unlock_with_passphrase_for(&BEFORE, dir.path(), "pw").is_err());
+    }
+
+    /// A key file is editable by anyone who can write the mail folder: a
+    /// label set this build does not know is refused, not derived from.
+    #[test]
+    fn an_unknown_label_set_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        enable_with_cheap_kdf_for(&RENAMED, dir.path(), "pw");
+        let mut file = read_key_file(dir.path()).unwrap().unwrap();
+        file.labels = Some("someone-else/mail/v1/".into());
+        write_key_file(dir.path(), &file).unwrap();
+        let error = unlock_with_passphrase_for(&RENAMED, dir.path(), "pw").unwrap_err();
+        assert!(error.contains("label set"), "{error}");
+    }
+
+    /// While the name is unchanged: the key file has no `labels` entry (the
+    /// format older builds read), the labels are what they always were, and
+    /// no store counts as being on old labels.
+    #[test]
+    fn with_the_name_unchanged_the_key_file_and_the_labels_are_what_they_were() {
+        let pair = crate::brand::PAIR;
+        if pair.renamed() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let keys = enable_with_cheap_kdf(dir.path(), "pw");
+        let file = String::from_utf8(std::fs::read(key_file_path(dir.path())).unwrap()).unwrap();
+        assert!(!file.contains("labels"), "{file}");
+        assert!(!keys.on_legacy_labels());
+        let labels = LabelSet::current(&pair);
+        assert_eq!(labels.label("field"), crate::brand::mail_label("field"));
+        assert_eq!(labels.wrap_aad, crate::brand::MAIL_WRAP_AAD);
+        assert_eq!(labels, LabelSet::of(&crate::brand::LEGACY));
+        // Derived exactly as before this module knew of label sets.
+        let hk = Hkdf::<Sha256>::new(None, &[5u8; 32]);
+        let derived = MailKeys::derive(Key::from_bytes([5u8; 32]));
+        assert_eq!(
+            derived.field.as_bytes(),
+            subkey(&hk, &crate::brand::mail_label("field")).as_bytes()
+        );
+        assert_eq!(
+            derived.wrap.as_bytes(),
+            subkey(&hk, &crate::brand::mail_label("wrap")).as_bytes()
+        );
     }
 }

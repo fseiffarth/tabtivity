@@ -54,11 +54,11 @@ export function projectTypeTags(
       title: t("projectType.titleNoGit"),
     });
   } else {
-    // The provider badge normally rides on an Eldrun-published `remote-*`
-    // git_type, but a repo pushed to a host *outside* Eldrun carries only a
+    // The provider badge normally rides on a Tabtivity-published `remote-*`
+    // git_type, but a repo pushed to a host *outside* Tabtivity carries only a
     // detected provider (sniffed from `origin`; git_type stays "local"). Either
     // one lights up the badge; the ·public/·private suffix stays exclusive to
-    // Eldrun-published repos, since visibility can't be sniffed from the URL.
+    // Tabtivity-published repos, since visibility can't be sniffed from the URL.
     const published = gitType.startsWith("remote");
     const provider = project.git_provider ?? project.detected_provider;
     // A repo always carries the base "git" tag; when it's published, the hosting
@@ -75,7 +75,7 @@ export function projectTypeTags(
     });
     if (published || provider) {
       const providerLabel = provider === "gitlab" ? "GitLab" : "GitHub";
-      // Visibility is trustworthy only when Eldrun recorded it during publish;
+      // Visibility is trustworthy only when Tabtivity recorded it during publish;
       // an origin URL alone cannot reveal whether its repository is private.
       const label = published
         ? gitType === "remote-private"

@@ -301,7 +301,7 @@ describe("auto-connect opt-in", () => {
 });
 
 /**
- * The same opt-in, in the mode where Eldrun handles no passwords at all
+ * The same opt-in, in the mode where Tabtivity handles no passwords at all
  * (`connections_headless` off).
  *
  * The headless gate — a saved SSH password, or a `key_auth` host — can never pass
@@ -391,7 +391,7 @@ describe("auto-connect with connections_headless off", () => {
     await useProjectsStore.getState().setActive("remote1");
     await vi.advanceTimersByTimeAsync(0);
     expect(rootInputs()).toContain("pkexec openvpn --config /cfg.ovpn");
-    // Eldrun never handles the passphrase here, so the headless connect must not fire.
+    // Tabtivity never handles the passphrase here, so the headless connect must not fire.
     expect(invokeMock).not.toHaveBeenCalledWith("openvpn_connect", expect.anything());
     // Red, not "connecting" — the host is unreachable until the tunnel is up, and red
     // is what `retryAutoConnectAfterVpn` clears once the tunnel actually comes up.
@@ -422,7 +422,7 @@ describe("auto-connect with connections_headless off", () => {
     // The project's own VPN lamp is likewise never stuck yellow (it defaults to "off"
     // as a side effect of setting the SSH lamp; it must never be "connecting").
     expect(vpnLamp()).not.toBe("connecting");
-    // Eldrun handles no passphrase here, so no silent connect fires.
+    // Tabtivity handles no passphrase here, so no silent connect fires.
     expect(invokeMock).not.toHaveBeenCalledWith("openvpn_connect", expect.anything());
   });
 

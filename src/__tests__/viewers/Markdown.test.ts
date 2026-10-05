@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderMarkdown, toggleTaskCheckbox } from "../../lib/viewers/markdown";
+import { renderMarkdown, taskSourceLines, toggleTaskCheckbox } from "../../lib/viewers/markdown";
 
 describe("renderMarkdown", () => {
   it("renders ATX headings", () => {
@@ -267,3 +267,11 @@ describe("toggleTaskCheckbox", () => {
 });
 // Link labels (images/code/math inside `[…](…)`) and the placeholder scheme they
 // share are covered in MarkdownLinkLabel.test.ts.
+
+describe("taskSourceLines", () => {
+  it("lists task lines in toggleTaskCheckbox's order, skipping fenced code", () => {
+    const src = "- [ ] a\n```\n- [ ] code\n```\n  * [x] b\n1. [ ] numbered";
+    expect(taskSourceLines(src)).toEqual(["- [ ] a", "  * [x] b"]);
+    expect(toggleTaskCheckbox(src, 1)).toBe(src.replace("* [x] b", "* [ ] b"));
+  });
+});

@@ -28,8 +28,9 @@ import {
   remoteMemberTreeDir,
   resolveMoveTarget,
 } from "../../lib/projects/fileMove";
+import { BRAND } from "../../lib/brand";
 
-const LOCAL_A = { root: "/home/u/eldrun/projects/a", folderRel: "src", remote: false };
+const LOCAL_A = { root: `/home/u/${BRAND.slug}/projects/a`, folderRel: "src", remote: false };
 
 describe("resolveMoveTarget", () => {
   it("same root: an ordinary folder is a plain move", () => {
@@ -54,26 +55,26 @@ describe("resolveMoveTarget", () => {
     // Regression core: this used to commit against the SOURCE root with the
     // target's rel path — the "strangely moved folders" report.
     const r = resolveMoveTarget(
-      { rel: "data", root: "/home/u/eldrun/projects/b", remote: false },
+      { rel: "data", root: `/home/u/${BRAND.slug}/projects/b`, remote: false },
       LOCAL_A,
     );
-    expect(r).toEqual({ root: "/home/u/eldrun/projects/b", rel: "data", crossRoot: true });
+    expect(r).toEqual({ root: `/home/u/${BRAND.slug}/projects/b`, rel: "data", crossRoot: true });
   });
 
   it("cross root: the SAME rel path in another project is still a real move", () => {
     // `rel === folderRel` only means "no-op" within one tree; across roots it
     // is a genuine destination.
     const r = resolveMoveTarget(
-      { rel: "src", root: "/home/u/eldrun/projects/b", remote: false },
+      { rel: "src", root: `/home/u/${BRAND.slug}/projects/b`, remote: false },
       LOCAL_A,
     );
-    expect(r).toEqual({ root: "/home/u/eldrun/projects/b", rel: "src", crossRoot: true });
+    expect(r).toEqual({ root: `/home/u/${BRAND.slug}/projects/b`, rel: "src", crossRoot: true });
   });
 
   it("cross root refuses a remote target (move_path is local-fs only)", () => {
     expect(
       resolveMoveTarget(
-        { rel: "data", root: "/home/u/eldrun/projects/r", remote: true },
+        { rel: "data", root: `/home/u/${BRAND.slug}/projects/r`, remote: true },
         LOCAL_A,
       ),
     ).toBeNull();
@@ -82,18 +83,18 @@ describe("resolveMoveTarget", () => {
   it("cross root refuses a remote SOURCE tree", () => {
     expect(
       resolveMoveTarget(
-        { rel: "data", root: "/home/u/eldrun/projects/b", remote: false },
-        { root: "/home/u/eldrun/projects/r", folderRel: "", remote: true },
+        { rel: "data", root: `/home/u/${BRAND.slug}/projects/b`, remote: false },
+        { root: `/home/u/${BRAND.slug}/projects/r`, folderRel: "", remote: true },
       ),
     ).toBeNull();
   });
 
   it("a remote tree still moves within itself (same-root path unchanged)", () => {
     const r = resolveMoveTarget(
-      { rel: "out", root: "/home/u/eldrun/projects/r", remote: true },
-      { root: "/home/u/eldrun/projects/r", folderRel: "", remote: true },
+      { rel: "out", root: `/home/u/${BRAND.slug}/projects/r`, remote: true },
+      { root: `/home/u/${BRAND.slug}/projects/r`, folderRel: "", remote: true },
     );
-    expect(r).toEqual({ root: "/home/u/eldrun/projects/r", rel: "out", crossRoot: false });
+    expect(r).toEqual({ root: `/home/u/${BRAND.slug}/projects/r`, rel: "out", crossRoot: false });
   });
 });
 
@@ -129,7 +130,7 @@ describe("moveDestRel / movedEntryAbs", () => {
 });
 
 describe("remoteMemberTreeDir (box member Remote/Local switch)", () => {
-  const stateDir = "/home/u/eldrun/projects/r";
+  const stateDir = `/home/u/${BRAND.slug}/projects/r`;
 
   it("remote side lists the state dir (backend resolves it to the host)", () => {
     expect(remoteMemberTreeDir(stateDir, "/mnt/mirror", "remote")).toBe(stateDir);

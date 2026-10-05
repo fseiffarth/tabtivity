@@ -7,11 +7,11 @@
 //! `~/.copilot/config.json` as plain text — inside the fence's throwaway home,
 //! which is gone at the next respawn. Every fenced tab asked for a new login.
 //!
-//! Eldrun runs outside the fence, so it keeps the token instead, in its **own**
+//! Tabtivity runs outside the fence, so it keeps the token instead, in its **own**
 //! keyring entry, and hands it to every fenced Copilot as [`TOKEN_ENV`], which
 //! Copilot reads before any stored login:
 //!
-//! 1. Each scope's Copilot home is `~/.copilot` of its Eldrun-owned agent home
+//! 1. Each scope's Copilot home is `~/.copilot` of its Tabtivity-owned agent home
 //!    (`services::agent_home`), never the user's own: a fenced Copilot must not plant trusted folders, hooks or MCP
 //!    servers that the host's uncontained Copilot would honour, nor reach
 //!    another project's copy. Its `settings.json` turns on Copilot's own
@@ -61,7 +61,7 @@ const TOKEN_KEYS: &[&str] = &["authTokens", "copilotTokens", "copilot_tokens"];
 const LAST_USER_KEYS: &[&str] = &["lastLoggedInUser", "last_logged_in_user"];
 const PLAINTEXT_SETTING: &str = "storeTokenPlaintext";
 
-/// The scope's Copilot home: `~/.copilot` of its Eldrun-owned agent home
+/// The scope's Copilot home: `~/.copilot` of its Tabtivity-owned agent home
 /// (`services::agent_home`), which the fence mounts as the tab's `$HOME`.
 fn home_in(state_dir: &Path, scope_id: &str) -> PathBuf {
     crate::services::agent_home::scope_home_in(state_dir, scope_id).join(".copilot")
@@ -219,7 +219,7 @@ fn stored_token() -> Option<String> {
 }
 
 /// Give a fenced Copilot spawn the stored token. A token the user set up
-/// themselves (in Eldrun's environment or the tab's) is left to win.
+/// themselves (in Tabtivity's environment or the tab's) is left to win.
 pub(crate) fn inject_env(env: &mut HashMap<String, String>) {
     let user_set = USER_TOKEN_ENVS
         .iter()
@@ -236,7 +236,7 @@ fn client() -> Result<reqwest::Client, String> {
     // `reqwest` is built with `rustls-no-provider`; see `app_update::client`.
     crate::services::mail_engine::install_crypto_provider();
     reqwest::Client::builder()
-        .user_agent(concat!("Eldrun/", env!("CARGO_PKG_VERSION")))
+        .user_agent(crate::brand::user_agent())
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -463,7 +463,7 @@ mod tests {
         let path = dir.path().join("config.json");
         let victim = dir.path().join("victim");
         std::fs::write(&victim, "keep").unwrap();
-        let planted = path.with_extension(format!("eldrun-{}.tmp", std::process::id()));
+        let planted = path.with_extension(format!(concat!(crate::app_slug!(), "-{}.tmp"), std::process::id()));
         std::os::unix::fs::symlink(&victim, planted).unwrap();
         let file = HomeFile::open(dir.path(), "config.json").unwrap();
         write_private(&file, "", &serde_json::json!({"model": "x"})).unwrap();

@@ -7,7 +7,7 @@ import type { TabKind } from "./tabs";
  *
  * It used to be a native OS `confirm()` with the whole question crammed into one
  * sentence ("stops 3 terminal tab(s) and 1 persistent tmux session(s)…"). Two
- * problems with that: the platform dialog is the only piece of chrome in Eldrun
+ * problems with that: the platform dialog is the only piece of chrome in Tabtivity
  * that ignores the theme, and a count is not an inventory — "3 tabs" does not
  * tell you whether one of them is the training run you started an hour ago. The
  * in-app dialog names them.

@@ -4,8 +4,9 @@
  * recommendation. Store- and Tauri-free, so it is unit-testable on its own.
  */
 import type { TranslationKey } from "../../../lib/i18n";
+import { storageKey } from "../../../lib/brand";
 
-export const INTRO_PAGES = ["welcome", "projects", "agents", "localModels", "askEldrun", "done"] as const;
+export const INTRO_PAGES = ["welcome", "projects", "agents", "localModels", "askApp", "done"] as const;
 export type IntroPage = (typeof INTRO_PAGES)[number];
 
 export const INTRO_PAGE_TITLE_KEYS: Record<IntroPage, TranslationKey> = {
@@ -13,13 +14,13 @@ export const INTRO_PAGE_TITLE_KEYS: Record<IntroPage, TranslationKey> = {
   projects: "intro.page.projects",
   agents: "intro.page.agents",
   localModels: "intro.page.localModels",
-  askEldrun: "intro.page.askEldrun",
+  askApp: "intro.page.askApp",
   done: "intro.page.done",
 };
 
 /** The page the wizard was left on survives a close and a window reload — a
  *  per-viewer convenience, so localStorage (and nothing breaks without it). */
-const PAGE_KEY = "eldrun.intro.page";
+const PAGE_KEY = storageKey("intro.page");
 
 export function readIntroPage(): IntroPage {
   try {
@@ -47,7 +48,7 @@ export const FEATURED_AGENT_IDS = ["claude", "codex", "gemini"] as const;
 export type FeaturedAgentId = (typeof FEATURED_AGENT_IDS)[number];
 
 /** What the optional "sign in now" button runs in a terminal tab: each CLI's
- *  own first-run login (Eldrun does no agent login itself; the first agent tab
+ *  own first-run login (Tabtivity does no agent login itself; the first agent tab
  *  would ask the same). Interactive — a browser handoff or a pasted key — which
  *  is why it is a visible terminal and never a headless call. */
 export const AGENT_SIGN_IN_CMD: Record<FeaturedAgentId, string> = {

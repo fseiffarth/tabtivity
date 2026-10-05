@@ -3,20 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Eldrun</title>
+    <title>Tabtivity</title>
     <script>
       // Apply the theme BEFORE first paint. Settings arrive over an async
       // Tauri invoke, so without this the page renders ~1s with the CSS
       // :root default (fancy_dark tokens) and then snaps to the real theme.
       // stores/settings.ts keeps this cache in sync on every theme change;
-      // "dark" (Plain Dark) mirrors the backend default (schema::settings).
+      // "light_lavender" mirrors the backend default (schema::settings).
+      //
+      // The keys carry the app's name (src/lib/brand.ts, `storageDashKey`).
+      // What an older build cached under the app's old name is moved to the
+      // current keys by brandMigrationBoot — a module, so it runs after this
+      // script. On the first launch after the rename only the old keys exist:
+      // read those then, or that launch paints the default theme first.
+      var KEY = "tabtivity-";
+      var OLD_KEY = "eldrun-";
+      function stored(name) {
+        var value = localStorage.getItem(KEY + name);
+        return value === null ? localStorage.getItem(OLD_KEY + name) : value;
+      }
       try {
-        document.documentElement.setAttribute(
-          "data-theme",
-          localStorage.getItem("eldrun-theme") || "dark",
-        );
+        document.documentElement.setAttribute("data-theme", stored("theme") || "light_lavender");
       } catch (_) {
-        document.documentElement.setAttribute("data-theme", "dark");
+        document.documentElement.setAttribute("data-theme", "light_lavender");
       }
       // Same bargain for the appearance overrides (custom accent color, the
       // Theme Customizer's per-token colors, corner style —
@@ -28,7 +37,7 @@
       // back to the theme.
       try {
         var s = document.documentElement.style;
-        var accent = localStorage.getItem("eldrun-accent");
+        var accent = stored("accent");
         if (accent && /^#[0-9a-fA-F]{6}$/.test(accent)) {
           s.setProperty("--accent", accent);
           s.setProperty("--accent-hover", "color-mix(in srgb, var(--accent) 84%, var(--text-primary))");
@@ -41,7 +50,7 @@
         // like the map that wrote them: only `--name` keys with a hex value
         // reach the root style, so a stale or tampered cache can only ever set
         // colors on custom properties, never arbitrary CSS.
-        var raw = localStorage.getItem("eldrun-theme-vars");
+        var raw = stored("theme-vars");
         if (raw) {
           var vars = JSON.parse(raw);
           for (var k in vars) {
@@ -51,7 +60,7 @@
             s.setProperty(k, vars[k]);
           }
         }
-        var corners = localStorage.getItem("eldrun-corners");
+        var corners = stored("corners");
         var radii = corners === "rounded" ? ["4px", "8px", "12px"]
           : corners === "square" ? ["0px", "0px", "0px"] : null;
         if (radii) {

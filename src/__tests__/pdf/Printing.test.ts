@@ -29,6 +29,7 @@ import {
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import type { PrintJob, PrintJobState, PrintSnapshot, PrinterInfo } from "../../types/printing";
+import { NAMES } from "../../lib/brand";
 
 function printer(over: Partial<PrinterInfo> = {}): PrinterInfo {
   return {
@@ -242,7 +243,7 @@ describe("printPdfNative", () => {
   });
 
   it("falls back when the platform or the running backend has no native path", async () => {
-    mocked.mockRejectedValueOnce("eldrun-native-print-unsupported");
+    mocked.mockRejectedValueOnce(NAMES.nativePrintUnsupported);
     await expect(printPdfNative(new Uint8Array([1]), "a.pdf")).resolves.toBe("unsupported");
     mocked.mockRejectedValueOnce("Command print_pdf_native not found");
     await expect(printPdfNative(new Uint8Array([1]), "a.pdf")).resolves.toBe("unsupported");

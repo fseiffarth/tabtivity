@@ -11,7 +11,7 @@ the code comments at `services::sandbox::resolve_spawn_authority`,
 
 ## The one sentence that explains every item below
 
-**Eldrun's own control files live inside the container's writable project mount,
+**Tabtivity's own control files live inside the container's writable project mount,
 and the host reads them back as executable intent.** The container itself is
 sound — no docker socket, `--cap-drop ALL`, `--security-opt no-new-privileges`,
 non-root `--user <uid>:<gid>`, `--pids-limit`, `--init` — but a boundary whose
@@ -24,7 +24,7 @@ property, because a validator list can never be shown to be complete.
 ## What the perimeter is now
 
 Worth stating, because it changes the priority of everything else: the review
-tried to reach the privileged renderer from every hostile-content surface Eldrun
+tried to reach the privileged renderer from every hostile-content surface Tabtivity
 renders and **could not**. The CSP (`script-src 'self' blob:`, no
 `unsafe-inline`, `withGlobalTauri` off) blocks the `dangerouslySetInnerHTML`
 sinks in the markdown/notebook/compare/ODT viewers, and the mail body and
@@ -32,7 +32,7 @@ HTML/SVG previews are additionally in `<iframe sandbox="">`.
 
 The one confirmed exception was dev-mode Vite HMR executing repo-authored
 `src/**` in the main webview — which required an agent with write access to the
-*Eldrun checkout itself*. That is no longer how Eldrun is developed, so there is
+*Tabtivity checkout itself*. That is no longer how Tabtivity is developed, so there is
 no confirmed renderer-execution path at all.
 
 Consequence: **the CSP is load-bearing** (pinned by
@@ -42,7 +42,7 @@ bug rather than a live hole.
 
 Two confirmed escape classes remain, and they are the same sentence twice — the
 container's writable area holds files the host reads as intent. Phase 1 (#142) is
-Eldrun's own control files. The second, found later, is **the repo's `.git`**:
+Tabtivity's own control files. The second, found later, is **the repo's `.git`**:
 `.git/config` names programs git runs, and `core.fsmonitor` fires on the polled
 `git status` behind the file tree, so it needs no user action. Verified live, and
 partly mitigated in code (`commands::git::hardened_git_args`) — the residual and
@@ -88,7 +88,7 @@ what was forgotten twice. Afterwards the rule is structural and testable.
 
 | What | Where | Read by |
 |------|-------|---------|
-| tab layout (`cmd`/`env`/`cwd`/`location`/`resumeArgs`/`agentMode`) | `<project>/.eldrun/sessions/terminals.json`, falling back to `project.json`'s `tab_layout`/`tab_groups`/`open_tab_sessions` | `terminal_service::load_terminal_session`, `commands::projects::load_project` |
+| tab layout (`cmd`/`env`/`cwd`/`location`/`resumeArgs`/`agentMode`) | `<project>/.tabtivity/sessions/terminals.json`, falling back to `project.json`'s `tab_layout`/`tab_groups`/`open_tab_sessions` | `terminal_service::load_terminal_session`, `commands::projects::load_project` |
 | `open_apps` (host auto-exec on activation) | `<project>/project.json` | `terminal_service::load_open_apps` → `project_runtime::switch` → `restore_service::restore_project_apps` |
 
 The sandbox spec is already read only from `projects.json` in the state dir (that
@@ -131,7 +131,7 @@ The whole `terminal_service` API is keyed by `local_file` (the path to
 ### Costs — accept these explicitly before starting
 
 - **The layout stops travelling with the folder.** Small in practice:
-  `project.json` is already gitignored for Eldrun-created projects, so this only
+  `project.json` is already gitignored for Tabtivity-created projects, so this only
   affects copying or moving a directory by hand.
 - **It does affect byte-sync / multi-host.** A project folder synced between
   machines currently carries its tab layout; afterwards it does not. This is the
@@ -165,7 +165,7 @@ reintroduces a project-tree read.
 > **State what this buys, because the plan overstates it.** With Phase 1 done, the
 > layout is no longer attacker-writable, so this is not primarily a containment
 > fix any more. What it removes is the *coupling*: the exemption was keyed on
-> `ELDRUN_LOCAL_MODEL`, a label `TabBar.tsx` sets for the usage recap — so any
+> `TABTIVITY_LOCAL_MODEL`, a label `TabBar.tsx` sets for the usage recap — so any
 > future surface setting it for a display reason would have handed out container
 > escapes with nothing failing. It does **not** defend against a compromised
 > renderer: registration is a command the renderer calls, so a renderer that can
@@ -177,8 +177,8 @@ small.
 
 `sandbox::is_host_bound_local_agent` grants a tab the right to skip the container
 when its `cmd` is in `HOST_BOUND_LOCAL_AGENT_CMDS` **and** its env carries
-`ELDRUN_LOCAL_MODEL`. Both came from the persisted layout, and
-`ELDRUN_LOCAL_MODEL` was never an authority marker — `TabBar.tsx` sets it so the
+`TABTIVITY_LOCAL_MODEL`. Both came from the persisted layout, and
+`TABTIVITY_LOCAL_MODEL` was never an authority marker — `TabBar.tsx` sets it so the
 usage recap can break local-agent tabs down by model. An authority decision was
 keyed on a telemetry label.
 
@@ -194,7 +194,7 @@ the host instead of in the container.
 **Fix.** Record host-bound-ness where the container cannot write it — a marker
 file under `<state_dir>/sessions/<project>/host_bound/<tab uid>`, written when the
 tab is genuinely created by `TabBar`/`NewTabMenu`, and required by
-`is_host_bound_local_agent` in addition to the cmd allowlist. `ELDRUN_LOCAL_MODEL`
+`is_host_bound_local_agent` in addition to the cmd allowlist. `TABTIVITY_LOCAL_MODEL`
 goes back to being only a usage label. The tab uid is already stable across
 relaunch (unlike the PTY id), so a legitimate restored Ollama tab keeps working.
 
@@ -219,9 +219,9 @@ read and write **every** project's conversation history — a confidentiality br
 on its own, and the enabler for the `live_sessions` lateral-movement trick that
 the per-project mount only half-closes.
 
-Claude keys transcripts by **encoded cwd**, not by Eldrun project: a repo at
-`/home/user/eldrun/projects/myproject` has its transcripts under
-`~/.claude/projects/-home-user-eldrun-projects-myproject/`,
+Claude keys transcripts by **encoded cwd**, not by Tabtivity project: a repo at
+`/home/user/tabtivity/projects/myproject` has its transcripts under
+`~/.claude/projects/-home-user-tabtivity-projects-myproject/`,
 i.e. `/` → `-` with a leading `-`.
 
 **The cost is the point:** that encoding is undocumented and belongs to another
@@ -339,9 +339,9 @@ from project.json" is the thing this makes impossible to do by accident. It was
 verified to *fail* on a planted read, not just to pass.
 
 One thing the move forced: these tests now write to the state dir, so
-`storage::state_dir()` honours `ELDRUN_STATE_DIR` and the suites point it at a
+`storage::state_dir()` honours `TABTIVITY_STATE_DIR` and the suites point it at a
 temp dir. A test run must never touch the developer's real
-`~/.local/share/eldrun/`.
+`~/.local/share/tabtivity/`.
 
 Baseline to preserve: the Rust suite was green at 1269 immediately after the
 audit pass, and the frontend at 2108 with `tsc --noEmit` clean. After Phases 1+2:

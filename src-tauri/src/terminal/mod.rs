@@ -1,4 +1,4 @@
-//! PTY lifecycle management for Eldrun terminals.
+//! PTY lifecycle management for Tabtivity terminals.
 //!
 //! Design constraints from TauriRust.md Phase 3:
 //! - portable-pty for cross-platform PTY creation.
@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+
+use crate::services::window_service::MAIN_WINDOW_LABEL;
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -169,6 +171,19 @@ impl OutputRoute {
         self.visible_viewers.values().any(|v| v.visible) || self.watchers > 0
     }
 
+    /// Every window other than the main one with a view of this PTY registered,
+    /// shown or hidden (a hidden view still buffers what a sibling view streams).
+    /// See `emit_output`.
+    fn viewer_windows(&self) -> Vec<String> {
+        let mut windows: Vec<String> = Vec::new();
+        for v in self.visible_viewers.values() {
+            if v.window != MAIN_WINDOW_LABEL && !windows.contains(&v.window) {
+                windows.push(v.window.clone());
+            }
+        }
+        windows
+    }
+
     /// Append to the always-on catch-up tail. Called for every routed chunk,
     /// visible or not — that is the point: the question it answers is "what has
     /// this terminal shown", which does not depend on who was watching.
@@ -186,6 +201,7 @@ impl OutputRoute {
             text,
             start_offset,
             end_offset: self.output_offset,
+            windows: Vec::new(),
         }
     }
 
@@ -211,6 +227,7 @@ impl OutputRoute {
             text,
             start_offset,
             end_offset: self.output_offset,
+            windows: self.viewer_windows(),
         })
     }
 }
@@ -224,6 +241,15 @@ impl Utf8StreamDecoder {
     /// Decode all complete UTF-8 in `bytes`, retaining only an incomplete suffix
     /// for the next PTY read. Invalid sequences are replaced exactly once.
     fn push(&mut self, bytes: &[u8]) -> String {
+        // The common case — no split codepoint carried over, a chunk that is
+        // all valid UTF-8 — is one validation and one copy, rather than a copy
+        // into `pending`, a validation and a second copy out of it. Every flush
+        // of every PTY comes through here.
+        if self.pending.is_empty() {
+            if let Ok(valid) = std::str::from_utf8(bytes) {
+                return valid.to_owned();
+            }
+        }
         self.pending.extend_from_slice(bytes);
         let mut out = String::new();
         loop {
@@ -297,6 +323,10 @@ struct OutputSlice {
     text: String,
     start_offset: u64,
     end_offset: u64,
+    /// The secondary windows (popouts) holding a view of this PTY, each sent
+    /// its own copy of the chunk (`emit_output`). Filled only when the slice is
+    /// emitted; empty for a PTY shown only in the main window.
+    windows: Vec<String>,
 }
 
 /// What the batcher should do with one flushed chunk.
@@ -334,8 +364,9 @@ fn route_chunk_at(id: &str, bytes: &[u8], now: Instant, seq: u64) -> Routed {
     if text.is_empty() {
         return Routed::Quiet;
     }
-    let slice = route.retain(text);
+    let mut slice = route.retain(text);
     if route.subscribed() {
+        slice.windows = route.viewer_windows();
         return Routed::Data(slice);
     }
     route.push_pending(&slice);
@@ -378,8 +409,9 @@ fn route_finish(id: &str, seq: u64) -> Routed {
     if text.is_empty() {
         return Routed::Quiet;
     }
-    let slice = route.retain(text);
+    let mut slice = route.retain(text);
     if route.subscribed() {
+        slice.windows = route.viewer_windows();
         return Routed::Data(slice);
     }
     route.push_pending(&slice);
@@ -469,16 +501,28 @@ fn route_close(id: &str, seq: u64) -> bool {
 /// guaranteed to precede any output produced after the flip.
 fn emit_replay(app: &AppHandle, id: &str, route: &mut OutputRoute) {
     if let Some(slice) = route.take_pending() {
-        let _ = app.emit(
-            "terminal-replay",
-            TerminalOutput {
-                id: id.to_string(),
-                data: slice.text,
-                start_offset: Some(slice.start_offset),
-                end_offset: Some(slice.end_offset),
-            },
-        );
+        emit_output(app, "terminal-replay", id, slice);
     }
+}
+
+/// Emit a chunk of a PTY's output (`terminal-output`) or a replay
+/// (`terminal-replay`). Tauri evaluates every emit in every webview that
+/// listens for that event name, whatever the listener's target, so one shared
+/// name made each popout parse every chunk of every PTY the main window
+/// streams. The main window keeps the plain name: it receives every chunk, as
+/// its activity classifier needs. A popout listens on `<event>:<its label>`
+/// (`terminalBus.ts`) and gets only the PTYs it has a view of.
+fn emit_output(app: &AppHandle, event: &str, id: &str, slice: OutputSlice) {
+    let payload = TerminalOutput {
+        id: id.to_string(),
+        data: slice.text,
+        start_offset: Some(slice.start_offset),
+        end_offset: Some(slice.end_offset),
+    };
+    for window in &slice.windows {
+        let _ = app.emit(&format!("{event}:{window}"), &payload);
+    }
+    let _ = app.emit(event, payload);
 }
 
 /// One TerminalView instance's visibility report (`pty_set_visible`). `window`
@@ -631,7 +675,7 @@ pub struct PtyOptions {
     #[serde(default)]
     pub schedule_target_id: Option<String>,
     /// The root console's **Host session**: an agent that runs unfenced, with
-    /// the user's full rights, in Eldrun's `host` agent home
+    /// the user's full rights, in Tabtivity's `host` agent home
     /// (`docs/context/agent_authority.md`). Honoured only with no
     /// `project_id`; a project tab that sets it is fenced like any other.
     #[serde(default)]
@@ -645,7 +689,7 @@ pub struct PtyOptions {
     pub remote_host_id: Option<String>,
     /// Persistent remote session (TODO #85): the **stable tmux session name** to
     /// spawn-or-attach on the host, wrapping the spawn in `tmux new-session -A` so
-    /// the run survives an SSH drop / laptop sleep / Eldrun relaunch. The frontend
+    /// the run survives an SSH drop / laptop sleep / Tabtivity relaunch. The frontend
     /// mints it once per shell tab and **persists it** (`TabEntry.tmuxSession`), so
     /// it is stable across a relaunch even though the tab's PTY id (`scope:key`) is
     /// regenerated on restore — that stability is what makes reattach work. Set
@@ -667,9 +711,15 @@ pub struct PtyOptions {
     /// It is only an *index*: the grant itself is a file under
     /// `<state_dir>/sessions/<project>/host_bound/`, written when the tab is
     /// genuinely created. This replaced keying that decision on the tab's
-    /// `ELDRUN_LOCAL_MODEL` env var, which is a usage-recap label.
+    /// `TABTIVITY_LOCAL_MODEL` env var, which is a usage-recap label.
     #[serde(default)]
     pub host_bound_uid: Option<String>,
+    /// A local-model tab (`kind: "local_agent"`): its agent gets the scope's
+    /// local-model home (`services::agent_home::local_model_home`) instead of
+    /// the scope's own, so an Ollama launch's config and sessions stay apart.
+    /// Chooses a home only; it grants nothing — both homes are fenced alike.
+    #[serde(default)]
+    pub local_model: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -901,35 +951,33 @@ impl PtyRegistry {
             .collect()
     }
 
+    /// Kill one PTY and its process subtree: [`Self::take`] plus
+    /// [`TakenPty::teardown`]. Holds `self` for the whole teardown, a full
+    /// process-table walk included — callers that share the registry behind a
+    /// lock should `take` under it and tear down after releasing it.
     pub fn kill(&mut self, id: &str) {
-        if let Some(mut e) = self.entries.remove(id) {
-            e.dead.store(true, Ordering::SeqCst);
-            // Abort the child's whole process subtree, not just the shell leader.
-            // `child.kill()` below reaps only the leader, so a long-running
-            // descendant (a dev server, a build, a training run) started in the
-            // tab would otherwise be orphaned and keep running after the tab
-            // closes. Gather the subtree first — it is unreachable once the
-            // leader dies and its children reparent to init.
-            if let Some(pid) = e.child.process_id() {
-                reap_child_subtree(pid, ReapMode::Graceful);
-            }
-            let _ = e.child.kill();
-            // The tree shrank; drop the cached descendant-pid set.
-            invalidate_proc_tree_cache();
-            // The tab is gone for good, so stop watching for its Codex session.
-            crate::services::codex_bind::untrack_now(id);
-            // Containerized tab: killing the child above only killed the
-            // `docker exec` CLIENT — TERM the process inside the container too
-            // (best-effort, no-op for tabs that never containerized).
-            crate::services::sandbox::kill_tab_process(id);
-            crate::services::agent_fence::on_tab_gone(id);
-            crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), id);
+        if let Some(taken) = self.take(id) {
+            taken.teardown();
         }
+    }
+
+    /// Remove a PTY from the registry and mark it dead, leaving the teardown
+    /// (process-tree walk, signals, per-tab cleanups) to the caller.
+    ///
+    /// Exists because the registry lock is on the keystroke path: `pty_write`
+    /// takes it to find the input channel, for every key in every tab. Tearing
+    /// down under it — a `/proc` walk per closed tab — stalled typing in every
+    /// other tab for as long as a tab (or a whole project's tabs, one walk
+    /// each) took to close.
+    pub fn take(&mut self, id: &str) -> Option<TakenPty> {
+        let entry = self.entries.remove(id)?;
+        entry.dead.store(true, Ordering::SeqCst);
+        Some(TakenPty { id: id.to_string(), entry })
     }
 
     /// Abort every live PTY and its process subtree. Called once at app exit so
     /// no terminal's inner process (a dev server, a build, a training run)
-    /// outlives Eldrun — dropping the registry alone kills only the shell
+    /// outlives Tabtivity — dropping the registry alone kills only the shell
     /// leaders and orphans everything they spawned. Uses [`ReapMode::Immediate`]
     /// because a delayed escalation thread would die with the exiting process.
     pub fn kill_all(&mut self) {
@@ -985,6 +1033,51 @@ impl PtyRegistry {
         entry.crash_times.push(now);
         true
     }
+}
+
+/// A PTY [`PtyRegistry::take`]n out of the registry, still to be torn down.
+pub struct TakenPty {
+    id: String,
+    entry: PtyEntry,
+}
+
+impl TakenPty {
+    /// Tear this one PTY down; see [`teardown_taken`].
+    pub fn teardown(self) {
+        teardown_taken(vec![self]);
+    }
+}
+
+/// Tear down PTYs taken out of the registry: abort each child's whole process
+/// subtree, not just the shell leader — `child.kill()` reaps only the leader,
+/// so a long-running descendant (a dev server, a build, a training run) would
+/// otherwise be orphaned and keep running after its tab closes. The subtrees
+/// are gathered first (they are unreachable once a leader dies and its
+/// children reparent to init), in ONE process-table walk for all of them, so
+/// closing a project's ten tabs costs one walk rather than ten.
+pub fn teardown_taken(taken: Vec<TakenPty>) {
+    if taken.is_empty() {
+        return;
+    }
+    let leaders: Vec<u32> = taken.iter().filter_map(|t| t.entry.child.process_id()).collect();
+    if !leaders.is_empty() {
+        // Fresh walk: a cached set may predate a just-spawned child.
+        crate::sysstat::invalidate_descendant_cache();
+        reap_pids(crate::sysstat::descendant_pids(&leaders), ReapMode::Graceful);
+    }
+    for TakenPty { id, mut entry } in taken {
+        let _ = entry.child.kill();
+        // The tab is gone for good, so stop watching for its Codex session.
+        crate::services::codex_bind::untrack_now(&id);
+        // Containerized tab: killing the child above only killed the
+        // `docker exec` CLIENT — TERM the process inside the container too
+        // (best-effort, no-op for tabs that never containerized).
+        crate::services::sandbox::kill_tab_process(&id);
+        crate::services::agent_fence::on_tab_gone(&id);
+        crate::services::root_mcp_review::on_tab_gone(&crate::storage::state_dir(), &id);
+    }
+    // The tree shrank; drop the cached descendant-pid set.
+    invalidate_proc_tree_cache();
 }
 
 fn pty_id_in_scope(id: &str, scope: &str) -> bool {
@@ -1096,20 +1189,11 @@ pub fn spawn_pty(
         .or_else(|| opts.env.get(crate::services::root_mcp::SCHEDULE_TOKEN_ENV)).cloned();
     let help_token = opts.env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned();
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
+    let markup_token = opts.env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned();
     tokio::spawn(async move {
         let emitter = app.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
-            Routed::Data(slice) => {
-                let _ = emitter.emit(
-                    "terminal-output",
-                    TerminalOutput {
-                        id: id.clone(),
-                        data: slice.text,
-                        start_offset: Some(slice.start_offset),
-                        end_offset: Some(slice.end_offset),
-                    },
-                );
-            }
+            Routed::Data(slice) => emit_output(&emitter, "terminal-output", &id, slice),
             Routed::Activity(text) => {
                 let _ = emitter.emit(
                     "terminal-activity",
@@ -1146,17 +1230,7 @@ pub fn spawn_pty(
         })
         .await;
         match route_finish(&id, route_seq) {
-            Routed::Data(slice) => {
-                let _ = emitter.emit(
-                    "terminal-output",
-                    TerminalOutput {
-                        id: id.clone(),
-                        data: slice.text,
-                        start_offset: Some(slice.start_offset),
-                        end_offset: Some(slice.end_offset),
-                    },
-                );
-            }
+            Routed::Data(slice) => emit_output(&emitter, "terminal-output", &id, slice),
             Routed::Activity(text) => {
                 let _ = emitter.emit(
                     "terminal-activity",
@@ -1192,6 +1266,12 @@ pub fn spawn_pty(
             if let Some(token) = push_token {
                 crate::services::root_mcp::revoke_token(&token);
                 let _ = app.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+            }
+            if let Some(token) = markup_token {
+                // The tab's open markup question goes with its session; the
+                // sweep rings `markup-mcp-changed` through the change hook.
+                crate::services::root_mcp::revoke_token(&token);
+                crate::services::markup_mcp::sweep();
             }
             if let Some(token) = mcp_token {
                 let state = crate::storage::state_dir();
@@ -1338,14 +1418,14 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     } else {
         opts.cmd.clone()
     };
-    // A bare tool name (e.g. "vibe"/"ollama") that Eldrun detected as installed
+    // A bare tool name (e.g. "vibe"/"ollama") that Tabtivity detected as installed
     // may still not be launchable on Windows: winget/uv/npm install into per-user
     // dirs (%LOCALAPPDATA%\Programs, %USERPROFILE%\.local\bin, %APPDATA%\npm, …)
     // that the PATH this process inherited often omits. Resolve to an absolute
     // path so the spawn finds it. No-op when the name already resolves on PATH or
     // carries a path — so ssh/docker-wrapped tabs (cmd "ssh"/"docker", both on
     // PATH) keep their remote/in-container binary names, which live in `args`.
-    // Eldrun's own helpers (the `ssh` of a remote tab, the local `tmux`) come
+    // Tabtivity's own helpers (the `ssh` of a remote tab, the local `tmux`) come
     // from the root-owned system dirs first, never a user-writable one (#861).
     let resolved = crate::paths::helper_program(std::ffi::OsStr::new(&cmd_str))
         .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str));
@@ -1370,10 +1450,10 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     {
         cmd.env_remove("GIO_LAUNCHED_DESKTOP_FILE");
         cmd.env_remove("GIO_LAUNCHED_DESKTOP_FILE_PID");
-        // Eldrun's own AT-SPI opt-out is about Eldrun's window (see
+        // Tabtivity's own AT-SPI opt-out is about Tabtivity's window (see
         // `services::webkit_a11y`); inherited, it would silently strip
         // accessibility from any other WebKitGTK app a tab launches. Dropped
-        // only when Eldrun set it — an address the user exported stays.
+        // only when Tabtivity set it — an address the user exported stays.
         if crate::services::webkit_a11y::installed() {
             cmd.env_remove(crate::services::webkit_a11y::BUS_ADDRESS_VAR);
         }
@@ -1659,7 +1739,7 @@ mod route_tests {
                 .insert("main-view".to_string(), viewer(false, "main"));
             route
                 .visible_viewers
-                .insert("popout-view".to_string(), viewer(true, "detached-p-g-1"));
+                .insert("popout-view".to_string(), viewer(true, "detached-p-g-2"));
         }
         // While the popout's view is registered the PTY streams…
         assert!(matches!(
@@ -1667,7 +1747,9 @@ mod route_tests {
             Routed::Data(_)
         ));
 
-        assert_eq!(route_drop_window_views("detached-p-g-1"), 1);
+        // Its own window label: the drop sweeps every route, and the other
+        // route tests run in parallel.
+        assert_eq!(route_drop_window_views("detached-p-g-2"), 1);
 
         // …and once its window is gone it goes back to buffering, exactly as it
         // would have if the pane had unmounted properly. The main window's own
@@ -1686,6 +1768,41 @@ mod route_tests {
             let mut map = routes().lock().unwrap();
             map.get_mut(id).unwrap().visible_viewers.remove("main-view");
         }
+        route_close(id, seq);
+    }
+
+    /// A chunk names each popout with a view of the PTY (shown or hidden) once,
+    /// and never the main window, which gets every chunk under the plain event.
+    #[test]
+    fn a_streamed_chunk_names_the_popouts_viewing_it() {
+        let id = "route-t-chunk-windows";
+        let seq = route_open(id);
+        {
+            let mut map = routes().lock().unwrap();
+            let route = map.get_mut(id).unwrap();
+            route.visible_viewers.insert("main-view".to_string(), viewer(true, "main"));
+            route
+                .visible_viewers
+                .insert("pop-a".to_string(), viewer(true, "detached-p-g-3"));
+            route
+                .visible_viewers
+                .insert("pop-b".to_string(), viewer(false, "detached-p-g-3"));
+        }
+        match route_chunk_at(id, b"live", Instant::now(), seq) {
+            Routed::Data(slice) => assert_eq!(slice.windows, vec!["detached-p-g-3".to_string()]),
+            other => panic!("expected data, got {other:?}"),
+        }
+        {
+            let mut map = routes().lock().unwrap();
+            let route = map.get_mut(id).unwrap();
+            route.visible_viewers.remove("pop-a");
+            route.visible_viewers.remove("pop-b");
+        }
+        match route_chunk_at(id, b"main-only", Instant::now(), seq) {
+            Routed::Data(slice) => assert!(slice.windows.is_empty()),
+            other => panic!("expected data, got {other:?}"),
+        }
+        routes().lock().unwrap().get_mut(id).unwrap().visible_viewers.remove("main-view");
         route_close(id, seq);
     }
 
@@ -1973,5 +2090,78 @@ mod tests {
             gone,
             "the inner process must be aborted when the tab is closed"
         );
+    }
+
+    /// `take` + `teardown_taken`, the shape `pty_kill_scope` uses: the PTYs
+    /// leave the registry at once (so the lock is free for every other tab's
+    /// keystrokes), and one teardown afterwards still aborts every tab's inner
+    /// process, not just the shell leaders.
+    #[test]
+    fn taken_ptys_leave_the_registry_and_one_teardown_reaps_every_subtree() {
+        let _cache_guard = crate::sysstat::lock_cache_for_test();
+        // SAFETY: kill(pid, 0) probes existence without signalling; no pointers.
+        let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+        let registry = Arc::new(Mutex::new(PtyRegistry::default()));
+        let mut leaders = Vec::new();
+        for id in ["scope:a", "scope:b"] {
+            let pair = NativePtySystem::default()
+                .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+                .expect("openpty");
+            let mut cmd = CommandBuilder::new("sh");
+            cmd.arg("-c");
+            cmd.arg("sleep 300; true");
+            let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+            leaders.push(child.process_id().expect("leader pid"));
+            let writer = pair.master.take_writer().expect("take writer");
+            registry.lock().unwrap().insert(
+                id.to_string(),
+                pair.master,
+                writer,
+                child,
+                Arc::new(AtomicBool::new(false)),
+            );
+        }
+        // Each leader's `sleep` child, once it has appeared.
+        let mut inner = Vec::new();
+        for &leader in &leaders {
+            let mut found = None;
+            for _ in 0..100 {
+                crate::sysstat::invalidate_descendant_cache();
+                if let Some(&pid) =
+                    crate::sysstat::descendant_pids(&[leader]).iter().find(|&&p| p != leader)
+                {
+                    found = Some(pid);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            inner.push(found.expect("sleep child should have spawned"));
+        }
+
+        let taken: Vec<TakenPty> = {
+            let mut reg = registry.lock().unwrap();
+            let ids = reg.ids_for_scope("scope");
+            ids.iter().filter_map(|id| reg.take(id)).collect()
+        };
+        assert_eq!(taken.len(), 2);
+        {
+            let reg = registry.lock().unwrap();
+            assert!(reg.input_sender("scope:a").is_none() && reg.input_sender("scope:b").is_none());
+            assert!(!reg.any_live_for_scope("scope"));
+        }
+        assert!(taken.iter().all(|t| t.entry.dead.load(Ordering::SeqCst)));
+
+        teardown_taken(taken);
+        for pid in inner {
+            let mut gone = false;
+            for _ in 0..250 {
+                if !alive(pid) {
+                    gone = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(gone, "every taken tab's inner process must be aborted");
+        }
     }
 }

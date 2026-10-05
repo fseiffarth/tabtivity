@@ -20,11 +20,11 @@ Run these in your own terminal, not in a fenced agent tab — the fence hides
    ```
 
 2. **Find the private key.** `scripts/release-signing-keygen.sh` writes it to
-   `~/.config/eldrun-release-signing/release-signing.key.pem`. Check it belongs
+   `~/.config/tabtivity-release-signing/release-signing.key.pem`. Check it belongs
    to the committed public key — no output means it matches:
 
    ```bash
-   openssl pkey -in ~/.config/eldrun-release-signing/release-signing.key.pem -pubout \
+   openssl pkey -in ~/.config/tabtivity-release-signing/release-signing.key.pem -pubout \
      | diff - src-tauri/release-signing.pub.pem
    ```
 
@@ -43,8 +43,8 @@ Run these in your own terminal, not in a fenced agent tab — the fence hides
 3. **Set the secret:** <!-- privacy-check: ok — a step heading, no secret -->
 
    ```bash
-   gh secret set RELEASE_SIGNING_KEY --repo fseiffarth/ProjectEldrun \
-     < ~/.config/eldrun-release-signing/release-signing.key.pem
+   gh secret set RELEASE_SIGNING_KEY --repo fseiffarth/tabtivity \
+     < ~/.config/tabtivity-release-signing/release-signing.key.pem
    ```
 
    Web alternative: repo → Settings → Secrets and variables → Actions → New
@@ -54,17 +54,17 @@ Run these in your own terminal, not in a fenced agent tab — the fence hides
 4. **Check it is there:**
 
    ```bash
-   gh secret list --repo fseiffarth/ProjectEldrun   # lists RELEASE_SIGNING_KEY
+   gh secret list --repo fseiffarth/tabtivity   # lists RELEASE_SIGNING_KEY
    ```
 
    The next `git push` stays quiet: the hook sees the secret and writes
-   `.git/eldrun-release-signing-secret-ok`, so it never asks GitHub again.
+   `.git/tabtivity-release-signing-secret-ok`, so it never asks GitHub again.
 
 5. **Keep an offline copy, then delete the file.** Store the PEM in a password
    manager — GitHub secrets can't be read back. Then:
 
    ```bash
-   shred -u ~/.config/eldrun-release-signing/release-signing.key.pem
+   shred -u ~/.config/tabtivity-release-signing/release-signing.key.pem
    ```
 
 6. **Push as usual.** The first `v*` tag after this runs the "Sign release
@@ -77,5 +77,5 @@ Every installed build trusts only the public key it was built with. A new key
 therefore has to ship in a release signed with the **old** key; a lost old key
 means every user updates once by hand. Keep the offline copy.
 
-The hook's escape hatch, `ELDRUN_SKIP_SIGNING_CHECK=1 git push …`, only lets a
+The hook's escape hatch, `TABTIVITY_SKIP_SIGNING_CHECK=1 git push …`, only lets a
 tag through — the release job still refuses to publish unsigned.

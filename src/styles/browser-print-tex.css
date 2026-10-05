@@ -112,7 +112,7 @@
   overflow-x: auto;
   white-space: nowrap;
   /* A one-line address strip: it pans, it never shows a bar or a thumb. */
-  --eldrun-scrollbar: none;
+  --app-scrollbar: none;
 }
 
 .browser-address-input {

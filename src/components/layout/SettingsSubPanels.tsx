@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsAdvanced, SettingsCard, SettingsHeader, SettingsList, SettingsSection, ToggleRow } from "./settingsUi";
 import { formatBytes as fmtBytes } from "../../lib/formatBytes";
 import { UntestedTag } from "../common/UntestedTag";
+import { PasswordInput } from "../common/PasswordInput";
+import type { UntestedId } from "../../lib/untested";
+import { unlockKeyring } from "../../lib/keyring";
+import { diffDefaultApps, patchDefaultApps } from "../../lib/defaultApps";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
 import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
 import { GitPushMcpSettings } from "../agents/GitPushMcp";
+import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
 import { PLATFORM } from "../../lib/platform";
 import {
   NODE_DOWNLOAD_URL,
@@ -56,6 +61,7 @@ import { formatTime } from "../../lib/calendar/calendarTime";
 import { useUse24h } from "../../lib/timeFormat";
 import { AGENT_FENCE_DEFAULT_PATHS, parseAgentFencePaths } from "../../lib/agents/agentFence";
 import { loginIdForCmd } from "../../lib/agents/signInLaunch";
+import { useAgentVersionNoticeStore } from "../../stores/agents/agentVersionNotice";
 import {
   AGENT_ITEMS,
   agentShortcutSlots,
@@ -67,6 +73,7 @@ import {
 import { AGENT_TAB_ACTIONS, chordLabel, resolveChord } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { ErrorNote } from "../common/ErrorNote";
+import { NAMES } from "../../lib/brand";
 
 interface OllamaModelInfo {
   name: string;
@@ -281,8 +288,13 @@ export function FileTypeSettings({ onBack, onClose }: SubPanelProps) {
   }, []);
 
   const saveApps = (next: Record<string, string>) => {
+    // Only the change, so a save from another window or the phone in between
+    // is kept (headless owner plan, H1b); the answer is the map as stored.
+    const patch = diffDefaultApps(apps, next);
     setApps(next);
-    invoke<void>("save_default_apps", { defaultApps: next }).catch((err) => setError(String(err)));
+    patchDefaultApps(patch, () => next)
+      .then(setApps)
+      .catch((err) => setError(String(err)));
   };
 
   const normalizeExt = (ext: string) => {
@@ -538,7 +550,7 @@ interface AgentVersionStale {
   direction: "newer" | "older" | "different";
 }
 
-/** What one installed CLI answers `--version`, against the releases Eldrun's
+/** What one installed CLI answers `--version`, against the releases Tabtivity's
  *  flags and parsers were checked with. Reported, never enforced — see
  *  `services::agent_versions`. */
 interface AgentVersionReport {
@@ -557,6 +569,20 @@ interface AgentVersionReport {
   checkedAt: number;
   cached: boolean;
   dismissed: boolean;
+}
+
+/** One installed CLI against its newest published release (backend
+ *  `check_agent_updates`, `services::agent_latest`). */
+interface AgentUpdateReport {
+  agent: string;
+  /** The installed version, when it could be read. */
+  current: string | null;
+  latest: string | null;
+  /** Both versions read and `latest` genuinely newer. */
+  updateAvailable: boolean;
+  /** Whether a registry is known for this CLI at all. */
+  checkable: boolean;
+  error: string | null;
 }
 
 interface AgentInfo {
@@ -589,7 +615,7 @@ interface AgentInfo {
  *
  * Codex gates user-level hooks behind a one-time trust approval, and an
  * untrusted one silently never fires — which is why Codex tabs used to restore
- * into a blank conversation. Eldrun resumes them anyway now (it reconstructs the
+ * into a blank conversation. Tabtivity resumes them anyway now (it reconstructs the
  * session from Codex's rollout logs), but that is a heuristic: it can mix up two
  * Codex tabs open in the same directory. Enabling the hook makes it exact.
  *
@@ -634,7 +660,7 @@ function CodexHookNotice() {
       </p>
       <p className="settings-help">
         {t("agents.codexHookFindPre")} <code>/hooks</code>{" "}
-        {t("agents.codexHookFindMid")} <strong>eldrun_session_start</strong>
+        {t("agents.codexHookFindMid")} <strong>{NAMES.sessionHookSh.replace(/\.sh$/, "")}</strong>
         {off ? t("agents.codexHookActionDisabled") : t("agents.codexHookActionUntrusted")}
       </p>
       <div className="ollama-install-cmd-row">
@@ -681,7 +707,7 @@ function ClaudeRemoteControlNotice() {
 }
 
 /** One row of `agent_logins` (`services::agent_auth`): a CLI's shared
- *  sign-in across every Eldrun agent home. Never a token. */
+ *  sign-in across every Tabtivity agent home. Never a token. */
 interface AgentLogin {
   id: string;
   signed_in: boolean;
@@ -691,11 +717,18 @@ interface AgentLogin {
    *  names a command where a credential belongs. */
   blocked: { account: string | null; stored: string | null; command: string | null } | null;
   shared: boolean;
+  /** Switched on for a stored provider API key, and one is saved
+   *  (`services::agent_api_keys`). */
+  api_key?: boolean;
+  /** That key's monthly budget is spent, or no limit is set: its keyed tabs
+   *  are refused (`services::api_usage`). */
+  api_budget_reached?: boolean;
 }
 
-/** The shared agent logins: one row per CLI whose login Eldrun can share,
- *  with the one-click import from this computer and a way out. */
-function AgentLoginsRows() {
+/** The shared agent logins: one row per CLI whose login Tabtivity can share,
+ *  with the one-click import from this computer and a way out. `refreshKey`
+ *  re-reads them when the API keys below change. */
+export function AgentLoginsRows({ refreshKey = 0 }: { refreshKey?: number }) {
   const t = useT();
   const [logins, setLogins] = useState<AgentLogin[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -705,7 +738,7 @@ function AgentLoginsRows() {
       .then(setLogins)
       .catch(() => setLogins(null));
   };
-  useEffect(refresh, []);
+  useEffect(refresh, [refreshKey]);
   const labels = useMemo(() => new Map(AGENT_ITEMS.map((a) => [a.cmd, a.label])), []);
   const registry = useMemo(
     () => new Map(AGENT_ITEMS.map((a) => [loginIdForCmd(a.cmd), a.label])),
@@ -731,11 +764,15 @@ function AgentLoginsRows() {
       <p className="settings-help">{t("settings.agentLoginsHelp")}</p>
       {rows.map((l) => {
         const label = registry.get(l.id) ?? labels.get(l.id) ?? l.id;
-        const state = l.signed_in
+        const login = l.signed_in
           ? l.account
             ? t("settings.agentLoginSignedInAs", { account: l.account })
             : t("settings.agentLoginSignedIn")
           : t("settings.agentLoginNotSignedIn");
+        const keyLabel = l.api_budget_reached
+          ? t("settings.agentLoginApiBudgetReached")
+          : t("settings.agentLoginUsesApiKey");
+        const state = !l.api_key ? login : l.signed_in ? `${login} · ${keyLabel}` : keyLabel;
         return (
           <div key={l.id} className="settings-toggle-card-row">
             <span>
@@ -780,6 +817,292 @@ function AgentLoginsRows() {
   );
 }
 
+/** `agent_api_keys_status` (`services::agent_api_keys`). Never a key. */
+interface AgentApiKeyStatus {
+  /** The keyring can be read now; while locked every `saved` reads false. */
+  readable: boolean;
+  providers: {
+    id: string;
+    saved: boolean;
+    /** The monthly limit (`agent_api_limits`) as the backend reads it. */
+    limitUsd?: number | null;
+    /** Spent this month by the price table — an estimate. */
+    spentUsd?: number;
+    /** `open`, `reached`, or `noLimit` (refused until a limit is set). */
+    budget?: "open" | "reached" | "noLimit";
+    /** Models priced at the provider's highest rate (not in the table). */
+    unknownModels?: string[];
+  }[];
+  clis: { id: string; enabled: boolean; providers: string[]; ready: boolean }[];
+  /** UTC month counted (`YYYY-MM`) and the day the count restarts. */
+  month?: string;
+  resetsOn?: string;
+  /** This month's count restarted: the ledger file could not be read. */
+  ledgerRestarted?: string | null;
+  /** When the price table was read off the vendors' pages. */
+  pricesDate?: string;
+}
+
+/** The monthly limit a new key's row proposes, in US dollars. */
+export const DEFAULT_API_LIMIT_USD = 20;
+/** The backend's `api_usage::MAX_LIMIT`. */
+const MAX_API_LIMIT_USD = 1_000_000;
+
+/** A typed limit as dollars, or `null` when it is not a usable one. */
+function parseApiLimit(text: string): number | null {
+  const n = Number(text.trim());
+  return text.trim() !== "" && Number.isFinite(n) && n > 0 && n <= MAX_API_LIMIT_USD ? n : null;
+}
+
+const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/** Provider names as their vendors spell them. */
+const API_KEY_PROVIDERS: Record<string, string> = {
+  anthropic: "Anthropic",
+  gemini: "Google Gemini",
+};
+
+/** The CLIs that can take a stored key through the API proxy (the backend's
+ *  `CLI_ROUTES`: only CLIs an environment variable points at the proxy), each
+ *  with its own pill — literal ids, which is what `scripts/untested.mjs` reads. */
+const API_KEY_CLIS: { cli: string; untested: UntestedId }[] = [
+  { cli: "claude", untested: "settings.agentApiKeys.claude" },
+  { cli: "gemini", untested: "settings.agentApiKeys.gemini" },
+];
+
+/** Provider API keys for the agent CLIs: one key per provider, kept in the OS
+ *  keyring only — typed here, saved, never read back — and a switch per CLI
+ *  that should start on it (`agent_api_key_clis`, off by default). A keyed tab
+ *  gets a proxy token, never the key (`services::api_proxy`). */
+export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
+  const t = useT();
+  const { settings, updateSettings } = useSettingsStore();
+  const [status, setStatus] = useState<AgentApiKeyStatus | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [limitDrafts, setLimitDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const refresh = () => {
+    invoke<AgentApiKeyStatus>("agent_api_keys_status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  };
+  useEffect(refresh, []);
+  const labels = useMemo(() => new Map(AGENT_ITEMS.map((a) => [a.cmd, a.label])), []);
+  if (!status) return null;
+  const saved = new Set(status.providers.filter((p) => p.saved).map((p) => p.id));
+  const enabled = settings?.agent_api_key_clis ?? [];
+  const limits = settings?.agent_api_limits ?? {};
+  // A new key's row proposes the default; a saved key's shows its limit.
+  const limitDraft = (id: string, current?: number | null) =>
+    limitDrafts[id] ?? String(current ?? limits[id] ?? DEFAULT_API_LIMIT_USD);
+  const writeLimit = (id: string, limit: number) =>
+    updateSettings({ agent_api_limits: { ...limits, [id]: limit } });
+  const act = (id: string, call: () => Promise<unknown>) => {
+    setError(null);
+    setBusy(id);
+    call()
+      .catch((e: unknown) => setError(String(e)))
+      .finally(() => {
+        setBusy(null);
+        refresh();
+        onChange?.();
+      });
+  };
+  const save = (id: string) => {
+    const key = (drafts[id] ?? "").trim();
+    // A key is only saved with a monthly limit: the limit goes first, so the
+    // backend (which refuses a key without one) finds it.
+    const limit = parseApiLimit(limitDraft(id));
+    if (!key || limit === null) return;
+    // Out of the page at once, saved or not: the key is never kept around.
+    setDrafts((d) => ({ ...d, [id]: "" }));
+    act(id, async () => {
+      await writeLimit(id, limit);
+      await invoke("agent_api_key_set", { provider: id, key });
+    });
+  };
+  const setLimit = (id: string) => {
+    const limit = parseApiLimit(limitDraft(id));
+    if (limit === null) return;
+    act(id, async () => {
+      await writeLimit(id, limit);
+      setLimitDrafts((d) => {
+        const next = { ...d };
+        delete next[id];
+        return next;
+      });
+    });
+  };
+  const setCliEnabled = (cli: string, on: boolean) => {
+    const next = on ? [...enabled.filter((c) => c !== cli), cli] : enabled.filter((c) => c !== cli);
+    act(cli, () => updateSettings({ agent_api_key_clis: next }));
+  };
+  return (
+    <>
+      <div className="settings-subheader">
+        {t("settings.agentApiKeys")} <UntestedTag id="settings.agentApiKeys" />
+      </div>
+      <p className="settings-help">{t("settings.agentApiKeysHelp")}</p>
+      <p className="settings-help">{t("settings.agentApiKeysWarning")}</p>
+      <p className="settings-help">
+        {t("settings.agentApiLimitHelp", { date: status.resetsOn ?? "", priced: status.pricesDate ?? "" })}{" "}
+        <UntestedTag id="settings.agentApiKeys.limit" />
+      </p>
+      {status.ledgerRestarted && (
+        <p className="settings-help pill-fence-live-note">
+          {t("settings.agentApiLedgerRestarted", { date: status.ledgerRestarted })}
+        </p>
+      )}
+      {status.providers.map((p) => {
+        const name = API_KEY_PROVIDERS[p.id] ?? p.id;
+        const draft = drafts[p.id] ?? "";
+        const limitText = limitDraft(p.id, p.limitUsd);
+        const limitOk = parseApiLimit(limitText) !== null;
+        const spent = usd(p.spentUsd ?? 0);
+        const budget = !p.saved
+          ? null
+          : p.budget === "noLimit" || p.limitUsd == null
+            ? t("settings.agentApiNoLimit")
+            : p.budget === "reached"
+              ? t("settings.agentApiBudgetReached", { spent, limit: usd(p.limitUsd), date: status.resetsOn ?? "" })
+              : t("settings.agentApiSpent", { spent, limit: usd(p.limitUsd) });
+        const state = !status.readable
+          ? t("settings.agentApiKeyLocked")
+          : p.saved
+            ? `${t("settings.agentApiKeySaved")} · ${budget}`
+            : t("settings.agentApiKeyNotSaved");
+        const limitInput = (
+          <input
+            type="number"
+            min={0.01}
+            step="any"
+            value={limitText}
+            aria-label={t("settings.agentApiLimitLabel", { provider: name })}
+            title={t("settings.agentApiLimitLabel", { provider: name })}
+            disabled={busy === p.id}
+            onChange={(e) => {
+              const value = e.target.value;
+              setLimitDrafts((d) => ({ ...d, [p.id]: value }));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (p.saved ? setLimit : save)(p.id);
+            }}
+          />
+        );
+        const blocked = p.saved && (p.budget === "reached" || p.budget === "noLimit");
+        return (
+          <Fragment key={p.id}>
+            <div className="settings-toggle-card-row">
+              <span>
+                {name}
+                <span className={blocked ? "settings-help pill-fence-live-note" : "settings-help"}> · {state}</span>
+              </span>
+              <span>
+                {status.readable && p.saved && (
+                  <>
+                    {limitInput}
+                    <button
+                      type="button"
+                      className="ollama-action-btn"
+                      disabled={busy === p.id || !limitOk || parseApiLimit(limitText) === p.limitUsd}
+                      onClick={() => setLimit(p.id)}
+                    >
+                      {t("settings.agentApiLimitSet")}
+                    </button>
+                  </>
+                )}
+                {status.readable && !p.saved && (
+                  <>
+                    <PasswordInput
+                      value={draft}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder={t("settings.agentApiKeyPlaceholder", { provider: name })}
+                      aria-label={t("settings.agentApiKeyPlaceholder", { provider: name })}
+                      disabled={busy === p.id}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setDrafts((d) => ({ ...d, [p.id]: value }));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") save(p.id);
+                      }}
+                    />
+                    {limitInput}
+                    <button
+                      type="button"
+                      className="ollama-action-btn"
+                      disabled={busy === p.id || !draft.trim() || !limitOk}
+                      onClick={() => save(p.id)}
+                    >
+                      {t("settings.agentApiKeySave")}
+                    </button>
+                  </>
+                )}
+                {status.readable && p.saved && (
+                  <button
+                    type="button"
+                    className="ollama-action-btn"
+                    disabled={busy === p.id}
+                    onClick={() => act(p.id, () => invoke("agent_api_key_clear", { provider: p.id }))}
+                  >
+                    {t("settings.agentApiKeyRemove")}
+                  </button>
+                )}
+              </span>
+            </div>
+            {p.saved && (p.unknownModels?.length ?? 0) > 0 && (
+              <p className="settings-help">
+                {t("settings.agentApiUnknownModels", { provider: name, models: (p.unknownModels ?? []).join(", ") })}
+              </p>
+            )}
+          </Fragment>
+        );
+      })}
+      {!status.readable && (
+        <div className="settings-toggle-card-row">
+          <span />
+          <button
+            type="button"
+            className="ollama-action-btn"
+            disabled={busy === "unlock"}
+            onClick={() => act("unlock", unlockKeyring)}
+          >
+            {t("settings.agentApiKeyUnlock")}
+          </button>
+        </div>
+      )}
+      {API_KEY_CLIS.map(({ cli, untested }) => {
+        const row = status.clis.find((c) => c.id === cli);
+        if (!row) return null;
+        const on = enabled.includes(cli);
+        const hasKey = row.providers.some((p) => saved.has(p));
+        return (
+          <ToggleRow
+            key={cli}
+            label={
+              <>
+                {t("settings.agentApiKeyUse", {
+                  cli: labels.get(cli) ?? cli,
+                  providers: row.providers.map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                })}{" "}
+                <UntestedTag id={untested} />
+              </>
+            }
+            checked={on}
+            // Off without a key; a switch left on can always be turned off.
+            disabled={busy === cli || (!on && !hasKey)}
+            onChange={(e) => setCliEnabled(cli, e.target.checked)}
+          />
+        );
+      })}
+      <p className="settings-help">{t("settings.agentApiKeysDialogs")}</p>
+      {error && <p className="settings-help">{error}</p>}
+    </>
+  );
+}
+
 /** `agent_global_status` (`services::agent_global`). */
 interface AgentGlobalLayer {
   dir: string;
@@ -787,7 +1110,7 @@ interface AgentGlobalLayer {
   codexAutoReview: boolean;
 }
 
-/** The Eldrun-wide agent config: the instructions, skills, hooks and MCP
+/** The Tabtivity-wide agent config: the instructions, skills, hooks and MCP
  *  servers every agent home gets, filled from this computer in one click. */
 function AgentGlobalRow() {
   const t = useT();
@@ -841,7 +1164,7 @@ function AgentGlobalRow() {
   );
 }
 
-/** Codex auto-review (`approvals_reviewer` in the Eldrun-wide layer's Codex
+/** Codex auto-review (`approvals_reviewer` in the Tabtivity-wide layer's Codex
  *  config). On the Codex card, not under the fence settings: it is what makes
  *  fenced Codex usable, so it sits where a Codex user looks. */
 function CodexAutoReviewToggle() {
@@ -878,7 +1201,7 @@ function CodexAutoReviewToggle() {
   );
 }
 
-/** `copilot_fence_auth_status`: the Copilot sign-in Eldrun holds for fenced
+/** `copilot_fence_auth_status`: the Copilot sign-in Tabtivity holds for fenced
  *  tabs (`services::copilot_auth`). Never carries the token itself. */
 interface CopilotFenceAuth {
   supported: boolean;
@@ -940,6 +1263,8 @@ function CopilotFenceAuthRow() {
 function AgentFenceCard() {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();
+  // Bumped by the API keys rows, so the logins re-read their "uses API key".
+  const [apiKeysVersion, setApiKeysVersion] = useState(0);
   const stored = settings?.agent_fence_paths;
   const effective = stored ?? [...AGENT_FENCE_DEFAULT_PATHS];
   const [paths, setPaths] = useState(effective.join("\n"));
@@ -983,7 +1308,8 @@ function AgentFenceCard() {
           <p className="settings-help">{t("settings.agentFencePlatformAcceptedHelp")}</p>
         </>
       )}
-      <AgentLoginsRows />
+      <AgentLoginsRows refreshKey={apiKeysVersion} />
+      <AgentApiKeysRows onChange={() => setApiKeysVersion((v) => v + 1)} />
       <AgentGlobalRow />
       <CopilotFenceAuthRow />
       <label className="settings-toggle-card-row">
@@ -1030,7 +1356,7 @@ function AgentFenceCard() {
  * install through `npm`, so when `npm` isn't on the host's PATH — or the Node
  * that is there is older than the current LTS the CLIs require — this points
  * the user at the one-click, no-admin Node install for their OS (and stays
- * hidden once a current Node is detected). Follows Eldrun's
+ * hidden once a current Node is detected). Follows Tabtivity's
  * install-via-terminal-tab policy.
  */
 function NodeRuntimeNotice() {
@@ -1537,7 +1863,7 @@ const NO_CUSTOM_AGENTS: CustomAgent[] = [];
 
 /**
  * "Manage Agents" panel: detect and one-click-install the AI coding-agent CLIs
- * Eldrun can launch as agent tabs (Claude, Codex, Google Antigravity, Google
+ * Tabtivity can launch as agent tabs (Claude, Codex, Google Antigravity, Google
  * Gemini, Mistral/vibe, Aider, OpenCode, Cursor, Copilot, Grok, Qwen, OpenClaw).
  * The
  * registry lives in the backend (`commands::agents`); this just renders each
@@ -1584,6 +1910,10 @@ export function AgentsPanel({
   // Per-agent installed version + drift verdict, keyed by agent id.
   const [versions, setVersions] = useState<Record<string, AgentVersionReport>>({});
   const [checkingVersions, setCheckingVersions] = useState(false);
+  // Newest published release per installed CLI — only after a click.
+  const [updates, setUpdates] = useState<Record<string, AgentUpdateReport>>({});
+  /** The CLIs whose own "Check for update" is in flight. */
+  const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
   // Filter over the *not installed* half only (see the two sections below).
   const [search, setSearch] = useState("");
   const logRef = useRef<HTMLPreElement>(null);
@@ -1610,14 +1940,15 @@ export function AgentsPanel({
   useEffect(refresh, []);
   // Version drift is read separately from the agent list on purpose: listing
   // agents is a PATH lookup, this spawns every installed CLI once. The backend
-  // caches for a day, so opening the panel again this afternoon costs nothing;
-  // `true` means "ask them again now".
+  // caches for a day while executables are unchanged; `true` means "ask them
+  // again now".
   const loadVersions = (recheck: boolean) => {
     setCheckingVersions(true);
     invoke<AgentVersionReport[]>("agent_versions", { refresh: recheck })
-      .then((rows) =>
-        setVersions(Object.fromEntries(rows.map((row) => [row.agent, row]))),
-      )
+      .then((rows) => {
+        setVersions(Object.fromEntries(rows.map((row) => [row.agent, row])));
+        useAgentVersionNoticeStore.getState().update(rows);
+      })
       .catch(() => {})
       .finally(() => setCheckingVersions(false));
   };
@@ -1651,6 +1982,66 @@ export function AgentsPanel({
       await invoke<string>("install_agent", { id });
       refresh();
       notifyAgentRegistryChanged();
+      loadVersions(true);
+    } catch (err) {
+      setErrors((e) => ({ ...e, [id]: String(err) }));
+    } finally {
+      unlisten();
+      setInstalling(null);
+    }
+  };
+
+  // Ask one CLI's registry for its newest release — each card's own button, the
+  // agent twin of the local-model "Check for Ollama updates" row, and like it
+  // explicit only: one request, when clicked and at no other time. The backend
+  // re-reads the installed versions first, so the version chips refresh too.
+  const checkUpdate = (id: string) => {
+    setCheckingUpdates((c) => ({ ...c, [id]: true }));
+    invoke<AgentUpdateReport[]>("check_agent_updates", { id })
+      .then((rows) => {
+        setUpdates((u) => ({ ...u, ...Object.fromEntries(rows.map((row) => [row.agent, row])) }));
+        loadVersions(false);
+      })
+      .catch(() =>
+        setUpdates((u) => ({
+          ...u,
+          [id]: {
+            agent: id,
+            current: null,
+            latest: null,
+            updateAvailable: false,
+            checkable: true,
+            error: t("agents.updateCheckNoBackend"),
+          },
+        })),
+      )
+      .finally(() => setCheckingUpdates(({ [id]: _drop, ...rest }) => rest));
+  };
+
+  // Run the CLI's own installer again, which fetches the newest release (into
+  // Tabtivity's install home, ahead of a host copy on PATH). Same live log as an
+  // install; the card stays in the installed list throughout.
+  const updateAgent = async (id: string) => {
+    setInstalling(id);
+    setErrors(({ [id]: _drop, ...rest }) => rest);
+    setLogs((l) => ({ ...l, [id]: "" }));
+    const unlisten = await listen<{ id: string; line: string }>(
+      "agent-install-progress",
+      (e) => {
+        if (e.payload.id !== id) return;
+        setLogs((l) => ({
+          ...l,
+          [id]: l[id] ? `${l[id]}\n${e.payload.line}` : e.payload.line,
+        }));
+      },
+    );
+    try {
+      await invoke<string>("update_agent", { id });
+      setUpdates(({ [id]: _drop, ...rest }) => rest);
+      setLogs(({ [id]: _drop, ...rest }) => rest);
+      refresh();
+      notifyAgentRegistryChanged();
+      loadVersions(true);
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
@@ -1669,6 +2060,7 @@ export function AgentsPanel({
       await invoke<string>("uninstall_agent", { id });
       refresh();
       notifyAgentRegistryChanged();
+      loadVersions(true);
       return true;
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
@@ -1680,7 +2072,7 @@ export function AgentsPanel({
 
   // Remove then immediately re-run the official installer — the one-click fix
   // for an install that half-succeeded (binary present but broken) or that
-  // Eldrun's stale detection missed (see paths.rs's Windows install-dir list).
+  // Tabtivity's stale detection missed (see paths.rs's Windows install-dir list).
   const reinstallAgent = async (id: string) => {
     if (await removeAgent(id)) await installAgent(id);
   };
@@ -1692,6 +2084,7 @@ export function AgentsPanel({
           prev?.map((a) => (a.id === id ? { ...a, installed: ok } : a)) ?? prev,
         );
         notifyAgentRegistryChanged();
+        loadVersions(true);
         if (!ok) {
           setErrors((e) => ({
             ...e,
@@ -1766,19 +2159,22 @@ export function AgentsPanel({
     try {
       await invoke("dismiss_agent_version", { agent: id, version });
       setVersions((prev) => ({ ...prev, [id]: { ...prev[id], dismissed: true } }));
+      useAgentVersionNoticeStore.getState().noteDismissed(id, version);
     } catch {
       // A dismissal that did not stick costs one more notice, nothing else.
     }
   };
 
   // What this CLI reports as its version, and whether that release is still the
-  // one Eldrun's flags and parsers were verified against
+  // one Tabtivity's flags and parsers were verified against
   // (docs/third_party_update_checklist.md, as data in `agent_versions`).
   // Informational: drift is what explains an agent tab misreading an approval
   // prompt or a mode line, and it blocks nothing.
   const versionNotice = (a: AgentInfo) => {
     const report = versions[a.id];
     if (!report) return null;
+    const update = updates[a.id];
+    const current = report.version ?? update?.current ?? null;
     const moved = report.state === "moved" && !report.dismissed;
     const staleLabel = (note: AgentVersionStale) =>
       t(
@@ -1792,18 +2188,67 @@ export function AgentsPanel({
     return (
       <>
         <div className="agent-version-row">
-          {report.version && (
-            <span
-              className="agent-version-chip"
-              title={t("agents.versionTitle", {
-                label: a.label,
-                raw: report.raw ?? report.version,
-              })}
+          {/* After a check found a newer release the chip turns into the
+              update itself — `2.1.284 → 2.1.287`, the Ollama row's version
+              pair — because the new number is what the user wants to act on. */}
+          {update?.updateAvailable && current && update.latest ? (
+            <button
+              type="button"
+              className="local-model-version-note has-update"
+              disabled={installing !== null || removing !== null}
+              title={t("agents.updateTitle", { label: a.label, current, latest: update.latest })}
+              onClick={() => void updateAgent(a.id)}
             >
-              {report.version}
+              {installing === a.id ? (
+                t("agents.updating")
+              ) : (
+                <>
+                  {current}
+                  <span className="local-model-version-arrow" aria-hidden="true">
+                    →
+                  </span>
+                  <span className="local-model-version-new">{update.latest}</span>
+                </>
+              )}
+            </button>
+          ) : (
+            current && (
+              <span
+                className="agent-version-chip"
+                title={t("agents.versionTitle", {
+                  label: a.label,
+                  raw: report.raw ?? current,
+                })}
+              >
+                {current}
+              </span>
+            )
+          )}
+          {/* Newest release known but the installed one unreadable: no claim
+              of an update, but the installer can still be run again for it. */}
+          {update && !update.updateAvailable && update.latest && !current && (
+            <button
+              type="button"
+              className="ollama-action-btn"
+              disabled={installing !== null || removing !== null}
+              title={t("agents.updateUnreadTitle", { label: a.label, latest: update.latest })}
+              onClick={() => void updateAgent(a.id)}
+            >
+              {installing === a.id ? t("agents.updating") : t("agents.updateToLatest", { latest: update.latest })}
+            </button>
+          )}
+          {update?.error && (
+            <span className="local-model-update-note" title={update.error}>
+              {t("agents.updateCouldntCheck")}
             </span>
           )}
-          {!report.supported && (
+          {update && !update.checkable && (
+            <span className="local-model-update-note">{t("agents.updateNoRegistry")}</span>
+          )}
+          {update && !update.updateAvailable && !update.error && update.latest && current && (
+            <span className="local-model-update-note">{t("agents.updatesNone")}</span>
+          )}
+          {!report.supported && !current && (
             <span className="settings-help">{t("agents.versionUnsupported")}</span>
           )}
           {report.state === "unverified" && (
@@ -1824,6 +2269,16 @@ export function AgentsPanel({
                 : t("agents.versionRecheck")}
             </button>
           )}
+          <button
+            type="button"
+            className="ollama-action-btn"
+            disabled={!!checkingUpdates[a.id] || installing === a.id}
+            title={t("agents.checkUpdatesTitle", { label: a.label })}
+            onClick={() => checkUpdate(a.id)}
+          >
+            {checkingUpdates[a.id] ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
+          </button>
+          <UntestedTag id="settingsSubPanels.agentUpdates" />
           <UntestedTag id="settingsSubPanels.3" />
         </div>
         {moved && (
@@ -2023,9 +2478,14 @@ export function AgentsPanel({
               title={t("agents.reinstallTitle")}
               onClick={() => void reinstallAgent(a.id)}
             >
-              {removing === a.id || installing === a.id ? t("agents.reinstalling") : t("agents.reinstall")}
+              {removing === a.id ? t("agents.reinstalling") : t("agents.reinstall")}
             </button>
           </div>
+          {logs[a.id] && (
+            <pre className="ollama-install-log" ref={installing === a.id ? logRef : undefined}>
+              {logs[a.id]}
+            </pre>
+          )}
           {errors[a.id] && (
             <div className="project-dialog-error">{errors[a.id]}</div>
           )}
@@ -2214,7 +2674,9 @@ export function AgentsPanel({
             {installedAgents.length === 0 ? (
               <p className="settings-help">{t("agents.noneInstalled")}</p>
             ) : (
-              <SettingsList>{installedAgents.map(agentCard)}</SettingsList>
+              <>
+                <SettingsList>{installedAgents.map(agentCard)}</SettingsList>
+              </>
             )}
           </SettingsSection>
           <SettingsSection title={t("agents.availableGroup")}>
@@ -2259,6 +2721,7 @@ export function AgentsPanel({
         <AgentCronSection agents={agents} />
         <AgentScheduleMcpSettings />
         <GitPushMcpSettings />
+        <MarkupMcpSettings />
         <AgentComposerCard agents={agents} />
       </SettingsAdvanced>
       </div>
@@ -2334,7 +2797,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const [pullProgress, setPullProgress] = useState<
     Record<string, { pct: number | null; status: string }>
   >({});
-  // Model refs whose download was interrupted by a previous Eldrun exit/crash,
+  // Model refs whose download was interrupted by a previous Tabtivity exit/crash,
   // persisted by the backend. Each can be resumed ("Continue") since Ollama
   // picks up a partially-fetched model where it left off.
   const [interrupted, setInterrupted] = useState<string[]>([]);
@@ -2678,7 +3141,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
 
   // Point the *running* server at the chosen folder (systemd drop-in), in a
   // visible terminal — it needs a root password and rewrites a service the user
-  // is entitled to read first. The setting alone already covers a server Eldrun
+  // is entitled to read first. The setting alone already covers a server Tabtivity
   // starts itself.
   const applyModelsDirToService = () => {
     if (!modelsDirPlan?.service_cmd) return;
@@ -2847,7 +3310,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownRegistry]);
 
-  // "Load on Eldrun start" — which models `stores/agents/ollamaAutoload` warms into
+  // "Load on Tabtivity start" — which models `stores/agents/ollamaAutoload` warms into
   // memory at launch. The per-model switches write straight through (the same
   // setting the 🧠 menu's chip toggles, so the two surfaces cannot disagree);
   // the Energy Saver opt-out is *staged* behind a Save button, because it is the
@@ -3353,7 +3816,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </div>
       )}
 
-      {/* Load-on-start: the models Eldrun warms into memory at launch, plus the
+      {/* Load-on-start: the models Tabtivity warms into memory at launch, plus the
           Energy Saver opt-out. See `stores/agents/ollamaAutoload` for the rules. */}
       <div className="settings-section-title">
         {t("ollama.autostartTitle")} <UntestedTag id="ollama.autostartTitle" />

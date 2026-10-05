@@ -6,12 +6,12 @@ Referenced from `AGENTS.md`.
 **reattaches** on relaunch. It covers **two axes**:
 
 - **Remote** (on the SSH host): survives an SSH drop, a laptop sleep, a VPN drop,
-  or Eldrun quitting. **Default ON** per remote project
+  or Tabtivity quitting. **Default ON** per remote project
   (`RemoteSpec.persist_sessions !== false`; opt out via the pill's "Persistent
   sessions (tmux)"). `ssh_exec::wrap_pty_options` nests the existing `exec …`
   inside `tmux new-session -A -D -s <name>`.
-- **Local** (on this machine, Unix only — no tmux on Windows): survives an
-  **Eldrun crash** (the tmux server is a daemon; the PTY only holds a client).
+- **Local** (on this machine, Unix only — no tmux on Windows): survives a
+  **Tabtivity crash** (the tmux server is a daemon; the PTY only holds a client).
   **Default ON** via `settings.persist_local_sessions`. `services::tmux_local`
   rewrites the local spawn's `{cmd,args}` into a `tmux` argv in
   `commands::terminal::pty_spawn`, *after* the ssh/docker branch so only a
@@ -34,13 +34,13 @@ the wrap **reattaches** the still-running agent and the `--resume` target is ign
 when it is gone (host rebooted, session killed) `-A` creates a fresh session that runs
 `--resume`, so the conversation resumes exactly as it did before. The agent bootstrap
 prelude is nested inside the tmux target unchanged, the same way a shell tab's login
-shell is. The session name is a **`eldrun-<scope>--<kind>-<uuid>` the frontend mints
+shell is. The session name is a **`tabtivity-<scope>--<kind>-<uuid>` the frontend mints
 once per tab and persists** (`TabEntry.tmuxSession`, `lib/terminal/tmuxSession.ts`'s
 `newTmuxSessionName`) — *not* derived from the PTY id, which `loadFromLayout`
 regenerates on restore (a derived name would fork a second session on relaunch
 instead of reattaching); `tmux_attach` overrides it for a Sessions-view attach.
 The `<kind>` token (`agent`/`shell`) sits at the *front of the uuid half*, after
-the `--`, so it never disturbs the `eldrun-<scope>--` prefix the project filter
+the `--`, so it never disturbs the `tabtivity-<scope>--` prefix the project filter
 matches on, and a uuid (hex) can never begin with `agent`/`shell` so an older
 tokenless name reads back cleanly as neither. `sessionKindFromName` is the pure
 inverse, and it is the whole basis of the Sessions view's **second** grouping:
@@ -51,12 +51,12 @@ sessions — shown only when non-empty. The grouping is entirely a function of t
 name; the backend `TmuxSession` carries no kind field and did not need one.
 **Scoping the Sessions view to one project** (`remote_tmux_list` →
 `ssh_exec::filter_sessions_for_project`) matters because the host is usually
-shared — a cluster login node carries several Eldrun projects' runs and other
+shared — a cluster login node carries several Tabtivity projects' runs and other
 people's. It reads **two** signals, and the second is the load-bearing one:
 the **name** settles a session outright when it carries a project id (this
-project's prefix ⇒ shown, `eldrun-<other-project>--` ⇒ hidden), but that only
+project's prefix ⇒ shown, `tabtivity-<other-project>--` ⇒ hidden), but that only
 ever covers sessions minted *after* the name was scoped. Every session already
-running on a host — the `eldrun-<uuid>` ones — and every hand-started session
+running on a host — the `tabtivity-<uuid>` ones — and every hand-started session
 carry no id at all, and on a cluster those outlive the change by weeks, so a
 name-only rule leaves the view looking exactly as unscoped as before. Those are
 attributed by **working directory** instead (`#{pane_current_path}` in
@@ -88,11 +88,11 @@ local one**. `lib/remote/closeRemoteTab.ts`'s `closeTabInScope` (the desktop ×,
 context menu, close chord, bulk closes, and the phone's ✕ all go through it)
 `removeTab`s — killing the ssh/PTY client — and then `local_tmux_kill`s the
 local session the tab minted (`mintedLocalSessionOf`; never an attach tab's,
-which may be a session made outside Eldrun). A remote session lives on under
+which may be a session made outside Tabtivity). A remote session lives on under
 its host's tmux daemon; a crash or a respawn **leaves any session alive**, and
-so does an app exit for a **remote** session. A **clean quit ends every local `eldrun-*` session** —
-the window's × runs `local_tmux_kill_eldrun_sessions` before `destroy()`, and
-`RunEvent::Exit` runs the same `tmux_local::kill_eldrun_sessions` as the net for
+so does an app exit for a **remote** session. A **clean quit ends every local `tabtivity-*` session** —
+the window's × runs `local_tmux_kill_app_sessions` before `destroy()`, and
+`RunEvent::Exit` runs the same `tmux_local::kill_tabtivity_sessions` as the net for
 exits that never reach frontend code (the dev launcher's Ctrl+C: SIGTERM/SIGINT
 are routed into `app.exit()` on Unix). Only a crash leaves local sessions
 behind, and those are what the next launch reattaches.

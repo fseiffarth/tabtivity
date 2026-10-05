@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 
 import { useAlarmStore } from "../../stores/calendar/alarms";
 import { useCalendarStore } from "../../stores/calendar/calendar";
+import { _grantTimerLeaseForTest } from "../../stores/timerLease";
 
 const cal = (id: string, over: Partial<Calendar> = {}): Calendar => ({
   id, name: id, color: "#4aa3df", visible: true, readonly: false, ...over,
@@ -35,6 +36,7 @@ const notices = () => invoke.mock.calls
   .map(([, args]) => (args as { request: Record<string, unknown> }).request);
 
 beforeEach(() => {
+  _grantTimerLeaseForTest();
   localStorage.clear();
   invoke.mockClear();
   useAlarmStore.setState({ active: [], snoozed: [], fired: new Set() });

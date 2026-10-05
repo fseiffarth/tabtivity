@@ -1,6 +1,6 @@
 # Agent sandbox image
 
-Reference Docker image for Eldrun's per-project **"Run agents in Docker sandbox"**
+Reference Docker image for Tabtivity's per-project **"Run agents in Docker sandbox"**
 toggle (right-click a project pill → *Run agents in Docker sandbox*).
 
 When enabled for a (local) project, every **agent** tab (Claude, Codex, Gemini,
@@ -15,10 +15,10 @@ host. The toggle is **off by default** and per project.
 ## Build
 
 ```bash
-docker build -t eldrun-agent-sandbox:latest docker/agent-sandbox
+docker build -t tabtivity-agent-sandbox:latest docker/agent-sandbox
 ```
 
-`eldrun-agent-sandbox:latest` is the default image name the backend looks for.
+`tabtivity-agent-sandbox:latest` is the default image name the backend looks for.
 If the image (or `docker` itself) is missing, opening a sandboxed agent tab fails
 loudly in the terminal with a `[spawn error: …]` message rather than silently
 running the agent on the host.
@@ -42,8 +42,8 @@ docker run --rm -it \
   -v <state_dir>/hooks:<state_dir>/hooks:ro \                # hook script (read-only)
   -v <stage>/…_settings.json:<home>/.claude/settings.json \  # writable copy (shadows host)
   [ -v <stage>/…_settings.local.json:… -v <stage>/…_config.toml:… ] \
-  -e ELDRUN_TAB_UID=… -e TERM=… -e <agent auth vars> \
-  eldrun-agent-sandbox:latest <agent> <args>
+  -e TABTIVITY_TAB_UID=… -e TERM=… -e <agent auth vars> \
+  tabtivity-agent-sandbox:latest <agent> <args>
 ```
 
 `<stage>` is a per-tab dir under `<state_dir>/sandbox-stage/`.

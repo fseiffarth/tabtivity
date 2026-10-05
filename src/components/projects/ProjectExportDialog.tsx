@@ -14,9 +14,10 @@ import type {
   ProjectEntry,
 } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
+import { NAMES } from "../../lib/brand";
 
 /**
- * "Export project…" — write one project into a single `.eldrunproj` file that
+ * "Export project…" — write one project into a single `.tabtivityproj` file that
  * can be carried to another computer (see `commands::project_transfer`).
  *
  * The toggles exist because the honest answer to "export the project" is not
@@ -104,7 +105,7 @@ export function ProjectExportDialog({
     const destination = await saveDialog({
       defaultPath: preview.suggestedFileName,
       filters: [
-        { name: t("transfer.bundleFilter"), extensions: ["eldrunproj"] },
+        { name: t("transfer.bundleFilter"), extensions: [NAMES.exportExtension] },
       ],
     });
     if (typeof destination !== "string") return;

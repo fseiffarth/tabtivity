@@ -18,19 +18,19 @@ use tauri::State;
 
 use crate::services::remote::{self, RemotePoolState};
 
-const REMOTE_IFACES: &str = "test -r /proc/net/dev || exit 42; \
-printf '__ELDRUN_IFACES__\\n'; cat /proc/net/dev; \
-printf '__ELDRUN_STATES__\\n'; \
+const REMOTE_IFACES: &str = concat!("test -r /proc/net/dev || exit 42; \
+printf '__", crate::app_upper!(), "_IFACES__\\n'; cat /proc/net/dev; \
+printf '__", crate::app_upper!(), "_STATES__\\n'; \
 for p in /sys/class/net/*; do test -e \"$p\" || continue; \
-printf '%s ' \"${p##*/}\"; cat \"$p/operstate\" 2>/dev/null || printf 'unknown\\n'; done";
-const REMOTE_WITH_CONNECTIONS: &str = "test -r /proc/net/dev || exit 42; \
-printf '__ELDRUN_IFACES__\\n'; cat /proc/net/dev; \
-printf '__ELDRUN_STATES__\\n'; \
+printf '%s ' \"${p##*/}\"; cat \"$p/operstate\" 2>/dev/null || printf 'unknown\\n'; done");
+const REMOTE_WITH_CONNECTIONS: &str = concat!("test -r /proc/net/dev || exit 42; \
+printf '__", crate::app_upper!(), "_IFACES__\\n'; cat /proc/net/dev; \
+printf '__", crate::app_upper!(), "_STATES__\\n'; \
 for p in /sys/class/net/*; do test -e \"$p\" || continue; \
 printf '%s ' \"${p##*/}\"; cat \"$p/operstate\" 2>/dev/null || printf 'unknown\\n'; done; \
-printf '__ELDRUN_CONNECTIONS__\\n'; \
+printf '__", crate::app_upper!(), "_CONNECTIONS__\\n'; \
 if command -v ss >/dev/null 2>&1; then LC_ALL=C ss -H -tuna -p 2>/dev/null || true; \
-else printf '__ELDRUN_NO_SS__\\n'; fi";
+else printf '__", crate::app_upper!(), "_NO_SS__\\n'; fi");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,7 +198,7 @@ fn parse_remote_snapshot(
     host_label: String,
     include_connections: bool,
 ) -> NetworkHostSnapshot {
-    let Some(after_ifaces) = output.split_once("__ELDRUN_IFACES__\n").map(|(_, v)| v) else {
+    let Some(after_ifaces) = output.split_once(concat!("__", crate::app_upper!(), "_IFACES__\n")).map(|(_, v)| v) else {
         return unsupported_host(
             true,
             true,
@@ -207,10 +207,10 @@ fn parse_remote_snapshot(
         );
     };
     let (iface_text, after_states) = after_ifaces
-        .split_once("__ELDRUN_STATES__\n")
+        .split_once(concat!("__", crate::app_upper!(), "_STATES__\n"))
         .unwrap_or((after_ifaces, ""));
     let (state_text, connection_text) = after_states
-        .split_once("__ELDRUN_CONNECTIONS__\n")
+        .split_once(concat!("__", crate::app_upper!(), "_CONNECTIONS__\n"))
         .map(|(a, b)| (a, Some(b)))
         .unwrap_or((after_states, None));
     let states: std::collections::HashMap<&str, &str> = state_text
@@ -233,7 +233,7 @@ fn parse_remote_snapshot(
             "No Linux network interfaces were available on the SSH host.",
         );
     }
-    let no_ss = connection_text.is_some_and(|v| v.contains("__ELDRUN_NO_SS__"));
+    let no_ss = connection_text.is_some_and(|v| v.contains(concat!("__", crate::app_upper!(), "_NO_SS__")));
     NetworkHostSnapshot {
         supported: true,
         remote: true,
@@ -1281,7 +1281,7 @@ utun0 1380  <Link#16>                            123     0      45678      321  
 
     #[test]
     fn remote_snapshot_without_ss_keeps_interface_data() {
-        let output = "__ELDRUN_IFACES__\neth0: 12 0 0 0 0 0 0 0 34 0 0 0 0 0 0 0\n__ELDRUN_STATES__\neth0 up\n__ELDRUN_CONNECTIONS__\n__ELDRUN_NO_SS__\n";
+        let output = concat!("__", crate::app_upper!(), "_IFACES__\neth0: 12 0 0 0 0 0 0 0 34 0 0 0 0 0 0 0\n__", crate::app_upper!(), "_STATES__\neth0 up\n__", crate::app_upper!(), "_CONNECTIONS__\n__", crate::app_upper!(), "_NO_SS__\n");
         let parsed = parse_remote_snapshot(output, "host".to_string(), true);
         assert!(parsed.supported);
         assert!(parsed.interfaces[0].up);

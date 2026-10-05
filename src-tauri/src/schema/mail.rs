@@ -7,7 +7,7 @@
 //!    optionality. That file is frozen for the phase; this one must follow it,
 //!    not the other way round.
 //! 2. **`accounts.json`.** [`MailAccounts`] is the on-disk store under
-//!    `~/.local/share/eldrun/mail/accounts.json`. It carries **no secret of any
+//!    `~/.local/share/tabtivity/mail/accounts.json`. It carries **no secret of any
 //!    kind** — passwords live in the OS keychain via
 //!    `services::remote_credentials`, keyed by server target (see
 //!    `commands::mail::mail_account`). It does carry the things an observer
@@ -168,7 +168,7 @@ pub struct MailAccount {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_interval_min: Option<u32>,
     /// **VPN-only account, default false.** While set, no socket is opened to
-    /// this account's IMAP or SMTP server unless an OpenVPN tunnel Eldrun knows
+    /// this account's IMAP or SMTP server unless an OpenVPN tunnel Tabtivity knows
     /// about is up (`services::openvpn::any_tunnel_up`). The case is an
     /// institutional mailbox reachable only from inside its network: without
     /// the gate every interval check burns a connect timeout and paints the
@@ -193,7 +193,7 @@ pub struct MailAccount {
     pub extra: HashMap<String, Value>,
 }
 
-/// `~/.local/share/eldrun/mail/accounts.json`.
+/// `~/.local/share/tabtivity/mail/accounts.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MailAccounts {
     #[serde(default)]
@@ -532,7 +532,7 @@ pub struct MailHeader {
     pub uid: u32,
     /// The message's **RFC 5322 `Message-ID`**, as the sender wrote it.
     ///
-    /// Distinct from `id`, which is Eldrun's own `{folder_id}-{uid}` store key.
+    /// Distinct from `id`, which is Tabtivity's own `{folder_id}-{uid}` store key.
     /// The store key is meaningless to any other mail system, so a reply that
     /// puts it in `In-Reply-To` fabricates a reference that threads nowhere —
     /// which is why this is carried separately rather than derived.
@@ -647,7 +647,7 @@ impl MailPrioritySource {
 /// "starred" the same bit in two places with different names.
 ///
 /// The consequence to be honest about: a mark is **this machine's**. It is not
-/// visible in another mail client, and a mailbox re-synced onto a second Eldrun
+/// visible in another mail client, and a mailbox re-synced onto a second Tabtivity
 /// install starts unmarked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1127,6 +1127,12 @@ pub struct MailDraft {
     /// by a send: the composer offers each as a pill the user adds by a click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_to: Option<Vec<String>>,
+    /// An agent draft the user approved in ✓ Approvals: it now sits in the
+    /// "Drafted by agents" folder. Unset until then (and on older drafts, which
+    /// therefore come up for approval once); an agent's update unsets it again,
+    /// so a changed draft is approved again before it is filed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub filed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

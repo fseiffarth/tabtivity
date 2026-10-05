@@ -1,6 +1,6 @@
 //! External app launching and window tracking.
 //!
-//! Eldrun's X11 window embedding model is intentionally dropped in the Tauri
+//! Tabtivity's X11 window embedding model is intentionally dropped in the Tauri
 //! rewrite (fundamentally incompatible with the WebView). Instead, external
 //! apps are tracked by PID and launched/raised as separate windows.
 //! `project.json["open_apps"]` is preserved for backward compatibility but
@@ -93,7 +93,7 @@ pub struct WindowRegistry {
     pub notify: Option<WindowsChangedNotifier>,
     /// Detached-subwindow display numbers, keyed by the window's stable label.
     /// Assigned in `detach_subwindow` (lowest free positive int) so each popout's
-    /// OS title reads "Eldrun win-N", and freed on dock-back/close
+    /// OS title reads "Tabtivity win-N", and freed on dock-back/close
     /// (`attach_subwindow`) and on any other window destruction (the
     /// `WindowEvent::Destroyed` hook in `lib.rs`) so numbers stay small and
     /// reuse freed slots — a lone popout is always "win-1".
@@ -236,7 +236,7 @@ pub fn do_launch(
     Ok(win)
 }
 
-/// What happens to a tracked window's registry row when the child Eldrun
+/// What happens to a tracked window's registry row when the child Tabtivity
 /// spawned for it exits.
 #[derive(Debug, PartialEq, Eq)]
 enum ExitAction {
@@ -362,7 +362,7 @@ fn launch_command(exec: &str, args: &[String], file: Option<&str>) -> Command {
 
     let (program, leading_args) = split_exec_command(exec);
     let mut cmd = crate::paths::command_for_program(Path::new(program));
-    // Same reason as the terminal spawn: Eldrun's AT-SPI opt-out covers Eldrun's
+    // Same reason as the terminal spawn: Tabtivity's AT-SPI opt-out covers Tabtivity's
     // own window, not the app the user is launching (`services::webkit_a11y`).
     #[cfg(target_os = "linux")]
     if crate::services::webkit_a11y::installed() {
@@ -1021,7 +1021,7 @@ thread_local! {
 /// handoff, so it needs to hear the end from the OS: once GTK owns the pointer,
 /// the webview never sees the `pointerup` that would otherwise end it.
 #[cfg(target_os = "linux")]
-pub const FILE_DRAG_ENDED: &str = "eldrun:file-drag-ended";
+pub const FILE_DRAG_ENDED: &str = crate::brand::FILE_DRAG_ENDED_EVENT;
 
 /// Start a native OS drag-out of `paths` from the calling window (Linux/GTK).
 ///
@@ -1137,7 +1137,7 @@ pub fn start_file_drag(window: tauri::Window, paths: Vec<String>) -> Result<(), 
 }
 
 /// Abort the in-flight native drag, handing the still-held button back to the
-/// in-app pointer drag (the cursor re-entered the Eldrun window, so the ghost
+/// in-app pointer drag (the cursor re-entered the Tabtivity window, so the ghost
 /// and hover take over again from the OS drag icon). A no-op when no native
 /// drag is running, so the frontend can call it unconditionally.
 #[cfg(target_os = "linux")]
@@ -2086,8 +2086,8 @@ pub fn untrack_window(registry: State<'_, WindowRegistryState>, id: String) -> b
 /// Close a tracked app from the Apps view: SIGTERM its whole process subtree
 /// (SIGKILL after a grace — `terminal`'s tab-close primitive), remove the
 /// registry row, and announce the change. Refuses rows that cannot be safely
-/// signalled: detached subwindows and anything carrying Eldrun's own pid
-/// (killing that subtree would kill Eldrun), and pid-0 rows (OS-default opens,
+/// signalled: detached subwindows and anything carrying Tabtivity's own pid
+/// (killing that subtree would kill Tabtivity), and pid-0 rows (OS-default opens,
 /// demoted hand-offs — nothing to signal; the frontend falls back to a plain
 /// untrack).
 ///
@@ -2107,7 +2107,7 @@ pub fn close_tracked_window(
         return Err("unknown window".into());
     };
     if entry.origin == ORIGIN_DETACHED_SUBWINDOW || entry.pid == std::process::id() {
-        return Err("not closeable: eldrun-owned window".into());
+        return Err("not closeable: app-owned window".into());
     }
     if entry.pid == 0 {
         return Err("not closeable: no tracked pid".into());
@@ -2602,7 +2602,7 @@ mod tests {
     fn base64_roundtrip_via_reference_crate() {
         use base64::Engine;
 
-        let input = b"Eldrun workspace manager";
+        let input = b"A workspace manager";
         let encoded = base64_encode(input);
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(encoded)
@@ -2629,7 +2629,7 @@ mod tests {
     #[test]
     fn apps_view_origin_set_is_exactly_the_project_launch_surfaces() {
         // Every origin a project surface launches with shows in the Apps view;
-        // global launches and Eldrun's own detached windows never do.
+        // global launches and Tabtivity's own detached windows never do.
         for origin in [
             ORIGIN_SIDE_FILE_TREE,
             ORIGIN_MIDDLE_FILE_BROWSER,
@@ -2839,7 +2839,7 @@ mod tests {
     #[test]
     fn split_exec_command_keeps_existing_path_with_spaces_whole() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("eldrun test app {}.txt", std::process::id()));
+        let path = dir.join(format!(concat!(crate::app_slug!(), " test app {}.txt"), std::process::id()));
         fs::write(&path, b"").unwrap();
         let exec = path.to_string_lossy().into_owned();
         assert_eq!(split_exec_command(&exec), (exec.as_str(), vec![]));
@@ -2855,7 +2855,7 @@ mod tests {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
-            "eldrun-test-{}-{}.desktop",
+            concat!(crate::app_slug!(), "-test-{}-{}.desktop"),
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
@@ -3053,7 +3053,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn unix_script_command_passes_args_through_to_the_script() {
-        let dir = std::env::temp_dir().join(format!("eldrun-args-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-args-{}"), std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("echo args.sh");
         std::fs::write(&script, "printf '%s|' \"$@\"\n").unwrap();

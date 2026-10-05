@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Move the frozen "Eldrun (dev)" snapshot to the commit that was just made.
+# Move the frozen "Tabtivity (dev)" snapshot to the commit that was just made.
 #
 # The frozen window is where the day's real work happens, so it is only ever
 # as good as the last time somebody remembered to re-freeze it. A commit is the
@@ -33,14 +33,20 @@
 #   take in this project, because a 3-4 minute release build at full tilt is
 #   felt in every keystroke of the window it exists to serve.
 #
-# It builds and installs; it NEVER launches or stops Eldrun (user, 2026-07-29).
+# It builds and installs; it NEVER launches or stops Tabtivity (user, 2026-07-29).
 # A running frozen instance keeps its old inode and picks the new snapshot up
 # on its next launch, which is what the completion notification says.
 #
 # Off switch, in order of scope:
-#   git config eldrun.autoDevBuild false   # this clone, permanently
-#   ELDRUN_NO_AUTO_DEV_BUILD=1 git commit  # one commit
-# Log: ~/.local/share/eldrun/package-dev-auto.log (the last build's output).
+#   git config tabtivity.autoDevBuild false   # this clone, permanently
+#   package-dev-auto.sh --pause            # until --resume (the dev-build chip's
+#                                          # "Pause auto-builds"); also cancels a
+#                                          # running compile to free the machine
+#   package-dev-auto.sh --build-now        # while paused: one build of HEAD, if
+#                                          # it is newer than the snapshot; stays
+#                                          # paused (the chip's "Build now")
+#   TABTIVITY_NO_AUTO_DEV_BUILD=1 git commit  # one commit
+# Log: ~/.local/share/tabtivity/package-dev-auto.log (the last build's output).
 set -uo pipefail
 
 # A post-commit hook inherits git's own environment, and GIT_INDEX_FILE arrives
@@ -53,12 +59,14 @@ set -uo pipefail
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The app's names (scripts/lib/brand.sh): $APP_DISPLAY, $APP_SLUG, $APP_BIN_NAME, …
+. "$ROOT/scripts/lib/brand.sh" || exit 1
 SELF="$ROOT/scripts/package-dev-auto.sh"
 # Beside the binary package-dev.sh installs, and for the same reason it hardcodes
 # that path: what is frozen here is per-user, not per-state-dir, so a sandbox
-# session's ELDRUN_STATE_DIR must not send these somewhere else.
-APP_DIR="$HOME/.local/share/eldrun"
-BINARY="$APP_DIR/eldrun-dev"
+# session's TABTIVITY_STATE_DIR must not send these somewhere else.
+APP_DIR="$APP_SHARE_DIR"
+BINARY="$APP_DIR/$APP_DEV_BIN_NAME"
 LOCK_DIR="$APP_DIR/package-dev-auto.lock"
 PENDING="$APP_DIR/package-dev-auto.pending"
 STAMP="$APP_DIR/package-dev-auto.stamp"
@@ -74,31 +82,49 @@ LOG_MAX_BYTES=$((4 * 1024 * 1024))
 # Touched by package-dev.sh once the compile is finished: past it, a pass is
 # no longer cancelled for a newer commit.
 INSTALLING="$APP_DIR/package-dev-auto.installing"
+# Present while auto-builds are paused (`--pause`, the dev-build chip's
+# button): the machine's cores are wanted for something else. Nothing queues,
+# and a running pass is cancelled like one superseded by a newer commit.
+PAUSED="$APP_DIR/package-dev-auto.paused"
+# Present while a `--build-now` pass runs despite the pause: the loop builds
+# through it, and drops it after one pass. Never consulted by queue(), so a
+# leftover one cannot make commits build while paused.
+ONCE="$APP_DIR/package-dev-auto.once"
 FREEZE_TREE="$ROOT/target/freeze-tree"
 # The status build_once returns for a pass it cancelled (128 + SIGTERM).
 CANCELLED=143
-SETTLE_SECONDS="${ELDRUN_DEV_BUILD_SETTLE:-30}"
+SETTLE_SECONDS="$(app_env DEV_BUILD_SETTLE 30)"
+
+# Paused, unless the user asked for this one pass (`--build-now`).
+paused() { [ -f "$PAUSED" ] && [ ! -f "$ONCE" ]; }
 
 note() { printf '%s %s\n' "$(date -Is)" "$*"; }
 
 notify() { # urgency, title, body
   command -v notify-send >/dev/null 2>&1 || return 0
-  notify-send -u "$1" -a Eldrun "$2" "$3" 2>/dev/null || true
+  notify-send -u "$1" -a "$APP_DISPLAY" "$2" "$3" 2>/dev/null || true
 }
 
-# Every reason not to touch the frozen build, cheapest first.
+# Every reason not to touch the frozen build, cheapest first. `declined once`
+# is `--build-now`'s check: the user's click outranks only the pause.
 declined() {
-  [ "${ELDRUN_NO_AUTO_DEV_BUILD:-}" = "1" ] && { echo "disabled for this commit"; return 0; }
+  [ "$(app_env NO_AUTO_DEV_BUILD)" = "1" ] && { echo "disabled for this commit"; return 0; }
   [ -n "${CI:-}" ] && { echo "running in CI"; return 0; }
+  [ "${1:-}" != once ] && [ -f "$PAUSED" ] && { echo "paused (resume from the dev-build menu, or --resume)"; return 0; }
   # An agent tab's commit runs this hook inside the agent fence, whose $HOME is
   # the agent's own: the lock, stamp and install would all land in a throwaway
   # copy while the real snapshot never moves (2026-09-25: 27 commits behind).
   # The window runs on the host and queues it from the dev-build chip's poll
   # (services::dev_build::queue_if_behind).
-  [ -n "${ELDRUN_AGENT_FENCE:-}" ] && { echo "inside an agent fence — the Eldrun window queues it"; return 0; }
-  case "$(git -C "$ROOT" config --bool --get eldrun.autoDevBuild 2>/dev/null)" in
-    false) echo "disabled by git config eldrun.autoDevBuild"; return 0 ;;
-  esac
+  [ -n "$(app_env AGENT_FENCE)" ] && { echo "inside an agent fence — the $APP_DISPLAY window queues it"; return 0; }
+  # Under the current name, and under the old one: a clone switched off
+  # before the app was renamed stays off.
+  local key
+  for key in "$APP_SLUG.autoDevBuild" "$APP_LEGACY_SLUG.autoDevBuild"; do
+    case "$(git -C "$ROOT" config --bool --get "$key" 2>/dev/null)" in
+      false) echo "disabled by git config $key"; return 0 ;;
+    esac
+  done
   # A linked worktree is somebody else's tree — an agent's, usually. Freezing
   # THAT over the user's dev binary is exactly the surprise this must not be.
   local git_dir common_dir
@@ -127,7 +153,7 @@ queue() {
   # the terminal (or the editor that ran it) does not take the build with it.
   setsid nohup "$SELF" --run </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
-  printf 'Eldrun (dev): rebuilding the frozen snapshot in the background (%s)\n' "$LOG"
+  printf '%s (dev): rebuilding the frozen snapshot in the background (%s)\n' "$APP_DISPLAY" "$LOG"
 }
 
 # One build attempt. Prints into the (already redirected) log; returns the
@@ -154,6 +180,11 @@ build_once() {
     setsid "${low[@]}" npm --prefix "$ROOT" run package:dev -- --head &
   local build=$!
   while kill -0 "$build" 2>/dev/null; do
+    if paused && [ ! -f "$INSTALLING" ]; then
+      note "auto-builds paused — cancelling this build"
+      cancel_build "$build"
+      return "$CANCELLED"
+    fi
     if [ -f "$PENDING" ] && [ ! -f "$INSTALLING" ]; then
       note "a newer commit landed — cancelling this build"
       cancel_build "$build"
@@ -206,7 +237,7 @@ run() {
     mkdir "$LOCK_DIR" 2>/dev/null || return 0
   fi
   printf '%s\n' "$$" >"$LOCK_DIR/pid"
-  trap 'rm -rf "$LOCK_DIR"' EXIT
+  trap 'rm -rf "$LOCK_DIR" "$ONCE"' EXIT
 
   if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG" 2>/dev/null || echo 0)" -gt "$LOG_MAX_BYTES" ]; then
     mv -f "$LOG" "$LOG.1"
@@ -224,6 +255,10 @@ run() {
       sleep $(( SETTLE_SECONDS - age ))
     done
     [ -f "$PENDING" ] || break
+    if paused; then
+      rm -f "$PENDING"
+      break
+    fi
     # Cleared BEFORE the build: a commit landing mid-build re-creates it and
     # earns the next pass, rather than being swallowed by this one.
     rm -f "$PENDING"
@@ -231,11 +266,19 @@ run() {
     built="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
     build_once
     status=$?
+    # A `--build-now` is one pass; whatever comes next waits for a resume.
+    rm -f "$ONCE"
     if [ "$status" -eq "$CANCELLED" ] && [ -f "$PENDING" ]; then
       # Not a failure: nothing was wrong with the commit, it was just no
       # longer the newest. The FAILED record keeps whatever it said.
       note "pass $passes ($built) cancelled for a newer commit, finished with status $status"
       continue
+    fi
+    if [ "$status" -eq "$CANCELLED" ] && paused; then
+      # Not a failure either: the user wanted the machine back.
+      note "pass $passes ($built) cancelled — auto-builds paused"
+      rm -f "$PENDING"
+      return 0
     fi
     note "pass $passes ($built) finished with status $status"
     if [ "$status" -eq 0 ]; then
@@ -250,20 +293,72 @@ run() {
     fi
   done
 
+  # Paused while settling: nothing was built, nothing to announce.
+  [ "$passes" -eq 0 ] && paused && return 0
+
   local version commit
   version="$(node -p "require('$ROOT/package.json').version" 2>/dev/null || echo '?')"
   commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
   if [ "$status" -eq 0 ]; then
-    notify low 'Eldrun (dev) rebuilt' "$version @ $commit — relaunch Eldrun (dev) to pick it up."
+    notify low "$APP_DISPLAY (dev) rebuilt" "$version @ $commit — relaunch $APP_DISPLAY (dev) to pick it up."
   else
-    notify critical 'Eldrun (dev) build failed' "$version @ $commit — see $LOG"
+    notify critical "$APP_DISPLAY (dev) build failed" "$version @ $commit — see $LOG"
   fi
   return "$status"
+}
+
+# Stop auto-building until resume(): drop what is queued, and let a running
+# pass cancel itself (build_once watches for the mark, and leaves an install
+# already under way to finish).
+pause() {
+  mkdir -p "$APP_DIR" || return 1
+  : >"$PAUSED"
+  rm -f "$PENDING" "$ONCE"
+  echo "$APP_DISPLAY (dev): auto-builds paused"
+}
+
+# Undo pause() and catch up: queue HEAD when the installed snapshot is behind
+# it, since the commits made while paused queued nothing.
+resume() {
+  rm -f "$PAUSED"
+  echo "$APP_DISPLAY (dev): auto-builds resumed"
+  local head
+  head="$(tree_signature)" || return 0
+  [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$head" ] && return 0
+  queue
+}
+
+# While paused: build HEAD once, now (no settle wait), when the installed
+# snapshot is not already HEAD — and stay paused. Pausing again cancels it like
+# any other pass. Not paused, it is a plain queue().
+build_now() {
+  paused || { queue; return 0; }
+  local head reason
+  head="$(tree_signature)" || { echo "not a git checkout" >&2; return 1; }
+  if [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$head" ] && [ -x "$BINARY" ]; then
+    echo "$APP_DISPLAY (dev): the installed snapshot is HEAD — nothing newer to build"
+    return 0
+  fi
+  if reason="$(declined once)"; then
+    echo "$APP_DISPLAY (dev): not building — $reason" >&2
+    return 1
+  fi
+  mkdir -p "$APP_DIR" || return 1
+  : >"$ONCE"
+  : >"$PENDING"
+  # Aged past the settle window: the user asked for now.
+  touch -d "@$(( $(date +%s) - SETTLE_SECONDS ))" "$PENDING" 2>/dev/null || true
+  setsid nohup "$SELF" --run </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  printf '%s (dev): building HEAD once while paused (%s)\n' "$APP_DISPLAY" "$LOG"
 }
 
 case "${1:---queue}" in
   --queue) queue ;;
   --run) run ;;
+  --pause) pause ;;
+  --resume) resume ;;
+  --build-now) build_now || exit 1 ;;
   --status)
     if [ -d "$LOCK_DIR" ]; then echo "building (pid $(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?'))"; else echo "idle"; fi
     [ -f "$PENDING" ] && echo "a rebuild is queued"
@@ -278,6 +373,6 @@ case "${1:---queue}" in
     fi
     if reason="$(declined)"; then echo "auto-build declined: $reason"; else echo "auto-build enabled"; fi
     ;;
-  *) echo "usage: $(basename "$0") [--queue|--run|--status]" >&2; exit 2 ;;
+  *) echo "usage: $(basename "$0") [--queue|--run|--status|--pause|--resume|--build-now]" >&2; exit 2 ;;
 esac
 exit 0

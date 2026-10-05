@@ -20,6 +20,7 @@ import { useHostSessionsStore, sessionHostsOf } from "../../stores/remote/hostSe
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import type { ProjectEntry } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 /** A fresh project id per test. The store's refcount/interval bookkeeping is
  *  module-level (it has to outlive any one component), so tests that reused one
@@ -58,7 +59,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   invoke.mockReset();
   invoke.mockImplementation((cmd: string) =>
-    cmd === "remote_tmux_list" ? Promise.resolve([session("eldrun-a")]) : Promise.resolve(null),
+    cmd === "remote_tmux_list" ? Promise.resolve([session(`${BRAND.slug}-a`)]) : Promise.resolve(null),
   );
   PID = `p${++seq}`;
   useHostSessionsStore.setState({ byProject: {}, showAll: {} });
@@ -202,7 +203,7 @@ describe("one list every surface reads", () => {
     const { retain, release } = useHostSessionsStore.getState();
     retain(PID);
     await settle();
-    useHostSessionsStore.getState().dropRow(PID, "primary", "eldrun-a");
+    useHostSessionsStore.getState().dropRow(PID, "primary", `${BRAND.slug}-a`);
     // There is only one list, so there is no second copy left holding the row.
     expect(useHostSessionsStore.getState().byProject[PID]).toEqual([]);
     release(PID);
@@ -212,7 +213,7 @@ describe("one list every surface reads", () => {
     const { retain, release } = useHostSessionsStore.getState();
     retain(PID);
     await settle();
-    useHostSessionsStore.getState().renameRow(PID, "primary", "eldrun-a", "train");
+    useHostSessionsStore.getState().renameRow(PID, "primary", `${BRAND.slug}-a`, "train");
     expect(useHostSessionsStore.getState().byProject[PID]?.[0].session.name).toBe("train");
     release(PID);
   });

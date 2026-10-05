@@ -21,10 +21,13 @@ import {
   isRelaunchableLocalTab,
   isResumableAgentTab,
   isRestorableTab,
+  isSavedWhileLive,
+  hydrateScopeFromDisk,
   pruneSavedTree,
   useTabsStore,
   type SavedLayoutTree,
 } from "../../stores/tabs";
+import { BRAND, envName, tabCommand } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -83,6 +86,75 @@ describe("a browser tab round-trips its URL and nothing else", () => {
   });
 });
 
+describe("a sign-in tab (31bk) or cloud session", () => {
+  it("is saved in its tmux session while it runs, so the phone can attach, and never restored", async () => {
+    // The Mobile sidecar lists a scope's tabs from the saved layout and attaches
+    // through tmux; a sign-in tab left out of either timed the phone's create
+    // out as `launch_pending`. It has no session id, so a load drops it again.
+    useTabsStore.setState({
+      scope: "p",
+      tabsByScope: {},
+      layoutByScope: {},
+      focusedGroupByScope: {},
+      detachedGroupsByScope: {},
+      hiddenGroupsByScope: {},
+    });
+    const tab = useTabsStore.getState().addTab({
+      label: "Claude sign-in",
+      cmd: "claude",
+      args: ["auth", "login", "--claudeai"],
+      cwd: "/tmp",
+      kind: "agent",
+      signIn: true,
+    });
+    expect(tab.tmuxSession).toMatch(new RegExp(String.raw`^${BRAND.slug}-p--agent-`));
+    expect(isRestorableTab(tab)).toBe(false);
+    expect(isSavedWhileLive(tab)).toBe(true);
+    const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
+    const savedTab = saved.tabs.find((t) => t.key === tab.key);
+    expect(savedTab).toMatchObject({ signIn: true, tmuxSession: tab.tmuxSession });
+
+    // The next launch: restore reads the saved layout and keeps restorable tabs only.
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {} });
+    invokeMock.mockResolvedValueOnce({ tabLayout: saved.tabs, tabGroups: saved.tabGroups });
+    expect(await hydrateScopeFromDisk("p", "/tmp")).toBe(false);
+    expect(useTabsStore.getState().tabsByScope.p ?? []).toEqual([]);
+  });
+
+  it("covers a cloud session the same way — saved while it runs, never restored into a second one", async () => {
+    useTabsStore.setState({
+      scope: "p",
+      tabsByScope: {},
+      layoutByScope: {},
+      focusedGroupByScope: {},
+      detachedGroupsByScope: {},
+      hiddenGroupsByScope: {},
+    });
+    const tab = useTabsStore.getState().addTab({
+      label: "Claude cloud",
+      cmd: "claude",
+      args: ["--cloud", "fix it"],
+      cwd: "/tmp",
+      kind: "agent",
+      cloud: true,
+    });
+    expect(isSavedWhileLive(tab)).toBe(true);
+    const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
+    expect(saved.tabs.find((t) => t.key === tab.key)).toMatchObject({ cloud: true, tmuxSession: tab.tmuxSession });
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {} });
+    invokeMock.mockResolvedValueOnce({ tabLayout: saved.tabs, tabGroups: saved.tabGroups });
+    expect(await hydrateScopeFromDisk("p", "/tmp")).toBe(false);
+    expect(useTabsStore.getState().tabsByScope.p ?? []).toEqual([]);
+  });
+
+  it("is only a live agent tab with the marker", () => {
+    expect(isSavedWhileLive({ kind: "agent", signIn: true })).toBe(false);
+    expect(isSavedWhileLive({ kind: "agent", tmuxSession: `${BRAND.slug}-p--agent-1` })).toBe(false);
+    expect(isSavedWhileLive({ kind: "shell", signIn: true, tmuxSession: `${BRAND.slug}-p--shell-1` })).toBe(false);
+    expect(isSavedWhileLive({ kind: "local_agent", cloud: true, tmuxSession: `${BRAND.slug}-p--agent-1` })).toBe(false);
+  });
+});
+
 describe("a relaunchable local-model tab (#31bl)", () => {
   const launch = { driver: "claude", model: "qwen3:8b", args: ["launch", "claude", "--model", "qwen3:8b"] };
 
@@ -109,12 +181,12 @@ describe("a relaunchable local-model tab (#31bl)", () => {
       label: "qwen3:8b · Claude Code",
       cmd: "ollama",
       args: launch.args,
-      env: { ELDRUN_LOCAL_MODEL: "qwen3:8b" },
+      env: { [envName("LOCAL_MODEL")]: "qwen3:8b" },
       cwd: "/tmp",
       kind: "local_agent",
       localLaunch: launch,
     });
-    expect(tab.tmuxSession).toMatch(/^eldrun-p--agent-/);
+    expect(tab.tmuxSession).toMatch(new RegExp(String.raw`^${BRAND.slug}-p--agent-`));
     const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
     const savedTab = saved.tabs.find((t) => t.key === tab.key);
     expect(savedTab?.localLaunch).toEqual(launch);
@@ -169,7 +241,7 @@ describe("isResumableAgentTab / isRestorableTab", () => {
 
   it("keeps shell/files tabs via kind regardless of sessionId", () => {
     expect(isRestorableTab({ kind: "shell", cmd: "bash" })).toBe(true);
-    expect(isRestorableTab({ kind: "files", cmd: "__eldrun_files__" })).toBe(true);
+    expect(isRestorableTab({ kind: "files", cmd: tabCommand("files") })).toBe(true);
   });
 });
 
@@ -221,11 +293,11 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
       sessionId: "abc-123",
     });
     store.addTab({ label: "bash", cmd: "bash", cwd: "/p", kind: "shell" });
-    store.addTab({ label: "Files", cmd: "__eldrun_files__", cwd: "/p", kind: "files" });
+    store.addTab({ label: "Files", cmd: tabCommand("files"), cwd: "/p", kind: "files" });
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     expect(call).toBeTruthy();
     const arg = call![1] as {
       tabs: { kind: string; cmd: string; sessionId?: string }[];
@@ -246,7 +318,7 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     const arg = call![1] as { tabs: { kind: string }[]; groups: SavedLayoutTree | null };
     expect(arg.tabs.map((t) => t.kind)).toEqual(["shell"]);
     expect(JSON.stringify(arg.groups)).not.toContain("agent");
@@ -271,7 +343,7 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     const arg = call![1] as { tabs: { kind: string; url?: string }[] };
     const browser = arg.tabs.find((t) => t.kind === "browser");
     expect(browser?.url).toBe("https://example.com/docs");
@@ -291,7 +363,7 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     const arg = call![1] as { tabs: { kind: string; cmd: string; sessionId?: string }[] };
     const codex = arg.tabs.find((t) => t.cmd === "codex");
     expect(codex?.sessionId).toBe("codex-key-1");
@@ -311,7 +383,7 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     const arg = call![1] as {
       tabs: { kind: string; cmd: string; sessionId?: string }[];
     };
@@ -333,7 +405,7 @@ describe("saveLayout — persists restorable tabs (incl. resumable agents)", () 
 
     await useTabsStore.getState().saveLayout("/p/project.json");
 
-    const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+    const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
     const arg = call![1] as { tabs: { kind: string }[]; groups: SavedLayoutTree | null };
     expect(arg.tabs.map((t) => t.kind)).toEqual(["shell"]);
     expect(JSON.stringify(arg.groups)).not.toContain("agent");

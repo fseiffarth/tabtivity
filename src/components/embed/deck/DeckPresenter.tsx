@@ -10,7 +10,7 @@
  *
  * **One presenter, one or two screens.** With no second display this is the
  * fullscreen presenter with an optional notes/timer panel (`N`). Press `D` (or
- * the ⧉ button) and Eldrun opens an **audience window** — a separate OS window,
+ * the ⧉ button) and Tabtivity opens an **audience window** — a separate OS window,
  * placed fullscreen on another monitor when there is one — and this window
  * becomes the *presenter view*: current slide, next slide, notes, timer, build
  * indicator. This window keeps owning the stop; the audience window renders what

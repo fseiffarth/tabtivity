@@ -1,6 +1,6 @@
 //! Bounds on the state dir's **unbounded** files — the ones nothing else owns.
 //!
-//! Everything Eldrun writes outside a project tree is owned by the subsystem
+//! Everything Tabtivity writes outside a project tree is owned by the subsystem
 //! that writes it, and that subsystem prunes it: `sandbox::sweep_orphans` takes
 //! its containers, `browser_engine::sweep_quarantine` takes abandoned downloads,
 //! `ssh_exec::sweep_stale_control_sockets` takes its own sockets. What is left
@@ -29,7 +29,7 @@ use std::path::Path;
 /// actually reading it after a crash.
 const CRASH_LOG_CAP: u64 = 4 * 1024 * 1024;
 
-/// The WebKitGTK disk cache Eldrun is allowed to keep between sessions.
+/// The WebKitGTK disk cache Tabtivity is allowed to keep between sessions.
 ///
 /// The engine bounds this itself in theory and did not in practice (961 MB in
 /// `WebKitCache/Version 17/Blobs` after seven weeks, still growing daily), and
@@ -126,9 +126,9 @@ pub fn trim_webview_cache(data_root: &Path) {
 ///
 /// The layout is wry's: `$XDG_DATA_HOME/<identifier>`, falling back to
 /// `~/.local/share` per the XDG base-directory spec — the same resolution
-/// `storage::state_dir` does for Eldrun's own state, minus the Eldrun-specific
+/// `storage::state_dir` does for Tabtivity's own state, minus the Tabtivity-specific
 /// override (this directory belongs to the engine, and pointing a dev sandbox's
-/// `ELDRUN_STATE_DIR` at it would be pointing it at the wrong thing).
+/// `TABTIVITY_STATE_DIR` at it would be pointing it at the wrong thing).
 #[cfg(target_os = "linux")]
 pub fn webview_data_root(identifier: &str) -> Option<std::path::PathBuf> {
     let base = match std::env::var("XDG_DATA_HOME") {

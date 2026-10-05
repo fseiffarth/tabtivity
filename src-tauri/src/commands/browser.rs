@@ -30,7 +30,7 @@
 //!
 //! Refused in v1 because of WebView2's permission model: with no
 //! `PermissionRequested` handler its default state is `Default`, which draws
-//! **Edge's own** permission prompt — a dialog Eldrun did not write, whose
+//! **Edge's own** permission prompt — a dialog Tabtivity did not write, whose
 //! "Allow" grants a browsed page the camera, and whose answer is persisted into
 //! the profile. wry registers a handler only for clipboard reads, and that one
 //! only ever *allows*. Lifted since: [`deny_all_permissions`] registers a
@@ -308,14 +308,14 @@ fn spawn_live_window(app: &AppHandle, label: &str, url: url::Url) -> Result<(), 
     let title_app = app.clone();
 
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url.clone()))
-        .title("Eldrun — Web")
+        .title(concat!(crate::app_name!(), " — Web"))
         .inner_size(1100.0, 800.0)
         // **Ephemeral, always.** On Linux this is
         // `WebContext::new_ephemeral()`: no website-data-manager base directory,
         // no cookie file, no cache. Nothing to steal off disk, no cross-session
         // correlation, no service worker that outlives the tab that installed
         // it, and no "delete my browsing data" story to get wrong — quitting
-        // Eldrun *is* the delete. It is also mutually exclusive with a
+        // Tabtivity *is* the delete. It is also mutually exclusive with a
         // persistent profile directory: wry documents that the web context is
         // IGNORED when incognito is on, and on Linux it builds a function-local
         // ephemeral context instead. Passing both is how "ephemeral" silently
@@ -323,7 +323,7 @@ fn spawn_live_window(app: &AppHandle, label: &str, url: url::Url) -> Result<(), 
         .incognito(true)
         // An extension in this webview would run with the page's privileges
         // *plus* whatever the extension API grants, in a process that also hosts
-        // Eldrun's own window.
+        // Tabtivity's own window.
         .browser_extensions_enabled(false)
         // THE navigation gate. In Rust, in the backend: a page navigates
         // itself, a redirect moves it, a `target=_blank` spawns it, and none of
@@ -356,7 +356,7 @@ fn spawn_live_window(app: &AppHandle, label: &str, url: url::Url) -> Result<(), 
             }
         })
         // `NewWindowResponse::Allow` produces a chromeless OS window with no
-        // address bar — the ideal canvas for a fake login or a fake Eldrun
+        // address bar — the ideal canvas for a fake login or a fake Tabtivity
         // dialog. Denying means every page the user ever sees sits inside
         // chrome that shows the real origin. Cost, disclosed: `window.open`
         // returns null, so OAuth popups and some payment flows break.
@@ -981,7 +981,7 @@ mod tests {
     ///
     /// Clipboard read matters disproportionately in this app: whatever the user
     /// last copied is unusually likely to be a password, an SSH command line or
-    /// an API token — Eldrun has a credential-paste-to-PTY path precisely
+    /// an API token — Tabtivity has a credential-paste-to-PTY path precisely
     /// because credentials move through it.
     #[test]
     fn nothing_installs_a_permission_or_clipboard_handler() {
@@ -1041,8 +1041,8 @@ mod tests {
     /// (Tauri marks it `TODO: Remove this special check in v3`), and it reads
     /// from a **process-global** queue keyed by an incrementing `u32` with no
     /// webview and no origin check. So a browsed page could enumerate ids and
-    /// read `Channel` payloads queued for Eldrun's own webview. It is harmless
-    /// today only because Eldrun uses events and never channels — i.e. the queue
+    /// read `Channel` payloads queued for Tabtivity's own webview. It is harmless
+    /// today only because Tabtivity uses events and never channels — i.e. the queue
     /// is permanently empty. This test is what keeps that true.
     #[test]
     fn the_backend_uses_no_ipc_channel() {
@@ -1061,7 +1061,7 @@ mod tests {
         }
     }
 
-    /// There is exactly one keychain path in Eldrun — the remote-credentials
+    /// There is exactly one keychain path in Tabtivity — the remote-credentials
     /// service — and the browser does not open a second. It offers no password
     /// saving, no form auto-fill, and no credential storage of any kind — not
     /// off-by-default, absent. A password manager is the single largest secret store an
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     /// Restates TODO O #60 in browser terms, because a browser is precisely the
-    /// feature that will tempt someone to break it: Eldrun never reads, writes,
+    /// feature that will tempt someone to break it: Tabtivity never reads, writes,
     /// imports from or "detects" another browser's profile, preferences, cookie
     /// jar, bookmarks, password store or download directory.
     /// `commands/downloads.rs` was deleted for exactly this and must not come
@@ -1104,7 +1104,7 @@ mod tests {
             ] {
                 assert!(
                     !src.contains(banned),
-                    "`{banned}` in {name}: Eldrun never touches another app's config"
+                    "`{banned}` in {name}: {app} never touches another app's config", app = crate::brand::DISPLAY
                 );
             }
         }
@@ -1124,8 +1124,8 @@ mod tests {
             ),
             (
                 "browser_extensions_enabled(false)",
-                "an extension here runs with the page's privileges plus the extension \
-                 API's, in a process that also hosts Eldrun's window",
+                concat!("an extension here runs with the page's privileges plus the extension \
+                 API's, in a process that also hosts ", crate::app_name!(), "'s window"),
             ),
             (
                 "on_new_window",

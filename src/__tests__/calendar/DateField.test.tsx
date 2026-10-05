@@ -1,6 +1,6 @@
 /**
  * The day-entry field as the user meets it: a button that reads as a date, a
- * calendar Eldrun draws itself, and a value on the wire the native input's
+ * calendar Tabtivity draws itself, and a value on the wire the native input's
  * callers would not notice a change in.
  *
  * What it is here to prove is what the native `<input type="date">` could not

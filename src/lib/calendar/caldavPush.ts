@@ -10,7 +10,7 @@
  *
  * **A resource is not a row.** CalDAV stores one calendar object per URL, and a
  * repeating event's occurrence edits live inside the *same* object as their
- * master — there is no separate occurrence resource to write. Eldrun holds a
+ * master — there is no separate occurrence resource to write. Tabtivity holds a
  * synced series as several rows sharing one `caldav_href`, so pushing any one of
  * them means serializing **all** of them, together, in one body. `resourceRows`
  * is that grouping and `resourceIcs` is that body. Writing only the edited row

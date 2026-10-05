@@ -3,7 +3,7 @@ import type { IcsFinding, IcsReport } from "../../lib/calendar/icsSafety";
 import { useT } from "../../lib/i18n";
 
 /**
- * The report itself — the counts, then each finding with what Eldrun does about
+ * The report itself — the counts, then each finding with what Tabtivity does about
  * it. Apart from the dialog so the root console's review panel shows a file an
  * agent staged (`calendar_import_ics`) in exactly the same words.
  */
@@ -64,11 +64,11 @@ export function IcsReportBody({ report }: { report: IcsReport }) {
  * events carry attachments, whose "location" is an application URL, or whose
  * titles contain right-to-left overrides is worth a second look — and every one
  * of those is dropped or cleaned *in silence* today. This is the difference
- * between "Eldrun ignored it" and "you know it was there".
+ * between "Tabtivity ignored it" and "you know it was there".
  *
  * ## The one rule the wording follows
  *
- * Every row says what Eldrun **does** about the finding, and the `ignored` half
+ * Every row says what Tabtivity **does** about the finding, and the `ignored` half
  * carries its own word for it. A warning that lists a hostile-sounding property
  * without saying it is discarded reads as a threat rather than as a fact, and the
  * user has no way to tell which they are looking at.

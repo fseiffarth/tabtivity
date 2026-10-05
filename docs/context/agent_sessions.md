@@ -12,11 +12,11 @@ comes back (see `isRestorableTab`/`RESUMABLE_AGENTS` in `src/stores/tabs.ts`).
 
 ## Mechanism
 
-`services/agent_session.rs`, installed at startup: Eldrun installs a
+`services/agent_session.rs`, installed at startup: Tabtivity installs a
 `SessionStart` hook — into `~/.claude/settings.json` (JSON) and
 `~/.codex/config.toml` (TOML text-append) — that records each tab's live
-`session_id` under `~/.local/share/eldrun/live_sessions/<key>`, keyed by the
-`ELDRUN_TAB_UID` env var Eldrun sets on the agent. At spawn,
+`session_id` under `~/.local/share/tabtivity/live_sessions/<key>`, keyed by the
+`TABTIVITY_TAB_UID` env var Tabtivity sets on the agent. At spawn,
 `resolve_{claude,codex}_session` reads that to resume the *current* session,
 following a `/clear`. The same script is also registered as a Claude `Stop`
 hook: `Stop` fires after every response and — unlike `SessionStart` — carries
@@ -25,7 +25,7 @@ hook: `Stop` fires after every response and — unlike `SessionStart` — carrie
 `--permission-mode` on the `--resume` respawn, because Claude restores a mode
 given at launch but *not* one reached via shift+tab mid-session (no hook event
 fires for the cycle; verified empirically on CLI 2.1.251). This record is the
-**only** thing that carries a mode across a respawn — Eldrun has no mode toggle
+**only** thing that carries a mode across a respawn — Tabtivity has no mode toggle
 of its own; a mode flag a custom agent's own spec puts on the args outranks it,
 and values outside the known mode set are discarded (the record is hook-parsed
 JSON becoming a CLI argument).
@@ -90,25 +90,38 @@ one-time trust (`/hooks` in Codex) before they run; until then
 record. Gemini and the other "continue last" agents restore on their CLI's
 continue flag, not a captured id.
 
-Vibe 2.25 has `--resume <session-id>`. Eldrun registers a `post_agent` hook in
+Vibe 2.25 has `--resume <session-id>`. Tabtivity registers a `post_agent` hook in
 the user's `~/.vibe/hooks.toml` and in each prepared local-model `VIBE_HOME`;
 after a completed turn it records Vibe's current ID under the tab's
-`ELDRUN_TAB_UID`. A local tab with a recorded, still-present session resumes
+`TABTIVITY_TAB_UID`. A local tab with a recorded, still-present session resumes
 that exact ID (including after Vibe's in-app `/resume` or `/branch`). Existing
 tabs without a record retain the prior `--continue` fallback. Remote Vibe tabs
-also retain `--continue`, since no Eldrun hook is installed on the host. Vibe's
+also retain `--continue`, since no Tabtivity hook is installed on the host. Vibe's
 session logging must be enabled for either flag. Fenced/container tabs receive
 a per-project shadow of `hooks.toml`, like Claude/Codex hook config, so they can
 record their live ID without editing the host hook registration.
 
 ### The phone send hint
 
-An accepted Claude `SessionStart` prints a one-line `eldrun-send <file>` hint
-when `ELDRUN_PROJECT_DIR` is set. The existing continuity check runs first, so
-a nested startup cannot print it; `Stop` and Codex never print it. Claude adds
-SessionStart stdout to context. The PowerShell hook mirrors it; other agents
-learn the command from the project's scaffold `AGENTS.md`. See
-the third-party update checklist.
+An accepted Claude or Codex `SessionStart` prints a one-line
+`tabtivity-send <file>` hint when `TABTIVITY_PROJECT_DIR` is set. The existing
+continuity check runs first, so a nested startup cannot print it; `Stop` never
+prints it. Both CLIs add SessionStart stdout to context. The PowerShell hook
+mirrors it. The hint lives here, not in the project scaffold's `AGENTS.md`:
+that file is the user's, committed and never rewritten, so Tabtivity runtime text
+in it froze in every project and reached collaborators' agents where the
+command doesn't exist.
+
+The other CLIs get the same line from `services::agent_hint`: a SessionStart
+hook where the CLI has one that feeds the model (Gemini, Qwen, Auggie,
+CodeBuddy, Droid, Cursor, Copilot — one script in `<state_dir>/hooks/`, one
+output shape per CLI, silent outside a Tabtivity project tab). Vibe and
+OpenCode have no such hook: Vibe gets a marker-delimited block in its
+user-level `AGENTS.md`, OpenCode a hint file in its `opencode.json`
+`instructions` — not its user-level `AGENTS.md`, which would replace the
+`~/.claude/CLAUDE.md` fallback carrying the user's global instructions. All of
+it is written into the agent home at each spawn, after the global layer. CLIs with neither (Aider, Goose, Crush, …) get no
+hint. See the third-party update checklist.
 
 ### Where Codex keeps a session, and why resume died
 
@@ -138,7 +151,7 @@ conversation, and that question has two answers in the field:
 Asking only the first is how Codex resume failed silently: the hook kept
 recording live thread ids, the walk kept finding no file for any of them, and
 every Codex tab relaunched as a **brand-new session** — which is also why the
-folder-trust question came back on every Eldrun restart, since a fresh Codex
+folder-trust question came back on every Tabtivity restart, since a fresh Codex
 start in an untrusted cwd is exactly what asks it. `codex_session_exists` now
 takes either answer, and `services::codex_store` reads the store (read-only,
 best-effort: a renamed file, table or column yields "no", never an error). The
@@ -171,12 +184,12 @@ directly because they do not substitute a tmpfs home.
 
 ## Only the tab's own session may move the record
 
-Every process under the tab inherits `ELDRUN_TAB_UID`, so a nested CLI fires
+Every process under the tab inherits `TABTIVITY_TAB_UID`, so a nested CLI fires
 the hook too — the tab's Claude running `claude -p …` through its own shell
 tool does (verified live: a one-shot headless run overwrote both the id and the
 mode record, so the next relaunch would have resumed a dead session in the
 wrong mode). The script therefore applies a continuity rule, keyed by a second
-env var the resolver sets, `ELDRUN_TAB_AGENT`:
+env var the resolver sets, `TABTIVITY_TAB_AGENT`:
 
 - **Claude** (`claude`, and the default when the marker is missing): a Claude
   tab's session id *is* its launch key, stays that id until `/clear` or
@@ -206,7 +219,7 @@ run for real by a unit test.
 
 `loadFromLayout` resets an agent tab's cwd to the scope root — a saved cwd is
 stale after a project move — except for cwds the scope *derives*: a linked
-worktree under the root (`<root>/.eldrun/worktrees/<name>`) and, for a box
+worktree under the root (`<root>/.tabtivity/worktrees/<name>`) and, for a box
 scope, a member project's root (or a worktree under one), which is where the
 "+" menu's per-member Claude tab is deliberately started. `restoredAgentCwd`
 in `src/lib/agents/agentWorktrees.ts` is the rule; the box restore passes its member

@@ -24,7 +24,10 @@ use super::{WorkspaceBackend, WorkspaceInfo};
 const ACTIVE_DESKTOP: u32 = 0;
 const PARKED_DESKTOP: u32 = 1;
 
-const PROTECTED_CLASSES: &[&str] = &["eldrun", "plasmashell", "kwin", "cinnamon"];
+// The app's own windows under its current binary name and under the one an
+// older build runs as (the same entry twice until the name changes).
+const PROTECTED_CLASSES: &[&str] =
+    &[crate::brand::BIN_NAME, crate::brand::LEGACY_BIN_NAME, "plasmashell", "kwin", "cinnamon"];
 
 // ── Backend ────────────────────────────────────────────────────────────────
 
@@ -35,8 +38,8 @@ pub struct X11Backend {
     original_desktop_count: u32,
     cinnamon: Option<CinnamonWorkspaceState>,
     cleaned_up: Mutex<bool>,
-    /// Eldrun-owned window ids that are explicitly opted in to project-switch
-    /// parking despite carrying the protected `eldrun` WM_CLASS (#42 detached
+    /// Tabtivity-owned window ids that are explicitly opted in to project-switch
+    /// parking despite carrying the protected `tabtivity` WM_CLASS (#42 detached
     /// subwindows). The MAIN window id can NEVER enter this set — `set_parkable`
     /// refuses it structurally (see `parkable_state`).
     parkable: Mutex<ParkableState>,
@@ -46,7 +49,7 @@ pub struct X11Backend {
 #[derive(Default)]
 struct ParkableState {
     override_ids: HashSet<u64>,
-    /// The main Eldrun window's X11 id, once known. `add_parkable` refuses to
+    /// The main Tabtivity window's X11 id, once known. `add_parkable` refuses to
     /// add this id, keeping "the main window is never parked" structural.
     main_window_id: Option<u64>,
 }
@@ -58,7 +61,7 @@ impl ParkableState {
         if self.main_window_id == Some(id) {
             // STRUCTURAL GUARD: the main window must never be parkable, even if a
             // caller mistakenly asks. Refuse silently (debug-assert in tests).
-            debug_assert!(false, "attempted to mark the MAIN Eldrun window parkable");
+            debug_assert!(false, concat!("attempted to mark the MAIN ", crate::app_name!(), " window parkable"));
             return false;
         }
         self.override_ids.insert(id)
@@ -119,7 +122,7 @@ impl WorkspaceBackend for X11Backend {
 
     fn supports_embedding(&self) -> bool {
         // X11 is the only backend that can reparent an external app's top-level
-        // into an Eldrun-owned container for frameless in-tab embedding.
+        // into a Tabtivity-owned container for frameless in-tab embedding.
         true
     }
 
@@ -143,7 +146,7 @@ impl WorkspaceBackend for X11Backend {
         let wid = window_from_u64(window_id)
             .ok_or_else(|| format!("invalid x11 window id {window_id}"))?;
         // The parkable override is consulted BEFORE the protected-class skip so a
-        // detached Eldrun subwindow (WM_CLASS `eldrun`, normally skipped) is still
+        // detached Tabtivity subwindow (WM_CLASS `tabtivity`, normally skipped) is still
         // moved/raised. The main window is never in the override (structural
         // guard in `add_parkable`), so it can never reach here.
         if !self.is_parkable(window_id) && is_protected(&self.conn, wid) {
@@ -167,7 +170,7 @@ impl WorkspaceBackend for X11Backend {
     fn hide_window(&self, window_id: u64) -> Result<(), String> {
         let wid = window_from_u64(window_id)
             .ok_or_else(|| format!("invalid x11 window id {window_id}"))?;
-        // See show_window: the override lets a detached `eldrun` subwindow park.
+        // See show_window: the override lets a detached `tabtivity` subwindow park.
         // The main window can never be in the override (structural guard).
         if !self.is_parkable(window_id) && is_protected(&self.conn, wid) {
             return Ok(());
@@ -176,7 +179,7 @@ impl WorkspaceBackend for X11Backend {
         self.move_window(wid, PARKED_DESKTOP)
     }
 
-    fn make_sticky(&self, _eldrun_pid: u32) -> Result<(), String> {
+    fn make_sticky(&self, _app_pid: u32) -> Result<(), String> {
         Ok(())
     }
 
@@ -556,8 +559,8 @@ pub(crate) fn is_protected_class(wm_class_raw: &str) -> bool {
 /// Pure title-match predicate for the detached-window resolver (#42 Phase 0).
 ///
 /// CRITICAL: unlike `find_window_for_pid`/`find_new_window` (apps.rs), this match
-/// must NOT filter on the protected WM_CLASS. A detached Eldrun subwindow carries
-/// WM_CLASS `eldrun` (protected), so a protected-filtering scan would never
+/// must NOT filter on the protected WM_CLASS. A detached Tabtivity subwindow carries
+/// WM_CLASS `tabtivity` (protected), so a protected-filtering scan would never
 /// return it. Matching purely on the exact `_NET_WM_NAME` title (which embeds a
 /// unique `project:group`) finds the right window regardless of WM_CLASS.
 pub fn title_matches(net_wm_name: Option<&str>, target: &str) -> bool {
@@ -576,7 +579,7 @@ pub fn is_wayland_session(wayland_display: Option<&std::ffi::OsStr>) -> bool {
 /// running.
 ///
 /// Under Wayland, `DISPLAY` is still set (XWayland), so `xcb` connects fine and
-/// the scans *run* — but the client list holds only XWayland clients. Eldrun's
+/// the scans *run* — but the client list holds only XWayland clients. Tabtivity's
 /// own windows are native Wayland toplevels, and so is nearly every app it
 /// launches, so every scan runs to its retry cap and answers `None`: 3 s at
 /// startup, **2 s of unpainted black popout inside every `detach_subwindow`**,
@@ -589,7 +592,7 @@ pub fn session_is_wayland() -> bool {
     is_wayland_session(std::env::var_os("WAYLAND_DISPLAY").as_deref())
 }
 
-/// Resolve an Eldrun-owned window's X11 id by its exact `_NET_WM_NAME` title,
+/// Resolve a Tabtivity-owned window's X11 id by its exact `_NET_WM_NAME` title,
 /// ignoring the protected-class filter (see `title_matches`). Mirrors
 /// `find_window_for_pid`'s retry loop. Returns the first matching window id.
 /// Answers `None` at once under Wayland — see [`session_is_wayland`].
@@ -831,13 +834,13 @@ fn cinnamon_workspace_names(value: &str) -> Vec<String> {
 fn cinnamon_workspace_names_value(original: &[String]) -> String {
     let mut names = original.to_vec();
     if names.is_empty() {
-        names.push("Eldrun".to_string());
+        names.push(crate::brand::WM_CLASS.to_string());
     }
     if names.len() == 1 {
-        names.push("Eldrun-Hidden".to_string());
+        names.push(crate::brand::WM_CLASS_HIDDEN.to_string());
     }
-    names[0] = "Eldrun".to_string();
-    names[1] = "Eldrun-Hidden".to_string();
+    names[0] = crate::brand::WM_CLASS.to_string();
+    names[1] = crate::brand::WM_CLASS_HIDDEN.to_string();
     let values = names
         .into_iter()
         .map(|name| format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'")))
@@ -863,23 +866,23 @@ mod tests {
     // ── is_protected_class ─────────────────────────────────────────────────
 
     #[test]
-    fn eldrun_wm_class_is_always_protected() {
-        // The most critical invariant: Eldrun's own window must NEVER be sent
+    fn app_wm_class_is_always_protected() {
+        // The most critical invariant: Tabtivity's own window must NEVER be sent
         // to PARKED_DESKTOP.  X11 WM_CLASS is two NUL-separated strings:
         // "<instance>\0<class>\0".
-        assert!(is_protected_class("eldrun\0Eldrun\0"));
-        assert!(is_protected_class("Eldrun\0Eldrun\0"));
-        assert!(is_protected_class("eldrun")); // instance name only
-        assert!(is_protected_class("ELDRUN")); // all-caps (case-insensitive)
+        assert!(is_protected_class(concat!(crate::app_slug!(), "\0", crate::app_name!(), "\0")));
+        assert!(is_protected_class(concat!(crate::app_name!(), "\0", crate::app_name!(), "\0")));
+        assert!(is_protected_class(crate::app_slug!())); // instance name only
+        assert!(is_protected_class(crate::app_upper!())); // all-caps (case-insensitive)
     }
 
     #[test]
-    fn protected_classes_constant_includes_eldrun() {
-        // Regression guard: if someone removes "eldrun" from PROTECTED_CLASSES
+    fn protected_classes_constant_includes_app() {
+        // Regression guard: if someone removes "tabtivity" from PROTECTED_CLASSES
         // by accident, this test fails immediately.
         assert!(
-            PROTECTED_CLASSES.contains(&"eldrun"),
-            "PROTECTED_CLASSES must contain \"eldrun\" or Eldrun will be hidden on project switch"
+            PROTECTED_CLASSES.contains(&crate::app_slug!()),
+            concat!("PROTECTED_CLASSES must contain \"", crate::app_slug!(), "\" or ", crate::app_name!(), " will be hidden on project switch")
         );
     }
 
@@ -909,18 +912,18 @@ mod tests {
     // ── parkable override (#42) ────────────────────────────────────────────
 
     #[test]
-    fn overridden_id_is_parkable_even_though_eldrun_is_protected() {
+    fn overridden_id_is_parkable_even_though_app_is_protected() {
         // A detached subwindow's id, opted in, must be parkable despite its
-        // `eldrun` WM_CLASS being protected — that is the whole #42 parking link.
+        // `tabtivity` WM_CLASS being protected — that is the whole #42 parking link.
         let mut state = ParkableState::default();
         assert!(state.add_parkable(42));
         assert!(state.is_parkable(42));
         // Sanity: the WM_CLASS itself is still protected by default.
-        assert!(is_protected_class("eldrun\0Eldrun\0"));
+        assert!(is_protected_class(concat!(crate::app_slug!(), "\0", crate::app_name!(), "\0")));
     }
 
     #[test]
-    fn non_overridden_eldrun_id_is_not_parkable() {
+    fn non_overridden_app_id_is_not_parkable() {
         let state = ParkableState::default();
         assert!(!state.is_parkable(99), "ids not opted in stay non-parkable");
     }
@@ -962,17 +965,17 @@ mod tests {
 
     #[test]
     fn title_matches_exact_project_group_title() {
-        let target = "Eldrun — p1 — g-3";
+        let target = concat!(crate::app_name!(), " — p1 — g-3");
         assert!(title_matches(Some(target), target));
     }
 
     #[test]
     fn title_matches_rejects_mismatch_and_empty() {
         assert!(!title_matches(
-            Some("Eldrun — p1 — g-3"),
-            "Eldrun — p2 — g-3"
+            Some(concat!(crate::app_name!(), " — p1 — g-3")),
+            concat!(crate::app_name!(), " — p2 — g-3")
         ));
-        assert!(!title_matches(None, "Eldrun — p1 — g-3"));
+        assert!(!title_matches(None, concat!(crate::app_name!(), " — p1 — g-3")));
         // An empty target must never match (a window with no title shouldn't be
         // resolved by accident).
         assert!(!title_matches(Some(""), ""));
@@ -982,9 +985,9 @@ mod tests {
     #[test]
     fn class_merely_containing_protected_token_is_parkable() {
         // Segment matching, not substring matching: an unrelated app whose name
-        // happens to contain "kwin"/"eldrun" must remain parkable.
+        // happens to contain "kwin"/"tabtivity" must remain parkable.
         assert!(!is_protected_class("kwinter\0Kwinter\0"));
-        assert!(!is_protected_class("eldrunner\0Eldrunner\0"));
+        assert!(!is_protected_class(concat!(crate::app_slug!(), "ner\0", crate::app_name!(), "ner\0")));
     }
 
     // ── window_from_u64 ────────────────────────────────────────────────────
@@ -1022,10 +1025,10 @@ mod tests {
     #[test]
     fn cinnamon_names_value_always_sets_first_two_slots() {
         let result = cinnamon_workspace_names_value(&[]);
-        assert!(result.contains("'Eldrun'"), "first slot must be Eldrun");
+        assert!(result.contains(concat!("'", crate::app_name!(), "'")), concat!("first slot must be ", crate::app_name!()));
         assert!(
-            result.contains("'Eldrun-Hidden'"),
-            "second slot must be Eldrun-Hidden"
+            result.contains(concat!("'", crate::app_name!(), "-Hidden'")),
+            concat!("second slot must be ", crate::app_name!(), "-Hidden")
         );
     }
 
@@ -1038,6 +1041,6 @@ mod tests {
         ];
         let result = cinnamon_workspace_names_value(&original);
         assert!(result.contains("'Extra'"), "extra workspaces must be kept");
-        assert!(result.starts_with("['Eldrun', 'Eldrun-Hidden',"));
+        assert!(result.starts_with(concat!("['", crate::app_name!(), "', '", crate::app_name!(), "-Hidden',")));
     }
 }

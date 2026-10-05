@@ -12,7 +12,7 @@
 //! Reaches the network for the two update checks, exactly as clicking the
 //! button does. Nothing here writes anything.
 
-use eldrun_lib::commands::ollama;
+use app_lib::commands::ollama;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {

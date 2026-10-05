@@ -18,6 +18,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, renderHook, screen, act, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NAMES } from "../../lib/brand";
 
 const { mockInvoke } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
@@ -88,7 +89,7 @@ function setupInvoke(
       }
       case "write_file_bytes": {
         // Bytes ride as the raw body; the path is a header (see fileAccess.ts).
-        const p = decodeURIComponent(opts?.headers?.["x-eldrun-path"] ?? "");
+        const p = decodeURIComponent(opts?.headers?.[NAMES.filePathHeader] ?? "");
         files[p] = "";
         return Promise.resolve(null);
       }

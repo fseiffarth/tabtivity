@@ -8,7 +8,7 @@ import { create } from "zustand";
  * re-derived by `components/layout/AgentContinueHost` from the agent CLI's own
  * usage panel each time it reads one. A stored arming time would be the one
  * thing that could fire a continue against a window that had already turned
- * over while Eldrun was closed.
+ * over while Tabtivity was closed.
  */
 
 export type ContinuePhase =
@@ -39,7 +39,7 @@ export interface ContinueStatus {
   checkAt?: number;
   /** Epoch ms of the last continue that actually reached the tab. */
   lastSentAt?: number;
-  /** How many continues this switch has sent since Eldrun started. */
+  /** How many continues this switch has sent since Tabtivity started. */
   sent: number;
   /** Why there is nothing armed, in the CLI's words where it had any. */
   error?: string;

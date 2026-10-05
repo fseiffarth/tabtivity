@@ -2,7 +2,7 @@
  * The app CSP — the perimeter, asserted so it cannot be loosened silently.
  *
  * A security review of the agent-tab sandbox tried to reach the privileged
- * renderer from every hostile-content surface Eldrun renders (markdown, notebook,
+ * renderer from every hostile-content surface Tabtivity renders (markdown, notebook,
  * compare and ODT viewers' `dangerouslySetInnerHTML` sinks, a mail body, an
  * HTML/SVG preview) and could not: `script-src 'self' blob:` with **no**
  * `unsafe-inline` is what stops an injected `<script>` or `onerror=` from running,

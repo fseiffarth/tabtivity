@@ -41,7 +41,7 @@ class ResizeObserverStub {
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
 const { invoke, terminals, disposeThrows } = vi.hoisted(() => ({
-  invoke: vi.fn((..._a: unknown[]) => Promise.resolve(undefined)),
+  invoke: vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve(undefined)),
   terminals: [] as { opened: boolean; disposed: boolean; el: HTMLElement | null }[],
   // Flipped per test: does the teardown reach its element-removal disposable?
   disposeThrows: { value: false },
@@ -102,6 +102,7 @@ vi.mock("../../stores/settings", () => ({
 }));
 
 import { TerminalView } from "../../components/terminal/TerminalView";
+import { resetAgentVersionNotice, useAgentVersionNoticeStore } from "../../stores/agents/agentVersionNotice";
 
 /** jsdom reports a zero-sized, unparented box, so `hasLayout()` is false and the
  *  terminal never opens. Flip it on so `tryOpen` can succeed. */
@@ -190,5 +191,54 @@ describe("TerminalView — a re-opened pane never stacks two xterms", () => {
     });
 
     expect(terminals[1].opened).toBe(true);
+  });
+});
+
+describe("TerminalView — the sweep leaves the pane's portaled cards to React", () => {
+  beforeEach(() => {
+    invoke.mockClear();
+    invoke.mockImplementation((cmd: unknown) => Promise.resolve(
+      cmd === "agent_versions"
+        ? [{
+          agent: "claude", label: "Claude Code", version: "9.9.9", state: "moved",
+          stale: [{ version: "1.0.0", surface: "test", direction: "newer" }], dismissed: false,
+        }]
+        : undefined,
+    ));
+    terminals.length = 0;
+    disposeThrows.value = false;
+    giveLayout(true);
+    // A host CLI newer than the verified release: every zoomable agent pane
+    // portals the version card into its xterm container.
+    useAgentVersionNoticeStore.setState({
+      hidden: {},
+      newer: { claude: { agent: "claude", label: "Claude Code", installed: "9.9.9", verified: "1.0.0" } },
+    });
+  });
+  afterEach(() => {
+    giveLayout(false);
+    resetAgentVersionNotice();
+  });
+
+  it("closing the tab after a re-spawn does not throw out of React's unmount", async () => {
+    // Before: the teardown's `replaceChildren()` removed the card node too, so
+    // React's own removal on the tab close threw NotFoundError and took the
+    // main window's whole tree down (a black window; popouts, which render no
+    // version card, kept working).
+    const props = { id: "p:t", cmd: "claude", visible: true, focused: true, zoomable: true };
+    const { container, rerender, unmount } = render(<TerminalView {...props} cwd="/p/one" />);
+    await act(async () => {});
+    await act(async () => {
+      rerender(<TerminalView {...props} cwd="/p/one" />);
+    });
+    expect(paneContainer(container).querySelector(".terminal-version-drift")).not.toBeNull();
+
+    await act(async () => {
+      rerender(<TerminalView {...props} cwd="/p/two" />);
+    });
+    expect(paneContainer(container).querySelector(".terminal-version-drift")).not.toBeNull();
+    expect(paneContainer(container).querySelectorAll(".xterm")).toHaveLength(1);
+
+    expect(() => unmount()).not.toThrow();
   });
 });

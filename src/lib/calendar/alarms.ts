@@ -58,7 +58,7 @@ export function alarmTime(occurrence: Occurrence, minutesBefore: number): string
 /**
  * The alarms that are due at `now` and have not been shown yet.
  *
- * "Due" means its time has arrived — including one that arrived while Eldrun was
+ * "Due" means its time has arrived — including one that arrived while Tabtivity was
  * closed, which is why this looks backwards as well as at this instant. It does
  * not look back forever, though: `graceMinutes` bounds how stale a reminder may
  * be and still be worth showing (a week-old reminder is noise, not information).

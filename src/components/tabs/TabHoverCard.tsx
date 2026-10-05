@@ -159,7 +159,7 @@ export function TabHoverCard({
   // Muted kind line, enriched with what the tiny tab badges can only hint at:
   // the concrete viewer, where the process runs (remote projects), and which
   // side a viewed file came from. An agent's permission mode is deliberately
-  // absent: it is set inside the agent's own CLI and Eldrun does not track it.
+  // absent: it is set inside the agent's own CLI and Tabtivity does not track it.
   const kindBits: string[] = [
     tab.kind === "embed" && tab.viewer
       ? t(VIEWER_LABEL_KEY[tab.viewer] ?? KIND_LABEL_KEY.embed)

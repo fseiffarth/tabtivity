@@ -54,6 +54,10 @@ pub struct OpenApp {
 /// One entry in `project.json["tab_layout"]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TabEntry {
+    /// The window's own handle, re-minted by every window that loads the
+    /// tab (`loadFromLayout`); defaulted so a record written without one (an
+    /// older or hand-made file) still loads.
+    #[serde(default)]
     pub key: String,
     pub label: String,
     pub cmd: String,
@@ -111,7 +115,7 @@ pub struct RemoteSpec {
     pub key_auth: Option<bool>,
     /// Run this project's remote shell/script tabs inside a **tmux** session on
     /// the host (TODO #85), so a long run survives an SSH drop, a laptop sleep, or
-    /// Eldrun quitting — the session keeps running and the tab reattaches on
+    /// Tabtivity quitting — the session keeps running and the tab reattaches on
     /// reconnect/relaunch. **Default ON** for a remote project: `None` and
     /// `Some(true)` both mean enabled; only an explicit `Some(false)` opts out (the
     /// pill's toggle). Agent tabs are excluded regardless — they resume via their
@@ -120,7 +124,7 @@ pub struct RemoteSpec {
     /// `projects.json` entry's `extra["remote"]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persist_sessions: Option<bool>,
-    /// This spec reaches a **project VM** Eldrun itself booted
+    /// This spec reaches a **project VM** Tabtivity itself booted
     /// (`docs/vm_projects_plan.md`): `host` is loopback and `port` the QEMU
     /// slirp forward, rewritten by `services::vm` on every boot. The marker is
     /// what authorizes the per-VM SSH identity/known_hosts handling (a
@@ -170,7 +174,7 @@ pub struct ComputeHost {
     #[serde(default)]
     pub pull_outputs: bool,
     /// This machine reaches the project over a **shared filesystem**: it already
-    /// sees the primary's project folder at `spec.remote_path`, so Eldrun copies
+    /// sees the primary's project folder at `spec.remote_path`, so Tabtivity copies
     /// **no** code to it and **never runs git on it** — shells just `cd` into the
     /// shared tree and run there (`docs/multi_host_remote_plan.md`, shared-fs mode).
     /// Mutually exclusive with the whole one-way sync path: when set, connect does
@@ -243,7 +247,7 @@ pub enum SandboxScope {
 
 /// Per-project container config (TODO #38). When present and `enabled`, every
 /// terminal/agent tab of this project execs into ONE session-lived,
-/// capability-dropped Docker container (`eldrun-<id>`) that mounts only the
+/// capability-dropped Docker container (`tabtivity-<id>`) that mounts only the
 /// project directory plus the minimal agent auth/state paths (see
 /// `services::sandbox`), so a process inside cannot reach unrelated host files.
 /// Absent (the default) = tabs run on the host exactly as before. Local
@@ -262,7 +266,7 @@ pub struct SandboxSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     /// In-repo Dockerfile (path relative to the project dir); when set, `up`
-    /// builds `eldrun-<id>:latest` from it instead of pulling/expecting `image`.
+    /// builds `tabtivity-<id>:latest` from it instead of pulling/expecting `image`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dockerfile: Option<String>,
     /// Max number of processes inside the container (`--pids-limit`). Guards
@@ -308,7 +312,7 @@ pub enum VmEgress {
     /// host. Local-model / pure build-test isolation only; agent tabs are
     /// unavailable with the reason.
     Off,
-    /// slirp `restrict=on` plus a guestfwd channel to Eldrun's allowlisting
+    /// slirp `restrict=on` plus a guestfwd channel to Tabtivity's allowlisting
     /// HTTP CONNECT proxy. Default: agents reach their APIs, denied CONNECTs
     /// are logged and surfaced (an exfiltration tripwire). The honest caveat,
     /// stated in the UI: the agent can still exfiltrate *to the allowed
@@ -506,7 +510,7 @@ pub struct Project {
     pub compute_hosts: Vec<ComputeHost>,
     /// For a remote (SSH) project, the local mirror root — the paired local
     /// working copy synced from the host. Chosen at import (defaults to a
-    /// `<name>` subfolder of the top-level `eldrun/projects-ssh/` root) and relocatable via the
+    /// `<name>` subfolder of the top-level `tabtivity/projects-ssh/` root) and relocatable via the
     /// pill's "Show on disk" when the mirror has been deleted. Absent for local
     /// projects and for remote projects predating configurable mirrors, which
     /// fall back to the default under the state dir. Mirrored into the
@@ -808,8 +812,8 @@ mod tests {
     fn hpc_info_writes_only_what_it_knows() {
         assert_eq!(json(&HpcInfo::default()), serde_json::json!({}));
         let partial = HpcInfo {
-            anchor_dir: Some("/home/u/eldrun-anchors/p".into()),
-            anchor_rel: Some("eldrun-anchors/p".into()),
+            anchor_dir: Some(concat!("/home/u/", crate::app_slug!(), "-anchors/p").into()),
+            anchor_rel: Some(concat!(crate::app_slug!(), "-anchors/p").into()),
             ..Default::default()
         };
         let out = json(&partial);

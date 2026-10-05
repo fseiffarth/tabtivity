@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef } from "react";
 
 const modals: HTMLElement[] = [];
 export const hasActiveModal = () => modals.length > 0;
+/** The frame on top — the one that owns the keyboard — or null. */
+export const topModal = (): HTMLElement | null => modals[modals.length - 1] ?? null;
 export const isInActiveModal = (node: Node | null) => !modals.length || (node !== null && modals[modals.length - 1].contains(node));
 
 /** CSS-hidden ancestors matter too (for example the narrow settings navigation). */

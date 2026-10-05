@@ -5,6 +5,7 @@ import { eventColor } from "../../lib/calendar/calendarCategories";
 import { calendarColor } from "../../stores/calendar/calendar";
 import { useI18nStore, useT } from "../../lib/i18n";
 import type { CalendarMenuTarget } from "./CalendarContextMenu";
+import { useArrivedMarks } from "../../stores/calendar/arrivals";
 
 interface Props {
   occurrences: Occurrence[];
@@ -27,6 +28,7 @@ interface Props {
  */
 export function AgendaView({ occurrences, calendars, use24h, onOpen, onMenu, emptyLabel }: Props) {
   const t = useT();
+  const arrived = useArrivedMarks();
   const lang = useI18nStore((s) => s.lang);
   const today = todayStr();
 
@@ -75,7 +77,8 @@ export function AgendaView({ occurrences, calendars, use24h, onOpen, onMenu, emp
                 key={`${occ.eventId}:${occ.occurrenceStart}:${date}`}
                 className={
                   "cal-agenda-row" +
-                  (occ.status === "cancelled" ? " cal-block-cancelled" : "")
+                  (occ.status === "cancelled" ? " cal-block-cancelled" : "") +
+                  (arrived[occ.eventId] ? " arrived" : "")
                 }
                 onClick={() => onOpen(occ)}
                 onContextMenu={(e) => {

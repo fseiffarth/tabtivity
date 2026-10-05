@@ -13,12 +13,12 @@ import { useT } from "../../lib/i18n";
 /**
  * "Go easy on this machine" — the per-host **careful** switch.
  *
- * It exists because Eldrun's background work is priced for a machine you own. On
+ * It exists because Tabtivity's background work is priced for a machine you own. On
  * a host you merely have an account on — an HPC login node above all — three of
  * those habits are things the site actively watches: CPU on the login node, a
  * recursive `du` over a tree that usually lives on a *parallel* filesystem (a
  * metadata storm against a shared server), and repeated account lookups against a
- * shared directory service. None of them are expensive for Eldrun; all of them
+ * shared directory service. None of them are expensive for Tabtivity; all of them
  * are rude at a cadence, and one of them is the kind of thing a usage policy
  * names by hand.
  *
@@ -30,7 +30,7 @@ import { useT } from "../../lib/i18n";
  * that disagree.
  *
  * **It is on by default and there is no detection behind it.** Every remote host
- * starts careful, because Eldrun cannot tell whose machine it is and guessing
+ * starts careful, because Tabtivity cannot tell whose machine it is and guessing
  * only ever guesses wrong expensively. Flipping it off is a statement about *this*
  * machine — "this one is mine" — recorded per SSH target and kept from then on,
  * which is why it has to be stored rather than re-derived.

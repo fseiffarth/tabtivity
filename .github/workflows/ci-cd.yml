@@ -69,6 +69,21 @@ jobs:
           echo "Scanning ${base}..${HEAD_SHA}"
           scripts/privacy-check.sh "$base" "$HEAD_SHA"
 
+  # The app's name is spelled in the brand modules only (src-tauri/src/brand.rs,
+  # src/lib/brand.ts, scripts/lib/brand.sh); everything else reads it from
+  # there. This fails when a tracked file outside the script's commented
+  # allowlist spells it itself. No hook runs it, so CI is where it is enforced.
+  brand:
+    name: brand
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check that only the brand modules spell the app's name
+        run: scripts/brand-check.sh
+
   # gitleaks over the whole history, next to privacy-check.sh (which scans only
   # the pushed range, for this repo's own private literals). The two overlap on
   # purpose: gitleaks knows far more issuer token formats. Blocking: history is
@@ -284,7 +299,7 @@ jobs:
     if: github.event_name == 'push'
     # `privacy` gates every package job: a build that leaks must never become a
     # downloadable artifact, let alone a release asset.
-    needs: [test-windows, privacy]
+    needs: [test-windows, privacy, brand]
 
     steps:
       - name: Checkout
@@ -313,7 +328,7 @@ jobs:
       - name: Upload NSIS installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: eldrun-${{ github.sha }}-windows-nsis
+          name: tabtivity-${{ github.sha }}-windows-nsis
           # Tauri 2 on Windows puts bundles in the project-root target/ when
           # CARGO_TARGET_DIR is overridden by swatinem/rust-cache.
           path: |
@@ -334,7 +349,7 @@ jobs:
     name: package
     runs-on: ubuntu-24.04
     if: github.event_name == 'push'
-    needs: [test, privacy]
+    needs: [test, privacy, brand]
 
     steps:
       - name: Checkout
@@ -380,7 +395,7 @@ jobs:
       - name: Upload AppImage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: eldrun-${{ github.sha }}-appimage
+          name: tabtivity-${{ github.sha }}-appimage
           # Project-root target/ is a fallback for when CARGO_TARGET_DIR is
           # overridden by swatinem/rust-cache.
           path: |
@@ -390,7 +405,7 @@ jobs:
       - name: Upload DEB
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: eldrun-${{ github.sha }}-deb
+          name: tabtivity-${{ github.sha }}-deb
           # Project-root target/ is a fallback for when CARGO_TARGET_DIR is
           # overridden by swatinem/rust-cache.
           path: |
@@ -401,7 +416,7 @@ jobs:
     name: package-macos
     runs-on: macos-latest
     if: github.event_name == 'push'
-    needs: [test-macos, privacy]
+    needs: [test-macos, privacy, brand]
 
     steps:
       - name: Checkout
@@ -448,13 +463,13 @@ jobs:
           # one a user couldn't match to a release at a glance. Guard the move:
           # Tauri may already emit exactly this name, and `mv x x` fails.
           version="$(node -p "require('./package.json').version")"
-          target="$(dirname "$dmg")/Eldrun_${version}_universal.dmg"
+          target="$(dirname "$dmg")/Tabtivity_${version}_universal.dmg"
           [ "$dmg" = "$target" ] || mv "$dmg" "$target"
 
       - name: Upload DMG
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: eldrun-${{ github.sha }}-macos-universal-dmg
+          name: tabtivity-${{ github.sha }}-macos-universal-dmg
           path: |
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*universal.dmg
             target/universal-apple-darwin/release/bundle/dmg/*universal.dmg
@@ -480,28 +495,28 @@ jobs:
         if: needs.package.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: eldrun-${{ github.sha }}-appimage
+          name: tabtivity-${{ github.sha }}-appimage
           path: release-assets
 
       - name: Download DEB artifact
         if: needs.package.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: eldrun-${{ github.sha }}-deb
+          name: tabtivity-${{ github.sha }}-deb
           path: release-assets
 
       - name: Download Windows NSIS artifact
         if: needs.package-windows.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: eldrun-${{ github.sha }}-windows-nsis
+          name: tabtivity-${{ github.sha }}-windows-nsis
           path: release-assets
 
       - name: Download macOS DMG artifact
         if: needs.package-macos.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: eldrun-${{ github.sha }}-macos-universal-dmg
+          name: tabtivity-${{ github.sha }}-macos-universal-dmg
           path: release-assets
 
       - name: Build release notes
@@ -513,7 +528,7 @@ jobs:
           MACOS_RESULT: ${{ needs.package-macos.result }}
         run: |
           {
-            printf 'Eldrun %s — alpha / preview build.\n\n' "$RELEASE_TAG"
+            printf 'Tabtivity %s — alpha / preview build.\n\n' "$RELEASE_TAG"
             printf 'Built from commit `%s`.\n\n' "$RELEASE_SHA"
             printf 'Artifacts:\n'
 
@@ -531,17 +546,25 @@ jobs:
 
             if [ "$MACOS_RESULT" = success ]; then
               printf -- '- macOS: universal Intel/Apple Silicon `.dmg` (unsigned — right-click → Open, or run '
-              printf '`xattr -dr com.apple.quarantine /Applications/Eldrun.app`)\n'
+              printf '`xattr -dr com.apple.quarantine /Applications/Tabtivity.app`)\n'
             else
               printf -- '- macOS: unavailable (package job: `%s`)\n' "$MACOS_RESULT"
             fi
 
+            # Until the cleanup release (the one that drops the old-name
+            # lookups): what an upgrade across the rename does and asks for.
+            printf '\nTabtivity was called Eldrun before. Upgrading from an Eldrun build:\n'
+            printf -- '- your state is moved to the new name on the first start (projects stay where they are); '
+            printf 'close the old window before installing, and update all machines that sync with each other together\n'
+            printf -- '- agents may ask once more for permission to use the app'"'"'s tools, and Codex to trust its session hook\n'
+            printf -- '- `eldrun-send` keeps working for one release as an alias of `tabtivity-send`\n'
+            printf -- '- macOS: delete the old `Eldrun.app` yourself; a pinned launcher of the old entry has to be pinned again\n'
             printf '\nThis is an early alpha; expect rough edges.\n'
           } > release-body.md
 
       # Only the public key: the job verifies its own signature against the
       # key the updater has compiled in, so a wrong secret fails here instead
-      # of shipping a release no installed Eldrun will accept.
+      # of shipping a release no installed Tabtivity will accept.
       - name: Check out the release public key
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

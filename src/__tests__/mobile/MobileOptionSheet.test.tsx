@@ -56,6 +56,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND } from "../../lib/brand";
 
 const ESC = String.fromCharCode(27);
 const TAB = { id: "tab", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
@@ -84,7 +85,7 @@ const PICKER = [
   "Esc to cancel",
 ].join("\n");
 
-describe("Eldrun Mobile composer sheets", () => {
+describe(`${BRAND.display} Mobile composer sheets`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
@@ -107,7 +108,7 @@ describe("Eldrun Mobile composer sheets", () => {
     await settle(400);
     expect(FakeWebSocket.keys.join("")).toContain("/model");
     // The sheet is up before the picker is: it says so rather than listing
-    // models Eldrun made up.
+    // models Tabtivity made up.
     expect(screen.getByText("Waiting for the session's model picker…")).toBeTruthy();
 
     await paint(PICKER);
@@ -130,7 +131,7 @@ describe("Eldrun Mobile composer sheets", () => {
     expect(rows[2].hasAttribute("disabled")).toBe(true);
 
     // Here it was the only question: the dialog is gone and so is the sheet.
-    await paint("❯ \n\n  ~/projects/eldrun · Sonnet 4");
+    await paint(`❯ \n\n  ~/projects/${BRAND.slug} · Sonnet 4`);
     await settle(1_000);
     expect(screen.queryByRole("dialog")).toBeNull();
   });

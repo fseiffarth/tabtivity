@@ -16,11 +16,11 @@ import { PRIMARY_HOST } from "./remoteStatus";
  *
  * **Busy = the host has ≥1 live tmux session.** That is the right signal
  * precisely because of the tmux contract (TODO #85): a run is decoupled from the
- * ssh channel that started it, so a session outliving its tab, an Eldrun
+ * ssh channel that started it, so a session outliving its tab, a Tabtivity
  * relaunch, or a VPN drop is exactly the work that would otherwise be invisible.
  * A *detached* session counts — a training run nobody is watching is still a
- * training run. A foreign session (one Eldrun never started) counts too: the
- * question is what the machine is doing, not what Eldrun launched.
+ * training run. A foreign session (one Tabtivity never started) counts too: the
+ * question is what the machine is doing, not what Tabtivity launched.
  *
  * **Keyed by SSH target, never by id.** A global machine (`stores/remote/globalMachines`)
  * and the project host it also is (a primary `remote` or a `compute_hosts`

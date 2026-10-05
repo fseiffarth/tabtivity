@@ -4,12 +4,12 @@
  *
  * A shell/script tab can run inside a **tmux** session — remote (on the SSH host)
  * or local (on this machine) — so the run survives an SSH drop / laptop sleep /
- * Eldrun crash. What closing the tab does depends on where that session lives:
+ * Tabtivity crash. What closing the tab does depends on where that session lives:
  * a **remote** session is only detached (the pane unmounts, killing the ssh/PTY
  * client) and stays alive under its host's tmux daemon, reattachable from the
  * Sessions view and ended only by its × there (`remote_tmux_kill`); a **local**
  * session the tab minted is ended with the tab (`local_tmux_kill`), the same as
- * closing the project or quitting Eldrun does — local sessions exist to survive
+ * closing the project or quitting Tabtivity does — local sessions exist to survive
  * a crash, not a close.
  *
  * `persistentSessionOf` / `localPersistentSessionOf` classify the tab (used by the
@@ -27,10 +27,11 @@ import {
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { invoke } from "@tauri-apps/api/core";
-import { isRelaunchableLocalTab, isResumableAgentTab } from "../../stores/tabs";
+import { isRelaunchableLocalTab, isResumableAgentTab, isSavedWhileLive } from "../../stores/tabs";
 import { shouldPersistLocalTab, shouldPersistTab } from "../terminal/tmuxSession";
 import { IS_WINDOWS } from "../platform";
 import { noteClosedAgentTab } from "../../stores/agents/closedAgentTabs";
+import { MOBILE_ACCESS_KEY } from "../brand";
 
 /**
  * The persistent host tmux session a tab owns, or `null` if the tab is not a
@@ -90,7 +91,7 @@ export function localPersistentSessionOf(scope: string, tab: TabEntry): string |
  * `null`. The spawn-side rule itself (`shouldPersistLocalTab`), so it covers the
  * Mobile-access agent tabs `localPersistentSessionOf` leaves out. An attach tab
  * (`tmuxAttach`, opened from the Sessions view) is never one: it looks at a
- * session it did not create — possibly one made outside Eldrun — and closing the
+ * session it did not create — possibly one made outside Tabtivity — and closing the
  * window onto it must not take it down.
  */
 export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | null {
@@ -105,8 +106,8 @@ export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | nul
     scope,
     localRunning,
     enabled,
-    !!project?.eldrun_mobile_access,
-    isResumableAgentTab(tab) || isRelaunchableLocalTab(tab),
+    !!project?.[MOBILE_ACCESS_KEY],
+    isResumableAgentTab(tab) || isRelaunchableLocalTab(tab) || isSavedWhileLive(tab),
   )
     ? tab.tmuxSession
     : null;

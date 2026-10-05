@@ -24,8 +24,9 @@ import {
   isHostTimeout,
   resetDirSizeGuard,
 } from "../../lib/projects/dirSizeGuard";
+import { BRAND } from "../../lib/brand";
 
-const PROJECT = "/home/u/eldrun/projects/demo";
+const PROJECT = `/home/u/${BRAND.slug}/projects/demo`;
 
 /** A call that never settles — what a black-holed SSH round trip looks like. */
 const hangs = () => new Promise<number>(() => {});

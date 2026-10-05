@@ -2,18 +2,18 @@
 //!
 //! macOS offers no public per-window control over other applications (that
 //! would need the private CGS/SkyLight API — rejected as build-fragile), so
-//! Eldrun parks at APP granularity: hiding a tracked window `hide`s its owning
+//! Tabtivity parks at APP granularity: hiding a tracked window `hide`s its owning
 //! application, showing it `unhide`s + best-effort activates it. Window
 //! enumeration/geometry ride `CGWindowListCopyWindowInfo`, which needs NO
 //! Screen Recording permission for the keys used here (window id, owner pid,
 //! owner name, layer, bounds), and `NSRunningApplication hide/unhide` needs NO
 //! Accessibility permission.
 //!
-//! Every X11/Windows safety invariant holds: Eldrun's own windows are never
+//! Every X11/Windows safety invariant holds: Tabtivity's own windows are never
 //! hidden (owning-process identity — hiding our own app would hide the MAIN
 //! window, since hide is app-wide — plus the structural main-window guard),
 //! protected shell surfaces (Dock/Finder/…) are never hidden, and cleanup
-//! unhides everything Eldrun hid. Because a hidden app's windows leave the
+//! unhides everything Tabtivity hid. Because a hidden app's windows leave the
 //! on-screen CGWindowList, the owner pid is recorded at hide time
 //! (`MacParkState::mark_parked`) and show/cleanup key on that pid.
 //!
@@ -287,7 +287,7 @@ fn pointer_location() -> Option<(f64, f64)> {
 pub struct MacBackend {
     /// Pure parking state: parkable override, main-window guard, parked map.
     state: Mutex<MacParkState>,
-    /// Eldrun's own pid — the structural backbone of "never hide Eldrun":
+    /// Tabtivity's own pid — the structural backbone of "never hide Tabtivity":
     /// hide is app-granular, so hiding our own app would hide the MAIN window.
     self_pid: u32,
     /// Idempotency latch for `cleanup` (mirrors x11.rs/windows.rs).
@@ -367,7 +367,7 @@ impl WorkspaceBackend for MacBackend {
         let Some((pid, owner_name)) = self.owner_of(window_id) else {
             return Ok(()); // window already gone/hidden — nothing to do
         };
-        // NEVER hide Eldrun itself — hide is app-granular, so this would take
+        // NEVER hide Tabtivity itself — hide is app-granular, so this would take
         // down the MAIN window. Unlike X11/Windows, the parkable override can
         // NOT bypass this: popout self-parking is deferred on macOS for
         // exactly this reason (see the intentional-gaps register).
@@ -388,8 +388,8 @@ impl WorkspaceBackend for MacBackend {
         Ok(())
     }
 
-    fn make_sticky(&self, _eldrun_pid: u32) -> Result<(), String> {
-        // No public Spaces API to pin an app to every Space. Leave Eldrun on
+    fn make_sticky(&self, _app_pid: u32) -> Result<(), String> {
+        // No public Spaces API to pin an app to every Space. Leave Tabtivity on
         // the user-selected Space.
         Ok(())
     }
@@ -414,7 +414,7 @@ impl WorkspaceBackend for MacBackend {
         *cleaned_up = true;
         drop(cleaned_up);
 
-        // Unhide exactly the apps Eldrun hid (dedup by pid — several tracked
+        // Unhide exactly the apps Tabtivity hid (dedup by pid — several tracked
         // windows can share one app, and unhide is app-granular anyway).
         let parked = self.state.lock().unwrap().drain_parked();
         let mut seen = std::collections::HashSet::new();
@@ -469,7 +469,7 @@ pub fn find_window_for_pid(pid: u32, attempts: usize) -> Option<u64> {
 }
 
 /// First window id not present in `before`, polling up to `attempts` times.
-/// Mirrors x11's `!w.protected` filter: never latch onto Eldrun's own or a
+/// Mirrors x11's `!w.protected` filter: never latch onto Tabtivity's own or a
 /// protected shell window that happens to appear during the poll.
 pub fn find_new_window(before: &[u64], attempts: usize) -> Option<u64> {
     let self_pid = std::process::id();

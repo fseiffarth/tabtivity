@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_TAB_LABEL, type TabRow } from "../../../mobile-web/src/api";
 import { RenameSheet } from "../../../mobile-web/src/screens/RenameSheet";
+import { BRAND } from "../../lib/brand";
 
 const tab: TabRow = { id: "t/agent 1", label: "Claude", kind: "agent", available: true, viewer_busy: false };
 
@@ -64,12 +65,12 @@ describe("Mobile rename sheet", () => {
     expect(puts().filter(([, init]) => JSON.parse(String((init as RequestInit).body)).label.length > MAX_TAB_LABEL * 2)).toHaveLength(0);
   });
 
-  it("says to open desktop Eldrun on a 503, and something generic on any other failure", async () => {
+  it(`says to open desktop ${BRAND.display} on a 503, and something generic on any other failure`, async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 }));
     render(<RenameSheet tab={tab} onClose={() => {}} onRenamed={() => {}} />);
     fireEvent.change(screen.getByLabelText("Tab name"), { target: { value: "X" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("Open desktop Eldrun to rename a tab.");
+    expect((await screen.findByRole("alert")).textContent).toBe(`Open desktop ${BRAND.display} to rename a tab.`);
     // The form is usable again afterwards.
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
 

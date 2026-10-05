@@ -7,10 +7,10 @@
 
 The tab content area is a WebKitGTK webview surface, not a native container. You cannot reparent an external X11 client *into* a DOM node. The faithful achievable approach is:
 
-**A positioned native child window owned by Eldrun's top-level X11 window, reparented to hold the app's top-level, and continuously synced to the panel-relative pixel rect of the tab's pane slot.** Concretely:
+**A positioned native child window owned by Tabtivity's top-level X11 window, reparented to hold the app's top-level, and continuously synced to the panel-relative pixel rect of the tab's pane slot.** Concretely:
 
 - The frontend already measures every group body rect (`groupRects` in `CenterPanel.tsx`, panel-relative px) for the flat pane layer. We reuse that exact rect for an embedded tab and report it (converted to root-window coordinates) to the backend.
-- The backend keeps, per embedded tab, an **embed container window** (a child of Eldrun's GTK/X11 top-level), `XReparentWindow`s the launched app's top-level into that container, and maps/positions both to track the reported rect.
+- The backend keeps, per embedded tab, an **embed container window** (a child of Tabtivity's GTK/X11 top-level), `XReparentWindow`s the launched app's top-level into that container, and maps/positions both to track the reported rect.
 - On tab switch/hide we `XUnmapWindow` the container; on show we `XMapWindow` + reposition; on resize we `ConfigureWindow` both container and child; on close/move-away we reparent the child back to root and kill the app.
 
 **Stacking limitation, called out explicitly:** the embedded native window stacks *above* the webview (it's a sibling/child in the X tree, not in the DOM). While an embedded tab is the active tab of its group it covers that group's pane rect — desired — but it will also paint over any DOM overlapping that rect: drag ghosts, the split-preview overlay, context menus, the right-panel overlay. Mitigation: while a tab drag is in progress or the right panel is open over the center, **unmap all embed containers** and remap them when the interaction ends. This is the biggest correctness risk; handled in step F below. True in-webview compositing is infeasible with WebKitGTK; this positioned-child approach is the standard XEmbed-style fallback.
@@ -51,12 +51,12 @@ Reuse `intern_atom` (x11.rs:329), `window_from_u64` (x11.rs:107), `MapWindow`/`C
 - `set_embed_visible(conn, container, bool)`
 - `release_embed(conn, child, root, container)` — reparent child back to root, DestroyWindow container
 
-**Eldrun top-level XID:** in `lib.rs` `setup`, fetch GdkWindow → XID of main window, store in managed `EmbedManagerState`. Recommend parenting containers to Eldrun top-level (z-order + auto-cleanup on exit). Open question for reviewer: parent choice.
+**Tabtivity top-level XID:** in `lib.rs` `setup`, fetch GdkWindow → XID of main window, store in managed `EmbedManagerState`. Recommend parenting containers to Tabtivity top-level (z-order + auto-cleanup on exit). Open question for reviewer: parent choice.
 
 ### 2b. Embed lifecycle — new `src-tauri/src/services/embed.rs` (mirror `services/ssh_mount.rs`)
 ```
 struct EmbeddedApp { tab_key, scope, pid, app_window, container, exec, file }
-struct EmbedManager { conn, eldrun_xid, embeds: HashMap<"scope:tabkey", EmbeddedApp> }
+struct EmbedManager { conn, tabtivity_xid, embeds: HashMap<"scope:tabkey", EmbeddedApp> }
 type EmbedManagerState = Arc<Mutex<EmbedManager>>;
 ```
 Functions: `embed_open`, `embed_set_geometry`, `embed_set_visible`, `embed_close`, `embed_close_all_for_scope`, `embed_suspend_all`/`embed_resume_all`.
@@ -70,7 +70,7 @@ Functions: `embed_open`, `embed_set_geometry`, `embed_set_visible`, `embed_close
 Add `ORIGIN_EMBEDDED_TAB` const (near apps.rs:42-46).
 
 ### 2d. Lifecycle / leak avoidance
-- App exit: parent-to-Eldrun-top-level → X destroys containers on Eldrun window death; also `embed_close_all` in app exit/cleanup. Kill pids to avoid zombies. Recommend kill (tabs non-restorable §4).
+- App exit: parent-to-Tabtivity-top-level → X destroys containers on Tabtivity window death; also `embed_close_all` in app exit/cleanup. Kill pids to avoid zombies. Recommend kill (tabs non-restorable §4).
 - App self-exit: reaper thread per embed waits on pid, emits `embed-exited {scope, tabKey}`; frontend removes tab.
 - Tab moved to another group: same embed, new rect — just `embed_set_geometry`.
 
@@ -97,7 +97,7 @@ On file drag with valid target + capability OK: focus target group, `addTab({lab
 - On rect/visibility change: `embed_set_geometry` + `embed_set_visible`, debounced via rAF (divider drag floods, CenterPanel.tsx:469-503).
 - On unmount/close: `embed_close`. Listen for `embed-exited` → `removeTab`.
 
-### 3f. Geometry: send viewport `getBoundingClientRect()`; backend adds Eldrun top-level origin (queried via X) → root coords. Math in `services/embed.rs`, unit-tested.
+### 3f. Geometry: send viewport `getBoundingClientRect()`; backend adds Tabtivity top-level origin (queried via X) → root coords. Math in `services/embed.rs`, unit-tested.
 
 ### 3g. Mitigation (stacking): suspend/resume embeds on drag start/end (`useDragStore.drag != null`) and on right-panel open/close (`AppShell.tsx`).
 
@@ -133,7 +133,7 @@ Non-X11/Wayland/non-allowlisted/unresolvable → capability false. File drag sti
 2. `resolve_default_handler` + `EMBEDDABLE_EXECS` in `commands/apps.rs`; tests `embed_capability_tests.rs`.
 3. `embed_capability` command; register in `lib.rs`.
 4. X11 primitives in `platform/x11.rs`.
-5. `services/embed.rs` (`EmbedManager` + state + geometry conversion tested in `embed_geometry_tests.rs`); capture Eldrun top-level XID in `lib.rs` setup; `.manage`.
+5. `services/embed.rs` (`EmbedManager` + state + geometry conversion tested in `embed_geometry_tests.rs`); capture Tabtivity top-level XID in `lib.rs` setup; `.manage`.
 6. Embed commands + reaper (`embed-exited`) + cleanup-on-exit; register in `lib.rs`; `ORIGIN_EMBEDDED_TAB`.
 7. Tabs store: `"embed"` kind + fields + accent; confirm `isRestorableKind` excludes embed.
 8. Drag store: file-drag variant + capability fields.
@@ -142,13 +142,13 @@ Non-X11/Wayland/non-allowlisted/unresolvable → capability false. File drag sti
 11. `EmbedPane` + CenterPanel branch; geometry/visibility sync; open/close; `embed-exited` listener.
 12. Mitigation wiring: suspend/resume on drag + right-panel.
 13. All tests from §6.
-14. `npx tsc --noEmit` + `cargo test --manifest-path src-tauri/Cargo.toml`. Backend changes need user rebuild/restart for QA; do not launch Eldrun.
+14. `npx tsc --noEmit` + `cargo test --manifest-path src-tauri/Cargo.toml`. Backend changes need user rebuild/restart for QA; do not launch Tabtivity.
 
 ---
 
 ## 8. Risks / open questions
 1. Stacking/z-order central risk — does global suspend-on-overlay suffice, or per-overlay intersection logic for context menus/modals/project switcher?
-2. Eldrun top-level XID via `with_webview`/GTK — confirm GTK window (not webview child) is reparent target, XID stable post-setup.
+2. Tabtivity top-level XID via `with_webview`/GTK — confirm GTK window (not webview child) is reparent target, XID stable post-setup.
 3. FileTree native DnD vs pointer drag coexistence on WebKitGTK (pointerup hazard) — modifier or drag handle?
 4. App allowlist heuristic — ship conservative, expand later?
 5. Kill-on-close/exit policy — always SIGTERM child (possible unsaved-data loss)?
@@ -179,7 +179,7 @@ Plan reviewer verdict was REWORK→staged. User approved **Phase 1 now**. The co
 
 ### REQUIRED fixes deferred to Phase 2 (note them, don't implement)
 - **R2 (stacking mitigation):** wire suspend/resume from a single overlay-count signal covering drag + right-panel + context menus + modals + project-switcher dropdown + SplitPreviewOverlay — not just drag + right-panel.
-- **R4 (geometry):** EmbedPane sends `el.getBoundingClientRect()` (viewport CSS px) + `window.devicePixelRatio`; backend queries Eldrun GTK top-level root origin once and composes to root device px. Do NOT reuse panel-relative `groupRects`. Extract the math as a pure fn (TS + Rust) so geometry tests are meaningful.
+- **R4 (geometry):** EmbedPane sends `el.getBoundingClientRect()` (viewport CSS px) + `window.devicePixelRatio`; backend queries Tabtivity GTK top-level root origin once and composes to root device px. Do NOT reuse panel-relative `groupRects`. Extract the math as a pure fn (TS + Rust) so geometry tests are meaningful.
 - Dedicated xcb connection for `EmbedManager` (avoid workspace Mutex contention during rAF geometry floods).
 - `embed-exited` event must carry scope; removal targets the right scope even after project switch.
 

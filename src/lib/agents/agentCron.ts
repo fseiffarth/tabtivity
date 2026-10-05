@@ -10,7 +10,7 @@
  * tab and type something before starting work, which is exactly the kind of
  * thing nobody remembers on the morning it matters.
  *
- * So Eldrun can do it: at each configured local time it sends one short message
+ * So Tabtivity can do it: at each configured local time it sends one short message
  * ({@link AGENT_CRON_MESSAGE}) to that agent, and the window starts there.
  *
  * Three decisions are encoded here rather than in the UI.

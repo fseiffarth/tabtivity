@@ -24,6 +24,7 @@ import { useT } from "../../lib/i18n";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { ErrorNote } from "../common/ErrorNote";
+import { VpnGlyph } from "./HeaderGlyphs";
 
 const MENU_ID = "vpn";
 
@@ -65,9 +66,9 @@ const NO_SAVED: string[] = [];
 /**
  * The machine's OpenVPN control, in the header — where a machine-level thing belongs.
  *
- * Every other VPN surface in Eldrun hangs off a project: the toggle is in that
+ * Every other VPN surface in Tabtivity hangs off a project: the toggle is in that
  * project's Connect dialog, the lamp is on its pill, and both vanish the moment you
- * switch away. The tunnel does not vanish. It runs as root, Eldrun passes it no
+ * switch away. The tunnel does not vanish. It runs as root, Tabtivity passes it no
  * routing flags, and a typical `.ovpn` pushes `redirect-gateway` — so while it is
  * up, *this computer's* traffic goes through it, browser and all, whether or not
  * the project that asked for it is still on screen.
@@ -326,7 +327,7 @@ export function VpnIndicator() {
             : t("vpnIndicator.noSavedCredentialsYet");
       }
 
-      // Non-headless: Eldrun handles no passwords in this mode, so a modal is the
+      // Non-headless: Tabtivity handles no passwords in this mode, so a modal is the
       // wrong ask entirely — the connect command goes to the root terminal and the
       // user authenticates there. (The saved-credential path above still applies:
       // credentials the user explicitly handed over via the save toggle are used, and
@@ -370,7 +371,7 @@ export function VpnIndicator() {
 
   /**
    * "Save login credentials", per config — the toggle that makes every later connect
-   * silent, and the only place a **non-headless** user can hand Eldrun a VPN secret
+   * silent, and the only place a **non-headless** user can hand Tabtivity a VPN secret
    * at all (that mode has no password fields anywhere else, by design).
    *
    * Turning it **on** cannot just flip a flag: there is no secret to save yet, so it
@@ -404,7 +405,7 @@ export function VpnIndicator() {
         });
       } catch (e) {
         const msg = String(e);
-        // A terminal handoff saves nothing either (Eldrun never sees that password), so
+        // A terminal handoff saves nothing either (Tabtivity never sees that password), so
         // it lands in the same place as a cancel: drop the intent, say nothing.
         if (!isVpnTerminalHandoff(e) && !/cancel|superseded/i.test(msg)) setError(msg);
         // Nothing was stored (the backend only saves after a tunnel comes up), so the
@@ -442,7 +443,7 @@ export function VpnIndicator() {
   );
 
   /**
-   * Add a config without connecting: browse for a `.ovpn`, copy it into Eldrun's store
+   * Add a config without connecting: browse for a `.ovpn`, copy it into Tabtivity's store
    * (`openvpn_store_config`, the same import the Connect dialog uses), and list it —
    * then the user connects it explicitly from its row, which is the path that shows the
    * password modal. Adding and connecting used to be one button ("Connect…"), which
@@ -471,7 +472,7 @@ export function VpnIndicator() {
   }, []);
 
   /**
-   * Remove a stored config: delete Eldrun's copy and forget its saved
+   * Remove a stored config: delete Tabtivity's copy and forget its saved
    * credentials (the backend does both, in that order — a refused removal
    * leaves the credentials alone). Only offered on idle rows; a live tunnel's
    * config can't be removed, only disconnected first. A removed config can't
@@ -598,7 +599,7 @@ export function VpnIndicator() {
         )}
         {on && armed !== null && (
           <div className="vpn-indicator-hint">
-            {t("vpnIndicator.startsWithEldrun")}{headless ? "" : t("vpnIndicator.waitsInRootTerminal")}.
+            {t("vpnIndicator.startsWithApp")}{headless ? "" : t("vpnIndicator.waitsInRootTerminal")}.
           </div>
         )}
       </>
@@ -629,7 +630,7 @@ export function VpnIndicator() {
         onFocus={reveal}
       >
         <ConnLamp status={lamp} label="OpenVPN" />
-        <span className="vpn-indicator-label">{t("vpnIndicator.vpnLabel")}</span>
+        <VpnGlyph className="header-status-glyph" />
       </button>
       {open && (
         <div className="tab-new-menu vpn-indicator-menu" role="menu">
@@ -655,7 +656,7 @@ export function VpnIndicator() {
             {t("vpnIndicator.notePost")}
           </div>
 
-          {/* The locked-keyring banner. It is the difference between "Eldrun forgot my
+          {/* The locked-keyring banner. It is the difference between "Tabtivity forgot my
               password" and "your keyring is locked": a locked Secret Service answers
               every read as though nothing were saved, so without saying so the app
               silently un-remembers every credential on each restart. Only shown when

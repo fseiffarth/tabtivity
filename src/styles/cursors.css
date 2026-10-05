@@ -40,7 +40,7 @@
    arrow inherits INTO them, and the UA stylesheet's `cursor: auto` on a text
    field loses to an inherited value from an element as specific as `:root`.
    The list is the app's actual text: the fields, the editors, the terminal.
-   Everything else in Eldrun is chrome, which is why the arrow is the honest
+   Everything else in Tabtivity is chrome, which is why the arrow is the honest
    default here and `auto` is not offered as a pack shape. */
 :root[data-cursor] :is(textarea, [contenteditable="true"]),
 :root[data-cursor]

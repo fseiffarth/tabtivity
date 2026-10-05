@@ -45,9 +45,11 @@ import { useT } from "../../lib/i18n";
  *  - Folding is `display: none` on a wrapper, NOT unmounting. Every member stays
  *    mounted and keeps polling, because a folded widget still has to report the
  *    tone the summary lamp shows — a Machines indicator that stopped watching
- *    while hidden would leave the lamp green over a dead host. It also means
- *    folding costs nothing and saves nothing at runtime: this is a width fix,
- *    not a polling fix.
+ *    while hidden would leave the lamp green over a dead host. So folding
+ *    is a width fix, not a polling fix. The one exception is the
+ *    CPU/RAM/GPU readout, which never tones the lamp: folded, it stops its
+ *    poll and samples once as the pointer reaches the toggle, whose tooltip
+ *    is the only place its figures still appear.
  *  - Members render in a FIXED DOM order whether folded or not, so expanding
  *    puts every widget back in the slot it always had.
  */
@@ -68,6 +70,7 @@ export function StatusCluster() {
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const reports = useHeaderStatusStore((s) => s.reports);
+  const [resourcePeek, setResourcePeek] = useState(0);
 
   useEffect(() => {
     const onOnline = () => setOnline(true);
@@ -167,7 +170,7 @@ export function StatusCluster() {
         <MachinesIndicator />
       </span>
       <span className="status-cluster-item" data-folded={collapsed}>
-        <AppResourceDisplay />
+        <AppResourceDisplay folded={collapsed} peek={resourcePeek} />
       </span>
       {/* Dev checkouts only: a release build's backend answers no status and
           the chip renders nothing (see DevBuildIndicator). */}
@@ -184,6 +187,7 @@ export function StatusCluster() {
           aria-expanded={!collapsed}
           aria-label={collapsed ? t("statusCluster.expandTitle") : t("statusCluster.collapseTitle")}
           title={toggleTitle}
+          onPointerEnter={collapsed ? () => setResourcePeek((n) => n + 1) : undefined}
           onClick={() => void updateSettings({ header_status_expanded: collapsed })}
         >
           {collapsed && <ConnLamp status={summaryLamp(all)} label={t("statusCluster.label")} />}

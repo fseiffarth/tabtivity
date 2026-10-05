@@ -188,7 +188,7 @@ impl PgpKeyring {
                     .map_err(|e| format!("the keyring is corrupt: {e}"))?;
                 if file.version != KEYRING_VERSION {
                     return Err(format!(
-                        "this keyring was written by a newer version of Eldrun (v{})",
+                        concat!("this keyring was written by a newer version of ", crate::app_name!(), " (v{})"),
                         file.version
                     ));
                 }
@@ -920,7 +920,7 @@ fn boundary() -> String {
     let mut bytes = [0u8; 18];
     getrandom::fill(&mut bytes).expect("the OS RNG must be available to send mail");
     format!(
-        "=_eldrun_{}",
+        concat!("=_", crate::app_slug!(), "_{}"),
         B64.encode(bytes).replace(['+', '/', '='], "x")
     )
 }

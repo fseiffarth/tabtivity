@@ -88,7 +88,7 @@ export interface PromptChartInput {
 /** Lines that steer the session rather than ask it anything, never adopted
  * into the history (and rows an older build stored are not drawn): any bare
  * one-word slash command (`/clear`, `/login`, `/compact`, …), plus the two
- * that take an argument and still only housekeep — the `/rename <name>` Eldrun
+ * that take an argument and still only housekeep — the `/rename <name>` Tabtivity
  * types into a new agent tab and a `/model <name>` switch. A command that
  * carries words for the agent (`/goal ship the release`) is a prompt. */
 const SESSION_COMMANDS_WITH_ARGS = new Set(["/rename", "/model"]);

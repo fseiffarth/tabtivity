@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ScheduledPrompt } from "../../../mobile-web/src/api";
 import { ScheduleSheet } from "../../../mobile-web/src/screens/ScheduleSheet";
+import { BRAND } from "../../lib/brand";
 
 const TAB = "tab one";
 const PATH = "/api/v1/tabs/tab%20one/schedules";
@@ -54,7 +55,10 @@ describe("Mobile schedule sheet", () => {
     render(<ScheduleSheet tabId={TAB} label="Claude" onClose={() => {}} />);
     expect(await screen.findByText("No prompts are scheduled for this tab.")).toBeTruthy();
     expect(screen.getByText("Desktop time zone: Europe/Berlin")).toBeTruthy();
+    // A new schedule starts as a one-time prompt; recurring is opt-in.
+    expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("once");
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Review the diff" } });
+    fireEvent.change(screen.getByLabelText("Recurrence"), { target: { value: "daily" } });
     fireEvent.change(screen.getByLabelText("Desktop-local time"), { target: { value: "07:30" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls("POST")).toHaveLength(1));
@@ -62,6 +66,7 @@ describe("Mobile schedule sheet", () => {
     expect(await screen.findByText("Daily · 07:30")).toBeTruthy();
     expect(screen.getByText("Next: 2026-09-16 09:00 (Europe/Berlin)")).toBeTruthy();
     expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).value).toBe("once");
   });
 
   it("sends the weekdays sorted, and refuses a rule with none picked without a request", async () => {
@@ -144,10 +149,19 @@ describe("Mobile schedule sheet", () => {
   it("disables the whole form when the desktop is closed, and says why", async () => {
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 }));
     render(<ScheduleSheet tabId={TAB} onClose={() => {}} />);
-    expect((await screen.findByRole("alert")).textContent).toBe("Open desktop Eldrun to manage scheduled prompts.");
+    expect((await screen.findByRole("alert")).textContent).toBe(`Open desktop ${BRAND.display} to manage scheduled prompts.`);
     expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).disabled).toBe(true);
     expect((screen.getByLabelText("Recurrence") as HTMLSelectElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps the form live when the host answered off its files with no window (H3), and says so", async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ schedules: [], time_zone: "Europe/Berlin", next_runs: {}, desktop_available: false }), { status: 200 }));
+    render(<ScheduleSheet tabId={TAB} onClose={() => {}} />);
+    expect((await screen.findByRole("status")).textContent).toContain(`The ${BRAND.display} window is closed`);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("closes from ✕ and the backdrop, not from a tap inside the sheet", async () => {

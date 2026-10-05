@@ -14,6 +14,7 @@ import { MobileBridgeHost } from "../../components/mobile/MobileBridgeHost";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import type { ProjectEntry, Settings } from "../../types";
+import { MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const paper: ProjectEntry = {
   id: "p-paper",
@@ -22,7 +23,7 @@ const paper: ProjectEntry = {
   position: 1,
   local_file: "/projects/paper/project.json",
   directory: "/projects/paper",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
 const worktree = (path: string, branch: string, isMain: boolean) => ({
@@ -31,7 +32,7 @@ const worktree = (path: string, branch: string, isMain: boolean) => ({
 });
 
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   invokeMock.mockClear();
@@ -55,7 +56,7 @@ describe("Mobile bridge — launch options", () => {
       if (command === "git_worktree_list") {
         return Promise.resolve([
           worktree("/projects/paper", "develop", true),
-          worktree("/projects/paper/.eldrun/worktrees/fix", "fix-build", false),
+          worktree(`/projects/paper/${NAMES.worktreesDir}/fix`, "fix-build", false),
         ]);
       }
       if (command === "agent_logins") {
@@ -66,7 +67,8 @@ describe("Mobile bridge — launch options", () => {
       }
       if (command === "mobile_opaque_id") {
         const { domain, value } = args as { domain: string; value: string };
-        return Promise.resolve(`${domain}-${value.length}`);
+        // Counted without the app's folder name, so the id does not move with it.
+        return Promise.resolve(`${domain}-${value.replace(NAMES.worktreesDir, ".appdir/worktrees").length}`);
       }
       return Promise.resolve(undefined);
     });
@@ -100,6 +102,25 @@ describe("Mobile bridge — launch options", () => {
       { agent_id: "agent-6", signed_in: true, account: "me@example.com", alternate: "console" },
       { agent_id: "agent-6", signed_in: false },
     ]);
+  });
+
+  it("counts a CLI on a stored API key as signed in, and sends only the flag", async () => {
+    const answer = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) =>
+      command === "agent_logins"
+        ? Promise.resolve([
+            { id: "claude", signed_in: true, account: "me@example.com", importable: false, blocked: null, shared: true, api_key: true },
+            { id: "gemini", signed_in: false, account: null, importable: false, blocked: null, shared: true, api_key: true, api_budget_reached: true },
+          ])
+        : answer(command, args as Parameters<typeof invoke>[1]));
+    const response = await ask({ type: "launch_options", request_id: "l3", project_id: paper.id });
+    expect(response.sign_in).toEqual([
+      { agent_id: "agent-6", signed_in: true, account: "me@example.com", alternate: "console", api_key: true },
+      // Out of budget: the flag crosses, never an amount.
+      { agent_id: "agent-6", signed_in: true, api_key: true, api_budget_reached: true },
+    ]);
+    // No provider name crosses.
+    expect(JSON.stringify(response.sign_in)).not.toMatch(/anthropic|gemini_api|google/i);
   });
 
   it("refuses a project the phone may not reach", async () => {

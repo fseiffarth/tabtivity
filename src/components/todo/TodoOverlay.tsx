@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { useSettingsStore } from "../../stores/settings";
 import { useTodoStore } from "../../stores/todo";
@@ -7,7 +7,10 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { TodoGlyph } from "../header/HeaderGlyphs";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
+import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
+import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { TodoPane } from "./TodoPane";
+import { storageKey } from "../../lib/brand";
 
 /**
  * The header ☑ button's overlay — the todo board's only surface, and the third
@@ -47,11 +50,19 @@ export function TodoOverlayHost() {
   const live = enabled && open;
   // Moves, resizes and fills like the root console; remembered per overlay.
   const { frameRef, frameStyle, frameClass, barProps, grips, fillButton } =
-    useFloatingFrame("eldrun.todoOverlayFrame");
+    useFloatingFrame(storageKey("todoOverlayFrame"));
+  // The docked root agent beside the board (Ctrl+1–9 here, or the bar's
+  // button), capped to leave the board room (`overlayAgentMaxWidth`).
+  const agent = useOverlayAgent("todo", live);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const agentMaxWidth = useOverlayAgentMaxWidth(bodyRef, live);
 
   useEffect(() => {
     if (!live) return;
     const onKey = (e: KeyboardEvent) => {
+      // Escape typed into the docked agent is its cancel key, not "close" —
+      // the root console's `regionRef` rule.
+      if ((e.target as Element | null)?.closest?.(".overlay-agent-column")) return;
       // An Escape the approvals panel (or anything else) already took is not ours.
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.stopPropagation();
@@ -105,6 +116,7 @@ export function TodoOverlayHost() {
             </div>
           </div>
           <div className="tab-controls root-overlay-controls">
+            <OverlayAgentToggle handle={agent} />
             <OverlayApprovals domain="todo" />
             {fillButton}
             <button
@@ -118,8 +130,18 @@ export function TodoOverlayHost() {
             </button>
           </div>
         </div>
-        <div className="subwindow-body todo-overlay-body">
+        <div ref={bodyRef} className="subwindow-body todo-overlay-body app-overlay-body-row">
           <TodoPane />
+          {agent.showColumn && (
+            <OverlayAgentColumn
+              app="todo"
+              tab={agent.tab}
+              hint={agent.hint}
+              maxWidth={agentMaxWidth}
+              focusRequest={agent.focusRequest}
+              onDismissHint={agent.dismissHint}
+            />
+          )}
         </div>
       </div>
     </div>

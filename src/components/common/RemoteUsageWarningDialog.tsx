@@ -22,7 +22,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
  * `services::remote_usage` for the probe). It is **not** a verdict:
  * `report.busy`/`report.reasons` are surfaced as extra context (a "may be in
  * use" hint) but never gate anything. Note the one known false positive the hint
- * carries: an Eldrun terminal tab already open to the same host shows up in
+ * carries: a Tabtivity terminal tab already open to the same host shows up in
  * `who` exactly like a human login.
  *
  * **On demand only.** It used to pop up by itself after every connect, which

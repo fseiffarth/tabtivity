@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
 
@@ -29,8 +30,15 @@ struct ProjectRecord {
     sandbox: Option<Value>,
     #[serde(default)]
     vm: Option<Value>,
-    #[serde(default)]
-    eldrun_mobile_access: bool,
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
+    #[serde(default, rename = "tabtivity_mobile_access")]
+    app_mobile_access: bool,
+    /// The paired phones that may open it; absent means every phone
+    /// (`brand::MOBILE_DEVICES_KEY`). Lenient: a malformed value closes this
+    /// scope alone instead of failing the whole file.
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
+    #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices")]
+    app_mobile_devices: Option<Vec<String>>,
 }
 
 /// The slice of `boxes.json` the catalog reads (#31aa). A box is listed as a
@@ -45,8 +53,15 @@ struct BoxRecord {
     member_ids: Vec<String>,
     #[serde(default)]
     folder: Option<String>,
-    #[serde(default)]
-    eldrun_mobile_access: bool,
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
+    #[serde(default, rename = "tabtivity_mobile_access")]
+    app_mobile_access: bool,
+    /// The paired phones that may open it; absent means every phone
+    /// (`brand::MOBILE_DEVICES_KEY`). Lenient: a malformed value closes this
+    /// scope alone instead of failing the whole file.
+    // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_DEVICES_KEY
+    #[serde(default, rename = "tabtivity_mobile_devices", deserialize_with = "crate::schema::projects::lenient_mobile_devices")]
+    app_mobile_devices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,6 +95,43 @@ struct SavedTab {
     /// so be one the phone can come back to (`terminal_service::local_launch_ok`).
     #[serde(default)]
     local_launch: Option<Value>,
+    /// The tab's binding into `agent_tasks.json` — what its schedules are
+    /// filed under. Read here so the sidecar can list them with no window.
+    #[serde(default)]
+    schedule_target_id: Option<String>,
+    /// A sign-in tab (`src/lib/agents/signInLaunch.ts`): the CLI's login
+    /// command, with no session to resume. The desktop saves it only while it
+    /// runs (`isSavedWhileLive`), so it is listed like a resumable agent tab.
+    #[serde(default)]
+    sign_in: bool,
+    /// A vendor cloud session (`src/lib/agents/cloudSessions.ts`), saved while
+    /// it runs for the same reason.
+    #[serde(default)]
+    cloud: bool,
+    /// The args the tab was launched with, and the launch moment (epoch ms) a
+    /// headless create stamps (`headless::tab_record`): together they say
+    /// whether an OpenCode tab began a session of its own — see
+    /// [`ResolvedTab::since`]. Loose `Value`s, so an odd shape in either never
+    /// drops the whole file.
+    #[serde(default)]
+    args: Option<Value>,
+    #[serde(default)]
+    launched_at: Option<Value>,
+}
+
+/// [`ResolvedTab::since`] off the saved record: its stamped launch moment,
+/// unless it was started on `--continue` (the window's rule in
+/// `agentReader.ts`).
+fn fresh_since(tab: &SavedTab) -> Option<i64> {
+    let continued = tab
+        .args
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|args| args.iter().any(|arg| arg.as_str() == Some("--continue")));
+    if continued {
+        return None;
+    }
+    tab.launched_at.as_ref().and_then(|at| at.as_i64().or_else(|| at.as_f64().map(|ms| ms as i64)))
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +170,36 @@ pub struct PublicProject {
     /// clean, not a repo, never probed, or the desktop is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<&'static str>,
+    /// How many of the project's agent tabs are working, waiting on a
+    /// decision, or done right now, filled in per request from the same
+    /// readings the activity list uses. Absent when none is in any of the three.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<AgentCounts>,
+}
+
+/// A project row's agent tabs by state, for the phone's project list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct AgentCounts {
+    pub working: usize,
+    pub question: usize,
+    pub done: usize,
+}
+
+impl AgentCounts {
+    /// Counts one tab's agent status; the states the row does not show are
+    /// skipped.
+    pub fn add(&mut self, status: &str) {
+        match status {
+            "working" => self.working += 1,
+            "question" => self.question += 1,
+            "done" => self.done += 1,
+            _ => {}
+        }
+    }
+
+    pub fn any(&self) -> bool {
+        self.working + self.question + self.done > 0
+    }
 }
 
 /// The one-line schedule summary the desktop's Agents view puts under an agent
@@ -163,6 +245,18 @@ pub struct PublicTab {
     /// answered with, shortened from the transcript's id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_model: Option<String>,
+    /// The agent tab's session is in plan mode / running a `/goal`, as its
+    /// own status line says — the desktop's PLAN and GOAL tab pills, which
+    /// the phone's cards wear too. Omitted while off or unknown.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub agent_plan: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub agent_goal: bool,
+    /// How many subagents the agent tab's session has at work right now, as
+    /// the desktop (or, with no window, the transcript) reads it — the count
+    /// the phone's tab cards wear. Omitted at zero.
+    #[serde(skip_serializing_if = "super::protocol::is_zero")]
+    pub agent_subagents: u32,
     /// Desktop wall clock (ms) of the tab's last working output and of its last
     /// finished turn — the two keys the phone's Agents list can sort by. The
     /// desktop's numbers travel untouched: they are compared with each other,
@@ -171,6 +265,10 @@ pub struct PublicTab {
     pub working_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    /// Desktop wall clock (ms) of when the tab's current or last turn began —
+    /// with `working_at`/`done_at`, how long it has been or was at work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<u64>,
     /// How many prompts this agent tab has scheduled, and when the first fires.
     /// Absent for a shell tab and while the desktop is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,16 +289,47 @@ pub struct PublicTab {
     /// dropped here rather than published for the phone to guess at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// The tab is a sign-in tab (`SavedTab::sign_in`), so the phone opens it
+    /// with its sign-in sheet however it got there — from the tab list, or
+    /// after the PWA reloaded on the way back from the sign-in page. Only the
+    /// flag crosses; never the login command.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sign_in: bool,
+    /// The linked worktree an agent tab runs in (`git_overview::tab_worktrees`),
+    /// filled by the project route; absent for the project folder's checkout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<super::git_overview::TabWorktree>,
+    /// The other linked worktrees its subagents at work run in, with how many
+    /// of them each (`git_overview::subagent_worktrees`), filled by the
+    /// project route.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subagent_worktrees: Vec<super::git_overview::SubagentWorktree>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTab {
     pub public: PublicTab,
     pub tmux_name: String,
-    /// The desktop's session id for an agent tab — the `ELDRUN_TAB_UID` its
-    /// processes run with, which `eldrun-send` stamps on what it sends. Never
+    /// The desktop's session id for an agent tab — the `TABTIVITY_TAB_UID` its
+    /// processes run with, which `tabtivity-send` stamps on what it sends. Never
     /// crosses the browser API.
     pub session_id: Option<String>,
+    /// The tab's `agent_tasks.json` binding, for answering its schedules with
+    /// no window open (`headless`). Never crosses the browser API.
+    pub schedule_target_id: Option<String>,
+    /// The command the tab runs (`claude`, `codex`, `bash`, …) and the folder
+    /// it runs in — what reading its transcript with no window needs. The
+    /// folder is a raw path and never crosses the browser API.
+    pub cmd: String,
+    pub cwd: String,
+    /// The launch moment (epoch ms) of a tab opened fresh rather than started
+    /// on its continue flag — what keeps a new OpenCode tab from reading the
+    /// folder's older session (`opencode_store`), as the window's
+    /// `launchedAt` does. `None` once its args carry `--continue`.
+    pub since: Option<i64>,
+    /// A local-model tab: its agent runs in the scope's local-model home
+    /// (`services::agent_home::local_model_home`), where its transcript is.
+    pub local_model: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +346,16 @@ pub struct ResolvedProject {
     /// per-member agent tab deliberately starts in that member's tree.
     pub roots: Vec<PathBuf>,
     pub tabs: Vec<ResolvedTab>,
+    /// The paired phones this scope is open to: `None` is every phone, a list
+    /// only those device ids (none when empty). Never crosses the browser API.
+    pub devices: Option<Vec<String>>,
+}
+
+impl ResolvedProject {
+    /// Whether the phone paired as `device_id` may see this scope at all.
+    pub fn reaches(&self, device_id: &str) -> bool {
+        device_listed(self.devices.as_deref(), device_id)
+    }
 }
 
 /// One scope to resolve, before its session file and tmux rows are read.
@@ -228,6 +367,8 @@ struct ScopeSource {
     /// Uncanonicalized; the first entry is the home and must exist, the rest
     /// are best-effort.
     roots: Vec<PathBuf>,
+    /// [`ResolvedProject::devices`].
+    devices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -240,13 +381,36 @@ pub struct Catalog {
 /// upgrade *and* the periodic authorization re-check of each open terminal
 /// (every fifth second of `pty_bridge`'s tick), so without a TTL an idle phone
 /// with one terminal open kept the workstation at roughly 1.7 tmux forks per
-/// second forever.
-const CATALOG_TTL: Duration = Duration::from_millis(1_000);
+/// second forever. At 1 s nearly every phone request still missed (its polls
+/// run every 5 s and 8 s, the re-check every 5 s), so each paid a fork and the
+/// session-file reads; 3 s lets a poll's burst of requests share one load.
+/// The cost is staleness: a change made on the desktop (a tab opened or
+/// closed there, phone access switched off) reaches the phone up to 3 s later.
+/// Changes the phone makes itself go through `load_fresh` / `invalidate`.
+const CATALOG_TTL: Duration = Duration::from_millis(3_000);
+
+/// How long `tmux ls` may take before it is killed. It answers in
+/// milliseconds; one that has not in this long is talking to a hung server,
+/// and the load — which runs under the catalog mutex, in front of every
+/// catalog-backed route — must not wait on it forever.
+const TMUX_LS_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// After tmux could not be asked, how long before it is asked again. Without
+/// this every load in the meantime would pay `TMUX_LS_TIMEOUT` again, one
+/// after another under the mutex, and a hung tmux would still stall the
+/// phone — just three seconds at a time.
+const TMUX_RETRY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default)]
 pub struct CatalogCache {
     last_valid: Option<Catalog>,
     loaded_at: Option<Instant>,
+    /// What tmux last *answered*. Carried forward while it cannot be asked
+    /// (see `live`), so a failed or hung `tmux ls` changes no tab's
+    /// availability.
+    last_live: Option<HashMap<String, LiveTmux>>,
+    /// When tmux last could not be asked; cleared by the next answer.
+    tmux_failed_at: Option<Instant>,
 }
 
 impl CatalogCache {
@@ -263,7 +427,55 @@ impl CatalogCache {
     /// Bypasses the TTL, for the one caller that is waiting on a change it knows
     /// is not in the snapshot yet (a tab the desktop has just been told to open).
     pub fn load_fresh(&mut self, state_dir: &Path, host_key: &[u8]) -> Result<Catalog, String> {
-        match Catalog::load(state_dir, host_key) {
+        self.load_fresh_with(state_dir, host_key, live_tmux)
+    }
+
+    /// The live tmux sessions for this load: tmux's answer, or — when it could
+    /// not be asked — the last answer it gave.
+    ///
+    /// "Could not be asked" (the spawn failed, the listing errored, it hung
+    /// past `TMUX_LS_TIMEOUT`) used to read as "no sessions": every tab went
+    /// `available: false`, and each open terminal's re-check then closed it
+    /// with `access_revoked`, which does not retry — one failed fork took down
+    /// every terminal on every phone. The previous answer is carried forward
+    /// rather than the whole previous snapshot served, because the rest of the
+    /// load is files and must stay current: a project whose phone access was
+    /// just switched off is revoked on time even while tmux is wedged. With no
+    /// previous answer at all the load fails, and the routes say
+    /// `catalog_unavailable` instead of presenting every session as gone.
+    fn live(
+        &mut self,
+        ask_tmux: impl FnOnce() -> Result<HashMap<String, LiveTmux>, String>,
+    ) -> Result<HashMap<String, LiveTmux>, String> {
+        if self.tmux_failed_at.is_some_and(|at| at.elapsed() < TMUX_RETRY) {
+            return self
+                .last_live
+                .clone()
+                .ok_or_else(|| "tmux could not be asked".to_string());
+        }
+        match ask_tmux() {
+            Ok(live) => {
+                self.tmux_failed_at = None;
+                self.last_live = Some(live.clone());
+                Ok(live)
+            }
+            Err(error) => {
+                self.tmux_failed_at = Some(Instant::now());
+                self.last_live.clone().ok_or(error)
+            }
+        }
+    }
+
+    fn load_fresh_with(
+        &mut self,
+        state_dir: &Path,
+        host_key: &[u8],
+        ask_tmux: impl FnOnce() -> Result<HashMap<String, LiveTmux>, String>,
+    ) -> Result<Catalog, String> {
+        let loaded = self
+            .live(ask_tmux)
+            .and_then(|live| Catalog::load_with(state_dir, host_key, &RootEnv::live(), &live));
+        match loaded {
             Ok(next) => {
                 self.last_valid = Some(next.clone());
                 self.loaded_at = Some(Instant::now());
@@ -294,7 +506,7 @@ fn enabled(value: &Option<Value>) -> bool {
         .unwrap_or(false)
 }
 
-fn key_id(key: &[u8], domain: &str, parts: &[&str]) -> String {
+pub(super) fn key_id(key: &[u8], domain: &str, parts: &[&str]) -> String {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts all key sizes");
     mac.update(domain.as_bytes());
     mac.update(&[0]);
@@ -313,7 +525,16 @@ fn key_id(key: &[u8], domain: &str, parts: &[&str]) -> String {
 fn valid_opaque_control_domain(domain: &str) -> bool {
     matches!(
         domain,
-        "agent" | "request" | "task" | "mail" | "calendar" | "event" | "project" | "subtask"
+        "agent"
+            | "request"
+            | "task"
+            | "mail"
+            | "calendar"
+            | "event"
+            | "project"
+            | "subtask"
+            | "worktree"
+            | "alert"
     )
 }
 
@@ -359,7 +580,7 @@ impl RootEnv {
 /// so flipping any of its inputs needs no sidecar restart and an open root
 /// terminal detaches at `pty_bridge`'s next re-check.
 ///
-/// Off unless `eldrun_mobile_host.root_access` is set. Then: a root agent
+/// Off unless `tabtivity_mobile_host.root_access` is set. Then: a root agent
 /// without the MCP tools holds no right a project agent lacks, so root is
 /// open; with them, only while every write is staged (`root_mcp_review` =
 /// all, the default and the reading of any unknown value) behind a fence the
@@ -374,7 +595,7 @@ fn root_open(state_dir: &Path, env: &RootEnv) -> bool {
         return false;
     };
     let switched_on = settings
-        .get("eldrun_mobile_host")
+        .get(crate::brand::MOBILE_HOST_KEY)
         .and_then(|host| host.get("root_access"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -411,30 +632,41 @@ fn project_key(id: &str) -> String {
 }
 
 fn expected_tmux(project_id: &str, kind: &str, name: &str) -> bool {
-    let prefix = format!("eldrun-{}--{kind}-", project_key(project_id));
-    name.starts_with(&prefix)
-        && name.len() > prefix.len() + 8
+    expected_tmux_for(&crate::brand::PAIR, project_id, kind, name)
+}
+
+/// [`expected_tmux`] for a brand pair: the session may carry the prefix an
+/// older build minted (a saved tab keeps its session's name, and a remote
+/// session keeps running across an update).
+fn expected_tmux_for(pair: &crate::brand::Pair, project_id: &str, kind: &str, name: &str) -> bool {
+    let scoped = format!("{}--{kind}-", project_key(project_id));
+    crate::services::brand_migration::compat::tmux_session_rest(pair, name)
+        .is_some_and(|rest| rest.starts_with(&scoped) && rest.len() > scoped.len() + 8)
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// The built-in agent CLIs whose tabs resume across a relaunch (the frontend's
+/// `RESUMABLE_AGENTS`): what the phone may come back to, and — with no
+/// window — what it may start (`headless::agents`).
+pub(super) const RESUMABLE_BUILTINS: &[&str] = &[
+    "claude",
+    "codex",
+    "qwen",
+    "opencode",
+    "copilot",
+    "cursor-agent",
+    "grok",
+    "gemini",
+    "agy",
+    "vibe",
+    "droid",
+];
+
 fn resumable(tab: &SavedTab) -> bool {
-    const BUILTIN: &[&str] = &[
-        "claude",
-        "codex",
-        "qwen",
-        "opencode",
-        "copilot",
-        "cursor-agent",
-        "grok",
-        "gemini",
-        "agy",
-        "vibe",
-        "droid",
-    ];
     tab.session_id.is_some()
-        && (BUILTIN.contains(&tab.cmd.as_str())
+        && (RESUMABLE_BUILTINS.contains(&tab.cmd.as_str())
             || tab.resume_args.as_ref().is_some_and(|v| !v.is_empty()))
 }
 
@@ -458,6 +690,25 @@ fn agent_label_of(tab: &SavedTab) -> String {
         .unwrap_or_else(|| tab.label.chars().take(120).collect())
 }
 
+/// The command a tab's transcript is read as: its own, except that a
+/// local-model tab driving OpenCode (`ollama launch opencode …`) reads as
+/// `opencode` — found by folder, it needs no launch id. The other local
+/// drivers keep their `ollama` line: Claude's and Codex's transcripts need the
+/// launch id a local tab never mints. The window's `agentTranscriptFor` makes
+/// the same call.
+fn transcript_cmd_of(tab: &SavedTab) -> &str {
+    let driver = tab
+        .local_launch
+        .as_ref()
+        .and_then(|launch| launch.get("driver"))
+        .and_then(Value::as_str);
+    if tab.kind == "local_agent" && driver == Some("opencode") {
+        "opencode"
+    } else {
+        &tab.cmd
+    }
+}
+
 fn canonical_below_any(path: &Path, roots: &[PathBuf]) -> bool {
     path.canonicalize()
         .ok()
@@ -473,7 +724,7 @@ fn mobile_local(project: &ProjectRecord) -> bool {
         && !enabled(&project.vm)
 }
 
-/// `tmux ls` through Eldrun's effective PATH, the one the desktop's own tmux
+/// `tmux ls` through Tabtivity's effective PATH, the one the desktop's own tmux
 /// spawns use (`services::tmux_local`). A headless sidecar (launchd/systemd
 /// user service) inherits a bare PATH, so a bare `tmux` misses Homebrew's on a
 /// Mac, or picks `/usr/bin/tmux` against a server a `~/.local/bin/tmux` started
@@ -484,23 +735,76 @@ fn tmux_ls_command(format: &str) -> Command {
     command
 }
 
-fn live_tmux() -> HashMap<String, LiveTmux> {
-    // Windows has no tmux, and local tabs there are never wrapped in one
-    // (`CenterPanel` disables local persistence on Windows), so there is nothing
-    // to list — and a spawn per catalog read would only ever fail. The desktop's
-    // Mobile settings say so rather than leaving an empty terminal list to explain
-    // itself.
-    if cfg!(target_os = "windows") {
-        return HashMap::new();
+/// `Command::output` with a deadline: the child is killed and reaped once
+/// `limit` has passed, and that is reported as `TimedOut`. Both pipes are
+/// drained on their own threads meanwhile, so a child that fills one cannot
+/// block on it; the threads end when the child's ends of the pipes close,
+/// which killing it does.
+fn output_within(mut command: Command, limit: Duration) -> std::io::Result<Output> {
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
     }
-    let format ="#{session_name}\t#{session_activity}\t#{pane_current_path}";
-    let Ok(out) = tmux_ls_command(format).output() else {
-        return HashMap::new();
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
+            waited => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match waited {
+                    Err(error) => error,
+                    _ => std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"),
+                });
+            }
+        }
     };
-    if !out.status.success() {
-        return HashMap::new();
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+/// Whether a failed `tmux ls` is tmux saying there is no server — which is
+/// how it says "zero sessions": the server exits with its last session, and a
+/// client that finds none exits non-zero. The same three wordings the
+/// desktop's own tmux calls take for "already gone"
+/// (`tmux_local::kill_failure_is_already_gone`): `no server running on …`
+/// (the socket is there, nobody behind it), `error connecting to … (No such
+/// file or directory)` (no socket at all, tmux ≥ 3.x), and the older `failed
+/// to connect to server`. Any other failure — a permission error, an
+/// exhausted table, a server too busy to accept — is tmux not answering.
+fn tmux_says_no_server(stderr: &str) -> bool {
+    stderr.contains("no server running")
+        || stderr.contains("failed to connect to server")
+        || (stderr.contains("error connecting to")
+            && (stderr.contains("No such file or directory") || stderr.contains("Connection refused")))
+}
+
+/// One `tmux ls` exit, read as an answer or as a failure to get one.
+fn live_from_ls(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<HashMap<String, LiveTmux>, String> {
+    if !success {
+        let stderr = String::from_utf8_lossy(stderr);
+        if tmux_says_no_server(&stderr) {
+            return Ok(HashMap::new());
+        }
+        return Err(format!("tmux ls failed: {}", stderr.trim()));
     }
-    String::from_utf8_lossy(&out.stdout)
+    Ok(String::from_utf8_lossy(stdout)
         .lines()
         .filter_map(|line| {
             let mut p = line.splitn(3, '\t');
@@ -509,99 +813,228 @@ fn live_tmux() -> HashMap<String, LiveTmux> {
             let cwd = PathBuf::from(p.next()?);
             Some((name, LiveTmux { activity, cwd }))
         })
-        .collect()
+        .collect())
+}
+
+/// The live tmux sessions, or `Err` when tmux could not be asked. The two
+/// are different facts and are kept apart all the way up (`CatalogCache::live`):
+/// an empty map is tmux answering "none".
+fn live_tmux() -> Result<HashMap<String, LiveTmux>, String> {
+    // Windows has no tmux, and local tabs there are never wrapped in one
+    // (`CenterPanel` disables local persistence on Windows), so there is nothing
+    // to list — and a spawn per catalog read would only ever fail. The desktop's
+    // Mobile settings say so rather than leaving an empty terminal list to explain
+    // itself.
+    if cfg!(target_os = "windows") {
+        return Ok(HashMap::new());
+    }
+    let format ="#{session_name}\t#{session_activity}\t#{pane_current_path}";
+    match output_within(tmux_ls_command(format), TMUX_LS_TIMEOUT) {
+        Ok(out) => live_from_ls(out.status.success(), &out.stdout, &out.stderr),
+        // No tmux on Tabtivity's PATH: no session was ever started in one.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(error) => Err(format!("tmux ls: {error}")),
+    }
+}
+
+/// Whether a paired phone may see and open shell tabs. Off unless
+/// `tabtivity_mobile_host.shell_tabs` is set: a shell is the whole account with
+/// nothing between it and a lost phone, so Mobile is agents-only by default.
+/// Read per catalog load, like `root_open`, so turning it off unlists every
+/// shell and detaches an open one at `pty_bridge`'s next re-check.
+/// Unreadable settings refuse.
+pub fn shells_open(state_dir: &Path) -> bool {
+    fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|settings| settings.get(crate::brand::MOBILE_HOST_KEY)?.get("shell_tabs")?.as_bool())
+        .unwrap_or(false)
 }
 
 impl Catalog {
+    #[cfg(test)]
     pub fn load(state_dir: &Path, host_key: &[u8]) -> Result<Self, String> {
-        Self::load_with(state_dir, host_key, &RootEnv::live())
+        Self::load_with(state_dir, host_key, &RootEnv::live(), &live_tmux().unwrap_or_default())
     }
 
-    fn load_with(state_dir: &Path, host_key: &[u8], root: &RootEnv) -> Result<Self, String> {
-        let bytes =
-            fs::read(state_dir.join("projects.json")).map_err(|e| format!("read projects: {e}"))?;
-        let projects: Vec<ProjectRecord> =
-            serde_json::from_slice(&bytes).map_err(|e| format!("parse projects: {e}"))?;
-        // Boxes are optional: no file, or one this build cannot read, costs the
-        // boxes and never the projects — a corrupt `boxes.json` must not take
-        // the whole catalog with it (see the session-file rule below).
-        let boxes: Vec<BoxRecord> = fs::read(state_dir.join("boxes.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let live = live_tmux();
-        let mut sources = Vec::new();
-        if root_open(state_dir, root) {
-            sources.push(ScopeSource {
-                raw_id: ROOT_SCOPE_ID.into(),
-                label: "Root".into(),
-                status: "active".into(),
-                kind: ScopeKind::Root,
-                roots: vec![root.dir.clone()],
-            });
-        }
-        for project in &projects {
-            if !project.eldrun_mobile_access || !mobile_local(project) {
-                continue;
-            }
-            // Root is listed above, by its own switch and gate, and is not a
-            // project: this refuses a hand-edited record that would borrow its
-            // session directory — and walk past that gate — by taking its id.
-            if is_root_scope_id(&project.id) {
-                continue;
-            }
-            let Some(root_raw) = project.directory.as_deref() else {
-                continue;
-            };
-            sources.push(ScopeSource {
-                raw_id: project.id.clone(),
-                label: project.name.clone(),
-                status: project.status.clone(),
-                kind: ScopeKind::Project,
-                roots: vec![PathBuf::from(root_raw)],
-            });
-        }
-        for b in &boxes {
-            // A box never opened on the desktop has no folder and so no tabs;
-            // the desktop's switch resolves the folder on enable, so this only
-            // skips a bit hand-edited onto a folder-less record.
-            if !b.eldrun_mobile_access {
-                continue;
-            }
-            let Some(folder) = b.folder.as_deref() else {
-                continue;
-            };
-            let mut roots = vec![PathBuf::from(folder)];
-            for id in &b.member_ids {
-                let Some(member) = projects.iter().find(|p| &p.id == id) else {
-                    continue;
-                };
-                // A member's own Mobile switch is not consulted: the box's
-                // switch is the consent, and what it covers is the box's tabs
-                // — which run locally, in the folder or a local member's root.
-                // A remote/VM/container member contributes no root at all.
-                if !mobile_local(member) {
-                    continue;
-                }
-                if let Some(dir) = member.directory.as_deref() {
-                    roots.push(PathBuf::from(dir));
-                }
-            }
-            sources.push(ScopeSource {
-                raw_id: format!("box:{}", b.id),
-                label: b.name.clone(),
-                // A box has no status of its own; listing it is what the
-                // switch means, so it is always in the phone's active list.
-                status: "active".into(),
-                kind: ScopeKind::Box,
-                roots,
-            });
-        }
+    fn load_with(
+        state_dir: &Path,
+        host_key: &[u8],
+        root: &RootEnv,
+        live: &HashMap<String, LiveTmux>,
+    ) -> Result<Self, String> {
+        let sources = scope_sources(state_dir, root)?;
+        let shells = shells_open(state_dir);
         let resolved = sources
             .into_iter()
-            .filter_map(|source| resolve_scope(state_dir, host_key, &live, source))
+            .filter_map(|source| resolve_scope(state_dir, host_key, live, shells, source))
             .collect();
         Ok(Self { projects: resolved })
+    }
+}
+
+/// Every scope a phone may be shown and the per-phone list of each, read
+/// from the state dir as the catalog reads it — before any session file or
+/// tmux row. The one place the opt-in rule lives: `Catalog::load_with` and
+/// [`ScopeAccess`] both start here.
+fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, String> {
+    let bytes =
+        fs::read(state_dir.join("projects.json")).map_err(|e| format!("read projects: {e}"))?;
+    let projects: Vec<ProjectRecord> =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse projects: {e}"))?;
+    // Boxes are optional: no file, or one this build cannot read, costs the
+    // boxes and never the projects — a corrupt `boxes.json` must not take
+    // the whole catalog with it (see the session-file rule below).
+    let boxes: Vec<BoxRecord> = fs::read(state_dir.join("boxes.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let mut sources = Vec::new();
+    if root_open(state_dir, root) {
+        sources.push(ScopeSource {
+            raw_id: ROOT_SCOPE_ID.into(),
+            label: "Root".into(),
+            status: "active".into(),
+            kind: ScopeKind::Root,
+            roots: vec![root.dir.clone()],
+            // Root has its own switch and gate; per-phone root is out of
+            // scope (docs/mobile_device_scoped_access_plan.md).
+            devices: None,
+        });
+    }
+    for project in &projects {
+        if !project.app_mobile_access || !mobile_local(project) {
+            continue;
+        }
+        // Root is listed above, by its own switch and gate, and is not a
+        // project: this refuses a hand-edited record that would borrow its
+        // session directory — and walk past that gate — by taking its id.
+        if is_root_scope_id(&project.id) {
+            continue;
+        }
+        let Some(root_raw) = project.directory.as_deref() else {
+            continue;
+        };
+        sources.push(ScopeSource {
+            raw_id: project.id.clone(),
+            label: project.name.clone(),
+            status: project.status.clone(),
+            kind: ScopeKind::Project,
+            roots: vec![PathBuf::from(root_raw)],
+            devices: project.app_mobile_devices.clone(),
+        });
+    }
+    for b in &boxes {
+        // A box never opened on the desktop has no folder and so no tabs;
+        // the desktop's switch resolves the folder on enable, so this only
+        // skips a bit hand-edited onto a folder-less record.
+        if !b.app_mobile_access {
+            continue;
+        }
+        let Some(folder) = b.folder.as_deref() else {
+            continue;
+        };
+        let mut roots = vec![PathBuf::from(folder)];
+        for id in &b.member_ids {
+            let Some(member) = projects.iter().find(|p| &p.id == id) else {
+                continue;
+            };
+            // A member's own Mobile switch is not consulted: the box's
+            // switch is the consent, and what it covers is the box's tabs
+            // — which run locally, in the folder or a local member's root.
+            // A remote/VM/container member contributes no root at all.
+            if !mobile_local(member) {
+                continue;
+            }
+            if let Some(dir) = member.directory.as_deref() {
+                roots.push(PathBuf::from(dir));
+            }
+        }
+        sources.push(ScopeSource {
+            raw_id: format!("box:{}", b.id),
+            label: b.name.clone(),
+            // A box has no status of its own; listing it is what the
+            // switch means, so it is always in the phone's active list.
+            status: "active".into(),
+            kind: ScopeKind::Box,
+            roots,
+            // The box's own list; a member's list, like its switch, is
+            // not consulted.
+            devices: b.app_mobile_devices.clone(),
+        });
+    }
+    Ok(sources)
+}
+
+/// Whether a scope's per-phone list (`None`: every phone) names `device_id`.
+fn device_listed(devices: Option<&[String]>, device_id: &str) -> bool {
+    devices.is_none_or(|devices| devices.iter().any(|id| id == device_id))
+}
+
+/// Which phones may reach which scope, by raw scope id, without resolving a
+/// tab: the catalog's own opt-in rule ([`scope_sources`]) and per-phone
+/// list ([`ResolvedProject::reaches`]). What a phone-made prompt or schedule
+/// is checked against before it is typed (`phone_origin`), so an access a
+/// phone lost also stops what it left behind.
+pub struct ScopeAccess {
+    scopes: HashMap<String, Option<Vec<String>>>,
+    /// `boxes.json` / `settings.json` is there but cannot be read. The
+    /// catalog lists no box (no root) then, which is right for what it
+    /// shows; for a rule that answer would *remove*, it is unknown instead.
+    boxes_unread: bool,
+    root_unread: bool,
+}
+
+/// Whether `path` exists but does not parse as `T` — a missing file is a
+/// plain "none".
+fn present_but_unreadable<T: serde::de::DeserializeOwned>(path: &Path) -> bool {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice::<T>(&bytes).is_err(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+impl ScopeAccess {
+    pub fn load(state_dir: &Path) -> Result<Self, String> {
+        Self::load_with(state_dir, &RootEnv::live())
+    }
+
+    fn load_with(state_dir: &Path, root: &RootEnv) -> Result<Self, String> {
+        Ok(Self {
+            scopes: scope_sources(state_dir, root)?
+                .into_iter()
+                .map(|source| (source.raw_id, source.devices))
+                .collect(),
+            boxes_unread: present_but_unreadable::<Vec<BoxRecord>>(&state_dir.join("boxes.json")),
+            root_unread: present_but_unreadable::<Value>(&state_dir.join("settings.json")),
+        })
+    }
+
+    /// Whether the phone paired as `device_id` reaches the scope `raw_id`. A
+    /// scope no longer opted in reaches no phone. `Err` for a box or root
+    /// whose file cannot be read right now: not known, so not "no".
+    pub fn reaches(&self, raw_id: &str, device_id: &str) -> Result<bool, String> {
+        if let Some(devices) = self.scopes.get(raw_id) {
+            return Ok(device_listed(devices.as_deref(), device_id));
+        }
+        if self.boxes_unread && raw_id.starts_with("box:") {
+            return Err("boxes.json cannot be read".into());
+        }
+        if self.root_unread && is_root_scope_id(raw_id) {
+            return Err("settings.json cannot be read".into());
+        }
+        Ok(false)
+    }
+}
+
+impl Catalog {
+    /// This snapshot as the phone paired as `device_id` sees it: every scope
+    /// whose per-phone list leaves that phone out is gone, so `project`, `tab`
+    /// and `grants` answer for it exactly as for an unknown id. The cache stays
+    /// one device-agnostic snapshot; each request filters its own copy.
+    pub fn for_device(mut self, device_id: &str) -> Self {
+        self.projects.retain(|project| project.reaches(device_id));
+        self
     }
 
     pub fn project(&self, id: &str) -> Option<&ResolvedProject> {
@@ -612,6 +1045,71 @@ impl Catalog {
             .iter()
             .find_map(|p| p.tabs.iter().find(|t| t.public.id == id).map(|t| (p, t)))
     }
+
+    /// Whether this snapshot still grants an open terminal its tab: the tab is
+    /// listed (its scope's phone access is on, its row is in the session
+    /// file), its session is live, and it is still the session the terminal
+    /// attached to.
+    pub fn grants(&self, tab_id: &str, tmux_name: &str) -> bool {
+        self.tab(tab_id)
+            .is_some_and(|(_, tab)| tab.public.available && tab.tmux_name == tmux_name)
+    }
+}
+
+/// One project scope holding one live agent tab, for tests elsewhere in the
+/// sidecar that need a catalog without a state dir or a tmux server.
+#[cfg(test)]
+pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<String>>) -> ResolvedProject {
+    let tab = PublicTab {
+        id: tab_id.into(),
+        label: "Agent".into(),
+        kind: "agent".into(),
+        agent_label: None,
+        agent_status: None,
+        agent_model: None,
+        agent_plan: false,
+        agent_goal: false,
+        agent_subagents: 0,
+        working_at: None,
+        done_at: None,
+        schedules: None,
+        prompts: Vec::new(),
+        available: true,
+        viewer_busy: false,
+        last_activity: None,
+        color: None,
+        sign_in: false,
+        turn_started_at: None,
+        worktree: None,
+        subagent_worktrees: Vec::new(),
+    };
+    ResolvedProject {
+        public: PublicProject {
+            id: "p".into(),
+            label: "P".into(),
+            status: "active".into(),
+            kind: ScopeKind::Project,
+            live_sessions: 1,
+            last_activity: None,
+            pending_reviews: None,
+            git: None,
+            agents: None,
+        },
+        raw_id: "raw-p".into(),
+        root: PathBuf::from("/"),
+        roots: vec![PathBuf::from("/")],
+        tabs: vec![ResolvedTab {
+            public: tab,
+            tmux_name: tmux_name.into(),
+            session_id: None,
+            schedule_target_id: None,
+            cmd: "claude".into(),
+            cwd: "/".into(),
+            since: None,
+            local_model: false,
+        }],
+        devices,
+    }
 }
 
 /// Read one scope's saved tabs and join them to the live tmux rows. `None`
@@ -621,6 +1119,7 @@ fn resolve_scope(
     state_dir: &Path,
     host_key: &[u8],
     live: &HashMap<String, LiveTmux>,
+    shells: bool,
     source: ScopeSource,
 ) -> Option<ResolvedProject> {
     let mut roots: Vec<PathBuf> = Vec::new();
@@ -658,8 +1157,8 @@ fn resolve_scope(
         // started with — and while the tmux session lives, both reattach.
         let local_agent = tab.kind == "local_agent";
         let agent = tab.kind == "agent" || local_agent;
-        let eligible_kind = tab.kind == "shell"
-            || (agent && resumable(&tab))
+        let eligible_kind = (shells && tab.kind == "shell")
+            || (agent && (resumable(&tab) || tab.sign_in || tab.cloud))
             || (local_agent
                 && tab.local_launch.as_ref().is_some_and(|launch| {
                     crate::services::terminal_service::local_launch_ok(launch, &tab.cmd)
@@ -690,8 +1189,12 @@ fn resolve_scope(
             agent_label: agent.then(|| agent_label_of(&tab)),
             agent_status: None,
             agent_model: None,
+            agent_plan: false,
+            agent_goal: false,
+            agent_subagents: 0,
             working_at: None,
             done_at: None,
+            turn_started_at: None,
             schedules: None,
             prompts: Vec::new(),
             available: live_row.is_some(),
@@ -702,11 +1205,19 @@ fn resolve_scope(
                 .as_deref()
                 .filter(|id| TAB_COLORS.contains(id))
                 .map(str::to_string),
+            sign_in: agent && tab.sign_in,
+            worktree: None,
+            subagent_worktrees: Vec::new(),
         };
         tabs.push(ResolvedTab {
             public,
             tmux_name: tmux.to_string(),
             session_id: tab.session_id.clone(),
+            schedule_target_id: tab.schedule_target_id.clone(),
+            cmd: transcript_cmd_of(&tab).to_string(),
+            cwd: tab.cwd.clone(),
+            since: fresh_since(&tab),
+            local_model: local_agent,
         });
     }
     let last_activity = tabs.iter().filter_map(|t| t.public.last_activity).max();
@@ -720,6 +1231,7 @@ fn resolve_scope(
         pending_reviews: (source.kind == ScopeKind::Root)
             .then(|| crate::services::root_mcp_review::pending_count(state_dir)),
         git: None,
+        agents: None,
     };
     Some(ResolvedProject {
         public,
@@ -727,15 +1239,97 @@ fn resolve_scope(
         root,
         roots,
         tabs,
+        devices: source.devices,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    /// A saved tab keeps the session name it was created with, and a remote
+    /// session keeps running across an update: the name an older build
+    /// minted still matches its tab, and is counted.
+    #[test]
+    fn a_session_minted_under_the_old_prefix_still_matches_its_tab() {
+        use crate::brand::{Name, LEGACY};
+        use crate::services::brand_migration::{hits, testing::RENAMED};
+        let _ = hits::taken();
+        let old = format!("{}p1--agent-123456789", LEGACY.name(Name::TMUX_PREFIX));
+        assert!(super::expected_tmux_for(&RENAMED, "p1", "agent", &old));
+        assert_eq!(hits::taken(), ["tmux-prefix"]);
+        assert!(super::expected_tmux_for(&RENAMED, "p1", "agent", "newname-p1--agent-123456789"));
+        assert!(!super::expected_tmux_for(&RENAMED, "p2", "agent", &old));
+        assert!(!super::expected_tmux_for(&RENAMED, "p1", "agent", "other-p1--agent-123456789"));
+    }
+
+    /// The serde keys are literals in the attributes; this ties them to the
+    /// brand module so they cannot drift.
+    #[test]
+    fn the_mobile_access_key_is_the_brand_constant() {
+        let key = crate::brand::MOBILE_ACCESS_KEY;
+        let project: super::ProjectRecord =
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"P","status":"active","{key}":true}}"#)).unwrap();
+        assert!(project.app_mobile_access);
+        let b: super::BoxRecord = serde_json::from_str(&format!(r#"{{"id":"b","name":"B","{key}":true}}"#)).unwrap();
+        assert!(b.app_mobile_access);
+    }
+
+    /// The per-phone list's serde key is a literal too, and it is read
+    /// leniently: absent is every phone, a list is those ids, anything else
+    /// is no phone — and never a parse error for the record.
+    #[test]
+    fn the_mobile_devices_key_is_the_brand_constant_and_read_leniently() {
+        let key = crate::brand::MOBILE_DEVICES_KEY;
+        let project = |value: &str| -> super::ProjectRecord {
+            let extra = if value.is_empty() { String::new() } else { format!(r#","{key}":{value}"#) };
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"P","status":"active"{extra}}}"#)).unwrap()
+        };
+        assert_eq!(project("").app_mobile_devices, None);
+        assert_eq!(project(r#"["d1","d2"]"#).app_mobile_devices, Some(vec!["d1".to_string(), "d2".to_string()]));
+        for malformed in ["[]", "null", r#""d1""#, r#"["d1",2]"#, "{}"] {
+            assert_eq!(project(malformed).app_mobile_devices, Some(vec![]), "{malformed}");
+        }
+        let b: super::BoxRecord = serde_json::from_str(&format!(r#"{{"id":"b","name":"B","{key}":7}}"#)).unwrap();
+        assert_eq!(b.app_mobile_devices, Some(vec![]));
+    }
+
+    /// The phone's access is read under the current key only. A key an older
+    /// build left behind must not open a project the window (which reads the
+    /// current key) shows as closed; and a record with both keys still parses.
+    #[test]
+    fn a_leftover_old_access_key_opens_nothing() {
+        if !crate::brand::PAIR.renamed() {
+            return;
+        }
+        let old = crate::brand::LEGACY_MOBILE_ACCESS_KEY;
+        let new = crate::brand::MOBILE_ACCESS_KEY;
+        let project: super::ProjectRecord =
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"P","status":"active","{old}":true}}"#)).unwrap();
+        assert!(!project.app_mobile_access);
+        let b: super::BoxRecord =
+            serde_json::from_str(&format!(r#"{{"id":"b","name":"B","{old}":true,"{new}":false}}"#)).unwrap();
+        assert!(!b.app_mobile_access);
+    }
+
+    use crate::brand::SLUG;
     use super::*;
 
     #[test]
-    fn tmux_ls_runs_through_eldrun_path() {
+    fn agent_counts_keep_working_question_and_done_and_skip_the_rest() {
+        let mut counts = AgentCounts::default();
+        assert!(!counts.any());
+        for status in ["working", "question", "done", "done", "interrupted", "bogus"] {
+            counts.add(status);
+        }
+        assert_eq!(counts, AgentCounts { working: 1, question: 1, done: 2 });
+        assert!(counts.any());
+        assert_eq!(
+            serde_json::to_value(counts).unwrap(),
+            serde_json::json!({ "working": 1, "question": 1, "done": 2 })
+        );
+    }
+
+    #[test]
+    fn tmux_ls_runs_through_app_path() {
         let command = tmux_ls_command("#{session_name}");
         let path = command
             .get_envs()
@@ -761,23 +1355,57 @@ mod tests {
     fn mobile_protocol_domains_are_accepted_but_arbitrary_ones_are_not() {
         for domain in [
             "agent", "request", "task", "mail", "calendar", "event", "project", "subtask",
+            "worktree", "alert",
         ] {
             assert!(valid_opaque_control_domain(domain), "{domain}");
         }
         assert!(!valid_opaque_control_domain("filesystem_path"));
     }
 
+    /// Every literal domain the desktop bridge mints an opaque id under must be
+    /// on the allow list. The bridge swallows the command's error in places
+    /// (the ＋ sheet's worktrees, the alert strip), and vitest mocks `invoke`, so
+    /// a missing domain otherwise fails silently in production only.
+    #[test]
+    fn every_domain_the_bridge_mints_is_allowed() {
+        let source = include_str!("../../../../src/components/mobile/MobileBridgeHost.tsx");
+        let mut seen = Vec::new();
+        // `invoke("mobile_opaque_id", { domain: "<x>", … })`
+        for (at, _) in source.match_indices("\"mobile_opaque_id\"") {
+            let rest = source[at + "\"mobile_opaque_id\"".len()..]
+                .trim_start_matches(|c: char| c == ',' || c == '{' || c.is_whitespace());
+            if let Some(after) = rest.strip_prefix("domain:") {
+                if let Some(literal) = after.trim_start().strip_prefix('"') {
+                    let domain = &literal[..literal.find('"').expect("closed literal")];
+                    seen.push(domain.to_string());
+                }
+            }
+        }
+        // `opaqueId("<x>", …)`, the bridge's own wrapper
+        for (at, _) in source.match_indices("opaqueId(\"") {
+            let literal = &source[at + "opaqueId(\"".len()..];
+            seen.push(literal[..literal.find('"').expect("closed literal")].to_string());
+        }
+        for domain in ["worktree", "alert", "request", "task", "agent"] {
+            assert!(seen.iter().any(|d| d == domain), "scan found no {domain:?} call: {seen:?}");
+        }
+        for domain in &seen {
+            assert!(valid_opaque_control_domain(domain), "the bridge mints {domain:?} ids");
+        }
+    }
+
     #[test]
     fn exact_session_names_only() {
-        assert!(expected_tmux("p1", "shell", "eldrun-p1--shell-123456789"));
-        assert!(!expected_tmux("p1", "shell", "eldrun-p2--shell-123456789"));
-        assert!(!expected_tmux("p1", "shell", "eldrun-p1--agent-123456789"));
+        assert!(expected_tmux("p1", "shell", concat!(crate::app_slug!(), "-p1--shell-123456789")));
+        assert!(!expected_tmux("p1", "shell", concat!(crate::app_slug!(), "-p2--shell-123456789")));
+        assert!(!expected_tmux("p1", "shell", concat!(crate::app_slug!(), "-p1--agent-123456789")));
     }
 
     #[test]
     fn one_corrupt_session_file_costs_that_project_its_tabs_not_the_whole_catalog() {
         let dir = tempfile::tempdir().expect("state dir");
         let state = dir.path();
+        allow_shells(state);
         let root_a = state.join("a");
         let root_b = state.join("b");
         fs::create_dir_all(&root_a).expect("root a");
@@ -788,7 +1416,7 @@ mod tests {
                 "name": name,
                 "status": "active",
                 "directory": root.to_string_lossy(),
-                "eldrun_mobile_access": true,
+                concat!(crate::app_slug!(), "_mobile_access"): true,
             })
         };
         fs::write(
@@ -811,7 +1439,7 @@ mod tests {
                     "cmd": "bash",
                     "cwd": root_a.to_string_lossy(),
                     "kind": "shell",
-                    "tmuxSession": "eldrun-p-a--shell-123456789",
+                    "tmuxSession": concat!(crate::app_slug!(), "-p-a--shell-123456789"),
                 }]
             }))
             .expect("session"),
@@ -837,6 +1465,7 @@ mod tests {
     fn an_invalidated_cache_re_reads_within_the_ttl() {
         let dir = tempfile::tempdir().expect("state dir");
         let state = dir.path();
+        allow_shells(state);
         let root = state.join("p");
         fs::create_dir_all(&root).expect("root dir");
         fs::write(
@@ -846,7 +1475,7 @@ mod tests {
                 "name": "P",
                 "status": "active",
                 "directory": root.to_string_lossy(),
-                "eldrun_mobile_access": true,
+                concat!(crate::app_slug!(), "_mobile_access"): true,
             }]))
             .expect("projects"),
         )
@@ -865,7 +1494,7 @@ mod tests {
             "cmd": "bash",
             "cwd": root.to_string_lossy(),
             "kind": "shell",
-            "tmuxSession": "eldrun-p-1--shell-123456789",
+            "tmuxSession": concat!(crate::app_slug!(), "-p-1--shell-123456789"),
         }]));
 
         let mut cache = CatalogCache::default();
@@ -895,6 +1524,7 @@ mod tests {
     fn a_tab_publishes_a_palette_colour_and_drops_anything_else() {
         let dir = tempfile::tempdir().expect("state dir");
         let state = dir.path();
+        allow_shells(state);
         let root = state.join("p");
         fs::create_dir_all(&root).expect("root dir");
         fs::write(
@@ -904,7 +1534,7 @@ mod tests {
                 "name": "P",
                 "status": "active",
                 "directory": root.to_string_lossy(),
-                "eldrun_mobile_access": true,
+                concat!(crate::app_slug!(), "_mobile_access"): true,
             }]))
             .expect("projects"),
         )
@@ -917,7 +1547,7 @@ mod tests {
                 "cmd": "bash",
                 "cwd": root.to_string_lossy(),
                 "kind": "shell",
-                "tmuxSession": format!("eldrun-p-1--shell-10000000{suffix}"),
+                "tmuxSession": format!("{SLUG}-p-1--shell-10000000{suffix}"),
                 "color": color,
             })
         };
@@ -960,7 +1590,7 @@ mod tests {
                 "name": "Borrowed",
                 "status": "active",
                 "directory": root.to_string_lossy(),
-                "eldrun_mobile_access": true,
+                concat!(crate::app_slug!(), "_mobile_access"): true,
             }]))
             .expect("projects"),
         )
@@ -975,7 +1605,7 @@ mod tests {
                     "cwd": root.to_string_lossy(),
                     "kind": "agent",
                     "sessionId": "s1",
-                    "tmuxSession": "eldrun-root--agent-123456789",
+                    "tmuxSession": concat!(crate::app_slug!(), "-root--agent-123456789"),
                 }]
             }))
             .expect("session"),
@@ -988,19 +1618,19 @@ mod tests {
                 Some(value) => fs::write(state.join("settings.json"), value.to_string()).expect("settings"),
                 None => { let _ = fs::remove_file(state.join("settings.json")); }
             }
-            Catalog::load_with(state, &[7; 32], env).expect("catalog").projects
+            Catalog::load_with(state, &[7; 32], env, &HashMap::new()).expect("catalog").projects
         };
         let host = |on: bool| serde_json::json!({ "enabled": true, "root_access": on });
 
         // No settings, or the switch unset/off: the borrowed record is refused
         // and nothing else lists root.
         assert!(load(None, &fenced).is_empty());
-        assert!(load(Some(serde_json::json!({ "eldrun_mobile_host": { "enabled": true } })), &fenced).is_empty());
-        assert!(load(Some(serde_json::json!({ "eldrun_mobile_host": host(false) })), &fenced).is_empty());
+        assert!(load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true } })), &fenced).is_empty());
+        assert!(load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): host(false) })), &fenced).is_empty());
 
         // Switched on, default review, fenced: one Root row — the gate's, not
         // the borrowed record's — with its tab and a pending count.
-        let listed = load(Some(serde_json::json!({ "eldrun_mobile_host": host(true) })), &fenced);
+        let listed = load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): host(true) })), &fenced);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].public.kind, ScopeKind::Root);
         assert_eq!(listed[0].public.label, "Root");
@@ -1008,27 +1638,46 @@ mod tests {
         assert_eq!(listed[0].tabs.len(), 1);
         assert_eq!(listed[0].public.pending_reviews, Some(0));
         // An unknown review value reads as `all`, as it does for the tools.
-        assert_eq!(load(Some(serde_json::json!({ "eldrun_mobile_host": host(true), "root_mcp_review": "later" })), &fenced).len(), 1);
+        assert_eq!(load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): host(true), "root_mcp_review": "later" })), &fenced).len(), 1);
 
         // Tools on but writes not staged behind a fence: closed.
-        assert!(load(Some(serde_json::json!({ "eldrun_mobile_host": host(true) })), &unfenced).is_empty());
+        assert!(load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): host(true) })), &unfenced).is_empty());
         for level in ["destructive", "off"] {
             assert!(
-                load(Some(serde_json::json!({ "eldrun_mobile_host": host(true), "root_mcp_review": level })), &fenced).is_empty(),
+                load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): host(true), "root_mcp_review": level })), &fenced).is_empty(),
                 "{level}"
             );
         }
         // Tools off: a root agent holds nothing extra, so neither matters.
         assert_eq!(
-            load(Some(serde_json::json!({ "eldrun_mobile_host": host(true), "root_mcp": false, "root_mcp_review": "off" })), &unfenced).len(),
+            load(Some(serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): host(true), "root_mcp": false, "root_mcp_review": "off" })), &unfenced).len(),
             1
         );
         // Unreadable settings refuse.
         fs::write(state.join("settings.json"), b"{").expect("corrupt settings");
-        assert!(Catalog::load_with(state, &[7; 32], &fenced).expect("catalog").projects.is_empty());
+        assert!(Catalog::load_with(state, &[7; 32], &fenced, &HashMap::new()).expect("catalog").projects.is_empty());
 
         assert!(is_root_scope_id("root"));
         assert!(!is_root_scope_id("rooted"));
+    }
+
+    /// A tab a headless create stamped reads only sessions begun since its
+    /// launch; one started on `--continue`, or never stamped, reads the
+    /// folder's newest.
+    #[test]
+    fn a_fresh_tab_reads_since_its_launch_unless_continued() {
+        let saved = |args: Value, launched_at: Option<Value>| {
+            serde_json::from_value::<SavedTab>(serde_json::json!({
+                "label": "OpenCode", "cmd": "opencode", "cwd": "/p", "kind": "agent",
+                "args": args, "launchedAt": launched_at,
+            }))
+            .expect("saved tab")
+        };
+        assert_eq!(fresh_since(&saved(serde_json::json!([]), Some(serde_json::json!(1_700_000_000_123_i64)))), Some(1_700_000_000_123));
+        assert_eq!(fresh_since(&saved(serde_json::json!(["--continue"]), Some(serde_json::json!(5)))), None);
+        assert_eq!(fresh_since(&saved(serde_json::json!([]), None)), None);
+        // An odd shape is no stamp, never a file that fails to parse.
+        assert_eq!(fresh_since(&saved(serde_json::json!("x"), Some(serde_json::json!("soon")))), None);
     }
 
     /// The phone learns which agent a tab runs from the registry, not from the
@@ -1048,6 +1697,11 @@ mod tests {
             ephemeral: false,
             color: None,
             local_launch: None,
+            schedule_target_id: None,
+            sign_in: false,
+            cloud: false,
+            args: None,
+            launched_at: None,
         };
         assert_eq!(agent_label_of(&tab("release review", "claude")), "Claude");
         assert_eq!(agent_label_of(&tab("Codex", "codex")), "Codex");
@@ -1058,8 +1712,27 @@ mod tests {
         assert_eq!(agent_label_of(&local), "Claude");
     }
 
+    /// A local-model tab driving OpenCode reads its transcript as `opencode`
+    /// (found by folder); the other drivers keep `ollama`, whose Claude or
+    /// Codex transcript needs a launch id the tab never has.
+    #[test]
+    fn a_local_opencode_tab_reads_as_opencode() {
+        let local = |driver: &str| {
+            serde_json::from_value::<SavedTab>(serde_json::json!({
+                "label": "m · OpenCode", "cmd": "ollama", "cwd": "/p", "kind": "local_agent",
+                "localLaunch": { "driver": driver, "model": "m", "args": ["launch", driver, "--model", "m"] },
+            }))
+            .expect("saved tab")
+        };
+        assert_eq!(transcript_cmd_of(&local("opencode")), "opencode");
+        assert_eq!(transcript_cmd_of(&local("claude")), "ollama");
+        let mut agent = local("opencode");
+        agent.kind = "agent".into();
+        assert_eq!(transcript_cmd_of(&agent), "ollama", "only a local-model tab is remapped");
+    }
+
     /// Local-model tabs reach the phone as agent tabs (#31bl): Mistral's by its
-    /// resumable session, the other drivers by a `localLaunch` line Eldrun
+    /// resumable session, the other drivers by a `localLaunch` line Tabtivity
     /// builds — never by one it does not, and never without the `agent` token
     /// every agent tab's tmux name carries.
     #[test]
@@ -1075,7 +1748,7 @@ mod tests {
                 "name": "P",
                 "status": "active",
                 "directory": root.to_string_lossy(),
-                "eldrun_mobile_access": true,
+                concat!(crate::app_slug!(), "_mobile_access"): true,
             }]))
             .expect("projects"),
         )
@@ -1088,7 +1761,7 @@ mod tests {
                 "cmd": cmd,
                 "cwd": root.to_string_lossy(),
                 "kind": "local_agent",
-                "tmuxSession": format!("eldrun-p-1--agent-10000000{n}"),
+                "tmuxSession": format!("{SLUG}-p-1--agent-10000000{n}"),
             });
             row.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
             row
@@ -1098,14 +1771,14 @@ mod tests {
         };
         // The wrong token.
         let mut wrong_token = tab("5", "vibe", serde_json::json!({ "sessionId": "s5" }));
-        wrong_token["tmuxSession"] = serde_json::json!("eldrun-p-1--local_agent-100000005");
+        wrong_token["tmuxSession"] = serde_json::json!(concat!(crate::app_slug!(), "-p-1--local_agent-100000005"));
         fs::write(
             sessions.join("terminals.json"),
             serde_json::to_vec(&serde_json::json!({
                 "tabLayout": [
                     tab("1", "vibe", serde_json::json!({ "sessionId": "s1" })),
                     tab("2", "ollama", launch(serde_json::json!(["launch", "claude", "--model", "qwen3:8b"]))),
-                    // Not a line Eldrun builds.
+                    // Not a line Tabtivity builds.
                     tab("3", "ollama", launch(serde_json::json!(["serve"]))),
                     // Neither resumable nor relaunchable.
                     tab("4", "ollama", serde_json::json!({})),
@@ -1128,6 +1801,64 @@ mod tests {
         );
     }
 
+    /// A sign-in tab and a cloud session have no session to resume, yet the
+    /// phone that asked for one has to attach: the desktop saves it (flagged
+    /// `signIn` / `cloud`) while it runs, and the catalog lists it. Only the
+    /// sign-in flag reaches the phone, which opens that tab on its sign-in
+    /// sheet. An agent tab with neither stays unlisted.
+    #[test]
+    fn sign_in_and_cloud_tabs_are_listed_without_a_session() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let root = state.join("p");
+        fs::create_dir_all(&root).expect("root dir");
+        fs::write(
+            state.join("projects.json"),
+            serde_json::to_vec(&serde_json::json!([{
+                "id": "p-1",
+                "name": "P",
+                "status": "active",
+                "directory": root.to_string_lossy(),
+                concat!(crate::app_slug!(), "_mobile_access"): true,
+            }]))
+            .expect("projects"),
+        )
+        .expect("write projects");
+        let sessions = state.join("sessions").join("p-1");
+        fs::create_dir_all(&sessions).expect("session dir");
+        let tab = |n: &str, marker: serde_json::Value| {
+            let mut row = serde_json::json!({
+                "label": format!("Tab {n}"),
+                "cmd": "claude",
+                "cwd": root.to_string_lossy(),
+                "kind": "agent",
+                "tmuxSession": format!("{SLUG}-p-1--agent-10000000{n}"),
+            });
+            row.as_object_mut().unwrap().extend(marker.as_object().unwrap().clone());
+            row
+        };
+        fs::write(
+            sessions.join("terminals.json"),
+            serde_json::to_vec(&serde_json::json!({ "tabLayout": [
+                tab("1", serde_json::json!({ "signIn": true })),
+                tab("2", serde_json::json!({ "cloud": true })),
+                tab("3", serde_json::json!({ "signIn": false })),
+            ] }))
+            .expect("session"),
+        )
+        .expect("write session");
+
+        let catalog = Catalog::load(state, &[7; 32]).expect("catalog");
+        let tabs = &catalog.projects.first().expect("project").tabs;
+        let listed: Vec<(&str, Option<&str>, bool)> = tabs
+            .iter()
+            .map(|t| (t.public.label.as_str(), t.public.agent_label.as_deref(), t.public.sign_in))
+            .collect();
+        assert_eq!(listed, vec![("Tab 1", Some("Claude"), true), ("Tab 2", Some("Claude"), false)]);
+        let json = serde_json::to_value(&tabs[1].public).expect("public tab");
+        assert!(json.get("sign_in").is_none(), "an unset flag is left out");
+    }
+
     /// A mobile-enabled box is a scope of its own (#31aa): listed as `kind:
     /// box` under its own opaque id, with tabs from `sessions/box_<id>/` whose
     /// cwd is the box folder OR a local member's root. Its switch is the only
@@ -1138,6 +1869,7 @@ mod tests {
     fn a_mobile_enabled_box_is_a_scope_with_the_folder_and_local_member_roots() {
         let dir = tempfile::tempdir().expect("state dir");
         let state = dir.path();
+        allow_shells(state);
         let folder = state.join("boxes").join("paper");
         let member = state.join("lib");
         let remote_mirror = state.join("mirror");
@@ -1161,9 +1893,9 @@ mod tests {
             state.join("boxes.json"),
             serde_json::to_vec(&serde_json::json!([
                 { "id": "b1", "name": "Paper", "member_ids": ["p-lib", "p-remote", "p-gone"],
-                  "folder": folder.to_string_lossy(), "eldrun_mobile_access": true },
+                  "folder": folder.to_string_lossy(), concat!(crate::app_slug!(), "_mobile_access"): true },
                 { "id": "b2", "name": "Off", "folder": folder.to_string_lossy() },
-                { "id": "b3", "name": "Unopened", "eldrun_mobile_access": true },
+                { "id": "b3", "name": "Unopened", concat!(crate::app_slug!(), "_mobile_access"): true },
             ]))
             .expect("boxes"),
         )
@@ -1179,10 +1911,10 @@ mod tests {
         fs::write(
             sessions.join("terminals.json"),
             serde_json::to_vec(&serde_json::json!({ "tabLayout": [
-                tab("Box shell", &folder, "eldrun-box_b1--shell-123456789"),
-                tab("Lib shell", &member, "eldrun-box_b1--shell-223456789"),
-                tab("Remote shell", &remote_mirror, "eldrun-box_b1--shell-323456789"),
-                tab("Foreign", &folder, "eldrun-p-lib--shell-423456789"),
+                tab("Box shell", &folder, concat!(crate::app_slug!(), "-box_b1--shell-123456789")),
+                tab("Lib shell", &member, concat!(crate::app_slug!(), "-box_b1--shell-223456789")),
+                tab("Remote shell", &remote_mirror, concat!(crate::app_slug!(), "-box_b1--shell-323456789")),
+                tab("Foreign", &folder, concat!(crate::app_slug!(), "-p-lib--shell-423456789")),
             ]}))
             .expect("session"),
         )
@@ -1200,6 +1932,272 @@ mod tests {
         let labels: Vec<&str> = b.tabs.iter().map(|t| t.public.label.as_str()).collect();
         assert_eq!(labels, vec!["Box shell", "Lib shell"]);
         assert!(!b.public.id.contains("b1"), "the opaque id must not carry the box id");
+    }
+
+    /// The per-phone list, end to end through a load: absent reaches every
+    /// phone, a list only its ids, an empty or malformed one none — and a
+    /// malformed value costs that scope alone, never the rest of the file. A
+    /// list on a scope whose switch is off opens nothing.
+    #[test]
+    fn a_scope_with_a_device_list_reaches_only_those_phones() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let devices = crate::brand::MOBILE_DEVICES_KEY;
+        let access = crate::brand::MOBILE_ACCESS_KEY;
+        let folder = state.join("boxes").join("paper");
+        fs::create_dir_all(&folder).expect("box folder");
+        let mut projects = Vec::new();
+        for id in ["p-all", "p-one", "p-empty", "p-bad", "p-off"] {
+            let root = state.join(id);
+            fs::create_dir_all(&root).expect("root");
+            let mut record = serde_json::json!({
+                "id": id, "name": id, "status": "active",
+                "directory": root.to_string_lossy(), access: id != "p-off",
+            });
+            match id {
+                "p-one" | "p-off" => record[devices] = serde_json::json!(["d1"]),
+                "p-empty" => record[devices] = serde_json::json!([]),
+                "p-bad" => record[devices] = serde_json::json!("d1"),
+                _ => {}
+            }
+            projects.push(record);
+        }
+        fs::write(state.join("projects.json"), serde_json::to_vec(&projects).expect("projects"))
+            .expect("write projects");
+        fs::write(
+            state.join("boxes.json"),
+            serde_json::to_vec(&serde_json::json!([
+                { "id": "b-all", "name": "All", "folder": folder.to_string_lossy(), access: true },
+                { "id": "b-two", "name": "Two", "folder": folder.to_string_lossy(), access: true,
+                  devices: ["d2"] },
+                { "id": "b-bad", "name": "Bad", "folder": folder.to_string_lossy(), access: true,
+                  devices: [1] },
+            ]))
+            .expect("boxes"),
+        )
+        .expect("write boxes");
+
+        let catalog = Catalog::load(state, &[7; 32]).expect("a malformed list must not fail the load");
+        let ids = |catalog: &Catalog| {
+            let mut ids: Vec<String> = catalog.projects.iter().map(|p| p.raw_id.clone()).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(
+            ids(&catalog),
+            ["box:b-all", "box:b-bad", "box:b-two", "p-all", "p-bad", "p-empty", "p-one"],
+            "the unfiltered snapshot lists every opted-in scope"
+        );
+        assert_eq!(ids(&catalog.clone().for_device("d1")), ["box:b-all", "p-all", "p-one"]);
+        assert_eq!(ids(&catalog.clone().for_device("d2")), ["box:b-all", "box:b-two", "p-all"]);
+        assert_eq!(ids(&catalog.clone().for_device("d3")), ["box:b-all", "p-all"]);
+        // A filtered-out scope answers like an unknown one.
+        let one = catalog.projects.iter().find(|p| p.raw_id == "p-one").expect("p-one").public.id.clone();
+        assert!(catalog.clone().for_device("d1").project(&one).is_some());
+        assert!(catalog.for_device("d2").project(&one).is_none());
+    }
+
+    #[test]
+    fn no_tmux_server_is_an_answer_and_any_other_failure_is_not() {
+        // tmux's ways of saying "no server", i.e. zero sessions.
+        for stderr in [
+            "no server running on /tmp/tmux-1000/default",
+            "error connecting to /tmp/tmux-1000/default (No such file or directory)",
+            "error connecting to /tmp/tmux-1000/default (Connection refused)",
+            "failed to connect to server: Connection refused",
+        ] {
+            let live = live_from_ls(false, b"", stderr.as_bytes());
+            assert!(live.is_ok_and(|live| live.is_empty()), "{stderr}");
+        }
+        // tmux not answering: never "zero sessions".
+        for stderr in [
+            "error connecting to /tmp/tmux-1000/default (Permission denied)",
+            "error connecting to /tmp/tmux-1000/default (Resource temporarily unavailable)",
+            "server exited unexpectedly",
+            "lost server",
+            "",
+        ] {
+            assert!(live_from_ls(false, b"", stderr.as_bytes()).is_err(), "{stderr:?}");
+        }
+        // An answer: its rows, and a malformed one costs only itself.
+        let live = live_from_ls(
+            true,
+            concat!(crate::app_slug!(), "-p--shell-1\t1700000000\t/home/u/p\nbroken row\nwork\t5\t/tmp\n").as_bytes(),
+            b"",
+        )
+        .expect("listing");
+        assert_eq!(live.len(), 2);
+        assert_eq!(live[concat!(crate::app_slug!(), "-p--shell-1")].activity, 1_700_000_000);
+        assert_eq!(live["work"].cwd, PathBuf::from("/tmp"));
+        assert!(live_from_ls(true, b"", b"").expect("empty listing").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_hangs_is_killed_at_its_deadline() {
+        let mut hung = Command::new("sleep");
+        hung.arg("30");
+        let started = Instant::now();
+        let error = output_within(hung, Duration::from_millis(150)).expect_err("deadline");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10), "returned at the deadline, not the child's exit");
+
+        // One that answers in time is read whole, both pipes and its status.
+        let mut quick = Command::new("sh");
+        quick.args(["-c", "printf out; printf err >&2; exit 3"]);
+        let out = output_within(quick, Duration::from_secs(10)).expect("output");
+        assert_eq!(out.status.code(), Some(3));
+        assert_eq!(out.stdout, b"out");
+        assert_eq!(out.stderr, b"err");
+
+        let missing = Command::new("no-such-binary-for-this-test");
+        let error = output_within(missing, Duration::from_secs(1)).expect_err("spawn");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn shell_tabs_are_off_the_phone_unless_switched_on() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let (live, _) = live_tab_fixture(state);
+        let kinds = |state: &Path| {
+            Catalog::load_with(state, &[7; 32], &RootEnv { dir: state.join("root"), fenced: || true }, &live)
+                .expect("catalog")
+                .projects
+                .iter()
+                .flat_map(|p| p.tabs.iter().map(|t| t.public.kind.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(state), vec!["shell"]);
+        for settings in [
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true } }),
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": false } }),
+        ] {
+            fs::write(state.join("settings.json"), settings.to_string()).expect("settings");
+            assert!(kinds(state).is_empty(), "{settings}");
+        }
+        fs::write(state.join("settings.json"), b"{").expect("corrupt settings");
+        assert!(kinds(state).is_empty(), "unreadable settings refuse");
+        fs::remove_file(state.join("settings.json")).expect("remove");
+        assert!(kinds(state).is_empty(), "no settings is the default");
+    }
+
+    /// Shell tabs are off the phone by default; the fixtures that list them
+    /// switch them on.
+    fn allow_shells(state: &Path) {
+        fs::write(
+            state.join("settings.json"),
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+        )
+        .expect("settings");
+    }
+
+    /// One project with one shell tab, and the tmux row that makes it live.
+    fn live_tab_fixture(state: &Path) -> (HashMap<String, LiveTmux>, impl Fn(bool) + '_) {
+        const TMUX: &str = concat!(crate::app_slug!(), "-p-1--shell-123456789");
+        allow_shells(state);
+        let root = state.join("p");
+        fs::create_dir_all(&root).expect("root dir");
+        let sessions = state.join("sessions").join("p-1");
+        fs::create_dir_all(&sessions).expect("session dir");
+        fs::write(
+            sessions.join("terminals.json"),
+            serde_json::to_vec(&serde_json::json!({ "tabLayout": [{
+                "label": "Shell",
+                "cmd": "bash",
+                "cwd": root.to_string_lossy(),
+                "kind": "shell",
+                "tmuxSession": TMUX,
+            }] }))
+            .expect("session"),
+        )
+        .expect("write session");
+        let live = HashMap::from([(TMUX.to_string(), LiveTmux { activity: 7, cwd: root.clone() })]);
+        let write_project = move |access: bool| {
+            fs::write(
+                state.join("projects.json"),
+                serde_json::to_vec(&serde_json::json!([{
+                    "id": "p-1",
+                    "name": "P",
+                    "status": "active",
+                    "directory": root.to_string_lossy(),
+                    crate::brand::MOBILE_ACCESS_KEY: access,
+                }]))
+                .expect("projects"),
+            )
+            .expect("write projects");
+        };
+        write_project(true);
+        (live, write_project)
+    }
+
+    #[test]
+    fn a_tmux_that_cannot_be_asked_changes_no_tabs_availability() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let (live, write_project) = live_tab_fixture(state);
+        const TMUX: &str = concat!(crate::app_slug!(), "-p-1--shell-123456789");
+        let key = [7u8; 32];
+        let mut cache = CatalogCache::default();
+        let available = |catalog: &Catalog| catalog.projects[0].tabs[0].public.available;
+
+        let first = cache
+            .load_fresh_with(state, &key, || Ok(live.clone()))
+            .expect("tmux answered");
+        assert!(available(&first));
+        let tab_id = first.projects[0].tabs[0].public.id.clone();
+        assert!(first.grants(&tab_id, TMUX));
+        assert!(!first.grants(&tab_id, concat!(crate::app_slug!(), "-p-1--shell-other6789")), "another session");
+        assert!(!first.grants("no-such-tab", TMUX));
+
+        // The fork failed, or the server hung: the tab is still what tmux last
+        // said it was — and an open terminal on it is still granted.
+        let next = cache
+            .load_fresh_with(state, &key, || Err("tmux ls: timed out".into()))
+            .expect("carried forward");
+        assert!(available(&next));
+        assert!(next.grants(&tab_id, TMUX));
+
+        // Inside the retry window tmux is not asked again at all…
+        let again = cache
+            .load_fresh_with(state, &key, || panic!("asked a tmux that just failed"))
+            .expect("carried forward");
+        assert!(available(&again));
+        // …but the files are still read: switching phone access off revokes
+        // on time, wedged tmux or not.
+        write_project(false);
+        let revoked = cache
+            .load_fresh_with(state, &key, || panic!("asked a tmux that just failed"))
+            .expect("load");
+        assert!(revoked.projects.is_empty());
+        assert!(!revoked.grants(&tab_id, TMUX));
+        write_project(true);
+
+        // Once it may be asked again, its answer stands — including "no
+        // sessions", which is an answer.
+        cache.tmux_failed_at = None;
+        let gone = cache
+            .load_fresh_with(state, &key, || Ok(HashMap::new()))
+            .expect("tmux answered");
+        assert!(!available(&gone));
+        assert!(!gone.grants(&tab_id, TMUX));
+    }
+
+    #[test]
+    fn with_no_tmux_answer_yet_the_load_fails_rather_than_listing_every_session_as_gone() {
+        let dir = tempfile::tempdir().expect("state dir");
+        let state = dir.path();
+        let (live, _write_project) = live_tab_fixture(state);
+        let mut cache = CatalogCache::default();
+        assert!(cache
+            .load_fresh_with(state, &[7; 32], || Err("tmux ls: timed out".into()))
+            .is_err());
+        // The failure is not pinned past the retry window.
+        cache.tmux_failed_at = None;
+        let catalog = cache
+            .load_fresh_with(state, &[7; 32], || Ok(live))
+            .expect("tmux answered");
+        assert!(catalog.projects[0].tabs[0].public.available);
     }
 
     #[test]

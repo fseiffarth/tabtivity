@@ -16,6 +16,9 @@ const PREFACE_GAP_MS = 400;
 export interface ScheduledAgentInput {
   ptyId: string;
   ready: () => boolean;
+  /** The pane is up and taking keystrokes, busy or not (`ready` also wants the
+   *  agent quiet). Unset reads as `ready`. */
+  started?: () => boolean;
   bracketedPaste: () => boolean;
   /** What launches the agent, for {@link bracketsAgentMessage}: the markers are
    *  per family, and Claude Code reads a pasted prompt as quoted content rather
@@ -35,6 +38,9 @@ export interface SubmitOptions {
   preface?: string[];
   /** Awaited between submissions instead of the fixed {@link PREFACE_GAP_MS}. */
   settle?: (ptyId: string) => Promise<void>;
+  /** Go in while the agent works, as a prompt typed then would (the CLI queues
+   *  it): only a pane that is not up yet refuses. */
+  whileBusy?: boolean;
 }
 
 const inputs = new Map<string, ScheduledAgentInput>();
@@ -75,7 +81,8 @@ export async function submitScheduledAgentMessage(
   options: SubmitOptions = {},
 ): Promise<string> {
   const input = inputs.get(scheduleTargetId);
-  if (!input || !input.ready()) throw new Error("agent terminal is not ready");
+  const takesInput = options.whileBusy ? (input?.started ?? input?.ready) : input?.ready;
+  if (!input || !takesInput?.()) throw new Error("agent terminal is not ready");
   const bracketed = bracketsAgentMessage(input.agent, input.bracketedPaste());
   const messageWrites = agentInputWrites(message, bracketed);
   if (messageWrites.length === 0) throw new Error("scheduled prompt is empty");

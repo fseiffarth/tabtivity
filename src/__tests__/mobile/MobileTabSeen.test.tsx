@@ -23,6 +23,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
 import type { TabEntry } from "../../stores/tabs";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const project: ProjectEntry = {
   id: "p-mobile",
@@ -30,14 +31,14 @@ const project: ProjectEntry = {
   status: "active",
   position: 1,
   local_file: "/projects/alpha/project.json",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
-const TMUX = "eldrun-p-mobile--agent-123456789";
+const TMUX = `${BRAND.slug}-p-mobile--agent-123456789`;
 
 /** Hand the bridge one desktop request and give back what it answered. */
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   invokeMock.mockClear();
@@ -118,11 +119,21 @@ describe("Mobile bridge — a phone that looked at an agent tab", () => {
   });
 
   it("says nothing about a project the Mobile switch is off for", async () => {
-    useProjectsStore.setState({ projects: [{ ...project, eldrun_mobile_access: false }] });
+    useProjectsStore.setState({ projects: [{ ...project, [MOBILE_ACCESS_KEY]: false }] });
     useActivityStore.setState({ attentionByTab: { "p-mobile:agent-1": "done" } });
 
     const response = await ask({ type: "tab_seen", request_id: "r4", project_id: project.id, tmux_session: TMUX });
     expect(response.status).toBe("error");
     expect(useActivityStore.getState().attentionByTab["p-mobile:agent-1"]).toBe("done");
+  });
+
+  it("answers a request kind this window does not know, at once and by name", async () => {
+    // A sidecar newer than the window. No answer at all left the phone waiting
+    // out the whole desktop timeout before it read "desktop unavailable".
+    expect(await ask({ type: "kind_from_a_newer_sidecar", request_id: "r7" })).toEqual({
+      status: "error",
+      code: "unknown_request",
+      message: expect.any(String),
+    });
   });
 });

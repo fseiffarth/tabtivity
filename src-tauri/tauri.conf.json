@@ -1,7 +1,7 @@
 {
-  "productName": "Eldrun",
-  "version": "0.1.96",
-  "identifier": "io.github.fseiffarth.eldrun",
+  "productName": "Tabtivity",
+  "version": "0.1.107",
+  "identifier": "io.github.fseiffarth.tabtivity",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Eldrun",
+        "title": "Tabtivity",
         "width": 1400,
         "height": 900,
         "minWidth": 800,
@@ -53,6 +53,15 @@
           "bubblewrap",
           "tmux",
           "cups-client"
+        ],
+        "provides": [
+          "eldrun"
+        ],
+        "conflicts": [
+          "eldrun"
+        ],
+        "replaces": [
+          "eldrun"
         ]
       }
     },
@@ -68,6 +77,8 @@
         "type": "downloadBootstrapper"
       }
     },
-    "category": "Development"
+    "category": "Development",
+    "shortDescription": "A tab for each project. A tab for everything in it.",
+    "longDescription": "Tabtivity keeps each project in a tab of its own, and every agent, terminal, file, mail and viewer of that project in a tab inside it."
   }
 }

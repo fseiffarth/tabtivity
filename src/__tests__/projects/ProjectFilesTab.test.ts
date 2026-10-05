@@ -2,7 +2,7 @@
  * The "Files (Project)" tab kind — the side panel's file view hosted in a tab.
  * Two things must hold for it, and neither is visible from the pane itself:
  * the tab is recovered from its bare command on restore (a persisted layout
- * stores `cmd`, and a kind Eldrun can't recover would come back a shell), and
+ * stores `cmd`, and a kind Tabtivity can't recover would come back a shell), and
  * the folder it was opened on is part of what survives — the whole point of
  * "Open in a new tab" on a folder is that the tab IS that folder.
  */
@@ -20,6 +20,7 @@ import {
   useTabsStore,
   type GroupNode,
 } from "../../stores/tabs";
+import { tabCommand } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -27,7 +28,7 @@ describe("projectfiles tab kind", () => {
   it("recovers its kind from the bare command", () => {
     expect(cmdToKind(PROJECT_FILES_TAB_CMD)).toBe("projectfiles");
     // The separate FileBrowser tab keeps its own command and kind.
-    expect(cmdToKind("__eldrun_files__")).toBe("files");
+    expect(cmdToKind(tabCommand("files"))).toBe("files");
   });
 
   it("survives a restart (a pure frontend pane, like the files tab)", () => {
@@ -89,7 +90,7 @@ describe("a projectfiles tab's browsed folder", () => {
 
   it("persists the folder, and restores the tab on it", async () => {
     await useTabsStore.getState().saveLayout("/p/p1/project.json");
-    const saved = invokeMock.mock.calls.find(([cmd]) => cmd === "save_tab_layout");
+    const saved = invokeMock.mock.calls.find(([cmd]) => cmd === "workspace_sync");
     expect(saved).toBeTruthy();
     const layout = (saved![1] as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(layout).toHaveLength(1);

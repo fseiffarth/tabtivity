@@ -1,7 +1,7 @@
 /**
  * The HPC tag's confirmable half, from the caller's side (`lib/remote/hpc/hpcGuard`).
  *
- * The backend refuses a gated act with `ELDRUN_HPC_GUARD <kind> <target>`, and
+ * The backend refuses a gated act with `TABTIVITY_HPC_GUARD <kind> <target>`, and
  * the wrapper reads both out of the error itself — no call site knows in
  * advance that its target might be a cluster. What these pin: the parse, the
  * retry-exactly-once-on-confirm contract (a decline propagates the ORIGINAL

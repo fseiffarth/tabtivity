@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
  * of which exists inside the image. That exemption is the one hole in an
  * otherwise total containment, so what grants it matters.
  *
- * It used to be granted by the tab carrying `ELDRUN_LOCAL_MODEL` — which
+ * It used to be granted by the tab carrying `TABTIVITY_LOCAL_MODEL` — which
  * `TabBar`/`NewTabMenu` set so the daily usage recap can break local-agent tabs
  * down by model. An authority decision keyed on a telemetry label: anything that
  * later set that var for a display reason would have handed out container
@@ -17,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
  *
  * Now the tab mints a uid at creation, the backend records it as a file under
  * `<state_dir>/sessions/<project>/host_bound/`, and the spawn path checks for
- * that file. `ELDRUN_LOCAL_MODEL` is a usage label again.
+ * that file. `TABTIVITY_LOCAL_MODEL` is a usage label again.
  *
  * The uid is minted here and persisted on the tab, because it has to survive a
  * relaunch and nothing else on the tab does — the tab's key and its PTY id are

@@ -10,6 +10,7 @@ import { useActivityStore } from "../../stores/activity";
 import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentPromptsStore, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { BRAND } from "../../lib/brand";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "session-abc", scheduleTargetId: "target-1" };
 const row = (message: string, sent_at: string, extra: Partial<SentAgentPrompt> = {}): SentAgentPrompt =>
@@ -27,23 +28,23 @@ describe("adopting a prompt typed into the terminal", () => {
     useAgentPromptsStore.setState({ byProject: {}, historyByProject: {}, linksByProject: {}, loading: {} });
   });
 
-  it("a prompt Eldrun sent is the tab's newest history row and is not recorded again", () => {
+  it(`a prompt ${BRAND.display} sent is the tab's newest history row and is not recorded again`, () => {
     const history = [row("fix the tests", "2026-09-07T10:00:00Z"), row("write\n  docs", "2026-09-07T11:00:00Z")];
     expect(alreadyRecorded(history, "write docs", tab)).toBe(true);
     expect(alreadyRecorded(history, "fix the tests", tab)).toBe(false);
     // A long prompt reaches here cut, and still matches its own opening.
     expect(alreadyRecorded([row("a".repeat(400), "2026-09-07T12:00:00Z")], `${"a".repeat(300)}…`, tab)).toBe(true);
-    // Another tab's rows say nothing about this one; a row from before the
-    // tab had a session id is matched by label.
+    // Another tab's rows say nothing about this one, and neither does a row
+    // with no id at all: every "Claude" tab carries that label.
     expect(alreadyRecorded([row("write docs", "2026-09-07T13:00:00Z", { tab_label: "Codex", session_id: "other" })], "write docs", tab)).toBe(false);
-    expect(alreadyRecorded([row("write docs", "2026-09-07T13:00:00Z", { session_id: undefined })], "write docs", tab)).toBe(true);
+    expect(alreadyRecorded([row("write docs", "2026-09-07T13:00:00Z", { session_id: undefined })], "write docs", tab)).toBe(false);
     // A row filed under the live session the tab rolled onto (`/clear`) is
     // still this tab's: its tab id is the launch id.
     expect(alreadyRecorded([row("write docs", "2026-09-07T13:00:00Z", { tab_label: "Renamed", session_id: "cleared", tab_id: "session-abc" })], "write docs", tab)).toBe(true);
     expect(foldPrompt("  a \n\n b\tc ")).toBe("a b c");
   });
 
-  it("records a prompt that changed at a turn's start, and neither the first read nor one Eldrun sent", async () => {
+  it(`records a prompt that changed at a turn's start, and neither the first read nor one ${BRAND.display} sent`, async () => {
     let lastPrompt = "fix the tests";
     const recorded: unknown[] = [];
     vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -87,7 +88,7 @@ describe("adopting a prompt typed into the terminal", () => {
   });
 
   it("tells a session command from a prompt that mentions one", () => {
-    expect(isSessionCommand("/rename eldrun")).toBe(true);
+    expect(isSessionCommand(`/rename ${BRAND.slug}`)).toBe(true);
     expect(isSessionCommand("  /MODEL sonnet")).toBe(true);
     expect(isSessionCommand("/clear")).toBe(true);
     expect(isSessionCommand("/login")).toBe(true);

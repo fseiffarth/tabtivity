@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { loginIdForCmd, signInLaunch } from "../../lib/agents/signInLaunch";
 import { AGENT_ITEMS, buildSignInTabSpec } from "../../components/tabs/newTabItems";
 import { isRestorableTab } from "../../stores/tabs";
+import { envName } from "../../lib/brand";
 
 const t = (key: string, vars?: Record<string, string>) =>
   vars ? `${key}(${Object.values(vars).join(",")})` : key;
@@ -46,8 +47,9 @@ describe("sign-in launches", () => {
     const spec = buildSignInTabSpec(item("claude"), signInLaunch("claude"), "/p", t);
     expect(spec).toMatchObject({ label: "newTabMenu.signInTabLabel(Claude)", cmd: "claude", args: ["auth", "login", "--claudeai"], cwd: "/p", kind: "agent" });
     expect(spec.sessionId).toBeUndefined();
-    expect(spec.env).not.toHaveProperty("ELDRUN_TAB_UID");
+    expect(spec.env).not.toHaveProperty(envName("TAB_UID"));
     expect(isRestorableTab(spec)).toBe(false);
+    expect(spec.signIn).toBe(true);
     const gemini = buildSignInTabSpec(item("gemini"), signInLaunch("gemini"), "/p", t);
     expect(gemini).toMatchObject({ args: [], env: { NO_BROWSER: "true" } });
     expect(gemini.label).not.toContain("signInTabLabel");

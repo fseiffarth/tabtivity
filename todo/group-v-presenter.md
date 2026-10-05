@@ -200,7 +200,7 @@ backend `src-tauri/src/commands/{presenter,tex,fs}.rs`. *
     the presenter can read, or give `PresentationOverlay` an `onEscapeHandled`
     callback and bail when it returns true. Stop rendering `FileViewerPane`'s
     overlay while `presenting`.
-     - [ ] 🤖 Automated test — none: three window-level keydown listeners in two webviews; needs a live Eldrun
+     - [ ] 🤖 Automated test — none: three window-level keydown listeners in two webviews; needs a live Tabtivity
      - [ ] 🖐️ Manual test — present a real deck and confirm it.
        - [ ] ✅ Works on Linux (X11)
        - [ ] ❌ Doesn't work on Linux (X11)
@@ -265,7 +265,7 @@ backend `src-tauri/src/commands/{presenter,tex,fs}.rs`. *
      *plus* text length and item count, so consecutive overlay pages differ. And
      gate the order fallback: if more than one content-bearing slide would be
      re-anchored by order alone, **hold the autosave** and surface "the base PDF
-     changed in a way Eldrun can't match; review before saving."
+     changed in a way Tabtivity can't match; review before saving."
      *Test:* `DeckSidecar.test.ts` — a synthetic overlay deck (N pages sharing
      leading text) must not silently reorder layers.
      - [x] 🤖 Automated test — `DeckSidecar.test.ts` (overlay fingerprints differ, within-line matching, `line` written back, `ambiguous`) + `tex.rs` (SyncTeX parse, main-input tag, postamble)
@@ -958,7 +958,7 @@ annotation plus animation (already built, and unique), and then #133–#138.*
      Slidev/Marp gap in one move.
 
 136. ★ **Agent-authored decks.** "Turn this README / this paper / this week's
-     commits into a talk" — Eldrun has the agent tabs in-app. The sidecar is
+     commits into a talk" — Tabtivity has the agent tabs in-app. The sidecar is
      small, plain, schema-validated JSON whose defensive parser
      (`sidecar.ts:77-88, 291`) repairs anything malformed rather than crashing,
      which makes it an unusually safe LLM output target. Pairs naturally with
@@ -972,7 +972,7 @@ annotation plus animation (already built, and unique), and then #133–#138.*
      view to the existing diff viewer.
 
 138. ★ **Terminal / live-demo object.** A slide object hosting a real PTY — the
-     demo that always breaks when you alt-tab to a terminal mid-talk. Eldrun is
+     demo that always breaks when you alt-tab to a terminal mid-talk. Tabtivity is
      the one presentation surface that already owns a terminal. Largest surface
      of anything here: PTY lifecycle tied to slide visibility, a sane export
      fallback (a captured still), and a decision about what happens when the same

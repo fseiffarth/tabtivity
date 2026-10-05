@@ -11,10 +11,11 @@ import { useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
+import { storageKey } from "../../lib/brand";
 
 const tab: TabEntry = { key: "a", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", scheduleTargetId: "t", sessionId: "s" };
 const NOW = new Date(2026, 8, 4, 12, 2, 0);
-const DRAFTS_KEY = "eldrun.promptChart.drafts.p";
+const DRAFTS_KEY = storageKey("promptChart.drafts.p");
 
 type Call = [string, Record<string, unknown> | undefined];
 const calls = (name: string) => (vi.mocked(invoke).mock.calls as Call[]).filter(([command]) => command === name).map(([, args]) => args);

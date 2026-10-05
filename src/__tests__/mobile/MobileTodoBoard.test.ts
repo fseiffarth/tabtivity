@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, normalizeTodoBoard } from "../../../mobile-web/src/api";
 import { Todo } from "../../../mobile-web/src/screens/Todo";
+import { storageKey } from "../../lib/brand";
 
 vi.mock("../../../mobile-web/src/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../mobile-web/src/api")>();
@@ -155,7 +156,7 @@ describe("mobile todo hide-done persistence", () => {
 
   it("hides an archived card the done switch cannot reach", async () => {
     vi.mocked(api).mockResolvedValue(boardWithArchive());
-    localStorage.setItem("eldrun.mobile.todoHideArchived", "0");
+    localStorage.setItem(storageKey("mobile.todoHideArchived"), "0");
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("Set aside")).toBeTruthy());
@@ -171,7 +172,7 @@ describe("mobile todo hide-done persistence", () => {
 
   it("stops hiding done cards once the reader unticks it", async () => {
     vi.mocked(api).mockResolvedValue(boardWithOneDoneCard());
-    localStorage.setItem("eldrun.mobile.todoHideDone", "1");
+    localStorage.setItem(storageKey("mobile.todoHideDone"), "1");
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
@@ -213,8 +214,8 @@ describe("mobile todo column folding", () => {
 
   it("keeps a folded column quiet when its cards are filtered out", async () => {
     vi.mocked(api).mockResolvedValue(boardWithOneDoneCard());
-    localStorage.setItem("eldrun.mobile.todoCollapsedColumns", JSON.stringify(["done"]));
-    localStorage.setItem("eldrun.mobile.todoHideDone", "1");
+    localStorage.setItem(storageKey("mobile.todoCollapsedColumns"), JSON.stringify(["done"]));
+    localStorage.setItem(storageKey("mobile.todoHideDone"), "1");
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
@@ -223,12 +224,12 @@ describe("mobile todo column folding", () => {
 
   it("drops a fold set on a column the board no longer has", async () => {
     vi.mocked(api).mockResolvedValue(boardWithOneDoneCard());
-    localStorage.setItem("eldrun.mobile.todoCollapsedColumns", JSON.stringify(["done", "gone"]));
+    localStorage.setItem(storageKey("mobile.todoCollapsedColumns"), JSON.stringify(["done", "gone"]));
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Today" }));
 
-    expect(JSON.parse(localStorage.getItem("eldrun.mobile.todoCollapsedColumns") ?? "[]")).toEqual(["done", "today"]);
+    expect(JSON.parse(localStorage.getItem(storageKey("mobile.todoCollapsedColumns")) ?? "[]")).toEqual(["done", "today"]);
   });
 });

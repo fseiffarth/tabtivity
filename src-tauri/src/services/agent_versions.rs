@@ -1,7 +1,7 @@
 //! Which release of each agent CLI is installed, and whether it is still the
-//! one Eldrun's flags and parsers were actually checked against.
+//! one Tabtivity's flags and parsers were actually checked against.
 //!
-//! Eldrun reads other people's CLIs at a level of detail that only holds for
+//! Tabtivity reads other people's CLIs at a level of detail that only holds for
 //! the release someone sat down and verified: a `--resume` flag, a session-log
 //! key, the numbered rows of an approval menu, the shape of a `/model` sheet.
 //! `docs/third_party_update_checklist.md` records those checks in prose — "*
@@ -51,12 +51,10 @@ pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// a page of prose into the state file and onto a settings row.
 pub const MAX_VERSION_TEXT: usize = 200;
 
-/// How long a probe result is reused before the CLI is asked again.
+/// How long a probe result is reused while its executable is unchanged.
 ///
-/// A day, because that is the rate the answer changes at: an agent CLI is
-/// updated by a person running an installer, not by Eldrun. It also means the
-/// Manage Agents panel spawns processes on its first open of the day and never
-/// again — opening the panel five times in a row costs nothing.
+/// A day is the fallback for changes that do not replace the launcher itself.
+/// Normal installs change its metadata and invalidate the cache immediately.
 pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Per-agent argv that prints a version and exits, keyed by the registry `id`.
@@ -66,11 +64,11 @@ pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// add an agent: run its `--version`, paste the output as the comment, add the
 /// line. Do not add one from a README.
 const VERSION_ARGV: &[(&str, &[&str])] = &[
-    // "2.1.282 (Claude Code)"
+    // "2.1.284 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.157.0"
+    // "codex-cli 0.159.3"
     ("codex", &["--version"]),
-    // "0.0.393 Commit: ea52078"
+    // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
     // "1.2.9"
     ("antigravity", &["--version"]),
@@ -83,7 +81,7 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
 /// For the CLI whose launcher does more than print on `--version`: Muse's
 /// wrapper script checks for an update on *any* invocation and, once its
 /// interval has passed, starts a background self-update — so an unguarded
-/// daily probe would be Eldrun updating somebody else's CLI.
+/// daily probe would be Tabtivity updating somebody else's CLI.
 /// `MUSE_NO_AUTO_UPDATE=1` skips that branch of the launcher (read out of the
 /// 1.3.0 launcher, 2026-09-25) and the version still prints.
 const VERSION_ENV: &[(&str, &[(&str, &str)])] = &[("muse", &[("MUSE_NO_AUTO_UPDATE", "1")])];
@@ -105,7 +103,7 @@ pub struct Verified {
 ///
 /// One row per *check*, not per agent: Codex has four because four different
 /// surfaces are verified separately, and once they sit at different releases
-/// the oldest of them is the weakest assumption Eldrun currently rests on.
+/// the oldest of them is the weakest assumption Tabtivity currently rests on.
 /// Collapsing them to one number per agent would throw away the only part that
 /// says where to look.
 ///
@@ -114,33 +112,38 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "claude",
-        version: "2.1.282",
+        version: "2.1.288",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
         agent: "codex",
-        version: "0.157.0",
+        version: "0.159.3",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.157.0",
+        version: "0.159.3",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.157.0",
+        version: "0.159.3",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.157.0",
-        surface: "§1.2 — resume writer-lock conflict and release on process exit (offline probe)",
+        version: "0.159.3",
+        surface: "§1.2 — resume writer-lock markers (lifecycle last probed on 0.154.0)",
     },
     Verified {
         agent: "antigravity",
-        version: "1.2.9",
+        version: "1.2.14",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
+    },
+    Verified {
+        agent: "copilot",
+        version: "1.0.89",
+        surface: "§1.5 — --continue/-p, session-state store, authTokens login layout",
     },
 ];
 
@@ -383,10 +386,47 @@ pub struct Seen {
     /// store and taking every other agent's entry with it.
     #[serde(default)]
     pub checked_at: u64,
+    /// Identity of the executable that answered. An installer can replace it
+    /// before the day-long probe TTL expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<VersionSource>,
     /// The installed version the user has already been told about. A newer one
     /// raises the notice again; the same one does not nag every launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dismissed: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionSource {
+    path: PathBuf,
+    modified_nanos: u128,
+    len: u64,
+    link_modified_nanos: u128,
+}
+
+fn modified_nanos(metadata: &std::fs::Metadata) -> Option<u128> {
+    Some(
+        metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos(),
+    )
+}
+
+/// Follow the launcher and also watch its link: installers can replace either
+/// the binary itself or a symlink that selects a different release.
+fn version_source(path: &Path) -> Option<VersionSource> {
+    let target = std::fs::metadata(path).ok()?;
+    let link = std::fs::symlink_metadata(path).ok()?;
+    Some(VersionSource {
+        path: path.canonicalize().ok()?,
+        modified_nanos: modified_nanos(&target)?,
+        len: target.len(),
+        link_modified_nanos: modified_nanos(&link)?,
+    })
 }
 
 /// `<state_dir>/agent_versions.json` — probe results keyed by registry `id`.
@@ -422,15 +462,28 @@ pub fn fresh(seen: &Seen, ttl: Duration) -> bool {
     now_secs().saturating_sub(seen.checked_at) < ttl.as_secs()
 }
 
+/// A cached answer belongs to the same executable only while its identity and
+/// metadata still match. Old cache entries without `source` get one new probe.
+pub fn fresh_for_path(seen: &Seen, ttl: Duration, path: &Path) -> bool {
+    fresh(seen, ttl)
+        && seen.source.is_some()
+        && seen.source.as_ref() == version_source(path).as_ref()
+}
+
 /// The entry one probe result becomes, carrying `dismissed` over from whatever
 /// the store already held for that agent.
-fn seen_from(result: Result<String, String>, dismissed: Option<String>) -> Seen {
+fn seen_from(
+    result: Result<String, String>,
+    dismissed: Option<String>,
+    source: Option<VersionSource>,
+) -> Seen {
     match result {
         Ok(raw) => Seen {
             version: parse_version(&raw),
             raw: Some(raw),
             error: None,
             checked_at: now_secs(),
+            source,
             dismissed,
         },
         Err(error) => Seen {
@@ -438,6 +491,7 @@ fn seen_from(result: Result<String, String>, dismissed: Option<String>) -> Seen 
             raw: None,
             error: Some(error),
             checked_at: now_secs(),
+            source,
             dismissed,
         },
     }
@@ -451,18 +505,27 @@ fn seen_from(result: Result<String, String>, dismissed: Option<String>) -> Seen 
 /// otherwise be the one thing this loses. A failed write costs a re-probe and
 /// nothing else, so the probe result is still returned.
 pub fn remember_in(path: &Path, agent_id: &str, result: Result<String, String>) -> Seen {
-    let unwritten = seen_from(result.clone(), None);
+    remember_with_source_in(path, agent_id, result, None)
+}
+
+fn remember_with_source_in(
+    path: &Path,
+    agent_id: &str,
+    result: Result<String, String>,
+    source: Option<VersionSource>,
+) -> Seen {
+    let unwritten = seen_from(result.clone(), None, source.clone());
     crate::storage::patch_json(path, Store::new(), |store| {
         let dismissed = store.get(agent_id).and_then(|seen| seen.dismissed.clone());
-        let entry = seen_from(result, dismissed);
+        let entry = seen_from(result, dismissed, source);
         store.insert(agent_id.to_string(), entry.clone());
         Ok(entry)
     })
     .unwrap_or(unwritten)
 }
 
-pub fn remember(agent_id: &str, result: Result<String, String>) -> Seen {
-    remember_in(&store_path(), agent_id, result)
+pub fn remember(agent_id: &str, result: Result<String, String>, executable: &Path) -> Seen {
+    remember_with_source_in(&store_path(), agent_id, result, version_source(executable))
 }
 
 /// Mark the drift notice for `version` as seen. Recording the *version* rather
@@ -567,9 +630,55 @@ pub fn claude_takes_name_flag(seen: Option<&Seen>) -> bool {
         .is_some_and(|v| version_cmp(v, CLAUDE_NAME_FLAG_SINCE) != std::cmp::Ordering::Less)
 }
 
+/// First Codex release with `--no-daemon`, which is also the first whose TUI
+/// may hand its threads to a detached, shared `app-server --managed-daemon`
+/// (`daemon_auto_start`, on by default). 0.155.x has neither and exits on the
+/// unknown option. Checked against the npm linux-x64 builds of 0.155.1 and
+/// 0.156.0.
+pub const CODEX_NO_DAEMON_SINCE: &str = "0.156.0";
+
+/// Whether the Codex a probe last read accepts `--no-daemon` at launch — the
+/// same rule as [`claude_takes_name_flag`]: only a known version says yes.
+pub fn codex_takes_no_daemon(seen: Option<&Seen>) -> bool {
+    seen.and_then(|seen| seen.version.as_deref())
+        .is_some_and(|v| version_cmp(v, CODEX_NO_DAEMON_SINCE) != std::cmp::Ordering::Less)
+}
+
+/// Whether `args` start Codex's interactive TUI — nothing, an option, or its
+/// `resume`/`fork` subcommands — rather than a subcommand of its own (`login`,
+/// `exec`, `mcp`, …) that has no background server to opt out of.
+pub fn codex_runs_tui(args: &[String]) -> bool {
+    args.first()
+        .is_none_or(|arg| arg.starts_with('-') || arg == "resume" || arg == "fork")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_takes_no_daemon_from_0_156_0_on() {
+        let seen = |v: Option<&str>| Seen {
+            version: v.map(str::to_string),
+            ..Seen::default()
+        };
+        assert!(codex_takes_no_daemon(Some(&seen(Some("0.156.0")))));
+        assert!(codex_takes_no_daemon(Some(&seen(Some("0.159.2")))));
+        assert!(!codex_takes_no_daemon(Some(&seen(Some("0.155.1")))));
+        assert!(!codex_takes_no_daemon(Some(&seen(None))));
+        assert!(!codex_takes_no_daemon(None));
+    }
+
+    #[test]
+    fn only_the_codex_tui_gets_tui_flags() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(codex_runs_tui(&args(&[])));
+        assert!(codex_runs_tui(&args(&["resume", "01a0f263-e07f-77a2-9ef3-d1e1b921d724"])));
+        assert!(codex_runs_tui(&args(&["resume"])));
+        assert!(codex_runs_tui(&args(&["--oss", "-m", "qwen3"])));
+        assert!(!codex_runs_tui(&args(&["login", "--device-auth"])));
+        assert!(!codex_runs_tui(&args(&["exec", "--skip-git-repo-check", "hi"])));
+    }
 
     #[test]
     fn claude_takes_name_from_2_1_76_on() {
@@ -588,8 +697,9 @@ mod tests {
         assert!(!claude_takes_name_flag(None));
     }
 
-    /// The three shapes the recipes were verified against, and the one that
-    /// must not be read as a version: `copilot`'s trailing commit hash.
+    /// The shapes the recipes were verified against, and the one that must
+    /// not be read as a version: `copilot`'s trailing commit hash (0.0.x), then
+    /// its sentence with a closing full stop (1.0.x).
     #[test]
     fn parses_the_version_lines_the_recipes_were_verified_against() {
         assert_eq!(parse_version("2.1.263 (Claude Code)").as_deref(), Some("2.1.263"));
@@ -597,6 +707,10 @@ mod tests {
         assert_eq!(
             parse_version("0.0.393 Commit: ea52078").as_deref(),
             Some("0.0.393")
+        );
+        assert_eq!(
+            parse_version("GitHub Copilot CLI 1.0.88.").as_deref(),
+            Some("1.0.88")
         );
         assert_eq!(parse_version("1.2.9").as_deref(), Some("1.2.9"));
         assert_eq!(
@@ -673,14 +787,20 @@ mod tests {
     }
 
     #[test]
-    fn an_install_older_than_every_codex_check_names_them_all() {
-        // Today's table: an install older than all four Codex checks names
-        // all four, a matching install none.
+    fn codex_drift_uses_the_current_verified_release() {
+        // An older install names every surface; the checked release is quiet,
+        // and the next release raises all four again.
         let (state, stale) = drift("codex", Some("0.153.4"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        assert_eq!(drift("codex", Some("0.157.0")).0, DriftState::Match);
+        let (state, stale) = drift("codex", Some("0.159.3"));
+        assert_eq!(state, DriftState::Match);
+        assert!(stale.is_empty());
+        let (state, stale) = drift("codex", Some("0.159.4"));
+        assert_eq!(state, DriftState::Moved);
+        assert_eq!(stale.len(), 4);
+        assert!(stale.iter().all(|note| note.version == "0.159.3" && note.direction == Direction::Newer));
     }
 
     #[test]
@@ -692,10 +812,10 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.282")).0, DriftState::Match);
-        // `copilot` has a recipe but no recorded check — the honest answer is
+        assert_eq!(drift("claude", Some("2.1.288")).0, DriftState::Match);
+        // `muse` has a recipe but no recorded check — the honest answer is
         // "nobody has verified this", not a tick.
-        assert_eq!(drift("copilot", Some("0.0.393")).0, DriftState::Unverified);
+        assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);
         assert_eq!(drift("claude", None).0, DriftState::Unknown);
     }
 
@@ -780,6 +900,26 @@ mod tests {
             ..Default::default()
         };
         assert!(!fresh(&stale, PROBE_TTL));
+    }
+
+    #[test]
+    fn replacing_an_executable_invalidates_its_cached_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("codex");
+        std::fs::write(&executable, "old binary").unwrap();
+        let seen = Seen {
+            checked_at: now_secs(),
+            source: version_source(&executable),
+            ..Default::default()
+        };
+        assert!(fresh_for_path(&seen, PROBE_TTL, &executable));
+        assert!(!fresh_for_path(
+            &Seen { source: None, ..seen.clone() },
+            PROBE_TTL,
+            &executable
+        ));
+        std::fs::write(&executable, "newer, longer binary").unwrap();
+        assert!(!fresh_for_path(&seen, PROBE_TTL, &executable));
     }
 
     #[test]

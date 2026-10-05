@@ -8,6 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "../../../mobile-web/src/ErrorBoundary";
 import { readLastPlace, rememberLastPlace } from "../../../mobile-web/src/lastPlace";
+import { BRAND } from "../../lib/brand";
 
 function Crash(): never {
   throw new Error("boom");
@@ -20,7 +21,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Eldrun Mobile error boundary", () => {
+describe(`${BRAND.display} Mobile error boundary`, () => {
   it("draws a way out instead of a blank screen", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     render(<ErrorBoundary><Crash /></ErrorBoundary>);

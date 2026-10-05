@@ -1,4 +1,4 @@
-# Eldrun Mobile × Project Boxes — Parity Plan (TODO 31av / 31aw)
+# Tabtivity Mobile × Project Boxes — Parity Plan (TODO 31av / 31aw)
 
 Status: **proposed, 2026-09-20. Nothing here is built.** The shipped half is
 31aa (2026-09-05, code-complete, phone QA still open); this plan covers the
@@ -9,7 +9,7 @@ which desktop box features are deliberately *not* coming to the phone.
 
 A box reaches the phone as a scope of its own, behind its own switch:
 
-- `eldrun_mobile_access` on the box record in `boxes.json`, flipped from
+- `tabtivity_mobile_access` on the box record in `boxes.json`, flipped from
   Mobile settings → **Box access** (`components/mobile/MobileSettings.tsx`,
   `commands/boxes.rs::set_box_mobile_access`, which also resolves the folder).
 - The sidecar lists it as `kind: "box"` under `box:<id>`, status always
@@ -18,7 +18,7 @@ A box reaches the phone as a scope of its own, behind its own switch:
   A remote / VM / container member contributes no root; a member's own Mobile
   switch is never consulted.
 - Tabs are the `sessions/box_<id>/` ones whose cwd sits below one of those
-  roots, joined to live `eldrun-box_<id>--…` tmux rows (`resolve_scope`).
+  roots, joined to live `tabtivity-box_<id>--…` tmux rows (`resolve_scope`).
 - The desktop bridge resolves `box:<id>` through `mobileScope`
   (`components/mobile/MobileBridgeHost.tsx`), so every per-scope handler —
   catalog, activity, create, activate (→ `openBox`), rename / close / colour /

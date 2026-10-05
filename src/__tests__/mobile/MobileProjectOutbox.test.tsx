@@ -1,6 +1,6 @@
 /**
- * The project screen's way to what was sent this project with `eldrun-send`
- * (`.eldrun/outbox/`): the 🖼 in its header, which opens the same gallery
+ * The project screen's way to what was sent this project with `tabtivity-send`
+ * (`.tabtivity/outbox/`): the 🖼 in the dropdown under its name, which opens the same gallery
  * sheet the Focus screen does. There is no shelf under the tab cards any more
  * — it showed the same files a second time, under another name.
  *
@@ -34,9 +34,10 @@ function hostWith(files: unknown[]) {
 
 const picture = (name: string, modified: number) => ({ name, kind: "image/png", size: 48_000, modified });
 
-/** Opens the gallery from the header's 🖼, which counts the files. */
+/** Opens the gallery from the dropdown under the project's name, whose row counts the files. */
 async function openGallery(count: number) {
-  fireEvent.click(await screen.findByRole("button", { name: `Files from the agent (${count})` }));
+  fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: `Files from the agent (${count})` }));
   return screen.getByRole("dialog", { name: "Files from the agent" });
 }
 
@@ -58,8 +59,12 @@ describe("Mobile project — the files the agent sent", () => {
     ]));
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
 
+    // The header row keeps no 🖼 of its own: the name opens a dropdown that has it.
     const header = document.querySelector("header") as HTMLElement;
-    const button = await within(header).findByRole("button", { name: "Files from the agent (2)" });
+    const name = await within(header).findByRole("button", { name: "Alpha" });
+    expect(within(header).queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
+    fireEvent.click(name);
+    const button = within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: "Files from the agent (2)" });
     expect(document.querySelector(".outbox-shelf")).toBeNull();
     expect(screen.queryByText("From the desktop")).toBeNull();
 
@@ -76,7 +81,7 @@ describe("Mobile project — the files the agent sent", () => {
       .toBe("/api/v1/projects/p1/outbox/plot.png");
   });
 
-  it("lists every file, and opens a PDF in the browser's own viewer", async () => {
+  it("lists every file, and opens a PDF in the app's own page view", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubGlobal("fetch", hostWith([
       { name: "paper.pdf", kind: "application/pdf", size: 4_000, modified: 1_770_000_009 },
@@ -88,10 +93,14 @@ describe("Mobile project — the files the agent sent", () => {
     expect(gallery.querySelectorAll(".outbox-entry").length).toBe(8);
 
     fireEvent.click(within(gallery).getByRole("button", { name: "Open paper.pdf" }));
-    // This host mints no ticket, so the plain URL opens.
-    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/projects/p1/outbox/paper.pdf", "_blank", "noopener"));
+    // Never the phone's own PDF viewer: the installed app is not got back to
+    // from there. ✕ comes back to the gallery.
+    const viewer = await screen.findByRole("dialog", { name: "paper.pdf" });
+    expect(within(viewer).getByTitle("pdf")).toBeTruthy();
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
 
-    fireEvent.click(within(gallery).getByRole("button", { name: "Close" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Files from the agent" })).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Files from the agent" })).toBeNull());
   });
 
@@ -149,7 +158,8 @@ describe("Mobile project — the files the agent sent", () => {
     // Gone at once, and the counts with it — the poll is 8 s away.
     await waitFor(() => expect(Array.from(gallery.querySelectorAll(".outbox-entry strong")).map((n) => n.textContent)).toEqual(["notes.txt"]));
     expect(gallery.textContent).toContain("1 file in the project's outbox");
-    expect(screen.getByRole("button", { name: "Files from the agent (1)" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    expect(screen.getByRole("menuitem", { name: "Files from the agent (1)" })).toBeTruthy();
   });
 
   it("keeps the tile when the sidecar refuses the delete", async () => {
@@ -183,5 +193,11 @@ describe("Mobile project — the files the agent sent", () => {
 
     await screen.findByRole("button", { name: "Open Claude" });
     expect(screen.queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
+    // Nor a 🖼 entry in the name's dropdown, which a project now always has
+    // for its ⎇ Git overview.
+    fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+    const menu = screen.getByRole("menu", { name: "Project menu" });
+    expect(within(menu).queryByRole("menuitem", { name: /^Files from the agent/ })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: /^Git/ })).toBeTruthy();
   });
 });

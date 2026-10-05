@@ -35,7 +35,7 @@ function mintId(): string {
  * optional "continue last session" resume flag). Persisted globally via
  * `updateSettings`, so a new agent shows up in every add-tab menu's Agents group.
  *
- * A custom agent is only a launch command — Eldrun spawns `cmd` (+ args/env) as
+ * A custom agent is only a launch command — Tabtivity spawns `cmd` (+ args/env) as
  * an `agent` tab. The resume flag is the one extra capability: set it and the
  * tab survives a restart (cwd-continue tier, like Qwen/OpenCode/Gemini); leave it
  * blank and the tab is launch-only, dropped on restart like Aider.
@@ -109,7 +109,7 @@ export function CustomAgentDialog({ onClose }: Props) {
 
   const remove = (id: string) => void persist(agents.filter((a) => a.id !== id));
 
-  // Run an agent's install command in a fresh root terminal tab (Eldrun's
+  // Run an agent's install command in a fresh root terminal tab (Tabtivity's
   // install-via-tab policy). Closes the dialog so the terminal is in view.
   const install = (a: CustomAgent) => {
     if (!a.installCmd) return;

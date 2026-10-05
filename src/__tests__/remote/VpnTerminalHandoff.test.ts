@@ -1,7 +1,7 @@
 /**
  * The escape hatch out of a headless VPN login that cannot work.
  *
- * Eldrun's own login models exactly two secrets — an account password and a key
+ * Tabtivity's own login models exactly two secrets — an account password and a key
  * passphrase. A config whose server asks anything else (a challenge/OTP, a prompt of
  * its own) is unanswerable from the modal, and the symptom is a loop the user cannot
  * get out of: the saved credentials fail, the prompt opens, the password typed into
@@ -12,7 +12,7 @@
  * Two things are load-bearing, and both are asserted here.
  *
  *  1. **It is a local switch.** `connections_headless` is the user's statement about
- *     how Eldrun should behave; a failed handshake does not get to rewrite it.
+ *     how Tabtivity should behave; a failed handshake does not get to rewrite it.
  *  2. **The rejection is not a failure.** `request()` rejects (the tunnel is not up,
  *     so resolving would be a lie), but the attempt is alive — the lamp is amber and
  *     the poll owns the outcome. A caller reading it as "no tunnel" would paint a
@@ -101,7 +101,7 @@ describe("VPN terminal handoff", () => {
   });
 
   /** The whole point of "locally": the setting is the user's statement about how
-   *  Eldrun should behave, and one config's broken handshake must not rewrite it. */
+   *  Tabtivity should behave, and one config's broken handshake must not rewrite it. */
   it("never touches the global connections_headless setting", async () => {
     backend();
     const g = await graph();

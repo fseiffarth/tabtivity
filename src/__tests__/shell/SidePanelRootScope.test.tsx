@@ -1,6 +1,6 @@
 /**
  * The side panel in the ROOT scope: the scope that belongs to no project gets
- * the same file viewer, rooted at `~/eldrun/root` (`rootDir`) — the staging area
+ * the same file viewer, rooted at `~/tabtivity/root` (`rootDir`) — the staging area
  * for data that is only being looked at, or has no project to belong to yet.
  *
  * The two things worth pinning down are the ones a plain "no active project"
@@ -25,8 +25,9 @@ import { SidePanel } from "../../components/layout/SidePanel";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
 import { useTabsStore, ROOT_SCOPE } from "../../stores/tabs";
+import { BRAND } from "../../lib/brand";
 
-const ROOT_DIR = "/home/u/eldrun/root";
+const ROOT_DIR = `/home/u/${BRAND.slug}/root`;
 
 /** Every `list_dir` the render dispatched, as (projectDir, relPath) pairs. */
 function listedDirs(): Array<{ projectDir: string; relPath: string }> {

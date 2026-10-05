@@ -200,7 +200,7 @@ export interface ImageObject extends ObjectBase {
    * Project-relative path to the `.tex` source that generates `src`, when this
    * image is a **TeX figure** rather than an ordinary picture — placed via the
    * deck toolbar's TeX FAB. `src` is a rasterized PNG of the compiled PDF's first
-   * page; Eldrun regenerates it whenever that PDF's mtime advances, so editing
+   * page; Tabtivity regenerates it whenever that PDF's mtime advances, so editing
    * and recompiling the source (in its own tab) updates the slide in place. Absent
    * for a plain image.
    */

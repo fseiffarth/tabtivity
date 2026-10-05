@@ -7,11 +7,11 @@
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
-  <!-- Eldrun spawns child processes (PTYs, git, ssh, sshfs, tex, ollama) and
+  <!-- Tabtivity spawns child processes (PTYs, git, ssh, sshfs, tex, ollama) and
        may load third-party dylibs (e.g. macFUSE); relax library validation. -->
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
-  <!-- Eldrun augments the PATH/env of child processes it launches. -->
+  <!-- Tabtivity augments the PATH/env of child processes it launches. -->
   <key>com.apple.security.cs.allow-dyld-environment-variables</key>
   <true/>
   <!-- Network access: SSH, localhost Ollama, the dev server during tauri dev. -->

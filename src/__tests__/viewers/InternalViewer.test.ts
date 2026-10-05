@@ -37,7 +37,7 @@ describe("internalViewerFor", () => {
 
   it("falls back to the plain editor when the tree is opted out (#48)", () => {
     // Turning off the tree is a vote against the tree, not against editing YAML
-    // in Eldrun — so it drops back to the code editor, not to an external app.
+    // in Tabtivity — so it drops back to the code editor, not to an external app.
     expect(internalViewerFor(file("data.json", ".json"), new Set(["yaml"] as const))).toBe("text");
     expect(internalViewerFor(file("c.yaml", ".yaml"), new Set(["yaml", "text"] as const))).toBeNull();
   });

@@ -2,7 +2,8 @@
  * The new-tab chords land through the focused pane's `TabBar`: a shell, the
  * System Monitor and the numbered agents open there as the active tab (which
  * is what hands a terminal the keyboard), an unused number is left alone, and
- * the + menu shows each chord beside its row.
+ * the + menu shows each chord beside its row. Steering's requests
+ * (`besideActive`) land right of the active tab, chords at the pane's end.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, cleanup, fireEvent } from "@testing-library/react";
@@ -136,5 +137,76 @@ describe("new-tab chords", () => {
     expect(hint("Claude")).toBe("Ctrl+2");
     expect(hint("Shell")).toBe("Ctrl+Shift+N");
     expect(hint("System Monitor")).toBe("Ctrl+Shift+M");
+  });
+});
+
+describe("steering's new tabs land beside the active one", () => {
+  // Files | a | b, with Files active.
+  async function renderThree() {
+    const bar = await renderBar();
+    const add = (label: string) =>
+      useTabsStore
+        .getState()
+        .addTab({ label, cmd: "", args: [], env: {}, cwd: "/p/p1", kind: "shell" });
+    add("a");
+    add("b");
+    const first = findGroup(useTabsStore.getState().layout, bar.groupId)!.tabKeys[0];
+    act(() => useTabsStore.getState().setGroupActive(bar.groupId, first));
+    return bar;
+  }
+  const order = (groupId: string) => {
+    const s = useTabsStore.getState();
+    return findGroup(s.layout, groupId)!.tabKeys.map(
+      (k) => s.tabs.find((t) => t.key === k)!,
+    );
+  };
+
+  it("puts a steering shell, monitor and agent right of the active tab", async () => {
+    const { groupId } = await renderThree();
+    await act(async () => {
+      requestNewTab({ kind: "shell" }, { besideActive: true });
+    });
+    expect(order(groupId).map((t) => t.label)).toEqual(["Files", "Shell", "a", "b"]);
+    await act(async () => {
+      requestNewTab({ kind: "monitor" }, { besideActive: true });
+    });
+    expect(order(groupId)[2].kind).toBe("monitor");
+    await act(async () => {
+      requestNewTab({ kind: "agent", slot: 0 }, { besideActive: true });
+    });
+    expect(order(groupId)[3].cmd).toBe("codex");
+    expect(order(groupId)).toHaveLength(6);
+  });
+
+  it("keeps a chord's tab at the end", async () => {
+    const { groupId } = await renderThree();
+    await act(async () => {
+      requestNewTab({ kind: "shell" });
+    });
+    expect(order(groupId).map((t) => t.label)).toEqual(["Files", "a", "b", "Shell"]);
+  });
+
+  it("places a pick from a menu steering opened, and only that one", async () => {
+    const { groupId, container } = await renderThree();
+    await act(async () => {
+      requestNewTab({ kind: "menu" }, { besideActive: true });
+    });
+    const shellRow = () =>
+      [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu button")].find(
+        (el) => el.querySelector(".tab-new-menu-dot")?.nextSibling?.textContent === "Shell",
+      )!;
+    await act(async () => {
+      fireEvent.click(shellRow());
+    });
+    expect(order(groupId)[1].label).toBe("Shell");
+    // The menu closed; a mouse-opened one appends again.
+    await act(async () => {
+      fireEvent.click(container.querySelector(".tab-new-btn")!);
+    });
+    await act(async () => {
+      fireEvent.click(shellRow());
+    });
+    expect(order(groupId)).toHaveLength(5);
+    expect(order(groupId)[4].key).toBe(activeTab(groupId)?.key);
   });
 });

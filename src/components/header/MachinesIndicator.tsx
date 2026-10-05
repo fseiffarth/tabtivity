@@ -28,6 +28,7 @@ import { ErrorNote } from "../common/ErrorNote";
 import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
 import { MachinesOverlayFrame } from "./MachinesOverlay";
 import { MachinesGlyph } from "./HeaderGlyphs";
+import { BRAND } from "../../lib/brand";
 
 const MENU_ID = "machines";
 
@@ -550,7 +551,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     setImportResult(null);
   };
 
-  /** May Eldrun touch this machine with nobody asking? The same authority the
+  /** May Tabtivity touch this machine with nobody asking? The same authority the
    *  store's sweeps consult, so the row's stated reason for "not checked" and
    *  the sweep's decision to skip it can never disagree. */
   const autoTouchable = (m: GlobalMachine) => mayAutoTouch(settings, targetOfSpec(m));
@@ -854,7 +855,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // A machine in the error bucket is the fleet's only non-nominal reading worth
   // pulling out of a collapsed header. "Connecting" deliberately is not: the whole
   // fleet is amber for the first seconds after launch and after every reconnect,
-  // which would make the bar reflow on its own every time Eldrun starts.
+  // which would make the bar reflow on its own every time Tabtivity starts.
   // The header's instance reports; the overlay's is a second reader of the
   // same fleet and must not clear the key when it unmounts.
   useHeaderStatusReport(
@@ -916,7 +917,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   };
 
   // ── Terminal sign-in: log in in the root terminal, then adopt that session ───
-  // Eldrun sees no password here: the user logs in in the root terminal, and the
+  // Tabtivity sees no password here: the user logs in in the root terminal, and the
   // machine is then `register`ed — the store action that deliberately does *not*
   // re-authenticate, precisely because the caller already did.
   //
@@ -930,9 +931,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // is no frontend command for `ssh -O check` against the shared `cm-%C` socket
   // (the backend has one internally — `services::ssh_exec` — but exposes none),
   // so the master cannot be observed directly from here. Until it can, this is
-  // honestly a **readiness** poll — "can Eldrun authenticate this host yet" —
+  // honestly a **readiness** poll — "can Tabtivity authenticate this host yet" —
   // backed off and capped hard (below) so a wrong answer is cheap. Adopting a
-  // session Eldrun could have opened by itself is harmless; the terminal path
+  // session Tabtivity could have opened by itself is harmless; the terminal path
   // still exists for the host where it is the only way in.
   const clearAddPoll = () => {
     if (addPoll.current) {
@@ -1166,8 +1167,8 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // The `pollAddLogin` twin, for an existing machine. It shares that path's honest
   // caveat: `ssh_connect` may succeed on the first poll via key/agent/saved
   // credentials without the terminal login mattering, so this is a *readiness*
-  // poll — "can Eldrun authenticate this (possibly re-addressed) target yet" —
-  // backed off and capped so a wrong answer is cheap. Adopting a session Eldrun
+  // poll — "can Tabtivity authenticate this (possibly re-addressed) target yet" —
+  // backed off and capped so a wrong answer is cheap. Adopting a session Tabtivity
   // could have opened itself is harmless; the terminal path is there for the host
   // that only a terminal login can get through.
   const clearEditPoll = () => {
@@ -1184,7 +1185,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     // Persist the edited identity WITHOUT reconnecting — the terminal login has
     // already opened the session, so `connect: false` avoids a second (possibly
     // prompting) `ssh_connect`. `remember` is left unset: a terminal login is one
-    // Eldrun never sees, so there is no new secret to save and nothing to clear.
+    // Tabtivity never sees, so there is no new secret to save and nothing to clear.
     await update(
       id,
       {
@@ -1313,7 +1314,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       // keeps it from closing while the native picker is up.
       const path = await saveDialog({
         title: t("machines.exportDialogTitle"),
-        defaultPath: "eldrun-machines.json",
+        defaultPath: `${BRAND.slug}-machines.json`,
         filters: [{ name: t("machines.jsonFilter"), extensions: ["json"] }],
       });
       if (!path) {
@@ -2206,7 +2207,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                       </label>
                     )}
                     {/* Disabled rather than hidden in the terminal path, the add
-                        form's rule: a terminal login is one Eldrun never sees, so it
+                        form's rule: a terminal login is one Tabtivity never sees, so it
                         stores nothing new and clears nothing — a saved password for
                         this host stays as it is, and a vanishing row would read as
                         one that was dropped. */}
@@ -2389,7 +2390,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                 </span>
               </label>
               {/* The tag, at the moment it is actually known: logging in is when
-                  the user knows what they are logging in to. Everything Eldrun
+                  the user knows what they are logging in to. Everything Tabtivity
                   would otherwise do to this machine on its own is gated behind it
                   (`lib/remote/hpc/hpcHost.ts`), so ticking it here means the very first
                   connect already behaves — nothing scans, nothing polls, and the
@@ -2532,7 +2533,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </span>
           ))}
         </span>
-        <span className="vpn-indicator-label">{t("machines.label")}</span>
+        <MachinesGlyph className="header-status-glyph" />
       </button>
       {menuOpen && (
         <div className="tab-new-menu vpn-indicator-menu machines-indicator-menu" role="menu">

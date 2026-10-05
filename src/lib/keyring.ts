@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 /**
  * The OS credential store as a *thing with a state*, not just a place secrets go.
  *
- * Every "is this password saved?" in Eldrun is a keychain read, and on Linux a read
+ * Every "is this password saved?" in Tabtivity is a keychain read, and on Linux a read
  * against a **locked** Secret Service collection answers exactly like an empty one:
  * nothing saved. So a user who ticked "Save password", connected, and restarted finds
  * the box blank, no silent connect, and no explanation — the credential was there the

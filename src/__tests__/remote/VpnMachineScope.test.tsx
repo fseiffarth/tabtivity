@@ -1,7 +1,7 @@
 /**
  * The OpenVPN tunnel is a machine-level object, not a project's property.
  *
- * `pkexec openvpn --config …` runs as root with no routing flags from Eldrun, so a
+ * `pkexec openvpn --config …` runs as root with no routing flags from Tabtivity, so a
  * config that pushes `redirect-gateway` reroutes the *whole computer* — browser and
  * all — for as long as it is up. Two things follow, and both are locked here:
  *
@@ -151,7 +151,7 @@ describe("the header indicator is the tunnel's own surface", () => {
 
 describe("the tunnel state follows the backend", () => {
   it("reconciles away a tunnel the backend no longer reports", async () => {
-    // The tunnel died (or was killed outside Eldrun). The indicator must not keep
+    // The tunnel died (or was killed outside Tabtivity). The indicator must not keep
     // claiming the machine is being rerouted when it isn't.
     markVpnConnected(A.id, CONFIG);
     await useVpnStatusStore.getState().refresh();
@@ -250,7 +250,7 @@ describe("the header can bring a tunnel up, with no project behind it", () => {
     await userEvent.hover(screen.getByRole("button", { name: /openvpn/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^add config…$/i }));
 
-    // The picked file is copied into Eldrun's store…
+    // The picked file is copied into Tabtivity's store…
     await waitFor(() =>
       expect(
         invokeMock.mock.calls.filter(([name]) => name === "openvpn_store_config"),

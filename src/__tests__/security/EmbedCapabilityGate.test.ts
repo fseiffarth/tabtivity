@@ -19,6 +19,7 @@ vi.mock("../../stores/windows", () => ({
 import { commitFileDrop } from "../../components/tabs/commitFileDrop";
 import { useTabsStore } from "../../stores/tabs";
 import { type TabDrag, type EmbedCap } from "../../stores/drag/drag";
+import { BRAND } from "../../lib/brand";
 
 function seedGroup() {
   useTabsStore.setState({
@@ -122,7 +123,7 @@ describe("commitFileDrop — dragged out of the window (detachBounds)", () => {
     openFileMock.mockClear();
   });
 
-  it("opens an external-app file directly, without a detached Eldrun subwindow", () => {
+  it(`opens an external-app file directly, without a detached ${BRAND.display} subwindow`, () => {
     const g = seedGroup();
     // No built-in viewer → the file opens in its external app.
     commitFileDrop(fileDrag(PASS, g), "p", "/p", bounds);
@@ -135,11 +136,11 @@ describe("commitFileDrop — dragged out of the window (detachBounds)", () => {
       // on the monitor the file was actually dragged onto.
       { x: bounds.x, y: bounds.y },
     );
-    // No standalone Eldrun window was spawned for it.
+    // No standalone Tabtivity window was spawned for it.
     expect(useTabsStore.getState().detachedGroupsByScope["p"] ?? []).toHaveLength(0);
   });
 
-  it("detaches a built-in-viewer file into its own standalone Eldrun window", () => {
+  it(`detaches a built-in-viewer file into its own standalone ${BRAND.display} window`, () => {
     const g = seedGroup();
     const drag = fileDrag(null, g);
     drag.viewer = "pdf";

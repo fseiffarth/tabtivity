@@ -1,5 +1,5 @@
 //! Landlock's abstract-socket scope for the agent fence:
-//! `eldrun --fence-scope <bwrap> [args…]`.
+//! `tabtivity --fence-scope <bwrap> [args…]`.
 //!
 //! bubblewrap unshares only the pid namespace, so a fenced agent shares the
 //! host's network namespace and with it every abstract Unix socket
@@ -8,17 +8,18 @@
 //! one that matters: only its cookie check stands behind it, and a host that
 //! ran `xhost +local:` or `+si:localuser:$USER` (or an unauthenticated
 //! `startx`) lets any fenced agent log keystrokes and type into unfenced
-//! windows — the Eldrun window and shell tabs included. Landlock's
+//! windows — the Tabtivity window and shell tabs included. Landlock's
 //! `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` (ABI 6, Linux 6.12) refuses every
 //! connect to an abstract socket created outside the domain; sockets the
 //! agent creates inside it keep working, and the network is untouched.
 //!
 //! No spawn path can run code between fork and exec (see
-//! `agent_fence::seccomp_launcher`), so the Eldrun binary itself is the step
+//! `agent_fence::seccomp_launcher`), so the Tabtivity binary itself is the step
 //! before bwrap: it enters the domain and execs bwrap. Best-effort per host:
 //! an older kernel, or a setuid bwrap (the domain needs `no_new_privs`, which
 //! would strip it), launches without the step as before. Where the step is
-//! used it fails closed.
+//! used it fails closed. It also maps `agent_exec`'s carriers, so a host
+//! with the scope runs one step in front of bwrap, not two.
 
 use std::path::{Path, PathBuf};
 
@@ -86,7 +87,13 @@ pub fn helper_for(bwrap: &Path) -> Option<String> {
     if abi() < SCOPE_ABI || is_setuid(bwrap) {
         return None;
     }
-    Some(helper_path(std::env::current_exe().ok(), std::process::id()))
+    Some(running_binary())
+}
+
+/// The running Tabtivity binary as a path another process can exec now — the
+/// helper here and `agent_exec`'s.
+pub fn running_binary() -> String {
+    helper_path(std::env::current_exe().ok(), std::process::id())
 }
 
 fn is_setuid(path: &Path) -> bool {
@@ -96,7 +103,7 @@ fn is_setuid(path: &Path) -> bool {
 
 /// The running binary by path, or by `/proc/<pid>/exe` once a rebuild or an
 /// update has replaced it on disk (`current_exe` then ends in ` (deleted)`).
-/// The helper is exec'd at once, by Eldrun or its tmux server, while Eldrun
+/// The helper is exec'd at once, by Tabtivity or its tmux server, while Tabtivity
 /// still runs.
 fn helper_path(exe: Option<PathBuf>, pid: u32) -> String {
     match exe {
@@ -105,19 +112,24 @@ fn helper_path(exe: Option<PathBuf>, pid: u32) -> String {
     }
 }
 
-/// `eldrun --fence-scope <prog> [args…]`: enter the domain, then exec `prog`.
+/// `tabtivity --fence-scope <prog> [args…]`: enter the domain, then exec `prog`
+/// with the environment `agent_exec` would give it (its carriers mapped), so
+/// a spawn needs one step in front of bwrap, not two.
 /// Returns only on failure, with the exit code.
 pub fn run(args: &[std::ffi::OsString]) -> i32 {
     use std::os::unix::process::CommandExt;
     let Some((prog, rest)) = args.split_first() else {
-        eprintln!("Agent sandbox: usage: eldrun --fence-scope <program> [args…]");
+        eprintln!(concat!("Agent sandbox: usage: ", crate::app_slug!(), " --fence-scope <program> [args…]"));
         return 2;
     };
     if let Err(e) = restrict_self() {
         eprintln!("Agent sandbox: abstract-socket scope: {e}");
         return 126;
     }
-    let e = std::process::Command::new(prog).args(rest).exec();
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(rest);
+    crate::services::agent_exec::apply(&mut cmd);
+    let e = cmd.exec();
     eprintln!("Agent sandbox: {}: {e}", Path::new(prog).display());
     127
 }
@@ -148,8 +160,8 @@ mod tests {
             eprintln!("skipped: Landlock ABI {} has no scopes", abi());
             return;
         }
-        let outside = format!("eldrun-fence-scope-out-{}", std::process::id());
-        let inside = format!("eldrun-fence-scope-in-{}", std::process::id());
+        let outside = format!(concat!(crate::app_slug!(), "-fence-scope-out-{}"), std::process::id());
+        let inside = format!(concat!(crate::app_slug!(), "-fence-scope-in-{}"), std::process::id());
         let _listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(&outside).unwrap()).unwrap();
         let (out_addr, out_len) = abstract_addr(outside.as_bytes());
         let (in_addr, in_len) = abstract_addr(inside.as_bytes());
@@ -187,7 +199,7 @@ mod tests {
     #[test]
     fn the_helper_is_the_running_binary_even_once_replaced() {
         let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("eldrun");
+        let exe = dir.path().join(crate::app_slug!());
         std::fs::write(&exe, b"").unwrap();
         assert_eq!(helper_path(Some(exe.clone()), 42), exe.to_string_lossy());
         let gone = PathBuf::from(format!("{} (deleted)", exe.display()));

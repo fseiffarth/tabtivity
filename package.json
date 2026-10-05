@@ -1,14 +1,14 @@
 {
-  "name": "eldrun",
+  "name": "tabtivity",
   "private": true,
-  "version": "0.1.96",
+  "version": "0.1.107",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && npm run mobile:build",
     "mobile:build": "tsc -p tsconfig.mobile.json && npm run mobile:bundle",
-    "mobile:bundle": "vite build --config vite.mobile.config.ts",
+    "mobile:bundle": "vite build --config vite.mobile.config.ts && vite build --config vite.pdf-frame.config.ts",
     "mobile:dev": "vite --config vite.mobile.config.ts",
     "preview": "vite preview",
     "tauri": "tauri",

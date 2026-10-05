@@ -1,6 +1,6 @@
 //! Project-VM lifecycle (`docs/vm_projects_plan.md`): the third trust tier.
 //! A VM project's whole tree lives inside a locally booted QEMU/KVM guest that
-//! Eldrun reaches **exclusively over SSH/SFTP** on a forwarded loopback port —
+//! Tabtivity reaches **exclusively over SSH/SFTP** on a forwarded loopback port —
 //! no shared filesystem, no virtiofs/9p, deliberately. From the moment the VM
 //! is up, the project is an ordinary remote project (`services::remote` pool,
 //! `ssh -tt` tabs, optional git lockstep); this module owns only what a real
@@ -27,7 +27,7 @@
 //!
 //! State layout (`<state_dir>/vm/`):
 //! ```text
-//! images/<stock cloud image>, images/eldrun-base-<ver>.qcow2
+//! images/<stock cloud image>, images/tabtivity-base-<ver>.qcow2
 //! <project-id>/disk.qcow2      # per-project qcow2 overlay (copy-on-write)
 //! <project-id>/seed/…,seed.iso # cloud-init NoCloud seed (user, key, proxy env)
 //! <project-id>/id_ed25519(.pub)# per-VM generated keypair
@@ -59,10 +59,10 @@ use crate::schema::projects::ProjectsList;
 use crate::storage;
 
 /// The guest account every VM project runs as; its home holds the tree.
-pub const VM_USER: &str = "eldrun";
+pub const VM_USER: &str = crate::brand::VM_USER;
 /// The project root inside the guest — the `RemoteSpec.remote_path` a VM
 /// project is created with.
-pub const VM_PROJECT_DIR: &str = "/home/eldrun/project";
+pub const VM_PROJECT_DIR: &str = crate::brand::VM_PROJECT_DIR;
 
 /// Baked-base-image version: bump when the bake recipe changes so an outdated
 /// base is rebuilt on demand (never automatically).
@@ -111,9 +111,16 @@ impl GuestArch {
     /// The baked image keeps its historical name on x86-64 (existing state
     /// dirs), and carries the arch elsewhere.
     fn baked_image_name(self) -> String {
+        self.baked_image_name_for(&crate::brand::CURRENT)
+    }
+
+    /// [`baked_image_name`](Self::baked_image_name) as a build named `forms`
+    /// writes it.
+    fn baked_image_name_for(self, forms: &crate::brand::Forms) -> String {
+        let prefix = forms.name(crate::brand::Name::VM_BASE_IMAGE_PREFIX);
         match self {
-            GuestArch::X86_64 => format!("eldrun-base-{BASE_VERSION}.qcow2"),
-            GuestArch::Aarch64 => format!("eldrun-base-{BASE_VERSION}-arm64.qcow2"),
+            GuestArch::X86_64 => format!("{prefix}{BASE_VERSION}.qcow2"),
+            GuestArch::Aarch64 => format!("{prefix}{BASE_VERSION}-arm64.qcow2"),
         }
     }
 
@@ -250,6 +257,29 @@ fn stock_image_path() -> PathBuf {
 }
 
 fn baked_image_path() -> PathBuf {
+    baked_image_path_in(&crate::brand::PAIR, &images_dir())
+}
+
+/// The baked image in `images`: under its current name, or — while only that
+/// exists — under the name an older build baked it as. That file is never
+/// renamed: the overlays of existing VMs name it as their backing file. A new
+/// bake writes the current name.
+fn baked_image_path_in(pair: &crate::brand::Pair, images: &Path) -> PathBuf {
+    let current = images.join(GuestArch::host().baked_image_name_for(&pair.cur));
+    if pair.legacy(crate::brand::Name::VM_BASE_IMAGE_PREFIX).is_none() || current.is_file() {
+        return current;
+    }
+    let old = images.join(GuestArch::host().baked_image_name_for(&pair.legacy));
+    if old.is_file() {
+        crate::brand::legacy_hit("vm-base-image");
+        old
+    } else {
+        current
+    }
+}
+
+/// Where a bake writes: always the current name.
+fn baked_image_target() -> PathBuf {
     images_dir().join(GuestArch::host().baked_image_name())
 }
 
@@ -481,7 +511,7 @@ fn qemu_install_hint() -> &'static str {
 /// installable — a kvm permission problem or a full disk is not.
 ///
 /// Only the *packages* appear here. The Linux line follows the same apt
-/// convention as the rest of Eldrun's install buttons; a non-apt distro's user
+/// convention as the rest of Tabtivity's install buttons; a non-apt distro's user
 /// still has the doctor's sentences above the button.
 fn install_command_for(host: HostOs, arch: GuestArch, p: &VmDoctorProbes) -> Option<String> {
     if !p.supported {
@@ -572,7 +602,7 @@ pub fn doctor_verdict(p: &VmDoctorProbes) -> VmDoctorReport {
         if let Some(free) = p.disk_free_gb {
             if free < 8 {
                 reasons.push(format!(
-                    "Low disk space in the Eldrun state dir ({free} GiB free); a VM overlay can grow to tens of GiB."
+                    "Low disk space in the {app} state dir ({free} GiB free); a VM overlay can grow to tens of GiB.", app = crate::brand::DISPLAY
                 ));
             }
         }
@@ -878,7 +908,7 @@ pub fn bake_user_data() -> String {
     // node via NodeSource keeps the npm-installed agent CLIs current enough;
     // the stock 24.04 nodejs is fine for all three CLIs today, so stay with
     // the distro package — fewer moving parts inside the trust boundary.
-    r#"#cloud-config
+    concat!(r#"#cloud-config
 package_update: true
 packages:
   - git
@@ -890,11 +920,11 @@ packages:
   - python3-venv
 runcmd:
   - [sh, -c, "npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli || true"]
-  - [sh, -c, "echo ELDRUN_BAKE_DONE"]
+  - [sh, -c, "echo "#, crate::app_upper!(), r#"_BAKE_DONE"]
 power_state:
   mode: poweroff
   timeout: 60
-"#
+"#)
     .to_string()
 }
 
@@ -902,7 +932,7 @@ power_state:
 /// command. The bake boots the stock image once with `-serial stdio`, so the
 /// guest's own cloud-init output streams into the tab as build progress;
 /// cloud-init powers the VM off when done and the script converts the overlay
-/// into `eldrun-base-<ver>.qcow2`.
+/// into `tabtivity-base-<ver>.qcow2`.
 pub fn build_base_command() -> Result<String, String> {
     let root = vm_root();
     let bake = root.join("bake");
@@ -910,7 +940,7 @@ pub fn build_base_command() -> Result<String, String> {
     std::fs::write(bake.join("user-data"), bake_user_data()).map_err(|e| e.to_string())?;
     std::fs::write(
         bake.join("meta-data"),
-        cloud_init_meta_data("eldrun-bake", "eldrun-bake"),
+        cloud_init_meta_data(concat!(crate::app_slug!(), "-bake"), concat!(crate::app_slug!(), "-bake")),
     )
     .map_err(|e| e.to_string())?;
     let tool = seed_tool();
@@ -920,7 +950,7 @@ pub fn build_base_command() -> Result<String, String> {
     let iso_line = if tool == BUILTIN_ISO_TOOL {
         let _ = std::fs::remove_file(bake.join("seed.iso"));
         write_seed_iso(&bake, tool)?;
-        "# seed.iso was written by Eldrun's built-in ISO 9660 writer".to_string()
+        concat!("# seed.iso was written by ", crate::app_name!(), "'s built-in ISO 9660 writer").to_string()
     } else {
         let argv = seed_iso_args(tool)
             .iter()
@@ -936,9 +966,9 @@ pub fn build_base_command() -> Result<String, String> {
     let machine = machine_args()?.join(" ");
     if cfg!(windows) {
         let script = format!(
-            r#"$ErrorActionPreference = 'Stop'
+            concat!(r#"$ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath '{bake}'
-Write-Output '── Building the Eldrun VM base image (installs git, build tools, node, agent CLIs) ──'
+Write-Output '── Building the "#, crate::app_name!(), r#" VM base image (installs git, build tools, node, agent CLIs) ──'
 Remove-Item -Force -ErrorAction SilentlyContinue disk.qcow2
 {iso_line}
 & qemu-img create -f qcow2 -b '{stock}' -F qcow2 disk.qcow2 32G
@@ -950,13 +980,13 @@ Move-Item -Force -LiteralPath '{baked}.part' -Destination '{baked}'
 Remove-Item -Force -ErrorAction SilentlyContinue disk.qcow2, seed.iso
 Write-Output '── Baked base image ready: {baked} ──'
 Write-Output '   New VM projects boot from it; existing VMs keep their current disk.'
-"#,
+"#),
             bake = bake.display(),
             iso_line = iso_line,
             qemu = qemu,
             machine = machine,
             stock = stock_image_path().display(),
-            baked = baked_image_path().display(),
+            baked = baked_image_target().display(),
         );
         let path = root.join("bake-base.ps1");
         std::fs::write(&path, script).map_err(|e| e.to_string())?;
@@ -966,10 +996,10 @@ Write-Output '   New VM projects boot from it; existing VMs keep their current d
         ));
     }
     let script = format!(
-        r#"#!/usr/bin/env bash
+        concat!(r#"#!/usr/bin/env bash
 set -euo pipefail
 cd '{bake}'
-echo '── Building the Eldrun VM base image (installs git, build tools, node, agent CLIs) ──'
+echo '── Building the "#, crate::app_name!(), r#" VM base image (installs git, build tools, node, agent CLIs) ──'
 rm -f disk.qcow2
 {iso_line}
 qemu-img create -f qcow2 -b '{stock}' -F qcow2 disk.qcow2 32G
@@ -985,13 +1015,13 @@ mv '{baked}.part' '{baked}'
 rm -f disk.qcow2 seed.iso
 echo '── Baked base image ready: {baked} ──'
 echo '   New VM projects boot from it; existing VMs keep their current disk.'
-"#,
+"#),
         bake = bake.display(),
         iso_line = iso_line,
         qemu = qemu,
         machine = machine,
         stock = stock_image_path().display(),
-        baked = baked_image_path().display(),
+        baked = baked_image_target().display(),
     );
     let path = root.join("bake-base.sh");
     std::fs::write(&path, script).map_err(|e| e.to_string())?;
@@ -1001,7 +1031,68 @@ echo '   New VM projects boot from it; existing VMs keep their current disk.'
 // ── cloud-init seed (per project) ──────────────────────────────────────────
 
 /// Guest-safe hostname from a project name: ASCII alphanumerics and dashes.
+/// The names a VM's guest was set up with: its account, its project folder,
+/// and the names cloud-init wrote files and its instance id under.
+///
+/// They are fixed when a VM is created and must never change afterwards.
+/// cloud-init runs "first boot" again whenever the instance id moves, and the
+/// id is computed at every boot from a prefix and a hash of the user-data —
+/// which itself names the account, the folder and two files. So an existing
+/// VM is always seeded with the names it was created under, whatever the app
+/// is called now; only a VM created by this build gets the current ones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmNames {
+    /// The guest account.
+    pub user: String,
+    /// The project's folder in the guest.
+    pub project_dir: String,
+    /// In the names of the files cloud-init writes.
+    pub slug: String,
+    /// What the instance id starts with.
+    pub instance_prefix: String,
+    /// The hostname of a project whose name has no usable character.
+    pub default_hostname: String,
+}
+
+impl VmNames {
+    /// The names a build called `forms` gives a VM it creates.
+    pub fn of(forms: &crate::brand::Forms) -> Self {
+        use crate::brand::Name;
+        Self {
+            user: forms.name(Name::VM_USER),
+            project_dir: forms.name(Name::VM_PROJECT_DIR),
+            slug: forms.slug.to_string(),
+            instance_prefix: forms.name(Name::VM_INSTANCE_ID_PREFIX),
+            default_hostname: forms.name(Name::VM_NAME),
+        }
+    }
+
+    /// The names of the VM whose project record stores `guest_user` as its
+    /// SSH user (written once, when the project was created): the old names
+    /// for a VM an older build created, the current ones otherwise.
+    pub fn of_existing(pair: &crate::brand::Pair, guest_user: Option<&str>) -> Self {
+        match (guest_user, pair.legacy(crate::brand::Name::VM_USER)) {
+            (Some(user), Some(old_user)) if user == old_user => Self::of(&pair.legacy),
+            _ => Self::of(&pair.cur),
+        }
+    }
+
+    /// The names of project `project_id`'s VM, from its stored record.
+    fn of_project(project_id: &str) -> Self {
+        let pair = crate::brand::PAIR;
+        if !pair.renamed() {
+            return Self::of(&pair.cur);
+        }
+        let user = crate::services::remote::remote_target_for(project_id).and_then(|target| target.spec.user);
+        Self::of_existing(&pair, user.as_deref())
+    }
+}
+
 pub fn vm_hostname(project_name: &str) -> String {
+    vm_hostname_for(&VmNames::of(&crate::brand::CURRENT), project_name)
+}
+
+fn vm_hostname_for(names: &VmNames, project_name: &str) -> String {
     let mut out = String::new();
     for c in project_name.chars() {
         if c.is_ascii_alphanumeric() {
@@ -1012,7 +1103,7 @@ pub fn vm_hostname(project_name: &str) -> String {
     }
     let trimmed = out.trim_matches('-');
     if trimmed.is_empty() {
-        "eldrun-vm".to_string()
+        names.default_hostname.clone()
     } else {
         let mut name = String::from("vm-");
         name.push_str(&trimmed.chars().take(24).collect::<String>());
@@ -1020,10 +1111,16 @@ pub fn vm_hostname(project_name: &str) -> String {
     }
 }
 
-/// The per-project NoCloud `user-data`: the `eldrun` account with the per-VM
+/// The per-project NoCloud `user-data`: the `tabtivity` account with the per-VM
 /// public key, the project dir, and — under `Proxy` egress — the proxy env
 /// pointing at the fixed guest-side `guestfwd` address. Pure.
 pub fn cloud_init_user_data(hostname: &str, pubkey: &str, proxy: bool) -> String {
+    cloud_init_user_data_for(&VmNames::of(&crate::brand::CURRENT), hostname, pubkey, proxy)
+}
+
+/// [`cloud_init_user_data`] with the names of the VM it is for.
+fn cloud_init_user_data_for(names: &VmNames, hostname: &str, pubkey: &str, proxy: bool) -> String {
+    let slug = names.slug.as_str();
     let mut doc = format!(
         r#"#cloud-config
 hostname: {hostname}
@@ -1038,14 +1135,14 @@ users:
 ssh_pwauth: false
 "#,
         hostname = hostname,
-        user = VM_USER,
+        user = names.user,
         pubkey = pubkey.trim(),
     );
     if proxy {
         let addr = crate::services::vm_proxy::GUEST_PROXY_ADDR;
         doc.push_str(&format!(
             r#"write_files:
-  - path: /etc/profile.d/eldrun-proxy.sh
+  - path: /etc/profile.d/{slug}-proxy.sh
     permissions: '0644'
     content: |
       export http_proxy=http://{addr}
@@ -1054,7 +1151,7 @@ ssh_pwauth: false
       export HTTPS_PROXY=http://{addr}
       export no_proxy=localhost,127.0.0.1,::1
       export NO_PROXY=localhost,127.0.0.1,::1
-  - path: /etc/apt/apt.conf.d/95eldrun-proxy
+  - path: /etc/apt/apt.conf.d/95{slug}-proxy
     permissions: '0644'
     content: |
       Acquire::http::Proxy "http://{addr}";
@@ -1067,8 +1164,8 @@ ssh_pwauth: false
   - mkdir -p {dir}
   - chown {user}:{user} {dir}
 "#,
-        dir = VM_PROJECT_DIR,
-        user = VM_USER,
+        dir = names.project_dir,
+        user = names.user,
     ));
     if proxy {
         let addr = crate::services::vm_proxy::GUEST_PROXY_ADDR;
@@ -1088,13 +1185,17 @@ pub fn cloud_init_meta_data(instance_id: &str, hostname: &str) -> String {
 
 /// Instance id for a seed: stable while the config is, new when it changes.
 pub fn seed_instance_id(project_id: &str, user_data: &str) -> String {
+    seed_instance_id_for(&VmNames::of(&crate::brand::CURRENT), project_id, user_data)
+}
+
+fn seed_instance_id_for(names: &VmNames, project_id: &str, user_data: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(user_data.as_bytes());
     let digest = hasher.finalize();
     let hash_hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
     let id8: String = project_id.chars().take(8).collect();
-    format!("eldrun-{id8}-{hash_hex}")
+    format!("{}{id8}-{hash_hex}", names.instance_prefix)
 }
 
 // ── QEMU argv (pure builders) ──────────────────────────────────────────────
@@ -1205,7 +1306,7 @@ fn ensure_keypair(dir: &Path) -> Result<String, String> {
     let key = dir.join("id_ed25519");
     if !key.exists() {
         let out = crate::paths::command_no_window("ssh-keygen")
-            .args(["-q", "-t", "ed25519", "-N", "", "-C", "eldrun-vm", "-f"])
+            .args(["-q", "-t", "ed25519", "-N", "", "-C", crate::brand::VM_NAME, "-f"])
             .arg(&key)
             .output()
             .map_err(|e| format!("ssh-keygen: {e}"))?;
@@ -1248,6 +1349,7 @@ fn ensure_overlay(dir: &Path, disk_gb: u32) -> Result<(PathBuf, String), String>
 
 fn ensure_seed(
     dir: &Path,
+    names: &VmNames,
     project_id: &str,
     hostname: &str,
     pubkey: &str,
@@ -1255,8 +1357,8 @@ fn ensure_seed(
 ) -> Result<PathBuf, String> {
     let seed_dir = dir.join("seed");
     std::fs::create_dir_all(&seed_dir).map_err(|e| e.to_string())?;
-    let user_data = cloud_init_user_data(hostname, pubkey, proxy);
-    let meta_data = cloud_init_meta_data(&seed_instance_id(project_id, &user_data), hostname);
+    let user_data = cloud_init_user_data_for(names, hostname, pubkey, proxy);
+    let meta_data = cloud_init_meta_data(&seed_instance_id_for(names, project_id, &user_data), hostname);
     let iso = dir.join("seed.iso");
 
     // Rebuild only when the inputs changed — the iso is consumed on every
@@ -1364,9 +1466,13 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
         _ => None,
     };
 
-    let hostname = vm_hostname(project_name);
+    // The names this VM was created under (see [`VmNames`]): they decide
+    // the seed, and so whether cloud-init sees the instance it already set up.
+    let names = VmNames::of_project(project_id);
+    let hostname = vm_hostname_for(&names, project_name);
     let seed = ensure_seed(
         &dir,
+        &names,
         project_id,
         &hostname,
         &pubkey,
@@ -1389,7 +1495,7 @@ pub fn ensure_booted(project_id: &str, project_name: &str) -> Result<VmRuntime, 
     // while the listener is up; every other VM has no route to it at all.
     let mcp_port = spec
         .mail_reader
-        .then(|| crate::services::root_mcp::runtime().map(|rt| rt.port))
+        .then(|| crate::services::root_mcp::runtime().filter(|rt| rt.serves_root).map(|rt| rt.port))
         .flatten();
     let netdev = netdev_arg(spec.egress, ssh_port, proxy_port, mcp_port);
     let machine = machine_args()?;
@@ -1902,7 +2008,7 @@ mod tests {
         assert!(machine_args_for(HostOs::Windows, GuestArch::Aarch64, None).is_none());
         assert_eq!(GuestArch::Aarch64.qemu_binary(), "qemu-system-aarch64");
         assert!(GuestArch::Aarch64.stock_image_name().contains("arm64"));
-        assert_eq!(GuestArch::X86_64.baked_image_name(), format!("eldrun-base-{BASE_VERSION}.qcow2"));
+        assert_eq!(GuestArch::X86_64.baked_image_name(), format!("{}{BASE_VERSION}.qcow2", crate::brand::VM_BASE_IMAGE_PREFIX));
     }
 
     #[test]
@@ -2014,9 +2120,9 @@ mod tests {
     fn user_data_carries_user_key_and_project_dir() {
         let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", false);
         assert!(doc.starts_with("#cloud-config\n"));
-        assert!(doc.contains("name: eldrun"));
+        assert!(doc.contains(concat!("name: ", crate::app_slug!())));
         assert!(doc.contains("ssh-ed25519 AAAA test"));
-        assert!(doc.contains("mkdir -p /home/eldrun/project"));
+        assert!(doc.contains(concat!("mkdir -p /home/", crate::app_slug!(), "/project")));
         assert!(doc.contains("ssh_pwauth: false"));
         assert!(!doc.contains("http_proxy"));
     }
@@ -2025,7 +2131,7 @@ mod tests {
     fn user_data_proxy_mode_sets_the_guest_proxy_env() {
         let doc = cloud_init_user_data("vm-proj", "ssh-ed25519 AAAA test", true);
         assert!(doc.contains("export https_proxy=http://10.0.2.100:3128")); // privacy-check: ok — QEMU slirp, not a real host
-        assert!(doc.contains("/etc/apt/apt.conf.d/95eldrun-proxy"));
+        assert!(doc.contains(concat!("/etc/apt/apt.conf.d/95", crate::app_slug!(), "-proxy")));
         assert!(doc.contains("/etc/environment"));
     }
 
@@ -2034,15 +2140,88 @@ mod tests {
         let a = seed_instance_id("project-1234", "#cloud-config\na");
         let b = seed_instance_id("project-1234", "#cloud-config\nb");
         assert_ne!(a, b);
-        assert!(a.starts_with("eldrun-project-"));
+        assert!(a.starts_with(concat!(crate::app_slug!(), "-project-")));
         // …and is stable for a stable config:
         assert_eq!(a, seed_instance_id("project-1234", "#cloud-config\na"));
+    }
+
+    /// The rule of [`VmNames`]: after a rename, a VM an older build created
+    /// is seeded byte-for-byte as that build seeded it — same user-data, same
+    /// instance id, same hostname — so cloud-init does not run first boot
+    /// again. Only a VM created under the current name gets the current ones.
+    #[test]
+    fn an_existing_vm_keeps_its_seed_across_a_rename() {
+        use crate::brand::{Forms, Pair, LEGACY};
+        let renamed = Pair {
+            cur: Forms { display: "Newname", slug: "newname", upper: "NEWNAME" },
+            legacy: LEGACY,
+        };
+        let key = "ssh-ed25519 AAAA test";
+        // What the older build wrote at every boot of this VM.
+        let old_names = VmNames::of(&LEGACY);
+        for proxy in [false, true] {
+            let was_data = cloud_init_user_data_for(&old_names, "vm-proj", key, proxy);
+            let was_id = seed_instance_id_for(&old_names, "project-1234", &was_data);
+
+            // The renamed build, for the same VM: its record stores the old user.
+            let names = VmNames::of_existing(&renamed, Some(LEGACY.name(crate::brand::Name::VM_USER).as_str()));
+            assert_eq!(names, old_names);
+            let data = cloud_init_user_data_for(&names, "vm-proj", key, proxy);
+            assert_eq!(data, was_data, "user-data moved (proxy: {proxy})");
+            assert_eq!(seed_instance_id_for(&names, "project-1234", &data), was_id);
+            assert_eq!(vm_hostname_for(&names, "---"), vm_hostname_for(&old_names, "---"));
+
+            // A VM the renamed build creates stores the current user.
+            let fresh = VmNames::of_existing(&renamed, Some("newname"));
+            let fresh_data = cloud_init_user_data_for(&fresh, "vm-proj", key, proxy);
+            assert!(fresh_data.contains("  - name: newname\n"));
+            assert!(fresh_data.contains("mkdir -p /home/newname/project"));
+            assert!(!fresh_data.contains(LEGACY.slug));
+            assert!(seed_instance_id_for(&fresh, "project-1234", &fresh_data).starts_with("newname-project-"));
+            assert_ne!(seed_instance_id_for(&fresh, "project-1234", &fresh_data), was_id);
+        }
+        // No record, or a user that is neither: the current names.
+        assert_eq!(VmNames::of_existing(&renamed, None), VmNames::of(&renamed.cur));
+        // The production pair: the constants, whichever way it is asked.
+        let production = VmNames::of_existing(&crate::brand::PAIR, Some(VM_USER));
+        assert_eq!(production.user, VM_USER);
+        assert_eq!(production.project_dir, VM_PROJECT_DIR);
+        assert_eq!(
+            cloud_init_user_data_for(&production, "vm-proj", key, true),
+            cloud_init_user_data("vm-proj", key, true)
+        );
+    }
+
+    /// A base image an older build baked is found under its old name and is
+    /// never renamed — existing overlays back onto that very file. A new
+    /// bake writes the current name, which then wins.
+    #[test]
+    fn the_baked_image_is_found_under_its_old_name() {
+        use crate::brand::{Forms, Pair, LEGACY};
+        use crate::services::brand_migration::hits;
+        let renamed = Pair {
+            cur: Forms { display: "Newname", slug: "newname", upper: "NEWNAME" },
+            legacy: LEGACY,
+        };
+        let images = tempfile::tempdir().expect("tempdir");
+        let arch = GuestArch::host();
+        let old = images.path().join(arch.baked_image_name_for(&LEGACY));
+        let new = images.path().join(arch.baked_image_name_for(&renamed.cur));
+        let _ = hits::taken();
+        assert_eq!(baked_image_path_in(&renamed, images.path()), new);
+        assert!(hits::taken().is_empty());
+        std::fs::write(&old, b"qcow").expect("write");
+        assert_eq!(baked_image_path_in(&renamed, images.path()), old);
+        assert_eq!(hits::taken(), ["vm-base-image"]);
+        std::fs::write(&new, b"qcow").expect("write");
+        assert_eq!(baked_image_path_in(&renamed, images.path()), new);
+        assert!(old.is_file(), "the old image stays for the overlays that back onto it");
     }
 
     #[test]
     fn hostname_is_guest_safe() {
         assert_eq!(vm_hostname("My Project!"), "vm-my-project");
-        assert_eq!(vm_hostname("---"), "eldrun-vm");
+        assert_eq!(vm_hostname("---"), concat!(crate::app_slug!(), "-vm"));
         assert!(vm_hostname(&"x".repeat(100)).len() <= 27);
     }
 

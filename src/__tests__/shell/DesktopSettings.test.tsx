@@ -1,9 +1,10 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockRejectedValue(new Error("Not available in this test")) }));
 import { SettingsDialog } from "../../components/layout/SettingsPanel";
 import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_ANCHORS } from "../../components/layout/settingsUi";
+import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION, DEFAULT_PDF_MARKUP_INSTRUCTION } from "../../lib/viewers/pdfMarkup";
 
 beforeEach(() => {
   useSettingsStore.setState({ settings: {} } as never);
@@ -14,6 +15,80 @@ const links = () => nav().querySelector(".settings-navigation-links") as HTMLEle
 const mainScroll = () => document.querySelector(".settings-panel-content .dialog-scroll") as HTMLElement;
 
 describe("settings category navigation", () => {
+  it("defaults untested tags off and lets General show and hide them", async () => {
+    const originalUpdateSettings = useSettingsStore.getState().updateSettings;
+    const updateSettings = vi.fn().mockImplementation(async (patch: { show_untested_tags: boolean }) => {
+      useSettingsStore.setState({ settings: { show_untested_tags: patch.show_untested_tags } });
+    });
+    useSettingsStore.setState({ settings: {}, updateSettings } as never);
+    await act(async () => { render(<SettingsDialog onClose={() => {}} />); });
+    const toggle = screen.getByRole("checkbox", { name: /Show untested tags/ }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(document.documentElement.classList.contains("show-untested-tags")).toBe(false);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(updateSettings).toHaveBeenCalledWith({ show_untested_tags: true });
+    expect(document.documentElement.classList.contains("show-untested-tags")).toBe(true);
+    expect(toggle.checked).toBe(true);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(document.documentElement.classList.contains("show-untested-tags")).toBe(false);
+    expect(toggle.checked).toBe(false);
+    act(() => { useSettingsStore.setState({ updateSettings: originalUpdateSettings }); });
+  });
+
+  it("keeps the desktop's own PDF markup prompts, starting from the defaults", async () => {
+    const originalUpdateSettings = useSettingsStore.getState().updateSettings;
+    const updateSettings = vi.fn().mockImplementation(async (patch: Record<string, unknown>) => {
+      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, ...patch } });
+    });
+    useSettingsStore.setState({ settings: {}, updateSettings } as never);
+    await act(async () => { render(<SettingsDialog onClose={() => {}} initialAnchor="settings-anchor-pdfMarkup" />); });
+    const instruction = screen.getByLabelText("Mark up prompt") as HTMLTextAreaElement;
+    // Apply marks directly is on unset: the instruction starts from its default.
+    expect(instruction.value).toBe(DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION);
+    const apply = screen.getByLabelText("“Make these changes” prompt") as HTMLTextAreaElement;
+    expect(apply.value).toBe(DEFAULT_PDF_MARKUP_APPLY);
+    await act(async () => { fireEvent.change(apply, { target: { value: "Apply all and rebuild." } }); });
+    expect(updateSettings).toHaveBeenLastCalledWith({ pdf_markup_apply: "Apply all and rebuild." });
+    // Typed back to the default, or emptied: the default stands, unsaved.
+    await act(async () => { fireEvent.change(instruction, { target: { value: ` ${DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION}` } }); });
+    expect(updateSettings).toHaveBeenLastCalledWith({ pdf_markup_instruction: undefined });
+    const resets = screen.getAllByRole("button", { name: "Use the default" }) as HTMLButtonElement[];
+    expect(resets[0].disabled).toBe(true);
+    await act(async () => { fireEvent.click(resets[1]); });
+    expect(updateSettings).toHaveBeenLastCalledWith({ pdf_markup_apply: undefined });
+    act(() => { useSettingsStore.setState({ updateSettings: originalUpdateSettings }); });
+  });
+
+  it("switches Apply marks directly, on unset, and the instruction follows its mode", async () => {
+    const originalUpdateSettings = useSettingsStore.getState().updateSettings;
+    const updateSettings = vi.fn().mockImplementation(async (patch: Record<string, unknown>) => {
+      useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, ...patch } });
+    });
+    useSettingsStore.setState({ settings: {}, updateSettings } as never);
+    await act(async () => { render(<SettingsDialog onClose={() => {}} initialAnchor="settings-anchor-pdfMarkup" />); });
+    const toggle = screen.getByRole("checkbox", { name: /Apply marks directly/ }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(updateSettings).toHaveBeenLastCalledWith({ pdf_markup_direct: false });
+    expect(toggle.checked).toBe(false);
+    expect((screen.getByLabelText("Mark up prompt") as HTMLTextAreaElement).value).toBe(DEFAULT_PDF_MARKUP_INSTRUCTION);
+    act(() => { useSettingsStore.setState({ updateSettings: originalUpdateSettings }); });
+  });
+
+  it("shows this mode's default over the other mode's kept from before, and a user's own instruction as written", async () => {
+    // An older build kept the list default as the user's text: no instruction
+    // of theirs — the field shows (and a Submit sends) the apply default.
+    useSettingsStore.setState({ settings: { pdf_markup_instruction: DEFAULT_PDF_MARKUP_INSTRUCTION } } as never);
+    await act(async () => { render(<SettingsDialog onClose={() => {}} initialAnchor="settings-anchor-pdfMarkup" />); });
+    expect((screen.getByLabelText("Mark up prompt") as HTMLTextAreaElement).value).toBe(DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION);
+    expect((screen.getAllByRole("button", { name: "Use the default" })[0] as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    useSettingsStore.setState({ settings: { pdf_markup_instruction: "Fix typos only. " } } as never);
+    await act(async () => { render(<SettingsDialog onClose={() => {}} initialAnchor="settings-anchor-pdfMarkup" />); });
+    expect((screen.getByLabelText("Mark up prompt") as HTMLTextAreaElement).value).toBe("Fix typos only. ");
+    expect((screen.getAllByRole("button", { name: "Use the default" })[0] as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("opens one page per entry and honors the Mobile deep link", async () => {
     await act(async () => { render(<SettingsDialog onClose={() => {}} initialAnchor={SETTINGS_ANCHORS.mobile} />); });
     // The deep link lands on the Mobile page alone — not a long scroll that

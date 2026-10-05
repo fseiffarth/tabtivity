@@ -58,8 +58,9 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
-describe("Eldrun Mobile readable terminal view", () => {
+describe(`${BRAND.display} Mobile readable terminal view`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     terminalState.options = undefined;
@@ -68,8 +69,8 @@ describe("Eldrun Mobile readable terminal view", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     // These read the Focus view; the phone opens on Terminal until the
     // reader chose Focus for the agent, so the stored choice is preset.
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
-    localStorage.setItem("eldrun.mobile.view.shell", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
+    localStorage.setItem(storageKey("mobile.view.shell"), "focus");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
@@ -192,7 +193,7 @@ describe("Eldrun Mobile readable terminal view", () => {
       cursorStyle: "bar",
       cursorInactiveStyle: "bar",
       cursorWidth: 2,
-      theme: { cursor: "#0b0d13", cursorAccent: "#0b0d13" },
+      theme: { background: "#000000", cursor: "#000000", cursorAccent: "#000000" },
     });
     expect(terminalState.textarea).toMatchObject({ disabled: true, tabIndex: -1 });
     expect(terminalState.textarea?.getAttribute("aria-hidden")).toBe("true");

@@ -34,7 +34,7 @@ import { loadModelsSequentially } from "./ollamaAutoload";
  *   creates unasked. What it will not do is invent models — an upgrade with
  *   nothing resident starts no watcher at all.
  *
- * Session-scoped on purpose. The snapshot lives in memory, so quitting Eldrun
+ * Session-scoped on purpose. The snapshot lives in memory, so quitting Tabtivity
  * mid-upgrade forgets it; persisting it would mean a launch that loads models
  * because of something that happened before the last shutdown, which is the
  * surprise this is trying to avoid in the first place.

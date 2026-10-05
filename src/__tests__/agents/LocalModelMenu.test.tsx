@@ -287,7 +287,7 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
     await door("Skills library…", "skills");
     await door("Manage local models…", "ollama");
     await door("Ollama…", "ollama");
-    const settingsEvents = spy.mock.calls.filter(([e]) => (e as Event).type === "eldrun:open-settings");
+    const settingsEvents = spy.mock.calls.filter(([e]) => (e as Event).type === "app:open-settings");
     expect(settingsEvents).toHaveLength(0);
     spy.mockRestore();
   });

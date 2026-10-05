@@ -8,6 +8,7 @@ import { render, fireEvent, cleanup } from "@testing-library/react";
 import { TodoColumn } from "../../components/todo/TodoColumn";
 import { useTodoStore } from "../../stores/todo";
 import type { TaskColumn } from "../../types";
+import { storageKey } from "../../lib/brand";
 
 const TODO: TaskColumn = { id: "todo", name: "To do", position: 0, done: false };
 const DONE: TaskColumn = { id: "done", name: "Done", position: 1, done: true };
@@ -49,7 +50,7 @@ describe("TodoColumn collapse", () => {
     fireEvent.click(r.getByLabelText("Collapse column"));
 
     expect(useTodoStore.getState().collapsedColumns).toEqual({ todo: true });
-    expect(JSON.parse(localStorage.getItem("eldrun.todo.collapsedColumns")!)).toEqual(["todo"]);
+    expect(JSON.parse(localStorage.getItem(storageKey("todo.collapsedColumns"))!)).toEqual(["todo"]);
     const strip = r.getByLabelText("Expand column");
     expect(strip.textContent).toContain("To do");
     expect(strip.textContent).toContain("3");
@@ -59,7 +60,7 @@ describe("TodoColumn collapse", () => {
 
     fireEvent.click(strip);
     expect(useTodoStore.getState().collapsedColumns).toEqual({});
-    expect(JSON.parse(localStorage.getItem("eldrun.todo.collapsedColumns")!)).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(storageKey("todo.collapsedColumns"))!)).toEqual([]);
     expect(r.getByLabelText("Collapse column")).toBeTruthy();
   });
 });

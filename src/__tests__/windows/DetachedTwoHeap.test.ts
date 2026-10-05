@@ -17,6 +17,7 @@ import {
   resetTabs,
   type EventBus,
 } from "../helpers/detachedHarness";
+import { BRAND } from "../../lib/brand";
 
 // Hoisted so both heaps' mocked modules reach the SAME doubles: that shared bus
 // is what makes one window's emit arrive at the other window's listener.
@@ -185,14 +186,14 @@ describe("Group B — two heaps, one protocol", () => {
     const { main, b, groupId, label } = await setup();
     const popout = await popoutHeapFor("p", groupId, label);
 
-    popout.tabs.useTabsStore.getState().setTabTmuxName("p", b.key, "eldrun-p--shell-renamed");
+    popout.tabs.useTabsStore.getState().setTabTmuxName("p", b.key, `${BRAND.slug}-p--shell-renamed`);
     popout.tabs.useTabsStore.getState().setTabFolder(b.key, "src/deep");
 
     const payload = main.tabs.useTabsStore
       .getState()
       .tabsByScope["p"]!.find((t) => t.key === b.key);
     // Without the forward, a renamed session reattached to its OLD name.
-    expect(payload?.tmuxSession).toBe("eldrun-p--shell-renamed");
+    expect(payload?.tmuxSession).toBe(`${BRAND.slug}-p--shell-renamed`);
     expect(payload?.folder).toBe("src/deep");
   });
 
@@ -431,10 +432,10 @@ describe("Group B — two heaps, one protocol", () => {
       await Promise.resolve();
       expect(main.tabs.useTabsStore.getState().detachedGroupsByScope["p"]).toHaveLength(1);
       // Switching to one screen reconfigures the outputs for seconds: still
-      // detached well after the old 3 s budget.
-      await vi.advanceTimersByTimeAsync(10_000);
+      // detached well after the old 3 s and 30 s budgets.
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(main.tabs.useTabsStore.getState().detachedGroupsByScope["p"]).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(150_000);
 
       // A permanent failure still leaves the tabs reachable in the main layout.
       expect(main.tabs.useTabsStore.getState().detachedGroupsByScope["p"] ?? []).toHaveLength(0);

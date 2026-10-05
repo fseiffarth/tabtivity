@@ -99,7 +99,7 @@ describe("tour catalogs", () => {
   });
 });
 
-// The tours live in the Lessons picker — one place to learn Eldrun — and the
+// The tours live in the Lessons picker — one place to learn Tabtivity — and the
 // quick tour is still what records onboarding as done.
 describe("tours as lessons", () => {
   it("opens Basics with the quick tour and Advanced with the tour of other machines", () => {

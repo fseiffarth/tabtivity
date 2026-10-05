@@ -212,9 +212,9 @@ fn primary_volume_descriptor(volume_id: &str, total_sectors: u32) -> Vec<u8> {
     let root = dir_record(ROOT_LBA, SECTOR as u32, true, &[0x00], &[]);
     d[156..156 + root.len()].copy_from_slice(&root);
     padded(&mut d[190..318], ""); // volume set id
-    padded(&mut d[318..446], "ELDRUN"); // publisher
-    padded(&mut d[446..574], "ELDRUN"); // data preparer
-    padded(&mut d[574..702], "ELDRUN VM SEED"); // application id
+    padded(&mut d[318..446], crate::app_upper!()); // publisher
+    padded(&mut d[446..574], crate::app_upper!()); // data preparer
+    padded(&mut d[574..702], concat!(crate::app_upper!(), " VM SEED")); // application id
     padded(&mut d[702..739], "");
     padded(&mut d[739..776], "");
     padded(&mut d[776..813], "");
@@ -237,7 +237,7 @@ mod tests {
             "cidata",
             &[
                 ("user-data", b"#cloud-config\nhostname: vm-x\n"),
-                ("meta-data", b"instance-id: eldrun-1\n"),
+                ("meta-data", b"instance-id: vm-1\n"),
             ],
         )
         .unwrap()
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(names[0].0, "user-data");
         assert_eq!(names[0].1, b"#cloud-config\nhostname: vm-x\n");
         assert_eq!(names[1].0, "meta-data");
-        assert_eq!(names[1].1, b"instance-id: eldrun-1\n");
+        assert_eq!(names[1].1, b"instance-id: vm-1\n");
     }
 
     #[test]

@@ -44,12 +44,16 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 class FakeWebSocket {
   static OPEN = 1;
+  static CLOSING = 2;
   static CLOSED = 3;
   static instances: FakeWebSocket[] = [];
   readyState = FakeWebSocket.OPEN;
   binaryType = "";
   bufferedAmount = 0;
   sent: string[] = [];
+  /** A link gone silent: `close()` starts a closing handshake nothing will
+   * answer, so `onclose` does not come until the test fires it. */
+  silent = false;
   onopen: (() => void) | null = null;
   onclose: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -58,7 +62,12 @@ class FakeWebSocket {
     queueMicrotask(() => this.onopen?.());
   }
   send(value: unknown) { this.sent.push(typeof value === "string" ? value : "<bytes>"); }
-  close() { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
+  close() {
+    if (this.silent) { this.readyState = FakeWebSocket.CLOSING; return; }
+    this.readyState = FakeWebSocket.CLOSED;
+    this.onclose?.();
+  }
+  control(frame: unknown) { this.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent); }
   /** Binary input frames sent so far — what the desktop's ack counts. */
   get frames() { return this.sent.filter((frame) => frame === "<bytes>").length; }
   ack(seq = this.frames) { this.onmessage?.({ data: JSON.stringify({ type: "ack", seq }) } as MessageEvent); }
@@ -67,6 +76,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 /** The key row starts folded; open it, then press its Enter. */
 function pressEnterKey() {
@@ -93,13 +103,13 @@ const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms)
 const socket = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
 const bubble = () => screen.getAllByRole("group", { name: "Your prompt" }).find((row) => row.textContent?.includes("also the tests"))!;
 
-describe("Eldrun Mobile prompt delivery", () => {
+describe(`${BRAND.display} Mobile prompt delivery`, () => {
   beforeEach(() => {
     vi.useFakeTimers();
     terminalState.lines = [];
     FakeWebSocket.instances = [];
     localStorage.clear();
-    localStorage.setItem("eldrun.mobile.view.claude-code", "focus");
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url.endsWith("/outbox")) return Promise.resolve(jsonResponse(200, { files: [] }));
@@ -230,6 +240,64 @@ describe("Eldrun Mobile prompt delivery", () => {
     // The composer's own notice is for keystrokes with no bubble; the bubble
     // carries this one.
     expect(screen.queryByText(/That did not reach the desktop/)).toBeNull();
+  });
+
+  it("lets go of a link the ping watchdog finds silent and reconnects without waiting for its close", async () => {
+    // A silent link's `onclose` waits on a closing handshake nothing answers;
+    // until then the composer said connected and the watchdog stood idle.
+    await sendPrompt();
+    const dead = socket();
+    dead.silent = true;
+    // No pong for longer than PONG_GRACE: the next ping tick judges it dead.
+    await tick(60_000);
+    expect(dead.readyState).toBe(FakeWebSocket.CLOSING);
+    expect(screen.getByRole("textbox", { name: "Message agent" })).toHaveProperty("disabled", true);
+    expect(bubble().getAttribute("data-send-failed")).toBe("true");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    // The ordinary backoff's first step, then a fresh socket.
+    await tick(1_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(screen.getByRole("textbox", { name: "Message agent" })).toHaveProperty("disabled", false);
+
+    // The abandoned socket's late close and frames change nothing.
+    act(() => {
+      dead.control({ type: "closing", reason: "replaced", retry: false });
+      dead.readyState = FakeWebSocket.CLOSED;
+      dead.onclose?.();
+    });
+    await tick(5_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(screen.getByRole("textbox", { name: "Message agent" })).toHaveProperty("disabled", false);
+    expect(screen.queryByText(/opened on another device/)).toBeNull();
+  });
+
+  it("lets go of a link that answers no pong on resume, without waiting for its close", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await tick(50);
+    const dead = socket();
+    dead.silent = true;
+    act(() => { window.dispatchEvent(new Event("pageshow")); });
+    await tick(4_000);
+    expect(dead.readyState).toBe(FakeWebSocket.CLOSING);
+    expect(screen.getByRole("textbox", { name: "Message agent" })).toHaveProperty("disabled", true);
+    await tick(1_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(screen.getByRole("textbox", { name: "Message agent" })).toHaveProperty("disabled", false);
+  });
+
+  it("tears the link down on a closing frame that ends the session, and does not reconnect", async () => {
+    await sendPrompt();
+    act(() => {
+      socket().control({ type: "closing", reason: "replaced", retry: false });
+      socket().close();
+    });
+    await tick(0);
+    screen.getByText("This session was opened on another device or tab.");
+    expect(screen.getByRole("textbox", { name: "Message agent" })).toHaveProperty("disabled", true);
+    expect(bubble().getAttribute("data-send-failed")).toBe("true");
+    await tick(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("refuses to hand a frame to a socket whose send buffer has stalled", async () => {

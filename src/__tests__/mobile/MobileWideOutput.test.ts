@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { installWideOutputHint } from "../../../mobile-web/src/terminal/wideOutput";
+import { BRAND } from "../../lib/brand";
 
 /** jsdom lays nothing out, so the geometry the hint reads is stubbed. */
 function makeScroller(geometry: { clientWidth: number; scrollWidth: number; scrollLeft: number }) {
@@ -11,7 +12,7 @@ function makeScroller(geometry: { clientWidth: number; scrollWidth: number; scro
   return scroller;
 }
 
-describe("Eldrun Mobile wide terminal output", () => {
+describe(`${BRAND.display} Mobile wide terminal output`, () => {
   it("marks the edge that still hides output as the view pans", () => {
     const geometry = { clientWidth: 390, scrollWidth: 1180, scrollLeft: 0 };
     const scroller = makeScroller(geometry);

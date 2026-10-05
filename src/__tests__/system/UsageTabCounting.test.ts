@@ -7,7 +7,7 @@
  * opened days ago. That makes two things load-bearing and easy to regress:
  *
  *  - `loadFromLayout` (restore) must NOT go through `addTab`.
- *  - the root scope's auto-seeded 3D-blob tab must opt out — Eldrun opened it,
+ *  - the root scope's auto-seeded 3D-blob tab must opt out — Tabtivity opened it,
  *    not the user.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 import { useTabsStore, BLOB_TAB_CMD } from "../../stores/tabs";
 import { _pendingUsageForTest, _resetUsageForTest } from "../../stores/usage";
 import { METRIC } from "../../lib/usageMetrics";
+import { BRAND, envName } from "../../lib/brand";
 
 function counters(scope: string): Record<string, number> {
   return _pendingUsageForTest()[scope] ?? {};
@@ -47,7 +48,7 @@ describe("agent tab opens", () => {
       cmd: "vibe",
       cwd: "/p",
       kind: "local_agent",
-      env: { ELDRUN_LOCAL_MODEL: "qwen3:8b" },
+      env: { [envName("LOCAL_MODEL")]: "qwen3:8b" },
     });
 
     expect(counters("p1")[`${METRIC.AGENT_TAB_LOCAL}.qwen3:8b`]).toBe(1);
@@ -72,7 +73,7 @@ describe("agent tab opens", () => {
   });
 });
 
-describe("tabs Eldrun opens by itself", () => {
+describe(`tabs ${BRAND.display} opens by itself`, () => {
   it("does not count the auto-seeded root 3D-blob tab", () => {
     useTabsStore.setState({ scope: "root" });
     useTabsStore.getState().addTab(

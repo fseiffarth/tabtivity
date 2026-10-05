@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="150" height="57" viewBox="0 0 150 57" fill="none" role="img" aria-label="Eldrun">
-  <title>Eldrun installer header</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="57" viewBox="0 0 150 57" fill="none" role="img" aria-label="Tabtivity">
+  <title>Tabtivity installer header</title>
   <rect x="0" y="0" width="150" height="57" fill="#000000" />
   <!-- Glyph: the 512-unit icon artwork scaled to 41px and inset from the left. -->
   <g transform="translate(9,8) scale(0.08)">
@@ -23,5 +23,5 @@
     <!-- Gold eight-point compass star -->
     <path d="M 256 52 L 265 87 L 284 73 L 270 92 L 305 101 L 270 110 L 284 129 L 265 115 L 256 150 L 247 115 L 228 129 L 242 110 L 207 101 L 242 92 L 228 73 L 247 87 Z" fill="#C79A45" />
   </g>
-  <text x="60" y="34" font-family="Inter, 'DejaVu Sans', sans-serif" font-size="21" font-weight="600" fill="#FFFFFF" letter-spacing="0.5">Eldrun</text>
+  <text x="58" y="34" font-family="Inter, 'DejaVu Sans', sans-serif" font-size="18" font-weight="600" fill="#FFFFFF" letter-spacing="0.5">Tabtivity</text>
 </svg>

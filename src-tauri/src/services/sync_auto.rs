@@ -248,10 +248,10 @@ async fn ensure_watcher(
     let tx = tx.clone();
     let root = mirror.to_path_buf();
     let Ok(mut w) = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        // The recursive watch covers `.git` and `.eldrun` too, and byte-sync never
+        // The recursive watch covers `.git` and `.tabtivity` too, and byte-sync never
         // moves a byte of either — yet every lockstep pass (bundle, fetch, refs),
         // every `git status` stat-cache refresh and every tab-runtime write under
-        // `.eldrun` used to queue a full host walk here. Only a write to something
+        // `.tabtivity` used to queue a full host walk here. Only a write to something
         // byte-sync could actually act on gets to wake the loop.
         if let Ok(ev) = res {
             if event_touches_synced_bytes(&root, &ev.paths) {
@@ -267,9 +267,9 @@ async fn ensure_watcher(
 }
 
 /// Whether a watcher event names at least one path byte-sync could act on — i.e.
-/// anything that is **not** inside the mirror's `.git` or `.eldrun` directories
-/// (both are never byte-mirrored: git state travels through lockstep, `.eldrun` is
-/// Eldrun's own runtime dir). An event with no paths at all (some backends emit
+/// anything that is **not** inside the mirror's `.git` or `.tabtivity` directories
+/// (both are never byte-mirrored: git state travels through lockstep, `.tabtivity` is
+/// Tabtivity's own runtime dir). An event with no paths at all (some backends emit
 /// rescan/overflow notices that way) counts as "could be anything" and wakes the
 /// loop. Pure.
 pub fn event_touches_synced_bytes(mirror: &std::path::Path, paths: &[std::path::PathBuf]) -> bool {
@@ -283,7 +283,7 @@ pub fn event_touches_synced_bytes(mirror: &std::path::Path, paths: &[std::path::
         };
         !matches!(
             rel.components().next(),
-            Some(std::path::Component::Normal(first)) if first == ".git" || first == ".eldrun"
+            Some(std::path::Component::Normal(first)) if first == ".git" || first.to_str().is_some_and(crate::brand::is_project_dir)
         )
     })
 }
@@ -574,16 +574,16 @@ mod tests {
     }
 
     #[test]
-    fn git_and_eldrun_writes_do_not_wake_the_byte_sync_loop() {
+    fn git_and_app_writes_do_not_wake_the_byte_sync_loop() {
         use std::path::{Path, PathBuf};
         let mirror = Path::new("/m/mirror");
         let p = |s: &str| PathBuf::from(s);
         // Lockstep's own writes and git's stat-cache refreshes all live here.
         assert!(!event_touches_synced_bytes(
             mirror,
-            &[p("/m/mirror/.git/index"), p("/m/mirror/.git/refs/eldrun/peer/main")]
+            &[p("/m/mirror/.git/index"), p(concat!("/m/mirror/.git/refs/", crate::app_slug!(), "/peer/main"))]
         ));
-        assert!(!event_touches_synced_bytes(mirror, &[p("/m/mirror/.eldrun/tabs.json")]));
+        assert!(!event_touches_synced_bytes(mirror, &[p(concat!("/m/mirror/.", crate::app_slug!(), "/tabs.json"))]));
         // A real file write anywhere else does — even alongside a .git one.
         assert!(event_touches_synced_bytes(
             mirror,

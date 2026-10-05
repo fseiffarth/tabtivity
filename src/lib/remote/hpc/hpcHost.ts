@@ -34,7 +34,7 @@ export type { Target };
 
 /** Whether `target` is tagged as a cluster login node. `false` for a local
  *  sample and for any host nobody has tagged — unlike careful mode there is no
- *  default to fall back to, because every gate here changes what Eldrun *does*
+ *  default to fall back to, because every gate here changes what Tabtivity *does*
  *  and an untagged host must behave exactly as it always has. */
 export function isHpcHost(
   settings: Settings | null | undefined,
@@ -45,7 +45,7 @@ export function isHpcHost(
 }
 
 /**
- * **May Eldrun reach `target` without a gesture?** — the single authority behind
+ * **May Tabtivity reach `target` without a gesture?** — the single authority behind
  * every unattended path: the launch/VPN-up sweeps, the reachability probe, the
  * dead-host silent reconnect, and the pool `lib/remote/machineSync` opens to mirror one
  * lamp onto another. Nothing re-derives the rule; they all ask here.

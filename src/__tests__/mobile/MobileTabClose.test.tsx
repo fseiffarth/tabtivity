@@ -24,6 +24,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const project: ProjectEntry = {
   id: "p-mobile",
@@ -31,11 +32,11 @@ const project: ProjectEntry = {
   status: "active",
   position: 1,
   local_file: "/projects/alpha/project.json",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
-const AGENT_TMUX = "eldrun-p-mobile--agent-123456789";
-const SHELL_TMUX = "eldrun-p-mobile--shell-123456789";
+const AGENT_TMUX = `${BRAND.slug}-p-mobile--agent-123456789`;
+const SHELL_TMUX = `${BRAND.slug}-p-mobile--shell-123456789`;
 
 const TABS: TabEntry[] = [
   { key: "agent-1", label: "Claude", kind: "agent", cmd: "claude", cwd: "/projects/alpha", tmuxSession: AGENT_TMUX },
@@ -46,7 +47,7 @@ const TABS: TabEntry[] = [
  *  by request id rather than "the last answer", because these tests read the
  *  invoke log across several asks (the persist below) instead of clearing it. */
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const answer = () => vi.mocked(invoke).mock.calls.find(([command, args]) =>
     command === "mobile_desktop_respond"
@@ -121,7 +122,7 @@ describe("Mobile bridge — closing a tab", () => {
       .toEqual({ status: "closed" });
     expect(useTabsStore.getState().tabsByScope[project.id]?.map((t) => t.key)).toEqual(["shell-1"]);
 
-    const saves = vi.mocked(invoke).mock.calls.filter(([command]) => command === "save_tab_layout");
+    const saves = vi.mocked(invoke).mock.calls.filter(([command]) => command === "workspace_sync");
     const saved = saves[saves.length - 1];
     expect(saved).toBeTruthy();
     const payload = saved![1] as { projectId: string; tabs: { label: string }[] };
@@ -155,10 +156,10 @@ describe("Mobile bridge — closing a tab", () => {
   });
 
   it("refuses a tmux name this scope does not hold, and a project with Mobile off", async () => {
-    expect(await ask({ type: "close_tab", request_id: "r3", project_id: project.id, tmux_session: "eldrun-elsewhere--agent-9" }))
+    expect(await ask({ type: "close_tab", request_id: "r3", project_id: project.id, tmux_session: `${BRAND.slug}-elsewhere--agent-9` }))
       .toMatchObject({ status: "error", code: "tab_not_found" });
 
-    useProjectsStore.setState({ projects: [{ ...project, eldrun_mobile_access: false }] });
+    useProjectsStore.setState({ projects: [{ ...project, [MOBILE_ACCESS_KEY]: false }] });
     expect(await ask({ type: "close_tab", request_id: "r4", project_id: project.id, tmux_session: AGENT_TMUX }))
       .toMatchObject({ status: "error", code: "project_ineligible" });
     expect(useTabsStore.getState().tabsByScope[project.id]).toHaveLength(2);
@@ -268,7 +269,7 @@ describe("Mobile project screen — the row's ✕", () => {
     const button = await screen.findByRole("button", { name: "Close Claude" });
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 }));
     fireEvent.click(button);
-    expect(await screen.findByText("Open desktop Eldrun to close a tab.")).toBeTruthy();
+    expect(await screen.findByText(`Open desktop ${BRAND.display} to close a tab.`)).toBeTruthy();
     // The tab is still listed, and its ✕ works again.
     await waitFor(() => expect((screen.getByRole("button", { name: "Close Claude" }) as HTMLButtonElement).disabled).toBe(false));
   });

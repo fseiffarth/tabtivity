@@ -5,7 +5,7 @@ import { useSettingsStore } from "../settings";
 import { energySaverActive, usePowerStore } from "../power";
 
 /**
- * **Load a local (Ollama) model into memory when Eldrun starts.**
+ * **Load a local (Ollama) model into memory when Tabtivity starts.**
  *
  * A model that is merely *installed* is not usable — the first request pays the
  * whole load, which for a 7B model is tens of seconds. Anything that wants a
@@ -26,7 +26,7 @@ import { energySaverActive, usePowerStore } from "../power";
  *   loader and having no model in memory are two different facts: Ollama is a
  *   separate, machine-wide server, so an armed model can already be resident —
  *   left warm by an earlier session, loaded by hand, or by something that is not
- *   Eldrun at all. Announcing the skip over the whole armed list then put "Not
+ *   Tabtivity at all. Announcing the skip over the whole armed list then put "Not
  *   loaded at start (deepcoder)" directly above a green-lamped `deepcoder` row
  *   in the same menu, which reads as the UI contradicting itself. So the
  *   decision asks what is resident (`pending`), reports only that remainder, and

@@ -1,7 +1,12 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useProjectsStore } from "../../stores/projects";
-import { useLocalLossStore, type LocalLoss } from "../../stores/localLoss";
+import {
+  LOCAL_LOSS_EVENTS,
+  localLossEventConcerns,
+  useLocalLossStore,
+  type LocalLoss,
+} from "../../stores/localLoss";
 import { useT, type TranslationKey } from "../../lib/i18n";
 
 /**
@@ -87,13 +92,11 @@ export function LocalLossDialog() {
     const uns: Array<() => void> = [];
     let cancelled = false;
     const on = (event: string) => {
-      void listen(event, () => {
-        void refresh(activeId);
+      void listen(event, (e) => {
+        if (localLossEventConcerns(event, e.payload, activeId)) void refresh(activeId);
       }).then((u) => (cancelled ? u() : uns.push(u)));
     };
-    on("git-peer-status");
-    on("sync-progress");
-    on("auto-sync");
+    LOCAL_LOSS_EVENTS.forEach(on);
     return () => {
       cancelled = true;
       uns.forEach((u) => u());

@@ -163,8 +163,8 @@ impl fmt::Display for MailError {
         match self {
             MailError::PlaintextRefused => write!(
                 f,
-                "this account is configured for an unencrypted or STARTTLS port; \
-                 Eldrun connects over implicit TLS only (IMAP 993, SMTP 465)"
+                concat!("this account is configured for an unencrypted or STARTTLS port; \
+                 ", crate::app_name!(), " connects over implicit TLS only (IMAP 993, SMTP 465)")
             ),
             MailError::TooLarge { bytes } => write!(
                 f,
@@ -187,13 +187,13 @@ impl fmt::Display for MailError {
             MailError::VpnRequired => f.write_str(crate::services::openvpn::VPN_GATE_REFUSAL),
             MailError::AuthFailed => write!(
                 f,
-                "the server rejected the username or password. Eldrun does not retry \
-                 automatically, so nothing was sent a second time."
+                concat!("the server rejected the username or password. ", crate::app_name!(), " does not retry \
+                 automatically, so nothing was sent a second time.")
             ),
             MailError::NoSupportedAuth => write!(
                 f,
-                "this server doesn't offer a password mechanism Eldrun supports; it may require \
-                 OAuth sign-in, which Eldrun does not support yet"
+                concat!("this server doesn't offer a password mechanism ", crate::app_name!(), " supports; it may require \
+                 OAuth sign-in, which ", crate::app_name!(), " does not support yet")
             ),
             MailError::Protocol(m) => write!(f, "{m}"),
         }
@@ -1130,7 +1130,7 @@ pub trait MailEngine: Send + Sync {
     ) -> Result<(), MailError>;
 }
 
-/// The in-process engine: sockets and parsers in Eldrun's own address space.
+/// The in-process engine: sockets and parsers in Tabtivity's own address space.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InProcessEngine;
 

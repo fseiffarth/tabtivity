@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { splitPtyId } from "../../lib/terminal/ptyId";
+import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { IS_WINDOWS } from "../../lib/platform";
+import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
 import {
   RESUMABLE_AGENTS,
@@ -13,11 +15,11 @@ import {
 } from "../tabs";
 
 /**
- * "Undo clear" for every agent tab Eldrun can resume, on the desktop and —
+ * "Undo clear" for every agent tab Tabtivity can resume, on the desktop and —
  * through the mobile bridge — on the phone.
  *
  * A `/clear` (Codex's `/new`, …) starts a fresh conversation, but the one it
- * ended stays on disk, and taking it back is what a restart of Eldrun already
+ * ended stays on disk, and taking it back is what a restart of Tabtivity already
  * does for a tab: resume the conversation the tab was in.
  *
  *  - Claude resumes in-session: the hook keeps the cleared conversation's id
@@ -40,25 +42,43 @@ import {
  * (`agent-session-roll`, Claude and Codex) or a new-conversation command typed
  * into the pane (`noteTypedClear`), until the next prompt goes in, the session
  * is resumed, or the user dismisses it.
+ *
+ * `marks` is where the Reader's conversation stood when that clear came
+ * (`clearedSession.ts`, the phone's own rule): the Reader shows only what
+ * follows it, so the cleared chat is gone before the card offers to bring it
+ * back. It outlives the card — Codex reads the cleared session until its first
+ * prompt — and goes only when the conversation is resumed (`null`: taken, with
+ * nothing to hide).
  */
 interface AgentClearUndoStore {
   /** Composed PTY id → true while that tab offers "Undo clear". */
   cleared: Record<string, true>;
+  /** Composed PTY id → the Reader's mark for that tab's last clear. */
+  marks: Record<string, ClearMark | null>;
   /** How the tab's session just (re)started, from the hook's source record.
    *  Only `clear` offers the undo and only `resume` withdraws it: a Codex `/new`
    *  may report a plain start right after the typed command offered it. */
   noteRoll: (ptyId: string, source: string) => void;
   /** Stop offering the undo for this tab. */
   dismiss: (ptyId: string) => void;
+  /** Where the Reader stood at this tab's clear. */
+  setMark: (ptyId: string, mark: ClearMark | null) => void;
+  /** The cleared conversation is the tab's again: the Reader shows all of it. */
+  forgetMark: (ptyId: string) => void;
 }
 
 export const useAgentClearUndoStore = create<AgentClearUndoStore>((set, get) => ({
   cleared: {},
+  marks: {},
   noteRoll: (ptyId, source) => {
     if (source === "clear") {
-      if (!get().cleared[ptyId]) set((state) => ({ cleared: { ...state.cleared, [ptyId]: true } }));
+      if (get().cleared[ptyId]) return;
+      // A new clear: the Reader marks again from what it shows now.
+      get().forgetMark(ptyId);
+      set((state) => ({ cleared: { ...state.cleared, [ptyId]: true } }));
     } else if (source === "resume") {
       get().dismiss(ptyId);
+      get().forgetMark(ptyId);
     }
   },
   dismiss: (ptyId) => {
@@ -69,16 +89,33 @@ export const useAgentClearUndoStore = create<AgentClearUndoStore>((set, get) => 
       return { cleared };
     });
   },
+  setMark: (ptyId, mark) => set((state) => ({ marks: { ...state.marks, [ptyId]: mark } })),
+  forgetMark: (ptyId) => {
+    if (!(ptyId in get().marks)) return;
+    set((state) => {
+      const marks = { ...state.marks };
+      delete marks[ptyId];
+      return { marks };
+    });
+  },
 }));
 
-/** Whether a tab's clear can be taken back at all: an agent Eldrun resumes. */
+/** Whether a tab's clear can be taken back at all: an agent Tabtivity resumes. */
 export function canUndoClear(tab: TabEntry): boolean {
   return isResumableAgentTab(tab);
 }
 
 /** A new-conversation command was typed into this pane: offer the undo when
- * the tab is one whose conversation can come back. */
-export function noteTypedClear(ptyId: string): void {
+ * the tab is one whose conversation can come back.
+ *
+ * Not while the agent is at work (`busy`, read before the command went in):
+ * Claude queues the command behind the turn and Codex refuses it, so the
+ * conversation on screen is not cleared yet. Hiding it and offering the undo
+ * then took back the clear before — resuming the conversation that one ended
+ * and leaving the prompt sent since behind. A queued `/clear` is reported by
+ * the hook when it runs (`agent-session-roll`). */
+export function noteTypedClear(ptyId: string, busy = !!useActivityStore.getState().busyByTab[ptyId]): void {
+  if (busy) return;
   const parts = splitPtyId(ptyId);
   const tab = parts && useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
   if (tab && canUndoClear(tab)) useAgentClearUndoStore.getState().noteRoll(ptyId, "clear");
@@ -160,5 +197,6 @@ export async function undoAgentClear(scope: string, tab: TabEntry): Promise<Undo
     result = await relaunch(scope, tab);
   }
   if (result === "undone" || result === "nothing_to_undo") useAgentClearUndoStore.getState().dismiss(ptyId);
+  if (result === "undone") useAgentClearUndoStore.getState().forgetMark(ptyId);
   return result;
 }

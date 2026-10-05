@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -20,24 +20,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::services::desktop_images;
+use crate::services::markup_rounds;
+use crate::terminal::PtyOptions;
 
 use super::{
     admin,
+    alarms,
     auth::AuthStore,
     config::{verify_tailscale_serve, HostConfig},
-    discovery::{Catalog, CatalogCache, PublicTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{shells_open, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
+    git_overview,
+    headless,
     inbox,
+    local_models,
+    markup,
     outbox,
     limits,
     protocol::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
-        MailMarkAction, MobileCollectedPrompt, MobilePromptInput, MobileSchedule,
+        LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation,
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
-        MAX_TAB_LABEL, TERMINAL_PROTOCOL,
+        MAX_TAB_LABEL,
     },
     pty_bridge::{self, TerminalRegistry},
+    scheduler,
     push::{AgentTabRef, PushPrefs},
     sign_in,
     live_pwa, MOBILE_ASSETS,
@@ -55,6 +63,13 @@ const MAX_TAB_PROMPTS: usize = 5;
 const MAX_SENT_PROMPT: usize = 16 * 1024;
 const MAX_TAB_PROMPT_CHARS: usize = 240;
 
+/// The one page another page may frame: the sealed pdf.js frame the markup
+/// view renders PDF pages in (`mobile-web/pdf-frame.html`). It is loaded as
+/// `<iframe sandbox="allow-scripts">` — an opaque origin with no cookie, no
+/// storage and no API — and its own policy lets it run its script and draw,
+/// and nothing else: no network, no forms, framed only by the PWA itself.
+const PDF_FRAME_PATH: &str = "/pdf-frame.html";
+
 const MOBILE_PERMISSIONS_POLICY: &str =
     "camera=(), microphone=(self), on-device-speech-recognition=(self), geolocation=(), payment=(), usb=()";
 
@@ -64,6 +79,61 @@ struct HostState {
     auth: Arc<Mutex<AuthStore>>,
     catalog: Arc<Mutex<CatalogCache>>,
     terminal_registry: TerminalRegistry,
+    /// How a tab is started with no window (headless owner plan, H1b).
+    spawner: HeadlessSpawner,
+    /// The headless git dots and agent readings, per project, so the phone's
+    /// polls cost a git spawn or a transcript walk once per `READING_TTL`.
+    readings: Arc<Mutex<headless::ReadingCache>>,
+    /// The owner's reach into the tmux server with no window (headless owner
+    /// plan, H3): a phone's prompt, undo and close type into or end the tab's
+    /// session through it. Production is `scheduler::TmuxRunner` on the
+    /// default socket; a test swaps in a recorder.
+    runner: Arc<dyn scheduler::Runner>,
+    /// The phone prompts the owner holds with no window, which the
+    /// scheduler types into the CLI's queue at once (`scheduler::PhoneHolds`).
+    holds: Arc<scheduler::PhoneHolds>,
+    /// The phone's git overviews, per project, for `git_overview::TTL`.
+    git_overview: Arc<Mutex<git_overview::Cache>>,
+    /// Each project's worktrees as its tab cards name them, for
+    /// `git_overview::SPOT_TTL`.
+    worktree_spots: Arc<Mutex<git_overview::SpotCache>>,
+}
+
+/// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
+/// prepared tab detached under its tmux name, `installed` says which agent
+/// CLIs the ＋ sheet may offer. Production is `launch_prep::prepare` plus
+/// `tmux_local::spawn_detached_with` on the default tmux server — the same
+/// launch assembly and the same server the window uses, so the window later
+/// attaches to what the sidecar started — and the registry's install probe.
+/// A test swaps in a recorder.
+#[derive(Clone)]
+struct HeadlessSpawner {
+    launch: headless::HeadlessLaunch,
+    installed: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+}
+
+impl Default for HeadlessSpawner {
+    fn default() -> Self {
+        Self {
+            launch: Arc::new(|opts: PtyOptions| {
+                Box::pin(async move {
+                    let prepared = crate::services::launch_prep::prepare(opts, None, None).await?;
+                    #[cfg(unix)]
+                    {
+                        crate::services::tmux_local::spawn_detached_with(&prepared.opts, None)?;
+                        prepared.commit();
+                        Ok(())
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = prepared;
+                        Err("a tab with no window needs tmux, which this platform has none of".to_string())
+                    }
+                })
+            }),
+            installed: Arc::new(crate::commands::agents::binary_is_installed),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -164,21 +234,62 @@ fn exact_origin(headers: &HeaderMap, state: &HostState) -> bool {
 }
 
 fn cookie_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .find_map(|part| {
+    session_cookie_in(&crate::brand::PAIR, headers.get(header::COOKIE)?.to_str().ok()?)
+}
+
+/// The session token in a `Cookie` header: the cookie under its current name,
+/// else under the name an older build's host set (counted as a legacy hit).
+fn session_cookie_in<'a>(pair: &crate::brand::Pair, cookies: &'a str) -> Option<&'a str> {
+    let named = |wanted: &str| {
+        cookies.split(';').find_map(|part| {
             let (name, value) = part.trim().split_once('=')?;
-            (name == "__Host-eldrun_session").then_some(value)
+            (name == wanted).then_some(value)
         })
+    };
+    if let Some(token) = named(&pair.cur(crate::brand::Name::SESSION_COOKIE)) {
+        return Some(token);
+    }
+    let token = named(&pair.legacy(crate::brand::Name::SESSION_COOKIE)?)?;
+    crate::brand::legacy_hit("session-cookie");
+    Some(token)
+}
+
+/// The terminal subprotocol to answer a WebSocket upgrade with, given what
+/// the client offered: the current one, else the one an older build of the
+/// phone app still offers (counted as a legacy hit). A phone keeps running
+/// its cached app until the service worker has updated.
+fn terminal_protocol_in(pair: &crate::brand::Pair, offered: &str) -> Option<String> {
+    let offers = |wanted: &str| offered.split(',').any(|v| v.trim() == wanted);
+    let current = pair.cur(crate::brand::Name::TERMINAL_PROTOCOL);
+    if offers(&current) {
+        return Some(current);
+    }
+    let old = pair.legacy(crate::brand::Name::TERMINAL_PROTOCOL)?;
+    if !offers(&old) {
+        return None;
+    }
+    crate::brand::legacy_hit("terminal-protocol");
+    Some(old)
+}
+
+/// The paired phone a request comes from — the device behind its session
+/// cookie or open ticket. Minted only by `authenticate`,
+/// `authenticate_or_ticket` and `mutation_guard`, and the key to every
+/// catalog read a phone route makes (`catalog`, `catalog_fresh`): a route
+/// cannot look a scope up without saying whose request it is, so a scope
+/// whose per-phone list leaves this phone out answers like an unknown id.
+struct Phone(String);
+
+impl Phone {
+    fn device_id(&self) -> &str {
+        &self.0
+    }
 }
 
 fn authenticate(
     headers: &HeaderMap,
     state: &HostState,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
     let token = cookie_token(headers)
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     state
@@ -187,7 +298,55 @@ fn authenticate(
         .unwrap_or_else(PoisonError::into_inner)
         // Every authenticated request slides the session (`auth::SESSION_IDLE`).
         .touch(token)
+        .map(Phone)
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))
+}
+
+/// `authenticate`, then refuse a phone the desktop keeps out of `section`
+/// (`auth::HIDEABLE_SECTIONS`): every route of that section answers the same
+/// 403, whatever it would have read or written.
+fn section_guard(
+    headers: &HeaderMap,
+    state: &HostState,
+    section: &str,
+) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
+    let phone = authenticate(headers, state)?;
+    if state
+        .auth
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .hides(phone.device_id(), section)
+    {
+        return Err(api_error(StatusCode::FORBIDDEN, "section_hidden"));
+    }
+    Ok(phone)
+}
+
+/// The section an alert row belongs to: a card is the board's, an event the
+/// calendar's, a mail the mail's.
+fn alert_section(kind: &str) -> Option<&'static str> {
+    match kind {
+        "task" => Some("todo"),
+        "event" => Some("calendar"),
+        "mail" => Some("mail"),
+        _ => None,
+    }
+}
+
+/// Drop the alert rows of the sections this phone is kept out of.
+fn open_alerts(hidden: &[String], mut alerts: super::protocol::MobileAlertsSnapshot) -> super::protocol::MobileAlertsSnapshot {
+    alerts
+        .items
+        .retain(|item| alert_section(&item.kind).is_none_or(|section| !hidden.iter().any(|h| h == section)));
+    alerts
+}
+
+fn hidden_sections(state: &HostState, phone: &Phone) -> Vec<String> {
+    state
+        .auth
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .hidden_sections(phone.device_id())
 }
 
 /// What an open ticket is bound to: the path and the query without its own
@@ -213,7 +372,7 @@ fn authenticate_or_ticket(
     headers: &HeaderMap,
     state: &HostState,
     uri: &Uri,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
     let cookie = authenticate(headers, state);
     if cookie.is_ok() {
         return cookie;
@@ -229,6 +388,7 @@ fn authenticate_or_ticket(
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .redeem_ticket(ticket, &ticket_target(uri))
+            .map(Phone)
             .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required")),
         None => cookie,
     }
@@ -263,26 +423,183 @@ async fn open_ticket(
     }
 }
 
-fn catalog(state: &HostState) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
+/// Run a catalog read without holding an async worker for it. A read past the
+/// TTL forks `tmux ls` (bounded by `discovery::TMUX_LS_TIMEOUT`, but seconds
+/// against a hung tmux server) and every other read waits on the catalog mutex
+/// behind it; done inline on the workers, a few such requests parked all of
+/// them and the sidecar stopped answering anything — pings and terminal output
+/// included. `block_in_place` hands this worker's other tasks to a fresh one
+/// first. It is only legal on the multi-threaded runtime the sidecar runs on;
+/// anywhere else (the current-thread runtime of a test) the read runs inline.
+fn off_worker<T>(read: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(read)
+        }
+        _ => read(),
+    }
+}
+
+/// The catalog as `phone` may see it: every scope whose per-phone list
+/// leaves it out is gone (`Catalog::for_device`).
+fn catalog(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
+    catalog_unfiltered(state).map(|catalog| catalog.for_device(phone.device_id()))
+}
+
+/// Every opted-in scope, whichever phones it is open to. Not for a phone's
+/// request: only the agent-notice lookup (`agent_tab_ref`), which carries the
+/// scope's list on to the push filter.
+fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
     let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
-    state
-        .catalog
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .load(&state.config.state_dir, &key)
-        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
+    off_worker(|| {
+        state
+            .catalog
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .load(&state.config.state_dir, &key)
+    })
+    .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
 }
 
 /// The create-tab poll is waiting for a tab the desktop has just been asked to
 /// open, so by definition it is not in the cached snapshot yet.
-fn catalog_fresh(state: &HostState) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
+fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
     let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    off_worker(|| {
+        state
+            .catalog
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .load_fresh(&state.config.state_dir, &key)
+    })
+    .map(|catalog| catalog.for_device(phone.device_id()))
+    .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
+}
+
+/// The host key the desktop mints its opaque ids with — the same
+/// `mobile-control/host.key` — so an id minted here resolves there.
+fn host_key(state: &HostState) -> Vec<u8> {
+    state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec()
+}
+
+/// Whether a desktop answer means no window is open: the persisted-state
+/// kinds are then answered from the state dir instead (`headless`, headless
+/// owner plan H0). A desktop that answered anything else — including its
+/// own error — is present, and its answer stands.
+fn desktop_down(response: &Result<DesktopResponse, String>) -> bool {
+    match response {
+        Err(_) => true,
+        Ok(DesktopResponse::Error { code, .. }) => code == "desktop_unavailable",
+        Ok(_) => false,
+    }
+}
+
+/// The scope's state-dir session file, which the headless tab edits lock.
+fn scope_session_file(state: &HostState, raw_id: &str) -> PathBuf {
+    headless::session_file(&state.config.state_dir, raw_id)
+}
+
+/// Milliseconds since the epoch, the desktop's close stamp.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A tab edit applied to the session file because no window was open to
+/// apply it to a store (headless owner plan, H3): the catalog is re-read so
+/// the answer is the row as stored, as the desktop path answers it.
+fn headless_tab_edit(
+    state: &HostState,
+    phone: &Phone,
+    raw_id: &str,
+    tab_id: &str,
+    tmux_session: &str,
+    edited: Result<crate::schema::session::TerminalSession, String>,
+    fallback: serde_json::Value,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match edited {
+        Ok(_) => {
+            catalog_stale(state);
+            poke_window(state, Some(raw_id), &["workspace"]);
+            let row = catalog_fresh(state, phone)
+                .ok()
+                .and_then(|next| next.tab(tab_id).map(|(_, tab)| tab.public.clone()));
+            match row {
+                Some(mut row) => {
+                    row.viewer_busy = state.terminal_registry.is_busy(tmux_session);
+                    (StatusCode::OK, Json(json!({ "tab": row, "desktop_available": false })))
+                }
+                None => {
+                    let mut answer = fallback;
+                    answer["desktop_available"] = json!(false);
+                    (StatusCode::OK, Json(answer))
+                }
+            }
+        }
+        Err(code) => headless_tab_error(&code),
+    }
+}
+
+fn headless_tab_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
+    if code == crate::services::workspace::TAB_NOT_FOUND {
+        api_error(StatusCode::NOT_FOUND, "tab_not_found")
+    } else {
+        eprintln!("mobile: a tab edit with no window failed: {code}");
+        api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")
+    }
+}
+
+/// Tell a window — should one be open after all — that the owner wrote a
+/// slice behind its back (headless owner plan, H3). The owner only writes
+/// when the desktop did not answer, so this normally reaches nothing; it is
+/// the net for a window that was wedged past its deadline and recovered.
+/// Fire-and-forget, never awaited by the phone's request.
+fn poke_window(state: &HostState, raw_id: Option<&str>, slices: &[&str]) {
+    poke_desktop(&state.config.control_dir, raw_id, slices);
+}
+
+/// [`poke_window`] from where there is no `HostState`: the MCP listener's
+/// notices (`docs/headless_mcp_plan.md`) — a schedule proposal a headless
+/// tab made shows in an open window at once. Must run inside the runtime.
+fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&str]) {
+    let socket = control_dir.join("desktop-control.sock");
+    let request = DesktopRequest::Refresh {
+        request_id: Base64UrlUnpadded::encode_string(&random_16()),
+        project_id: raw_id.map(str::to_string),
+        slices: slices.iter().map(|s| s.to_string()).collect(),
+    };
+    tokio::spawn(async move {
+        let _ = admin::desktop_call(&socket, &request).await;
+    });
+}
+
+/// A project's git dot with no window (`headless::git_dot_for`), cached per
+/// project for `READING_TTL`; the probe runs off the async thread.
+async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Path) -> Option<&'static str> {
+    let now = Instant::now();
+    if let Some(dot) = state.readings.lock().unwrap_or_else(PoisonError::into_inner).git(raw_id, now) {
+        return dot;
+    }
+    let dir = root.to_path_buf();
+    let dot = tokio::task::spawn_blocking(move || headless::git_dot_for(&dir)).await.ok().flatten();
+    state.readings.lock().unwrap_or_else(PoisonError::into_inner).set_git(raw_id, dot, Instant::now());
+    dot
+}
+
+/// A project's agent readings with no window, from the cache while fresh.
+fn headless_readings(state: &HostState, project: &super::discovery::ResolvedProject) -> headless::TurnReadings {
     state
-        .catalog
+        .readings
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .load_fresh(&state.config.state_dir, &key)
-        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
+        .readings(&state.config.state_dir, project, Instant::now())
+}
+
+/// Today as the desktop-local `YYYY-MM-DD` the board's date columns read.
+fn local_today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 /// Drop the cached catalog after a change the desktop has already written to
@@ -297,13 +614,19 @@ fn catalog_stale(state: &HostState) {
 
 async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
+    let frame = request.uri().path() == PDF_FRAME_PATH;
     let mut response = next.run(request).await;
+    // The sealed frame answers its own framing rules (`pdf_frame`); a miss
+    // there falls back to everyone else's.
+    let framed = frame && response.status() == StatusCode::OK;
     let headers = response.headers_mut();
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if !framed {
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     headers.insert(
         header::STRICT_TRANSPORT_SECURITY,
         HeaderValue::from_static("max-age=31536000"),
@@ -315,8 +638,53 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> 
         "permissions-policy",
         HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY),
     );
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+    if !framed {
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+    }
     response
+}
+
+/// The sealed frame's policy. Inside a sandbox the document's origin is
+/// opaque, and whether `'self'` still matches the server it came from differs
+/// between engines — so the server is also named outright, from the `Host`
+/// the request came in on (a host name, nothing else, or it is left out).
+fn pdf_frame_policy(host: Option<&HeaderValue>) -> String {
+    let named = host
+        .and_then(|value| value.to_str().ok())
+        .filter(|host| {
+            !host.is_empty()
+                && host.len() <= 255
+                && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':'))
+        })
+        .map(|host| format!(" https://{host}"))
+        .unwrap_or_default();
+    format!(
+        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}"
+    )
+}
+
+/// `GET /pdf-frame.html` — the sealed frame (`PDF_FRAME_PATH`), with its own
+/// framing rules. Only the frame's own bytes: a bundle without it is a 404,
+/// never the app shell under a framable policy.
+async fn pdf_frame(headers: HeaderMap) -> Response<Body> {
+    let found = match live_pwa::current() {
+        Some(live) => live.get(PDF_FRAME_PATH),
+        None => MOBILE_ASSETS
+            .iter()
+            .find(|(asset, _, _)| *asset == PDF_FRAME_PATH)
+            .map(|(_, bytes, mime)| (bytes::Bytes::from_static(bytes), *mime)),
+    };
+    let Some((bytes, mime)) = found else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::X_FRAME_OPTIONS, "SAMEORIGIN")
+        .header(header::CONTENT_SECURITY_POLICY, pdf_frame_policy(headers.get(header::HOST)))
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 async fn health() -> impl IntoResponse {
@@ -376,7 +744,7 @@ async fn login(
         Ok((token, expires_at)) => {
             let mut response =
                 Json(json!({ "ok": true, "expires_at": expires_at })).into_response();
-            let cookie = format!("__Host-eldrun_session={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200");
+            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", crate::brand::SESSION_COOKIE);
             response
                 .headers_mut()
                 .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
@@ -397,24 +765,49 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_static(
-            "__Host-eldrun_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0",
+            concat!("__Host-", crate::app_slug!(), "_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"),
         ),
     );
+    // A cookie an older build's host set is expired as well; there is none
+    // to name while the name is unchanged.
+    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE) {
+        if let Ok(expired) =
+            HeaderValue::from_str(&format!("{old}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"))
+        {
+            response.headers_mut().append(header::SET_COOKIE, expired);
+        }
+    }
     response
 }
 
 async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     // A live probe, not a file check: the socket file outlives a desktop exit
     // (and every crash), and on Windows the nominal path is never a file.
     let desktop_available =
         admin::desktop_reachable(&state.config.control_dir.join("desktop-control.sock")).await;
+    let settings = std::fs::read(state.config.state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let show_untested_tags = settings
+        .as_ref()
+        .and_then(|settings| settings.get("show_untested_tags").and_then(|value| value.as_bool()))
+        .unwrap_or(false);
+    // The desktop's theme, for a phone that follows it. Only a short plain
+    // name crosses: the phone checks it against the themes it knows.
+    let color_scheme = settings
+        .as_ref()
+        .and_then(|settings| settings.get("color_scheme").and_then(|value| value.as_str()))
+        .filter(|scheme| scheme.len() <= 32 && scheme.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+        .unwrap_or("light_lavender")
+        .to_string();
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone) }),
         ),
     )
 }
@@ -424,10 +817,11 @@ async fn projects(
     headers: HeaderMap,
     Query(query): Query<ProjectQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let Ok(catalog) = catalog(&state) else {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let q = query.q.unwrap_or_default();
@@ -439,9 +833,9 @@ async fn projects(
     if view != "active" && view != "search" {
         return api_error(StatusCode::BAD_REQUEST, "invalid_view");
     }
-    let listed = catalog
+    let listed = catalog_snapshot
         .projects
-        .into_iter()
+        .iter()
         .filter(|p| {
             if view == "search" {
                 !q.is_empty() && p.public.label.to_lowercase().contains(&q)
@@ -452,6 +846,17 @@ async fn projects(
             }
         })
         .collect::<Vec<_>>();
+    // Each row's agent tabs by state, from the readings the activity list
+    // uses. Tmux session names are unique server-wide, so one map serves all.
+    let agent_statuses = if listed.iter().any(|p| p.tabs.iter().any(|t| t.public.kind == "agent")) {
+        let (_, statuses, _) = activity_readings(&state, &catalog_snapshot).await;
+        statuses
+            .into_iter()
+            .map(|status| (status.tmux_session, status.status))
+            .collect::<HashMap<_, _>>()
+    } else {
+        HashMap::new()
+    };
     // Each row's git dot, from the desktop's own pills. Only asked when a
     // project is listed; a closed or older desktop leaves every row without one.
     let git = if listed.iter().any(|p| p.public.kind == ScopeKind::Project) {
@@ -462,6 +867,16 @@ async fn projects(
                 .into_iter()
                 .filter_map(|row| git_dot(&row.state).map(|dot| (row.project_id, dot)))
                 .collect::<HashMap<_, _>>(),
+            // No window: probe the dots here (headless owner plan, H1b).
+            response if desktop_down(&response) => {
+                let mut dots = HashMap::new();
+                for p in listed.iter().filter(|p| p.public.kind == ScopeKind::Project) {
+                    if let Some(dot) = headless_git_dot(&state, &p.raw_id, &p.root).await {
+                        dots.insert(p.raw_id.clone(), dot);
+                    }
+                }
+                dots
+            }
             _ => HashMap::new(),
         }
     } else {
@@ -470,10 +885,17 @@ async fn projects(
     let mut rows = listed
         .into_iter()
         .map(|p| {
-            let mut public = p.public;
+            let mut public = p.public.clone();
             if public.kind == ScopeKind::Project {
                 public.git = git.get(&p.raw_id).copied();
             }
+            let mut agents = AgentCounts::default();
+            for tab in p.tabs.iter().filter(|t| t.public.kind == "agent") {
+                if let Some(status) = agent_statuses.get(&tab.tmux_name) {
+                    agents.add(status);
+                }
+            }
+            public.agents = agents.any().then_some(agents);
             public
         })
         .collect::<Vec<_>>();
@@ -501,8 +923,8 @@ struct ActivityRow {
 }
 
 /// Where a status sorts in the activity list. A session waiting on a decision is
-/// blocked on the reader and comes first; a finished one is the least urgent of
-/// the three. Anything else never reaches this list.
+/// blocked on the reader and comes first; a finished or interrupted one is the
+/// least urgent. Anything else never reaches this list.
 fn activity_rank(status: &str) -> u8 {
     match status {
         "question" => 0,
@@ -511,28 +933,38 @@ fn activity_rank(status: &str) -> u8 {
     }
 }
 
+/// Every agent tab's status and prompt rows in one desktop round trip, and
+/// whether the desktop answered. Without a window they come from the hooks'
+/// turn records and the tabs' transcripts (headless owner plan, H1b).
+async fn activity_readings(
+    state: &HostState,
+    catalog_snapshot: &Catalog,
+) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
+        Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
+        response if desktop_down(&response) => {
+            let readings = headless::activity(&state.config.state_dir, catalog_snapshot);
+            (false, readings.statuses, readings.prompts)
+        }
+        _ => (false, vec![], vec![]),
+    }
+}
+
 /// `GET /api/v1/activity` — every agent tab the desktop reports as working,
 /// waiting on a decision, or done, across every project this phone may reach,
 /// in one flat list. One desktop round trip serves the whole list: a per-project
 /// `Catalog` call would be one round trip per project on every poll.
 async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    let (desktop_available, statuses, prompts) = match admin::desktop_call(
-        &desktop_socket,
-        &DesktopRequest::Activity { request_id },
-    )
-    .await
-    {
-        Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
-        _ => (false, vec![], vec![]),
-    };
+    let (desktop_available, statuses, prompts) = activity_readings(&state, &catalog_snapshot).await;
     // Tmux session names are unique across the whole server, so one map covers
     // every project's tabs.
     let statuses = statuses
@@ -552,8 +984,12 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
             let mut tab = resolved.public.clone();
             tab.agent_status = Some(status.status.clone());
             tab.agent_model = status.model.clone();
+            tab.agent_plan = status.plan;
+            tab.agent_goal = status.goal;
+            tab.agent_subagents = status.subagents;
             tab.working_at = status.working_at;
             tab.done_at = status.done_at;
+            tab.turn_started_at = status.turn_started_at;
             tab.viewer_busy = state.terminal_registry.is_busy(&resolved.tmux_name);
             tab.prompts = prompts.remove(&resolved.tmux_name).unwrap_or_default();
             rows.push(ActivityRow {
@@ -582,10 +1018,11 @@ async fn project(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some(project) = catalog_snapshot.project(&project_id) else {
@@ -625,6 +1062,24 @@ async fn project(
             closed,
             git,
         }) => (true, agents, statuses, schedules, prompts, timings, closed, git),
+        // No window: the same rows off the state dir (headless owner plan,
+        // H1b); the closed row is what the owner closed (H3).
+        response if desktop_down(&response) => {
+            let state_dir = &state.config.state_dir;
+            let agents = headless::agents(state_dir, &host_key(&state), &*state.spawner.installed)
+                .into_iter()
+                .map(|choice| choice.public)
+                .collect();
+            let readings = headless_readings(&state, project);
+            let schedules = headless::schedule_summaries(state_dir, &project.raw_id, &project.tabs, chrono::Local::now());
+            let git = if project.public.kind == ScopeKind::Project {
+                headless_git_dot(&state, &project.raw_id, &project.root).await.map(str::to_string)
+            } else {
+                None
+            };
+            let closed = headless::closed_tabs(state_dir, &project.raw_id);
+            (false, agents, readings.statuses, schedules, readings.prompts, readings.timings, closed, git)
+        }
         _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None),
     };
     let mut public = project.public.clone();
@@ -667,19 +1122,33 @@ async fn project(
             if let Some(status) = statuses.get(&resolved.tmux_name) {
                 tab.agent_status = Some(status.status.clone());
                 tab.agent_model = status.model.clone();
+                tab.agent_plan = status.plan;
+                tab.agent_goal = status.goal;
+                tab.agent_subagents = status.subagents;
                 tab.working_at = status.working_at;
                 tab.done_at = status.done_at;
+                tab.turn_started_at = status.turn_started_at;
             } else if let Some(timing) = timings.remove(&resolved.tmux_name) {
                 // A read turn has no status, but it still sorts by when it ran
                 // and still names its model.
                 tab.agent_model = timing.model;
+                tab.agent_plan = timing.plan;
+                tab.agent_goal = timing.goal;
+                tab.agent_subagents = timing.subagents;
                 tab.working_at = timing.working_at;
                 tab.done_at = timing.done_at;
+                tab.turn_started_at = timing.turn_started_at;
             }
             tab.schedules = schedules.remove(&resolved.tmux_name);
             // Published whether or not the tab has a status: a quiet session's
             // last prompt is the reading its card exists to carry.
             tab.prompts = prompts.remove(&resolved.tmux_name).unwrap_or_default();
+        }
+    }
+    if project.public.kind == ScopeKind::Project {
+        for (tab, (worktree, subagents)) in tabs.iter_mut().zip(project_tab_worktrees(&state, project).await) {
+            tab.worktree = worktree;
+            tab.subagent_worktrees = subagents;
         }
     }
     (
@@ -688,7 +1157,9 @@ async fn project(
             json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed,
                 // Whether this project's 📁 answers (`files.rs`): the host-wide
                 // switch, and a project rather than a box or the root console.
-                "files": project.public.kind == ScopeKind::Project && files::files_open(&state.config.state_dir) }),
+                "files": project.public.kind == ScopeKind::Project && files::files_open(&state.config.state_dir),
+                // Whether the phone may offer a new shell (`shells_open`).
+                "shells": shells_open(&state.config.state_dir) }),
         ),
     )
 }
@@ -762,9 +1233,10 @@ async fn create_tab(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -784,40 +1256,134 @@ async fn create_tab(
     {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    // The catalog would never list the new shell, so the create would only
+    // time out after leaving an unreachable tab on the desktop.
+    if matches!(request.kind, CreateTabKind::Shell) && !shells_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "shells_off");
+    }
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     request.project_id = project.raw_id.clone();
-    create_through_desktop(&state, &project_id, request).await
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Create { request_id, request: request.clone() }).await;
+    if desktop_down(&response) {
+        // No window: the owner mints and starts the tab (headless owner
+        // plan, H1b); the window attaches to it when it next opens.
+        return create_headless(&state, &phone, &project_id, &request).await;
+    }
+    answer_created(&state, &phone, &project_id, response).await
 }
 
-/// Ask the desktop for the tab `request` describes and answer with its row
-/// once the catalog lists it. `project_id` is the scope's public id, which the
-/// new row is looked up under; the request already carries the raw one.
+/// A create answered by the owner with no window: `headless::create_tab`
+/// through the host's spawn seam, then the new row once the catalog lists
+/// it (not `available` — no window is attached, and in a test no tmux
+/// server runs — so the row is read straight from the session file).
+async fn create_headless(
+    state: &HostState,
+    phone: &Phone,
+    project_id: &str,
+    request: &CreateTabRequest,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Ok(snapshot) = catalog(state, phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some(project) = snapshot.project(project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    let state_dir = &state.config.state_dir;
+    let agents = headless::agents(state_dir, &host_key(state), &*state.spawner.installed);
+    let created = headless::create_tab(state_dir, &host_key(state), project, request, &agents, &state.spawner.launch).await;
+    match created {
+        Ok(created) => {
+            poke_window(state, Some(&project.raw_id), &["workspace"]);
+            answer_headless_created(state, phone, project_id, &created).await
+        }
+        Err(refusal) => headless_create_error(refusal),
+    }
+}
+
+/// The new row once the catalog lists a tab the owner just minted and
+/// started (a create or a reopen with no window).
+async fn answer_headless_created(
+    state: &HostState,
+    phone: &Phone,
+    project_id: &str,
+    created: &headless::HeadlessCreated,
+) -> (StatusCode, Json<serde_json::Value>) {
+    for _ in 0..8 {
+        if let Ok(next) = catalog_fresh(state, phone) {
+            if let Some(tab) = next
+                .project(project_id)
+                .and_then(|p| p.tabs.iter().find(|t| t.tmux_name == created.tmux_session))
+            {
+                return (
+                    StatusCode::CREATED,
+                    Json(json!({ "tab": tab.public, "desktop_available": false })),
+                );
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(125)).await;
+    }
+    api_error(StatusCode::GATEWAY_TIMEOUT, "launch_pending")
+}
+
+fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<serde_json::Value>) {
+    if let headless::CreateRefusal::LaunchFailed(why) | headless::CreateRefusal::Persist(why) = &refusal {
+        eprintln!("mobile: a create with no window failed ({}): {why}", refusal.code());
+    }
+    api_error(
+        match refusal {
+            headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
+            headless::CreateRefusal::UnknownAgent => StatusCode::BAD_REQUEST,
+        },
+        refusal.code(),
+    )
+}
+
+/// Ask the desktop for the tab `request` describes (a sign-in tab, which
+/// needs the window) and answer with its row once the catalog lists it.
+/// `project_id` is the scope's public id, which the new row is looked up
+/// under; the request already carries the raw one.
 async fn create_through_desktop(
     state: &HostState,
+    phone: &Phone,
     project_id: &str,
     request: CreateTabRequest,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    created_through_desktop(state, project_id, &DesktopRequest::Create { request_id, request }).await
+    created_through_desktop(state, phone, project_id, &DesktopRequest::Create { request_id, request }).await
 }
 
 /// Send a request the desktop answers with `Created` (a create, a reopen) and
 /// answer with the new tab's row once the catalog lists it.
 async fn created_through_desktop(
     state: &HostState,
+    phone: &Phone,
     project_id: &str,
     request: &DesktopRequest,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    match admin::desktop_call(&desktop_socket, request).await {
+    let response = admin::desktop_call(&desktop_socket, request).await;
+    answer_created(state, phone, project_id, response).await
+}
+
+/// The phone's answer to a desktop `Created` (or the desktop's refusal).
+async fn answer_created(
+    state: &HostState,
+    phone: &Phone,
+    project_id: &str,
+    response: Result<DesktopResponse, String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match response {
         Ok(DesktopResponse::Created { tmux_session }) => {
             for _ in 0..40 {
-                if let Ok(next) = catalog_fresh(state) {
+                if let Ok(next) = catalog_fresh(state, phone) {
                     if let Some(tab) = next.project(project_id).and_then(|p| {
                         p.tabs
                             .iter()
@@ -862,9 +1428,10 @@ async fn reopen_tab(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let request = if body.is_empty() {
         ReopenTabRequest::default()
     } else {
@@ -876,23 +1443,188 @@ async fn reopen_tab(
     if request.closed_id.as_deref().is_some_and(|id| !closed_tab_id_ok(id)) {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    created_through_desktop(
-        &state,
-        &project_id,
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
         &DesktopRequest::ReopenTab {
             request_id,
             project_id: project.raw_id.clone(),
-            closed_id: request.closed_id,
+            closed_id: request.closed_id.clone(),
         },
     )
+    .await;
+    if desktop_down(&response) {
+        // No window: the owner reopens what it closed (headless owner plan,
+        // H3) and starts it detached, as its create does.
+        let reopened = headless::reopen_tab(&state.config.state_dir, project, request.closed_id.as_deref(), &state.spawner.launch).await;
+        return match reopened {
+            Ok(Some(created)) => {
+                poke_window(&state, Some(&project.raw_id), &["workspace"]);
+                answer_headless_created(&state, &phone, &project_id, &created).await
+            }
+            Ok(None) => api_error(StatusCode::CONFLICT, "nothing_to_reopen"),
+            Err(refusal) => headless_create_error(refusal),
+        };
+    }
+    answer_created(&state, &phone, &project_id, response).await
+}
+
+/// The linked worktree each of the project's tabs works in, in tab order, for
+/// its card — and the worktrees its subagents at work are in, other than that
+/// one. Only agent tabs are named: where the agent is now and where its
+/// subagents are come off its transcript (`agent_transcript::live_folders`,
+/// window or not); a tab with none yet is where it launched. Git is asked only
+/// when one of those folders is outside the project folder — a tab there is in
+/// its own checkout by definition — so a project without worktrees never
+/// spawns git on the screen's poll.
+async fn project_tab_worktrees(
+    state: &HostState,
+    project: &super::discovery::ResolvedProject,
+) -> Vec<(Option<git_overview::TabWorktree>, Vec<git_overview::SubagentWorktree>)> {
+    let tabs: Vec<(bool, Option<String>, String, String)> = project
+        .tabs
+        .iter()
+        .map(|tab| {
+            let session = tab.session_id.clone().filter(|id| !id.is_empty() && !tab.local_model);
+            (tab.public.kind == "agent", session, tab.cmd.clone(), tab.cwd.clone())
+        })
+        .collect();
+    let launched: Vec<(String, Vec<String>)> =
+        tabs.iter().map(|(agent, _, _, cwd)| (if *agent { cwd.clone() } else { String::new() }, Vec::new())).collect();
+    let raw_id = project.raw_id.clone();
+    let folders = tokio::task::spawn_blocking(move || {
+        tabs.into_iter()
+            .map(|(agent, session, cmd, cwd)| {
+                if !agent {
+                    return (String::new(), Vec::new());
+                }
+                let live = session
+                    .map(|uid| crate::services::agent_transcript::live_folders(&cmd, Some(&raw_id), &uid))
+                    .unwrap_or_default();
+                (live.cwd.unwrap_or(cwd), live.subagents)
+            })
+            .collect::<Vec<_>>()
+    })
     .await
+    .unwrap_or(launched);
+    let all: Vec<&str> = folders
+        .iter()
+        .flat_map(|(cwd, subagents)| std::iter::once(cwd.as_str()).chain(subagents.iter().map(String::as_str)))
+        .collect();
+    let spots = worktree_spots_for(state, project, &all).await;
+    let Some(spots) = spots else {
+        return vec![(None, Vec::new()); folders.len()];
+    };
+    let mut named = git_overview::tab_worktrees(&spots, &all).into_iter();
+    folders
+        .iter()
+        .map(|(_, subagents)| {
+            let own = named.next().flatten();
+            let others = git_overview::subagent_worktrees(own.as_ref(), named.by_ref().take(subagents.len()));
+            (own, others)
+        })
+        .collect()
+}
+
+/// The project's worktrees as tab spots, for naming `cwds` — `None` when
+/// none of them is outside the project folder, without asking git. The list
+/// is one hardened `git worktree list`, cached per project for
+/// `git_overview::SPOT_TTL`, and taken again at once when a folder is in no
+/// worktree of the cached one (`SpotCache::first_miss`): a subagent's new
+/// worktree is named on the next poll.
+async fn worktree_spots_for(
+    state: &HostState,
+    project: &super::discovery::ResolvedProject,
+    cwds: &[&str],
+) -> Option<Vec<git_overview::WorktreeSpot>> {
+    let elsewhere: Vec<&str> = cwds
+        .iter()
+        .copied()
+        .filter(|cwd| !cwd.is_empty() && std::path::Path::new(cwd) != project.root)
+        .collect();
+    if elsewhere.is_empty() {
+        return None;
+    }
+    let cached = state
+        .worktree_spots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&project.raw_id, Instant::now());
+    if let Some(spots) = cached {
+        let unplaced: Vec<&str> = elsewhere.iter().copied().filter(|cwd| git_overview::unplaced(&spots, cwd)).collect();
+        let retry = !unplaced.is_empty()
+            && state
+                .worktree_spots
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .first_miss(&project.raw_id, &unplaced);
+        if !retry {
+            return Some(spots);
+        }
+    }
+    let root = project.root.clone();
+    let spots = tokio::task::spawn_blocking(move || git_overview::worktree_spots(&root))
+        .await
+        .unwrap_or_default();
+    state
+        .worktree_spots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set(&project.raw_id, spots.clone(), Instant::now());
+    Some(spots)
+}
+
+/// `GET /api/v1/projects/{project_id}/git` — the project's worktrees, branches
+/// and remote branches for the phone's Git sheet (`git_overview`). Answered
+/// here, window open or not: every fact is a hardened local git read. A box or
+/// the root console is `not_a_project`. Read-only; cached per project for
+/// `git_overview::TTL`.
+async fn project_git(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some(project) = catalog_snapshot.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    if project.public.kind != ScopeKind::Project {
+        return api_error(StatusCode::NOT_FOUND, "not_a_project");
+    }
+    let raw_id = project.raw_id.clone();
+    if let Some(cached) = state
+        .git_overview
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&raw_id, Instant::now())
+    {
+        return (StatusCode::OK, Json(json!(cached)));
+    }
+    let root = project.root.clone();
+    let key = host_key(&state);
+    let tab_cwds: Vec<String> = project.tabs.iter().map(|tab| tab.cwd.clone()).collect();
+    let Ok(overview) = tokio::task::spawn_blocking(move || git_overview::probe(&root, &key, &tab_cwds)).await else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "git_failed");
+    };
+    state
+        .git_overview
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set(&raw_id, overview.clone(), Instant::now());
+    (StatusCode::OK, Json(json!(overview)))
 }
 
 /// `GET /api/v1/projects/{project_id}/launch-options` — what the ＋ sheet can
@@ -903,10 +1635,11 @@ async fn launch_options(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some(project) = catalog_snapshot.project(&project_id) else {
@@ -914,15 +1647,25 @@ async fn launch_options(
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::LaunchOptions {
             request_id,
             project_id: project.raw_id.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the ＋ sheet offers what the owner can start — the
+        // project folder, a shell or a plain agent (headless owner plan,
+        // H3). Worktrees, cloud sessions, sign-ins and local models wait for
+        // the window, so none is listed.
+        return (
+            StatusCode::OK,
+            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false })),
+        );
+    }
+    match response {
         Ok(DesktopResponse::LaunchOptions {
             worktrees,
             cloud,
@@ -949,13 +1692,14 @@ async fn activate_project(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some(project) = catalog_snapshot.project(&project_id) else {
@@ -963,15 +1707,34 @@ async fn activate_project(
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Activate {
             request_id,
             project_id: project.raw_id.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the registry entry is marked active under the file's
+        // lock, and the next window restores it open (headless owner plan,
+        // H3). A box or the root console has no such status.
+        if project.public.kind != ScopeKind::Project {
+            return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+        }
+        return match headless::activate(&state.config.state_dir, &project.raw_id) {
+            Ok(()) => {
+                catalog_stale(&state);
+                poke_window(&state, Some(&project.raw_id), &["projects"]);
+                (StatusCode::OK, Json(json!({ "status": "activated", "desktop_available": false })))
+            }
+            Err(why) => {
+                eprintln!("mobile: an activate with no window failed: {why}");
+                api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")
+            }
+        };
+    }
+    match response {
         Ok(DesktopResponse::Activated) => (StatusCode::OK, Json(json!({ "status": "activated" }))),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "desktop_unavailable" {
@@ -985,16 +1748,27 @@ async fn activate_project(
     }
 }
 
-/// The board is intentionally available only through the live desktop bridge:
-/// calendar writes also notify the desktop's CalDAV write hook, and the sidecar
-/// must not become another writer of calendar.json.
+/// The board through the window when one is open; with none, read and
+/// written off `calendar.json` (`headless`, `headless_board`), marked
+/// `desktop_available: false`.
 async fn todo(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "todo") {
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(&desktop_socket, &DesktopRequest::Todo { request_id }).await {
+    let response = admin::desktop_call(&desktop_socket, &DesktopRequest::Todo { request_id }).await;
+    if desktop_down(&response) {
+        let key = host_key(&state);
+        return match headless::todo_board(&state.config.state_dir, &key, &local_today()) {
+            Ok(board) => (
+                StatusCode::OK,
+                Json(json!({ "board": board, "desktop_available": false })),
+            ),
+            Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        };
+    }
+    match response {
         Ok(DesktopResponse::Todo { board }) => (StatusCode::OK, Json(json!({ "board": board }))),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "desktop_unavailable" {
@@ -1012,13 +1786,15 @@ async fn todo(State(state): State<HostState>, headers: HeaderMap) -> impl IntoRe
 /// the desktop owns the alert setting, source gates, recurrence expansion, and
 /// muted rows. The wire snapshot is deliberately display-only.
 async fn alerts(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
         Ok(DesktopResponse::Alerts { alerts }) => {
+            let alerts = open_alerts(&hidden_sections(&state, &phone), alerts);
             (StatusCode::OK, Json(json!({ "alerts": alerts })))
         }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
@@ -1044,9 +1820,10 @@ async fn alerts_resolve(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1057,6 +1834,24 @@ async fn alerts_resolve(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    // The handle is opaque, so a phone kept out of a section has its row's
+    // kind looked up first: a ✓ on a row it was never shown is refused.
+    let hidden = hidden_sections(&state, &phone);
+    if !hidden.is_empty() {
+        let request_id = Base64UrlUnpadded::encode_string(&random_16());
+        match admin::desktop_call(&desktop_socket, &DesktopRequest::Alerts { request_id }).await {
+            Ok(DesktopResponse::Alerts { alerts }) => {
+                if !open_alerts(&hidden, alerts)
+                    .items
+                    .iter()
+                    .any(|item| item.alert_id.as_deref() == Some(request.alert_id.as_str()))
+                {
+                    return api_error(StatusCode::FORBIDDEN, "section_hidden");
+                }
+            }
+            _ => return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        }
+    }
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     match admin::desktop_call(
         &desktop_socket,
@@ -1068,6 +1863,7 @@ async fn alerts_resolve(
     .await
     {
         Ok(DesktopResponse::Alerts { alerts }) => {
+            let alerts = open_alerts(&hidden, alerts);
             (StatusCode::OK, Json(json!({ "alerts": alerts })))
         }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
@@ -1085,6 +1881,12 @@ async fn alerts_resolve(
 /// This device's push state and the key it must subscribe with. The endpoint
 /// goes back only to the device that registered it, so the phone can tell a
 /// browser-rotated subscription from the one on file.
+///
+/// A row the push service declared gone is `lapsed`, not `subscribed`: nothing
+/// is sent to it, but its choices and the dead endpoint are still answered, so
+/// the phone's silent refresh re-subscribes with them (`refreshPush`) instead
+/// of leaving notices off. A phone bundle that predates the field reads
+/// `subscribed: false` and behaves as it always did.
 fn push_state(state: &HostState, device_id: &str) -> (StatusCode, Json<serde_json::Value>) {
     let auth = state.auth.lock().unwrap_or_else(PoisonError::into_inner);
     let push = auth.push();
@@ -1093,7 +1895,8 @@ fn push_state(state: &HostState, device_id: &str) -> (StatusCode, Json<serde_jso
         StatusCode::OK,
         Json(json!({
             "vapid_public_key": push.public_key(),
-            "subscribed": subscription.is_some(),
+            "subscribed": subscription.is_some_and(|s| !s.lapsed),
+            "lapsed": subscription.is_some_and(|s| s.lapsed),
             "details": subscription.is_some_and(|s| s.details),
             "calendar": subscription.is_some_and(|s| s.calendar),
             "agents": subscription.map(|s| s.agents).unwrap_or_default(),
@@ -1104,7 +1907,7 @@ fn push_state(state: &HostState, device_id: &str) -> (StatusCode, Json<serde_jso
 
 async fn push_get(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
     match authenticate(&headers, &state) {
-        Ok(device_id) => push_state(&state, &device_id),
+        Ok(phone) => push_state(&state, phone.device_id()),
         Err(error) => error,
     }
 }
@@ -1118,7 +1921,7 @@ async fn push_put(
     body: Bytes,
 ) -> impl IntoResponse {
     let device_id = match authenticate(&headers, &state) {
-        Ok(device_id) => device_id,
+        Ok(phone) => phone.0,
         Err(error) => return error,
     };
     if !exact_origin(&headers, &state) {
@@ -1140,7 +1943,7 @@ async fn push_put(
 
 async fn push_delete(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
     let device_id = match authenticate(&headers, &state) {
-        Ok(device_id) => device_id,
+        Ok(phone) => phone.0,
         Err(error) => return error,
     };
     if !exact_origin(&headers, &state) {
@@ -1161,8 +1964,11 @@ async fn push_delete(State(state): State<HostState>, headers: HeaderMap) -> impl
 /// The agent tab a tmux session is, as the phone knows it — for an agent-turn
 /// notice (`AdminRequest::AgentTurn`). Only a tab the catalog already offers a
 /// phone resolves, so a notice can never name one the phone could not open.
+///
+/// Not a phone's request, so it reads the unfiltered catalog and hands the
+/// scope's per-phone list on: the push filter sends only to those phones.
 fn agent_tab_ref(state: &HostState, tmux_session: &str) -> Option<AgentTabRef> {
-    let catalog = catalog(state).ok()?;
+    let catalog = catalog_unfiltered(state).ok()?;
     catalog.projects.iter().find_map(|project| {
         project
             .tabs
@@ -1173,7 +1979,8 @@ fn agent_tab_ref(state: &HostState, tmux_session: &str) -> Option<AgentTabRef> {
                 project_label: project.public.label.clone(),
                 tab_id: tab.public.id.clone(),
                 tab_label: tab.public.label.clone(),
-                attached: state.terminal_registry.is_busy(tmux_session),
+                attached: state.terminal_registry.is_watched(tmux_session),
+                devices: project.devices.clone(),
             })
     })
 }
@@ -1196,7 +2003,7 @@ async fn calendar(
     headers: HeaderMap,
     Query(query): Query<CalendarQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "calendar") {
         return error;
     }
     let Some(month) = query.month.filter(|value| valid_calendar_month(value)) else {
@@ -1204,12 +2011,23 @@ async fn calendar(
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::Calendar { request_id, month },
+        &DesktopRequest::Calendar { request_id, month: month.clone() },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the month is expanded off `calendar.json` here, read-only.
+        let key = host_key(&state);
+        return match headless::calendar_month(&state.config.state_dir, &key, &month) {
+            Ok(calendar) => (
+                StatusCode::OK,
+                Json(json!({ "calendar": calendar, "desktop_available": false })),
+            ),
+            Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        };
+    }
+    match response {
         Ok(DesktopResponse::Calendar { calendar }) => {
             (StatusCode::OK, Json(json!({ "calendar": calendar })))
         }
@@ -1262,15 +2080,15 @@ fn valid_calendar_action(action: &CalendarAction) -> bool {
     }
 }
 
-/// Calendar writes share the same live desktop bridge as the to-do board. This
-/// keeps CalDAV push ordering and the calendar store as the sole writer.
+/// Calendar writes go through the window when one is open (CalDAV pushes
+/// from there); with none, a local calendar is written here under CAS.
 async fn calendar_mutate(
     State(state): State<HostState>,
     headers: HeaderMap,
     Query(query): Query<CalendarQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "calendar") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -1287,16 +2105,39 @@ async fn calendar_mutate(
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::CalendarMutate {
             request_id,
-            month,
-            action,
+            month: month.clone(),
+            action: action.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the write is one CAS transaction on `calendar.json`
+        // (headless owner plan, H3); a CalDAV-backed calendar still needs
+        // the window, which pushes from the write.
+        let key = host_key(&state);
+        return match super::headless_board::calendar_mutate(&state.config.state_dir, &key, action) {
+            Ok(()) => {
+                poke_window(&state, None, &["calendar"]);
+                match headless::calendar_month(&state.config.state_dir, &key, &month) {
+                    Ok(calendar) => (StatusCode::OK, Json(json!({ "calendar": calendar, "desktop_available": false }))),
+                    Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+                }
+            }
+            Err(super::headless_board::Refused(code)) => api_error(
+                match code {
+                    "event_not_found" => StatusCode::NOT_FOUND,
+                    "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                    _ => StatusCode::BAD_REQUEST,
+                },
+                code,
+            ),
+        };
+    }
+    match response {
         Ok(DesktopResponse::Calendar { calendar }) => {
             (StatusCode::OK, Json(json!({ "calendar": calendar })))
         }
@@ -1317,7 +2158,7 @@ async fn todo_mutate(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "todo") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -1354,12 +2195,36 @@ async fn todo_mutate(
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::TodoMutate { request_id, action },
+        &DesktopRequest::TodoMutate { request_id, action: action.clone() },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the board write is one CAS transaction on
+        // `calendar.json` under the desktop's own rules (headless owner
+        // plan, H3), answered with the board as stored.
+        let key = host_key(&state);
+        let projects = headless::project_names(&state.config.state_dir);
+        return match super::headless_board::todo_mutate(&state.config.state_dir, &key, &projects, action) {
+            Ok(()) => {
+                poke_window(&state, None, &["calendar"]);
+                match headless::todo_board(&state.config.state_dir, &key, &local_today()) {
+                    Ok(board) => (StatusCode::OK, Json(json!({ "board": board, "desktop_available": false }))),
+                    Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+                }
+            }
+            Err(super::headless_board::Refused(code)) => api_error(
+                match code {
+                    "task_not_found" => StatusCode::NOT_FOUND,
+                    "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                    _ => StatusCode::BAD_REQUEST,
+                },
+                code,
+            ),
+        };
+    }
+    match response {
         Ok(DesktopResponse::Todo { board }) => (StatusCode::OK, Json(json!({ "board": board }))),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "desktop_unavailable" {
@@ -1425,11 +2290,85 @@ fn mail_response(
     }
 }
 
+/// The window's answer to a local-models request, as the phone gets it: the
+/// list rebuilt by `local_models::sanitize` under `ok`, a refusal as its code
+/// alone (`local_models::refusal`), and anything else — no window, a wedged
+/// one, an answer of another kind — as `desktop_unavailable`, which the phone
+/// reads as "open the app on the desktop". There is no headless answer.
+fn local_models_response(
+    response: Result<DesktopResponse, String>,
+    ok: StatusCode,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match response {
+        Ok(DesktopResponse::LocalModels { server, can_start, start_failed, models }) => {
+            (ok, Json(local_models::sanitize(&server, can_start, start_failed, &models)))
+        }
+        Ok(DesktopResponse::Error { code, .. }) => {
+            let (status, code) = local_models::refusal(&code);
+            api_error(status, code)
+        }
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
+/// `GET /api/v1/local-models` — the desktop's installed Ollama models, their
+/// residency and the server's state. Host-wide; the switch is read per
+/// request and, when off, answers before the desktop is asked.
+async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    if !local_models::local_models_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    local_models_response(
+        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModels { request_id }).await,
+        StatusCode::OK,
+    )
+}
+
+/// `POST /api/v1/local-models` `{ action: load | unload | start, model? }`.
+/// Guarded like every write; then the switch, then the action — a pull, a
+/// delete or anything else unnamed is `unsupported_action` and never reaches
+/// the desktop. The answer is the fresh list: 202 for a load or a start,
+/// which run on in the window after it answers, 200 for an unload.
+async fn local_models_mutate(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Err(error) = mutation_guard(&headers, &state) {
+        return error;
+    }
+    if !local_models::local_models_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
+    }
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let action = match local_models::parse_action(&body) {
+        Ok(action) => action,
+        Err(code) => return api_error(StatusCode::BAD_REQUEST, code),
+    };
+    let ok = match action {
+        LocalModelAction::Unload { .. } => StatusCode::OK,
+        LocalModelAction::Load { .. } | LocalModelAction::Start => StatusCode::ACCEPTED,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    local_models_response(
+        admin::desktop_call(&desktop_socket, &DesktopRequest::LocalModelMutate { request_id, action }).await,
+        ok,
+    )
+}
+
 /// Mail stays behind the live desktop for the same reason the board does: the
 /// desktop already owns the unlocked/encrypted MailState. The sidecar receives
 /// only the bounded, read-only snapshot defined in `protocol`.
 async fn mail_overview(State(state): State<HostState>, headers: HeaderMap) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -1449,7 +2388,7 @@ async fn mail_folder(
     Path(folder_id): Path<String>,
     Query(query): Query<MailQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     let offset = query.offset.unwrap_or(0);
@@ -1477,7 +2416,7 @@ async fn mail_message(
     Path((folder_id, message_id)): Path<(String, String)>,
     Query(query): Query<MailQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     let offset = query.offset.unwrap_or(0);
@@ -1511,7 +2450,7 @@ async fn mail_mark(
     Path((folder_id, message_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -1546,7 +2485,7 @@ async fn mail_reply(
     Path((folder_id, message_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
+    if let Err(error) = section_guard(&headers, &state, "mail") {
         return error;
     }
     if !exact_origin(&headers, &state) {
@@ -1586,10 +2525,11 @@ async fn tab(
     headers: HeaderMap,
     Path(tab_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let Ok(catalog) = catalog(&state) else {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(catalog) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some((_, tab)) = catalog.tab(&tab_id) else {
@@ -1624,9 +2564,10 @@ async fn rename_tab(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1641,25 +2582,31 @@ async fn rename_tab(
     let Some(label) = clean_tab_label(&request.label) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_label");
     };
-    let (project_id, tmux_session) = match agent_tab_target(&state, &tab_id) {
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::RenameTab {
             request_id,
-            project_id,
+            project_id: project_id.clone(),
             tmux_session: tmux_session.clone(),
-            label,
+            label: label.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the rename lands in the session file through the
+        // workspace service, and the desktop's next sync keeps it.
+        let edited = crate::services::workspace::rename_tab_in(&scope_session_file(&state, &project_id), &project_id, &tmux_session, &label);
+        return headless_tab_edit(&state, &phone, &project_id, &tab_id, &tmux_session, edited, json!({ "label": label }));
+    }
+    match response {
         Ok(DesktopResponse::Renamed { label }) => {
-            let row = catalog_fresh(&state)
+            let row = catalog_fresh(&state, &phone)
                 .ok()
                 .and_then(|next| next.tab(&tab_id).map(|(_, tab)| tab.public.clone()));
             match row {
@@ -1699,9 +2646,10 @@ async fn color_tab(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1717,25 +2665,29 @@ async fn color_tab(
     let Ok(color) = clean_tab_color(request.color.as_deref()) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_color");
     };
-    let (project_id, tmux_session) = match tab_target(&state, &tab_id, false) {
+    let (project_id, tmux_session) = match tab_target(&state, &phone, &tab_id, false) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::ColorTab {
             request_id,
-            project_id,
+            project_id: project_id.clone(),
             tmux_session: tmux_session.clone(),
-            color,
+            color: color.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        let edited = crate::services::workspace::color_tab_in(&scope_session_file(&state, &project_id), &project_id, &tmux_session, color.as_deref());
+        return headless_tab_edit(&state, &phone, &project_id, &tab_id, &tmux_session, edited, json!({ "color": color }));
+    }
+    match response {
         Ok(DesktopResponse::Colored { color }) => {
-            let row = catalog_fresh(&state)
+            let row = catalog_fresh(&state, &phone)
                 .ok()
                 .and_then(|next| next.tab(&tab_id).map(|(_, tab)| tab.public.clone()));
             match row {
@@ -1772,9 +2724,10 @@ async fn sent_prompt(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1790,23 +2743,42 @@ async fn sent_prompt(
     if message.is_empty() || message.len() > MAX_SENT_PROMPT {
         return api_error(StatusCode::BAD_REQUEST, "invalid_prompt");
     }
-    let (project_id, tmux_session) = match agent_tab_target(&state, &tab_id) {
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::TabPrompt {
             request_id,
-            project_id,
+            project_id: project_id.clone(),
             tmux_session,
             message: message.to_string(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the owner writes the history row (headless owner plan,
+        // H3); the words already reached the tab through the terminal socket.
+        let Ok((_, tab)) = agent_tab(&state, &phone, &tab_id) else {
+            return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+        };
+        return match headless::record_prompt(&state.config.state_dir, &project_id, &tab, message) {
+            Ok(recorded) => {
+                if recorded {
+                    poke_window(&state, Some(&project_id), &["prompts"]);
+                }
+                (StatusCode::OK, Json(json!({ "recorded": recorded, "desktop_available": false })))
+            }
+            Err(why) => {
+                eprintln!("mobile: recording a phone prompt with no window failed: {why}");
+                api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")
+            }
+        };
+    }
+    match response {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "recorded": true }))),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             match code.as_str() {
@@ -1820,6 +2792,161 @@ async fn sent_prompt(
     }
 }
 
+/// The words of a held prompt, as a route reads them off the body: trimmed,
+/// and bounded like a sent prompt.
+fn held_message(body: &Bytes) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HeldBody {
+        message: String,
+    }
+    let Ok(request) = serde_json::from_slice::<HeldBody>(body) else {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_request"));
+    };
+    let message = request.message.trim();
+    if message.is_empty() || message.len() > MAX_SENT_PROMPT {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_prompt"));
+    }
+    Ok(message.to_string())
+}
+
+/// A held prompt's id is a rule id the desktop minted (a UUID); anything
+/// else never reaches it.
+fn valid_held_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Ask the window to hold or edit a phone prompt; with no window the owner
+/// does it (`headless` — `fallback` answers the held id), marks the rule as a
+/// phone hold for its own scheduler and pokes a window that may be opening.
+async fn held_call(
+    state: &HostState,
+    request: DesktopRequest,
+    fallback: impl FnOnce() -> Result<String, String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(&desktop_socket, &request).await;
+    let code = if desktop_down(&response) {
+        match fallback() {
+            Ok(held_id) => {
+                state.holds.hold(&held_id);
+                if let DesktopRequest::HoldPrompt { project_id, .. } | DesktopRequest::EditHeldPrompt { project_id, .. } = &request {
+                    poke_window(state, Some(project_id), &["schedules"]);
+                }
+                return (StatusCode::OK, Json(json!({ "id": held_id, "desktop_available": false })));
+            }
+            Err(code) if matches!(code.as_str(), "tab_not_found" | "held_gone" | "held_busy" | "invalid_prompt") => code,
+            Err(why) => {
+                // A file the owner could not write: the phone types the words.
+                eprintln!("mobile: holding a phone prompt with no window failed: {why}");
+                "desktop_unavailable".to_string()
+            }
+        }
+    } else {
+        match response {
+            Ok(DesktopResponse::Held { held_id }) => return (StatusCode::OK, Json(json!({ "id": held_id }))),
+            Ok(DesktopResponse::Error { code, .. }) => code,
+            _ => "desktop_unavailable".to_string(),
+        }
+    };
+    api_error(
+        match code.as_str() {
+            "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+            "tab_not_found" => StatusCode::NOT_FOUND,
+            "held_gone" | "held_busy" => StatusCode::CONFLICT,
+            _ => StatusCode::BAD_REQUEST,
+        },
+        &code,
+    )
+}
+
+/// `POST /api/v1/tabs/{id}/held` — the phone's composer sent `message` while
+/// the agent was at work: the desktop holds it and delivers it at the tab's
+/// next safe idle point (`DesktopRequest::HoldPrompt`), so it stays editable
+/// until then. Answered with the id to edit it by. A refusal costs nothing:
+/// the phone then types the words itself, as it does for an idle agent.
+async fn hold_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let message = match held_message(&body) {
+        Ok(message) => message,
+        Err(error) => return error,
+    };
+    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let state_dir = state.config.state_dir.clone();
+    let (status, body) = held_call(
+        &state,
+        DesktopRequest::HoldPrompt {
+            request_id,
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            message: message.clone(),
+            device_id: Some(phone.device_id().to_string()),
+        },
+        || headless::hold_prompt(&state_dir, &project_id, &tab, &message, Some(phone.device_id()), chrono::Local::now()),
+    )
+    .await;
+    (if status == StatusCode::OK { StatusCode::CREATED } else { status }, body)
+}
+
+/// `PUT /api/v1/tabs/{id}/held/{held_id}` — new words for a prompt the desktop
+/// still holds. `409 held_gone` once the agent has it, `409 held_busy` while
+/// it is being typed (`DesktopRequest::EditHeldPrompt`).
+async fn edit_held_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, held_id)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if !valid_held_id(&held_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let message = match held_message(&body) {
+        Ok(message) => message,
+        Err(error) => return error,
+    };
+    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let state_dir = state.config.state_dir.clone();
+    held_call(
+        &state,
+        DesktopRequest::EditHeldPrompt {
+            request_id,
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            held_id: held_id.clone(),
+            message: message.clone(),
+            device_id: Some(phone.device_id().to_string()),
+        },
+        || headless::edit_held_prompt(&state_dir, &project_id, &tab, &held_id, &message, Some(phone.device_id())).map(|()| held_id.clone()),
+    )
+    .await
+}
+
 /// `POST /api/v1/tabs/{id}/sign-in-callback` — the address the phone's browser
 /// ended on after an agent CLI's sign-in redirected it to `localhost`, handed
 /// to the listener that CLI is waiting on here (`sign_in`). The tab only
@@ -1831,9 +2958,10 @@ async fn sign_in_callback(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1845,7 +2973,7 @@ async fn sign_in_callback(
     let Ok(request) = serde_json::from_slice::<CallbackBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    if let Err(error) = agent_tab_target(&state, &tab_id) {
+    if let Err(error) = agent_tab_target(&state, &phone, &tab_id) {
         return error;
     }
     let callback = match sign_in::parse_callback(&request.url, state.config.host.port) {
@@ -1869,9 +2997,10 @@ async fn sign_in_tab(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1888,7 +3017,7 @@ async fn sign_in_tab(
     if body.idempotency_key.len() < 16 || body.idempotency_key.len() > 128 {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    let Ok(catalog_snapshot) = catalog(&state) else {
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some((project, tab)) = catalog_snapshot.tab(&tab_id) else {
@@ -1911,7 +3040,7 @@ async fn sign_in_tab(
         idempotency_key: body.idempotency_key,
     };
     let project_id = project.public.id.clone();
-    create_through_desktop(&state, &project_id, request).await
+    create_through_desktop(&state, &phone, &project_id, request).await
 }
 
 /// `PUT /api/v1/tabs/{id}/order` — move one tab next to another, the phone's
@@ -1928,9 +3057,10 @@ async fn order_tab(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -1946,11 +3076,11 @@ async fn order_tab(
     if request.anchor == tab_id {
         return api_error(StatusCode::BAD_REQUEST, "invalid_anchor");
     }
-    let (project_id, tmux_session) = match tab_target(&state, &tab_id, false) {
+    let (project_id, tmux_session) = match tab_target(&state, &phone, &tab_id, false) {
         Ok(target) => target,
         Err(error) => return error,
     };
-    let (anchor_project, anchor_tmux) = match tab_target(&state, &request.anchor, false) {
+    let (anchor_project, anchor_tmux) = match tab_target(&state, &phone, &request.anchor, false) {
         Ok(target) => target,
         Err(error) => return error,
     };
@@ -1960,24 +3090,45 @@ async fn order_tab(
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let after = matches!(request.place, TabPlace::After);
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::ReorderTab {
             request_id,
-            project_id,
-            tmux_session,
-            anchor_tmux_session: anchor_tmux,
+            project_id: project_id.clone(),
+            tmux_session: tmux_session.clone(),
+            anchor_tmux_session: anchor_tmux.clone(),
             place: request.place,
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the move lands in the session file's order, which is
+        // the order the catalog publishes and the phone reconciles against.
+        let edited = crate::services::workspace::reorder_tab_in(&scope_session_file(&state, &project_id), &project_id, &tmux_session, &anchor_tmux, after);
+        return match edited {
+            Ok(_) => {
+                catalog_stale(&state);
+                poke_window(&state, Some(&project_id), &["workspace"]);
+                let tabs: Vec<String> = catalog_fresh(&state, &phone)
+                    .ok()
+                    .and_then(|next| {
+                        next.tab(&tab_id)
+                            .map(|(project, _)| project.tabs.iter().map(|t| t.public.id.clone()).collect())
+                    })
+                    .unwrap_or_default();
+                (StatusCode::OK, Json(json!({ "tabs": tabs, "desktop_available": false })))
+            }
+            Err(code) => headless_tab_error(&code),
+        };
+    }
+    match response {
         Ok(DesktopResponse::Reordered) => {
             // The desktop persists before it answers, so a fresh read is the new
             // order; a catalog that somehow has not caught up answers with what
             // it has rather than failing a write that did happen, exactly as the
             // colour route does.
-            let tabs: Vec<String> = catalog_fresh(&state)
+            let tabs: Vec<String> = catalog_fresh(&state, &phone)
                 .ok()
                 .and_then(|next| {
                     next.tab(&tab_id)
@@ -2000,7 +3151,7 @@ async fn order_tab(
 
 /// `DELETE /api/v1/tabs/{id}` — close one tab from the phone, agent or shell.
 /// The desktop owns the tab layout, so this is a bridge call, and it closes the
-/// way the desktop's own × does: the tab leaves the Eldrun window while the
+/// way the desktop's own × does: the tab leaves the Tabtivity window while the
 /// tmux session behind it keeps running, reattachable from the desktop's
 /// Sessions view. Only the opaque tab id crosses; the raw project id and the
 /// tmux name stay on the desktop/sidecar link.
@@ -2009,28 +3160,53 @@ async fn close_tab(
     headers: HeaderMap,
     Path(tab_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let (project_id, tmux_session) = match tab_target(&state, &tab_id, false) {
+    let (project_id, tmux_session) = match tab_target(&state, &phone, &tab_id, false) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::CloseTab {
             request_id,
-            project_id,
-            tmux_session,
+            project_id: project_id.clone(),
+            tmux_session: tmux_session.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the tab leaves the set in the session file (an agent tab
+        // is remembered for a reopen), then its session ends the way the
+        // desktop's × ends a local session the tab minted — the subtree
+        // reaped, the launcher dropped (`Runner::kill`). An attach tab's
+        // session is not the tab's to end: it stays running.
+        return match crate::services::workspace::close_tab_in(&scope_session_file(&state, &project_id), &project_id, &tmux_session, now_ms()) {
+            Ok(closed) => {
+                catalog_stale(&state);
+                poke_window(&state, Some(&project_id), &["workspace"]);
+                if crate::services::workspace::owns_tmux_session(&closed) {
+                    // Its MCP tokens go with it (`docs/headless_mcp_plan.md`).
+                    crate::services::root_mcp::revoke_tab(&format!("{}{tmux_session}", headless::LAUNCH_ID_PREFIX));
+                    let runner = state.runner.clone();
+                    let ended = tokio::task::spawn_blocking(move || runner.kill(&tmux_session)).await;
+                    if let Ok(Err(why)) = ended {
+                        eprintln!("mobile: a close with no window left the session running: {why}");
+                    }
+                }
+                (StatusCode::OK, Json(json!({ "closed": true, "desktop_available": false })))
+            }
+            Err(code) => headless_tab_error(&code),
+        };
+    }
+    match response {
         // The desktop rewrites the session file before it answers, so the only
         // thing that could still be carrying the closed tab is this cache —
         // dropped here rather than read back, because nothing in this reply
@@ -2089,10 +3265,11 @@ fn schedule_desktop_error(
 /// included. Neither value is ever serialized back to the phone.
 fn tab_target(
     state: &HostState,
+    phone: &Phone,
     tab_id: &str,
     agent_only: bool,
 ) -> Result<(String, String), (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state)?;
+    let catalog = catalog(state, phone)?;
     let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
@@ -2104,9 +3281,28 @@ fn tab_target(
 
 fn agent_tab_target(
     state: &HostState,
+    phone: &Phone,
     tab_id: &str,
 ) -> Result<(String, String), (StatusCode, Json<serde_json::Value>)> {
-    tab_target(state, tab_id, true)
+    tab_target(state, phone, tab_id, true)
+}
+
+/// [`agent_tab_target`] keeping the whole catalog record — what answering a
+/// tab's schedules or transcript with no window open needs (its schedule
+/// binding, command and folder), none of which is ever serialized back.
+fn agent_tab(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+) -> Result<(String, ResolvedTab), (StatusCode, Json<serde_json::Value>)> {
+    let catalog = catalog(state, phone)?;
+    let Some((project, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    Ok((project.raw_id.clone(), tab.clone()))
 }
 
 async fn schedules(
@@ -2114,26 +3310,50 @@ async fn schedules(
     headers: HeaderMap,
     Path(tab_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let (project_id, tmux_session) = match agent_tab_target(&state, &tab_id) {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    schedule_desktop_error(
-        admin::desktop_call(
-            &desktop_socket,
-            &DesktopRequest::Schedules {
-                request_id,
-                project_id,
-                tmux_session,
-            },
-        )
-        .await,
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::Schedules {
+            request_id,
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+        },
     )
+    .await;
+    if desktop_down(&response) {
+        // No window: the rows come off `agent_tasks.json`, read-only. A tab
+        // the desktop never bound to a schedule target has no rows yet.
+        let listed = match tab.schedule_target_id.as_deref() {
+            Some(target) => headless::schedules(&state.config.state_dir, &project_id, target, chrono::Local::now()),
+            None => Ok(headless::TabSchedules {
+                schedules: Vec::new(),
+                time_zone: headless::local_time_zone(),
+                next_runs: Default::default(),
+            }),
+        };
+        return match listed {
+            Ok(listed) => (
+                StatusCode::OK,
+                Json(json!({
+                    "schedules": listed.schedules.into_iter().map(MobileSchedule::from).collect::<Vec<_>>(),
+                    "time_zone": listed.time_zone,
+                    "next_runs": listed.next_runs,
+                    "desktop_available": false,
+                })),
+            ),
+            Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        };
+    }
+    schedule_desktop_error(response)
 }
 
 /// `?refresh=1` — ask the desktop to run the agent's CLI again rather than
@@ -2155,17 +3375,18 @@ async fn agent_status(
     Path(tab_id): Path<String>,
     Query(query): Query<AgentStatusQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let (project_id, tmux_session) = match agent_tab_target(&state, &tab_id) {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let refresh = matches!(query.refresh.as_deref(), Some("1" | "true"));
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AgentStatus {
             request_id,
@@ -2174,8 +3395,20 @@ async fn agent_status(
             refresh,
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the state and today's tally off the files; the CLI's
+        // usage panel needs the window (headless owner plan, H3).
+        let Ok(snapshot) = catalog(&state, &phone) else {
+            return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+        };
+        let Some((project, tab)) = snapshot.tab(&tab_id) else {
+            return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+        };
+        let report = headless::agent_status(&state.config.state_dir, project, tab);
+        return (StatusCode::OK, Json(json!({ "report": report, "desktop_available": false })));
+    }
+    match response {
         Ok(DesktopResponse::AgentStatus { report }) => (
             StatusCode::OK,
             Json(json!({ "report": report })),
@@ -2214,9 +3447,10 @@ async fn agent_transcript(
     Path(tab_id): Path<String>,
     Query(query): Query<TranscriptQuery>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     // A handle is a digest the desktop minted; anything else is not one.
     if query
         .subagent
@@ -2225,28 +3459,47 @@ async fn agent_transcript(
     {
         return api_error(StatusCode::BAD_REQUEST, "invalid_subagent");
     }
-    let (project_id, tmux_session) = match agent_tab_target(&state, &tab_id) {
+    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AgentTranscript {
             request_id,
-            project_id,
-            tmux_session,
-            subagent: query.subagent,
-            version: query.version,
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            subagent: query.subagent.clone(),
+            version: query.version.clone(),
             limit: query.limit,
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the CLI's own transcript is read here, off the tab record.
+        let transcript = tokio::task::spawn_blocking(move || {
+            headless::transcript(
+                &project_id,
+                &tab,
+                query.subagent.as_deref(),
+                query.version.as_deref(),
+                query.limit,
+            )
+        })
+        .await
+        .unwrap_or_else(|_| crate::services::agent_transcript::AgentTranscript::unavailable("read_failed"));
+        let transcript = phone_transcript(&state, &phone, &tab_id, transcript).await;
+        return (
+            StatusCode::OK,
+            Json(json!({ "transcript": transcript, "desktop_available": false })),
+        );
+    }
+    match response {
         Ok(DesktopResponse::AgentTranscript { transcript }) => (
             StatusCode::OK,
-            Json(json!({ "transcript": transcript })),
+            Json(json!({ "transcript": phone_transcript(&state, &phone, &tab_id, transcript).await })),
         ),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             if code == "tab_not_found" {
@@ -2260,29 +3513,95 @@ async fn agent_transcript(
     }
 }
 
+/// A transcript as the phone may see it: the shell commands the desktop
+/// Reader shows beside its working row are command lines, and the folders the
+/// agent and its subagents work in are paths, neither of which crosses the
+/// browser API. A subagent's folder in a linked worktree of the tab's project
+/// crosses as that worktree's name and branch instead (`worktree` on its
+/// `agent` entry), as the tab cards name it.
+async fn phone_transcript(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+    mut transcript: crate::services::agent_transcript::AgentTranscript,
+) -> serde_json::Value {
+    transcript.shells.clear();
+    transcript.cwd = None;
+    transcript.running_cwds.clear();
+    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
+    let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))
+        .then(|| catalog(state, phone).ok())
+        .flatten()
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, _)| project.clone()))
+        .filter(|project| project.public.kind == ScopeKind::Project);
+    if let Some(project) = project {
+        let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
+        if let Some(spots) = worktree_spots_for(state, &project, &all).await {
+            named = git_overview::tab_worktrees(&spots, &all);
+        }
+    }
+    let mut value = json!(transcript);
+    if let Some(entries) = value.get_mut("entries").and_then(serde_json::Value::as_array_mut) {
+        for (entry, worktree) in entries.iter_mut().zip(named) {
+            if let Some(worktree) = worktree {
+                entry["worktree"] = json!(worktree);
+            }
+        }
+    }
+    value
+}
+
 async fn schedule_mutation(
     state: &HostState,
+    phone: &Phone,
     tab_id: &str,
     action: ScheduleMutation,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let (project_id, tmux_session) = match agent_tab_target(state, tab_id) {
+    let (project_id, tab) = match agent_tab(state, phone, tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    schedule_desktop_error(
-        admin::desktop_call(
-            &desktop_socket,
-            &DesktopRequest::ScheduleMutate {
-                request_id,
-                project_id,
-                tmux_session,
-                action,
-            },
-        )
-        .await,
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::ScheduleMutate {
+            request_id,
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            action: action.clone(),
+            device_id: Some(phone.device_id().to_string()),
+        },
     )
+    .await;
+    if desktop_down(&response) {
+        // No window: the rule lands in `agent_tasks.json` under its lock
+        // (headless owner plan, H3); the sidecar's own scheduler fires it.
+        let Some(target) = tab.schedule_target_id.as_deref() else {
+            return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+        };
+        return match headless::schedule_mutate(&state.config.state_dir, &project_id, target, action, Some(phone.device_id()), chrono::Local::now()) {
+            Ok(listed) => {
+                poke_window(state, Some(&project_id), &["schedules"]);
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "schedules": listed.schedules.into_iter().map(MobileSchedule::from).collect::<Vec<_>>(),
+                        "time_zone": listed.time_zone,
+                        "next_runs": listed.next_runs,
+                        "desktop_available": false,
+                    })),
+                )
+            }
+            Err(code) if code == "schedule_not_found" => api_error(StatusCode::NOT_FOUND, &code),
+            Err(why) => {
+                eprintln!("mobile: a schedule write with no window failed: {why}");
+                api_error(StatusCode::BAD_REQUEST, "invalid_request")
+            }
+        };
+    }
+    schedule_desktop_error(response)
 }
 
 async fn schedule_create(
@@ -2291,9 +3610,10 @@ async fn schedule_create(
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -2301,7 +3621,7 @@ async fn schedule_create(
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (status, body) =
-        schedule_mutation(&state, &tab_id, ScheduleMutation::Create { schedule }).await;
+        schedule_mutation(&state, &phone, &tab_id, ScheduleMutation::Create { schedule }).await;
     (
         if status == StatusCode::OK {
             StatusCode::CREATED
@@ -2318,9 +3638,10 @@ async fn schedule_update(
     Path((tab_id, schedule_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
@@ -2329,6 +3650,7 @@ async fn schedule_update(
     };
     schedule_mutation(
         &state,
+        &phone,
         &tab_id,
         ScheduleMutation::Update {
             schedule_id,
@@ -2343,13 +3665,14 @@ async fn schedule_delete(
     headers: HeaderMap,
     Path((tab_id, schedule_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    schedule_mutation(&state, &tab_id, ScheduleMutation::Delete { schedule_id }).await
+    schedule_mutation(&state, &phone, &tab_id, ScheduleMutation::Delete { schedule_id }).await
 }
 
 // ── Project prompt collection ────────────────────────────────────────────────
@@ -2382,21 +3705,14 @@ fn prompt_desktop_error(
 
 fn prompt_project(
     state: &HostState,
+    phone: &Phone,
     project_id: &str,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state)?;
+    let catalog = catalog(state, phone)?;
     let Some(project) = catalog.project(project_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
     };
     Ok(project.raw_id.clone())
-}
-
-async fn prompts_call(
-    state: &HostState,
-    request: DesktopRequest,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    prompt_desktop_error(admin::desktop_call(&desktop_socket, &request).await)
 }
 
 async fn prompts(
@@ -2404,22 +3720,38 @@ async fn prompts(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let project_id = match prompt_project(&state, &project_id) {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let project_id = match prompt_project(&state, &phone, &project_id) {
         Ok(raw) => raw,
         Err(error) => return error,
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    prompts_call(
-        &state,
-        DesktopRequest::Prompts {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::Prompts {
             request_id,
-            project_id,
+            project_id: project_id.clone(),
         },
     )
-    .await
+    .await;
+    if desktop_down(&response) {
+        // No window: the rows come off `agent_prompts.json`, read-only.
+        return match headless::prompts(&state.config.state_dir, &project_id) {
+            Ok(prompts) => (
+                StatusCode::OK,
+                Json(json!({
+                    "prompts": prompts.into_iter().map(MobileCollectedPrompt::from).collect::<Vec<_>>(),
+                    "desktop_available": false,
+                })),
+            ),
+            Err(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        };
+    }
+    prompt_desktop_error(response)
 }
 
 /// Authentication and origin come before the body is even parsed, so an
@@ -2427,33 +3759,85 @@ async fn prompts(
 fn mutation_guard(
     headers: &HeaderMap,
     state: &HostState,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    authenticate(headers, state)?;
+) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
+    let phone = authenticate(headers, state)?;
     if !exact_origin(headers, state) {
         return Err(api_error(StatusCode::FORBIDDEN, "invalid_origin"));
     }
-    Ok(())
+    Ok(phone)
 }
 
 async fn prompt_mutation(
     state: &HostState,
+    phone: &Phone,
     project_id: &str,
     action: PromptMutation,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let project_id = match prompt_project(state, project_id) {
+    let project_id = match prompt_project(state, phone, project_id) {
         Ok(raw) => raw,
         Err(error) => return error,
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    prompts_call(
-        state,
-        DesktopRequest::PromptMutate {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::PromptMutate {
             request_id,
-            project_id,
-            action,
+            project_id: project_id.clone(),
+            action: action.clone(),
+            device_id: Some(phone.device_id().to_string()),
         },
     )
-    .await
+    .await;
+    if desktop_down(&response) {
+        // No window: the prompt lands in `agent_prompts.json` under its lock;
+        // a send is queued as a one-time rule the sidecar's scheduler fires
+        // (headless owner plan, H3).
+        let target = match &action {
+            PromptMutation::Send { tmux_session, .. } => {
+                let Ok(snapshot) = catalog(state, phone) else {
+                    return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+                };
+                let Some(tab) = snapshot
+                    .projects
+                    .iter()
+                    .filter(|p| p.raw_id == project_id)
+                    .flat_map(|p| p.tabs.iter())
+                    .find(|t| &t.tmux_name == tmux_session)
+                else {
+                    return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+                };
+                let Some(schedule_target_id) = tab.schedule_target_id.clone() else {
+                    return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+                };
+                Some(headless::SendTarget {
+                    schedule_target_id,
+                    label: tab.public.label.clone(),
+                    session_id: tab.session_id.clone(),
+                    agent: tab.cmd.clone(),
+                })
+            }
+            _ => None,
+        };
+        return match headless::prompt_mutate(&state.config.state_dir, &project_id, action, target, Some(phone.device_id()), chrono::Local::now()) {
+            Ok(prompts) => {
+                poke_window(state, Some(&project_id), &["prompts", "schedules"]);
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "prompts": prompts.into_iter().map(MobileCollectedPrompt::from).collect::<Vec<_>>(),
+                        "desktop_available": false,
+                    })),
+                )
+            }
+            Err(code) if code == "prompt_not_found" || code == "tab_not_found" => api_error(StatusCode::NOT_FOUND, &code),
+            Err(why) => {
+                eprintln!("mobile: a prompt write with no window failed: {why}");
+                api_error(StatusCode::BAD_REQUEST, "invalid_request")
+            }
+        };
+    }
+    prompt_desktop_error(response)
 }
 
 async fn prompt_create(
@@ -2462,14 +3846,15 @@ async fn prompt_create(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let Ok(prompt) = serde_json::from_slice::<MobilePromptInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (status, body) =
-        prompt_mutation(&state, &project_id, PromptMutation::Create { prompt }).await;
+        prompt_mutation(&state, &phone, &project_id, PromptMutation::Create { prompt }).await;
     (
         if status == StatusCode::OK {
             StatusCode::CREATED
@@ -2486,14 +3871,16 @@ async fn prompt_update(
     Path((project_id, prompt_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let Ok(prompt) = serde_json::from_slice::<MobilePromptInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     prompt_mutation(
         &state,
+        &phone,
         &project_id,
         PromptMutation::Update { prompt_id, prompt },
     )
@@ -2505,10 +3892,11 @@ async fn prompt_delete(
     headers: HeaderMap,
     Path((project_id, prompt_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
-    prompt_mutation(&state, &project_id, PromptMutation::Delete { prompt_id }).await
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    prompt_mutation(&state, &phone, &project_id, PromptMutation::Delete { prompt_id }).await
 }
 
 #[derive(Deserialize)]
@@ -2523,16 +3911,17 @@ async fn prompt_send(
     Path((project_id, prompt_id)): Path<(String, String)>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let Ok(send) = serde_json::from_slice::<PromptSendBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // The tab is resolved here, before the generic mutation path, so a tab id
     // from another project can never aim a prompt across projects.
     let tmux_session = {
-        let catalog = match catalog(&state) {
+        let catalog = match catalog(&state, &phone) {
             Ok(catalog) => catalog,
             Err(error) => return error,
         };
@@ -2551,6 +3940,7 @@ async fn prompt_send(
     };
     prompt_mutation(
         &state,
+        &phone,
         &project_id,
         PromptMutation::Send {
             prompt_id,
@@ -2569,25 +3959,32 @@ async fn undo_clear(
     headers: HeaderMap,
     Path(tab_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
-    let (project_id, tmux_session) = match agent_tab_target(&state, &tab_id) {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (project_id, tmux_session) = match agent_tab_target(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::UndoClear {
             request_id,
-            project_id,
+            project_id: project_id.clone(),
             tmux_session,
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the owner takes the clear back (headless owner plan,
+        // H3) — Claude's resume typed into the session, the others
+        // relaunched onto the cleared conversation.
+        return undo_clear_headless(&state, &phone, &tab_id).await;
+    }
+    match response {
         Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "undone": true }))),
         Ok(DesktopResponse::Error { code, .. }) => api_error(
             match code.as_str() {
@@ -2602,16 +3999,54 @@ async fn undo_clear(
     }
 }
 
+/// `undo_clear` with no window: the plan `agent_session::undo_clear_plan`
+/// makes for the tab (read off the process's own state dir — the same one
+/// in production) applied through the host's runner and spawn seam.
+async fn undo_clear_headless(state: &HostState, phone: &Phone, tab_id: &str) -> (StatusCode, Json<serde_json::Value>) {
+    let Ok(snapshot) = catalog(state, phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = snapshot.tab(tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if project.public.kind == ScopeKind::Root {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    let Some(uid) = tab.session_id.clone().filter(|id| !id.is_empty()) else {
+        return api_error(StatusCode::CONFLICT, "nothing_to_undo");
+    };
+    let (agent, raw_id) = (tab.cmd.clone(), project.raw_id.clone());
+    let plan = tokio::task::spawn_blocking(move || crate::services::agent_session::undo_clear_plan(&agent, Some(&raw_id), &uid))
+        .await
+        .ok()
+        .flatten();
+    match headless::apply_undo_plan(&state.config.state_dir, project, tab, plan, state.runner.clone(), &state.spawner.launch).await {
+        Ok(headless::UndoOutcome::Undone) => (StatusCode::OK, Json(json!({ "undone": true, "desktop_available": false }))),
+        Ok(headless::UndoOutcome::NothingToUndo) => api_error(StatusCode::CONFLICT, "nothing_to_undo"),
+        Ok(headless::UndoOutcome::TabNotReady) => api_error(StatusCode::SERVICE_UNAVAILABLE, "tab_not_ready"),
+        Err(why) => {
+            eprintln!("mobile: an undo with no window failed: {why}");
+            api_error(StatusCode::SERVICE_UNAVAILABLE, "tab_not_ready")
+        }
+    }
+}
+
 /// Tell the desktop a phone had this agent tab on screen, so its activity
 /// store marks the tab's output read (see `clearAttention`). Fire-and-forget:
 /// nothing in the terminal path may wait on the desktop, which is why this
 /// spawns rather than awaits — a wedged bridge would otherwise hold the
 /// WebSocket attach for the full control-call deadline.
-fn mark_tab_seen(socket: &std::path::Path, project_id: Option<String>, tmux_session: String) {
+fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: String, uid: Option<&str>) {
     let Some(project_id) = project_id else {
         return;
     };
-    let socket = socket.to_path_buf();
+    // Remembered on disk too (H3): the headless readings answer from files,
+    // and a turn the phone watched finish must not come back as `done` once
+    // the window is closed.
+    if let Some(uid) = uid {
+        headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000);
+    }
+    let socket = state.config.control_dir.join("desktop-control.sock");
     tokio::spawn(async move {
         // No `exists()` pre-check: a closed desktop refuses the connect at
         // once, and on Windows the nominal socket path is never a file, so the
@@ -2658,9 +4093,9 @@ async fn terminal(
     Path(tab_id): Path<String>,
     ws: WebSocketUpgrade,
 ) -> Response<Body> {
-    if authenticate(&headers, &state).is_err() {
+    let Ok(phone) = authenticate(&headers, &state) else {
         return api_error(StatusCode::UNAUTHORIZED, "authentication_required").into_response();
-    }
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
@@ -2668,10 +4103,10 @@ async fn terminal(
         .get(header::SEC_WEBSOCKET_PROTOCOL)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !offered.split(',').any(|v| v.trim() == TERMINAL_PROTOCOL) {
+    let Some(protocol) = terminal_protocol_in(&crate::brand::PAIR, offered) else {
         return api_error(StatusCode::BAD_REQUEST, "terminal_protocol_required").into_response();
-    }
-    let Ok(catalog) = catalog(&state) else {
+    };
+    let Ok(catalog) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable").into_response();
     };
     let Some((tab_project, tab)) = catalog.tab(&tab_id) else {
@@ -2696,13 +4131,15 @@ async fn terminal(
     let catalog = state.catalog.clone();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let seen_tmux = tmux.clone();
+    let seen_uid = tab.session_id.clone();
+    let seen_state = state.clone();
     let input_socket = desktop_socket.clone();
     let input_project = seen_project.clone();
     let input_tmux = tmux.clone();
     // `DefaultBodyLimit` does not reach WebSocket frames, and tungstenite's
     // default is 64 MiB — so `MAX_INPUT_FRAME` was only checked *after* the
     // server had already buffered a thousandfold more than it allows.
-    ws.protocols([TERMINAL_PROTOCOL])
+    ws.protocols([protocol])
         .max_message_size(MAX_INPUT_FRAME)
         .max_frame_size(MAX_INPUT_FRAME)
         .on_upgrade(move |socket| async move {
@@ -2711,7 +4148,14 @@ async fn terminal(
             // last moment the screen was in front of somebody. Both edges are
             // stamped, so a turn that finished while the phone was watching
             // does not come back as an unread `done` the moment it detaches.
-            mark_tab_seen(&desktop_socket, seen_project.clone(), seen_tmux.clone());
+            // A page going hidden and coming back are the same two edges with
+            // the socket left open, and the bridge stamps those (and the
+            // detach, unless the page was hidden by then): a turn that
+            // finishes in a pocket is still unread when the phone comes out.
+            let seen = move || {
+                mark_tab_seen(&seen_state, seen_project.clone(), seen_tmux.clone(), seen_uid.as_deref())
+            };
+            seen();
             let _ = pty_bridge::attach(
                 socket,
                 tmux,
@@ -2724,9 +4168,9 @@ async fn terminal(
                 move || {
                     mark_tab_input(&input_socket, input_project.clone(), input_tmux.clone());
                 },
+                seen,
             )
             .await;
-            mark_tab_seen(&desktop_socket, seen_project, seen_tmux);
         })
 }
 
@@ -2740,7 +4184,7 @@ struct InboxQuery {
 
 /// `POST /api/v1/tabs/{tab_id}/inbox` — the composer's **+ → From this phone**.
 /// The raw body is the file; it lands in the tab's project under
-/// `.eldrun/inbox/` and the phone gets the project-relative reference back to
+/// `.tabtivity/inbox/` and the phone gets the project-relative reference back to
 /// put after an `@`. The tab names the project and nothing else: a session
 /// that has ended can still receive a file for the next one. See
 /// `inbox.rs` for why a relative reference may cross the boundary.
@@ -2751,13 +4195,14 @@ async fn inbox_upload(
     Query(query): Query<InboxQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(catalog) = catalog(&state) else {
+    let Ok(catalog) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
     let Some((project, _)) = catalog.tab(&tab_id) else {
@@ -2779,13 +4224,14 @@ async fn project_inbox_upload(
     Query(query): Query<InboxQuery>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    match project_drop_box_root(&state, &project_id) {
+    match project_drop_box_root(&state, &phone, &project_id) {
         Ok(root) => store_in_project_inbox(root, query.name, body).await,
         Err(error) => error,
     }
@@ -2832,7 +4278,7 @@ fn inbox_error(error: inbox::InboxError) -> (StatusCode, Json<serde_json::Value>
 }
 
 /// `POST /api/v1/inbox` — the phone's **Send to desktop**: a file that belongs
-/// to no project. It lands in Eldrun's own `<state_dir>/inbox/`, never in a
+/// to no project. It lands in Tabtivity's own `<state_dir>/inbox/`, never in a
 /// project folder, and the desktop's header lists it from there. The answer
 /// carries the stored name and size only — there is nothing to reference.
 async fn global_inbox_upload(
@@ -2865,9 +4311,10 @@ async fn global_inbox_upload(
 /// project and nothing else, exactly as `inbox_upload` reads it.
 fn inbox_project(
     state: &HostState,
+    phone: &Phone,
     tab_id: &str,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state)?;
+    let catalog = catalog(state, phone)?;
     let Some((project, _)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
@@ -2900,24 +4347,32 @@ async fn desktop_images(
     headers: HeaderMap,
     Path(tab_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let project_id = match inbox_project(&state, &tab_id) {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let project_id = match inbox_project(&state, &phone, &tab_id) {
         Ok(raw) => raw,
         Err(error) => return error,
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::DesktopImages {
             request_id,
             project_id,
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the folders are listed here, without the clipboard
+        // (headless owner plan, H3).
+        let state_dir = state.config.state_dir.clone();
+        let images = tokio::task::spawn_blocking(move || headless::desktop_images(&state_dir)).await.unwrap_or_default();
+        return (StatusCode::OK, Json(json!({ "images": images, "desktop_available": false })));
+    }
+    match response {
         Ok(DesktopResponse::DesktopImages { images }) => {
             (StatusCode::OK, Json(json!({ "images": images })))
         }
@@ -2933,38 +4388,56 @@ struct AttachDesktopImageBody {
 
 /// `POST /api/v1/tabs/{tab_id}/desktop-images` — copy one listed image into
 /// the tab's project inbox. Answers like `inbox_upload`: the stored name, the
-/// project-relative `.eldrun/inbox/<file>` reference, the size.
+/// project-relative `.tabtivity/inbox/<file>` reference, the size.
 async fn attach_desktop_image(
     State(state): State<HostState>,
     headers: HeaderMap,
     Path(tab_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(error) = mutation_guard(&headers, &state) {
-        return error;
-    }
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     let Ok(request) = serde_json::from_slice::<AttachDesktopImageBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !desktop_images::valid_id(&request.image_id) {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    let project_id = match inbox_project(&state, &tab_id) {
+    let project_id = match inbox_project(&state, &phone, &tab_id) {
         Ok(raw) => raw,
         Err(error) => return error,
     };
     let request_id = Base64UrlUnpadded::encode_string(&random_16());
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-    match admin::desktop_call(
+    let response = admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::AttachDesktopImage {
             request_id,
             project_id,
-            image_id: request.image_id,
+            image_id: request.image_id.clone(),
         },
     )
-    .await
-    {
+    .await;
+    if desktop_down(&response) {
+        // No window: the file is copied into the project's inbox here.
+        let Ok(snapshot) = catalog(&state, &phone) else {
+            return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+        };
+        let Some((project, _)) = snapshot.tab(&tab_id) else {
+            return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+        };
+        let (state_dir, root, image_id) = (state.config.state_dir.clone(), project.root.clone(), request.image_id);
+        let attached = tokio::task::spawn_blocking(move || headless::attach_desktop_image(&state_dir, &root, &image_id))
+            .await
+            .unwrap_or_else(|_| Err("write_failed".to_string()));
+        return match attached {
+            Ok(attachment) => (StatusCode::CREATED, Json(json!({ "attachment": attachment, "desktop_available": false }))),
+            Err(code) => desktop_image_error(&code),
+        };
+    }
+    match response {
         Ok(DesktopResponse::Attached { attachment }) => (
             StatusCode::CREATED,
             Json(json!({ "attachment": attachment })),
@@ -2979,9 +4452,10 @@ async fn attach_desktop_image(
 /// session that has ended still shows what it left for the phone.
 fn outbox_root(
     state: &HostState,
+    phone: &Phone,
     tab_id: &str,
 ) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state)?;
+    let catalog = catalog(state, phone)?;
     let Some((project, _)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
@@ -2994,9 +4468,10 @@ fn outbox_root(
 /// an agent tab — still has them, and that screen has no tab to name.
 fn project_drop_box_root(
     state: &HostState,
+    phone: &Phone,
     project_id: &str,
 ) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state)?;
+    let catalog = catalog(state, phone)?;
     let Some(project) = catalog.project(project_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
     };
@@ -3015,7 +4490,7 @@ fn outbox_error(error: outbox::OutboxError) -> (StatusCode, Json<serde_json::Val
 }
 
 /// `GET /api/v1/tabs/{tab_id}/outbox` — the files the agent left in the
-/// project's `.eldrun/outbox/` for the phone to see (`outbox.rs`): leaf name,
+/// project's `.tabtivity/outbox/` for the phone to see (`outbox.rs`): leaf name,
 /// kind, size and mtime, newest first. Read from disk by the sidecar itself,
 /// like the inbox write — no desktop round trip, and no path in the answer.
 async fn outbox_list(
@@ -3023,10 +4498,11 @@ async fn outbox_list(
     headers: HeaderMap,
     Path(tab_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let catalog = match catalog(&state) {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let catalog = match catalog(&state, &phone) {
         Ok(catalog) => catalog,
         Err(error) => return error,
     };
@@ -3035,7 +4511,8 @@ async fn outbox_list(
     };
     // Every file is listed — the gallery holds them all — but only what this
     // tab sent is marked `from_tab`, the files its chat shows.
-    outbox_listing(project.root.clone(), tab.session_id.clone()).await
+    let rows = row_seal(&state, project);
+    outbox_listing(project.root.clone(), tab.session_id.clone(), rows).await
 }
 
 /// `GET /api/v1/projects/{project_id}/outbox` — the same listing by the
@@ -3045,23 +4522,65 @@ async fn project_outbox_list(
     headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let catalog = match catalog(&state, &phone) {
+        Ok(catalog) => catalog,
+        Err(error) => return error,
+    };
+    let Some(project) = catalog.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    let rows = row_seal(&state, project);
+    outbox_listing(project.root.clone(), None, rows).await
+}
+
+/// One outbox file as a listing hands it to the phone: the file's own fields
+/// and, for a copy `tabtivity-send` made of a project file the files drawer
+/// would list, that file's sealed row — the phone opens the project file in
+/// its place, so its marks are the drawer's (one layer per project file, not
+/// one per copy). The path the copy recorded never crosses.
+#[derive(Serialize)]
+struct ListedOutboxFile {
+    #[serde(flatten)]
+    file: outbox::OutboxFile,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_row: Option<MobileMarkupFile>,
+}
+
+/// What a listing seals a copy's project file with — the project's raw id
+/// and the host key — or `None` unless the drawer is open (`files_open`) and
+/// the scope is a real project: the same gates as `markup_banner_files`.
+fn row_seal(state: &HostState, project: &super::discovery::ResolvedProject) -> Option<(String, Vec<u8>)> {
+    if project.public.kind != ScopeKind::Project || !files::files_open(&state.config.state_dir) {
+        return None;
     }
-    match project_drop_box_root(&state, &project_id) {
-        Ok(root) => outbox_listing(root, None).await,
-        Err(error) => error,
-    }
+    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    Some((project.raw_id.clone(), key))
 }
 
 async fn outbox_listing(
     root: PathBuf,
     tab: Option<String>,
+    rows: Option<(String, Vec<u8>)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    // A directory walk that opens every candidate: off the connection executor.
-    let listed = tokio::task::spawn_blocking(move || outbox::list_for(&root, tab.as_deref()))
-        .await
-        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    // A directory walk that opens every candidate, and each copy's project
+    // file proven and sealed: off the connection executor.
+    let listed = tokio::task::spawn_blocking(move || {
+        let files = outbox::list_for(&root, tab.as_deref())?;
+        Ok::<_, outbox::OutboxError>(files
+            .into_iter()
+            .map(|file| {
+                let file_row = rows.as_ref().zip(file.source.as_deref())
+                    .and_then(|((raw_id, key), rel)| file_row(&root, rel, key, raw_id));
+                ListedOutboxFile { file, file_row }
+            })
+            .collect::<Vec<_>>())
+    })
+    .await
+    .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
     match listed {
         Ok(files) => (StatusCode::OK, Json(json!({ "files": files }))),
         Err(error) => outbox_error(error),
@@ -3082,10 +4601,11 @@ async fn outbox_file(
     Path((tab_id, name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response<Body> {
-    if let Err(error) = authenticate_or_ticket(&headers, &state, &uri) {
-        return error.into_response();
-    }
-    let root = match outbox_root(&state, &tab_id) {
+    let phone = match authenticate_or_ticket(&headers, &state, &uri) {
+        Ok(phone) => phone,
+        Err(error) => return error.into_response(),
+    };
+    let root = match outbox_root(&state, &phone, &tab_id) {
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
@@ -3101,10 +4621,11 @@ async fn project_outbox_file(
     Path((project_id, name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response<Body> {
-    if let Err(error) = authenticate_or_ticket(&headers, &state, &uri) {
-        return error.into_response();
-    }
-    let root = match project_drop_box_root(&state, &project_id) {
+    let phone = match authenticate_or_ticket(&headers, &state, &uri) {
+        Ok(phone) => phone,
+        Err(error) => return error.into_response(),
+    };
+    let root = match project_drop_box_root(&state, &phone, &project_id) {
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
@@ -3115,7 +4636,7 @@ async fn project_outbox_file(
 /// desktop published to this phone.
 ///
 /// What the reader can see, the reader can clear: nothing prunes
-/// `.eldrun/outbox/`, and a picture that has been looked at could only be
+/// `.tabtivity/outbox/`, and a picture that has been looked at could only be
 /// removed from a shell on the desktop until now. Only a leaf the listing
 /// handed out is deletable (`outbox::remove` re-proves it exactly as a read
 /// does), and the exact-origin check every mutating route here carries applies
@@ -3125,13 +4646,14 @@ async fn outbox_delete(
     headers: HeaderMap,
     Path((tab_id, name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    match outbox_root(&state, &tab_id) {
+    match outbox_root(&state, &phone, &tab_id) {
         Ok(root) => outbox_removal(root, name).await,
         Err(error) => error,
     }
@@ -3145,13 +4667,14 @@ async fn project_outbox_delete(
     headers: HeaderMap,
     Path((project_id, name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    match project_drop_box_root(&state, &project_id) {
+    match project_drop_box_root(&state, &phone, &project_id) {
         Ok(root) => outbox_removal(root, name).await,
         Err(error) => error,
     }
@@ -3179,10 +4702,21 @@ async fn outbox_bytes(root: PathBuf, name: String, download: bool) -> Response<B
     if !outbox::valid_name(&name) {
         return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
     }
-    let filename = name.clone();
+    // Saved under the name it was sent as, not the stamped leaf.
+    let filename = outbox::sent_name(&name).to_string();
     let read = tokio::task::spawn_blocking(move || outbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    file_response(read, &filename, download)
+}
+
+/// A drop-box read as the phone gets it: typed by the bytes, inline unless it
+/// is bytes the phone cannot show or a download was asked for.
+fn file_response(
+    read: Result<(Vec<u8>, &'static str), outbox::OutboxError>,
+    filename: &str,
+    download: bool,
+) -> Response<Body> {
     match read {
         Ok((bytes, kind)) => Response::builder()
             .status(StatusCode::OK)
@@ -3197,17 +4731,616 @@ async fn outbox_bytes(root: PathBuf, name: String, download: bool) -> Response<B
     }
 }
 
+/// `GET /api/v1/tabs/{tab_id}/inbox?names=a,b` — what the phone sent into this
+/// tab's project inbox, described for the chat's previews: the leaves are the
+/// ones its own `@` references name (the composer's, the chat's), each typed
+/// by its bytes (`inbox::describe`). Leaves the inbox does not hold are left
+/// out. No listing of the whole inbox: the phone asks only for what it wrote.
+async fn inbox_described(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let root = match outbox_root(&state, &phone, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
+    let names = query.get("names").cloned().unwrap_or_default();
+    let described = tokio::task::spawn_blocking(move || {
+        let names: Vec<&str> = names.split(',').filter(|name| !name.is_empty()).collect();
+        inbox::describe(&root, &names)
+    })
+    .await
+    .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    match described {
+        Ok(files) => (StatusCode::OK, Json(json!({ "files": files }))),
+        Err(error) => outbox_error(error),
+    }
+}
+
+/// `GET /api/v1/tabs/{tab_id}/inbox/{name}` — the bytes of one file the phone
+/// sent into this tab's project inbox, for its picture in the chat and the
+/// composer. Served exactly as an outbox file is (`outbox_bytes`): typed by
+/// its header, a symlink or an unlisted name is `file_not_found`.
+async fn inbox_file(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path((tab_id, name)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response<Body> {
+    let phone = match authenticate_or_ticket(&headers, &state, &uri) {
+        Ok(phone) => phone,
+        Err(error) => return error.into_response(),
+    };
+    let root = match outbox_root(&state, &phone, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    if !inbox::valid_stored_name(&name) {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
+    }
+    let download = query.get("download").is_some_and(|v| v == "1");
+    let filename = outbox::sent_name(&name).to_string();
+    let read = tokio::task::spawn_blocking(move || inbox::read(&root, &name))
+        .await
+        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    file_response(read, &filename, download)
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup` — the markup view's **Submit**
+/// (`markup.rs`): the marks of a PDF or picture the phone marked up, whose
+/// layer PNGs already went through this tab's inbox. Bakes a PDF's marked copy
+/// into the same inbox and answers the prompt the phone sends into the chat.
+/// The source is named by a sealed file token of this tab's project or an
+/// outbox leaf, read only; the answer carries project-relative references and
+/// never the root.
+///
+/// A request with `mode: "apply"` (**Apply marks directly**,
+/// `docs/pdf_markup_direct_apply_plan.md`) takes an undo snapshot of the
+/// project's work tree first (`services::markup_rounds`, owned by this tab and
+/// its project; a remote project gets none). The answer adds `mode` (what the
+/// round got), `undo` (the snapshot's id) and `noUndo` (why a requested
+/// `apply` runs as `list`).
+async fn markup_submit(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Ok(request) = serde_json::from_slice::<markup::MarkupRequest>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, markup::MarkupError::Invalid.code());
+    };
+    if let Err(error) = markup::validate(&request) {
+        return api_error(StatusCode::BAD_REQUEST, error.code());
+    }
+    let (root, raw_id, kind, send_back) = {
+        let catalog = match catalog(&state, &phone) {
+            Ok(catalog) => catalog,
+            Err(error) => return error,
+        };
+        let Some((project, tab)) = catalog.tab(&tab_id) else {
+            return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+        };
+        // A tab with a session id is one `tabtivity-send` can answer into.
+        (project.root.clone(), project.raw_id.clone(), project.public.kind, tab.session_id.is_some())
+    };
+    let source = match &request.source {
+        markup::MarkupSource::Files(token) => {
+            // The file browser's own gates: the host-wide switch, projects only.
+            if !files::files_open(&state.config.state_dir) {
+                return api_error(StatusCode::NOT_FOUND, "files_off");
+            }
+            if kind != ScopeKind::Project {
+                return api_error(StatusCode::NOT_FOUND, "files_unavailable");
+            }
+            match files_rel(&state, &raw_id, Some(token)) {
+                Ok(rel) => markup::ResolvedSource::Files(rel),
+                Err(error) => return error,
+            }
+        }
+        markup::MarkupSource::Outbox(name) => markup::ResolvedSource::Outbox(name.clone()),
+    };
+    let state_dir = state.config.state_dir.clone();
+    let owner = markup_rounds::Owner::Phone { tab: tab_id.clone(), project: raw_id.clone() };
+    // Reads, a bake bounded by its own deadline, an inbox write, and an
+    // `apply` round's snapshot (git calls bounded by theirs).
+    let submitted = tokio::task::spawn_blocking(move || {
+        let undo = if crate::services::remote::remote_target_for(&raw_id).is_some() {
+            Err(markup_rounds::NoUndo::Remote)
+        } else {
+            Ok(markup::UndoTarget { state_dir: &state_dir, owner })
+        };
+        markup::submit_with_undo(&root, &source, &request, send_back, undo)
+    })
+    .await;
+    match submitted {
+        Ok(Ok(done)) => (
+            StatusCode::OK,
+            Json(json!({
+                "prompt": done.prompt,
+                "marked": done.marked,
+                "mode": done.mode,
+                "undo": done.undo,
+                "noUndo": done.no_undo.map(markup_rounds::NoUndo::code),
+            })),
+        ),
+        Ok(Err(markup::MarkupError::Files(error))) => files_error(error),
+        Ok(Err(markup::MarkupError::Outbox(error))) => outbox_error(error),
+        Ok(Err(error @ markup::MarkupError::Unsupported)) => api_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, error.code()),
+        Ok(Err(error)) => api_error(StatusCode::BAD_REQUEST, error.code()),
+        Err(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "markup_failed"),
+    }
+}
+
+// ── Markup undo (`services::markup_rounds`, the phone's half) ───────────────
+
+/// The owner of the undo snapshot `undo_id` a phone route names: this tab, of
+/// this tab's project. A malformed id is `round_not_found`, as another tab's
+/// round is (`markup_rounds::load`).
+fn markup_undo_owner(state: &HostState, phone: &Phone, tab_id: &str, undo_id: &str) -> Result<markup_rounds::Owner, ApiRefusal> {
+    if !markup_rounds::valid_id(undo_id) {
+        return Err(api_error(StatusCode::NOT_FOUND, markup_rounds::RoundError::NotFound.code()));
+    }
+    let catalog = catalog(state, phone)?;
+    let Some((project, _)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    Ok(markup_rounds::Owner::Phone { tab: tab_id.to_string(), project: project.raw_id.clone() })
+}
+
+/// A refused settle, preview or undo under the status the phone reads it by:
+/// `undo_conflict` (409) carries the project-relative files changed since
+/// and how many more.
+fn markup_undo_error(error: markup_rounds::RoundError) -> ApiRefusal {
+    let code = error.code();
+    match error {
+        markup_rounds::RoundError::Conflict { files, more } => {
+            (StatusCode::CONFLICT, Json(json!({ "error": code, "files": files, "more": more })))
+        }
+        markup_rounds::RoundError::NotFound => api_error(StatusCode::NOT_FOUND, code),
+        markup_rounds::RoundError::Gone => api_error(StatusCode::GONE, code),
+        markup_rounds::RoundError::NotReady => api_error(StatusCode::CONFLICT, code),
+        markup_rounds::RoundError::Failed => api_error(StatusCode::INTERNAL_SERVER_ERROR, code),
+    }
+}
+
+/// One undo call for a phone route, after its gates: off the async runtime.
+async fn markup_undo_call<T: Serialize + Send + 'static>(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+    undo_id: String,
+    call: fn(&std::path::Path, &str, &markup_rounds::Owner) -> Result<T, markup_rounds::RoundError>,
+) -> ApiRefusal {
+    let owner = match markup_undo_owner(state, phone, tab_id, &undo_id) {
+        Ok(owner) => owner,
+        Err(error) => return error,
+    };
+    let state_dir = state.config.state_dir.clone();
+    match tokio::task::spawn_blocking(move || call(&state_dir, &undo_id, &owner)).await {
+        Ok(Ok(answer)) => (StatusCode::OK, Json(json!(answer))),
+        Ok(Err(error)) => markup_undo_error(error),
+        Err(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "markup_failed"),
+    }
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/undo/{undo_id}/settle` → `{}` — the
+/// round's after-snapshot, each time its turn finishes (the last one wins).
+async fn markup_undo_settle(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, undo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let settle = |dir: &std::path::Path, id: &str, owner: &markup_rounds::Owner| {
+        markup_rounds::settle(dir, id, owner).map(|()| serde_json::Map::new())
+    };
+    markup_undo_call(&state, &phone, &tab_id, undo_id, settle).await
+}
+
+/// `GET /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files: [{ path,
+/// change }], more, pdf, outsideMore }` — what an undo would put back,
+/// project-relative (settles first when the round has not). Files changed
+/// outside the project folder are only counted (`outsideMore`): a phone may
+/// be scoped to this project, and those names can be a sibling's.
+async fn markup_undo_preview(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, undo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let preview = |dir: &std::path::Path, id: &str, owner: &markup_rounds::Owner| {
+        markup_rounds::preview(dir, id, owner).map(markup_rounds::Changes::outside_counted)
+    };
+    markup_undo_call(&state, &phone, &tab_id, undo_id, preview).await
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/undo/{undo_id}` → `{ files, more, pdf,
+/// outsideMore }` — puts the round's changes back, or 409 `undo_conflict`
+/// with the files changed since and nothing touched. Outside the project
+/// folder: a count only, as the preview.
+async fn markup_undo(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, undo_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let undo = |dir: &std::path::Path, id: &str, owner: &markup_rounds::Owner| {
+        markup_rounds::undo(dir, id, owner).map(markup_rounds::Changes::outside_counted)
+    };
+    markup_undo_call(&state, &phone, &tab_id, undo_id, undo).await
+}
+
+// ── Markup questions (`services::markup_mcp`, the phone's half) ──────────────
+
+/// Longest body a markup answer may carry: four **Other…** texts of 500
+/// characters, four bytes each at worst, the option indices and the ask id.
+const MAX_MARKUP_ANSWER_BODY: usize = 16 * 1024;
+
+/// `?source=files:<token>` (a project file's sealed token) or
+/// `?source=outbox:<leaf>` — the file the phone's markup view shows. Left out
+/// by the Focus banner, which asks for every open ask of the tab.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct MarkupQuestionsQuery {
+    source: Option<String>,
+}
+
+/// An ask id as `services::markup_mcp` mints it: `ask-` and hex digits.
+fn valid_ask_id(id: &str) -> bool {
+    id.len() <= 64
+        && id
+            .strip_prefix("ask-")
+            .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// A tick as `services::markup_mcp` records it: a round id a view minted
+/// (`markup::valid_round`) and a 1-based page and mark within its bounds.
+fn valid_tick(tick: &MobileMarkupTick) -> bool {
+    markup::valid_round(&tick.round)
+        && (1..=crate::services::markup_mcp::MAX_PAGE).contains(&tick.page)
+        && (1..=crate::services::markup_mcp::MAX_MARK).contains(&tick.mark)
+}
+
+/// A refusal as a route answers it.
+type ApiRefusal = (StatusCode, Json<serde_json::Value>);
+
+/// The agent tab a markup question route names — its raw project id and
+/// record — and, given the view's `source`, the project-relative path of the
+/// file it shows: a files token unsealed under the file browser's own gates
+/// (as the markup Submit does), or an outbox leaf (`markup::validate_source`).
+/// Only that path goes on to the desktop; nothing of it comes back.
+fn markup_tab(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+    source: Option<&str>,
+) -> Result<(String, ResolvedTab, Option<String>), ApiRefusal> {
+    let catalog = catalog(state, phone)?;
+    let Some((project, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    let (raw_id, kind, tab) = (project.raw_id.clone(), project.public.kind, tab.clone());
+    let Some(source) = source else {
+        return Ok((raw_id, tab, None));
+    };
+    let source = match source.split_once(':') {
+        Some(("files", token)) => markup::MarkupSource::Files(token.to_string()),
+        Some(("outbox", leaf)) => markup::MarkupSource::Outbox(leaf.to_string()),
+        _ => return Err(api_error(StatusCode::BAD_REQUEST, "invalid_source")),
+    };
+    if markup::validate_source(&source).is_err() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_source"));
+    }
+    let rel = match source {
+        markup::MarkupSource::Files(token) => {
+            if !files::files_open(&state.config.state_dir) {
+                return Err(api_error(StatusCode::NOT_FOUND, "files_off"));
+            }
+            if kind != ScopeKind::Project {
+                return Err(api_error(StatusCode::NOT_FOUND, "files_unavailable"));
+            }
+            let rel = files_rel(state, &raw_id, Some(&token))?;
+            if rel.is_empty() {
+                // The root folder's own token names no file.
+                return Err(api_error(StatusCode::BAD_REQUEST, "invalid_source"));
+            }
+            rel
+        }
+        markup::MarkupSource::Outbox(leaf) => format!("{}/{leaf}", outbox::OUTBOX_DIR),
+    };
+    Ok((raw_id, tab, Some(rel)))
+}
+
+/// The name the phone is shown for an ask's file: its bare leaf, without the
+/// send stamps an outbox copy carries — whatever the desktop answered, no
+/// folder crosses.
+fn markup_file_name(name: &str) -> Option<String> {
+    let leaf = outbox::sent_name(name.rsplit(['/', '\\']).next().unwrap_or(name));
+    (!leaf.is_empty()).then(|| leaf.to_string())
+}
+
+/// A markup question refusal under the status the phone reads it by. The
+/// ask's own refusals are conflicts: the card re-lists and goes on.
+fn markup_desktop_error(code: &str) -> ApiRefusal {
+    api_error(
+        match code {
+            "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+            "tab_not_found" => StatusCode::NOT_FOUND,
+            "superseded" | "answered" | "gone" | "delivery_failed" | "not_delivered" => StatusCode::CONFLICT,
+            _ => StatusCode::BAD_REQUEST,
+        },
+        code,
+    )
+}
+
+/// Ask the window. The asks live in its process, beside the root MCP
+/// listener that took them; with no window there is no listener and so no
+/// ask, and the owner has nothing to answer from (headless owner plan) — a
+/// closed desktop is `desktop_unavailable`, which the phone reads as "no
+/// card". Never an error the phone would show.
+async fn markup_call(state: &HostState, request: DesktopRequest) -> Result<DesktopResponse, ApiRefusal> {
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(&desktop_socket, &request).await;
+    if desktop_down(&response) {
+        return Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"));
+    }
+    match response {
+        Ok(DesktopResponse::Error { code, .. }) => Err(markup_desktop_error(&code)),
+        Ok(answer) => Ok(answer),
+        Err(_) => Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable")),
+    }
+}
+
+/// `GET /api/v1/tabs/{tab_id}/markup/questions[?source=…]` — the agent tab's
+/// open markup question (`services::markup_mcp`) for the phone's markup card,
+/// or every open one for the Focus banner. Each ask carries its random id,
+/// its questions and its file's leaf name — never a path. Beside them,
+/// `ticks: [{ round, page, mark }]`: the marks the agent ticked off with
+/// `markup_done` for the same file (every file's for the banner), which the
+/// phone maps onto the marks it sent in that round.
+async fn markup_questions(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<MarkupQuestionsQuery>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (project_id, tab, path) = match markup_tab(&state, &phone, &tab_id, query.source.as_deref()) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let banner = path.is_none();
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request = DesktopRequest::MarkupQuestions { request_id, project_id: project_id.clone(), tmux_session: tab.tmux_name.clone(), path };
+    match markup_call(&state, request).await {
+        Ok(DesktopResponse::MarkupQuestions { asks, ticks }) => {
+            let ticks: Vec<_> = ticks.into_iter().filter(valid_tick).collect();
+            let mut asks: Vec<_> = asks.into_iter().filter(|ask| valid_ask_id(&ask.id)).collect();
+            // The path never crosses; for the Focus banner (no source) a
+            // project file the drawer could open is handed over as its row.
+            let paths: Vec<Option<String>> = asks
+                .iter_mut()
+                .map(|ask| {
+                    ask.file_row = None;
+                    ask.file_name = ask.file_name.as_deref().and_then(markup_file_name);
+                    ask.path.take()
+                })
+                .collect();
+            if banner {
+                let rows = markup_banner_files(&state, &phone, &tab_id, &project_id, paths).await;
+                for (ask, row) in asks.iter_mut().zip(rows) {
+                    ask.file_row = row;
+                }
+            }
+            (StatusCode::OK, Json(json!({ "asks": asks, "ticks": ticks })))
+        }
+        Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        Err(error) => error,
+    }
+}
+
+/// The Focus banner's file rows: each ask's project-relative path sealed as
+/// the files drawer would row it (`files::entry`), with its folder's token
+/// and folder trail. Only while the drawer is open for the project
+/// (`files_scope`), never for an outbox copy (the phone finds those in its
+/// own gallery), and `None` for a file the drawer would not list.
+async fn markup_banner_files(state: &HostState, phone: &Phone, tab_id: &str, raw_id: &str, paths: Vec<Option<String>>) -> Vec<Option<MobileMarkupFile>> {
+    let none = || vec![None; paths.len()];
+    if paths.iter().all(Option::is_none) || !files::files_open(&state.config.state_dir) {
+        return none();
+    }
+    let Ok(catalog) = catalog(state, phone) else { return none() };
+    let Some((project, _)) = catalog.tab(tab_id) else { return none() };
+    if project.public.kind != ScopeKind::Project || project.raw_id != raw_id {
+        return none();
+    }
+    let root = project.root.clone();
+    let raw_id = raw_id.to_string();
+    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    tokio::task::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|path| file_row(&root, &path?, &key, &raw_id))
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The project file at root-relative `rel` as the files drawer would row it
+/// (`files::entry`, which proves it: a regular file reached with no link on
+/// the way, nothing the browser hides), sealed with its folder's token and
+/// the folder trail the phone keys its markup layer by. `None` for anything
+/// the drawer would not list, and for the outbox — a copy there is the
+/// gallery's, not a project file.
+fn file_row(root: &std::path::Path, rel: &str, key: &[u8], raw_id: &str) -> Option<MobileMarkupFile> {
+    if rel.starts_with(&format!("{}/", outbox::OUTBOX_DIR)) {
+        return None;
+    }
+    let entry = files::entry(root, rel, key, raw_id)?;
+    let place = rel.rsplit_once('/').map(|(parent, _)| parent.to_string()).unwrap_or_default();
+    let folder = (!place.is_empty()).then(|| files::seal(key, raw_id, &place));
+    Some(MobileMarkupFile {
+        token: entry.token,
+        name: entry.name,
+        kind: entry.kind.to_string(),
+        size: entry.size,
+        modified: entry.modified,
+        folder,
+        place,
+    })
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/answer` — `{ ask_id, answers: [{
+/// options: number[], other? }] }`, one per question in order. The desktop
+/// checks it against the ask, builds the prompt and queues it into the tab;
+/// the phone never sends prompt text here. `409` with the ask's code when it
+/// does not take the answer (`superseded`, `answered`, `gone`), or when the
+/// prompt could not be queued (`delivery_failed`: the ask is open again).
+async fn markup_answer(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::markup_mcp::{MAX_OPTIONS, MAX_OTHER_CHARS, MAX_QUESTIONS};
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AnswerBody {
+        ask_id: String,
+        answers: Vec<super::protocol::MobileMarkupAnswer>,
+    }
+    let Ok(request) = serde_json::from_slice::<AnswerBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if !valid_ask_id(&request.ask_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let shaped = !request.answers.is_empty()
+        && request.answers.len() <= MAX_QUESTIONS
+        && request.answers.iter().all(|answer| {
+            answer.options.len() <= MAX_OPTIONS
+                && answer.options.iter().all(|&index| (index as usize) < MAX_OPTIONS)
+                && answer.other.as_deref().is_none_or(|text| {
+                    text.chars().count() <= MAX_OTHER_CHARS && !text.chars().any(char::is_control)
+                })
+        });
+    if !shaped {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_answer");
+    }
+    let (project_id, tab, _) = match markup_tab(&state, &phone, &tab_id, None) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request = DesktopRequest::MarkupAnswer {
+        request_id,
+        project_id,
+        tmux_session: tab.tmux_name.clone(),
+        ask_id: request.ask_id,
+        answers: request.answers,
+        device_id: Some(phone.device_id().to_string()),
+    };
+    match markup_call(&state, request).await {
+        Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "answered": true }))),
+        Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        Err(error) => error,
+    }
+}
+
+/// `POST /api/v1/tabs/{tab_id}/markup/dismiss` — `{ ask_id }`: **Answer in
+/// chat instead**. The ask closes everywhere; nothing is typed. Idempotent.
+async fn markup_dismiss(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct DismissBody {
+        ask_id: String,
+    }
+    let Ok(request) = serde_json::from_slice::<DismissBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if !valid_ask_id(&request.ask_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let (project_id, tab, _) = match markup_tab(&state, &phone, &tab_id, None) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let request_id = Base64UrlUnpadded::encode_string(&random_16());
+    let request = DesktopRequest::MarkupDismiss { request_id, project_id, tmux_session: tab.tmux_name.clone(), ask_id: request.ask_id };
+    match markup_call(&state, request).await {
+        Ok(DesktopResponse::Seen) => (StatusCode::OK, Json(json!({ "dismissed": true }))),
+        Ok(_) => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+        Err(error) => error,
+    }
+}
+
 /// The root and raw id a file-browser request reads by (`files.rs`). Closed —
 /// `files_off` — unless the host-wide switch is on, read per request; a box
 /// or the root console is `files_unavailable`.
 fn files_scope(
     state: &HostState,
+    phone: &Phone,
     project_id: &str,
 ) -> Result<(PathBuf, String), (StatusCode, Json<serde_json::Value>)> {
     if !files::files_open(&state.config.state_dir) {
         return Err(api_error(StatusCode::NOT_FOUND, "files_off"));
     }
-    let catalog = catalog(state)?;
+    let catalog = catalog(state, phone)?;
     let Some(project) = catalog.project(project_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
     };
@@ -3252,10 +5385,11 @@ async fn project_files_list(
     Path(project_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    if let Err(error) = authenticate(&headers, &state) {
-        return error;
-    }
-    let (root, raw_id) = match files_scope(&state, &project_id) {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
         Ok(scope) => scope,
         Err(error) => return error,
     };
@@ -3274,6 +5408,39 @@ async fn project_files_list(
     }
 }
 
+/// `GET /api/v1/projects/{project_id}/files/search?q=<words>` — the project's
+/// files and folders whose names hold every word, each with the sealed trail
+/// of folders above it (`files::search`). Read-only, like the listing; no
+/// path appears in the answer, only the leaf names the drawer would show.
+async fn project_files_search(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let q = query.get("q").cloned().unwrap_or_default();
+    if q.len() > files::MAX_QUERY {
+        return api_error(StatusCode::BAD_REQUEST, "query_too_long");
+    }
+    let key = state.auth.lock().unwrap_or_else(PoisonError::into_inner).host_key().to_vec();
+    // A git listing or a walk of the whole tree: off the executor.
+    let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
+        .await
+        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    match found {
+        Ok(found) => (StatusCode::OK, Json(json!(found))),
+        Err(error) => files_error(error),
+    }
+}
+
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
 /// inert text), for the same viewer. Read-only: there is no write route.
@@ -3284,10 +5451,11 @@ async fn project_files_raw(
     Path(project_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response<Body> {
-    if let Err(error) = authenticate_or_ticket(&headers, &state, &uri) {
-        return error.into_response();
-    }
-    let (root, raw_id) = match files_scope(&state, &project_id) {
+    let phone = match authenticate_or_ticket(&headers, &state, &uri) {
+        Ok(phone) => phone,
+        Err(error) => return error.into_response(),
+    };
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
         Ok(scope) => scope,
         Err(error) => return error.into_response(),
     };
@@ -3417,6 +5585,12 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/calendar", get(calendar).post(calendar_mutate))
         .route("/api/v1/push", get(push_get).put(push_put).delete(push_delete))
         .route("/api/v1/mail", get(mail_overview))
+        // Host-wide, no project or path: list, and load / unload / start.
+        // A body is one action and at most one model name.
+        .route(
+            "/api/v1/local-models",
+            get(local_models_list).merge(post(local_models_mutate).layer(DefaultBodyLimit::max(1024))),
+        )
         .route("/api/v1/mail/folders/{folder_id}", get(mail_folder))
         .route(
             "/api/v1/mail/folders/{folder_id}/messages/{message_id}",
@@ -3443,6 +5617,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/projects/{project_id}/launch-options",
             get(launch_options),
         )
+        .route("/api/v1/projects/{project_id}/git", get(project_git))
         .route(
             "/api/v1/projects/{project_id}/prompts",
             get(prompts).post(prompt_create),
@@ -3462,6 +5637,8 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/color", put(color_tab))
         .route("/api/v1/tabs/{tab_id}/order", put(order_tab))
         .route("/api/v1/tabs/{tab_id}/prompt", post(sent_prompt))
+        .route("/api/v1/tabs/{tab_id}/held", post(hold_prompt))
+        .route("/api/v1/tabs/{tab_id}/held/{held_id}", put(edit_held_prompt))
         .route("/api/v1/tabs/{tab_id}/undo-clear", post(undo_clear))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
         .route("/api/v1/tabs/{tab_id}/sign-in-callback", post(sign_in_callback))
@@ -3480,8 +5657,9 @@ fn router(state: HostState) -> Router {
         // the control-message limit below (the inner layer wins).
         .route(
             "/api/v1/tabs/{tab_id}/inbox",
-            post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),
+            get(inbox_described).merge(post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
         )
+        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file))
         .route(
             "/api/v1/projects/{project_id}/inbox",
             post(project_inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),
@@ -3489,6 +5667,28 @@ fn router(state: HostState) -> Router {
         .route(
             "/api/v1/inbox",
             post(global_inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),
+        )
+        // Vectors only — the layer pictures went up through the inbox.
+        .route(
+            "/api/v1/tabs/{tab_id}/markup",
+            post(markup_submit).layer(DefaultBodyLimit::max(markup::MAX_MARKUP_BODY)),
+        )
+        .route("/api/v1/tabs/{tab_id}/markup/questions", get(markup_questions))
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/undo/{undo_id}",
+            get(markup_undo_preview).post(markup_undo).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/undo/{undo_id}/settle",
+            post(markup_undo_settle).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/answer",
+            post(markup_answer).layer(DefaultBodyLimit::max(MAX_MARKUP_ANSWER_BODY)),
+        )
+        .route(
+            "/api/v1/tabs/{tab_id}/markup/dismiss",
+            post(markup_dismiss).layer(DefaultBodyLimit::max(1024)),
         )
         .route(
             "/api/v1/tabs/{tab_id}/desktop-images",
@@ -3502,6 +5702,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
+        .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
         .route(
             "/api/v1/projects/{project_id}/outbox",
             get(project_outbox_list),
@@ -3510,11 +5711,90 @@ fn router(state: HostState) -> Router {
             "/api/v1/projects/{project_id}/outbox/{name}",
             get(project_outbox_file).delete(project_outbox_delete),
         )
+        .route(PDF_FRAME_PATH, get(pdf_frame))
         .route("/", get(index))
         .route("/{*path}", get(static_asset))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
         .layer(middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+/// How often [`sweep_mcp_tokens`] looks, and how many looks in a row a tab's
+/// session must be missing before its tokens go.
+const MCP_SWEEP_EVERY: Duration = Duration::from_secs(60);
+const MCP_SWEEP_MISSES: u8 = 3;
+
+/// Revoke the MCP tokens of tabs this host started whose tmux session is gone
+/// (`docs/headless_mcp_plan.md`): the window closed the tab, or something
+/// killed the session. A CLI that merely exits does not end it — the session
+/// runs a login shell after it — so its tokens live as long as the session,
+/// as a window tab's live as long as its PTY. The window revokes on its own
+/// PTY's exit; here no PTY is ours, so the tmux server is asked. Several
+/// misses in a row, so a briefly unreachable server does not cost a live tab
+/// its tools; counted per token generation, so a tab the scheduler restarts
+/// meanwhile keeps its new tokens.
+async fn sweep_mcp_tokens(runner: Arc<dyn scheduler::Runner>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    let mut missed = HashMap::new();
+    let mut every = tokio::time::interval(MCP_SWEEP_EVERY);
+    // After a suspend, one look, not a burst that spends every miss at once.
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = every.tick() => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { return; }
+                continue;
+            }
+        }
+        let held = crate::services::root_mcp::token_generations();
+        let probe = runner.clone();
+        let tabs: Vec<String> = held.iter().map(|(tab, _)| tab.clone()).collect();
+        let Ok(alive) = tokio::task::spawn_blocking(move || {
+            tabs.into_iter().filter(|tab| headless_session_alive(tab, |tmux| probe.probe(tmux).is_some())).collect::<std::collections::HashSet<_>>()
+        })
+        .await
+        else {
+            continue;
+        };
+        for (_, sessions) in mcp_sweep_step(&mut missed, &held, |tab| alive.contains(tab)) {
+            // Only the generation that was missing: a token registered after
+            // this look's snapshot (a restart) has another session id.
+            for id in sessions {
+                let _ = crate::services::root_mcp::revoke_session(&id);
+            }
+        }
+    }
+}
+
+/// Whether `tab`'s session may still be running: a headless launch id whose
+/// tmux session answers, or an id this host cannot check (kept).
+fn headless_session_alive(tab: &str, probe: impl Fn(&str) -> bool) -> bool {
+    tab.strip_prefix(headless::LAUNCH_ID_PREFIX).is_none_or(probe)
+}
+
+/// One tab's tokens at one look: its id and the session ids it holds.
+type Generation = (String, Vec<String>);
+
+/// One look of the sweep: the generations whose tab's session has now been
+/// missing [`MCP_SWEEP_MISSES`] looks in a row. `missed` carries the count
+/// between looks, keyed by generation, and forgets what is no longer held —
+/// a restarted tab's new tokens start from zero.
+fn mcp_sweep_step(missed: &mut HashMap<Generation, u8>, held: &[Generation], alive: impl Fn(&str) -> bool) -> Vec<Generation> {
+    missed.retain(|generation, _| held.contains(generation));
+    let mut gone = Vec::new();
+    for generation in held {
+        if alive(&generation.0) {
+            missed.remove(generation);
+            continue;
+        }
+        let count = missed.entry(generation.clone()).or_insert(0);
+        *count += 1;
+        if *count >= MCP_SWEEP_MISSES {
+            missed.remove(generation);
+            gone.push(generation.clone());
+        }
+    }
+    gone
 }
 
 pub async fn run(state_dir: PathBuf) -> Result<(), String> {
@@ -3529,6 +5809,12 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         auth: auth.clone(),
         catalog: Arc::new(Mutex::new(CatalogCache::default())),
         terminal_registry: TerminalRegistry::default(),
+        spawner: HeadlessSpawner::default(),
+        readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
+        runner: Arc::new(scheduler::TmuxRunner::new(&state_dir, None)),
+        holds: Arc::default(),
+        git_overview: Arc::default(),
+        worktree_spots: Arc::default(),
     };
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     // A Serve verification failure must be a real service failure. A clean
@@ -3547,10 +5833,40 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
         origin: admin_origin,
         shutdown: shutdown_tx.clone(),
         agent_tab: Some(Arc::new(move |tmux: &str| agent_tab_ref(&lookup_state, tmux))),
+        state_dir: Some(state_dir.clone()),
     };
     tokio::spawn(async move {
         let _ = admin::serve(&admin_path, admin_context).await;
     });
+    // The agent MCP servers of the tabs this host spawns with no window open
+    // (`docs/headless_mcp_plan.md`): schedule, push and help on a listener of
+    // its own, bound here, before the scheduler's first restart can need it.
+    // This process never reads the git token from the keychain.
+    crate::services::git_push_mcp::serve_without_keyring();
+    let notice_dir = config.control_dir.clone();
+    let listener = crate::commands::root_mcp::start_headless(
+        Arc::new(move |notice| {
+            if notice == crate::commands::root_mcp::Notice::Schedules {
+                poke_desktop(&notice_dir, None, &["schedules"]);
+            }
+        }),
+        shutdown_tx.subscribe(),
+    )
+    .await;
+    if let Err(error) = listener {
+        eprintln!("mobile: the agent MCP servers are unavailable to tabs started here until a retry binds: {error}");
+    }
+    tokio::spawn(sweep_mcp_tokens(state.runner.clone(), shutdown_tx.subscribe()));
+    // The owner's timers (headless owner plan, H2): scheduled prompts fire
+    // from here while no window holds the timer lease, through the same
+    // launch seam the headless create uses. Ends with the server.
+    tokio::spawn(scheduler::run(
+        state.config.state_dir.clone(),
+        state.spawner.launch.clone(),
+        state.holds.clone(),
+        shutdown_tx.subscribe(),
+    ));
+    tokio::spawn(alarms::run(state.config.state_dir.clone(), state.auth.clone(), shutdown_tx.subscribe()));
     let publisher_shutdown = shutdown_tx.clone();
     let publisher_origin = config.origin.clone();
     let publisher_failure = serve_failure.clone();
@@ -3589,7 +5905,42 @@ pub async fn run(state_dir: PathBuf) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::brand::SLUG;
     use super::*;
+
+    /// The host accepts the names an older phone app or an older host used,
+    /// counts them, and prefers the current ones.
+    #[test]
+    fn old_protocol_names_are_accepted_and_counted() {
+        use crate::brand::{Name, LEGACY, PAIR};
+        use crate::services::brand_migration::{hits, testing::RENAMED};
+        let _ = hits::taken();
+        let old_protocol = LEGACY.name(Name::TERMINAL_PROTOCOL);
+        assert_eq!(terminal_protocol_in(&RENAMED, &old_protocol), Some(old_protocol.clone()));
+        assert_eq!(hits::taken(), ["terminal-protocol"]);
+        assert_eq!(
+            terminal_protocol_in(&RENAMED, &format!("{old_protocol}, newname-terminal.v1")).as_deref(),
+            Some("newname-terminal.v1")
+        );
+        assert_eq!(terminal_protocol_in(&RENAMED, "something-else"), None);
+        assert!(hits::taken().is_empty());
+
+        let old_cookie = format!("theme=dark; {}=tok-old", LEGACY.name(Name::SESSION_COOKIE));
+        assert_eq!(session_cookie_in(&RENAMED, &old_cookie), Some("tok-old"));
+        assert_eq!(hits::taken(), ["session-cookie"]);
+        let both = format!("{old_cookie}; __Host-newname_session=tok-new");
+        assert_eq!(session_cookie_in(&RENAMED, &both), Some("tok-new"));
+        assert_eq!(session_cookie_in(&RENAMED, "theme=dark"), None);
+        assert!(hits::taken().is_empty());
+
+        // The production pair: one name each, as before.
+        let current = super::super::protocol::TERMINAL_PROTOCOL;
+        assert_eq!(terminal_protocol_in(&PAIR, current).as_deref(), Some(current));
+        assert_eq!(
+            session_cookie_in(&PAIR, &format!("{}=tok", crate::brand::SESSION_COOKIE)),
+            Some("tok")
+        );
+    }
 
     use axum::body::to_bytes;
     use p256::{
@@ -3611,6 +5962,32 @@ mod tests {
         _dir: tempfile::TempDir,
         root: PathBuf,
         state: HostState,
+        /// What the owner typed into or ended (H3); the host's `runner`.
+        runner: Arc<RunnerRecorder>,
+    }
+
+    /// The host's tmux reach, recorded: no server runs in a test, so nothing
+    /// is probed unless a test says so, and what would have been typed or
+    /// ended is written down instead.
+    #[derive(Default)]
+    struct RunnerRecorder {
+        probe: Mutex<Option<scheduler::SessionProbe>>,
+        delivered: Mutex<Vec<(String, Vec<scheduler::Submission>)>>,
+        killed: Mutex<Vec<String>>,
+    }
+
+    impl scheduler::Runner for RunnerRecorder {
+        fn probe(&self, _tmux: &str) -> Option<scheduler::SessionProbe> {
+            *self.probe.lock().unwrap()
+        }
+        fn deliver(&self, tmux: &str, submissions: &[scheduler::Submission]) -> Result<(), String> {
+            self.delivered.lock().unwrap().push((tmux.to_string(), submissions.to_vec()));
+            Ok(())
+        }
+        fn kill(&self, tmux: &str) -> Result<(), String> {
+            self.killed.lock().unwrap().push(tmux.to_string());
+            Ok(())
+        }
     }
 
     impl Fixture {
@@ -3622,9 +5999,11 @@ mod tests {
             let auth = AuthStore::open(&control_dir, ORIGIN.to_string()).expect("auth store");
             let root = state_dir.join("work");
             std::fs::create_dir_all(&root).expect("project root");
+            let runner = Arc::new(RunnerRecorder::default());
             Self {
                 _dir: dir,
                 root,
+                runner: runner.clone(),
                 state: HostState {
                     config: HostConfig {
                         state_dir,
@@ -3638,6 +6017,12 @@ mod tests {
                     auth: Arc::new(Mutex::new(auth)),
                     catalog: Arc::new(Mutex::new(CatalogCache::default())),
                     terminal_registry: TerminalRegistry::default(),
+                    spawner: HeadlessSpawner::default(),
+                    readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
+                    runner,
+                    holds: Arc::default(),
+                    git_overview: Arc::default(),
+                    worktree_spots: Arc::default(),
                 },
             }
         }
@@ -3653,7 +6038,7 @@ mod tests {
                     "name": "Aurora",
                     "status": "active",
                     "directory": fixture.root.to_string_lossy(),
-                    "eldrun_mobile_access": true,
+                    concat!(crate::app_slug!(), "_mobile_access"): true,
                 }]))
                 .expect("projects fixture"),
             )
@@ -3669,7 +6054,7 @@ mod tests {
                         "cwd": fixture.root.to_string_lossy(),
                         "kind": "agent",
                         "sessionId": "9d0f-session",
-                        "tmuxSession": format!("eldrun-{RAW_PROJECT}--agent-abcdef123"),
+                        "tmuxSession": format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123"),
                     }]
                 }))
                 .expect("session fixture"),
@@ -3684,6 +6069,12 @@ mod tests {
         fn with_box() -> Self {
             let fixture = Self::bare();
             let state_dir = &fixture.state.config.state_dir;
+            // Shell tabs are off the phone unless switched on.
+            std::fs::write(
+                state_dir.join("settings.json"),
+                serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+            )
+            .expect("write settings");
             let folder = state_dir.join("boxes").join("paper");
             std::fs::create_dir_all(&folder).expect("box folder");
             std::fs::write(
@@ -3701,7 +6092,7 @@ mod tests {
                 state_dir.join("boxes.json"),
                 serde_json::to_vec(&serde_json::json!([
                     { "id": RAW_BOX, "name": "Paper", "member_ids": [RAW_PROJECT],
-                      "folder": folder.to_string_lossy(), "eldrun_mobile_access": true },
+                      "folder": folder.to_string_lossy(), concat!(crate::app_slug!(), "_mobile_access"): true },
                     { "id": "b-off", "name": "Private", "member_ids": [RAW_PROJECT],
                       "folder": folder.to_string_lossy() },
                 ]))
@@ -3718,13 +6109,13 @@ mod tests {
                         "cmd": "bash",
                         "cwd": folder.to_string_lossy(),
                         "kind": "shell",
-                        "tmuxSession": format!("eldrun-box_{RAW_BOX}--shell-abcdef123"),
+                        "tmuxSession": format!("{SLUG}-box_{RAW_BOX}--shell-abcdef123"),
                     }, {
                         "label": "Aurora shell",
                         "cmd": "bash",
                         "cwd": fixture.root.to_string_lossy(),
                         "kind": "shell",
-                        "tmuxSession": format!("eldrun-box_{RAW_BOX}--shell-bcdef1234"),
+                        "tmuxSession": format!("{SLUG}-box_{RAW_BOX}--shell-bcdef1234"),
                     }]
                 }))
                 .expect("session fixture"),
@@ -3879,6 +6270,8 @@ mod tests {
         "/api/v1/tabs/anything/transcript",
         "/api/v1/projects/anything/prompts",
         "/api/v1/tabs/anything/desktop-images",
+        "/api/v1/tabs/anything/markup/questions",
+        "/api/v1/local-models",
     ];
 
     /// The desktop bounds the tail before it sends one; this bounds it again at
@@ -3888,7 +6281,7 @@ mod tests {
     fn a_tab_publishes_the_newest_prompts_of_its_tail_and_no_more() {
         use crate::services::mobile_control::protocol::{AgentTabPrompt, AgentTabPrompts};
         let rows = prompt_rows(vec![AgentTabPrompts {
-            tmux_session: "eldrun-p_paper--agent-123456789".into(),
+            tmux_session: concat!(crate::app_slug!(), "-p_paper--agent-123456789").into(),
             prompts: (0..12)
                 .map(|n| AgentTabPrompt {
                     text: format!("prompt {n}"),
@@ -3896,7 +6289,7 @@ mod tests {
                 })
                 .collect(),
         }]);
-        let prompts = &rows["eldrun-p_paper--agent-123456789"];
+        let prompts = &rows[concat!(crate::app_slug!(), "-p_paper--agent-123456789")];
         assert_eq!(prompts.len(), MAX_TAB_PROMPTS);
         // Oldest first, ending on the newest the desktop sent.
         assert_eq!(prompts[0].text, "prompt 7");
@@ -3907,7 +6300,7 @@ mod tests {
     fn a_long_prompt_is_cut_before_it_reaches_the_phone() {
         use crate::services::mobile_control::protocol::{AgentTabPrompt, AgentTabPrompts};
         let rows = prompt_rows(vec![AgentTabPrompts {
-            tmux_session: "eldrun-p_paper--agent-123456789".into(),
+            tmux_session: concat!(crate::app_slug!(), "-p_paper--agent-123456789").into(),
             prompts: vec![AgentTabPrompt {
                 // Multi-byte on purpose: the cut counts characters, so a byte
                 // slice here would panic mid-character.
@@ -3915,7 +6308,7 @@ mod tests {
                 at: None,
             }],
         }]);
-        let prompts = &rows["eldrun-p_paper--agent-123456789"];
+        let prompts = &rows[concat!(crate::app_slug!(), "-p_paper--agent-123456789")];
         assert_eq!(prompts[0].text.chars().count(), MAX_TAB_PROMPT_CHARS);
         assert!(prompts[0].at.is_none());
     }
@@ -3983,6 +6376,48 @@ mod tests {
         assert_eq!(json(&body)["subscribed"], true);
         assert_eq!(json(&body)["details"], true);
         assert_eq!(json(&body)["agents"], "questions");
+        assert_eq!(json(&body)["lapsed"], false);
+
+        // The push service says the endpoint is gone: the phone is told it
+        // lapsed, with the choices it made and the endpoint that died — what
+        // its silent refresh re-subscribes from.
+        host.state
+            .auth
+            .lock()
+            .unwrap()
+            .push_lapse_endpoint("https://fcm.googleapis.com/fcm/send/phone");
+        let (_, _, body) = host.send(get_as("/api/v1/push", &cookie)).await;
+        let lapsed = json(&body);
+        assert_eq!(lapsed["subscribed"], false);
+        assert_eq!(lapsed["lapsed"], true);
+        assert_eq!(lapsed["agents"], "questions");
+        assert_eq!(lapsed["details"], true);
+        assert_eq!(lapsed["endpoint"], "https://fcm.googleapis.com/fcm/send/phone");
+        // Registering a fresh subscription brings it back…
+        let fresh = subscription("https://fcm.googleapis.com/fcm/send/phone-2");
+        let (status, _, body) = host.send(push_request("PUT", ORIGIN, &cookie, &fresh)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["subscribed"], true);
+        assert_eq!(json(&body)["lapsed"], false);
+        // …and an explicit unsubscribe removes even a lapsed record.
+        host.state
+            .auth
+            .lock()
+            .unwrap()
+            .push_lapse_endpoint("https://fcm.googleapis.com/fcm/send/phone-2");
+        let (status, _, body) = host
+            .send(push_request("DELETE", ORIGIN, &cookie, &serde_json::json!({})))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["subscribed"], false);
+        assert_eq!(json(&body)["lapsed"], false);
+        let (status, _, _) = host.send(push_request("PUT", ORIGIN, &cookie, &good)).await;
+        assert_eq!(status, StatusCode::OK);
+        host.state
+            .auth
+            .lock()
+            .unwrap()
+            .push_lapse_endpoint("https://fcm.googleapis.com/fcm/send/phone");
 
         host.state.auth.lock().unwrap().revoke(&device_id).expect("revoke");
         assert!(host.state.auth.lock().unwrap().push().subscription(&device_id).is_none());
@@ -3996,6 +6431,47 @@ mod tests {
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} answered: {body}");
             assert_eq!(json(&body)["error"], "authentication_required", "{uri}");
         }
+    }
+
+    /// The Git sheet's route: a project's overview, from the cache inside its
+    /// TTL; a box is `not_a_project`; nothing raw crosses.
+    #[tokio::test]
+    async fn the_git_overview_answers_projects_only_and_from_its_cache() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(61)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+
+        // Not a repo: the fixture's folder is a plain directory.
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/git"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["repo"], false);
+        assert!(!body.contains(RAW_PROJECT) && !body.contains(&*host.root.to_string_lossy()), "{body}");
+        let now = Instant::now();
+        assert!(host.state.git_overview.lock().unwrap().get(RAW_PROJECT, now).is_some(), "cached");
+
+        // A second call inside the TTL is the cache's answer, not a new probe.
+        let seeded = git_overview::GitOverview { repo: true, branches_total: 42, ..Default::default() };
+        host.state.git_overview.lock().unwrap().set(RAW_PROJECT, seeded, Instant::now());
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/git"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["branches_total"], 42);
+
+        let (status, _, body) = host.send(get_as("/api/v1/projects/nope/git", &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json(&body)["error"], "project_not_found");
+        let (status, _, _) = host
+            .send(Request::builder().uri(format!("/api/v1/projects/{project_id}/git")).body(Body::empty()).expect("request"))
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let host = Fixture::with_box();
+        let cookie = host.pair_device(&signing_key(62)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let box_id = json(&projects_body)["projects"][0]["id"].as_str().expect("box id").to_string();
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}/git"), &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body)["error"], "not_a_project");
     }
 
     #[tokio::test]
@@ -4018,12 +6494,14 @@ mod tests {
             "/api/v1/inbox",
             "/api/v1/tabs/anything/desktop-images",
             "/api/v1/tabs/anything/prompt",
+            "/api/v1/tabs/anything/held",
             "/api/v1/tabs/anything/sign-in-callback",
             "/api/v1/tabs/anything/sign-in",
             "/api/v1/projects/anything/prompts",
             "/api/v1/projects/anything/prompts/anything/send",
             "/api/v1/mail/folders/anything/messages/anything/mark",
             "/api/v1/mail/folders/anything/messages/anything/reply",
+            "/api/v1/local-models",
         ] {
             let (status, _, body) = host.send(post_json(uri, ORIGIN, &create)).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} answered: {body}");
@@ -4040,6 +6518,17 @@ mod tests {
             .expect("request");
         let (status, _, body) = host.send(put).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "answered: {body}");
+        let edit = Request::builder()
+            .method("PUT")
+            .uri("/api/v1/tabs/anything/held/anything")
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({ "message": "x" })).expect("body"),
+            ))
+            .expect("request");
+        let (status, _, body) = host.send(edit).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "held edit answered: {body}");
     }
 
     #[tokio::test]
@@ -4059,14 +6548,1058 @@ mod tests {
             .expect("opaque tab id")
             .to_string();
 
+        // No window: the list is answered off the file — nothing filed for a
+        // tab with no schedule binding yet — and flagged so the phone shows it
+        // read-only. Nothing raw crosses either way.
         let (status, _, body) = host
             .send(get_as(&format!("/api/v1/tabs/{tab_id}/schedules"), &cookie))
             .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
-        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let answer = json(&body);
+        assert_eq!(answer["desktop_available"], false);
+        assert_eq!(answer["schedules"], serde_json::json!([]));
         assert!(!body.contains(RAW_PROJECT));
         assert!(!body.contains(&host.root.to_string_lossy().to_string()));
         assert!(!body.contains("scheduleTargetId"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
+
+        // A tab the desktop never bound to a schedule target has nowhere to
+        // file a rule: the owner answers "no such tab" rather than inventing
+        // a binding (H3).
+        let create = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/tabs/{tab_id}/schedules"))
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "enabled": true,
+                    "message": "Review",
+                    "rule": { "type": "daily", "time": "09:00" },
+                }))
+                .expect("body"),
+            ))
+            .expect("request");
+        let (status, _, body) = host.send(create).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body)["error"], "tab_not_found");
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
+    }
+
+    /// A host whose spawn seam records what it is asked to start (and starts
+    /// nothing), with every agent CLI "installed".
+    fn headless_host(launch: headless::HeadlessLaunch) -> Fixture {
+        let mut host = Fixture::with_project();
+        // Shell tabs are off the phone unless switched on; the owner mints
+        // shells too, so the fixture opts in.
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+        )
+        .expect("write settings");
+        host.state.spawner = HeadlessSpawner { launch, installed: Arc::new(|_| true) };
+        host
+    }
+
+    /// A same-origin, authenticated JSON request of any method.
+    fn request_as(method: &str, uri: &str, cookie: &str, body: Option<Value>) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::COOKIE, cookie_pair(cookie))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.map(|b| serde_json::to_vec(&b).expect("body")).unwrap_or_default()))
+            .expect("request")
+    }
+
+    /// The opaque project id and the agent tab id of the `with_project` host.
+    async fn project_and_tab(host: &Fixture, cookie: &str) -> (String, String) {
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().unwrap_or_else(|| panic!("project id: {projects_body}")).to_string();
+        let (_, _, project_body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), cookie)).await;
+        let tab_id = json(&project_body)["tabs"][0]["id"].as_str().expect("tab id").to_string();
+        (project_id, tab_id)
+    }
+
+    /// H3 (headless owner plan §3): with no window open, the phone's tab
+    /// edits — rename, colour, close, reopen — are the owner's: they land in
+    /// the session file through the workspace service, answered as stored
+    /// and flagged; a close ends the tab's session and remembers an agent
+    /// tab; a reopen brings it back as a new tab started detached on its
+    /// resume args. Nothing raw crosses.
+    #[tokio::test]
+    async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let host = headless_host(Arc::new(move |opts: PtyOptions| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        }));
+        let cookie = host.pair_device(&signing_key(51)).await.0;
+        let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+        let session_file = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json");
+        let leaks = |body: &str| {
+            assert!(!body.contains(RAW_PROJECT), "raw project id leaked: {body}");
+            assert!(!body.contains(crate::brand::TMUX_PREFIX), "tmux name leaked: {body}");
+            assert!(!body.contains("9d0f-session"), "session id leaked: {body}");
+            assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+        };
+
+        let (status, _, body) = host
+            .send(request_as("PUT", &format!("/api/v1/tabs/{tab_id}"), &cookie, Some(json!({ "label": "  Review  " }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        assert_eq!(json(&body)["tab"]["label"], "Review", "the row as stored, trimmed");
+        leaks(&body);
+        let (status, _, body) = host
+            .send(request_as("PUT", &format!("/api/v1/tabs/{tab_id}/color"), &cookie, Some(json!({ "color": "teal" }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["tab"]["color"], "teal");
+        leaks(&body);
+        let stored: crate::schema::session::TerminalSession = crate::storage::read_json(&session_file).expect("session");
+        assert!(crate::services::workspace::is_owned(&stored));
+        assert_eq!(stored.tab_layout[0].label, "Review"); // project-tree-read: ok — the state-dir session file.
+        assert_eq!(stored.tab_layout[0].extra["color"], "teal"); // project-tree-read: ok — same.
+
+        // Closing: the tab is gone from the file and the catalog, its session
+        // was ended, and the project lists it under "Recently closed".
+        let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["closed"], true);
+        assert_eq!(host.runner.killed.lock().unwrap().as_slice(), [format!("{}{RAW_PROJECT}--agent-abcdef123", crate::brand::TMUX_PREFIX)]);
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        let detail = json(&body);
+        assert_eq!(detail["tabs"].as_array().map(Vec::len), Some(0), "{body}");
+        assert_eq!(detail["closed"].as_array().map(Vec::len), Some(1), "{body}");
+        assert_eq!(detail["closed"][0]["label"], "Review");
+        assert_eq!(detail["closed"][0]["agent"], "claude");
+        let closed_id = detail["closed"][0]["id"].as_str().expect("closed id").to_string();
+        leaks(&body);
+        let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+
+        // Reopening by that id: a new tab on the resume args a restart would
+        // give it, started through the spawn seam, listed, and gone from the
+        // closed row; a second reopen has nothing left.
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/reopen"), &cookie, Some(json!({ "closed_id": closed_id }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let answer = json(&body);
+        assert_eq!(answer["desktop_available"], false);
+        assert_eq!(answer["tab"]["label"], "Review");
+        assert_ne!(answer["tab"]["id"], tab_id, "a new tab");
+        leaks(&body);
+        let spawned = recorded.lock().unwrap().clone();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(spawned[0].cmd, "claude");
+        assert_eq!(spawned[0].args, vec!["--resume".to_string(), "9d0f-session".to_string()]);
+        assert!(spawned[0].tmux_session.as_deref().is_some_and(|n| n.starts_with(&format!("{}{RAW_PROJECT}--agent-", crate::brand::TMUX_PREFIX))));
+        assert_ne!(spawned[0].tmux_session.as_deref(), Some(&*format!("{}{RAW_PROJECT}--agent-abcdef123", crate::brand::TMUX_PREFIX)), "a fresh session name");
+        let stored: crate::schema::session::TerminalSession = crate::storage::read_json(&session_file).expect("session");
+        assert_eq!(stored.tab_layout.len(), 1); // project-tree-read: ok — the state-dir session file.
+        assert_eq!(stored.tab_layout[0].session_id.as_deref(), Some("9d0f-session")); // project-tree-read: ok — same.
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        assert_eq!(json(&body)["closed"], json!([]));
+        assert_eq!(json(&body)["tabs"][0]["label"], "Review");
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/reopen"), &cookie, None))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "nothing_to_reopen");
+    }
+
+    /// Bind the `with_project` host's agent tab to schedule target `tgt-1`.
+    fn bind_schedule_target(host: &Fixture) {
+        std::fs::write(
+            host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json"),
+            serde_json::to_vec(&json!({
+                "tabLayout": [{
+                    "label": "Claude",
+                    "cmd": "claude",
+                    "cwd": host.root.to_string_lossy(),
+                    "kind": "agent",
+                    "sessionId": "9d0f-session",
+                    "scheduleTargetId": "tgt-1",
+                    "tmuxSession": format!("{}{RAW_PROJECT}--agent-abcdef123", crate::brand::TMUX_PREFIX),
+                }]
+            }))
+            .expect("session fixture"),
+        )
+        .expect("write session");
+    }
+
+    /// With no window open the owner holds a prompt the phone sent mid-turn:
+    /// a send-now rule on the tab's binding, marked for its scheduler to type
+    /// at once, and editable until delivered — nothing raw crossing.
+    #[tokio::test]
+    async fn a_phone_prompt_is_held_and_edited_by_the_owner_with_no_window() {
+        let host = Fixture::with_project();
+        bind_schedule_target(&host);
+        let state_dir = host.state.config.state_dir.clone();
+        let cookie = host.pair_device(&signing_key(57)).await.0;
+        let (_, tab_id) = project_and_tab(&host, &cookie).await;
+        let held_uri = format!("/api/v1/tabs/{tab_id}/held");
+
+        let (status, _, body) = host
+            .send(request_as("POST", &held_uri, &cookie, Some(json!({ "message": "also update the docs" }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        assert!(!body.contains("tgt-1") && !body.contains(RAW_PROJECT), "{body}");
+        let held_id = json(&body)["id"].as_str().expect("held id").to_string();
+        assert!(host.state.holds.due(&held_id), "marked for the scheduler");
+        let rules = crate::services::agent_tasks::list_at(&state_dir, RAW_PROJECT, "tgt-1").expect("rules");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].id, held_id);
+        assert_eq!(rules[0].message, "also update the docs");
+
+        let (status, _, body) = host
+            .send(request_as("PUT", &format!("{held_uri}/{held_id}"), &cookie, Some(json!({ "message": "update the docs and the tests" }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["id"], held_id);
+        let rules = crate::services::agent_tasks::list_at(&state_dir, RAW_PROJECT, "tgt-1").expect("rules");
+        assert_eq!(rules[0].message, "update the docs and the tests");
+
+        let (status, _, body) = host
+            .send(request_as("PUT", &format!("{held_uri}/gone-1"), &cookie, Some(json!({ "message": "x" }))))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "held_gone");
+        let (status, _, body) = host
+            .send(request_as("POST", &held_uri, &cookie, Some(json!({ "message": "/clear" }))))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "a command is typed by the phone: {body}");
+        assert_eq!(json(&body)["error"], "invalid_prompt");
+    }
+
+    /// H3 (the plan's exit, the writes half): with no window open, the
+    /// phone edits a to-do card and a calendar event (CAS on
+    /// `calendar.json`), writes and removes a schedule and a collected
+    /// prompt, sends a prompt now (a one-time rule the sidecar's scheduler
+    /// fires, the prompt retired to the history), records a composer prompt,
+    /// asks for the tab's status and the ＋ sheet's options, and attaches a
+    /// desktop image — every answer flagged, nothing raw crossing.
+    #[tokio::test]
+    async fn writes_with_side_effects_are_the_owners_with_no_window() {
+        let host = Fixture::with_project();
+        bind_schedule_target(&host);
+        let state_dir = host.state.config.state_dir.clone();
+        let cookie = host.pair_device(&signing_key(54)).await.0;
+        let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+        let leaks = |body: &str| {
+            assert!(!body.contains(RAW_PROJECT), "raw project id leaked: {body}");
+            assert!(!body.contains("tgt-1"), "schedule target leaked: {body}");
+            assert!(!body.contains(crate::brand::TMUX_PREFIX), "tmux name leaked: {body}");
+            assert!(!body.contains("9d0f-session"), "session id leaked: {body}");
+            assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+        };
+
+        // The board: a card is created into the intake column, ticked, and
+        // the answer is the board as stored.
+        let (_, _, body) = host.send(get_as("/api/v1/todo", &cookie)).await;
+        let board = json(&body)["board"].clone();
+        let intake = board["columns"].as_array().unwrap().iter().find(|c| c["intake"] == true).unwrap()["id"].as_str().unwrap().to_string();
+        let calendar_id = board["calendars"][0]["id"].as_str().expect("calendar id").to_string();
+        let card = json!({ "title": "From the phone", "notes": "", "priority": 0, "percent": 0, "column": intake,
+            "calendar_id": calendar_id, "project_id": project_id, "tags": [], "subtasks": [] });
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/todo", &cookie, Some(json!({ "type": "create", "task": card }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let answer = json(&body);
+        assert_eq!(answer["desktop_available"], false);
+        assert_eq!(answer["board"]["tasks"][0]["title"], "From the phone");
+        assert_eq!(answer["board"]["tasks"][0]["project_id"], project_id);
+        let task_id = answer["board"]["tasks"][0]["id"].as_str().expect("task id").to_string();
+        leaks(&body);
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/todo", &cookie, Some(json!({ "type": "toggle", "task_id": task_id }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["board"]["tasks"][0]["done"], true);
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/todo", &cookie, Some(json!({ "type": "toggle", "task_id": "not-a-card" }))))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+
+        // The calendar: an event is created, then deleted, on the month.
+        let event = json!({ "calendar_id": calendar_id, "start": "2026-07-15T10:00", "end": "2026-07-15T11:00", "all_day": false,
+            "title": "Defense", "location": "", "notes": "", "conference": "", "category": "", "status": "" });
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/calendar?month=2026-07", &cookie, Some(json!({ "type": "create_event", "event": event }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let month = json(&body);
+        assert_eq!(month["desktop_available"], false);
+        assert_eq!(month["calendar"]["events"][0]["title"], "Defense");
+        let event_id = month["calendar"]["events"][0]["id"].as_str().expect("event id").to_string();
+        let data = crate::commands::calendar::read_data(&state_dir.join("calendar.json")).expect("calendar");
+        assert_eq!(data.events.len(), 1);
+        assert!(!body.contains(&data.events[0].id), "raw event id leaked: {body}");
+        let (status, _, body) = host
+            .send(request_as("POST", "/api/v1/calendar?month=2026-07", &cookie, Some(json!({ "type": "delete_event", "event_id": event_id }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["calendar"]["events"], json!([]));
+
+        // Schedules: a rule is created, edited (keeping prefix commands the
+        // phone never sees), and removed.
+        std::fs::write(
+            state_dir.join("agent_tasks.json"),
+            json!({ "version": 1, "projects": { RAW_PROJECT: { "tgt-1": { "schedules": [
+                { "id": "sched-1", "enabled": true, "message": "Nightly review", "preface": ["/clear"], "rule": { "type": "daily", "time": "09:00" } }
+            ] } } } })
+            .to_string(),
+        )
+        .expect("tasks fixture");
+        let (status, _, body) = host
+            .send(request_as(
+                "POST",
+                &format!("/api/v1/tabs/{tab_id}/schedules"),
+                &cookie,
+                Some(json!({ "enabled": true, "message": "Morning plan", "rule": { "type": "daily", "time": "08:00" } })),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let listed = json(&body);
+        assert_eq!(listed["desktop_available"], false);
+        assert_eq!(listed["schedules"].as_array().map(Vec::len), Some(2));
+        let created = listed["schedules"].as_array().unwrap().iter().find(|s| s["message"] == "Morning plan").unwrap()["id"].as_str().unwrap().to_string();
+        assert!(listed["next_runs"][&created].as_str().is_some_and(|k| k.ends_with("T08:00")));
+        leaks(&body);
+        let (status, _, body) = host
+            .send(request_as(
+                "PUT",
+                &format!("/api/v1/tabs/{tab_id}/schedules/sched-1"),
+                &cookie,
+                Some(json!({ "enabled": false, "message": "Nightly review, later", "rule": { "type": "daily", "time": "21:00" } })),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let stored = crate::services::agent_tasks::list_at(&state_dir, RAW_PROJECT, "tgt-1").expect("rules");
+        let nightly = stored.iter().find(|r| r.id == "sched-1").expect("kept");
+        assert_eq!(nightly.message, "Nightly review, later");
+        assert!(!nightly.enabled);
+        assert_eq!(nightly.preface, ["/clear"], "the desktop's prefix commands survive a phone edit");
+        let (status, _, body) = host
+            .send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}/schedules/{created}"), &cookie, None))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["schedules"].as_array().map(Vec::len), Some(1));
+        let (status, _, body) = host
+            .send(request_as("PUT", &format!("/api/v1/tabs/{tab_id}/schedules/gone"), &cookie, Some(json!({ "enabled": true, "message": "x", "rule": { "type": "daily", "time": "08:00" } }))))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+
+        // Collected prompts: created, edited, sent now (a one-time rule at
+        // this minute under the prompt's id; the prompt retired to the
+        // history), and one deleted.
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{project_id}/prompts"), &cookie, Some(json!({ "message": "Write the intro" }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let answer = json(&body);
+        assert_eq!(answer["desktop_available"], false);
+        let prompt_id = answer["prompts"][0]["id"].as_str().expect("prompt id").to_string();
+        let (status, _, body) = host
+            .send(request_as("PUT", &format!("/api/v1/projects/{project_id}/prompts/{prompt_id}"), &cookie, Some(json!({ "message": "Write the intro, briefly" }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["prompts"][0]["message"], "Write the intro, briefly");
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{project_id}/prompts/{prompt_id}/send"), &cookie, Some(json!({ "tab_id": tab_id }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["prompts"], json!([]), "retired to the history");
+        let rules = crate::services::agent_tasks::list_at(&state_dir, RAW_PROJECT, "tgt-1").expect("rules");
+        let queued = rules.iter().find(|r| r.id == prompt_id).expect("a one-time rule under the prompt's id");
+        assert!(matches!(&queued.rule, crate::schema::agent_tasks::AgentScheduleRule::Once { at } if at.len() == 16));
+        assert_eq!(queued.message, "Write the intro, briefly");
+        let history = crate::services::agent_prompts::list_at(&state_dir, RAW_PROJECT).expect("prompts");
+        assert!(history.is_empty());
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{project_id}/prompts"), &cookie, Some(json!({ "message": "Throwaway" }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let other = json(&body)["prompts"][0]["id"].as_str().expect("prompt id").to_string();
+        let (status, _, body) = host
+            .send(request_as("DELETE", &format!("/api/v1/projects/{project_id}/prompts/{other}"), &cookie, None))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["prompts"], json!([]));
+
+        // The composer's prompt is recorded on the history; a session
+        // command is not.
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/prompt"), &cookie, Some(json!({ "message": "  Summarize the diff  " }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["recorded"], true);
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/prompt"), &cookie, Some(json!({ "message": "/clear" }))))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["recorded"], false);
+        let file: serde_json::Value = serde_json::from_slice(&std::fs::read(state_dir.join("agent_prompts.json")).expect("prompts file")).expect("json");
+        let rows = file["history"][RAW_PROJECT].as_array().expect("history rows");
+        assert!(rows.iter().any(|row| row["message"] == "Summarize the diff" && row["tab_label"] == "Claude" && row["result"] == "delivered"), "{file}");
+        assert!(rows.iter().any(|row| row["message"] == "Write the intro, briefly"), "the send-now was retired here: {file}");
+        assert!(!rows.iter().any(|row| row["message"] == "/clear"));
+
+        // Nothing to undo for a tab whose hook recorded no clear.
+        let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/undo-clear"), &cookie, None)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "nothing_to_undo");
+
+        // The tab's status: state and tally off the files, no usage panel.
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/status"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let report = json(&body)["report"].clone();
+        assert_eq!(report["state"], "idle");
+        assert_eq!(report["label"], "Claude");
+        assert_eq!(report["project"], "Aurora");
+        assert_eq!(report["usage"]["supported"], false);
+        assert_eq!(report["usage"]["error"], "desktop_unavailable");
+        leaks(&body);
+
+        // The ＋ sheet's options: only what the owner can start.
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let options = json(&body);
+        assert_eq!(options["desktop_available"], false);
+        assert_eq!(options["worktrees"], json!([]));
+        assert_eq!(options["sign_in"], json!([]));
+
+        // Desktop images: a file in Tabtivity's own screenshot folder is listed
+        // (no clipboard) and attached into the project inbox.
+        let shots = state_dir.join("screenshots-pending");
+        std::fs::create_dir_all(&shots).expect("shots dir");
+        std::fs::write(shots.join("shot.png"), b"\x89PNG\r\n\x1a\nnot really").expect("shot");
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let images = json(&body);
+        assert_eq!(images["desktop_available"], false);
+        let shot = images["images"].as_array().unwrap().iter().find(|i| i["name"] == "shot.png").expect("the screenshot is listed");
+        assert!(!images["images"].as_array().unwrap().iter().any(|i| i["id"] == "clipboard"));
+        let image_id = shot["id"].as_str().unwrap().to_string();
+        assert!(!body.contains("screenshots-pending"), "folder path leaked: {body}");
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie, Some(json!({ "image_id": image_id }))))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let attached = json(&body)["attachment"].clone();
+        assert!(attached["reference"].as_str().is_some_and(|r| r.starts_with(concat!(".", crate::app_slug!(), "/inbox/"))), "{body}");
+        assert!(host.root.join(attached["reference"].as_str().unwrap()).is_file());
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie, Some(json!({ "image_id": "clipboard" }))))
+            .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+    }
+
+    /// H3: the owner's undo of a Claude `/clear` types the resume into the
+    /// running session, and a relaunch plan ends the session and starts the
+    /// tab again on its resume args; a tab whose session is gone is not
+    /// ready.
+    #[tokio::test]
+    async fn an_undo_with_no_window_types_or_relaunches() {
+        use crate::services::agent_session::UndoClearPlan;
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let host = headless_host(Arc::new(move |opts: PtyOptions| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        }));
+        let snapshot = catalog_unfiltered(&host.state).expect("catalog");
+        let project = snapshot.project(&snapshot.projects[0].public.id).expect("project");
+        let tab = &project.tabs[0];
+        let runner: Arc<dyn scheduler::Runner> = host.runner.clone();
+        let state_dir = host.state.config.state_dir.clone();
+
+        let outcome = headless::apply_undo_plan(&state_dir, project, tab, Some(UndoClearPlan::Type { command: "/resume abc".into() }), runner.clone(), &host.state.spawner.launch).await;
+        assert_eq!(outcome, Ok(headless::UndoOutcome::TabNotReady), "no session to type into");
+        *host.runner.probe.lock().unwrap() = Some(scheduler::SessionProbe { created: 1, activity: 1 });
+        let outcome = headless::apply_undo_plan(&state_dir, project, tab, Some(UndoClearPlan::Type { command: "/resume abc".into() }), runner.clone(), &host.state.spawner.launch).await;
+        assert_eq!(outcome, Ok(headless::UndoOutcome::Undone));
+        let typed = host.runner.delivered.lock().unwrap().clone();
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed[0].0, tab.tmux_name);
+        assert_eq!(typed[0].1, vec![scheduler::Submission { text: "/resume abc".into(), bracketed: false }]);
+
+        let outcome = headless::apply_undo_plan(&state_dir, project, tab, Some(UndoClearPlan::Relaunch), runner.clone(), &host.state.spawner.launch).await;
+        assert_eq!(outcome, Ok(headless::UndoOutcome::Undone));
+        assert_eq!(host.runner.killed.lock().unwrap().as_slice(), std::slice::from_ref(&tab.tmux_name));
+        let spawned = recorded.lock().unwrap().clone();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(spawned[0].tmux_session.as_deref(), Some(tab.tmux_name.as_str()));
+        assert_eq!(spawned[0].args, vec!["--resume".to_string(), "9d0f-session".to_string()]);
+        assert_eq!(headless::apply_undo_plan(&state_dir, project, tab, None, runner, &host.state.spawner.launch).await, Ok(headless::UndoOutcome::NothingToUndo));
+    }
+
+    /// H3: activating a stopped project with no window marks its registry
+    /// entry active under the file's lock, so the next window opens it; a
+    /// box has no such status and still needs the window.
+    #[tokio::test]
+    async fn activating_a_project_with_no_window_marks_the_registry() {
+        let host = Fixture::with_project();
+        let registry = host.state.config.state_dir.join("projects.json");
+        let mut list: Vec<Value> = serde_json::from_slice(&std::fs::read(&registry).expect("registry")).expect("json");
+        list[0]["status"] = json!("inactive");
+        std::fs::write(&registry, serde_json::to_vec(&list).expect("registry")).expect("write registry");
+        let cookie = host.pair_device(&signing_key(52)).await.0;
+        // A stopped project is off the phone's default list; the search
+        // view still finds it.
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        assert_eq!(json(&projects_body)["projects"], json!([]));
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects?view=search&q=aur", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().unwrap_or_else(|| panic!("project id: {projects_body}")).to_string();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        assert_eq!(json(&body)["project"]["status"], "inactive");
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{project_id}/activate"), &cookie, None))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        let list: Vec<Value> = serde_json::from_slice(&std::fs::read(&registry).expect("registry")).expect("json");
+        assert_eq!(list[0]["status"], "active");
+        assert_eq!(list[0]["name"], "Aurora", "the rest of the entry survived");
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        assert_eq!(json(&body)["project"]["status"], "active");
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        assert_eq!(json(&projects_body)["projects"][0]["id"], project_id, "listed again");
+
+        let host = Fixture::with_box();
+        let cookie = host.pair_device(&signing_key(53)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let box_id = json(&projects_body)["projects"][0]["id"].as_str().expect("box id").to_string();
+        let (status, _, body) = host
+            .send(request_as("POST", &format!("/api/v1/projects/{box_id}/activate"), &cookie, None))
+            .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert!(!body.contains(RAW_BOX));
+    }
+
+    fn create_request(project_id: &str, cookie: &str, body: Value) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{project_id}/tabs"))
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::COOKIE, cookie_pair(cookie))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request")
+    }
+
+    /// H1b exit (headless owner plan §3, H1): with no window, a phone's create
+    /// is the owner's — the tab is minted into the session file (id, tmux
+    /// name, schedule binding, request hash, session uuid), started detached
+    /// through the spawn seam under that name, and listed by the catalog; a
+    /// repeat of the request opens nothing twice; what needs the window is
+    /// still refused; and nothing raw crosses.
+    #[tokio::test]
+    async fn a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner() {
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let host = headless_host(Arc::new(move |opts: PtyOptions| {
+            sink.lock().unwrap().push(opts);
+            Box::pin(async { Ok(()) })
+        }));
+        let cookie = host.pair_device(&signing_key(41)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let detail = json(&body);
+        assert_eq!(detail["desktop_available"], false);
+        assert_eq!(detail["closed"], json!([]));
+        let claude = detail["agents"]
+            .as_array()
+            .expect("agents")
+            .iter()
+            .find(|a| a["label"] == "Claude")
+            .expect("Claude is offered with no window")["id"]
+            .as_str()
+            .expect("agent id")
+            .to_string();
+        let request = json!({
+            "project_id": project_id,
+            "kind": "agent",
+            "agent_id": claude,
+            "idempotency_key": "h1b-exit-0123456789abcdef",
+        });
+        let (status, _, body) = host.send(create_request(&project_id, &cookie, request.clone())).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let answer = json(&body);
+        assert_eq!(answer["desktop_available"], false);
+        assert_eq!(answer["tab"]["kind"], "agent");
+        assert_eq!(answer["tab"]["label"], "Claude");
+        assert_eq!(answer["tab"]["available"], false, "no tmux server runs here");
+        let tab_id = answer["tab"]["id"].as_str().expect("tab id").to_string();
+
+        // The owner minted the tab into the session file.
+        let session_path = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json");
+        let session: Value = serde_json::from_slice(&std::fs::read(&session_path).expect("session")).expect("json");
+        let tabs = session["tabLayout"].as_array().expect("tabs");
+        assert_eq!(tabs.len(), 2, "{session}");
+        let minted = &tabs[1];
+        assert!(minted["id"].as_str().is_some_and(|id| !id.is_empty()), "{minted}");
+        let tmux = minted["tmuxSession"].as_str().expect("tmux name").to_string();
+        assert!(tmux.starts_with(&format!("{}{RAW_PROJECT}--agent-", crate::brand::TMUX_PREFIX)), "{tmux}");
+        let target = minted["scheduleTargetId"].as_str().expect("schedule binding").to_string();
+        assert!(minted["mobileRequestHash"].as_str().is_some());
+        let uid = minted["sessionId"].as_str().expect("session uuid").to_string();
+        assert_eq!(minted["args"], json!(["--session-id", uid]));
+        assert_eq!(minted["env"][crate::app_env!("TAB_UID")], uid);
+        assert!(session["workspaceVersion"].as_u64().is_some_and(|v| v >= 2), "{session}");
+        let leaks = |body: &str| {
+            assert!(!body.contains(RAW_PROJECT), "raw project id leaked: {body}");
+            assert!(!body.contains(crate::brand::TMUX_PREFIX), "tmux name leaked: {body}");
+            assert!(!body.contains(&uid), "session id leaked: {body}");
+            assert!(!body.contains(&target), "schedule target leaked: {body}");
+            assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+        };
+        leaks(&body);
+
+        // The spawn seam was handed the tab's launch under that name.
+        let spawned = recorded.lock().unwrap().clone();
+        assert_eq!(spawned.len(), 1);
+        let opts = &spawned[0];
+        assert_eq!(opts.tmux_session.as_deref(), Some(tmux.as_str()));
+        assert_eq!(opts.id, format!("headless:{tmux}"));
+        assert_eq!(opts.cmd, "claude");
+        assert_eq!(opts.args, vec!["--session-id".to_string(), uid.clone()]);
+        assert!(opts.agent);
+        assert_eq!(opts.project_id.as_deref(), Some(RAW_PROJECT));
+        assert!(std::path::Path::new(&opts.cwd).ends_with("work"), "{}", opts.cwd);
+        assert_eq!(opts.env.get(crate::app_env!("TAB_UID")), Some(&uid));
+        assert_eq!(opts.schedule_target_id.as_deref(), Some(target.as_str()));
+
+        // The same request again answers the same tab and starts nothing.
+        let (status, _, body) = host.send(create_request(&project_id, &cookie, request)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(json(&body)["tab"]["id"], tab_id);
+        assert_eq!(recorded.lock().unwrap().len(), 1);
+        let session: Value = serde_json::from_slice(&std::fs::read(&session_path).expect("session")).expect("json");
+        assert_eq!(session["tabLayout"].as_array().expect("tabs").len(), 2);
+
+        // The catalog lists it, and the activity list knows the project.
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        assert!(json(&body)["tabs"].as_array().expect("tabs").iter().any(|t| t["id"] == tab_id), "{body}");
+        leaks(&body);
+        let (status, _, body) = host.send(get_as("/api/v1/activity", &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        leaks(&body);
+
+        // What needs the window is still refused, and a shell is the owner's too.
+        let (status, _, body) = host
+            .send(create_request(
+                &project_id,
+                &cookie,
+                json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "cloud": "new", "task": "x", "idempotency_key": "h1b-cloud-0123456789abcdef" }),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        let (status, _, body) = host
+            .send(create_request(
+                &project_id,
+                &cookie,
+                json!({ "project_id": project_id, "kind": "shell", "idempotency_key": "h1b-shell-0123456789abcdef" }),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(json(&body)["tab"]["kind"], "shell");
+        let shell = recorded.lock().unwrap().last().cloned().expect("shell spawn");
+        assert_eq!(shell.cmd, "");
+        assert!(!shell.agent);
+        assert!(shell.tmux_session.as_deref().is_some_and(|n| n.starts_with(&format!("{}{RAW_PROJECT}--shell-", crate::brand::TMUX_PREFIX))));
+    }
+
+    /// What a raw HTTP POST of a `ping` to `127.0.0.1:port` answers: the status.
+    async fn mcp_status(port: u16, path: &str, token: &str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.expect("connect");
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(request.as_bytes()).await.expect("write");
+        let mut answer = Vec::new();
+        tcp.read_to_end(&mut answer).await.expect("read");
+        String::from_utf8_lossy(&answer).get(9..12).and_then(|code| code.parse().ok()).expect("status line")
+    }
+
+    /// #2339 (`docs/headless_mcp_plan.md`), end to end in this process:
+    /// a) the Mobile host's `start_headless` binds a listener and publishes it
+    ///    as the process's `runtime()`, with no root lane;
+    /// b) a Claude tab the phone creates with no window goes through the spawn
+    ///    seam into `root_mcp::grant_lanes` — the call `launch_prep::prepare`
+    ///    makes — against the fixture's state dir, passes the real gates
+    ///    (agent, `schedule_mcp` and the project's level, `git_push_mcp`,
+    ///    `help_mcp`) and records `PtyOptions` naming the schedule, git and
+    ///    help servers; the listener admits each token on its own route over
+    ///    HTTP, and a fresh store (the window, or this host after a restart)
+    ///    refuses them;
+    /// c) the same grant with this runtime withholds the root and reader
+    ///    lanes, which a root-serving runtime would hand out;
+    /// d) closing the tab from the phone with no window revokes its tokens.
+    #[tokio::test]
+    async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
+        use crate::services::root_mcp::{self, TokenStore};
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let port = crate::commands::root_mcp::start_headless(Arc::new(|_| {}), stopped).await.expect("the host's listener binds");
+        let runtime = root_mcp::runtime().expect("a) the host publishes its runtime");
+        assert_eq!(runtime.port, port);
+        assert!(!runtime.serves_root, "the host serves no root lane");
+
+        let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = recorded.clone();
+        let mut host = headless_host(Arc::new(|_: PtyOptions| Box::pin(async { Ok(()) })));
+        let state_dir = host.state.config.state_dir.clone();
+        let grant_dir = state_dir.clone();
+        host.state.spawner = HeadlessSpawner {
+            launch: Arc::new(move |mut opts: PtyOptions| {
+                let agent = crate::services::agent_fence::is_agent(&opts);
+                root_mcp::grant_lanes(&mut opts, agent, root_mcp::runtime(), root_mcp::tokens(), &grant_dir);
+                sink.lock().unwrap().push(opts);
+                Box::pin(async { Ok(()) })
+            }),
+            installed: Arc::new(|_| true),
+        };
+        // The switches the gates read: scheduled prompts on (off by default),
+        // and what would give a root or reader spawn its tools.
+        std::fs::write(
+            state_dir.join("settings.json"),
+            json!({
+                crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true },
+                "schedule_mcp": true,
+                "root_mcp_agents": ["claude"],
+                "root_mcp_mail": true,
+            })
+            .to_string(),
+        )
+        .expect("settings");
+        let mut projects: Vec<Value> = serde_json::from_slice(&std::fs::read(state_dir.join("projects.json")).expect("projects")).expect("json");
+        projects.push(json!({ "id": "vm-reader", "name": "Reader", "status": "active", "vm": { "enabled": true, "mail_reader": true } }));
+        // The trusted list as the window writes it: every entry has these.
+        for (position, entry) in projects.iter_mut().enumerate() {
+            entry["position"] = json!(position);
+            entry["local_file"] = json!(format!("/nonexistent/{position}/project.json"));
+        }
+        std::fs::write(state_dir.join("projects.json"), serde_json::to_vec(&projects).expect("json")).expect("projects");
+
+        let cookie = host.pair_device(&signing_key(43)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        let claude = json(&body)["agents"].as_array().expect("agents").iter()
+            .find(|a| a["label"] == "Claude").expect("Claude is offered")["id"].as_str().expect("agent id").to_string();
+        let request = json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "idempotency_key": "mcp-2339-0123456789abcdef" });
+        let (status, _, body) = host.send(create_request(&project_id, &cookie, request)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let tab_id = json(&body)["tab"]["id"].as_str().expect("tab id").to_string();
+
+        // b) The recorded launch names the three servers; tokens only in env.
+        let spawned = recorded.lock().unwrap().clone();
+        assert_eq!(spawned.len(), 1);
+        let opts = &spawned[0];
+        assert_eq!(opts.cmd, "claude");
+        let token = |key: &str| opts.env.get(key).unwrap_or_else(|| panic!("{key} missing: {:?}", opts.env.keys())).clone();
+        let (schedule, git, help) = (token(root_mcp::SCHEDULE_TOKEN_ENV), token(root_mcp::GIT_TOKEN_ENV), token(root_mcp::HELP_TOKEN_ENV));
+        assert_eq!(opts.env[root_mcp::SCHEDULE_URL_ENV], format!("http://127.0.0.1:{port}/mcp/schedule"));
+        assert_eq!(opts.env[root_mcp::HELP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/help"));
+        assert!(!opts.env.contains_key(root_mcp::TOKEN_ENV), "never the root lane");
+        assert!(!opts.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "never the markup lane: its asks live in the window");
+        let argv = opts.args.join(" ");
+        assert_eq!(opts.args.iter().filter(|a| *a == "--mcp-config").count(), 1, "{argv}");
+        for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::git_push_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME] {
+            assert!(argv.contains(&format!("\"{server}\":")), "{server} missing: {argv}");
+        }
+        for token in [&schedule, &git, &help] {
+            assert!(!argv.contains(token.as_str()), "a token is never in argv");
+        }
+        let session = root_mcp::tokens().authenticate(Some(&format!("Bearer {schedule}"))).expect("the host knows its token");
+        assert_eq!(session.identity.tab, opts.id);
+        assert_eq!(session.identity.project.as_deref(), Some(RAW_PROJECT));
+        assert_eq!(session.identity.schedule_target.as_ref().map(|b| b.target.as_str()), opts.schedule_target_id.as_deref());
+
+        // The bound listener admits each token on its own route, over HTTP
+        // (past admission: whatever the handler then answers, never 401) …
+        for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+            assert_ne!(mcp_status(port, path, token).await, 401, "{path}");
+        }
+        assert_eq!(mcp_status(port, "/mcp/help", &schedule).await, 401, "a token is good on its own route only");
+        assert_eq!(mcp_status(port, "/mcp", &schedule).await, 404, "no root route on the host");
+        assert_eq!(mcp_status(port, "/mcp/markup", &schedule).await, 404, "no markup route on the host");
+        // … and no other process's listener does: the window's, or this host's
+        // after a restart (a fresh store).
+        let admission = crate::commands::root_mcp::admission;
+        assert_eq!(admission(root_mcp::tokens(), "/mcp/schedule", &schedule).await, Ok(()));
+        let other: &'static TokenStore = Box::leak(Box::default());
+        for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+            assert_eq!(admission(other, path, token).await, Err(StatusCode::UNAUTHORIZED), "{path}");
+        }
+
+        // c) Root and reader spawns get nothing from this runtime; a runtime
+        //    that serves the root lane would hand both out under these settings.
+        let spawn = |id: &str, project: Option<&str>| -> PtyOptions {
+            serde_json::from_value(json!({
+                "id": id, "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
+                "agent": true, "project_id": project,
+            }))
+            .expect("options")
+        };
+        let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true };
+        for project in [None, Some("vm-reader")] {
+            let mut here = spawn("headless:c", project);
+            root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
+            assert!(!here.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: {:?}", here.env.keys());
+            let mut window = spawn("window:c", project);
+            root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
+            assert!(window.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: the settings do grant it");
+        }
+        // The markup lane likewise: a project tab with a schedule target gets
+        // it from the window's runtime only.
+        let mut here = spawn("headless:m", Some(RAW_PROJECT));
+        here.schedule_target_id = Some("target-m".into());
+        let mut window = here.clone();
+        window.id = "window:m".into();
+        root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
+        root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
+        assert!(!here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
+        assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
+
+        // d) The phone's close with no window takes the tokens with the tab.
+        let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(host.runner.killed.lock().unwrap().len(), 1, "the session was ended");
+        for token in [&schedule, &git, &help] {
+            assert!(root_mcp::tokens().authenticate(Some(&format!("Bearer {token}"))).is_none(), "revoked on close");
+        }
+        assert_eq!(mcp_status(port, "/mcp/help", &help).await, 401);
+        let _ = stop.send(true);
+    }
+
+    /// The sweep revokes a generation of a tab's tokens only once its session
+    /// has been missing several looks in a row, keeps what it cannot check,
+    /// and never counts a restarted tab's new tokens against the old misses.
+    #[test]
+    fn the_token_sweep_waits_for_repeated_misses_of_one_generation() {
+        let generation = |tab: &str, ids: &[&str]| (tab.to_string(), ids.iter().map(|i| i.to_string()).collect::<Vec<_>>());
+        let held = vec![generation("headless:a", &["a1"]), generation("headless:b", &["b1", "b2"]), generation("pty:window", &["w1"])];
+        let alive = |tab: &str| headless_session_alive(tab, |tmux| tmux == "a");
+        let mut missed = HashMap::new();
+        for _ in 1..MCP_SWEEP_MISSES {
+            assert!(mcp_sweep_step(&mut missed, &held, alive).is_empty());
+        }
+        assert_eq!(mcp_sweep_step(&mut missed, &held, alive), vec![generation("headless:b", &["b1", "b2"])], "only the old ids go");
+        // A session back between looks resets its count.
+        let mut missed = HashMap::new();
+        mcp_sweep_step(&mut missed, &held, alive);
+        mcp_sweep_step(&mut missed, &held, |_| true);
+        for _ in 1..MCP_SWEEP_MISSES {
+            assert!(mcp_sweep_step(&mut missed, &held, alive).is_empty());
+        }
+        // A restart between looks (new session ids under the same tab) starts
+        // from zero: the last look before the old count ran out revokes nothing.
+        let mut missed = HashMap::new();
+        for _ in 1..MCP_SWEEP_MISSES {
+            mcp_sweep_step(&mut missed, &held, alive);
+        }
+        let restarted = vec![generation("headless:b", &["b3", "b4"])];
+        assert!(mcp_sweep_step(&mut missed, &restarted, alive).is_empty(), "the new tokens are not the old misses'");
+        assert_eq!(missed.len(), 1, "the old generation is forgotten");
+        // A generation no longer held is forgotten.
+        assert!(mcp_sweep_step(&mut missed, &[], alive).is_empty());
+        assert!(missed.is_empty());
+    }
+
+    /// A headless launch that fails leaves no tab behind: the record is taken
+    /// back out and the phone hears `launch_failed`.
+    #[tokio::test]
+    async fn a_headless_launch_that_fails_takes_the_minted_tab_back_out() {
+        let host = headless_host(Arc::new(|_: PtyOptions| Box::pin(async { Err("tmux is not installed".to_string()) })));
+        let cookie = host.pair_device(&signing_key(42)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let (status, _, body) = host
+            .send(create_request(
+                &project_id,
+                &cookie,
+                json!({ "project_id": project_id, "kind": "shell", "idempotency_key": "h1b-fail-0123456789abcdef" }),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+        assert_eq!(json(&body)["error"], "launch_failed");
+        assert!(!body.contains(crate::brand::TMUX_PREFIX), "{body}");
+        let session_path = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json");
+        let session: Value = serde_json::from_slice(&std::fs::read(&session_path).expect("session")).expect("json");
+        assert_eq!(session["tabLayout"].as_array().expect("tabs").len(), 1, "{session}");
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        assert_eq!(json(&body)["tabs"].as_array().expect("tabs").len(), 1);
+    }
+
+    /// Headless owner plan, H0: with no window open, the persisted-state kinds
+    /// — board, month, schedules, prompts, transcript — are answered off the
+    /// state dir with the desktop's own opaque ids, flagged
+    /// `desktop_available: false`.
+    #[tokio::test]
+    async fn persisted_state_is_answered_off_the_files_with_no_window() {
+        let host = Fixture::with_project();
+        let state_dir = host.state.config.state_dir.clone();
+        std::fs::write(
+            state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "tabLayout": [{
+                    "label": "Claude",
+                    "cmd": "claude",
+                    "cwd": host.root.to_string_lossy(),
+                    "kind": "agent",
+                    "sessionId": "9d0f-session",
+                    "scheduleTargetId": "tgt-1",
+                    "tmuxSession": format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123"),
+                }]
+            }))
+            .expect("session fixture"),
+        )
+        .expect("write session");
+        std::fs::write(
+            state_dir.join("agent_tasks.json"),
+            serde_json::json!({
+                "version": 1,
+                "projects": { RAW_PROJECT: { "tgt-1": { "schedules": [
+                    { "id": "sched-1", "enabled": true, "message": "Nightly review", "preface": ["/clear"],
+                      "rule": { "type": "daily", "time": "09:00" } }
+                ] } } }
+            })
+            .to_string(),
+        )
+        .expect("tasks fixture");
+        std::fs::write(
+            state_dir.join("agent_prompts.json"),
+            serde_json::json!({
+                "version": 1,
+                "projects": { RAW_PROJECT: [
+                    { "id": "prompt-1", "message": "Write the intro", "created_at": "2026-07-01T09:00:00Z",
+                      "updated_at": "2026-07-01T09:00:00Z", "target": "tgt-1" }
+                ] }
+            })
+            .to_string(),
+        )
+        .expect("prompts fixture");
+        let calendar = state_dir.join("calendar.json");
+        let task = crate::commands::calendar::create_task_at(
+            &calendar,
+            crate::schema::calendar::CalendarTask {
+                title: "Ship it".into(),
+                project_id: RAW_PROJECT.into(),
+                ..Default::default()
+            },
+        )
+        .expect("task");
+        let event = crate::commands::calendar::create_event_at(
+            &calendar,
+            crate::schema::calendar::CalendarEvent {
+                title: "Defense".into(),
+                start: "2026-07-15T10:00".into(),
+                end: "2026-07-15T11:00".into(),
+                ..Default::default()
+            },
+        )
+        .expect("event");
+        let cookie = host.pair_device(&signing_key(31)).await.0;
+        let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+        let (_, _, project_body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        let tab_id = json(&project_body)["tabs"][0]["id"].as_str().expect("tab id").to_string();
+        let leaks = |body: &str| {
+            assert!(!body.contains(RAW_PROJECT), "raw project id leaked: {body}");
+            assert!(!body.contains(&task.id), "raw task id leaked: {body}");
+            assert!(!body.contains(&event.id), "raw event id leaked: {body}");
+            assert!(!body.contains("tgt-1"), "schedule target leaked: {body}");
+            assert!(!body.contains(crate::brand::TMUX_PREFIX), "tmux name leaked: {body}");
+            assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+        };
+
+        let (status, _, body) = host.send(get_as("/api/v1/todo", &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let board = json(&body);
+        assert_eq!(board["desktop_available"], false);
+        assert_eq!(board["board"]["tasks"][0]["title"], "Ship it");
+        assert_eq!(board["board"]["tasks"][0]["column"], "backlog");
+        assert_eq!(board["board"]["tasks"][0]["project_id"], project_id, "the project chip carries the catalog's id");
+        assert_eq!(board["board"]["projects"][0]["name"], "Aurora");
+        leaks(&body);
+
+        let (status, _, body) = host.send(get_as("/api/v1/calendar?month=2026-07", &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let month = json(&body);
+        assert_eq!(month["desktop_available"], false);
+        assert_eq!(month["calendar"]["month"], "2026-07");
+        assert_eq!(month["calendar"]["events"][0]["title"], "Defense");
+        assert_eq!(month["calendar"]["events"][0]["start"], "2026-07-15T10:00");
+        leaks(&body);
+
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/schedules"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let schedules = json(&body);
+        assert_eq!(schedules["desktop_available"], false);
+        assert_eq!(schedules["schedules"][0]["id"], "sched-1");
+        assert_eq!(schedules["schedules"][0]["message"], "Nightly review");
+        assert!(schedules["schedules"][0].get("preface").is_none(), "prefix commands stay desktop-side");
+        assert!(schedules["next_runs"]["sched-1"].as_str().is_some_and(|k| k.ends_with("T09:00")));
+        assert!(schedules["time_zone"].as_str().is_some_and(|z| !z.is_empty()));
+        leaks(&body);
+
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/prompts"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let prompts = json(&body);
+        assert_eq!(prompts["desktop_available"], false);
+        assert_eq!(prompts["prompts"][0]["message"], "Write the intro");
+        assert!(prompts["prompts"][0].get("target").is_none(), "the target binding stays desktop-side");
+        leaks(&body);
+
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/transcript"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let transcript = json(&body);
+        assert_eq!(transcript["desktop_available"], false);
+        assert_eq!(transcript["transcript"]["available"], false, "no such session on this machine");
+        leaks(&body);
+
+        // Writes are still the window's: the sidecar never touches the files.
+        let create = Request::builder()
+            .method("POST")
+            .uri("/api/v1/todo")
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "type": "create",
+                    "task": { "title": "New", "priority": 0, "percent": 0, "column": "backlog",
+                              "calendar_id": board["board"]["calendars"][0]["id"] }
+                }))
+                .expect("body"),
+            ))
+            .expect("request");
+        // A write with no window is the owner's now (H3): one CAS commit on
+        // the file, answered with the board as stored.
+        let (status, _, body) = host.send(create).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        assert_eq!(
+            crate::commands::calendar::read_data(&calendar).expect("calendar").tasks.len(),
+            2,
+            "the card was written"
+        );
+        leaks(&body);
     }
 
     #[test]
@@ -4091,6 +7624,8 @@ mod tests {
                     at: "2026-09-23T08:00:00Z".into(),
                     from_delivery: None,
                 }),
+                // The phone that made a rule never crosses the browser API.
+                phone_device: Some("device-that-made-it".into()),
             }],
             time_zone: "Europe/Berlin".into(),
             next_runs: Default::default(),
@@ -4119,6 +7654,8 @@ mod tests {
                 updated_at: "2026-09-24T08:00:00Z".into(),
                 tags: vec!["review".into()],
                 target: Some("raw-schedule-target-id".into()),
+                // The phone that wrote it never crosses the browser API.
+                phone_device: Some("device-that-wrote-it".into()),
             }],
         }));
         assert_eq!(status, StatusCode::OK);
@@ -4142,7 +7679,7 @@ mod tests {
         assert_eq!(json(&body)["desktop_available"], false);
         assert_eq!(json(&body)["tabs"].as_array().expect("tabs").len(), 0);
         assert!(!body.contains(RAW_PROJECT));
-        assert!(!body.contains("eldrun-"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
     }
 
     #[test]
@@ -4301,7 +7838,7 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
         assert_eq!(json(&body)["error"], "desktop_unavailable");
         assert!(!body.contains(RAW_PROJECT));
-        assert!(!body.contains("eldrun-"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
 
         // The create route will not take the session name from the phone.
         let (status, _, body) = host
@@ -4311,7 +7848,7 @@ mod tests {
                 json!({
                     "project_id": project_id,
                     "kind": "agent",
-                    "like_tab": "eldrun-anything",
+                    "like_tab": concat!(crate::app_slug!(), "-anything"),
                     "sign_in": "default",
                     "idempotency_key": key,
                 }),
@@ -4397,14 +7934,15 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
         assert_eq!(json(&body)["error"], "invalid_label");
 
-        // A well-formed rename with no desktop window is unavailable, not an
-        // error the phone should read as "the name was rejected" — and it still
-        // leaks neither the raw project id nor the tmux name.
+        // A well-formed rename with no desktop window is the owner's (H3): it
+        // lands in the session file, is answered as stored and flagged, and
+        // still leaks neither the raw project id nor the tmux name.
         let (status, _, body) = host.send(rename(ORIGIN, "Release review")).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
-        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        assert_eq!(json(&body)["tab"]["label"], "Release review");
         assert!(!body.contains(RAW_PROJECT));
-        assert!(!body.contains("eldrun-"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
     }
 
     #[tokio::test]
@@ -4443,15 +7981,26 @@ mod tests {
         let (status, _, body) = host.send(close("https://evil.example", Some(&cookie))).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
 
-        // A well-formed close with no desktop window is unavailable, not a
-        // refusal of the tab — and it leaks neither the raw ids nor the tmux
-        // name the desktop is addressed by.
+        // A well-formed close with no desktop window is the owner's (H3): the
+        // tab leaves the session file and its session is ended — and the
+        // answer leaks neither the raw ids nor the tmux name.
         let (status, _, body) = host.send(close(ORIGIN, Some(&cookie))).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
-        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["closed"], true);
+        assert_eq!(json(&body)["desktop_available"], false);
         assert!(!body.contains(RAW_BOX));
         assert!(!body.contains(RAW_PROJECT));
-        assert!(!body.contains("eldrun-"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
+        assert_eq!(
+            host.runner.killed.lock().unwrap().as_slice(),
+            [format!("{SLUG}-box_{RAW_BOX}--shell-abcdef123")],
+            "the session behind the closed tab was ended"
+        );
+        let (_, _, project_body) = host
+            .send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie))
+            .await;
+        assert_eq!(json(&project_body)["tabs"].as_array().map(Vec::len), Some(1), "{project_body}");
+        let tab_id = json(&project_body)["tabs"][0]["id"].as_str().expect("remaining tab").to_string();
 
         // The agent-only routes are unchanged by that: the same shell tab is
         // still refused a schedule.
@@ -4537,16 +8086,18 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
         assert_eq!(json(&body)["error"], "tab_not_found");
 
-        // A well-formed move with no desktop window is unavailable rather than
-        // refused, and says nothing about the raw ids or the tmux names.
+        // A well-formed move with no desktop window is the owner's (H3): the
+        // session file's order is the phone's, and the answer says nothing
+        // about the raw ids or the tmux names.
         let (status, _, body) = host
-            .send(move_to(ORIGIN, Some(&cookie), &anchor_id, "before"))
+            .send(move_to(ORIGIN, Some(&cookie), &anchor_id, "after"))
             .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
-        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        assert_eq!(json(&body)["tabs"], serde_json::json!([anchor_id, tab_id]), "the moved tab now follows its anchor");
         assert!(!body.contains(RAW_BOX));
         assert!(!body.contains(RAW_PROJECT));
-        assert!(!body.contains("eldrun-"));
+        assert!(!body.contains(crate::brand::TMUX_PREFIX));
     }
 
     #[tokio::test]
@@ -4647,11 +8198,14 @@ mod tests {
             .expect("opaque tab id")
             .to_string();
 
+        // No window: the (empty) collection is answered off the file and
+        // flagged read-only; nothing raw crosses.
         let (status, _, body) = host
             .send(get_as(&format!("/api/v1/projects/{project_id}/prompts"), &cookie))
             .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
-        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
+        assert_eq!(json(&body)["prompts"], serde_json::json!([]));
         assert!(!body.contains(RAW_PROJECT));
 
         let (status, _, body) = host
@@ -4686,7 +8240,7 @@ mod tests {
             .expect("request");
         let (status, _, answer) = host.send(send).await;
         assert!(
-            status == StatusCode::BAD_REQUEST || status == StatusCode::SERVICE_UNAVAILABLE,
+            status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND,
             "answered {status}: {answer}"
         );
         assert!(!answer.contains(RAW_PROJECT));
@@ -4710,7 +8264,7 @@ mod tests {
         // `__Host-` guarantees and must not authenticate.
         let request = Request::builder()
             .uri("/api/v1/status")
-            .header(header::COOKIE, format!("eldrun_session={token}"))
+            .header(header::COOKIE, format!("{SLUG}_session={token}"))
             .body(Body::empty())
             .expect("request");
         let (status, _, body) = host.send(request).await;
@@ -4785,7 +8339,7 @@ mod tests {
         let host = Fixture::bare();
         let (cookie, _) = host.pair_device(&signing_key(13)).await;
         for attribute in [
-            "__Host-eldrun_session=",
+            concat!("__Host-", crate::app_slug!(), "_session="),
             "Path=/",
             "Secure",
             "HttpOnly",
@@ -5053,7 +8607,7 @@ mod tests {
             tab["available"], false,
             "a tab with no tmux session must not be attachable: {body}"
         );
-        assert!(!body.contains("eldrun-raw-project"), "a tmux name leaked: {body}");
+        assert!(!body.contains(concat!(crate::app_slug!(), "-raw-project")), "a tmux name leaked: {body}");
     }
 
     #[tokio::test]
@@ -5081,7 +8635,24 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {answer}");
         assert_eq!(json(&answer)["error"], "invalid_request");
 
+        // A shell, while shells are off the phone (the default), is refused
+        // before the catalog is asked.
+        let (status, _, answer) = host
+            .send(request(serde_json::json!({
+                "project_id": "target",
+                "kind": "shell",
+                "idempotency_key": "0123456789abcdef",
+            })))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {answer}");
+        assert_eq!(json(&answer)["error"], "shells_off");
+
         // An unknown project resolves to nothing rather than to a raw id.
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": true } }).to_string(),
+        )
+        .expect("settings");
         let (status, _, answer) = host
             .send(request(serde_json::json!({
                 "project_id": "target",
@@ -5131,13 +8702,13 @@ mod tests {
                 .expect("request")
         };
 
-        // No desktop window: unavailable, and neither the raw project id nor
-        // the project path leaks out of the answer.
+        // No desktop window: the folders are listed here, flagged (H3), and
+        // neither the raw project id nor the project path leaks out.
         let (status, _, body) = host
             .send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie))
             .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
-        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["desktop_available"], false);
         assert!(!body.contains(RAW_PROJECT));
         assert!(!body.contains(host.root.to_str().unwrap()));
 
@@ -5217,10 +8788,12 @@ mod tests {
         assert!(body.ends_with("IHDR-body"), "{body:?}");
 
         std::fs::write(dir.join("archive.zip"), b"PK\0\x01").unwrap();
+        std::fs::write(dir.join("20260930-101530-20260930-101010-deck.zip"), b"PK\0\x01").unwrap();
         for (name, kind, disposition) in [
             ("notes.png", "text/plain; charset=utf-8", "inline"),
             ("plot.png?download=1", "image/png", "attachment; filename=\"plot.png\""),
             ("archive.zip", "application/octet-stream", "attachment; filename=\"archive.zip\""),
+            ("20260930-101530-20260930-101010-deck.zip", "application/octet-stream", "attachment; filename=\"deck.zip\""),
         ] {
             let (status, headers, _) = host.send(get_as(&format!("{list}/{name}"), &cookie)).await;
             assert_eq!(status, StatusCode::OK);
@@ -5249,6 +8822,102 @@ mod tests {
         let (status, _, _) = host
             .send(get_as(&format!("{list}/plot.png"), "not-a-session"))
             .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A copy `tabtivity-send` made of a project file carries that file's
+    /// sealed row — only with the drawer on, and only for a file the drawer
+    /// would list — so the phone marks up the project file, not the copy.
+    #[tokio::test]
+    async fn an_outbox_copy_carries_its_project_files_row_while_the_drawer_is_on() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(37)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().unwrap().to_string();
+        let routes = [format!("/api/v1/tabs/{tab_id}/outbox"), format!("/api/v1/projects/{project_id}/outbox")];
+
+        std::fs::create_dir_all(host.root.join("docs/paper")).unwrap();
+        std::fs::write(host.root.join("docs/paper/draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        let dir = host.root.join(outbox::OUTBOX_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("20261004-120000-draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        std::fs::write(dir.join(".20261004-120000-draft.pdf.src"), "docs/paper/draft.pdf").unwrap();
+        // Its project file gone: no row.
+        std::fs::write(dir.join("20261004-120001-gone.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        std::fs::write(dir.join(".20261004-120001-gone.pdf.src"), "docs/gone.pdf").unwrap();
+        let row_of = |body: &str, name: &str| {
+            json(body)["files"].as_array().unwrap().iter().find(|file| file["name"] == name).unwrap().get("file_row").cloned()
+        };
+
+        // Drawer off: the listing as before, no row and no path.
+        for route in &routes {
+            let (status, _, body) = host.send(get_as(route, &cookie)).await;
+            assert_eq!(status, StatusCode::OK, "answered: {body}");
+            assert_eq!(row_of(&body, "20261004-120000-draft.pdf"), None, "{body}");
+            assert!(!body.contains("docs/") && !body.contains("source"), "{body}");
+        }
+
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let key = host.state.auth.lock().unwrap().host_key().to_vec();
+        for route in &routes {
+            let (status, _, body) = host.send(get_as(route, &cookie)).await;
+            assert_eq!(status, StatusCode::OK, "answered: {body}");
+            let row = row_of(&body, "20261004-120000-draft.pdf").expect("a row");
+            assert_eq!(row["name"], "draft.pdf", "{body}");
+            assert_eq!(row["place"], "docs/paper");
+            assert_eq!(row["kind"], "application/pdf");
+            assert_eq!(files::unseal(&key, RAW_PROJECT, row["token"].as_str().unwrap()).as_deref(), Some("docs/paper/draft.pdf"));
+            assert_eq!(files::unseal(&key, RAW_PROJECT, row["folder"].as_str().unwrap()).as_deref(), Some("docs/paper"));
+            assert_eq!(row_of(&body, "20261004-120001-gone.pdf"), None, "{body}");
+            assert!(!body.contains("\"source\"") && !body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_inbox_reads_back_what_the_phone_sent_by_leaf_only() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(34)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let base = format!("/api/v1/tabs/{tab_id}/inbox");
+
+        let (status, _, body) = host.send(get_as(&format!("{base}?names=a.png"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["files"], serde_json::json!([]));
+
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-body".to_vec();
+        let photo = inbox::store(&host.root, "photo.png", &png).unwrap();
+        let note = inbox::store(&host.root, "note.txt", b"hello").unwrap();
+        let (status, _, body) = host
+            .send(get_as(&format!("{base}?names={},gone.png,..%2Fx,{}", photo.name, note.name), &cookie))
+            .await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let files = json(&body)["files"].clone();
+        let kinds: Vec<_> = files.as_array().unwrap().iter().map(|f| (f["name"].as_str().unwrap().to_string(), f["kind"].as_str().unwrap().to_string(), f["original"].as_str().unwrap().to_string())).collect();
+        assert_eq!(kinds, vec![
+            (photo.name.clone(), "image/png".to_string(), "photo.png".to_string()),
+            (note.name.clone(), "text/plain; charset=utf-8".to_string(), "note.txt".to_string()),
+        ]);
+        assert!(!body.contains(host.root.to_str().unwrap()));
+
+        let (status, headers, body) = host.send(get_as(&format!("{base}/{}", photo.name), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "image/png");
+        assert_eq!(headers.get(header::CONTENT_DISPOSITION).unwrap(), "inline");
+        assert!(body.ends_with("IHDR-body"), "{body:?}");
+
+        for refused in ["..%2F..%2Fproject.json", "gone.png", ".hidden.png"] {
+            let (status, _, body) = host.send(get_as(&format!("{base}/{refused}"), &cookie)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{refused} answered: {body}");
+            assert_eq!(json(&body)["error"], "file_not_found");
+        }
+        let (status, _, _) = host.send(get_as("/api/v1/tabs/not-a-tab/inbox?names=a.png", &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _, _) = host.send(get_as(&format!("{base}/{}", photo.name), "not-a-session")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
@@ -5346,7 +9015,7 @@ mod tests {
 
         std::fs::write(
             host.state.config.state_dir.join("settings.json"),
-            serde_json::json!({ "eldrun_mobile_host": { "enabled": true, "project_files": true } }).to_string(),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
         )
         .unwrap();
         let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
@@ -5393,6 +9062,591 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn the_file_search_answers_sealed_rows_and_trails_while_the_drawer_is_on() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(36)).await.0;
+        let (_, _, body) = host
+            .send(get_as("/api/v1/projects?view=search&q=aurora", &cookie))
+            .await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+        let base = format!("/api/v1/projects/{project_id}/files");
+        std::fs::create_dir_all(host.root.join("src/deep")).unwrap();
+        std::fs::write(host.root.join("src/deep/notes.txt"), "deep").unwrap();
+        std::fs::write(host.root.join(".env.notes"), "HIDDEN=1").unwrap();
+
+        let (status, _, body) = host.send(get_as(&format!("{base}/search?q=notes"), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("files_off")), "{body}");
+
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (status, _, body) = host.send(get_as(&format!("{base}/search?q=NOTES"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let found = json(&body);
+        let hits = found["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "the hidden .env file is not searched: {body}");
+        assert_eq!(hits[0]["name"], "notes.txt");
+        let trail: Vec<&str> = hits[0]["trail"].as_array().unwrap().iter().map(|crumb| crumb["name"].as_str().unwrap()).collect();
+        assert_eq!(trail, ["src", "deep"]);
+        assert!(!body.contains("src/") && !body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+
+        // The hit's token opens the file, its last crumb lists its folder.
+        let token = hits[0]["token"].as_str().unwrap();
+        let (status, _, bytes) = host.send(get_as(&format!("{base}/raw?f={token}"), &cookie)).await;
+        assert_eq!((status, bytes.as_str()), (StatusCode::OK, "deep"));
+        let deep = hits[0]["trail"][1]["token"].as_str().unwrap();
+        let (_, _, body) = host.send(get_as(&format!("{base}?dir={deep}"), &cookie)).await;
+        assert_eq!(json(&body)["entries"][0]["name"], "notes.txt");
+
+        let (status, _, body) = host.send(get_as(&format!("{base}/search?q={}", "x".repeat(files::MAX_QUERY + 1)), &cookie)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::BAD_REQUEST, json!("query_too_long")));
+        let (_, _, body) = host.send(get_as(&format!("{base}/search"), &cookie)).await;
+        assert_eq!(json(&body)["hits"], json!([]));
+        let (status, _, _) = host.send(get_as(&format!("{base}/search?q=notes"), "not-a-session")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
+        let host = Fixture::bare();
+        let request = Request::builder()
+            .uri(PDF_FRAME_PATH)
+            .header(header::HOST, "phone.example.ts.net")
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, _) = host.send(request).await;
+        if status == StatusCode::OK {
+            assert_eq!(headers[header::X_FRAME_OPTIONS], "SAMEORIGIN");
+            let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+            assert!(policy.contains("default-src 'none'"), "{policy}");
+            assert!(policy.contains("connect-src 'none'"), "{policy}");
+            assert!(policy.contains("frame-ancestors 'self' https://phone.example.ts.net"), "{policy}");
+            assert!(!policy.contains("wasm-unsafe-eval") && !policy.contains("unsafe-eval"), "{policy}");
+        } else {
+            // A bundle built without the frame: a plain miss, never the shell
+            // under a framable policy.
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+        }
+        for uri in ["/", "/index.html", "/pdf-frame.html/x", "/assets/pdf-frame.js", "/api/v1/status"] {
+            let (_, headers, _) = host.send(get_request(uri)).await;
+            assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{uri}");
+            assert!(headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("frame-ancestors 'none'"), "{uri}");
+        }
+        // A host header that is not a host name is left out of the policy.
+        let forged = HeaderValue::from_static("evil.example; script-src *");
+        assert!(!pdf_frame_policy(Some(&forged)).contains("evil"));
+        assert!(pdf_frame_policy(None).contains("script-src 'self';"));
+    }
+
+    #[tokio::test]
+    async fn a_markup_submit_bakes_a_copy_into_the_inbox_and_answers_a_prompt() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(63)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().unwrap().to_string();
+        std::fs::create_dir_all(host.root.join("docs")).unwrap();
+        let pdf = super::super::markup_pdf::tests::classic_pdf(&[0, 90], false);
+        std::fs::write(host.root.join("docs/draft.pdf"), &pdf).unwrap();
+        let before = std::fs::metadata(host.root.join("docs/draft.pdf")).unwrap().modified().unwrap();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-layer".to_vec();
+        let (status, _, body) = host.send(inbox_request(&tab_id, "draft-p2-layer.png", &cookie, png)).await;
+        assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+        let layer = json(&body)["attachment"]["reference"].as_str().unwrap().to_string();
+        let submit = |origin: &str, body: Vec<u8>| {
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/tabs/{tab_id}/markup"))
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let marks = serde_json::json!([{ "kind": "ink", "color": "red", "width": 2, "points": [[10, 10, 0.5], [40, 30, 0.7]] },
+            { "kind": "text", "color": "blue", "at": [20, 50], "size": 14, "text": "smaller" }]);
+        let request_for = |source: Value| serde_json::to_vec(&serde_json::json!({
+            "source": source,
+            "pages": [{ "n": 2, "size": [800, 600], "layer": layer, "marks": marks }],
+        })).unwrap();
+
+        // The file browser's switch gates a file source, as it gates reading.
+        let (status, _, body) = host.send(submit(ORIGIN, request_for(serde_json::json!({ "files": "AAAA" })))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body)["error"], "files_off");
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files"), &cookie)).await;
+        let docs = json(&body)["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "docs").unwrap()["token"].as_str().unwrap().to_string();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files?dir={docs}"), &cookie)).await;
+        let token = json(&body)["entries"][0]["token"].as_str().unwrap().to_string();
+
+        let (status, _, body) = host.send(submit(ORIGIN, request_for(serde_json::json!({ "files": token })))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let answer = json(&body);
+        let prompt = answer["prompt"].as_str().unwrap();
+        let marked = answer["marked"].as_str().unwrap();
+        assert!(prompt.starts_with("I marked these changes by hand on `docs/draft.pdf`."), "{prompt}");
+        assert!(prompt.contains(&format!("Page 2: @{layer}")), "{prompt}");
+        assert!(prompt.contains("- p2: \"smaller\""), "{prompt}");
+        assert!(marked.starts_with(concat!(".", crate::app_slug!(), "/inbox/")) && marked.ends_with("-draft-marked.pdf"), "{marked}");
+        assert!(!body.contains(&host.root.to_string_lossy().to_string()), "a filesystem path leaked: {body}");
+        let copy = std::fs::read(host.root.join(marked)).unwrap();
+        assert!(copy.starts_with(&pdf) && copy.len() > pdf.len());
+        assert_eq!(std::fs::read(host.root.join("docs/draft.pdf")).unwrap(), pdf, "the source is never written");
+        assert_eq!(std::fs::metadata(host.root.join("docs/draft.pdf")).unwrap().modified().unwrap(), before);
+
+        // A forged token, an outbox leaf with a separator, a bad origin and an
+        // oversized body are all refused before anything is written.
+        let (status, _, body) = host.send(submit(ORIGIN, request_for(serde_json::json!({ "files": "AAAA" })))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body)["error"], "file_not_found");
+        for leaf in ["../draft.pdf", "a/b.pdf", ".hidden.pdf"] {
+            let (status, _, body) = host.send(submit(ORIGIN, request_for(serde_json::json!({ "outbox": leaf })))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{leaf} answered: {body}");
+            assert_eq!(json(&body)["error"], "invalid_markup");
+        }
+        let (status, ..) = host.send(submit("https://elsewhere.example", request_for(serde_json::json!({ "files": token })))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, ..) = host.send(submit(ORIGIN, vec![b' '; markup::MAX_MARKUP_BODY + 1])).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let (status, _, body) = host.send(submit(ORIGIN, b"{\"source\":1}".to_vec())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
+        let inbox: Vec<_> = std::fs::read_dir(host.root.join(inbox::INBOX_DIR)).unwrap().flatten().collect();
+        assert_eq!(inbox.len(), 2, "the layer and one marked copy");
+    }
+
+    /// **Apply marks directly** over the wire: an `apply` Submit in a git
+    /// project answers an undo id; settle, preview and undo answer
+    /// project-relative names only; a forged id or tab is not found, a
+    /// foreign origin refused, and nothing raw crosses.
+    #[tokio::test]
+    async fn an_apply_submit_answers_an_undo_the_phone_can_settle_preview_and_run() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(64)).await.0;
+        let tab_id = fixture_tab_id(&host, &cookie).await;
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+        let project_id = json(&body)["projects"][0]["id"].as_str().unwrap().to_string();
+        std::fs::create_dir_all(host.root.join("docs")).unwrap();
+        std::fs::write(host.root.join("docs/draft.pdf"), super::super::markup_pdf::tests::classic_pdf(&[0], false)).unwrap();
+        std::fs::write(host.root.join("docs/draft.tex"), "teh cat\n").unwrap();
+        for args in [&["init", "-q"][..], &["add", "-A"], &["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "i"]] {
+            let mut git = std::process::Command::new("git");
+            for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"] {
+                git.env_remove(name);
+            }
+            assert!(git.args(args).current_dir(&host.root).output().unwrap().status.success(), "git {args:?}");
+        }
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files"), &cookie)).await;
+        let docs = json(&body)["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "docs").unwrap()["token"].as_str().unwrap().to_string();
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files?dir={docs}"), &cookie)).await;
+        let token = json(&body)["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "draft.pdf").unwrap()["token"].as_str().unwrap().to_string();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-layer".to_vec();
+        let (_, _, body) = host.send(inbox_request(&tab_id, "draft-p1-layer.png", &cookie, png)).await;
+        let layer = json(&body)["attachment"]["reference"].as_str().unwrap().to_string();
+        let call = |method: &str, uri: String, origin: &str| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(if method == "POST" { b"{}".to_vec() } else { Vec::new() }))
+                .unwrap()
+        };
+        let submit = serde_json::json!({
+            "source": { "files": token },
+            "pages": [{ "n": 1, "size": [600, 800], "layer": layer, "marks": [{ "kind": "box", "color": "red", "rect": [1, 1, 5, 5] }] }],
+            "mode": "apply",
+        });
+        let mut request = call("POST", format!("/api/v1/tabs/{tab_id}/markup"), ORIGIN);
+        *request.body_mut() = Body::from(serde_json::to_vec(&submit).unwrap());
+        let (status, _, body) = host.send(request).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let answer = json(&body);
+        assert_eq!((answer["mode"].as_str(), answer["noUndo"].as_str()), (Some("apply"), None), "{body}");
+        let undo = answer["undo"].as_str().unwrap().to_string();
+        assert!(markup_rounds::valid_id(&undo));
+
+        // The agent's turn.
+        std::fs::write(host.root.join("docs/draft.tex"), "the cat\n").unwrap();
+        let base = format!("/api/v1/tabs/{tab_id}/markup/undo/{undo}");
+        let (status, _, body) = host.send(call("POST", format!("{base}/settle"), "https://elsewhere.example")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        let (status, _, body) = host.send(call("POST", format!("{base}/settle"), ORIGIN)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let (status, _, body) = host.send(get_as(&base, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["files"], serde_json::json!([{ "path": "docs/draft.tex", "change": "modified" }]), "{body}");
+        for leak in [host.root.to_string_lossy().to_string(), RAW_PROJECT.to_string()] {
+            assert!(!body.contains(&leak), "{leak} leaked: {body}");
+        }
+
+        // Forged ids and tabs, and a foreign origin on the undo itself.
+        for uri in [
+            format!("/api/v1/tabs/{tab_id}/markup/undo/{}", "0".repeat(32)),
+            format!("/api/v1/tabs/{tab_id}/markup/undo/..%2F..%2Fsecrets"),
+            format!("/api/v1/tabs/nope/markup/undo/{undo}"),
+        ] {
+            let (status, _, body) = host.send(call("POST", uri.clone(), ORIGIN)).await;
+            assert!(matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE), "{uri} answered {status}: {body}");
+        }
+        let (status, ..) = host.send(call("POST", base.clone(), "https://elsewhere.example")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(std::fs::read_to_string(host.root.join("docs/draft.tex")).unwrap(), "the cat\n", "nothing undone yet");
+
+        let (status, _, body) = host.send(call("POST", base.clone(), ORIGIN)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(std::fs::read_to_string(host.root.join("docs/draft.tex")).unwrap(), "teh cat\n");
+        let (status, _, body) = host.send(call("POST", base, ORIGIN)).await;
+        assert_eq!(status, StatusCode::GONE, "undone once: {body}");
+        assert_eq!(json(&body)["error"], "undo_gone");
+    }
+
+    /// The markup questions routes: with no window, a quiet
+    /// `desktop_unavailable` (the phone shows no card); with one, the view's
+    /// source goes to the desktop as a project-relative path, the asks come
+    /// back with a bare leaf name and nothing else of the path, and an answer
+    /// crosses as indices and typed text only — shaped here before it goes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn markup_questions_cross_as_leaf_names_and_answers_as_indices() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(64)).await.0;
+        let (_, tab_id) = project_and_tab(&host, &cookie).await;
+        let questions = format!("/api/v1/tabs/{tab_id}/markup/questions");
+        let answer_uri = format!("/api/v1/tabs/{tab_id}/markup/answer");
+        let dismiss_uri = format!("/api/v1/tabs/{tab_id}/markup/dismiss");
+        let ask = "ask-0123456789abcdef";
+        let good = json!({ "ask_id": ask, "answers": [{ "options": [1] }, { "options": [0, 2], "other": "both" }] });
+
+        // No window: no asks to read, nothing to answer.
+        let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good.clone()))).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+
+        // Refused before the desktop is asked.
+        let outbox_leaf = "20261003-101500-draft.pdf";
+        for (uri, code) in [
+            (format!("{questions}?source=elsewhere:x"), "invalid_source"),
+            (format!("{questions}?source=outbox:..%2Fdraft.pdf"), "invalid_source"),
+            (format!("{questions}?source=files:"), "invalid_source"),
+            (format!("{questions}?source=files:AAAA"), "files_off"),
+        ] {
+            let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+            assert!(status.is_client_error(), "{uri} answered {status}: {body}");
+            assert_eq!(json(&body)["error"], code, "{uri}");
+        }
+        for (bad, code) in [
+            (json!({ "ask_id": "held-1", "answers": [{ "options": [0] }] }), "invalid_request"),
+            (json!({ "ask_id": ask, "answers": [{ "options": [0] }], "prompt": "typed here" }), "invalid_request"),
+            (json!({ "ask_id": ask, "answers": [] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": [{ "options": [6] }] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": [{ "options": [], "other": "a\nb" }] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": [{ "other": "x".repeat(501) }] }), "invalid_answer"),
+            (json!({ "ask_id": ask, "answers": vec![json!({ "options": [0] }); 5] }), "invalid_answer"),
+        ] {
+            let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(bad.clone()))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} answered: {body}");
+            assert_eq!(json(&body)["error"], code, "{bad}");
+        }
+        let mut foreign = request_as("POST", &answer_uri, &cookie, Some(good.clone()));
+        foreign.headers_mut().insert(header::ORIGIN, HeaderValue::from_static("https://elsewhere.example"));
+        let (status, ..) = host.send(foreign).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+        let log = seen.clone();
+        let desktop = tokio::spawn(async move {
+            let mut answered = 0;
+            while answered < 6 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                // A reachability probe connects and sends nothing.
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                let response: DesktopResponse = match &request {
+                    DesktopRequest::MarkupQuestions { .. } => serde_json::from_value(json!({
+                        "status": "markup_questions",
+                        "asks": [
+                            { "id": ask, "path": "docs/paper/draft.pdf", "file_name": "docs/paper/20261003-101500-draft.pdf",
+                              "questions": [{ "question": "Figure or paragraph?", "options": [{ "label": "Figure" }, { "label": "Paragraph" }], "page": 2, "quote": "Figure 2" }] },
+                            { "id": "not-an-ask-id", "questions": [] },
+                        ],
+                        "ticks": [
+                            { "round": "k3x9a0b1", "page": 2, "mark": 1, "file": "docs/paper/draft.pdf" },
+                            { "round": "k3x9a0b1", "page": 3, "mark": 2 },
+                            { "round": "NOT-A-ROUND", "page": 1, "mark": 1 },
+                            { "round": "k3x9a0b1", "page": 0, "mark": 1 },
+                            { "round": "k3x9a0b1", "page": 1, "mark": 0 },
+                        ],
+                    }))
+                    .expect("asks"),
+                    DesktopRequest::MarkupAnswer { .. } if answered == 3 => DesktopResponse::Error { code: "superseded".into(), message: "replaced".into() },
+                    DesktopRequest::MarkupAnswer { .. } | DesktopRequest::MarkupDismiss { .. } => DesktopResponse::Seen,
+                    other => panic!("unexpected request {other:?}"),
+                };
+                log.lock().unwrap().push(request);
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+                answered += 1;
+            }
+        });
+
+        let (status, _, body) = host.send(get_as(&format!("{questions}?source=outbox:{outbox_leaf}"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let asks = json(&body)["asks"].clone();
+        assert_eq!(asks.as_array().unwrap().len(), 1, "the malformed id is dropped: {body}");
+        assert_eq!(asks[0]["file_name"], "draft.pdf");
+        assert_eq!(asks[0]["questions"][0]["page"], 2);
+        assert_eq!(
+            json(&body)["ticks"],
+            json!([{ "round": "k3x9a0b1", "page": 2, "mark": 1 }, { "round": "k3x9a0b1", "page": 3, "mark": 2 }]),
+            "malformed ticks are dropped, nothing but round, page and mark crosses"
+        );
+        assert!(!body.contains("docs/") && !body.contains("\"file\"") && !body.contains(RAW_PROJECT), "{body}");
+        // The Focus banner, drawer off: no row, and still no path.
+        let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert!(json(&body)["asks"][0].get("file_row").is_none(), "{body}");
+        assert!(!body.contains("docs/") && !body.contains("\"path\""), "{body}");
+
+        let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good.clone()))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["answered"], true);
+        let (status, _, body) = host.send(request_as("POST", &answer_uri, &cookie, Some(good))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "superseded");
+        let (status, _, body) = host.send(request_as("POST", &dismiss_uri, &cookie, Some(json!({ "ask_id": ask })))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        assert_eq!(json(&body)["dismissed"], true);
+
+        // Drawer on, the file there: the banner gets its sealed row — the
+        // folder trail and tokens, never the path or the root.
+        std::fs::create_dir_all(host.root.join("docs/paper")).unwrap();
+        std::fs::write(host.root.join("docs/paper/draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+        )
+        .unwrap();
+        let (status, _, body) = host.send(get_as(&questions, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let file = json(&body)["asks"][0]["file_row"].clone();
+        assert_eq!(file["name"], "draft.pdf", "{body}");
+        assert_eq!(file["place"], "docs/paper");
+        assert_eq!(file["kind"], "application/pdf");
+        let key = host.state.auth.lock().unwrap().host_key().to_vec();
+        assert_eq!(files::unseal(&key, RAW_PROJECT, file["token"].as_str().unwrap()).as_deref(), Some("docs/paper/draft.pdf"));
+        assert_eq!(files::unseal(&key, RAW_PROJECT, file["folder"].as_str().unwrap()).as_deref(), Some("docs/paper"));
+        assert!(!body.contains("\"path\"") && !body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+        desktop.await.expect("fake desktop");
+
+        let seen = seen.lock().unwrap();
+        let DesktopRequest::MarkupQuestions { project_id, path, .. } = &seen[0] else { panic!("{:?}", seen[0]) };
+        assert_eq!(project_id, RAW_PROJECT);
+        assert_eq!(path.as_deref(), Some(format!("{}/{outbox_leaf}", outbox::OUTBOX_DIR).as_str()));
+        assert!(matches!(&seen[1], DesktopRequest::MarkupQuestions { path: None, .. }));
+        let DesktopRequest::MarkupAnswer { ask_id, answers, .. } = &seen[2] else { panic!("{:?}", seen[2]) };
+        assert_eq!(ask_id, ask);
+        assert_eq!(answers[1].options, vec![0, 2]);
+        assert_eq!(answers[1].other.as_deref(), Some("both"));
+        assert!(matches!(&seen[4], DesktopRequest::MarkupDismiss { .. }));
+    }
+
+    /// Local models from the phone: the switch and every refusal the sidecar
+    /// owns answer before the desktop is asked (a pull never reaches it), no
+    /// window is `desktop_unavailable` with no headless answer, the window's
+    /// list is rebuilt before it crosses, and a refusal crosses as its code.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_models_go_through_the_window_and_a_pull_never_does() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(65)).await.0;
+        let uri = "/api/v1/local-models";
+        let settings = host.state.config.state_dir.join("settings.json");
+        let switch = |local_models: Option<bool>| {
+            let mut mobile = json!({ "enabled": true });
+            if let Some(on) = local_models {
+                mobile["local_models"] = json!(on);
+            }
+            std::fs::write(&settings, json!({ crate::brand::MOBILE_HOST_KEY: mobile }).to_string()).unwrap();
+        };
+        let post = |body: Value| request_as("POST", uri, &cookie, Some(body));
+        let load = json!({ "action": "load", "model": "llama3" });
+
+        // No settings at all: closed.
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "local_models_disabled");
+
+        // Unset is on; no window → open the app, never a headless list.
+        switch(None);
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+        let (status, _, body) = host.send(post(load.clone())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+        assert_eq!(json(&body)["error"], "desktop_unavailable");
+
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+        let log = seen.clone();
+        let list = |server: &str| -> DesktopResponse {
+            serde_json::from_value(json!({
+                "status": "local_models",
+                "server": server,
+                "can_start": false,
+                "start_failed": false,
+                "path": "/home/someone/.ollama",
+                "models": [
+                    { "name": "qwen3.5:9b", "size": 6594474711u64, "parameter_size": "9B", "quantization": "Q4_K_M",
+                      "state": "loaded", "loaded_size": 7100000000u64, "vram": 3550000000u64, "pinned": true,
+                      "expires_in": null, "for_tabs": true, "remote": false, "digest": "sha256:feed",
+                      "path": "/home/someone/.ollama/models/blobs" },
+                    { "name": "../escape", "state": "idle" },
+                    { "name": "llama3:latest", "size": 1, "state": "warming", "loaded_size": 9 },
+                ],
+            }))
+            .expect("list")
+        };
+        let desktop = tokio::spawn(async move {
+            for _ in 0..7 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                let refuse = |code: &str| DesktopResponse::Error {
+                    code: code.into(),
+                    message: "not_running at /home/someone/.ollama: secret prose".into(),
+                };
+                let response = match &request {
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Unload { model }, .. } if model == "gone:1" => {
+                        refuse("model_not_installed")
+                    }
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Unload { model }, .. } if model == "busy:1" => {
+                        refuse("model_loading")
+                    }
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Load { model }, .. } if model == "odd:1" => {
+                        refuse("Error: /home/someone/.ollama refused")
+                    }
+                    DesktopRequest::LocalModelMutate { action: LocalModelAction::Start, .. } => list("starting"),
+                    _ => list("running"),
+                };
+                log.lock().unwrap().push(request);
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+            }
+        });
+
+        // Switched off: refused here, for both verbs, with the window open.
+        switch(Some(false));
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "local_models_disabled");
+        let (status, _, body) = host.send(post(load.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "local_models_disabled");
+
+        // On again: what the sidecar refuses never reaches the window either.
+        switch(Some(true));
+        for (bad, code) in [
+            (json!({ "action": "pull", "model": "llama3" }), "unsupported_action"),
+            (json!({ "action": "delete", "model": "llama3" }), "unsupported_action"),
+            (json!({ "action": "start", "model": "llama3" }), "invalid_request"),
+            (json!({ "action": "load", "model": "a b" }), "invalid_request"),
+            (json!({ "action": "load" }), "invalid_request"),
+        ] {
+            let (status, _, body) = host.send(post(bad.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} answered: {body}");
+            assert_eq!(json(&body)["error"], code, "{bad}");
+        }
+        let mut not_json = post(json!({}));
+        *not_json.body_mut() = Body::from("{\"action\":");
+        let (status, _, body) = host.send(not_json).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "answered: {body}");
+        let mut foreign = post(load.clone());
+        foreign.headers_mut().insert(header::ORIGIN, HeaderValue::from_static("https://elsewhere.example"));
+        let (status, _, body) = host.send(foreign).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+        assert_eq!(json(&body)["error"], "invalid_origin");
+        let (status, _, body) = host.send(post_json(uri, ORIGIN, &load)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "answered: {body}");
+        // No route below it: not the shell, not a write.
+        let (status, ..) = host.send(get_as("/api/v1/local-models/pull", &cookie)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, ..) = host.send(request_as("POST", "/api/v1/local-models/pull", &cookie, Some(load.clone()))).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(seen.lock().unwrap().is_empty(), "the window was asked: {:?}", seen.lock().unwrap());
+
+        // The list, rebuilt: the bad name gone, the unknown state idle,
+        // residency only on the loaded row, no field the phone was not given.
+        let (status, _, body) = host.send(get_as(uri, &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        let list = json(&body);
+        assert_eq!(list["server"], "running");
+        let models = list["models"].as_array().unwrap();
+        assert_eq!(models.len(), 2, "{body}");
+        assert_eq!(models[0]["name"], "qwen3.5:9b");
+        assert_eq!(models[0]["vram"], 3_550_000_000u64);
+        assert_eq!(models[0]["pinned"], true);
+        assert_eq!(models[1]["state"], "idle");
+        assert!(models[1].get("loaded_size").is_none(), "{body}");
+        assert!(!body.contains("/home") && !body.contains("path") && !body.contains("digest") && !body.contains("escape"), "{body}");
+
+        // A load and a start answer at once (202); an unload is done (200).
+        let (status, _, body) = host.send(post(load.clone())).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "answered: {body}");
+        assert_eq!(json(&body)["models"].as_array().unwrap().len(), 2);
+        let (status, _, body) = host.send(post(json!({ "action": "unload", "model": "gone:1" }))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+        assert_eq!(json(&body), json!({ "error": "model_not_installed" }));
+        let (status, _, body) = host.send(post(json!({ "action": "unload", "model": "busy:1" }))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+        assert_eq!(json(&body)["error"], "model_loading");
+        let (status, _, body) = host.send(post(json!({ "action": "start" }))).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "answered: {body}");
+        assert_eq!(json(&body)["server"], "starting");
+        let (status, _, body) = host.send(post(json!({ "action": "unload", "model": "qwen3.5:9b" }))).await;
+        assert_eq!(status, StatusCode::OK, "answered: {body}");
+        // A code this feature does not define becomes a fixed one.
+        let (status, _, body) = host.send(post(json!({ "action": "load", "model": "odd:1" }))).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "answered: {body}");
+        assert_eq!(json(&body), json!({ "error": "desktop_error" }));
+        desktop.await.expect("fake desktop");
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 7, "{seen:?}");
+        assert!(matches!(&seen[0], DesktopRequest::LocalModels { .. }));
+        assert!(matches!(
+            &seen[1],
+            DesktopRequest::LocalModelMutate { action: LocalModelAction::Load { model }, .. } if model == "llama3"
+        ));
+        assert!(matches!(&seen[4], DesktopRequest::LocalModelMutate { action: LocalModelAction::Start, .. }));
+        assert!(matches!(
+            &seen[5],
+            DesktopRequest::LocalModelMutate { action: LocalModelAction::Unload { model }, .. } if model == "qwen3.5:9b"
+        ));
+    }
+
     /// The browser's own PDF viewer fetches without the strict session cookie;
     /// a ticket minted over the session opens that one URL and nothing else.
     #[tokio::test]
@@ -5408,7 +9662,7 @@ mod tests {
         std::fs::write(host.root.join("other.pdf"), "%PDF-1.7\n%%EOF\n").unwrap();
         std::fs::write(
             host.state.config.state_dir.join("settings.json"),
-            serde_json::json!({ "eldrun_mobile_host": { "enabled": true, "project_files": true } }).to_string(),
+            serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
         )
         .unwrap();
         let (_, _, body) = host.send(get_as(&base, &cookie)).await;
@@ -5468,7 +9722,7 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED, "answered: {body}");
         let attachment = &json(&body)["attachment"];
         let reference = attachment["reference"].as_str().expect("reference");
-        assert!(reference.starts_with(".eldrun/inbox/"), "{reference}");
+        assert!(reference.starts_with(concat!(".", crate::app_slug!(), "/inbox/")), "{reference}");
         assert!(reference.ends_with("-IMG_0042.jpg"), "{reference}");
         assert_eq!(attachment["size"], bytes.len());
         assert!(
@@ -5550,7 +9804,7 @@ mod tests {
             .as_str()
             .expect("reference")
             .to_string();
-        assert!(reference.starts_with(".eldrun/inbox/"), "{reference}");
+        assert!(reference.starts_with(concat!(".", crate::app_slug!(), "/inbox/")), "{reference}");
         assert!(reference.ends_with("-notes.pdf"), "{reference}");
         assert!(
             !body.contains(&host.root.to_string_lossy().to_string()),
@@ -5637,6 +9891,110 @@ mod tests {
         drop(listener);
     }
 
+    /// A phone kept out of a section gets 403 on every route of it, reads and
+    /// writes alike, and learns which from its status; another phone is not.
+    #[tokio::test]
+    async fn a_phone_kept_out_of_a_section_is_refused_its_routes() {
+        let host = Fixture::with_project();
+        let (kept_out, device) = host.pair_device(&signing_key(93)).await;
+        let (other, _) = host.pair_device(&signing_key(94)).await;
+        host.state
+            .auth
+            .lock()
+            .unwrap()
+            .set_hidden_sections(&device, &["mail".into(), "todo".into()])
+            .expect("hide");
+
+        let (_, _, body) = host.send(get_as("/api/v1/status", &kept_out)).await;
+        assert_eq!(json(&body)["hidden_sections"], serde_json::json!(["todo", "mail"]));
+        let (_, _, body) = host.send(get_as("/api/v1/status", &other)).await;
+        assert_eq!(json(&body)["hidden_sections"], serde_json::json!([]));
+
+        for (method, uri) in [
+            ("GET", "/api/v1/todo"),
+            ("POST", "/api/v1/todo"),
+            ("GET", "/api/v1/mail"),
+            ("GET", "/api/v1/mail/folders/anything"),
+            ("GET", "/api/v1/mail/folders/anything/messages/anything"),
+            ("POST", "/api/v1/mail/folders/anything/messages/anything/mark"),
+            ("POST", "/api/v1/mail/folders/anything/messages/anything/reply"),
+        ] {
+            let (status, _, body) = host.send(request_as(method, uri, &kept_out, Some(serde_json::json!({})))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
+            assert_eq!(json(&body)["error"], "section_hidden", "{method} {uri}");
+            let (status, _, _) = host.send(request_as(method, uri, &other, Some(serde_json::json!({})))).await;
+            assert_ne!(status, StatusCode::FORBIDDEN, "{method} {uri} for the other phone");
+        }
+        // The calendar was left open to it.
+        let (status, _, _) = host.send(get_as("/api/v1/calendar?month=2026-10", &kept_out)).await;
+        assert_ne!(status, StatusCode::FORBIDDEN);
+
+        // Opening the section again lets it straight back in.
+        host.state.auth.lock().unwrap().set_hidden_sections(&device, &[]).expect("open");
+        let (status, _, _) = host.send(get_as("/api/v1/mail", &kept_out)).await;
+        assert_ne!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn alert_rows_of_a_hidden_section_are_dropped() {
+        use crate::services::mobile_control::protocol::{MobileAlertItem, MobileAlertsSnapshot};
+        let row = |kind: &str| MobileAlertItem {
+            kind: kind.into(),
+            severity: "soon".into(),
+            title: kind.into(),
+            detail: String::new(),
+            at: None,
+            all_day: false,
+            minutes_away: None,
+            days_away: None,
+            task_id: None,
+            alert_id: Some(kind.into()),
+        };
+        let snapshot = MobileAlertsSnapshot {
+            enabled: true,
+            items: vec![row("mail"), row("event"), row("task"), row("later_kind")],
+        };
+        let kept = open_alerts(&["calendar".into(), "todo".into()], snapshot);
+        let kinds: Vec<&str> = kept.items.iter().map(|i| i.kind.as_str()).collect();
+        assert_eq!(kinds, ["mail", "later_kind"]);
+    }
+
+    #[tokio::test]
+    async fn status_tracks_the_untested_tag_display_preference() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(91)).await.0;
+        let settings = host.state.config.state_dir.join("settings.json");
+
+        let (status, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["show_untested_tags"], false);
+
+        std::fs::write(&settings, br#"{"show_untested_tags":true}"#).expect("settings");
+        let (status, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["show_untested_tags"], true);
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_desktop_theme_for_a_phone_that_follows_it() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(92)).await.0;
+        let settings = host.state.config.state_dir.join("settings.json");
+
+        // Unset is the desktop's own default.
+        let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+        assert_eq!(json(&body)["color_scheme"], "light_lavender");
+
+        std::fs::write(&settings, br#"{"color_scheme":"light_lavender"}"#).expect("settings");
+        let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+        assert_eq!(json(&body)["color_scheme"], "light_lavender");
+
+        // Anything that is not a plain theme name never crosses.
+        std::fs::write(&settings, br#"{"color_scheme":"<b>/etc/passwd</b>"}"#).expect("settings");
+        let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+        assert_eq!(json(&body)["color_scheme"], "light_lavender");
+    }
+
     /// The desktop pill's git dot reaches the list row and the project screen
     /// under the opaque id; the desktop's raw id and any level the phone does
     /// not know stay behind.
@@ -5649,10 +10007,16 @@ mod tests {
         let socket = host.state.config.control_dir.join("desktop-control.sock");
         let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
         let desktop = tokio::spawn(async move {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (mut stream, _) = listener.accept().await.expect("accept");
                 let request: DesktopRequest = admin::read_frame(&mut stream).await.expect("request");
                 let response = match request {
+                    // The list row's agent counts come from the activity readings.
+                    DesktopRequest::Activity { .. } => serde_json::from_value(json!({
+                        "status": "activity",
+                        "statuses": [{ "tmux_session": format!("{}-{RAW_PROJECT}--agent-abcdef123", crate::brand::SLUG), "status": "question" }],
+                    }))
+                    .expect("activity"),
                     DesktopRequest::GitStates { .. } => DesktopResponse::GitStates {
                         states: vec![
                             ProjectGitState { project_id: RAW_PROJECT.into(), state: "unpushed".into() },
@@ -5673,6 +10037,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "answered: {body}");
         let row = &json(&body)["projects"][0];
         assert_eq!(row["git"], "unpushed", "{body}");
+        assert_eq!(row["agents"], json!({ "working": 0, "question": 1, "done": 0 }), "{body}");
         assert!(!body.contains(RAW_PROJECT) && !body.contains("not-listed"), "{body}");
 
         let opaque = row["id"].as_str().unwrap().to_string();
@@ -5682,6 +10047,263 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "answered: {body}");
         assert!(json(&body)["project"].get("git").is_none(), "unknown level dropped: {body}");
         desktop.await.expect("fake desktop");
+    }
+
+    /// A write the desktop applied, whose refreshed list was too large to
+    /// relay, reaches the phone under its own code on every list-answering
+    /// write route. Not a 2xx: the body has no list, and a phone bundle that
+    /// does not know the code must land in its error path rather than read a
+    /// board out of nothing. Not a 503 either, which the phone reads as a
+    /// closed desktop. The phone tells it from a failed write by the code and
+    /// reloads through the read route (`reloadIfApplied` in `api.ts`).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_applied_write_with_an_unrelayable_answer_keeps_its_own_code() {
+        let host = Fixture::with_project();
+        let cookie = host.pair_device(&signing_key(55)).await.0;
+        let (_, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+        let project = json(&body)["projects"][0]["id"].as_str().unwrap().to_string();
+        let writes: Vec<(String, Value)> = vec![
+            ("/api/v1/todo".into(), json!({ "type": "toggle", "task_id": "t1" })),
+            ("/api/v1/alerts".into(), json!({ "alert_id": "row" })),
+            (
+                "/api/v1/calendar?month=2026-09".into(),
+                json!({ "type": "delete_event", "event_id": "e1" }),
+            ),
+            (
+                "/api/v1/mail/folders/f1/messages/m1/mark".into(),
+                json!({ "action": "seen" }),
+            ),
+            (
+                "/api/v1/mail/folders/f1/messages/m1/reply".into(),
+                json!({ "body": "Thanks" }),
+            ),
+            (format!("/api/v1/projects/{project}/prompts"), json!({ "message": "Review" })),
+            ("/api/v1/local-models".into(), json!({ "action": "load", "model": "llama3" })),
+        ];
+        // The local-models switch is unset (on) in a settings file that exists.
+        std::fs::write(host.state.config.state_dir.join("settings.json"), "{}").expect("settings");
+
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let expected = writes.len();
+        let desktop = tokio::spawn(async move {
+            let mut answered = 0;
+            while answered < expected {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                // A reachability probe connects and sends nothing.
+                let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                    continue;
+                };
+                assert!(request.is_mutation(), "not a mutation: {request:?}");
+                let response = DesktopResponse::Error {
+                    code: admin::APPLIED_RESPONSE_TOO_LARGE.into(),
+                    message: String::new(),
+                };
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+                answered += 1;
+            }
+        });
+
+        for (uri, body) in &writes {
+            let request = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::ORIGIN, ORIGIN)
+                .header(header::COOKIE, cookie_pair(&cookie))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(body).expect("body")))
+                .expect("request");
+            let (status, _, answer) = host.send(request).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri} answered: {answer}");
+            assert_eq!(
+                json(&answer)["error"],
+                admin::APPLIED_RESPONSE_TOO_LARGE,
+                "{uri} answered: {answer}"
+            );
+        }
+        desktop.await.expect("fake desktop");
+    }
+
+    /// Write the per-phone list onto every scope of `file` (`projects.json` or
+    /// `boxes.json`) that has the Mobile switch on, and drop the cached
+    /// snapshot so the next request reads it.
+    fn limit_to(host: &Fixture, file: &str, devices: &[&str]) {
+        let path = host.state.config.state_dir.join(file);
+        let mut list: Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        for scope in list.as_array_mut().expect("list") {
+            if scope[crate::brand::MOBILE_ACCESS_KEY] == true {
+                scope[crate::brand::MOBILE_DEVICES_KEY] = json!(devices);
+            }
+        }
+        std::fs::write(&path, serde_json::to_vec(&list).expect("bytes")).expect("write");
+        catalog_stale(&host.state);
+    }
+
+    /// A project open to one phone only: the listed phone sees and opens it
+    /// as before, and to the other phone it is exactly an unknown id on every
+    /// route that takes one — the project screen, a tab, a create, the file
+    /// browser (by cookie and by open ticket), markup, a schedule, a prompt
+    /// send — and missing from `/projects` and `/activity`. (The terminal
+    /// upgrade checks through the same filtered catalog; its socket cannot be
+    /// upgraded under `oneshot`, so `pty_bridge`'s re-check test covers it.)
+    #[tokio::test]
+    async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
+        let host = Fixture::with_project();
+        std::fs::create_dir_all(host.root.join("docs")).expect("docs");
+        std::fs::write(host.root.join("paper.pdf"), "%PDF-1.7\n%%EOF\n").expect("pdf");
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "shell_tabs": true } }).to_string(),
+        )
+        .expect("settings");
+        let (listed, listed_id) = host.pair_device(&signing_key(81)).await;
+        let (other, _) = host.pair_device(&signing_key(82)).await;
+        let (project_id, tab_id) = project_and_tab(&host, &other).await;
+        let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/files"), &listed)).await;
+        let token = json(&body)["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|entry| entry["name"] == "paper.pdf")
+            .expect("paper.pdf")["token"]
+            .as_str()
+            .expect("token")
+            .to_string();
+
+        limit_to(&host, "projects.json", &[&listed_id]);
+
+        // The listed phone: as before.
+        assert_eq!(project_and_tab(&host, &listed).await, (project_id.clone(), tab_id.clone()));
+        let (status, _, _) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}"), &listed)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The other phone: nothing listed.
+        let (_, _, body) = host.send(get_as("/api/v1/projects", &other)).await;
+        assert_eq!(json(&body)["projects"], json!([]), "{body}");
+        let (_, _, body) = host.send(get_as("/api/v1/projects?view=search", &other)).await;
+        assert_eq!(json(&body)["projects"], json!([]), "{body}");
+        let (status, _, body) = host.send(get_as("/api/v1/activity", &other)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.contains(&project_id) && !body.contains(&tab_id), "{body}");
+
+        // And every id-taking route answers it as an unknown id — the listed
+        // phone asking about ids that never existed is the yardstick.
+        let unknown = "A".repeat(27);
+        let schedule = json!({ "enabled": true, "message": "x", "rule": { "type": "daily", "time": "08:00" } });
+        let routes = |project: &str, tab: &str| -> Vec<(&'static str, String, Option<Value>)> {
+            vec![
+                ("GET", format!("/api/v1/projects/{project}"), None),
+                ("GET", format!("/api/v1/tabs/{tab}"), None),
+                ("POST", format!("/api/v1/projects/{project}/tabs"), Some(json!({
+                    "project_id": project, "kind": "shell", "idempotency_key": "scoped-0123456789abcdef",
+                }))),
+                ("GET", format!("/api/v1/projects/{project}/files"), None),
+                ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
+                ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
+                ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),
+                ("POST", format!("/api/v1/tabs/{tab}/schedules"), Some(schedule.clone())),
+                ("POST", format!("/api/v1/projects/{project}/prompts/p-1/send"), Some(json!({ "tab_id": tab }))),
+                ("GET", format!("/api/v1/tabs/{tab}/status"), None),
+                ("GET", format!("/api/v1/tabs/{tab}/outbox"), None),
+            ]
+        };
+        for ((method, real, body), (_, fake, fake_body)) in routes(&project_id, &tab_id).into_iter().zip(routes(&unknown, &unknown)) {
+            let (status, _, answer) = host.send(request_as(method, &real, &other, body)).await;
+            let (expected_status, _, expected) = host.send(request_as(method, &fake, &listed, fake_body)).await;
+            assert_eq!(expected_status, StatusCode::NOT_FOUND, "{fake}: {expected}");
+            assert!(
+                matches!(json(&expected)["error"].as_str(), Some("project_not_found" | "tab_not_found")),
+                "{fake}: {expected}"
+            );
+            assert_eq!((status, json(&answer)["error"].clone()), (expected_status, json(&expected)["error"].clone()), "{method} {real}");
+        }
+
+        // The file's bytes by open ticket, the way the browser's viewer asks.
+        let anonymous = |uri: &str| Request::builder().uri(uri).body(Body::empty()).expect("request");
+        let ticketed = |cookie: &str, project: &str| {
+            let url = format!("/api/v1/projects/{project}/files/raw?f={token}");
+            request_as("POST", "/api/v1/open-ticket", cookie, Some(json!({ "url": url })))
+        };
+        let (_, _, body) = host.send(ticketed(&listed, &project_id)).await;
+        let (status, _, _) = host.send(anonymous(json(&body)["url"].as_str().expect("url"))).await;
+        assert_eq!(status, StatusCode::OK, "the listed phone's ticket opens the file");
+        let (_, _, body) = host.send(ticketed(&other, &project_id)).await;
+        let (status, _, answer) = host.send(anonymous(json(&body)["url"].as_str().expect("url"))).await;
+        assert_eq!((status, json(&answer)["error"].clone()), (StatusCode::NOT_FOUND, json!("project_not_found")));
+
+        // An empty list reaches no phone at all; dropping it reaches both again.
+        limit_to(&host, "projects.json", &[]);
+        let (_, _, body) = host.send(get_as("/api/v1/projects", &listed)).await;
+        assert_eq!(json(&body)["projects"], json!([]), "{body}");
+        let path = host.state.config.state_dir.join("projects.json");
+        let mut list: Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        list[0].as_object_mut().expect("entry").remove(crate::brand::MOBILE_DEVICES_KEY);
+        std::fs::write(&path, serde_json::to_vec(&list).expect("bytes")).expect("write");
+        catalog_stale(&host.state);
+        assert_eq!(project_and_tab(&host, &other).await.0, project_id);
+    }
+
+    /// The desktop's activity answer covers every scope; each phone gets only
+    /// the rows of the scopes it may reach — a working tab in a project open
+    /// to one phone is on that phone's list and not on the other's.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_activity_list_carries_a_scoped_projects_tabs_only_to_its_phones() {
+        let host = Fixture::with_project();
+        let (listed, listed_id) = host.pair_device(&signing_key(85)).await;
+        let (other, _) = host.pair_device(&signing_key(86)).await;
+        limit_to(&host, "projects.json", &[&listed_id]);
+        let socket = host.state.config.control_dir.join("desktop-control.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let desktop = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let request: DesktopRequest = admin::read_frame(&mut stream).await.expect("request");
+                assert!(matches!(request, DesktopRequest::Activity { .. }), "unexpected request {request:?}");
+                let response: DesktopResponse = serde_json::from_value(json!({
+                    "status": "activity",
+                    "statuses": [{ "tmux_session": format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123"), "status": "working" }],
+                }))
+                .expect("activity");
+                admin::write_frame(&mut stream, &response).await.expect("answer");
+            }
+        });
+        let (status, _, body) = host.send(get_as("/api/v1/activity", &listed)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["tabs"].as_array().expect("tabs").len(), 1, "{body}");
+        let (status, _, body) = host.send(get_as("/api/v1/activity", &other)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["tabs"], json!([]), "{body}");
+        desktop.await.expect("fake desktop");
+    }
+
+    /// A box's own list scopes the box scope the same way.
+    #[tokio::test]
+    async fn a_box_open_to_one_phone_is_unlisted_for_the_other() {
+        let host = Fixture::with_box();
+        let (listed, listed_id) = host.pair_device(&signing_key(83)).await;
+        let (other, _) = host.pair_device(&signing_key(84)).await;
+        limit_to(&host, "boxes.json", &[&listed_id]);
+        let (_, _, body) = host.send(get_as("/api/v1/projects", &listed)).await;
+        let boxes = json(&body)["projects"].as_array().expect("projects").len();
+        assert_eq!(boxes, 1, "{body}");
+        let box_id = json(&body)["projects"][0]["id"].as_str().expect("box id").to_string();
+        let (_, _, body) = host.send(get_as("/api/v1/projects", &other)).await;
+        assert_eq!(json(&body)["projects"], json!([]), "{body}");
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}"), &other)).await;
+        assert_eq!((status, json(&body)["error"].clone()), (StatusCode::NOT_FOUND, json!("project_not_found")));
+    }
+
+    /// The agent-notice lookup is not a phone's request: it finds a tab in a
+    /// scope open to some phones and carries that list on to the push filter.
+    #[test]
+    fn an_agent_notice_lookup_carries_the_scopes_phone_list() {
+        let host = Fixture::with_project();
+        let tmux = format!("{SLUG}-{RAW_PROJECT}--agent-abcdef123");
+        assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, None);
+        limit_to(&host, "projects.json", &["d1"]);
+        assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, Some(vec!["d1".to_string()]));
     }
 }
 

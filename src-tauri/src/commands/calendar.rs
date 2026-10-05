@@ -1,6 +1,6 @@
 //! Native calendar — a single global, local store of calendars, events and tasks.
 //!
-//! Everything lives in `~/.local/share/eldrun/calendar.json` (like `boxes.json`),
+//! Everything lives in `~/.local/share/tabtivity/calendar.json` (like `boxes.json`),
 //! read/written through the shared `storage` helpers. Reads go through
 //! `schema::calendar::CalendarFile`, so a version-1 file (a bare array of
 //! start-time-only events) still loads and is migrated on the way in; writes are
@@ -30,7 +30,9 @@ use crate::storage;
 
 /// Calendar CRUD and CalDAV merges are read-modify-write transactions over the
 /// same file. Atomic replacement protects readers; this lock protects edits
-/// from overwriting one another between their read and rename.
+/// from overwriting one another between their read and rename — within this
+/// process. A second process (a second Tabtivity window, the Mobile sidecar) is
+/// what the revision check in [`transact`] is for (#171).
 static CALENDAR_RMW_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_calendar() -> std::sync::MutexGuard<'static, ()> {
@@ -64,6 +66,141 @@ fn write_data(path: &Path, data: &CalendarData) -> Result<(), String> {
     storage::write_json_atomic(path, data).map_err(|e| e.to_string())
 }
 
+// ── Compare-and-swap (#171) ─────────────────────────────────────────────────
+//
+// Every edit is a read-modify-write of the whole file. `CALENDAR_RMW_LOCK`
+// serialises those within one process, and nothing else: a second Tabtivity
+// window on the same machine, or the Mobile sidecar, reads the same file from
+// another process and the loser's edit silently vanished under the winner's
+// rename. So the file carries a revision (`CalendarData::rev`), a transaction
+// remembers the one it read, and commits only while the file still holds it;
+// otherwise the edit is re-applied to the fresh state instead of clobbering.
+// The check-and-rename itself sits under an advisory file lock, so two
+// processes cannot both pass the check.
+
+/// How many times an edit is re-run against fresh state before giving up.
+const CAS_ATTEMPTS: usize = 8;
+
+/// Whether a commit landed, or found the file already moved on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Commit {
+    Committed,
+    Stale,
+}
+
+/// Run one read-modify-write over the store, committing it only if the
+/// file's revision is still the one the read saw. Returns what `edit`
+/// returned and the state that reached disk (record revisions stamped).
+///
+/// `edit` runs again when another process wrote between the read and the
+/// commit, so it must not consume anything it needs a second time (push a
+/// clone into the store, not the original). An `Err` from `edit` ends the
+/// transaction without writing.
+pub(crate) fn transact<T>(
+    path: &Path,
+    mut edit: impl FnMut(&mut CalendarData) -> Result<T, String>,
+) -> Result<(T, CalendarData), String> {
+    let _guard = lock_calendar();
+    for _ in 0..CAS_ATTEMPTS {
+        let base = read_data(path)?;
+        let mut data = base.clone();
+        let out = edit(&mut data)?;
+        match commit(path, &base, &mut data)? {
+            Commit::Committed => return Ok((out, data)),
+            Commit::Stale => continue,
+        }
+    }
+    Err("calendar.json kept changing underneath this edit; try again".to_string())
+}
+
+/// Commit `data`, derived from `base`, if the file still holds `base.rev`.
+/// An unchanged store is a no-op that never touches the file. On success
+/// `data` carries the stamped record revisions and the new file revision.
+pub(crate) fn commit(path: &Path, base: &CalendarData, data: &mut CalendarData) -> Result<Commit, String> {
+    if *data == *base {
+        return Ok(Commit::Committed);
+    }
+    stamp_revs(&base.calendars, &mut data.calendars);
+    stamp_revs(&base.events, &mut data.events);
+    stamp_revs(&base.tasks, &mut data.tasks);
+    data.rev = base.rev + 1;
+    write_data_cas(path, data, base.rev)
+}
+
+/// A record with an id and a revision — the three kinds `calendar.json` holds.
+trait Revisioned: Clone + PartialEq {
+    fn id(&self) -> &str;
+    fn rev(&self) -> u64;
+    fn set_rev(&mut self, rev: u64);
+}
+
+macro_rules! revisioned {
+    ($($ty:ty),*) => {$(
+        impl Revisioned for $ty {
+            fn id(&self) -> &str {
+                &self.id
+            }
+            fn rev(&self) -> u64 {
+                self.rev
+            }
+            fn set_rev(&mut self, rev: u64) {
+                self.rev = rev;
+            }
+        }
+    )*};
+}
+revisioned!(Calendar, CalendarEvent, CalendarTask);
+
+/// Give every record that differs from its `base` counterpart the next
+/// revision, and every unchanged one its old revision back — whatever number
+/// the caller's copy carried, the store decides. A record `base` never held
+/// (new, or restored after a delete) moves past the revision it came with.
+fn stamp_revs<R: Revisioned>(base: &[R], now: &mut [R]) {
+    let was: std::collections::HashMap<&str, &R> = base.iter().map(|r| (r.id(), r)).collect();
+    for record in now.iter_mut() {
+        match was.get(record.id()) {
+            None => record.set_rev(record.rev().saturating_add(1)),
+            Some(was) => {
+                let mut probe = record.clone();
+                probe.set_rev(was.rev());
+                if probe == **was {
+                    record.set_rev(was.rev());
+                } else {
+                    record.set_rev(was.rev().saturating_add(1));
+                }
+            }
+        }
+    }
+}
+
+/// The revision the file holds right now: `0` for a missing or legacy
+/// (version-1 array) file, which is also what a read of either reports.
+fn on_disk_rev(path: &Path) -> u64 {
+    #[derive(Deserialize)]
+    struct RevProbe {
+        #[serde(default)]
+        rev: u64,
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<RevProbe>(&text).ok())
+        .map(|probe| probe.rev)
+        .unwrap_or(0)
+}
+
+/// Write `data` if the file still holds `expected_rev`, under an advisory
+/// lock on a sibling `.lock` file so another process cannot pass the same
+/// check in between. The lock file is never removed: deleting one out from
+/// under a holder is how two processes end up holding "the" lock.
+pub(crate) fn write_data_cas(path: &Path, data: &CalendarData, expected_rev: u64) -> Result<Commit, String> {
+    let _lock = storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
+    if on_disk_rev(path) == expected_rev {
+        write_data(path, data).map(|()| Commit::Committed)
+    } else {
+        Ok(Commit::Stale)
+    }
+}
+
 /// Apply an entire reviewed proposal under the same lock as user edits and
 /// CalDAV merges. Failed preconditions never write even part of a batch.
 pub(crate) fn apply_change_at(
@@ -71,11 +208,12 @@ pub(crate) fn apply_change_at(
     rows: &[crate::services::root_mcp_review::Row],
     calendars: &[serde_json::Value],
 ) -> Result<Vec<crate::services::root_mcp::Change>, String> {
-    let _guard = lock_calendar();
-    let mut value = serde_json::to_value(read_data(path)?).map_err(|e| e.to_string())?;
-    let changes = crate::services::root_mcp_review::apply_rows(&mut value, rows, calendars)?;
-    let data: CalendarData = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    write_data(path, &data)?;
+    let (changes, _) = transact(path, |data| {
+        let mut value = serde_json::to_value(&*data).map_err(|e| e.to_string())?;
+        let changes = crate::services::root_mcp_review::apply_rows(&mut value, rows, calendars)?;
+        *data = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        Ok(changes)
+    })?;
     Ok(changes)
 }
 
@@ -106,42 +244,56 @@ fn calendar_ids(data: &CalendarData) -> HashSet<&str> {
 /// Insert `event`, minting an id and defaulting its calendar. The caller's `id`
 /// is ignored — the store owns identity.
 pub(crate) fn create_event_at(path: &Path, mut event: CalendarEvent) -> Result<CalendarEvent, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    event.id = fresh_id(&event_ids(&data));
     if event.calendar_id.is_empty() {
         event.calendar_id = DEFAULT_CALENDAR_ID.to_string();
     }
-    data.events.push(event.clone());
-    data.normalize();
-    write_data(path, &data)?;
-    Ok(event)
+    let (id, data) = transact(path, |data| {
+        let mut event = event.clone();
+        event.id = fresh_id(&event_ids(data));
+        let id = event.id.clone();
+        data.events.push(event);
+        data.normalize();
+        Ok(id)
+    })?;
+    stored_event(&data, &id)
 }
 
 /// Replace the event with `event.id` wholesale.
 pub(crate) fn update_event_at(path: &Path, event: CalendarEvent) -> Result<CalendarEvent, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    let slot = data
-        .events
-        .iter_mut()
-        .find(|e| e.id == event.id)
-        .ok_or_else(|| format!("event '{}' not found", event.id))?;
-    *slot = event.clone();
-    data.normalize();
-    write_data(path, &data)?;
-    Ok(event)
+    let (_, data) = transact(path, |data| {
+        let slot = data
+            .events
+            .iter_mut()
+            .find(|e| e.id == event.id)
+            .ok_or_else(|| format!("event '{}' not found", event.id))?;
+        *slot = event.clone();
+        data.normalize();
+        Ok(())
+    })?;
+    stored_event(&data, &event.id)
+}
+
+/// The event as it reached disk: the writers return **this**, not the
+/// caller's record, so the caller holds the stamped revision and whatever
+/// `normalize` refiled.
+fn stored_event(data: &CalendarData, id: &str) -> Result<CalendarEvent, String> {
+    data.events
+        .iter()
+        .find(|e| e.id == id)
+        .cloned()
+        .ok_or_else(|| format!("event '{id}' vanished during normalize"))
 }
 
 pub(crate) fn delete_event_at(path: &Path, id: &str) -> Result<(), String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    let before = data.events.len();
-    data.events.retain(|e| e.id != id);
-    if data.events.len() == before {
-        return Err(format!("event '{id}' not found"));
-    }
-    write_data(path, &data)
+    transact(path, |data| {
+        let before = data.events.len();
+        data.events.retain(|e| e.id != id);
+        if data.events.len() == before {
+            return Err(format!("event '{id}' not found"));
+        }
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 /// One event a move re-filed: the row as it was, and as it now is.
@@ -197,56 +349,56 @@ pub(crate) fn relocate_event(
 /// no half-moved calendar behind. An event already in `to` is left alone and
 /// not reported.
 pub(crate) fn move_events_at(path: &Path, ids: &[String], to: &str) -> Result<Vec<MovedEvent>, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    let target = data
-        .calendars
-        .iter()
-        .find(|c| c.id == to)
-        .ok_or_else(|| format!("calendar '{to}' not found"))?;
-    if target.readonly {
-        return Err(format!("calendar '{}' is read-only", target.name));
-    }
-    let readonly: HashSet<&str> = data
-        .calendars
-        .iter()
-        .filter(|c| c.readonly)
-        .map(|c| c.id.as_str())
-        .collect();
-
-    let mut moved = Vec::new();
-    let mut seen = HashSet::new();
-    for id in ids {
-        if !seen.insert(id.as_str()) {
-            continue;
-        }
-        let before = data
-            .events
+    let (moved, _) = transact(path, |data| {
+        let target = data
+            .calendars
             .iter()
-            .find(|e| &e.id == id)
-            .cloned()
-            .ok_or_else(|| format!("event '{id}' not found"))?;
-        if before.calendar_id == to {
-            continue;
+            .find(|c| c.id == to)
+            .ok_or_else(|| format!("calendar '{to}' not found"))?;
+        if target.readonly {
+            return Err(format!("calendar '{}' is read-only", target.name));
         }
-        // Moving out of a read-only calendar deletes from it, which is a write
-        // the window could not push either.
-        if readonly.contains(before.calendar_id.as_str()) {
-            return Err(format!("event '{id}' is in a read-only calendar"));
+        let readonly: HashSet<&str> = data
+            .calendars
+            .iter()
+            .filter(|c| c.readonly)
+            .map(|c| c.id.as_str())
+            .collect();
+
+        let mut moved = Vec::new();
+        let mut seen = HashSet::new();
+        for id in ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            let before = data
+                .events
+                .iter()
+                .find(|e| &e.id == id)
+                .cloned()
+                .ok_or_else(|| format!("event '{id}' not found"))?;
+            if before.calendar_id == to {
+                continue;
+            }
+            // Moving out of a read-only calendar deletes from it, which is a
+            // write the window could not push either.
+            if readonly.contains(before.calendar_id.as_str()) {
+                return Err(format!("event '{id}' is in a read-only calendar"));
+            }
+            let mut after = before.clone();
+            relocate_event(data, &mut after, to)?;
+            moved.push(MovedEvent { before, after });
         }
-        let mut after = before.clone();
-        relocate_event(&data, &mut after, to)?;
-        moved.push(MovedEvent { before, after });
-    }
-    for m in &moved {
-        if let Some(slot) = data.events.iter_mut().find(|e| e.id == m.after.id) {
-            *slot = m.after.clone();
+        for m in &moved {
+            if let Some(slot) = data.events.iter_mut().find(|e| e.id == m.after.id) {
+                *slot = m.after.clone();
+            }
         }
-    }
-    if !moved.is_empty() {
-        data.normalize();
-        write_data(path, &data)?;
-    }
+        if !moved.is_empty() {
+            data.normalize();
+        }
+        Ok(moved)
+    })?;
     Ok(moved)
 }
 
@@ -268,43 +420,45 @@ fn normalized_task(data: &CalendarData, id: &str) -> Result<CalendarTask, String
 }
 
 pub(crate) fn create_task_at(path: &Path, mut task: CalendarTask) -> Result<CalendarTask, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    task.id = fresh_id(&task_ids(&data));
     if task.calendar_id.is_empty() {
         task.calendar_id = DEFAULT_CALENDAR_ID.to_string();
     }
-    let id = task.id.clone();
-    data.tasks.push(task);
-    data.normalize();
-    write_data(path, &data)?;
+    let (id, data) = transact(path, |data| {
+        let mut task = task.clone();
+        task.id = fresh_id(&task_ids(data));
+        let id = task.id.clone();
+        data.tasks.push(task);
+        data.normalize();
+        Ok(id)
+    })?;
     normalized_task(&data, &id)
 }
 
 pub(crate) fn update_task_at(path: &Path, task: CalendarTask) -> Result<CalendarTask, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
     let id = task.id.clone();
-    let slot = data
-        .tasks
-        .iter_mut()
-        .find(|t| t.id == id)
-        .ok_or_else(|| format!("task '{id}' not found"))?;
-    *slot = task;
-    data.normalize();
-    write_data(path, &data)?;
+    let (_, data) = transact(path, |data| {
+        let slot = data
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| format!("task '{id}' not found"))?;
+        *slot = task.clone();
+        data.normalize();
+        Ok(())
+    })?;
     normalized_task(&data, &id)
 }
 
 pub(crate) fn delete_task_at(path: &Path, id: &str) -> Result<(), String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    let before = data.tasks.len();
-    data.tasks.retain(|t| t.id != id);
-    if data.tasks.len() == before {
-        return Err(format!("task '{id}' not found"));
-    }
-    write_data(path, &data)
+    transact(path, |data| {
+        let before = data.tasks.len();
+        data.tasks.retain(|t| t.id != id);
+        if data.tasks.len() == before {
+            return Err(format!("task '{id}' not found"));
+        }
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 // ── Todo board ──────────────────────────────────────────────────────────────
@@ -361,8 +515,20 @@ fn column_order(data: &CalendarData, column: &str, exclude: &str) -> Vec<(String
 /// completed a card. The frontend merges those into its store rather than
 /// reloading the whole calendar.
 pub(crate) fn move_tasks_at(path: &Path, moves: Vec<TaskPlacement>) -> Result<Vec<CalendarTask>, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
+    let (changed, data) = transact(path, |data| move_tasks_in(data, &moves))?;
+    // Re-read the rows off the committed state, so they carry the stamped
+    // revisions rather than the pre-commit copies.
+    let ids: HashSet<&str> = changed.iter().map(|t| t.id.as_str()).collect();
+    Ok(data
+        .tasks
+        .iter()
+        .filter(|t| ids.contains(t.id.as_str()))
+        .cloned()
+        .collect())
+}
+
+/// The in-memory half of [`move_tasks_at`], over a store already read.
+fn move_tasks_in(data: &mut CalendarData, moves: &[TaskPlacement]) -> Result<Vec<CalendarTask>, String> {
     // The first drag is what creates the board — a *read* deliberately never
     // does, so a calendar-only user's file never grows board state.
     data.ensure_board();
@@ -383,13 +549,13 @@ pub(crate) fn move_tasks_at(path: &Path, moves: Vec<TaskPlacement>) -> Result<Ve
         let from_column = current.column.clone();
         let target = placement.column.clone();
 
-        let siblings = column_order(&data, &target, &placement.id);
+        let siblings = column_order(data, &target, &placement.id);
         let index = (placement.index as usize).min(siblings.len());
 
         // Where the card sits in the target column *today*, if it is already
         // there — the check that makes a replay a no-op.
         let settled = from_column == target && {
-            let full = column_order(&data, &target, "");
+            let full = column_order(data, &target, "");
             full.iter().position(|(id, _)| id == &placement.id) == Some(index)
         };
 
@@ -446,7 +612,7 @@ pub(crate) fn move_tasks_at(path: &Path, moves: Vec<TaskPlacement>) -> Result<Ve
     // (nothing is close), and cheap even when it fires: every write rewrites the
     // whole file, so N changed ranks cost what one costs.
     for col in touched {
-        let order = column_order(&data, &col, "");
+        let order = column_order(data, &col, "");
         let collapsed = order
             .windows(2)
             .any(|w| (w[1].1 - w[0].1).abs() < RANK_EPSILON);
@@ -461,7 +627,6 @@ pub(crate) fn move_tasks_at(path: &Path, moves: Vec<TaskPlacement>) -> Result<Ve
     }
 
     data.normalize();
-    write_data(path, &data)?;
 
     let changed: Vec<CalendarTask> = data
         .tasks
@@ -493,7 +658,7 @@ pub(crate) fn move_tasks_at(path: &Path, moves: Vec<TaskPlacement>) -> Result<Ve
 /// clears their placement instead and lets `normalize` file them, which is the
 /// better default: a *completed* card then lands in Done rather than being dumped
 /// into the leftmost column with its checkbox still ticked.
-fn columns_set_at(
+pub(crate) fn columns_set_at(
     path: &Path,
     columns: Vec<TaskColumn>,
     fallback_column: Option<String>,
@@ -504,76 +669,88 @@ fn columns_set_at(
         // default set — which reads as "my board reset itself".
         return Err("cannot delete the last column".to_string());
     }
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    data.ensure_board();
+    let (_, data) = transact(path, |data| {
+        data.ensure_board();
 
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut columns = columns;
-    for col in columns.iter_mut() {
-        if col.id.is_empty() || seen.contains(&col.id) {
-            let taken: HashSet<&str> = seen.iter().map(|s| s.as_str()).collect();
-            col.id = fresh_id(&taken);
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut columns = columns.clone();
+        for col in columns.iter_mut() {
+            if col.id.is_empty() || seen.contains(&col.id) {
+                let taken: HashSet<&str> = seen.iter().map(|s| s.as_str()).collect();
+                col.id = fresh_id(&taken);
+            }
+            seen.insert(col.id.clone());
         }
-        seen.insert(col.id.clone());
-    }
 
-    let fallback = fallback_column.filter(|id| seen.contains(id));
-    for task in data.tasks.iter_mut() {
-        if !task.column.is_empty() && !seen.contains(&task.column) {
-            task.column = fallback.clone().unwrap_or_default();
-            task.rank = None;
+        let fallback = fallback_column.clone().filter(|id| seen.contains(id));
+        for task in data.tasks.iter_mut() {
+            if !task.column.is_empty() && !seen.contains(&task.column) {
+                task.column = fallback.clone().unwrap_or_default();
+                task.rank = None;
+            }
         }
-    }
-    data.task_columns = columns;
+        data.task_columns = columns;
 
-    data.normalize();
-    write_data(path, &data)?;
+        data.normalize();
+        Ok(())
+    })?;
     Ok(data)
 }
 
 // ── Calendars ───────────────────────────────────────────────────────────────
 
-pub(crate) fn create_calendar_at(path: &Path, mut calendar: Calendar) -> Result<Calendar, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    calendar.id = fresh_id(&calendar_ids(&data));
-    data.calendars.push(calendar.clone());
-    write_data(path, &data)?;
-    Ok(calendar)
+pub(crate) fn create_calendar_at(path: &Path, calendar: Calendar) -> Result<Calendar, String> {
+    let (id, data) = transact(path, |data| {
+        let mut calendar = calendar.clone();
+        calendar.id = fresh_id(&calendar_ids(data));
+        let id = calendar.id.clone();
+        data.calendars.push(calendar);
+        Ok(id)
+    })?;
+    stored_calendar(&data, &id)
 }
 
-fn update_calendar_at(path: &Path, calendar: Calendar) -> Result<Calendar, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    let slot = data
-        .calendars
-        .iter_mut()
-        .find(|c| c.id == calendar.id)
-        .ok_or_else(|| format!("calendar '{}' not found", calendar.id))?;
-    *slot = calendar.clone();
-    write_data(path, &data)?;
-    Ok(calendar)
+pub(crate) fn update_calendar_at(path: &Path, calendar: Calendar) -> Result<Calendar, String> {
+    let (_, data) = transact(path, |data| {
+        let slot = data
+            .calendars
+            .iter_mut()
+            .find(|c| c.id == calendar.id)
+            .ok_or_else(|| format!("calendar '{}' not found", calendar.id))?;
+        *slot = calendar.clone();
+        Ok(())
+    })?;
+    stored_calendar(&data, &calendar.id)
+}
+
+/// The calendar row as it reached disk (see [`stored_event`]).
+fn stored_calendar(data: &CalendarData, id: &str) -> Result<Calendar, String> {
+    data.calendars
+        .iter()
+        .find(|c| c.id == id)
+        .cloned()
+        .ok_or_else(|| format!("calendar '{id}' vanished during normalize"))
 }
 
 /// Delete a calendar **and everything filed under it** — the destructive choice,
 /// matching what Thunderbird's "Remove calendar" does. Refusing to delete the last
 /// calendar keeps `normalize()`'s "at least one calendar" invariant meaningful
 /// (otherwise the next read would silently resurrect a default).
-fn delete_calendar_at(path: &Path, id: &str) -> Result<(), String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    if data.calendars.len() <= 1 {
-        return Err("cannot delete the last calendar".to_string());
-    }
-    let before = data.calendars.len();
-    data.calendars.retain(|c| c.id != id);
-    if data.calendars.len() == before {
-        return Err(format!("calendar '{id}' not found"));
-    }
-    data.events.retain(|e| e.calendar_id != id);
-    data.tasks.retain(|t| t.calendar_id != id);
-    write_data(path, &data)
+pub(crate) fn delete_calendar_at(path: &Path, id: &str) -> Result<(), String> {
+    transact(path, |data| {
+        if data.calendars.len() <= 1 {
+            return Err("cannot delete the last calendar".to_string());
+        }
+        let before = data.calendars.len();
+        data.calendars.retain(|c| c.id != id);
+        if data.calendars.len() == before {
+            return Err(format!("calendar '{id}' not found"));
+        }
+        data.events.retain(|e| e.calendar_id != id);
+        data.tasks.retain(|t| t.calendar_id != id);
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 /// Put a just-deleted calendar back, with the events and tasks the caller kept
@@ -587,27 +764,27 @@ fn restore_calendar_at(
     events: Vec<CalendarEvent>,
     tasks: Vec<CalendarTask>,
 ) -> Result<CalendarData, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    if data.calendars.iter().any(|c| c.id == calendar.id) {
-        return Err(format!("calendar '{}' already exists", calendar.id));
-    }
-    for mut event in events {
-        if event_ids(&data).contains(event.id.as_str()) {
-            event.id = fresh_id(&event_ids(&data));
+    let (_, data) = transact(path, |data| {
+        if data.calendars.iter().any(|c| c.id == calendar.id) {
+            return Err(format!("calendar '{}' already exists", calendar.id));
         }
-        event.calendar_id = calendar.id.clone();
-        data.events.push(event);
-    }
-    for mut task in tasks {
-        if task_ids(&data).contains(task.id.as_str()) {
-            task.id = fresh_id(&task_ids(&data));
+        for mut event in events.iter().cloned() {
+            if event_ids(data).contains(event.id.as_str()) {
+                event.id = fresh_id(&event_ids(data));
+            }
+            event.calendar_id = calendar.id.clone();
+            data.events.push(event);
         }
-        task.calendar_id = calendar.id.clone();
-        data.tasks.push(task);
-    }
-    data.calendars.push(calendar);
-    write_data(path, &data)?;
+        for mut task in tasks.iter().cloned() {
+            if task_ids(data).contains(task.id.as_str()) {
+                task.id = fresh_id(&task_ids(data));
+            }
+            task.calendar_id = calendar.id.clone();
+            data.tasks.push(task);
+        }
+        data.calendars.push(calendar.clone());
+        Ok(())
+    })?;
     Ok(data)
 }
 
@@ -627,27 +804,27 @@ fn replace_calendar_events_at(
     events: Vec<CalendarEvent>,
     tasks: Vec<CalendarTask>,
 ) -> Result<CalendarData, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    if !data.calendars.iter().any(|c| c.id == calendar_id) {
-        return Err(format!("calendar '{calendar_id}' not found"));
-    }
-    data.events.retain(|e| e.calendar_id != calendar_id);
-    data.tasks.retain(|t| t.calendar_id != calendar_id);
+    let (_, data) = transact(path, |data| {
+        if !data.calendars.iter().any(|c| c.id == calendar_id) {
+            return Err(format!("calendar '{calendar_id}' not found"));
+        }
+        data.events.retain(|e| e.calendar_id != calendar_id);
+        data.tasks.retain(|t| t.calendar_id != calendar_id);
 
-    for mut event in events {
-        event.id = fresh_id(&event_ids(&data));
-        event.calendar_id = calendar_id.to_string();
-        data.events.push(event);
-    }
-    for mut task in tasks {
-        task.id = fresh_id(&task_ids(&data));
-        task.calendar_id = calendar_id.to_string();
-        data.tasks.push(task);
-    }
+        for mut event in events.iter().cloned() {
+            event.id = fresh_id(&event_ids(data));
+            event.calendar_id = calendar_id.to_string();
+            data.events.push(event);
+        }
+        for mut task in tasks.iter().cloned() {
+            task.id = fresh_id(&task_ids(data));
+            task.calendar_id = calendar_id.to_string();
+            data.tasks.push(task);
+        }
 
-    data.normalize();
-    write_data(path, &data)?;
+        data.normalize();
+        Ok(())
+    })?;
     Ok(data)
 }
 
@@ -723,8 +900,18 @@ pub(crate) fn merge_caldav_calendar_at(
     removed: &[String],
     full: bool,
 ) -> Result<CalendarData, String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
+    let (_, data) = transact(path, |data| merge_caldav_calendar_in(data, calendar_id, &parsed, removed, full))?;
+    Ok(data)
+}
+
+/// The in-memory half of [`merge_caldav_calendar_at`], over a store already read.
+fn merge_caldav_calendar_in(
+    data: &mut CalendarData,
+    calendar_id: &str,
+    parsed: &[CalDavParsed],
+    removed: &[String],
+    full: bool,
+) -> Result<(), String> {
     if !data.calendars.iter().any(|c| c.id == calendar_id) {
         return Err(format!("calendar '{calendar_id}' not found"));
     }
@@ -737,7 +924,7 @@ pub(crate) fn merge_caldav_calendar_at(
     // from two components to one, and the orphan must go with it.
     let mut stale: HashSet<String> = HashSet::new();
 
-    for group in parsed {
+    for group in parsed.iter().cloned() {
         if group.href.trim().is_empty() {
             continue;
         }
@@ -783,7 +970,7 @@ pub(crate) fn merge_caldav_calendar_at(
             stale.insert(data.events[slot].id.clone());
         }
         for mut event in fresh_events {
-            event.id = fresh_id(&event_ids(&data));
+            event.id = fresh_id(&event_ids(data));
             data.events.push(event);
         }
 
@@ -813,7 +1000,7 @@ pub(crate) fn merge_caldav_calendar_at(
                 Some(&slot) => {
                     let local = &data.tasks[slot];
                     task.id = local.id.clone();
-                    // **The board state, kept.** These are Eldrun's own fields;
+                    // **The board state, kept.** These are Tabtivity's own fields;
                     // the server has never heard of them and a sync that
                     // overwrote them would move the user's cards on a timer.
                     task.column = local.column.clone();
@@ -835,7 +1022,7 @@ pub(crate) fn merge_caldav_calendar_at(
             stale.insert(data.tasks[slot].id.clone());
         }
         for mut task in fresh_tasks {
-            task.id = fresh_id(&task_ids(&data));
+            task.id = fresh_id(&task_ids(data));
             data.tasks.push(task);
         }
     }
@@ -872,8 +1059,7 @@ pub(crate) fn merge_caldav_calendar_at(
     }
 
     data.normalize();
-    write_data(path, &data)?;
-    Ok(data)
+    Ok(())
 }
 
 /// Record what a **push** made true: the resource URL a local row now lives at
@@ -897,32 +1083,33 @@ pub(crate) fn set_caldav_identity_at(
     href: &str,
     etag: &str,
 ) -> Result<(), String> {
-    let _guard = lock_calendar();
-    let mut data = read_data(path)?;
-    let extra = match kind {
-        "event" => data
-            .events
-            .iter_mut()
-            .find(|e| e.id == row_id)
-            .map(|e| &mut e.extra),
-        "task" => data
-            .tasks
-            .iter_mut()
-            .find(|t| t.id == row_id)
-            .map(|t| &mut t.extra),
-        other => return Err(format!("unknown calendar row kind '{other}'")),
-    }
-    .ok_or_else(|| format!("no {kind} with id '{row_id}'"))?;
+    transact(path, |data| {
+        let extra = match kind {
+            "event" => data
+                .events
+                .iter_mut()
+                .find(|e| e.id == row_id)
+                .map(|e| &mut e.extra),
+            "task" => data
+                .tasks
+                .iter_mut()
+                .find(|t| t.id == row_id)
+                .map(|t| &mut t.extra),
+            other => return Err(format!("unknown calendar row kind '{other}'")),
+        }
+        .ok_or_else(|| format!("no {kind} with id '{row_id}'"))?;
 
-    extra.insert(
-        CALDAV_HREF_KEY.to_string(),
-        serde_json::Value::String(href.to_string()),
-    );
-    extra.insert(
-        CALDAV_ETAG_KEY.to_string(),
-        serde_json::Value::String(etag.to_string()),
-    );
-    write_data(path, &data)
+        extra.insert(
+            CALDAV_HREF_KEY.to_string(),
+            serde_json::Value::String(href.to_string()),
+        );
+        extra.insert(
+            CALDAV_ETAG_KEY.to_string(),
+            serde_json::Value::String(etag.to_string()),
+        );
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 // ── ICS file I/O ────────────────────────────────────────────────────────────
@@ -1025,6 +1212,15 @@ pub async fn calendar_fetch_ics(url: String) -> Result<String, String> {
     crate::services::browser_engine::fetch_ics(&url).await
 }
 
+/// Claim reminders as fired before showing them (headless owner plan, H2):
+/// answers the keys nobody had claimed yet — another window, or the Mobile
+/// sidecar with no window open, may have shown one already — and records
+/// them all (`services::calendar_alarms`).
+#[tauri::command]
+pub fn calendar_alarms_claim(keys: Vec<String>) -> Result<Vec<String>, String> {
+    crate::services::calendar_alarms::claim(&keys)
+}
+
 /// Replace `calendar_id`'s events/tasks with a freshly parsed set, in one
 /// atomic write.
 #[tauri::command]
@@ -1047,13 +1243,26 @@ pub async fn calendar_load() -> Result<CalendarData, String> {
 /// Replace the whole store. Used by ICS import, which rewrites in bulk.
 #[tauri::command]
 pub async fn calendar_save(data: CalendarData) -> Result<(), String> {
-    run_off_thread(move || {
-        let _guard = lock_calendar();
-        let mut data = data;
-        data.normalize();
-        write_data(&calendar_path(), &data)
+    run_off_thread(move || save_document_at(&calendar_path(), data)).await
+}
+
+/// Replace the whole store with `data` — the one whole-document write, and
+/// therefore the one that must carry the revision it was loaded at: a
+/// document loaded before another writer's edit is refused rather than
+/// written over it (#171). The caller reloads and re-applies its change.
+pub(crate) fn save_document_at(path: &Path, data: CalendarData) -> Result<(), String> {
+    transact(path, |current| {
+        if data.rev != current.rev {
+            return Err(
+                "calendar changed on disk since it was loaded; reload and apply the edit again"
+                    .to_string(),
+            );
+        }
+        *current = data.clone();
+        current.normalize();
+        Ok(())
     })
-    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -1176,6 +1385,155 @@ mod tests {
         assert_eq!(data.events.len(), 12);
     }
 
+    // ── Compare-and-swap (#171) ─────────────────────────────────────────
+
+    /// Two writers read the same file; the first commits, the second is
+    /// rejected rather than clobbering, and its retry against fresh state
+    /// lands with both edits intact.
+    #[test]
+    fn interleaved_read_modify_writes_reject_the_stale_one_and_keep_both_edits() {
+        let (_dir, path) = tmp_path();
+        let base = read_data(&path).unwrap();
+        assert_eq!(base.rev, 0, "a missing file is revision 0");
+
+        let mut a = base.clone();
+        a.events.push(event("a", "2026-07-08T09:00", "2026-07-08T10:00"));
+        assert_eq!(commit(&path, &base, &mut a).unwrap(), Commit::Committed);
+
+        // B read the same base as A, so its write would erase A's event.
+        let mut b = base.clone();
+        b.events.push(event("b", "2026-07-08T11:00", "2026-07-08T12:00"));
+        assert_eq!(commit(&path, &base, &mut b).unwrap(), Commit::Stale);
+        let on_disk = read_data(&path).unwrap();
+        assert_eq!(on_disk.events.len(), 1, "the rejected write touched nothing");
+        assert_eq!(on_disk.events[0].title, "a");
+
+        // B retries from what is on disk now.
+        let fresh = read_data(&path).unwrap();
+        let mut b = fresh.clone();
+        b.events.push(event("b", "2026-07-08T11:00", "2026-07-08T12:00"));
+        assert_eq!(commit(&path, &fresh, &mut b).unwrap(), Commit::Committed);
+
+        let final_state = read_data(&path).unwrap();
+        let mut titles: Vec<&str> = final_state.events.iter().map(|e| e.title.as_str()).collect();
+        titles.sort();
+        assert_eq!(titles, vec!["a", "b"]);
+        assert_eq!(final_state.rev, 2, "one bump per committed write");
+    }
+
+    /// `transact` does the retry itself: an edit whose commit finds the file
+    /// moved on (here: another process wrote between the read and the
+    /// commit) is re-run against the fresh state, and nothing is lost.
+    #[test]
+    fn transact_reapplies_the_edit_when_another_process_wrote_in_between() {
+        let (_dir, path) = tmp_path();
+        create_event_at(&path, event("first", "2026-07-08T09:00", "2026-07-08T10:00")).unwrap();
+
+        let runs = std::cell::Cell::new(0);
+        let ((), data) = transact(&path, |data| {
+            runs.set(runs.get() + 1);
+            if runs.get() == 1 {
+                // Another process: reads the file, adds a row, writes it back
+                // with the next revision — without our in-process lock.
+                let mut other = read_data(&path).unwrap();
+                other.events.push(event("other", "2026-07-09T09:00", "2026-07-09T10:00"));
+                other.rev += 1;
+                write_data(&path, &other).unwrap();
+            }
+            data.events.push(event("mine", "2026-07-10T09:00", "2026-07-10T10:00"));
+            data.normalize();
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(runs.get(), 2, "the first attempt was rejected and re-run");
+        let mut titles: Vec<&str> = data.events.iter().map(|e| e.title.as_str()).collect();
+        titles.sort();
+        assert_eq!(titles, vec!["first", "mine", "other"]);
+        assert_eq!(read_data(&path).unwrap(), data, "the returned state is what reached disk");
+    }
+
+    /// Every write moves the file's revision; a record's revision moves only
+    /// when that record changed, whatever number the caller's copy carried.
+    #[test]
+    fn revisions_are_stamped_per_changed_record_and_per_write() {
+        let (_dir, path) = tmp_path();
+        let a = create_event_at(&path, event("a", "2026-07-08T09:00", "2026-07-08T10:00")).unwrap();
+        let b = create_event_at(&path, event("b", "2026-07-08T11:00", "2026-07-08T12:00")).unwrap();
+        assert_eq!((a.rev, b.rev), (1, 1));
+        assert_eq!(read_data(&path).unwrap().rev, 2);
+
+        let mut edited = a.clone();
+        edited.title = "a2".into();
+        edited.rev = 99; // the store decides, not the caller
+        let stored = update_event_at(&path, edited).unwrap();
+        assert_eq!(stored.rev, 2);
+        let data = read_data(&path).unwrap();
+        assert_eq!(data.rev, 3);
+        assert_eq!(data.events.iter().find(|e| e.id == b.id).unwrap().rev, 1, "untouched row keeps its revision");
+
+        // An edit that changes nothing writes nothing.
+        let unchanged = update_event_at(&path, stored.clone()).unwrap();
+        assert_eq!(unchanged.rev, 2);
+        assert_eq!(read_data(&path).unwrap().rev, 3);
+    }
+
+    /// A whole-document save carries the revision it was loaded at: a stale
+    /// one is refused instead of written over a newer file.
+    #[test]
+    fn whole_document_save_is_refused_when_the_file_moved_on() {
+        let (_dir, path) = tmp_path();
+        create_event_at(&path, event("a", "2026-07-08T09:00", "2026-07-08T10:00")).unwrap();
+        let loaded = read_data(&path).unwrap();
+
+        // Someone else edits in the meantime.
+        create_event_at(&path, event("b", "2026-07-08T11:00", "2026-07-08T12:00")).unwrap();
+
+        let mut stale = loaded.clone();
+        stale.events[0].title = "renamed".into();
+        let error = save_document_at(&path, stale).unwrap_err();
+        assert!(error.contains("changed on disk"), "{error}");
+        let data = read_data(&path).unwrap();
+        assert_eq!(data.events.len(), 2, "b survived");
+        assert_eq!(data.events[0].title, "a", "the stale rename never landed");
+
+        // Reloaded and re-applied, it lands.
+        let mut fresh = read_data(&path).unwrap();
+        fresh.events[0].title = "renamed".into();
+        save_document_at(&path, fresh).unwrap();
+        assert_eq!(read_data(&path).unwrap().events[0].title, "renamed");
+    }
+
+    /// A file written before revisions existed reads as revision 0 and takes
+    /// the first revision-aware write like any other; a legacy version-1
+    /// array does the same.
+    #[test]
+    fn files_without_revisions_round_trip_into_the_first_revision() {
+        let (_dir, path) = tmp_path();
+        std::fs::write(
+            &path,
+            r##"{"version":3,"calendars":[{"id":"cal","name":"Cal","color":"#fff"}],"events":[{"id":"e1","calendar_id":"cal","start":"2026-07-08T09:00","end":"2026-07-08T10:00","title":"old"}],"tasks":[]}"##,
+        )
+        .unwrap();
+        let loaded = read_data(&path).unwrap();
+        assert_eq!((loaded.rev, loaded.events[0].rev, loaded.calendars[0].rev), (0, 0, 0));
+        assert_eq!(on_disk_rev(&path), 0);
+
+        create_event_at(&path, event("new", "2026-07-09T09:00", "2026-07-09T10:00")).unwrap();
+        let data = read_data(&path).unwrap();
+        assert_eq!(data.rev, 1);
+        assert_eq!(data.events.iter().find(|e| e.id == "e1").unwrap().rev, 0, "an untouched legacy row is still unversioned");
+        assert_eq!(data.events.iter().find(|e| e.title == "new").unwrap().rev, 1);
+
+        let (_dir, legacy) = tmp_path();
+        std::fs::write(&legacy, r#"[{"id":"v1","date":"2026-07-08","time":"09:00","title":"v1"}]"#).unwrap();
+        assert_eq!(on_disk_rev(&legacy), 0);
+        create_event_at(&legacy, event("new", "2026-07-09T09:00", "2026-07-09T10:00")).unwrap();
+        let data = read_data(&legacy).unwrap();
+        assert_eq!(data.rev, 1);
+        assert_eq!(data.events.len(), 2);
+    }
+
     #[test]
     fn read_missing_file_is_an_empty_default_calendar() {
         let (_dir, path) = tmp_path();
@@ -1294,6 +1652,7 @@ mod tests {
         let cal = create_calendar_at(
             &path,
             Calendar {
+                rev: 0,
                 id: String::new(),
                 name: "Work".into(),
                 color: "#ff0000".into(),
@@ -1327,6 +1686,7 @@ mod tests {
         let cal = create_calendar_at(
             &path,
             Calendar {
+                rev: 0,
                 id: String::new(),
                 name: "Work".into(),
                 color: "#ff0000".into(),
@@ -1829,6 +2189,7 @@ mod tests {
         create_calendar_at(
             path,
             Calendar {
+                rev: 0,
                 id: String::new(),
                 name: "Work".into(),
                 color: "#4aa3df".into(),

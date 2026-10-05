@@ -1,4 +1,5 @@
 import { useHostKeyPromptStore } from "../../stores/remote/hostKeyPrompt";
+import { envName } from "../brand";
 
 /**
  * First-contact host-key confirmation, from the caller's side.
@@ -16,7 +17,7 @@ import { useHostKeyPromptStore } from "../../stores/remote/hostKeyPrompt";
  */
 
 /** Must match `services::ssh_common::UNKNOWN_HOST_KEY`. */
-export const UNKNOWN_HOST_KEY = "ELDRUN_UNKNOWN_HOST_KEY";
+export const UNKNOWN_HOST_KEY = envName("UNKNOWN_HOST_KEY");
 
 /**
  * The `host:port` an unknown-host-key failure names, or `null` if `e` is any

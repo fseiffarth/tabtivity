@@ -1,4 +1,4 @@
-//! Per-tab Claude session tracking so Eldrun can resume the *current* session
+//! Per-tab Claude session tracking so Tabtivity can resume the *current* session
 //! after a `/clear` — and resume it in the permission mode it was left in.
 //!
 //! Claude is launched with a deterministic launch id (`--session-id <uuid>`),
@@ -6,14 +6,15 @@
 //! to the launch id — so resuming the launch id brings back the pre-`/clear`
 //! conversation. To follow the live id we install a global Claude `SessionStart`
 //! hook (fires on startup / resume / clear / compact) that records the live
-//! `session_id` — and, beside it, that `source` — keyed by `$ELDRUN_TAB_UID`,
-//! an env var Eldrun sets on the spawned agent to the stable launch id (see
+//! `session_id` — and, beside it, that `source` — keyed by `$TABTIVITY_TAB_UID`,
+//! an env var Tabtivity sets on the spawned agent to the stable launch id (see
 //! `terminal::resolve_claude_session`). The prompt history reads the same
 //! record at write time (`services::agent_prompts`), so a prompt sent after a
 //! `/clear` is filed under the session it actually reached.
-//! The hook no-ops for any Claude not launched by Eldrun (no `ELDRUN_TAB_UID`),
+//! The hook no-ops for any Claude not launched by Tabtivity (no `TABTIVITY_TAB_UID`),
 //! so it is safe to install once, globally.
 
+use crate::brand::{DISPLAY, UPPER};
 use std::path::PathBuf;
 
 use crate::paths;
@@ -25,9 +26,9 @@ use crate::terminal::PtyOptions;
 // shell (`/bin/sh`) runs directly on unix, and a PowerShell script on Windows
 // (there is no `/bin/sh`; the agents run the hook `command` through `cmd.exe`).
 #[cfg(not(windows))]
-const HOOK_SCRIPT_NAME: &str = "eldrun_session_start.sh";
+const HOOK_SCRIPT_NAME: &str = crate::brand::SESSION_HOOK_SH;
 #[cfg(windows)]
-const HOOK_SCRIPT_NAME: &str = "eldrun_session_start.ps1";
+const HOOK_SCRIPT_NAME: &str = crate::brand::SESSION_HOOK_PS1;
 
 // ── Agent session resolution ────────────────────────────────────────────────
 //
@@ -50,7 +51,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
 }
 
 /// Vibe chooses its own session ID. Its post-agent hook records that ID under
-/// Eldrun's stable tab key, including after an in-app `/resume` or `/branch`.
+/// Tabtivity's stable tab key, including after an in-app `/resume` or `/branch`.
 /// Old tabs without a hook record retain their project-scoped `--continue`.
 fn resolve_vibe_session(opts: PtyOptions) -> PtyOptions {
     let remote = !opts.local_only && opts.project_id.as_deref()
@@ -73,7 +74,7 @@ fn vibe_home_for(opts: &PtyOptions) -> PathBuf {
     let Some(candidate) = opts.env.get("VIBE_HOME").map(PathBuf::from) else {
         return default;
     };
-    // The renderer supplies env. Only Eldrun's dedicated local-model homes may
+    // The renderer supplies env. Only Tabtivity's dedicated local-model homes may
     // select another session store; never read an arbitrary renderer path.
     if is_local_vibe_home(&candidate) {
         candidate
@@ -87,7 +88,7 @@ where
     F: Fn(&str) -> Option<String>,
 {
     opts.env.insert(TAB_AGENT_ENV.to_string(), "vibe".to_string());
-    let Some(uid) = opts.env.get("ELDRUN_TAB_UID") else {
+    let Some(uid) = opts.env.get(crate::app_env!("TAB_UID")) else {
         return opts;
     };
     if !is_uuid_shaped(uid) {
@@ -128,15 +129,16 @@ fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
 
 /// Resolve a Codex tab's session args. Unlike Claude, Codex mints its own session
 /// id (no launch-time `--session-id`), so the only stable per-tab key is the
-/// `ELDRUN_TAB_UID` env var Eldrun sets from the tab's id. The global Codex
+/// `TABTIVITY_TAB_UID` env var Tabtivity sets from the tab's id. The global Codex
 /// `SessionStart` hook records the live session id under that key (see
 /// `install_session_start_hook`); here we read it and, when Codex still has that
 /// conversation, launch `codex resume <live-id>`. With no record yet (first
 /// launch, or the hook not trusted), we leave the args untouched → a fresh Codex
 /// session.
 fn resolve_codex_session(opts: PtyOptions) -> PtyOptions {
-    let sessions = paths::home_dir().join(".codex").join("sessions");
     let project_id = opts.project_id.clone();
+    // The scope's agent home, where the tab's Codex writes — not the user's.
+    let sessions = codex_sessions_root(project_id.as_deref());
     let stores = crate::services::codex_store::state_dbs(Some(
         project_id.as_deref().unwrap_or("root"),
     ));
@@ -160,7 +162,7 @@ where
     }
     opts.env
         .insert(TAB_AGENT_ENV.to_string(), "codex".to_string());
-    let Some(uid) = opts.env.get("ELDRUN_TAB_UID").cloned() else {
+    let Some(uid) = opts.env.get(crate::app_env!("TAB_UID")).cloned() else {
         return opts;
     };
     if let Some(id) = live_lookup(&uid).filter(|id| {
@@ -236,7 +238,7 @@ fn codex_session_log(root: &std::path::Path, uuid: &str) -> Option<PathBuf> {
 /// which doubles as the tab's stable key. We:
 ///
 /// 1. Expose that launch id to the global `SessionStart` hook via the
-///    `ELDRUN_TAB_UID` env var, so the hook can record this tab's *live* session
+///    `TABTIVITY_TAB_UID` env var, so the hook can record this tab's *live* session
 ///    id. The live id diverges from the launch id after `/clear` (Claude rolls
 ///    onto a fresh session with no recorded back-link), so this is the only
 ///    reliable way to follow it.
@@ -279,10 +281,10 @@ where
     resolve_claude_session_in(opts, &[projects], live_lookup, mode_lookup)
 }
 
-/// Env var naming the agent a tab runs, set beside `ELDRUN_TAB_UID` so the hook
+/// Env var naming the agent a tab runs, set beside `TABTIVITY_TAB_UID` so the hook
 /// script knows which continuity rule applies to a record — see
 /// [`hook_script_body`]. Every process under the tab inherits both.
-pub const TAB_AGENT_ENV: &str = "ELDRUN_TAB_AGENT";
+pub const TAB_AGENT_ENV: &str = crate::app_env!("TAB_AGENT");
 
 /// [`resolve_claude_session_impl`] over several session roots: a log found under
 /// any of them counts. `live_lookup` maps a launch id → recorded live id (if
@@ -320,7 +322,7 @@ where
 
     // The stable per-tab key is the launch id; expose it to the SessionStart hook.
     opts.env
-        .entry("ELDRUN_TAB_UID".to_string())
+        .entry(crate::app_env!("TAB_UID").to_string())
         .or_insert_with(|| launch_id.clone());
 
     // Prefer the hook-recorded live id (survives /clear); fall back to launch id.
@@ -337,7 +339,7 @@ where
             // no hook event; verified empirically against 2.1.251) — so a
             // respawned tab used to come back in the wrong mode. Re-apply the
             // last mode the Stop hook recorded. This is now the ONLY thing that
-            // carries a permission mode across a respawn — Eldrun launches the
+            // carries a permission mode across a respawn — Tabtivity launches the
             // plain command and has no mode toggle of its own — so what it
             // preserves is exactly what the user set inside the CLI. An explicit
             // mode flag already on the args (a custom agent's own flag) outranks
@@ -401,9 +403,9 @@ fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf>
 // Neither CLI tells its hooks which model it runs (the hook payload carries a
 // session id and a permission mode, nothing more), and asking the agent would
 // spend a turn. What both keep is a transcript in which every answer names the
-// model that produced it, so the tag Eldrun shows beside a tab is *the model
+// model that produced it, so the tag Tabtivity shows beside a tab is *the model
 // this session last answered with* — read from the tail of that file, never
-// inferred from a flag Eldrun did not pass. A tab whose agent keeps no readable
+// inferred from a flag Tabtivity did not pass. A tab whose agent keeps no readable
 // transcript (Gemini, a custom command) gets no tag rather than a guessed one.
 //
 // Codex 0.153.4 stopped writing that transcript as a file and keeps its threads
@@ -435,7 +437,7 @@ pub enum TranscriptKind {
 
 /// The model the tab launched as `cmd` with launch id `launch_id` last answered
 /// with, or `None` when there is no transcript, no answer in it yet, or the
-/// agent is one whose transcript Eldrun does not read.
+/// agent is one whose transcript Tabtivity does not read.
 pub fn agent_session_model(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Option<String> {
     read_agent_transcript(
         cmd,
@@ -449,7 +451,7 @@ pub fn agent_session_model(cmd: &str, project_id: Option<&str>, launch_id: &str)
 /// The last prompt the tab launched as `cmd` with launch id `launch_id` was
 /// given — however it got there: typed into the terminal, pasted, sent from
 /// the Agents view's composer, or delivered by a schedule. Read from the same
-/// transcript as the model tag, because the terminal is the one place Eldrun
+/// transcript as the model tag, because the terminal is the one place Tabtivity
 /// cannot see a prompt go by (keystrokes reach the PTY, the TUI's input box
 /// edits them, and only the agent knows what was finally submitted), while
 /// the agent writes every submitted prompt to its transcript before it starts
@@ -457,7 +459,7 @@ pub fn agent_session_model(cmd: &str, project_id: Option<&str>, launch_id: &str)
 /// ([`clean_prompt_text`]).
 ///
 /// `None` when there is no transcript, no prompt in it, or the agent keeps
-/// none Eldrun reads. Codex 0.153.4's thread store records no messages at all
+/// none Tabtivity reads. Codex 0.153.4's thread store records no messages at all
 /// (only the thread's first one), so a Codex tab on that release has no answer
 /// here — nothing is guessed from the tab's output instead.
 ///
@@ -470,6 +472,54 @@ pub fn agent_session_last_prompt(
     launch_id: &str,
 ) -> Option<String> {
     read_agent_transcript_from(cmd, project_id, launch_id, false, last_prompt_in_transcript, |_, _| None)
+}
+
+/// Whether the tab launched as `cmd` with launch id `launch_id` is pursuing a
+/// `/goal`, from the session's own record rather than its screen — the one
+/// source that reads the same whatever the footer looks like: Claude's latest
+/// `goal_status` in its transcript, Codex's thread row in its goal store.
+/// `None` when the CLI keeps no such record or it cannot be read; the caller
+/// then goes by the footer.
+pub fn agent_session_goal(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Option<bool> {
+    match cmd {
+        "claude" => read_agent_transcript_from(cmd, project_id, launch_id, false, |path, _| claude_goal_in_transcript(path), |_, _| None),
+        "codex" => {
+            if !is_uuid_shaped(launch_id) {
+                return None;
+            }
+            let thread = read_live_session_for(project_id, launch_id)?;
+            let db = crate::services::codex_store::goals_db_for(Some(project_id.unwrap_or("root")))?;
+            crate::services::codex_store::thread_goal_active(&db, &thread)
+        }
+        _ => None,
+    }
+}
+
+/// Claude's goal state in the transcript at `path`: its last word on a goal.
+/// `/goal` writes a `goal_status` attachment when it is set (`met: false`,
+/// the `sentinel`), another at every check that finds it unmet, and one with
+/// `met: true` — or `failed` when Claude gives up — when it ends; `/goal clear`
+/// is the user's own end. `None` when the tail holds none of them.
+fn claude_goal_in_transcript(path: &std::path::Path) -> Option<bool> {
+    with_prompt_tail(path, |lines| lines.iter().rev().find_map(|line| claude_goal_in_record(line)))
+}
+
+fn claude_goal_in_record(line: &str) -> Option<bool> {
+    if !line.contains("\"goal_status\"") && !line.contains("/goal</command-name>") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    if value.get("isSidechain").and_then(|s| s.as_bool()) == Some(true) {
+        return None;
+    }
+    if let Some(attachment) = value.get("attachment").filter(|a| a.get("type").and_then(|t| t.as_str()) == Some("goal_status")) {
+        let met = attachment.get("met").and_then(|m| m.as_bool()).unwrap_or(false);
+        let failed = attachment.get("failed").and_then(|f| f.as_bool()).unwrap_or(false);
+        return Some(!met && !failed);
+    }
+    let content = value.get("message")?.get("content")?.as_str()?;
+    let args = between(content, "<command-args>", "</command-args>")?.trim();
+    (content.contains("<command-name>/goal</command-name>") && args == "clear").then_some(false)
 }
 
 /// Resolve the transcript behind a tab and read one fact out of it. The
@@ -643,7 +693,7 @@ pub struct TranscriptPrompt {
 
 /// The newest prompts (oldest first) the tab launched as `cmd` with launch id
 /// `launch_id` was given, however they were submitted. Empty when there is no
-/// transcript Eldrun reads (Codex's thread store keeps no messages), and right
+/// transcript Tabtivity reads (Codex's thread store keeps no messages), and right
 /// after a `/clear` — the same no-fallback rule as [`agent_session_last_prompt`].
 pub fn agent_session_recent_prompts(
     cmd: &str,
@@ -709,10 +759,11 @@ fn timed_prompt_in_record(line: &str, kind: TranscriptKind) -> Option<Transcript
 /// Whether a transcript line can hold a prompt at all, checked before it is
 /// parsed: every prompt record names the user as a JSON value — Claude's
 /// `"type":"user"`, Codex's `"role":"user"` and `"user_message"` — or is
-/// Claude's `queued_command`. Most of a busy transcript is tool output, and
-/// the prompt reads now reach back through megabytes of it.
+/// Claude's `queued_command` or Codex's `thread_goal_updated`. Most of a busy
+/// transcript is tool output, and the prompt reads now reach back through
+/// megabytes of it.
 fn may_be_prompt(line: &str) -> bool {
-    line.contains("\"user") || line.contains("queued_command")
+    line.contains("\"user") || line.contains("queued_command") || line.contains("thread_goal_updated")
 }
 
 /// A message the user sent while Claude was working: a `queued_command`
@@ -750,7 +801,7 @@ pub(crate) fn claude_queued_prompt(value: &serde_json::Value) -> Option<String> 
     claude_prompt_text(&text)
 }
 
-fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String> {
+pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -1089,6 +1140,7 @@ fn collapse_pasted_blocks(text: &str) -> String {
 /// which is also where Codex injects `<environment_context>`, `<user_instructions>`
 /// and the `AGENTS.md` text — those open with a tag or a heading, and are
 /// skipped. Both shapes are read, so either dialect of rollout answers.
+/// A `/goal` is neither: see [`codex_goal_prompt`].
 pub(crate) fn codex_prompt_in_record(value: &serde_json::Value) -> Option<String> {
     let payload = value.get("payload")?;
     let payload_type = payload.get("type").and_then(|t| t.as_str());
@@ -1096,6 +1148,7 @@ pub(crate) fn codex_prompt_in_record(value: &serde_json::Value) -> Option<String
         "event_msg" if payload_type == Some("user_message") => {
             payload.get("message")?.as_str().map(str::to_string)
         }
+        "event_msg" if payload_type == Some("thread_goal_updated") => codex_goal_prompt(payload),
         "response_item"
             if payload_type == Some("message")
                 && payload.get("role").and_then(|r| r.as_str()) == Some("user") =>
@@ -1120,6 +1173,27 @@ pub(crate) fn codex_prompt_in_record(value: &serde_json::Value) -> Option<String
         }
         _ => None,
     }
+}
+
+/// A `/goal` the user set, as they typed it. Codex (0.153+) records no user
+/// message for it: the objective rides only on a `thread_goal_updated` event,
+/// and every turn the goal drives — its first included — opens with a
+/// `<codex_internal_context source="goal">` user message, which is Codex's
+/// own and skipped. The event is also written when a goal resumes, paused or
+/// across a relaunch, with the time and tokens it has used; only a goal
+/// updated at the second it was created is a new one, so a resumed goal
+/// does not read as the prompt again.
+fn codex_goal_prompt(payload: &serde_json::Value) -> Option<String> {
+    let goal = payload.get("goal")?;
+    if goal.get("status").and_then(|s| s.as_str()) != Some("active") {
+        return None;
+    }
+    let created = goal.get("createdAt").and_then(|t| t.as_i64())?;
+    if goal.get("updatedAt").and_then(|t| t.as_i64()) != Some(created) {
+        return None;
+    }
+    let objective = goal.get("objective")?.as_str()?.trim();
+    (!objective.is_empty()).then(|| format!("/goal {objective}"))
 }
 
 /// The text between the first `open` and the `close` after it, if both exist.
@@ -1151,7 +1225,7 @@ pub(crate) fn clean_prompt_text(raw: &str) -> Option<String> {
     Some(cut)
 }
 
-/// `~/.local/share/eldrun/live_sessions/` — one file per tab (named by the
+/// `~/.local/share/tabtivity/live_sessions/` — one file per tab (named by the
 /// tab's stable launch uuid) holding that tab's current live Claude session id.
 ///
 /// This is where **host-run** (uncontained) agents record, via the hook script's
@@ -1187,7 +1261,7 @@ fn hook_script_path() -> PathBuf {
     storage::state_dir().join("hooks").join(HOOK_SCRIPT_NAME)
 }
 
-/// The `command` string Eldrun registers in the agents' SessionStart hook config
+/// The `command` string Tabtivity registers in the agents' SessionStart hook config
 /// (Claude `settings.json` / Codex `config.toml`). The agents run this through the
 /// OS shell, so it must be runnable there: on unix the bare `#!/bin/sh` script path
 /// suffices, but on Windows `cmd.exe` cannot execute that script, so we invoke the
@@ -1215,7 +1289,7 @@ pub fn is_uuidish(s: &str) -> bool {
 }
 
 /// Strict canonical-UUID shape (`8-4-4-4-12` hex). Used for the tab **key**, which
-/// becomes a path component: `ELDRUN_TAB_UID` arrives in the renderer-supplied
+/// becomes a path component: `TABTIVITY_TAB_UID` arrives in the renderer-supplied
 /// `PtyOptions.env`, so the looser [`is_uuidish`] (which happens to exclude `.`
 /// and `/`, and so blocked traversal by accident rather than by design) is not the
 /// check to rely on. Every real key is a `crypto.randomUUID()` / agent session id,
@@ -1317,7 +1391,7 @@ pub fn cleared_session_for(project_id: Option<&str>, uid: &str) -> Option<String
 pub enum UndoClearPlan {
     /// Type this into the running session (Claude's `/resume <id>`).
     Type { command: String },
-    /// Relaunch the tab the way a restart of Eldrun does: its resume resolves
+    /// Relaunch the tab the way a restart of Tabtivity does: its resume resolves
     /// through the record, which now names the cleared conversation.
     Relaunch,
 }
@@ -1484,7 +1558,7 @@ pub fn write_live_session_in(dir: &std::path::Path, uid: &str, id: &str) -> std:
 
 // ── Codex hook trust state ──────────────────────────────────────────────────
 
-/// What Eldrun's Codex `SessionStart` hook is actually doing right now.
+/// What Tabtivity's Codex `SessionStart` hook is actually doing right now.
 ///
 /// Codex gates *user-level* hooks behind a one-time trust approval (`/hooks`
 /// inside Codex), recording the verdict in a `[hooks.state."…"]` table. An
@@ -1506,20 +1580,17 @@ pub enum CodexHookState {
     Enabled,
 }
 
-/// Classify Eldrun's hook across the Eldrun-owned agent homes: the least
+/// Classify Tabtivity's hook across the Tabtivity-owned agent homes: the least
 /// trusted state any home that has run Codex is in (a `sessions/` dir), since
 /// Codex asks for the trust approval per config file. `NoCodex` when no home
 /// has run it yet.
 pub fn codex_hook_state() -> CodexHookState {
     let mut worst: Option<CodexHookState> = None;
     for home in crate::services::agent_home::existing_homes_in(&storage::state_dir()) {
-        let codex_dir = home.join(".codex");
-        if !codex_dir.join("sessions").is_dir() {
+        if !home.join(".codex").join("sessions").is_dir() {
             continue;
         }
-        let config = codex_dir.join("config.toml");
-        let src = std::fs::read_to_string(&config).unwrap_or_default();
-        let state = codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command());
+        let state = codex_hook_state_of_home(&home);
         let rank = |s: CodexHookState| match s {
             CodexHookState::Enabled => 0,
             CodexHookState::NoCodex => 1,
@@ -1532,6 +1603,13 @@ pub fn codex_hook_state() -> CodexHookState {
         }
     }
     worst.unwrap_or(CodexHookState::NoCodex)
+}
+
+/// Tabtivity's hook as the Codex of one agent home sees it.
+fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let config = home.join(".codex").join("config.toml");
+    let src = std::fs::read_to_string(&config).unwrap_or_default();
+    codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command())
 }
 
 /// Testable core of [`codex_hook_state`].
@@ -1578,6 +1656,10 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
         } else if let Some(key) = state_key.as_ref() {
             if let Some(v) = toml_value(line, "enabled") {
                 verdicts.insert(key.clone(), v == "true");
+            } else if toml_value(line, "trusted_hash").is_some() {
+                // Codex (0.15x) records a trusted, enabled hook as its hash
+                // alone — `enabled` is written only to switch it off.
+                verdicts.entry(key.clone()).or_insert(true);
             }
         }
     }
@@ -1635,22 +1717,26 @@ fn toml_value(line: &str, key: &str) -> Option<String> {
 /// Whether the hook-free rollout binder ([`crate::services::codex_bind`]) should
 /// run for a Codex tab. It is the *fallback*: when the hook is trusted it is
 /// strictly more precise (it fires on `/clear` immediately and can't confuse two
-/// tabs sharing a cwd), so we stay out of its way.
-pub fn codex_binder_enabled() -> bool {
-    !matches!(codex_hook_state(), CodexHookState::Enabled)
+/// tabs sharing a cwd), so we stay out of its way. Decided by the tab's own
+/// scope home, where Codex keeps the trust verdict: a guessing binder beside a
+/// live hook hands one tab's fresh `/clear` rollout to a sibling in the same
+/// folder, since the hook records it only at the first prompt after the clear.
+pub fn codex_binder_enabled(scope_id: Option<&str>) -> bool {
+    codex_hook_state_of_home(&crate::services::agent_home::scope_home(scope_id)) != CodexHookState::Enabled
 }
 
 /// Install (idempotently) the session hooks and their script for every agent
-/// Eldrun can track (Claude + Codex), so it learns each tab's live session id,
+/// Tabtivity can track (Claude + Codex), so it learns each tab's live session id,
 /// its live permission mode (Claude's `Stop`), and its turn state (see
 /// [`HOOK_EVENTS`] and `services::agent_turn`). Safe to call on every startup.
-/// The shared script keys by `$ELDRUN_TAB_UID` and reads `session_id` from the
+/// The shared script keys by `$TABTIVITY_TAB_UID` and reads `session_id` from the
 /// hook's stdin JSON — both CLIs use that schema.
 pub fn install_session_start_hook() -> std::io::Result<()> {
-    write_hook_script()
+    write_hook_script()?;
+    crate::services::agent_hint::write_script()
 }
 
-/// Register the hooks in one Eldrun-owned agent home (`services::agent_home`):
+/// Register the hooks in one Tabtivity-owned agent home (`services::agent_home`):
 /// Claude's `settings.json`, Codex's `config.toml`, Vibe's `hooks.toml`. Each
 /// is idempotent and keeps whatever else the file holds. Never a file in the
 /// user's own home, and never through a symlink: a fenced agent owns the home,
@@ -1682,13 +1768,16 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
             eprintln!("agent_session: register vibe hook in {}: {e}", home.display());
         }
     }
+    // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
+    // session hook above).
+    crate::services::agent_hint::register_in_home(home);
 }
 
 /// Vibe's user hook runs after each completed turn and reports the live ID.
 /// Local-model homes have their own hooks.toml, so preparation calls this too.
 ///
-/// A local-model home (`<state>/vibe_local/<alias>`) is Eldrun's own, so its
-/// file is rewritten to hold Eldrun's hook alone: a hook a fenced agent planted
+/// A local-model home (`<state>/vibe_local/<alias>`) is Tabtivity's own, so its
+/// file is rewritten to hold Tabtivity's hook alone: a hook a fenced agent planted
 /// there before the fence made the file read-only must not survive into the
 /// next local-model tab (threat model gap 7).
 pub fn register_vibe_hook_in(home: &std::path::Path) -> std::io::Result<()> {
@@ -1697,8 +1786,8 @@ pub fn register_vibe_hook_in(home: &std::path::Path) -> std::io::Result<()> {
     write_vibe_hooks(&file, is_local_vibe_home(home))
 }
 
-fn write_vibe_hooks(file: &HomeFile, eldrun_owned: bool) -> std::io::Result<()> {
-    if eldrun_owned {
+fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
+    if app_owned {
         let fresh = vibe_hook_block()?;
         if file.read().as_deref() != Some(fresh.as_bytes()) {
             file.write(fresh.as_bytes())?;
@@ -1709,7 +1798,7 @@ fn write_vibe_hooks(file: &HomeFile, eldrun_owned: bool) -> std::io::Result<()> 
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
-    if content.lines().any(|line| line.trim() == "name = \"eldrun-session\"") {
+    if content.lines().any(|line| line.trim() == format!("name = \"{}\"", crate::brand::VIBE_SESSION_HOOK)) {
         return Ok(());
     }
     if !content.is_empty() && !content.ends_with('\n') {
@@ -1723,15 +1812,16 @@ fn write_vibe_hooks(file: &HomeFile, eldrun_owned: bool) -> std::io::Result<()> 
 fn vibe_hook_block() -> std::io::Result<String> {
     let cmd = serde_json::to_string(&hook_command()).map_err(std::io::Error::other)?;
     Ok(format!(
-        "# Eldrun: remember the live Vibe session for this tab.\n\
-         [[hooks]]\nname = \"eldrun-session\"\ntype = \"post_agent\"\ncommand = {cmd}\ntimeout = 10.0\n"
+        "# {DISPLAY}: remember the live Vibe session for this tab.\n\
+         [[hooks]]\nname = \"{name}\"\ntype = \"post_agent\"\ncommand = {cmd}\ntimeout = 10.0\n",
+        name = crate::brand::VIBE_SESSION_HOOK
     ))
 }
 
-/// Whether `home` is one of Eldrun's local-model `VIBE_HOME`s — the same root
+/// Whether `home` is one of Tabtivity's local-model `VIBE_HOME`s — the same root
 /// and one-component rule [`vibe_home_for`] applies.
 fn is_local_vibe_home(home: &std::path::Path) -> bool {
-    is_local_vibe_home_in(home, &paths::home_dir().join(".local/share/eldrun/vibe_local"))
+    is_local_vibe_home_in(home, &storage::home_share_dir().join("vibe_local"))
 }
 
 fn is_local_vibe_home_in(home: &std::path::Path, local_root: &std::path::Path) -> bool {
@@ -1779,20 +1869,20 @@ fn write_hook_script() -> std::io::Result<()> {
 fn container_hook_script_path() -> PathBuf {
     storage::state_dir()
         .join("hooks")
-        .join("eldrun_session_start.sh")
+        .join(crate::brand::SESSION_HOOK_SH)
 }
 
 /// POSIX-sh hook body. Reads the hook JSON on stdin and records, per tab key:
-/// `session_id` → `<live_dir>/<ELDRUN_TAB_UID>` (on `SessionStart`/`Stop`), —
+/// `session_id` → `<live_dir>/<TABTIVITY_TAB_UID>` (on `SessionStart`/`Stop`), —
 /// when the event carries it (`SessionStart` does not; `Stop` does) —
-/// `permission_mode` → `<live_dir>/<ELDRUN_TAB_UID>.mode`, and the turn state
-/// the event implies → `<live_dir>/<ELDRUN_TAB_UID>.turn` (`working` /
+/// `permission_mode` → `<live_dir>/<TABTIVITY_TAB_UID>.mode`, and the turn state
+/// the event implies → `<live_dir>/<TABTIVITY_TAB_UID>.turn` (`working` /
 /// `decision` / `done` / `idle` plus the epoch second, read by
 /// `services::agent_turn`). No jq dependency: one `sed` per field pulls the
 /// value out of the one-line JSON.
 ///
 /// **Only the tab's own session may move the record.** Every process under the
-/// tab inherits `ELDRUN_TAB_UID`, so a nested CLI — the tab's agent running
+/// tab inherits `TABTIVITY_TAB_UID`, so a nested CLI — the tab's agent running
 /// `claude -p …` through its own shell tool, verified live — fires this hook too,
 /// and used to overwrite both records with its one-shot session and its default
 /// mode: the next relaunch resumed a dead headless session and lost the
@@ -1806,108 +1896,151 @@ fn container_hook_script_path() -> PathBuf {
 /// fresh id with `--session-id` dropped, so the record stayed on a launch id
 /// that never wrote a file and the phone read an empty conversation; a CLI
 /// nested under the tab is started by a session that has been prompted, whose
-/// transcript exists beside the new one — and only
+/// transcript exists — in *some* project folder: looking only beside the new
+/// transcript let a `claude -p` run from another cwd (the agent's Bash tool
+/// after a `cd`) take the record over, since its transcript lands in that
+/// cwd's folder, not the tab's (2.1.284, 2026-09-29) — and only
 /// with Claude's own transcript for it (`…/<session_id>.jsonl`): a Codex run
 /// from the tab's shell fires the same `clear` start after its own `/clear`,
 /// with a null `transcript_path` or a `rollout-…` one, and took the Claude
 /// tab's record over, so the phone read that Codex's rollout (2026-09-24). A Codex
-/// tab (`ELDRUN_TAB_AGENT=codex`) mints its own ids, so its record is free-form
+/// tab (`TABTIVITY_TAB_AGENT=codex`) mints its own ids, so its record is free-form
 /// — except that a Claude fired inside it (`CLAUDECODE` is set by Claude for its
-/// children, never by Codex) is refused outright.
+/// children, never by Codex) is refused outright. A `clear`/`resume` start is
+/// taken only from a Claude with no other Claude above it among the tab's
+/// processes (POSIX, via `/proc`): a `claude -p --resume <id>` run from the
+/// agent's Bash tool sent `source: resume` under its own id and moved the
+/// record, so the Reader showed that run's conversation until the tab's next
+/// `Stop` (2.1.287, 2026-10-02). Claude's env can't tell them apart — every
+/// hook, the tab's own too, gets `CLAUDECODE` and `CLAUDE_CODE_CHILD_SESSION`
+/// — and its self-relaunch execs in place (it spawns a child only when that
+/// exec fails), so it adds no Claude above itself. "The tab's processes" are
+/// those carrying its id under any `*_TAB_UID` name: a probe that unset only
+/// the current name still reached the hook through the legacy one, and a walk
+/// matching the current name alone counted nothing and let it through (2.1.288).
+/// The PowerShell twin has no such check yet.
 #[cfg(not(windows))]
 fn hook_script_body(live_dir: &str) -> String {
     posix_hook_script_body(live_dir)
 }
 
+/// The app's variables the hook reads. A session an older build started has
+/// them under the old prefix only; the script takes those when the current
+/// names are unset (nothing is added while the prefix is unchanged).
+const HOOK_ENV: &[&str] = &["TAB_UID", "TAB_AGENT", "PROJECT_DIR"];
+
 /// The POSIX body itself — the hook on Unix, and on Windows the container twin
 /// (see `write_hook_script`), so it is compiled everywhere.
 fn posix_hook_script_body(live_dir: &str) -> String {
+    let hint = crate::services::agent_hint::HINT;
     format!(
         "#!/bin/sh\n\
-         # Eldrun agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
+         # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
          # Notification, SessionEnd) — records, per tab, the agent's live session id\n\
-         # and permission mode (so Eldrun resumes the current session in the mode it\n\
+         # and permission mode (so {DISPLAY} resumes the current session in the mode it\n\
          # was left in, incl. after /clear), how the session started (so a prompt\n\
          # sent after a /clear is filed under the new session, linked to the old\n\
          # one), and its turn state (working / decision / done / idle), which\n\
          # lights the tab's working and finished marks. No-op\n\
-         # unless launched by Eldrun (ELDRUN_TAB_UID set). Managed by Eldrun; do not edit.\n\
-         [ -n \"$ELDRUN_TAB_UID\" ] || exit 0\n\
-         case \"$ELDRUN_TAB_UID\" in *[!a-zA-Z0-9-]*|\"\") exit 0 ;; esac\n\
+         # unless launched by {DISPLAY} ({UPPER}_TAB_UID set). Managed by {DISPLAY}; do not edit.\n\
+         {legacy_env}[ -n \"${UPPER}_TAB_UID\" ] || exit 0\n\
+         case \"${UPPER}_TAB_UID\" in *[!a-zA-Z0-9-]*|\"\") exit 0 ;; esac\n\
          input=$(cat | tr '\\n' ' ')\n\
          sid=$(printf '%s' \"$input\" | sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([0-9a-fA-F-]*\\)\".*/\\1/p')\n\
          mode=$(printf '%s' \"$input\" | sed -n 's/.*\"permission_mode\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z]*\\)\".*/\\1/p')\n\
          src=$(printf '%s' \"$input\" | sed -n 's/.*\"source\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z]*\\)\".*/\\1/p')\n\
          event=$(printf '%s' \"$input\" | sed -n 's/.*\"hook_event_name\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          ntype=$(printf '%s' \"$input\" | sed -n 's/.*\"notification_type\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
+         reason=$(printf '%s' \"$input\" | sed -n 's/.*\"reason\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          tpath=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p')\n\
          tnull=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*null.*/null/p')\n\
          [ -n \"$sid\" ] || exit 0\n\
          dir=\"{live_dir}\"\n\
          mkdir -p \"$dir\" 2>/dev/null || exit 0\n\
-         cur=$(cat \"$dir/$ELDRUN_TAB_UID\" 2>/dev/null)\n\
+         cur=$(cat \"$dir/${UPPER}_TAB_UID\" 2>/dev/null)\n\
          # Only the tab's own session may move the records: a nested CLI under the\n\
-         # tab inherits ELDRUN_TAB_UID and fires this hook too.\n\
-         case \"$ELDRUN_TAB_AGENT\" in\n\
+         # tab inherits {UPPER}_TAB_UID and fires this hook too.\n\
+         case \"${UPPER}_TAB_AGENT\" in\n\
          \x20 vibe) [ \"$event\" = post_agent ] || exit 0\n\
          \x20   parent=$(printf '%s' \"$input\" | sed -n 's/.*\"parent_session_id\"[[:space:]]*:[[:space:]]*\\([^,}}]*\\).*/\\1/p')\n\
          \x20   [ \"$parent\" = null ] || exit 0\n\
-         \x20   printf '%s' \"$sid\" > \"$dir/$ELDRUN_TAB_UID\"\n\
+         \x20   printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
          \x20   exit 0 ;;\n\
          \x20 codex) [ -z \"$CLAUDECODE\" ] || exit 0\n\
          \x20   # Codex mints its own ids, so a start is free-form; every later event\n\
          \x20   # must come from the session the tab already recorded.\n\
          \x20   if [ \"$event\" != SessionStart ] && [ -n \"$cur\" ] && [ \"$sid\" != \"$cur\" ]; then exit 0; fi ;;\n\
-         \x20 *) if [ \"$sid\" != \"$ELDRUN_TAB_UID\" ] && [ \"$sid\" != \"$cur\" ]; then\n\
+         \x20 *) if [ \"$sid\" != \"${UPPER}_TAB_UID\" ] && [ \"$sid\" != \"$cur\" ]; then\n\
          \x20      # Claude names the new transcript after its session; a Codex run under\n\
          \x20      # the tab sends null (a /clear, no rollout yet) or a rollout-… file.\n\
          \x20      [ \"$tnull\" = null ] && exit 0\n\
          \x20      case \"$tpath\" in \"\"|*/\"$sid\".jsonl) ;; *) exit 0 ;; esac\n\
          \x20      case \"$src\" in\n\
-         \x20        clear|resume) ;;\n\
+         \x20        # A /clear or /resume typed in the tab comes from the tab's own CLI;\n\
+         \x20        # a `claude --resume` nested under it (the agent's Bash tool) sends\n\
+         \x20        # the same start. Among the tab's processes — those carrying its\n\
+         \x20        # id under either tab-id name, so unsetting one (the other fills it\n\
+         \x20        # in above) can't hide a nested run — the tab's CLI has no claude\n\
+         \x20        # above it, a nested one has. Without /proc nothing is counted and\n\
+         \x20        # the start is taken.\n\
+         \x20        clear|resume) n=0; p=$PPID\n\
+         \x20          while [ -r \"/proc/$p/environ\" ] && tr '\\0' '\\n' < \"/proc/$p/environ\" | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
+         \x20            [ \"$(cat \"/proc/$p/comm\" 2>/dev/null)\" = claude ] && n=$((n + 1))\n\
+         \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"/proc/$p/stat\" 2>/dev/null)\n\
+         \x20          done\n\
+         \x20          [ \"$n\" -lt 2 ] || exit 0 ;;\n\
          \x20        # Claude relaunches itself (switching its renderer, updating) and,\n\
          \x20        # while its session has no transcript yet, comes back under a fresh\n\
-         \x20        # id with a plain start. The tab's own session is then the one whose\n\
-         \x20        # transcript is missing beside the new one; a CLI nested under the\n\
-         \x20        # tab was started by a session that has been prompted, whose file\n\
-         \x20        # is there.\n\
-         \x20        startup) [ \"$ELDRUN_TAB_AGENT\" = claude ] && [ -n \"$tpath\" ] || exit 0\n\
-         \x20          [ -f \"${{tpath%/*}}/${{cur:-$ELDRUN_TAB_UID}}.jsonl\" ] && exit 0 ;;\n\
+         \x20        # id with a plain start. The tab's own session is then the one with\n\
+         \x20        # no transcript in any project folder; a CLI nested under the tab\n\
+         \x20        # was started by a session that has been prompted, whose file is\n\
+         \x20        # there — in the tab's cwd folder, not the nested run's own.\n\
+         \x20        startup) [ \"${UPPER}_TAB_AGENT\" = claude ] && [ -n \"$tpath\" ] || exit 0\n\
+         \x20          for t in \"${{tpath%/*/*}}\"/*/\"${{cur:-${UPPER}_TAB_UID}}.jsonl\"; do [ -f \"$t\" ] && exit 0; done ;;\n\
          \x20        *) exit 0 ;;\n\
          \x20      esac\n\
          \x20    fi ;;\n\
          esac\n\
-         if [ \"$event\" = SessionStart ] && [ \"$ELDRUN_TAB_AGENT\" = claude ] && [ -n \"$ELDRUN_PROJECT_DIR\" ]; then\n\
-         \x20 printf '%s\\n' 'To put a file in front of the user on their phone, run `eldrun-send <file>` (local and container tabs).'\n\
-         fi\n\
+         case \"$event:${UPPER}_TAB_AGENT\" in SessionStart:claude|SessionStart:codex) [ -z \"${UPPER}_PROJECT_DIR\" ] ||\n\
+         \x20 printf '%s\\n' '{hint}' ;;\n\
+         esac\n\
          # The turn state, from the events the agent fires as it works: a prompt\n\
          # submitted or a tool finished means working (a finished tool is also what\n\
          # ends an approval wait), Stop means done, a permission or elicitation\n\
-         # notice means blocked on the user, the end of the session means idle.\n\
+         # notice means blocked on the user, the end of the session means idle —\n\
+         # unless a /clear ended it: the CLI is still at its prompt, and the\n\
+         # verdict it had (done) is what keeps the tab off its stale screen.\n\
          turn=\n\
          case \"$event\" in\n\
          \x20 UserPromptSubmit|PostToolUse) turn=working ;;\n\
          \x20 Stop) turn=done ;;\n\
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
-         \x20 SessionEnd) turn=idle ;;\n\
+         \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
-         [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/$ELDRUN_TAB_UID.turn\"\n\
+         [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
+         # A prompt in the conversation a /clear started ends that clear's undo:\n\
+         # resuming the one it ended would leave the prompt behind. Not a session\n\
+         # command, which a CLI may report as a prompt too.\n\
+         if [ \"$event\" = UserPromptSubmit ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20 rm -f \"$dir/${UPPER}_TAB_UID.prev\"\n\
+         fi\n\
          # A /clear keeps the id of the conversation it ended, so the clear can be\n\
          # undone by resuming it; written before the source that says clear.\n\
-         if [ \"$event\" = SessionStart ] && [ \"$src\" = clear ] && [ \"$sid\" != \"${{cur:-$ELDRUN_TAB_UID}}\" ]; then\n\
-         \x20 printf '%s' \"${{cur:-$ELDRUN_TAB_UID}}\" > \"$dir/$ELDRUN_TAB_UID.prev\"\n\
+         if [ \"$event\" = SessionStart ] && [ \"$src\" = clear ] && [ \"$sid\" != \"${{cur:-${UPPER}_TAB_UID}}\" ]; then\n\
+         \x20 printf '%s' \"${{cur:-${UPPER}_TAB_UID}}\" > \"$dir/${UPPER}_TAB_UID.prev\"\n\
          fi\n\
          # A start also records how the session came about (startup / resume /\n\
          # clear / compact), written BEFORE the id so a reader that sees the new\n\
          # id sees the source that produced it.\n\
          case \"$event\" in\n\
          \x20 SessionStart|Stop)\n\
-         \x20   [ \"$event\" = SessionStart ] && [ -n \"$src\" ] && printf '%s' \"$src\" > \"$dir/$ELDRUN_TAB_UID.src\"\n\
-         \x20   printf '%s' \"$sid\" > \"$dir/$ELDRUN_TAB_UID\"\n\
-         \x20   [ -n \"$mode\" ] && printf '%s' \"$mode\" > \"$dir/$ELDRUN_TAB_UID.mode\" ;;\n\
+         \x20   [ \"$event\" = SessionStart ] && [ -n \"$src\" ] && printf '%s' \"$src\" > \"$dir/${UPPER}_TAB_UID.src\"\n\
+         \x20   printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
+         \x20   [ -n \"$mode\" ] && printf '%s' \"$mode\" > \"$dir/${UPPER}_TAB_UID.mode\" ;;\n\
          esac\n\
          exit 0\n",
         live_dir = live_dir,
+        legacy_env = crate::services::brand_migration::compat::script_preamble_sh(HOOK_ENV),
     )
 }
 
@@ -1922,15 +2055,16 @@ fn hook_script_body(live_dir: &str) -> String {
     // `live_dir` is a Windows path (backslashes); embed it in a single-quoted
     // PowerShell literal so backslashes are not treated as escapes.
     let live_dir = live_dir.replace('\'', "''");
+    let hint = crate::services::agent_hint::HINT;
     format!(
-        "# Eldrun agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
+        "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
          # Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
-         # and permission mode (so Eldrun resumes the current session in the mode it\r\n\
+         # and permission mode (so {DISPLAY} resumes the current session in the mode it\r\n\
          # was left in, incl. after /clear) and its turn state (working / decision /\r\n\
          # done / idle), which lights the tab's working and finished marks. No-op\r\n\
-         # unless launched by Eldrun (ELDRUN_TAB_UID set). Managed by Eldrun; do not edit.\r\n\
-         $ErrorActionPreference = 'SilentlyContinue'\r\n\
-         $uid = $env:ELDRUN_TAB_UID\r\n\
+         # unless launched by {DISPLAY} ({UPPER}_TAB_UID set). Managed by {DISPLAY}; do not edit.\r\n\
+         {legacy_env}$ErrorActionPreference = 'SilentlyContinue'\r\n\
+         $uid = $env:{UPPER}_TAB_UID\r\n\
          if ([string]::IsNullOrEmpty($uid)) {{ exit 0 }}\r\n\
          if ($uid -notmatch '^[A-Za-z0-9-]+$') {{ exit 0 }}\r\n\
          $payload = [Console]::In.ReadToEnd()\r\n\
@@ -1939,6 +2073,7 @@ fn hook_script_body(live_dir: &str) -> String {
          $ms = [regex]::Match($payload, '\"source\"\\s*:\\s*\"([A-Za-z]+)\"')\r\n\
          $me = [regex]::Match($payload, '\"hook_event_name\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mn = [regex]::Match($payload, '\"notification_type\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
+         $mr = [regex]::Match($payload, '\"reason\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          if (-not $m.Success) {{ exit 0 }}\r\n\
          $sid = $m.Groups[1].Value\r\n\
          $event = ''\r\n\
@@ -1950,14 +2085,14 @@ fn hook_script_body(live_dir: &str) -> String {
          $rec = Join-Path $dir $uid\r\n\
          $cur = ''\r\n\
          if (Test-Path $rec) {{ $cur = [IO.File]::ReadAllText($rec).Trim() }}\r\n\
-         if ($env:ELDRUN_TAB_AGENT -eq 'vibe') {{\r\n\
+         if ($env:{UPPER}_TAB_AGENT -eq 'vibe') {{\r\n\
          \x20 if (($event -ne 'post_agent') -or ($payload -notmatch '\"parent_session_id\"\\s*:\\s*null')) {{ exit 0 }}\r\n\
          \x20 [IO.File]::WriteAllText($rec, $sid)\r\n\
          \x20 exit 0\r\n\
          }}\r\n\
          # Only the tab's own session may move the records: a nested CLI under the\r\n\
-         # tab inherits ELDRUN_TAB_UID and fires this hook too.\r\n\
-         if ($env:ELDRUN_TAB_AGENT -eq 'codex') {{\r\n\
+         # tab inherits {UPPER}_TAB_UID and fires this hook too.\r\n\
+         if ($env:{UPPER}_TAB_AGENT -eq 'codex') {{\r\n\
          \x20 if (-not [string]::IsNullOrEmpty($env:CLAUDECODE)) {{ exit 0 }}\r\n\
          \x20 # Codex mints its own ids, so a start is free-form; every later event\r\n\
          \x20 # must come from the session the tab already recorded.\r\n\
@@ -1973,16 +2108,16 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 if ($src -eq 'startup') {{\r\n\
          \x20   # Claude relaunches itself (switching its renderer, updating) and, while\r\n\
          \x20   # its session has no transcript yet, comes back under a fresh id with a\r\n\
-         \x20   # plain start: the tab's own session is the one whose transcript is\r\n\
-         \x20   # missing beside the new one (see the POSIX twin).\r\n\
-         \x20   if (($env:ELDRUN_TAB_AGENT -ne 'claude') -or (-not $mt.Success)) {{ exit 0 }}\r\n\
+         \x20   # plain start: the tab's own session is the one with no transcript in\r\n\
+         \x20   # any project folder (see the POSIX twin).\r\n\
+         \x20   if (($env:{UPPER}_TAB_AGENT -ne 'claude') -or (-not $mt.Success)) {{ exit 0 }}\r\n\
          \x20   $ref = $cur\r\n\
          \x20   if ($ref -eq '') {{ $ref = $uid }}\r\n\
          \x20   $tdir = Split-Path ($mt.Groups[1].Value -replace '\\\\\\\\', '\\') -Parent\r\n\
-         \x20   if (Test-Path (Join-Path $tdir ($ref + '.jsonl'))) {{ exit 0 }}\r\n\
+         \x20   if (Test-Path -Path (Join-Path (Split-Path $tdir -Parent) ('*\\' + $ref + '.jsonl'))) {{ exit 0 }}\r\n\
          \x20 }} elseif (($src -ne 'clear') -and ($src -ne 'resume')) {{ exit 0 }}\r\n\
          }}\r\n\
-         if ($env:ELDRUN_TAB_AGENT -eq 'claude' -and $env:ELDRUN_PROJECT_DIR -and $event -eq 'SessionStart') {{ Write-Output 'To put a file in front of the user on their phone, run `eldrun-send <file>` (local and container tabs).' }}\r\n\
+         if (($env:{UPPER}_TAB_AGENT -eq 'claude' -or $env:{UPPER}_TAB_AGENT -eq 'codex') -and $env:{UPPER}_PROJECT_DIR -and $event -eq 'SessionStart') {{ Write-Output '{hint}' }}\r\n\
          # The turn state, from the events the agent fires as it works (see the\r\n\
          # POSIX twin for the mapping).\r\n\
          $turn = ''\r\n\
@@ -1991,9 +2126,12 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
          \x20 'Notification' {{ if (($ntype -eq 'permission_prompt') -or ($ntype -eq 'elicitation_dialog')) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
-         \x20 'SessionEnd' {{ $turn = 'idle' }}\r\n\
+         \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
          }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
+         # A prompt in the conversation a /clear started ends that clear's undo\r\n\
+         # (see the POSIX twin).\r\n\
+         if (($event -eq 'UserPromptSubmit') -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{ Remove-Item -LiteralPath ($rec + '.prev') -Force -ErrorAction SilentlyContinue }}\r\n\
          # A /clear keeps the id of the conversation it ended (see the POSIX twin).\r\n\
          if (($event -eq 'SessionStart') -and $ms.Success -and ($ms.Groups[1].Value -eq 'clear')) {{\r\n\
          \x20 $was = $cur\r\n\
@@ -2007,6 +2145,7 @@ fn hook_script_body(live_dir: &str) -> String {
          }}\r\n\
          exit 0\r\n",
         live_dir = live_dir,
+        legacy_env = crate::services::brand_migration::compat::script_preamble_ps1(HOOK_ENV),
     )
 }
 
@@ -2034,6 +2173,11 @@ pub const HOOK_EVENTS: [&str; 6] = [
 /// install that predates an event gains just that event. Matchers are omitted
 /// so each hook fires for every `source` / tool / notification type.
 fn register_hook_in_settings(settings: &HomeFile) -> std::io::Result<()> {
+    register_hook_in_settings_as(settings, &hook_command())
+}
+
+/// [`register_hook_in_settings`] for a given hook command.
+pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> std::io::Result<()> {
     let mut root: serde_json::Value = settings
         .read()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -2041,7 +2185,6 @@ fn register_hook_in_settings(settings: &HomeFile) -> std::io::Result<()> {
     if !root.is_object() {
         root = serde_json::json!({});
     }
-    let cmd = hook_command();
 
     let obj = root.as_object_mut().unwrap();
     let hooks = obj.entry("hooks").or_insert_with(|| serde_json::json!({}));
@@ -2065,7 +2208,7 @@ fn register_hook_in_settings(settings: &HomeFile) -> std::io::Result<()> {
                 .and_then(|h| h.as_array())
                 .is_some_and(|hs| {
                     hs.iter()
-                        .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(cmd.as_str()))
+                        .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(cmd))
                 })
         });
         if !already {
@@ -2140,12 +2283,16 @@ pub fn codex_registered_events(src: &str, cmd: &str) -> std::collections::HashSe
 /// Appends one block per event of [`CODEX_HOOK_EVENTS`] the file does not
 /// already hold.
 fn register_codex_hook_in(config: &HomeFile) -> std::io::Result<()> {
-    let cmd = hook_command();
+    register_codex_hook_as(config, &hook_command())
+}
+
+/// [`register_codex_hook_in`] for a given hook command.
+pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::Result<()> {
     let mut content = config
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
-    let have = codex_registered_events(&content, &cmd);
+    let have = codex_registered_events(&content, cmd);
     let missing: Vec<&str> = CODEX_HOOK_EVENTS
         .iter()
         .copied()
@@ -2158,10 +2305,10 @@ fn register_codex_hook_in(config: &HomeFile) -> std::io::Result<()> {
         content.push('\n');
     }
     content.push_str(
-        "\n# Eldrun: record the live Codex session id and turn state per tab so Eldrun\n\
+        concat!("\n# ", crate::app_name!(), ": record the live Codex session id and turn state per tab so ", crate::app_name!(), "\n\
          # can resume the current session (incl. after /clear) and mark the tab\n\
-         # working / finished. Keyed by $ELDRUN_TAB_UID; a no-op for any Codex not\n\
-         # launched by Eldrun. Managed by Eldrun.\n",
+         # working / finished. Keyed by $", crate::app_upper!(), "_TAB_UID; a no-op for any Codex not\n\
+         # launched by ", crate::app_name!(), ". Managed by ", crate::app_name!(), ".\n"),
     );
     for ev in missing {
         // Only SessionStart has a source to match on; the others fire for every
@@ -2186,6 +2333,7 @@ fn register_codex_hook_in(config: &HomeFile) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::brand::SLUG;
     use super::*;
 
     /// A link at a hook file — planted by a fenced agent, or the old fence's
@@ -2274,6 +2422,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         }
@@ -2281,7 +2430,7 @@ mod tests {
 
     #[test]
     fn vibe_resumes_its_own_recorded_session_and_preserves_legacy_fallback() {
-        let home = unique_tmp("eldrun-vibe-resume");
+        let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-resume"));
         let sessions = home.join("logs/session");
         let uid = "11111111-2222-4333-8444-555555555555";
         let own = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -2294,7 +2443,7 @@ mod tests {
 
         let mut opts = opts_with_args(&["--continue"]);
         opts.cmd = "vibe".into();
-        opts.env.insert("ELDRUN_TAB_UID".into(), uid.into());
+        opts.env.insert(crate::app_env!("TAB_UID").into(), uid.into());
         let exact = resolve_vibe_session_impl(opts.clone(), &home, |_| Some(own.into()));
         assert_eq!(exact.args, ["--resume", own]);
         assert_eq!(exact.env.get(TAB_AGENT_ENV).map(String::as_str), Some("vibe"));
@@ -2307,7 +2456,7 @@ mod tests {
 
     #[test]
     fn vibe_hook_registration_preserves_existing_hooks_and_is_idempotent() {
-        let home = unique_tmp("eldrun-vibe-hooks");
+        let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-hooks"));
         std::fs::create_dir_all(&home).unwrap();
         let hooks = home.join("hooks.toml");
         std::fs::write(&hooks, "[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"true\"\n").unwrap();
@@ -2316,13 +2465,13 @@ mod tests {
         register_vibe_hook_in(&home).unwrap();
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
         assert!(once.contains("name = \"mine\""));
-        assert_eq!(once.matches("name = \"eldrun-session\"").count(), 1);
+        assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
         std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
-    fn a_local_model_home_keeps_only_eldruns_hook() {
-        let home = unique_tmp("eldrun-vibe-local-hooks");
+    fn a_local_model_home_keeps_only_apps_hook() {
+        let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-local-hooks"));
         std::fs::create_dir_all(&home).unwrap();
         let hooks = home.join("hooks.toml");
         std::fs::write(&hooks, "[[hooks]]\nname = \"planted\"\ntype = \"post_agent\"\ncommand = \"true\"\n").unwrap();
@@ -2330,7 +2479,7 @@ mod tests {
         write_vibe_hooks(&file, true).unwrap();
         let once = std::fs::read_to_string(&hooks).unwrap();
         assert!(!once.contains("planted"));
-        assert_eq!(once.matches("name = \"eldrun-session\"").count(), 1);
+        assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
         write_vibe_hooks(&file, true).unwrap();
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
         std::fs::remove_dir_all(home).unwrap();
@@ -2338,7 +2487,7 @@ mod tests {
 
     #[test]
     fn only_a_direct_child_of_vibe_local_is_a_local_model_home() {
-        let root = std::path::Path::new("/s/eldrun/vibe_local");
+        let root = std::path::Path::new(concat!("/s/", crate::app_slug!(), "/vibe_local"));
         assert!(is_local_vibe_home_in(&root.join("gemma4-e4b"), root));
         assert!(!is_local_vibe_home_in(root, root));
         assert!(!is_local_vibe_home_in(&root.join("a/b"), root));
@@ -2349,7 +2498,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn vibe_hook_records_only_top_level_post_agent() {
-        let home = unique_tmp("eldrun-vibe-hook-run");
+        let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-hook-run"));
         let live = home.join("live");
         std::fs::create_dir_all(&live).unwrap();
         let script = home.join("hook.sh");
@@ -2371,7 +2520,7 @@ mod tests {
 
     /// Temp Claude `projects` root containing a persisted log for each given uuid.
     fn projects_with_sessions(uuids: &[&str]) -> std::path::PathBuf {
-        let tmp = unique_tmp("eldrun-resolve");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-resolve"));
         let proj = tmp.join("-encoded-cwd");
         std::fs::create_dir_all(&proj).unwrap();
         for u in uuids {
@@ -2432,7 +2581,7 @@ mod tests {
         assert_eq!(out.args, vec!["--session-id".to_string(), uuid.to_string()]);
         // The launch id is always exposed to the SessionStart hook.
         assert_eq!(
-            out.env.get("ELDRUN_TAB_UID").map(String::as_str),
+            out.env.get(crate::app_env!("TAB_UID")).map(String::as_str),
             Some(uuid)
         );
         let _ = std::fs::remove_dir_all(&projects);
@@ -2469,7 +2618,7 @@ mod tests {
         );
         assert_eq!(out.args, vec!["--resume".to_string(), live.to_string()]);
         assert_eq!(
-            out.env.get("ELDRUN_TAB_UID").map(String::as_str),
+            out.env.get(crate::app_env!("TAB_UID")).map(String::as_str),
             Some(launch)
         );
         let _ = std::fs::remove_dir_all(&projects);
@@ -2516,13 +2665,13 @@ mod tests {
             out.args,
             vec!["--session-id".to_string(), "abc-123".to_string()]
         );
-        assert!(!out.env.contains_key("ELDRUN_TAB_UID"));
+        assert!(!out.env.contains_key(crate::app_env!("TAB_UID")));
         let _ = std::fs::remove_dir_all(&projects);
     }
 
     #[test]
     fn claude_session_exists_detects_persisted_log() {
-        let tmp = std::env::temp_dir().join(format!("eldrun-sess-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-sess-test-{}"), std::process::id()));
         let proj = tmp.join("-some-encoded-cwd");
         std::fs::create_dir_all(&proj).unwrap();
         let uuid = "11111111-2222-3333-4444-555555555555";
@@ -2545,7 +2694,7 @@ mod tests {
 
     /// Temp Codex sessions root with a `YYYY/MM/DD/rollout-…-<uuid>.jsonl` log.
     fn codex_sessions_with(uuid: &str) -> std::path::PathBuf {
-        let tmp = unique_tmp("eldrun-codex-sess");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-codex-sess"));
         let day = tmp.join("2026").join("06").join("08");
         std::fs::create_dir_all(&day).unwrap();
         std::fs::write(
@@ -2568,7 +2717,7 @@ mod tests {
         let root = codex_sessions_with(live);
         let mut opts = codex_opts();
         opts.env
-            .insert("ELDRUN_TAB_UID".to_string(), "tab-key-123".to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key-123".to_string());
         let out = resolve_codex_session_impl(opts, &root, &[], |uid| {
             (uid == "tab-key-123").then(|| live.to_string())
         });
@@ -2582,10 +2731,10 @@ mod tests {
         // No live record → fresh launch (args stay empty).
         let mut opts = codex_opts();
         opts.env
-            .insert("ELDRUN_TAB_UID".to_string(), "tab-key".to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key".to_string());
         let out = resolve_codex_session_impl(opts, &root, &[], |_| None);
         assert!(out.args.is_empty());
-        // No ELDRUN_TAB_UID at all → cannot track → fresh launch.
+        // No TABTIVITY_TAB_UID at all → cannot track → fresh launch.
         let out2 =
             resolve_codex_session_impl(codex_opts(), &root, &[], |_| Some("x".to_string()));
         assert!(out2.args.is_empty());
@@ -2597,7 +2746,7 @@ mod tests {
         let root = codex_sessions_with("aaaaaaaa-0000-0000-0000-000000000000");
         let mut opts = codex_opts();
         opts.env
-            .insert("ELDRUN_TAB_UID".to_string(), "tab-key".to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key".to_string());
         // Recorded id has no rollout log → don't pass a bad `resume` arg.
         let out = resolve_codex_session_impl(opts, &root, &[], |_| {
             Some("ffffffff-1111-2222-3333-444444444444".to_string())
@@ -2615,10 +2764,10 @@ mod tests {
         // A `sessions/` dir that is not merely empty but absent, as it is on a
         // machine where Codex never wrote one.
         let root = std::env::temp_dir().join(format!(
-            "eldrun-codex-nosessions-{}-{live}",
+            "{SLUG}-codex-nosessions-{}-{live}",
             std::process::id()
         ));
-        let dir = std::env::temp_dir().join(format!("eldrun-codex-db-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-codex-db-{}"), std::process::id()));
         // A store left behind by an earlier run would fail the CREATE below.
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -2635,7 +2784,7 @@ mod tests {
 
         let mut opts = codex_opts();
         opts.env
-            .insert("ELDRUN_TAB_UID".to_string(), "tab-key".to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key".to_string());
         let out = resolve_codex_session_impl(opts, &root, std::slice::from_ref(&db), |_| {
             Some(live.to_string())
         });
@@ -2645,7 +2794,7 @@ mod tests {
         let mut other = codex_opts();
         other
             .env
-            .insert("ELDRUN_TAB_UID".to_string(), "tab-key".to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key".to_string());
         let out = resolve_codex_session_impl(other, &root, std::slice::from_ref(&db), |_| {
             Some("ffffffff-1111-2222-3333-444444444444".to_string())
         });
@@ -2657,7 +2806,7 @@ mod tests {
 
     #[test]
     fn read_live_session_round_trips_and_rejects_junk() {
-        let tmp = std::env::temp_dir().join(format!("eldrun-live-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-live-{}"), std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let uid = "11111111-2222-3333-4444-555555555555";
         let live = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -2677,7 +2826,7 @@ mod tests {
 
     #[test]
     fn tab_keys_must_be_uuid_shaped_before_becoming_a_path_component() {
-        // `ELDRUN_TAB_UID` arrives in the renderer-supplied `PtyOptions.env`, so the
+        // `TABTIVITY_TAB_UID` arrives in the renderer-supplied `PtyOptions.env`, so the
         // key is validated by SHAPE rather than by "happens to contain no slash".
         assert!(is_uuid_shaped("11111111-2222-3333-4444-555555555555"));
         assert!(is_uuid_shaped("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"));
@@ -2700,7 +2849,7 @@ mod tests {
         // The S-4 primitive: with one shared directory a contained agent could
         // overwrite another project's tab record and so pick which conversation an
         // UNCONTAINED agent resumes. Records now live in per-project subdirs.
-        let root = std::env::temp_dir().join(format!("eldrun-live-pp-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-live-pp-{}"), std::process::id()));
         let own = root.join("p1");
         std::fs::create_dir_all(&own).unwrap();
         let uid = "11111111-2222-3333-4444-555555555555";
@@ -2778,10 +2927,10 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn hook_body_is_no_op_without_env_and_bakes_dir() {
-        let body = hook_script_body("/home/x/.local/share/eldrun/live_sessions");
+        let body = hook_script_body(concat!("/home/x/.local/share/", crate::app_slug!(), "/live_sessions"));
         assert!(body.starts_with("#!/bin/sh"));
-        assert!(body.contains("[ -n \"$ELDRUN_TAB_UID\" ] || exit 0"));
-        assert!(body.contains("/home/x/.local/share/eldrun/live_sessions"));
+        assert!(body.contains(concat!("[ -n \"$", crate::app_upper!(), "_TAB_UID\" ] || exit 0")));
+        assert!(body.contains(concat!("/home/x/.local/share/", crate::app_slug!(), "/live_sessions")));
         assert!(body.contains("\"session_id\""));
         assert!(body.contains("\"permission_mode\""));
         assert!(body.contains(".mode"));
@@ -2790,17 +2939,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn hook_body_is_no_op_without_env_and_bakes_dir() {
-        let body = hook_script_body(r"C:\Users\x\AppData\Roaming\eldrun\live_sessions");
-        assert!(body.contains("$uid = $env:ELDRUN_TAB_UID"));
+        let body = hook_script_body(concat!(r"C:\Users\x\AppData\Roaming\", crate::app_slug!(), r"\live_sessions"));
+        assert!(body.contains(concat!("$uid = $env:", crate::app_upper!(), "_TAB_UID")));
         assert!(body.contains("if ([string]::IsNullOrEmpty($uid)) { exit 0 }"));
-        assert!(body.contains(r"C:\Users\x\AppData\Roaming\eldrun\live_sessions"));
+        assert!(body.contains(concat!(r"C:\Users\x\AppData\Roaming\", crate::app_slug!(), r"\live_sessions")));
         assert!(body.contains("\"session_id\""));
         assert!(body.contains("\"permission_mode\""));
         assert!(body.contains(".mode"));
         // The container twin bakes the container-side path, POSIX-style.
-        let twin = posix_hook_script_body("/c/Users/x/AppData/Roaming/eldrun/live_sessions");
+        let twin = posix_hook_script_body(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions"));
         assert!(twin.starts_with("#!/bin/sh"));
-        assert!(twin.contains("/c/Users/x/AppData/Roaming/eldrun/live_sessions"));
+        assert!(twin.contains(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions")));
     }
 
     /// Run the POSIX hook body as the agents would: `sh <script>` with the tab
@@ -2819,7 +2968,7 @@ mod tests {
         cmd.arg(script)
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("ELDRUN_TAB_UID", uid)
+            .env(crate::app_env!("TAB_UID"), uid)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -2838,7 +2987,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn phone_hint_only_reaches_the_scoped_claude_session_start() {
+    fn phone_hint_only_reaches_a_scoped_claude_or_codex_session_start() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("hook.sh");
@@ -2848,25 +2997,27 @@ mod tests {
             ("claude", false, "aaaa", "SessionStart", false),
             ("claude", true, "bbbb", "SessionStart", false),
             ("claude", true, "aaaa", "Stop", false),
-            ("codex", true, "aaaa", "SessionStart", false),
+            ("codex", true, "cccc", "SessionStart", true),
+            ("codex", false, "cccc", "SessionStart", false),
+            ("codex", true, "cccc", "Stop", false),
         ] {
             let mut cmd = std::process::Command::new("sh");
             cmd.arg(&script).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
-                .env("ELDRUN_TAB_UID", "aaaa").env("ELDRUN_TAB_AGENT", agent)
+                .env(crate::app_env!("TAB_UID"), "aaaa").env(crate::app_env!("TAB_AGENT"), agent)
                 .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
-            if scoped { cmd.env("ELDRUN_PROJECT_DIR", dir.path()); }
+            if scoped { cmd.env(crate::app_env!("PROJECT_DIR"), dir.path()); }
             let mut child = cmd.spawn().unwrap();
             write!(child.stdin.take().unwrap(), "{{\"session_id\":\"{sid}\",\"hook_event_name\":\"{event}\",\"source\":\"startup\"}}").unwrap();
             let out = child.wait_with_output().unwrap();
             assert!(out.status.success());
-            assert_eq!(String::from_utf8_lossy(&out.stdout).contains("eldrun-send <file>"), expected, "{agent} {scoped} {sid} {event}");
+            assert_eq!(String::from_utf8_lossy(&out.stdout).contains(concat!(crate::app_slug!(), "-send <file>")), expected, "{agent} {scoped} {sid} {event}");
         }
     }
 
     #[cfg(unix)]
     #[test]
     fn hook_script_lets_only_the_tabs_own_session_move_the_record() {
-        let tmp = unique_tmp("eldrun-hook-run");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-run"));
         let live = tmp.join("live");
         std::fs::create_dir_all(&tmp).unwrap();
         let script = tmp.join("hook.sh");
@@ -2915,6 +3066,18 @@ mod tests {
         let (rec, mode) = run_hook(&script, &live, uid, claude, true, &stop(cleared, "plan"));
         assert_eq!(rec.as_deref(), Some(cleared));
         assert_eq!(mode.as_deref(), Some("plan"));
+        // A session command reported as a prompt leaves the undo standing; a
+        // prompt in the new chat ends it — resuming the cleared conversation
+        // would leave that prompt behind (a second `/clear` queued behind its
+        // turn was undone onto the first clear's conversation).
+        let prompt = |text: &str| {
+            format!(r#"{{"session_id":"{cleared}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#)
+        };
+        run_hook(&script, &live, uid, claude, true, &prompt("/clear"));
+        assert_eq!(cleared_session_in(&live, uid, |_| true).as_deref(), Some(uid));
+        run_hook(&script, &live, uid, claude, true, &prompt("fix the build"));
+        assert_eq!(prev(), None);
+        assert_eq!(cleared_session_in(&live, uid, |_| true), None);
         // …and the launch id itself is always the tab's (a relaunch on `--resume
         // <launch>` after a lost record) — that resume is also the undo, after
         // which there is no clear left to take back.
@@ -2968,13 +3131,83 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A `claude --resume` (or a `/clear`) nested under the tab's own Claude —
+    /// the agent's Bash tool running the CLI — sends the same start a `/resume`
+    /// typed in the tab does. Only the process chain tells them apart: a
+    /// `claude` (here: `sh` under that name) under another one, both carrying
+    /// the tab's id, is refused; one alone, or under a `claude` that is not the
+    /// tab's, is followed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hook_script_refuses_a_clear_or_resume_from_a_claude_nested_under_the_tabs() {
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-nested"));
+        let live = tmp.join("live");
+        let bin = tmp.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = tmp.join("hook.sh");
+        std::fs::write(&script, hook_script_body(&live.to_string_lossy())).unwrap();
+        let claude_bin = bin.join("claude");
+        std::os::unix::fs::symlink("/bin/sh", &claude_bin).unwrap();
+        let uid = "11111111-1111-4111-8111-111111111111";
+        let other = "22222222-2222-4222-8222-222222222222";
+        let payload = tmp.join("payload.json");
+        // `; true` keeps each shell alive under its command (no exec tail call).
+        let hook = r#"sh "$SCRIPT" < "$PAYLOAD"; true"#;
+        // An install upgraded across the rename: the hook takes the tab id from
+        // the legacy name when the current one is unset, and the tab carries both.
+        let legacy_script = tmp.join("hook-legacy.sh");
+        let legacy_preamble =
+            crate::services::brand_migration::compat::legacy_env_preamble_sh(&crate::brand::PAIR, HOOK_ENV);
+        assert!(!legacy_preamble.is_empty());
+        std::fs::write(&legacy_script, legacy_preamble + &hook_script_body(&live.to_string_lossy())).unwrap();
+        let legacy_tab_uid = crate::brand::PAIR.legacy_env_name("TAB_UID").unwrap();
+        let run_with = |script: &std::path::Path, legacy: bool, src: &str, chain: &str| {
+            std::fs::create_dir_all(&live).unwrap();
+            std::fs::write(live.join(uid), uid).unwrap();
+            std::fs::write(&payload, format!(r#"{{"session_id":"{other}","hook_event_name":"SessionStart","source":"{src}"}}"#)).unwrap();
+            let mut cmd = std::process::Command::new(&claude_bin);
+            cmd.arg("-c")
+                .arg(chain)
+                .env_clear()
+                .env("PATH", std::env::var("PATH").unwrap_or_default())
+                .env(crate::app_env!("TAB_UID"), uid)
+                .env(TAB_AGENT_ENV, "claude")
+                .env("SCRIPT", script)
+                .env("PAYLOAD", &payload)
+                .env("CLAUDE_BIN", &claude_bin)
+                .env("HOOK", hook);
+            if legacy {
+                cmd.env(&legacy_tab_uid, uid);
+            }
+            assert!(cmd.status().unwrap().success());
+            std::fs::read_to_string(live.join(uid)).unwrap()
+        };
+        let run = |src: &str, chain: &str| run_with(&script, false, src, chain);
+        let alone = format!("{hook}; true");
+        let nested = r#""$CLAUDE_BIN" -c "$HOOK"; true"#.to_string();
+        // A `claude` above the tab's own (the app launched from a Claude session).
+        let tab_uid = crate::app_env!("TAB_UID");
+        let outside = format!(r#"env -u {tab_uid} "$CLAUDE_BIN" -c '{tab_uid}="$0" "$CLAUDE_BIN" -c "$HOOK"; true' "${tab_uid}"; true"#);
+        for src in ["resume", "clear"] {
+            assert_eq!(run(src, &alone), other, "{src} from the tab's own claude");
+            assert_eq!(run(src, &nested), uid, "{src} from a claude nested under it");
+            assert_eq!(run(src, &outside), other, "{src} under a claude outside the tab");
+            // A probe that unsets only the current name still reaches the hook
+            // through the legacy one — and must still be seen as nested.
+            let half_unset = format!(r#"env -u {tab_uid} "$CLAUDE_BIN" -c "$HOOK"; true"#);
+            assert_eq!(run_with(&legacy_script, true, src, &half_unset), uid, "{src} nested, current name unset");
+            assert_eq!(run_with(&legacy_script, true, src, &alone), other, "{src} from the tab's own claude, legacy install");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Claude relaunching itself before the first prompt (renderer switch,
     /// update) comes back under a fresh id with a plain `startup`: the record
     /// follows it while the tab's own session has no transcript, and only then.
     #[cfg(unix)]
     #[test]
     fn hook_script_follows_a_relaunch_that_minted_a_fresh_id() {
-        let tmp = unique_tmp("eldrun-hook-relaunch");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-relaunch"));
         let live = tmp.join("live");
         let transcripts = tmp.join("projects").join("-p");
         std::fs::create_dir_all(&transcripts).unwrap();
@@ -3014,6 +3247,13 @@ mod tests {
         std::fs::write(path(fresh), "{}").unwrap();
         let (rec, _) = run_hook(&script, &live, uid, claude, true, &start(again, &own(again)));
         assert_eq!(rec.as_deref(), Some(fresh));
+        // …also when it runs from another cwd: its transcript lands in that
+        // cwd's project folder, where the tab's own is not.
+        let elsewhere = tmp.join("projects").join("-tmp");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let away = format!("\"{}\"", elsewhere.join(format!("{again}.jsonl")).display());
+        let (rec, _) = run_hook(&script, &live, uid, claude, true, &start(again, &away));
+        assert_eq!(rec.as_deref(), Some(fresh));
         // …as it is without the agent marker, whatever the transcripts say.
         std::fs::remove_file(path(fresh)).unwrap();
         let (rec, _) = run_hook(&script, &live, uid, None, true, &start(again, &own(again)));
@@ -3034,7 +3274,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
-        let tmp = unique_tmp("eldrun-hook-turn");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-hook-turn"));
         let live = tmp.join("live");
         std::fs::create_dir_all(&tmp).unwrap();
         let script = tmp.join("hook.sh");
@@ -3078,6 +3318,11 @@ mod tests {
         run_hook(&script, &live, uid, claude, true, &ev(nested, "Stop", ""));
         assert_eq!(turn().as_deref(), Some("done"));
 
+        // A /clear ends the session but not the CLI: the tab is still at its
+        // prompt, so its `done` stands instead of handing the tab back to its
+        // screen (where the last reply could read as a question).
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "SessionEnd", r#","reason":"clear""#));
+        assert_eq!(turn().as_deref(), Some("done"));
         run_hook(&script, &live, uid, claude, true, &ev(uid, "SessionEnd", r#","reason":"prompt_input_exit""#));
         assert_eq!(turn().as_deref(), Some("idle"));
 
@@ -3131,14 +3376,14 @@ mod tests {
         let mut opts = opts_with_args(&[]);
         opts.cmd = "codex".to_string();
         opts.env
-            .insert("ELDRUN_TAB_UID".to_string(), "11111111-1111-4111-8111-111111111111".to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), "11111111-1111-4111-8111-111111111111".to_string());
         let out = resolve_codex_session_impl(opts, &projects, &[], |_| None);
         assert_eq!(out.env.get(TAB_AGENT_ENV).map(String::as_str), Some("codex"));
     }
 
     #[test]
     fn register_hook_is_idempotent_and_preserves_other_keys() {
-        let tmp = std::env::temp_dir().join(format!("eldrun-settings-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-settings-{}"), std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let settings = tmp.join("settings.json");
         std::fs::write(
@@ -3200,7 +3445,7 @@ mod tests {
 
     #[test]
     fn register_codex_hook_appends_once_and_preserves_toml() {
-        let tmp = std::env::temp_dir().join(format!("eldrun-codex-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-codex-{}"), std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let config = tmp.join("config.toml");
         // A realistic pre-existing config with project tables.
@@ -3262,7 +3507,7 @@ mod tests {
     // ── Codex hook trust state ──────────────────────────────────────────────
 
     const CFG: &str = "/home/x/.codex/config.toml";
-    const CMD: &str = "/home/x/.local/share/eldrun/hooks/eldrun_session_start.sh";
+    const CMD: &str = concat!("/home/x/.local/share/", crate::app_slug!(), "/hooks/", crate::app_slug!(), "_session_start.sh");
 
     /// Our hook block as `register_codex_hook_in` writes it.
     fn our_hook() -> String {
@@ -3308,6 +3553,24 @@ mod tests {
             our_hook()
         );
         assert_eq!(codex_hook_state_in(&src, CFG, CMD), CodexHookState::Enabled);
+    }
+
+    #[test]
+    fn codex_hook_state_reads_a_bare_trusted_hash_as_enabled() {
+        // Codex 0.159 writes a trusted hook as its hash alone. Read as
+        // untrusted, the cwd binder kept guessing beside the live hook and gave
+        // one tab's fresh `/clear` rollout to its sibling: two phone tabs, one
+        // conversation.
+        let src = format!(
+            "{}\n[hooks.state]\n\n[hooks.state.\"{CFG}:post_tool_use:0:0\"]\ntrusted_hash = \"sha256:c6bc\"\n\n\
+             [hooks.state.\"{CFG}:session_start:0:0\"]\ntrusted_hash = \"sha256:93f0\"\n\n\
+             [projects.\"/home/x\"]\ntrust_level = \"trusted\"\n",
+            our_hook()
+        );
+        assert_eq!(codex_hook_state_in(&src, CFG, CMD), CodexHookState::Enabled);
+        // `enabled = false` after the hash still switches it off.
+        let off = src.replace("sha256:93f0\"\n", "sha256:93f0\"\nenabled = false\n");
+        assert_eq!(codex_hook_state_in(&off, CFG, CMD), CodexHookState::Disabled);
     }
 
     #[test]
@@ -3358,7 +3621,7 @@ mod tests {
 
     #[test]
     fn write_live_session_round_trips_and_refuses_junk_keys() {
-        let tmp = unique_tmp("eldrun-live-write");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-live-write"));
         let uid = "11111111-2222-3333-4444-555555555555";
         let id = "019ea7c8-b7d5-7a13-80e2-1ad6608db5e6";
 
@@ -3382,13 +3645,13 @@ mod tests {
         let live = "019ea7c8-b7d5-7a13-80e2-1ad6608db5e6";
         let uid = "11111111-2222-3333-4444-555555555555";
         let root = codex_sessions_with(live);
-        let live_dir = unique_tmp("eldrun-live-seam");
+        let live_dir = unique_tmp(concat!(crate::app_slug!(), "-live-seam"));
 
         write_live_session_in(&live_dir, uid, live).unwrap();
 
         let mut opts = codex_opts();
         opts.env
-            .insert("ELDRUN_TAB_UID".to_string(), uid.to_string());
+            .insert(crate::app_env!("TAB_UID").to_string(), uid.to_string());
         let out =
             resolve_codex_session_impl(opts, &root, &[], |u| read_live_session_in(&live_dir, u));
         assert_eq!(out.args, vec!["resume".to_string(), live.to_string()]);
@@ -3471,7 +3734,7 @@ mod tests {
 
     #[test]
     fn mode_records_round_trip_and_reject_junk() {
-        let tmp = unique_tmp("eldrun-mode");
+        let tmp = unique_tmp(concat!(crate::app_slug!(), "-mode"));
         std::fs::create_dir_all(&tmp).unwrap();
         let uid = "11111111-2222-3333-4444-555555555555";
         std::fs::write(tmp.join(format!("{uid}.mode")), "acceptEdits\n").unwrap();
@@ -3677,6 +3940,31 @@ mod tests {
         let long = clean_prompt_text(&"p".repeat(MAX_PROMPT_CHARS + 50)).unwrap();
         assert_eq!(long.chars().count(), MAX_PROMPT_CHARS + 1);
         assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn a_claude_goal_runs_from_its_sentinel_until_met_failed_or_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let set = r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"fix it"}}"#;
+        let typed = r#"{"type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>fix it</command-args>"}}"#;
+        let answer = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]}}"#;
+        let unmet = r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"reason":"not yet"}}"#;
+        let met = r#"{"type":"attachment","attachment":{"type":"goal_status","met":true,"condition":"fix it"}}"#;
+        let failed = r#"{"type":"attachment","attachment":{"type":"goal_status","met":false,"failed":true,"iterations":4}}"#;
+        let cleared = r#"{"type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-args>clear</command-args>"}}"#;
+        let sidechain = r#"{"type":"attachment","isSidechain":true,"attachment":{"type":"goal_status","met":false,"sentinel":true}}"#;
+        let read = |lines: &[&str]| {
+            std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+            claude_goal_in_transcript(&path)
+        };
+        assert_eq!(read(&[answer]), None);
+        assert_eq!(read(&[set, typed, answer]), Some(true));
+        assert_eq!(read(&[set, typed, answer, unmet, answer]), Some(true));
+        assert_eq!(read(&[set, typed, answer, met, answer]), Some(false));
+        assert_eq!(read(&[set, typed, answer, failed]), Some(false));
+        assert_eq!(read(&[set, typed, answer, cleared]), Some(false));
+        assert_eq!(read(&[met, sidechain]), Some(false));
     }
 
     #[test]

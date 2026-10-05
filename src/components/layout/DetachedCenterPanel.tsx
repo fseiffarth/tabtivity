@@ -1491,7 +1491,7 @@ export function DetachedCenterPanel({
             const stateOf = (tab: TabEntry) => {
               const ptyId = `${scope}:${tab.key}`;
               const isActive = tab.key === group.activeKey;
-              const working = isPtyTabKind(tab.kind) && !isActive && !!busyByTab[ptyId];
+              const working = isPtyTabKind(tab.kind) && !!busyByTab[ptyId];
               const rawAttn =
                 tab.kind === "agent" || tab.kind === "local_agent"
                   ? attentionByTab[ptyId] ?? null
@@ -1882,13 +1882,13 @@ export function DetachedCenterPanel({
         >
           <StarIcon />
         </span>
-        {/* Explicit move grip, mirroring the main window's header `⠿` (and the
-            subwindow tab bars' own). The whole strip is already a handle — every
+        {/* Explicit move grip, mirroring the subwindow tab bars' own `⠿`. The whole strip is already a handle — every
             pixel that isn't the window controls starts the drag — but an
             undecorated popout shows nothing that says so, and a title bar filled
-            edge-to-edge by the controls leaves nothing obvious to aim at. Same
-            reasoning as `.app-drag-grip` in the main header: the region is
-            grabbable either way, the grip is the always-present affordance. A
+            edge-to-edge by the controls leaves nothing obvious to aim at: the
+            region is grabbable either way, the grip is the always-present
+            affordance. (The main header dropped its own grip; its logo chip
+            stands at the left edge instead.) A
             plain (non-button) element that matches none of the no-drag selectors,
             so its pointerdown bubbles to `onTitlebarPointerDown` and drives the
             same native move — including the double-click-to-snap it decides. */}

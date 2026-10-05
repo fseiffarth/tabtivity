@@ -45,6 +45,7 @@ import {
   DEFAULT_PAGE_WIDTH,
   DEFAULT_PAGE_HEIGHT,
 } from "./model";
+import { BRAND } from "../../brand";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -500,7 +501,7 @@ export function normalizeDeck(
   };
 
   if (version > DECK_VERSION) {
-    repairs.push(`written by a newer Eldrun (deck v${version})`);
+    repairs.push(`written by a newer ${BRAND.display} (deck v${version})`);
     lose(translate(useI18nStore.getState().lang, "deckSidecar.lossNewerVersion", { version }));
   }
 

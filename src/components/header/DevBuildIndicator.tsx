@@ -11,20 +11,24 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
 
 /**
- * The background "Eldrun (dev)" freeze that every commit queues
+ * The background "Tabtivity (dev)" freeze that every commit queues
  * (`scripts/package-dev-auto.sh`, docs/context/dev_builds.md), as a header
  * chip: which step the build is on, for how long, and roughly how much is left
  * (the last successful build's duration is the estimate — nothing better is
  * knowable from a release `cargo build`).
  *
- * Read-only towards the build: `dev_build_status` reads the script's own state
- * files, one action opens a root-console tab tailing its log, and it never
- * queues, starts or stops a build. The other action is the user's own relaunch:
+ * `dev_build_status` reads the script's own state files, and one action opens
+ * a root-console tab tailing its log. The only build control is the user's
+ * pause switch (`dev_build_set_paused`): pausing hands the machine back —
+ * nothing queues and a running compile is cancelled — and resuming queues
+ * HEAD if the snapshot fell behind meanwhile. While paused, "Build now"
+ * (`dev_build_now`) builds HEAD once when it is newer than the snapshot and
+ * stays paused. The other action is the user's own relaunch:
  * in the frozen window, once a newer snapshot is installed or built, "Relaunch
  * now" quits through the ordinary close and reopens via the launcher
  * (`dev_build_relaunch`).
  *
- * Only a binary built from a checkout answers (`ELDRUN_DEV_SOURCE_ROOT`); a
+ * Only a binary built from a checkout answers (`TABTIVITY_DEV_SOURCE_ROOT`); a
  * release answers `null` and this renders nothing, so the chip is never a
  * cluster member there.
  *
@@ -49,6 +53,7 @@ interface DevBuildStatus {
   relaunch: boolean;
   adoptable: string | null;
   canRelaunch: boolean;
+  paused: boolean;
   logPath: string;
 }
 
@@ -109,6 +114,12 @@ export function DevBuildIndicator() {
   const [now, setNow] = useState(() => Date.now());
   const [relaunching, setRelaunching] = useState(false);
   const [relaunchError, setRelaunchError] = useState<string | null>(null);
+  const [pausing, setPausing] = useState(false);
+  const [pauseError, setPauseError] = useState<string | null>(null);
+  const [startingBuild, setStartingBuild] = useState(false);
+  const [buildNowError, setBuildNowError] = useState<string | null>(null);
+  // Bumped after a pause/resume/build-now so the poll re-reads at once.
+  const [refresh, setRefresh] = useState(0);
   const closeTimer = useRef<number | undefined>(undefined);
 
   const active = status?.state === "building" || status?.state === "waiting";
@@ -131,7 +142,7 @@ export function DevBuildIndicator() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [active, quiesce]);
+  }, [active, quiesce, refresh]);
 
   // The elapsed clock ticks locally between polls.
   const building = status?.state === "building";
@@ -158,6 +169,9 @@ export function DevBuildIndicator() {
     } else if (status.state === "waiting") {
       headline = t("devBuild.waiting");
       chipText = t("devBuild.chipQueued");
+    } else if (status.paused) {
+      headline = t("devBuild.paused");
+      chipText = t("devBuild.chipPaused");
     } else if (failed) {
       headline = t("devBuild.failed", { commit: failed.commit, status: failed.status });
       chipText = t("devBuild.chipFailed");
@@ -208,6 +222,32 @@ export function DevBuildIndicator() {
     });
   };
 
+  const setPaused = (paused: boolean) => {
+    setPausing(true);
+    setPauseError(null);
+    invoke("dev_build_set_paused", { paused })
+      .then(() => setStatus((s) => (s ? { ...s, paused } : s)))
+      .catch((e: unknown) => setPauseError(String(e)))
+      .finally(() => {
+        setPausing(false);
+        setRefresh((n) => n + 1);
+      });
+  };
+
+  const buildNow = () => {
+    setStartingBuild(true);
+    setBuildNowError(null);
+    invoke("dev_build_now")
+      .catch((e: unknown) => setBuildNowError(String(e)))
+      .finally(() => {
+        setStartingBuild(false);
+        setRefresh((n) => n + 1);
+      });
+  };
+  // Paused and idle with HEAD ahead of the snapshot (or no snapshot to compare
+  // against: the script itself skips a HEAD that is already installed).
+  const canBuildNow = status.paused && !active && status.behind !== 0;
+
   let detail: string | null = null;
   if (building && elapsed !== null) {
     const est = status.estimateSecs;
@@ -219,6 +259,8 @@ export function DevBuildIndicator() {
           : t("devBuild.elapsed", { elapsed: formatDuration(elapsed) });
   } else if (status.state === "waiting") {
     detail = t("devBuild.waitingDetail");
+  } else if (status.paused) {
+    detail = t("devBuild.pausedDetail");
   }
 
   return (
@@ -276,7 +318,7 @@ export function DevBuildIndicator() {
             )}
             <div className="mobile-indicator-origin">
               {status.installed && <div>{t("devBuild.installed", { commit: status.installed })}</div>}
-              {!!status.behind && building && <div>{t("devBuild.behind", { count: status.behind })}</div>}
+              {!!status.behind && (building || status.paused) && <div>{t("devBuild.behind", { count: status.behind })}</div>}
               {status.queued && building && <div>{t("devBuild.queuedNext")}</div>}
             </div>
             {failed && (
@@ -293,6 +335,8 @@ export function DevBuildIndicator() {
               )
             )}
             {relaunchError && <ErrorNote className="mobile-indicator-error" error={relaunchError} />}
+            {pauseError && <ErrorNote className="mobile-indicator-error" error={pauseError} />}
+            {buildNowError && <ErrorNote className="mobile-indicator-error" error={buildNowError} />}
             <div className="mobile-indicator-actions">
               {status.canRelaunch && (
                 <button
@@ -304,6 +348,28 @@ export function DevBuildIndicator() {
                 >
                   {relaunching ? t("devBuild.relaunching") : t("devBuild.relaunchNow")}{" "}
                   <UntestedTag id="devBuild.relaunchNow" />
+                </button>
+              )}
+              <button
+                type="button"
+                className="vpn-indicator-connect"
+                disabled={pausing}
+                aria-pressed={status.paused}
+                title={t(status.paused ? "devBuild.resumeHint" : "devBuild.pauseHint")}
+                onClick={() => setPaused(!status.paused)}
+              >
+                {t(status.paused ? "devBuild.resume" : "devBuild.pause")} <UntestedTag id="devBuild.pause" />
+              </button>
+              {canBuildNow && (
+                <button
+                  type="button"
+                  className="vpn-indicator-connect"
+                  disabled={startingBuild}
+                  title={t("devBuild.buildNowHint")}
+                  onClick={buildNow}
+                >
+                  {startingBuild ? t("devBuild.startingBuild") : t("devBuild.buildNow")}{" "}
+                  <UntestedTag id="devBuild.buildNow" />
                 </button>
               )}
               <button type="button" className="vpn-indicator-connect" onClick={followLog}>

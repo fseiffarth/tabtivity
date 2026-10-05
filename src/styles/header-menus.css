@@ -856,7 +856,7 @@
   color: var(--accent);
   font-weight: 600;
 }
-/* A CLI Eldrun cannot hand the MCP server to at all is dimmed further than an
+/* A CLI Tabtivity cannot hand the MCP server to at all is dimmed further than an
    off chip — "off" and "impossible" should not look alike. */
 .local-model-role-chip.local-model-role-chip-unwired {
   opacity: 0.5;
@@ -1445,7 +1445,7 @@
   gap: 8px;
 }
 
-/* One installed model in the "Load on Eldrun start" list: switch, name, size.
+/* One installed model in the "Load on Tabtivity start" list: switch, name, size.
    Rounded, with hover and armed states, like every other card list in Settings
    (.archived-project-row, .remote-machine-card) — the whole label is the hit
    target, so it has to look like one rather than like a bare bordered strip. */
@@ -1486,7 +1486,7 @@
 }
 /* Its own overlay thumb sits on the rows' right end — the "On start" badge —
    the same 8px gutter `.menu-scroll-region` reserves, and for its reason. */
-.ollama-autostart-list[data-eldrun-scrollbar] {
+.ollama-autostart-list[data-app-scrollbar] {
   padding-right: 8px;
 }
 
@@ -1625,6 +1625,19 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: ui-monospace, monospace;
+}
+
+/* Settings → Updates, after a rename of the app: the fallback log's summary. */
+.legacy-names {
+  margin-top: 14px;
+}
+.legacy-names-list {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .app-update-progress {
@@ -2063,6 +2076,21 @@
 .dev-build-btn[aria-expanded="true"] .vpn-indicator-label {
   color: var(--text-primary);
 }
+/* VPN and Machines carry a drawn glyph after their lamps instead of a word;
+   it dims and lights like the label it replaced. */
+.header-status-glyph {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-secondary);
+  transition: color var(--transition);
+}
+.vpn-indicator-btn:hover .header-status-glyph,
+.vpn-indicator-btn[aria-expanded="true"] .header-status-glyph,
+.machines-indicator-btn:hover .header-status-glyph,
+.machines-indicator-btn[aria-expanded="true"] .header-status-glyph {
+  color: var(--text-primary);
+}
 .vpn-indicator-label {
   font-size: var(--text-xs);
   line-height: 1;
@@ -2186,6 +2214,67 @@
   font-size: 10px;
   line-height: 1.4;
   color: var(--text-secondary);
+}
+/* Paired devices: one row each, a lamp for "signed in now", and the inbox
+   tray's armed delete as Disconnect → Disconnect? (`InboxIndicator`). */
+.mobile-indicator-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--control-border);
+}
+.mobile-indicator-devices-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.mobile-indicator-devices-empty {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.mobile-indicator-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mobile-indicator-device-lamp {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.6;
+}
+.mobile-indicator-device-lamp.online {
+  background: var(--success);
+  opacity: 1;
+}
+.mobile-indicator-device-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.mobile-indicator-device-text strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-indicator-device-text span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.mobile-indicator-device-access,
+.mobile-indicator-device-disconnect {
+  font-size: 11px;
 }
 .mobile-indicator-actions {
   display: flex;

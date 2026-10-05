@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import SOURCE from "../../../mobile-web/public/sw.js?raw";
 import INDEX from "../../../mobile-web/index.html?raw";
 import { shellAssets } from "../../../mobile-web/src/shellAssets";
+import { BRAND } from "../../lib/brand";
 
 const ORIGIN = "https://desktop.example.ts.net";
 
@@ -65,7 +66,7 @@ function boot(held: Record<string, unknown>, fetch: (url: string) => Promise<unk
 const html = { body: "<!doctype html>", ok: true, headers: new Headers({ "content-type": "text/html" }) };
 const script = { body: "export {}", ok: true, headers: new Headers({ "content-type": "text/javascript" }) };
 
-describe("Eldrun Mobile service worker", () => {
+describe(`${BRAND.display} Mobile service worker`, () => {
   it("answers a hashed asset from the cache without touching the network", async () => {
     let fetched = 0;
     const { dispatch } = boot({ "/assets/index-abc.js": script }, () => { fetched += 1; return Promise.resolve(script); });
@@ -107,15 +108,23 @@ describe("Eldrun Mobile service worker", () => {
     expect(untouched).toBe("untouched");
   });
 
+  it("leaves the sealed pdf.js frame to the network, even offline", async () => {
+    // Its framing policy rides on the answer, and the shell must never be
+    // handed to a sandboxed frame as its document.
+    const { dispatch } = boot({ "/": html }, () => Promise.reject(new TypeError("Failed to fetch")));
+    const untouched = await Promise.race([dispatch("/pdf-frame.html", "navigate"), Promise.resolve("untouched")]);
+    expect(untouched).toBe("untouched");
+  });
+
   it("precaches this build's entry script and stylesheet once stamped", async () => {
     const index = INDEX.replace("</head>", '<script type="module" crossorigin src="/assets/index-CYdYva-W.js"></script><link rel="stylesheet" crossorigin href="/assets/index-BazsAu1K.css"></head>');
     const assets = shellAssets(index);
     expect(assets).toEqual(["/assets/index-CYdYva-W.js", "/assets/index-BazsAu1K.css"]);
 
     // The same substitution the build plugin performs.
-    expect(SOURCE).toContain("__ELDRUN_BUILD__");
-    expect(SOURCE).toContain("__ELDRUN_ASSETS__");
-    const stamped = SOURCE.split("__ELDRUN_BUILD__").join("CYdYva-W").split("__ELDRUN_ASSETS__").join(assets.join(","));
+    expect(SOURCE).toContain("__APP_BUILD__");
+    expect(SOURCE).toContain("__APP_ASSETS__");
+    const stamped = SOURCE.split("__APP_BUILD__").join("CYdYva-W").split("__APP_ASSETS__").join(assets.join(","));
     const { install, added } = boot({}, () => Promise.resolve(script), stamped);
     await install();
     expect(added).toEqual(expect.arrayContaining(["/", "/manifest.webmanifest", ...assets]));

@@ -381,8 +381,8 @@ export function MailAccountDialog({
             />
           </label>
           {/* The VPN gate (`lib/remote/vpn/vpnGate.ts`). Its hint names the limit — only a
-              tunnel Eldrun started counts — because the failure mode of the
-              switch is silent: an account gated on a VPN Eldrun cannot see
+              tunnel Tabtivity started counts — because the failure mode of the
+              switch is silent: an account gated on a VPN Tabtivity cannot see
               simply never syncs, and nothing else would say why. */}
           <label className="mail-field mail-field-check">
             <span className="mail-check-row">

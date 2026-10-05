@@ -1,7 +1,7 @@
 /**
  * The HPC tag's resolution (`lib/remote/hpc/hpcHost`). Keyed by SSH target like the
  * careful flag, but with the OPPOSITE default: an untagged host behaves exactly
- * as it always has, because every gate here changes what Eldrun does. The one
+ * as it always has, because every gate here changes what Tabtivity does. The one
  * place that inverts is `mayAutoTouch`, which must fail closed while settings
  * are still unloaded — launch is the window where every sweep fires.
  */

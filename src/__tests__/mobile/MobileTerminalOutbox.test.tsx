@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@xterm/xterm", () => ({
@@ -37,6 +37,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 const NOW = 1_788_609_600; // 2026-09-04 12:00:00 UTC
@@ -55,11 +56,11 @@ function outboxFetch(images: () => unknown[]) {
     : Promise.resolve(jsonResponse(404, { error: "not_found" })));
 }
 
-describe("Eldrun Mobile reaches the files the agent sent through the gallery", () => {
+describe(`${BRAND.display} Mobile reaches the files the agent sent through the gallery`, () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    localStorage.setItem("eldrun.mobile.view.agent", "terminal");
+    localStorage.setItem(storageKey("mobile.view.agent"), "terminal");
     vi.spyOn(Date, "now").mockReturnValue(NOW * 1000);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
@@ -129,7 +130,7 @@ describe("Eldrun Mobile reaches the files the agent sent through the gallery", (
       .toEqual(["/api/v1/tabs/tab-7/outbox/diagram.png", "/api/v1/tabs/tab-7/outbox/plot.png"]);
   });
 
-  it("opens text as inert text, PDFs in a new tab, and binary files as downloads", async () => {
+  it("opens text as inert text, PDFs in the app's page view, and binary files as downloads", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
       ? jsonResponse(200, { files: [
@@ -147,8 +148,11 @@ describe("Eldrun Mobile reaches the files the agent sent through the gallery", (
     expect(dialog.querySelector("svg")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getByRole("button", { name: "Open paper.pdf" }));
-    // This host mints no ticket, so the plain URL opens.
-    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/tabs/tab-7/outbox/paper.pdf", "_blank", "noopener"));
+    // A PDF is drawn inside the app, never handed to the phone's viewer.
+    const viewer = await screen.findByRole("dialog", { name: "paper.pdf" });
+    expect(within(viewer).getByTitle("pdf")).toBeTruthy();
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
     const link = screen.getByRole("link", { name: "Open data.zip" });
     expect(link.getAttribute("href")).toBe("/api/v1/tabs/tab-7/outbox/data.zip?download=1");
     expect(link.getAttribute("download")).toBe("data.zip");
@@ -180,7 +184,7 @@ describe("Eldrun Mobile reaches the files the agent sent through the gallery", (
     }
   });
 
-  it("caps the inline text preview and offers the whole file", async () => {
+  it("caps the inline text preview and reads the whole file into the app", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
       ? jsonResponse(200, { files: [{ name: "large.log", kind: "text/plain; charset=utf-8", size: 2 * 1024 * 1024, modified: NOW }] })
       : new Response("x".repeat(2 * 1024 * 1024)))));
@@ -192,7 +196,45 @@ describe("Eldrun Mobile reaches the files the agent sent through the gallery", (
     expect(screen.getByRole("dialog").querySelector("pre")?.textContent?.length).toBe(1024 * 1024);
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     fireEvent.click(screen.getByRole("button", { name: "Open the whole file" }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/tabs/tab-7/outbox/large.log", "_blank", "noopener"));
+    await waitFor(() => expect(screen.getByRole("dialog").querySelector("pre")?.textContent?.length).toBe(2 * 1024 * 1024));
+    expect(screen.queryByRole("button", { name: "Open the whole file" })).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("opens a text too big for the app in the browser's tab", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
+      ? jsonResponse(200, { files: [{ name: "huge.log", kind: "text/plain; charset=utf-8", size: 9 * 1024 * 1024, modified: NOW }] })
+      : new Response("x".repeat(2 * 1024 * 1024)))));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    openGallery(1);
+    fireEvent.click(screen.getByRole("button", { name: "Open huge.log" }));
+    await settle();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    fireEvent.click(screen.getByRole("button", { name: "Open the whole file" }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/tabs/tab-7/outbox/huge.log", "_blank", "noopener"));
+  });
+
+  it("never sends a text out of the iPad's Home Screen app, where there is no way back", async () => {
+    Object.defineProperty(navigator, "userAgent", { configurable: true, value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15" });
+    Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: 5 });
+    Object.defineProperty(navigator, "standalone", { configurable: true, value: true });
+    try {
+      vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
+        ? jsonResponse(200, { files: [{ name: "huge.log", kind: "text/plain; charset=utf-8", size: 9 * 1024 * 1024, modified: NOW }] })
+        : new Response("x".repeat(2 * 1024 * 1024)))));
+      render(<Terminal tab={TAB} back={() => {}} />);
+      await settle();
+      openGallery(1);
+      fireEvent.click(screen.getByRole("button", { name: "Open huge.log" }));
+      await settle();
+      expect(screen.getByRole("dialog").querySelector("pre")?.textContent?.length).toBe(1024 * 1024);
+      expect(screen.queryByRole("button", { name: "Open the whole file" })).toBeNull();
+    } finally {
+      Reflect.deleteProperty(navigator, "userAgent");
+      Reflect.deleteProperty(navigator, "maxTouchPoints");
+      Reflect.deleteProperty(navigator, "standalone");
+    }
   });
 
   it("shows no gallery button for an empty or unreachable outbox", async () => {

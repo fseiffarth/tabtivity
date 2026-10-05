@@ -1,6 +1,6 @@
 # Third-party update checklist
 
-Eldrun wraps a lot of software it does not control: agent CLIs, Ollama,
+Tabtivity wraps a lot of software it does not control: agent CLIs, Ollama,
 Tailscale, tmux, Docker, QEMU, bubblewrap, OpenVPN, OpenSSH, SLURM, TeX, mail
 and CalDAV servers, desktop shells, and the GitHub API. Each of those ships on
 its own schedule, and every one of them is wired in through a *specific*
@@ -24,7 +24,7 @@ How to use it:
    prints installed-vs-verified for every installed CLI and exits non-zero on
    drift, and Manage Agents shows the same verdict per row. Re-verifying a
    surface means bumping **both** its row and the prose note here, in one
-   commit; a version only Eldrun can read and a version only a human can read
+   commit; a version only Tabtivity can read and a version only a human can read
    drift apart exactly like the two install tables did.
 3. A breakage found this way is a normal fix: patch the one place named under
    **Where**, add a test alongside the existing ones, update the version note.
@@ -117,18 +117,19 @@ npx vitest run src/__tests__/agents/agentPrompt.test.ts              # decision-
 ```
 
 Then open one tab per updated agent, trigger a permission prompt, and check
-the tab lamp turns to "decision"; close and reopen Eldrun and check the tab
+the tab lamp turns to "decision"; close and reopen Tabtivity and check the tab
 resumes.
 
 ### 1.1 Claude Code (deepest coupling)
 
 - Mobile send hint (2026-09-14): installed CLI is 2.1.270. The official
   [hooks reference](https://code.claude.com/docs/en/hooks#sessionstart) specifies
-  SessionStart stdout as model context. Eldrun prints `eldrun-send <file>` only
-  after session continuity accepts the payload, with `ELDRUN_TAB_AGENT=claude`
-  and `ELDRUN_PROJECT_DIR` set; tests execute the hook and prove nested startups,
-  Stop, Codex and unscoped invocations stay silent. Verify context ingestion
-  again on CLI upgrades; an authenticated live Claude round trip remains QA.
+  SessionStart stdout as model context. Tabtivity prints `tabtivity-send <file>` only
+  after session continuity accepts the payload, with `TABTIVITY_TAB_AGENT=claude`
+  (or `codex`, see 1.2) and `TABTIVITY_PROJECT_DIR` set; tests execute the hook
+  and prove nested startups, Stop and unscoped invocations stay silent. Verify
+  context ingestion again on CLI upgrades; an authenticated live Claude round
+  trip remains QA.
 
 
 **Where** `services/agent_session.rs`, `services/agent_usage.rs`,
@@ -139,7 +140,7 @@ Claude's `/fast` — different thing.
 **Assumes**
 
 - Root console (`services::root_mcp`): `--mcp-config <inline json>` with an
-  HTTP server whose `headers` value `Bearer ${ELDRUN_ROOT_MCP_TOKEN}` is
+  HTTP server whose `headers` value `Bearer ${TABTIVITY_ROOT_MCP_TOKEN}` is
   **expanded from the environment** — verified on 2.1.276 against a logging
   loopback server (`headersHelper` worked too). If expansion ever stops, the
   root tools fail with 401 rather than leaking; the fallback is
@@ -166,8 +167,42 @@ Claude's `/fast` — different thing.
   greps those keys with `sed`, so a renamed key breaks resume silently.
   Verified against Claude Code 2.1.282 (2026-09-25, live: a `/clear`'s
   SessionStart carried `session_id` + `source: clear`, a Stop carried
-  `permission_mode`, and a `/clear` fires no Stop event); the turn events
-  against 2.1.272 by reading the binary's strings, not live.
+  `permission_mode`, and a `/clear` fires no Stop event); re-checked against
+  2.1.284 (2026-09-29, live: the tab records of a 2.1.284 session show
+  `source: clear` / `startup`, `session_id` and `permission_mode` parsed off
+  its payloads — and that a `claude -p` run from a Bash tool in another cwd
+  passed the nested-startup guard and took the tab's record over; the guard
+  now looks for the tab's transcript in every project folder); re-checked
+  against 2.1.285 (2026-09-30, live, `-p` with an inline `--settings` hook
+  dumping every payload: SessionStart `source: startup` / `resume`, Stop and
+  UserPromptSubmit `permission_mode`, `session_id` equal to the
+  `--session-id` passed, SessionEnd `reason`; the transcript at the path
+  below, `--resume <uuid>` reopening it); re-checked against 2.1.286
+  (2026-09-30, live, the same `-p` dump: identical keys and values); re-checked
+  against 2.1.287 (2026-10-02, live, the same dump: identical keys — Stop now
+  also carries `effort`, `last_assistant_message`, `background_tasks`, a
+  resume start `seconds_since_last_response` and `context_tokens`, none read).
+  That run, a `claude -p --resume <id>` from the tab's Bash tool, took the
+  tab's record over: every hook, the tab's own included, gets `CLAUDECODE=1`,
+  `CLAUDE_CODE_CHILD_SESSION=1` and its own `CLAUDE_CODE_SESSION_ID`, so the
+  env cannot tell a nested CLI from the tab's; the hook now refuses a foreign
+  `clear`/`resume` start sent by a `claude` with another `claude` above it
+  among the processes carrying the tab's id (`/proc`, POSIX only). Re-checked
+  against 2.1.288 (2026-10-02, live, the same dump: identical keys and values,
+  `--permission-mode manual` reported as `default`; new and unread:
+  `prompt_id` on every event but SessionStart, Stop `session_crons`, a resume
+  start `estimated_cache_write_usd` and `prompt_cache_likely_expired`; the
+  hook's `sed` extractions match `jq` on every payload). That probe unset only
+  `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
+  pre-rename name and the `/proc` walk, matching the current name only,
+  counted no `claude` — the `--resume` took the record again, emptying the
+  Reader's chat and Changes panel. The walk now matches the tab's id under
+  any `*_TAB_UID` name. **Probing from a tab:** unset both names, or none and
+  let the guard refuse it. The turn
+  events against 2.1.272 by
+  reading the binary's strings, not live — 2.1.288 still carries
+  `permission_prompt`, `elicitation_dialog`, `idle_prompt` and the same six
+  permission modes.
 - Session logs: `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`; `--resume` is
   emitted only when that file exists.
 - The model tag in the Agents views (`agent_session_model`) reads the tail of
@@ -182,14 +217,21 @@ Claude's `/fast` — different thing.
   `<command-name>…<command-args>` reads as `/name args`, `<bash-input>` as
   `! cmd`. A new wrapper tag shows up as a prompt until it is added here.
 - `/usage` in print mode returns a JSON envelope with `result` (panel text),
-  `is_error`, `num_turns: 0` (re-checked live against 2.1.282, 2026-09-25). The
+  `is_error`, `num_turns: 0` (re-checked live against 2.1.286, 2026-09-30,
+  its panel fed through `parseUsageReport`: three meters, the
+  "What's contributing" lines kept as notes; 2.1.287, 2026-10-02, prints the
+  same layout plus a `Last 7d` block of the same shape; 2.1.288, 2026-10-02,
+  unchanged, every reset resolved by `resolveResetAt`). The
   panel text is parsed by `shared/usageReport.ts` for the phone's bars, the
   prompt chart's reset lines and auto-continue (five-hour / weekly windows,
   per-model lines) — a re-layout may cost figures. `resolveResetAt` places the
   reset phrase in time: 2.1.272 prints `resets Sep 15, 10:30pm (Europe/Berlin)`
   (a year only when it is not the current one, the zone always; 2.1.282 drops
   the minutes on the hour, `resets Sep 25, 1pm`) where earlier
-  builds printed `resets 6:20pm` / `resets Mon 9am`. A shape it does not know
+  builds printed `resets 6:20pm` / `resets Mon 9am`. 2.1.284 appends a
+  "What's contributing to your limits usage?" section (`Last 24h · N
+  requests · N sessions`, `Top subagents: general-purpose 39%, …`); a meter
+  needs its percentage to *lead* the value, so those shares stay notes. A shape it does not know
   resolves to nothing, which silently empties the chart's reset lines and
   leaves auto-continue unable to arm.
 - Model short names `opus | sonnet | haiku | fable` for the `/model` chips.
@@ -220,7 +262,7 @@ Claude's `/fast` — different thing.
   CLI opens it with `O_NOFOLLOW` — a symlink is refused (`refused-symlink`,
   `ELOOP`) — and **rotates it by atomic rename** (temp file + `rename(2)`),
   so the path gets a new inode on every refresh. `services/agent_creds.rs`
-  relies on all three: the fence mounts an Eldrun-owned mirror *file* (not a
+  relies on all three: the fence mounts a Tabtivity-owned mirror *file* (not a
   link, not the host inode) at that path and rewrites it in place; a
   cleared record has empty token strings and `expiresAt: 0`, which the mirror
   never copies back to the host. Verified against Claude Code 2.1.263. A moved
@@ -231,8 +273,18 @@ Claude's `/fast` — different thing.
   Anthropic-compatible endpoint is stood up for Claude (Ollama ≥ 0.15).
 - Mobile: mode family `default | accept edits | plan | auto | bypass
   permissions` — the cycle's labels `accept edits on`, `plan mode on`, `auto
-  mode on` read out of the 2.1.272 bundle — `default` draws no mode line;
-  Shift+Tab is the legacy backtab `ESC [ Z`.
+  mode on` read out of the 2.1.272 bundle (unchanged in 2.1.288) — `default` draws `⏸ manual mode on`
+  (seen live on 2.1.284 and 2.1.286; older builds drew nothing), which no mode
+  pattern names, so it reads as the silent default. Shift+Tab is the legacy
+  backtab `ESC [ Z`.
+- Permission prompt (2.1.286, live capture): the command sits between dashed
+  `╌` rules with no blank line before `Do you want to proceed?`.
+  `readableScreen` drops the rules as frame; the line under one carries
+  `afterRule`, and `selectPrompt`'s heading stops there — without that the
+  phone dialog went untitled. Desktop lamp unaffected (`❯ 1.` rows). 2.1.287
+  draws MCP/other tool prompts and a held message from another session the
+  same way (changelog); the rule handling is not Bash-specific, but no such
+  prompt has been captured live yet.
 
 **Verify**
 
@@ -242,7 +294,7 @@ claude --help | grep -E 'session-id|resume|permission-mode|remote-control|output
 claude -p "/usage" --output-format json | head -c 600
 grep -A4 SessionStart ~/.claude/settings.json
 stat -c '%i %a' ~/.claude/.credentials.json   # note the inode, then after a refresh: a new one
-cargo test --manifest-path src-tauri/Cargo.toml agent_creds
+cargo test --manifest-path src-tauri/Cargo.toml agent_auth
 cargo test --manifest-path src-tauri/Cargo.toml agent_session
 cargo test --manifest-path src-tauri/Cargo.toml agent_usage
 ```
@@ -260,8 +312,54 @@ aliases, and anything about where or how credentials are stored.
 `write_local_catalog`), `mobile-web/src/terminal/agentModes.ts`,
 `src/lib/agents/prompt/prompt.ts` + `src/stores/activity.ts` (the decision lamp).
 
+- Mobile send hint (2026-10-01): the Codex [hooks
+  docs](https://learn.chatgpt.com/docs/hooks) say plain SessionStart stdout
+  "is added as extra developer context", so the hook prints the same
+  `tabtivity-send <file>` line as for Claude (1.1) and the project scaffold's
+  `AGENTS.md` no longer carries it. Never verified live.
+
 **Assumes**
 
+- **0.159.3 (2026-10-01), binary and rollout check** — the installed standalone
+  CLI prints `codex-cli 0.159.3`. Its help still accepts `resume [SESSION_ID]`,
+  `exec --skip-git-repo-check`, `--no-daemon`, `--oss`, `-m` and `-c`.
+  The binary retains the model-sheet headings, mode names, `Action Required`,
+  numbered approval choice text, `active writer` / `thread-writer-locks`, hook
+  events, and `session_meta` / `turn_context` / `user_message` records. Recent
+  rollouts written by 0.159.3 still start with `session_meta` carrying
+  `session_id`. The parser regression tests below pass; the 0.159.3 TUI
+  screens were inspected as binary markers rather than captured live.
+  This was not a live approval, mode-cycle, model-picker or two-writer test;
+  the latest live UI check remains 0.159.2 and the writer-lock lifecycle's
+  offline probe remains 0.154.0. The four `VERIFIED` rows record this checked
+  patch release with those limits, as 0.157.0 did for its binary check.
+- **0.159.2 (2026-09-30), live but outside Tabtivity** — the npm linux-x64 build
+  run in a private tmux with its own `CODEX_HOME`, inside a fenced agent tab.
+  Verified live: the approval menu (labels below) and its title frames, the
+  two-step `/model` screens (both fed to `looksLikeDecisionPrompt` and
+  `readSelectPrompt` as captured), the rollout header and records, and that
+  `resume <id>` / `exec --skip-git-repo-check` / `--oss` / `-m` / `-c` stand.
+  `-a` now takes only `on-request | never` (Tabtivity passes none). Hook events
+  are unchanged since 0.157.0 (`PermissionRequest` and `Interrupt` exist; still
+  no `Notification`). Not verified: mobile mode lines, and the writer lock in
+  a fenced (in-process) tab.
+- **The shared app-server daemon.** Since at least 0.157.0
+  (`daemon_auto_start`, stable, on) a TUI may detach a
+  `codex app-server --managed-daemon` (own session, reparented to init) out of
+  `$CODEX_HOME/packages/app-server-daemon/`, socket under
+  `/tmp/codex-daemon-<uid>/`, and every later TUI on that `CODEX_HOME` attaches
+  to it — a second `resume <id>` of a live thread then *joins* it instead of
+  reporting an active writer. Fenced tabs have so far run in-process (the
+  scope's log says `rpc.transport="in-process"` on 0.158.0) for a reason not
+  pinned down; a TUI that does choose the daemon but cannot use it — only
+  `current/bin` of the standalone install is bound, a sibling tab's socket is
+  in another fence's private `/tmp` — exits 1 with "rerun … with
+  `--no-daemon`". So Tabtivity appends `--no-daemon` to every host Codex TUI
+  launch (fresh, `resume`, `--oss`; not `login`/`exec`/…) once the probed
+  version is ≥ `CODEX_NO_DAEMON_SINCE` = 0.156.0, the release that brought
+  both the daemon and the flag (0.155.x exits on it; unknown version → no
+  flag, as with Claude's `--name`). Containers, remote hosts and
+  `ollama launch codex` run their own Codex and get no flag.
 - **0.157.0 (2026-09-25) was checked from the binary's strings, not live** —
   launching a Codex TUI from an agent tab was refused, so all four
   `VERIFIED` rows moved to 0.157.0 on this evidence: `--help` still lists
@@ -306,7 +404,7 @@ aliases, and anything about where or how credentials are stored.
 - Local models: `codex --oss -c oss_provider="ollama" -m <model>` as the
   fallback when `ollama launch codex` cannot be used; reasoning is turned off
   with `-c model_reasoning_effort="none"`; the model catalog Codex expects is
-  `model.json` (written under Eldrun's own state dir, not `~/.codex`).
+  `model.json` (written under Tabtivity's own state dir, not `~/.codex`).
 - Preface commands `/new /compact /status`; `/status` is *not* available in
   exec mode, so there is no usage recipe.
 - The decision lamp reads Codex's screen off the PTY, and two habits of its
@@ -322,11 +420,14 @@ aliases, and anything about where or how credentials are stored.
     (U+2800–U+28FF) around the composer every ~150ms, indefinitely.
     `notePtyOutput` drops braille cells before judging a frame, or a finished
     turn reads as "working" forever. An animation in any other glyph range
-    brings that back.
+    brings that back. (0.159.2 under tmux: an idle TUI wrote nothing for 4s;
+    a blocked one only the title, now `[ ! ] Action Required | <action> |
+    <dir>` about once a second.)
   - **Approval menus are numbered rows whose labels decide, not their index.**
-    Codex offers two flavours of yes before the no ("Yes, just this once",
-    "Yes, and don't ask again for this command in this session", "No, and tell
-    Codex what to do differently"), and the diff renderer skips unchanged cells
+    Codex offers two flavours of yes before the no — on 0.159.2 "Yes, proceed
+    (y)", "Yes, and don't ask again for commands that start with `…` (p)",
+    "No, and tell Codex what to do differently (esc)"; earlier "Yes, just this
+    once" / "…for this command in this session" — and the diff renderer skips unchanged cells
     so the row arrives as `2.Yes,and…` — spaces gone, glued to the row above.
     `agentPrompt.ts` matches the first word of each option; renaming the
     options away from yes/no/allow/cancel wording is what would break it.
@@ -336,11 +437,13 @@ aliases, and anything about where or how credentials are stored.
 - Mobile's model sheet reads `/model` off the screen, and Codex answers it in
   **two steps** — `Select Model and Effort`, then `Select Reasoning Level for
   <model>` (whose row 5, "More reasoning…", opens a third). Each step is a
-  heading, a blank line, then rows `N. Label  Description` numbered from 1 with
+  heading, blank lines (one through 0.153.4, two on 0.159.2), then rows `N. Label  Description` numbered from 1 with
   the highlight marked `›`; the sheet holds until a *different* list is drawn
   and closes when none is. Renumbering, dropping the heading, or drawing the
   next step without clearing the previous one is what would break it. Verified
-  against codex-cli 0.153.4 (0.157.0 by strings).
+  against codex-cli 0.153.4 and live against 0.159.2, whose reasoning step's
+  footer reads `enter default · s session · esc back`: the Enter the sheet
+  sends saves the pick as the default, `s` would keep it to the session.
 
 **Verify**
 
@@ -412,8 +515,29 @@ Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
-that switch turns the daily probe into an updater. Muse and Copilot have a
-recipe but no recorded check, so Manage CLIs calls them unverified.
+that switch turns the daily probe into an updater. Muse has a recipe but no
+recorded check, so Manage CLIs calls it unverified; the 1.4.1-era launcher
+(`api.meta.ai/muse-launcher.sh`, fetched 2026-09-30) still honours the switch
+and still defaults the login to `$XDG_CONFIG_HOME` or `~/.config/muse/auth.json`.
+Copilot's row is 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
+`--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
+`storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
+
+The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
+CLI's session-start context channel; re-check it on update. Gemini, Qwen,
+Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
+`hookSpecificOutput.additionalContext` (Gemini requires stdout to be JSON only).
+Droid: `~/.factory/hooks.json` with the events at the top level, plain stdout.
+Cursor: `~/.cursor/hooks.json` `hooks.sessionStart[]`, `{"additional_context"}`
+(its forum reports the context dropped on some first messages). Copilot: every
+`*.json` in `~/.copilot/hooks/`, the `bash`/`powershell` command printing
+`{"additionalContext"}` — probed live on 1.0.88 (2026-10-01). Vibe (hooks are
+`pre_tool`/`post_tool`/`post_agent` only) and OpenCode (no start hook outside
+the experimental plugin API) get instructions instead: a marker block in
+`~/.vibe/AGENTS.md`, and for OpenCode `<state_dir>/hooks/tabtivity_agent_hint.md`
+in `~/.config/opencode/opencode.json` `instructions` (its global `AGENTS.md`
+would shadow the `~/.claude/CLAUDE.md` fallback). All but Copilot are from the vendors'
+docs, not live.
 
 A fenced tab resumes only if its session store is mounted into the fence:
 `sandbox::agent_home_mounts` lists each continue-last agent's store (OpenCode
@@ -450,11 +574,13 @@ the `fixed` flag in `agentModes.ts` be dropped.
 
 **Antigravity's model and effort** are read by the phone since 2026-09-20
 (`mobile-web/src/terminal/antigravity.ts`, verified against 1.2.7 by a pty
-capture; 1.2.9 by the binary's strings only, 2026-09-25 — `? for shortcuts`,
-`Switch Model`, `Search:`, `(current)` and the `items]` window note are all
-still in it). 1.2.11's changelog reworks the effort gauge in `/effort` and
-`/model`, so the slider below is the first thing to re-capture on that
-release. It assumes, of `agy`: the footer row under the input box, with
+capture; 1.2.14 by a tmux capture at 80×24 on 2026-09-30, run through
+`readableScreen` and the parsers: six rows, `[1-6 of 7 items]`, three effort
+stops — the 1.2.11 gauge rework left the slider's shape as below, and 1.2.9's
+dialog is byte-identical). Since at least 1.2.9 an underline row
+(`──────────`) sits under `Search:`; `readableScreen` drops it, so a parser fed
+raw rows would miss the list. A fresh home opens on a theme picker, a
+data-sharing opt-in (leave it unticked) and a folder-trust prompt. It assumes, of `agy`: the footer row under the input box, with
 `? for shortcuts` on the left and the model right-aligned, the reasoning effort
 after a ` · ` where the model has one (`Gemini 3.8 Flash · high`); the `/model`
 dialog's heading `Switch Model` and its `Search:` field; unnumbered rows, two
@@ -474,8 +600,57 @@ is; the phone's Focus view cannot read them — a release that changes that is a
 `--alt-screen` flag was removed). Copilot 1.0.81–1.0.82 also offered to restore
 interrupted sessions at startup, a prompt a restored tab would open on; 1.0.83
 turned it off by default. Vibe 2.25.4 still has `-c/--continue` and
-`-p/--prompt` (read out of the wheel, 2026-09-15). Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
+`-p/--prompt` (read out of the wheel, 2026-09-15); 2.25.8 too (2026-09-30),
+with `--resume [SESSION_ID]`, the `post_agent` hook type in `hooks.toml` whose
+payload carries `session_id`, and `logs/session/unified/<id>/CURRENT` — what
+`resolve_vibe_session` relies on. Cursor 2026.09.28 keeps `-p/--print`,
+`--continue` and its chats under `~/.cursor`. Aider 0.86.2 (latest) needs
+only its binary name and `aider.chat/install.sh`, still served. Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
 tabs via `ollama launch <agent>`).
+
+### 1.6 Token usage records (Claude, Codex)
+
+**Where** `services/token_stats.rs` (scan + cache), `commands/usage_stats.rs`
+(`usage_token_stats`), `src/lib/tokenStats.ts` (the recap's Tokens section).
+Plan: `docs/token_stats_plan.md`; context: `docs/context/usage_stats.md`.
+
+**Assumes** (checked against live files, 2026-10-01)
+
+- **Claude** — `<home>/.claude/projects/<slug>/<session>.jsonl` and
+  `<slug>/<session>/subagents/agent-<id>.jsonl`. Assistant records carry
+  `message.usage` with `input_tokens` (fresh, **excludes** cache),
+  `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`
+  (thinking included), plus `message.model`, `message.id`, top-level
+  `requestId` and an ISO-UTC `timestamp`. `<synthetic>` models are skipped.
+- **Claude writes one message on several adjacent lines**, one per content
+  block, and they are *not* identical: the first is written mid-stream, so
+  `output_tokens` can **grow** from one line to the next (1727 of 56728
+  duplicate lines on live data). The scan keys a message on
+  `(message.id, requestId)` and keeps the **largest value per field** — not
+  the first line, not the sum. A release that stops repeating lines is
+  harmless; one that spreads a message's lines further apart than the dedupe
+  window (`DEDUPE_WINDOW`) would double-count.
+- **Codex** — `<home>/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`,
+  `event_msg` records with `payload.type == "token_count"` and
+  `payload.info.total_token_usage` {`input_tokens` (**includes** cached),
+  `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`}. Codex
+  repeats a `token_count` without a new turn, so the scan counts **deltas of
+  `total_token_usage`** between events, never `last_token_usage`; a total that
+  goes *down* restarts the baseline (a new thread in the same file). Input is
+  normalized: fresh = `input − cached − cache_write` (floor 0), cache read =
+  `cached_input_tokens`, cache write = `cache_write_input_tokens`. The model
+  comes from the preceding `turn_context`'s `payload.model`.
+- **Codex fallback** — a thread with no rollout counts
+  `threads.tokens_used` from `state_<n>.sqlite` as an unsplit `tokens.total`
+  (shown as "no split reported").
+
+**Verify** after a Claude or Codex update: `cargo test --manifest-path
+src-tauri/Cargo.toml token_stats`; then in a fresh tab do a turn and compare the
+recap's Tokens row with the CLI's own `/usage` (Claude) or `/status` (Codex)
+for that session. Grep a new transcript for the field names above — a renamed
+field reads as zero tokens, not as an error. If a field's meaning changes
+(e.g. Claude's `input_tokens` starts including cache), bump `CACHE_VERSION` in
+`token_stats.rs` so the cache rebuilds.
 
 ---
 
@@ -506,7 +681,7 @@ Headless probe: `cargo run --example ollama_probe --manifest-path src-tauri/Carg
   `claude`, `codex`, `opencode`, `droid`, `openclaw`. `ollama launch --help` is
   read to learn which agents the installed server supports. `launch` writes
   `~/.codex/model.json` and forwards no extra flags.
-- **≥ 0.32 drops integrated GPUs** unless `OLLAMA_IGPU_ENABLE=1`; Eldrun sets it
+- **≥ 0.32 drops integrated GPUs** unless `OLLAMA_IGPU_ENABLE=1`; Tabtivity sets it
   on the server it spawns and offers a systemd drop-in for the unit. The flag's
   existence is read from `ollama serve --help`, not from the version.
 - `OLLAMA_HOST`, `OLLAMA_MODELS` env semantics (a bare number is a port).
@@ -565,10 +740,10 @@ finishing it via `workspace/executeCommand`, `signOut` and `checkStatus`
 against a fake server. `didChangeStatus` `kind`/`message` likewise.
 
 **Verify** after bumping `SERVER_VERSION`, the real server inside the real fence:
-`ELDRUN_COPILOT_INSTALL=<npm prefix> cargo test --manifest-path src-tauri/Cargo.toml --lib copilot -- --ignored`
+`TABTIVITY_COPILOT_INSTALL=<npm prefix> cargo test --manifest-path src-tauri/Cargo.toml --lib copilot -- --ignored`
 (initialize + unauthenticated error 1000 through `session.rs`). Also
 `python3 scripts/copilot-probe.py /absolute/path/to/copilot-language-server`
-without launching Eldrun. It currently verifies initialization, unsaved document
+without launching Tabtivity. It currently verifies initialization, unsaved document
 sync, unauthenticated error 1000 and cancellation -32800 only. Before release,
 also verify device sign-in/sign-out, credential persistence policy, exclusions,
 workspace filesystem reads, quota messages and accepted-item offsets against a
@@ -576,7 +751,7 @@ real signed-in session. Never capture tokens or raw protocol logs.
 
 ---
 
-## 3. Tailscale (Eldrun Mobile)
+## 3. Tailscale (Tabtivity Mobile)
 
 **Where** `services/mobile_control/config.rs` (`verify_tailscale_serve`,
 detect settings), `services/mobile_control/host.rs`, `src/components/mobile/
@@ -636,7 +811,7 @@ Also check the remote host's tmux, which is usually older.
 **Assumes** `docker --version`, `ps --filter label=… --format`, `run -d --init
 --name --label --user 1000:1000 --cap-drop --security-opt --pids-limit
 --memory --cpus --network --read-only --tmpfs … sleep infinity`, `exec`,
-`rm -f`, `build -t`, `pull`; the image tag Eldrun builds/pulls; bind-mount of
+`rm -f`, `build -t`, `pull`; the image tag Tabtivity builds/pulls; bind-mount of
 the project at its identical absolute path.
 
 **Verify** `docker --version; docker run --help | grep -E 'pids-limit|init'`;
@@ -725,7 +900,7 @@ watch the progress stream; `cargo test --manifest-path src-tauri/Cargo.toml open
   `sshpass -e` on Windows; OpenSSH re-asks a rejected passphrase three times.
 - `ssh-keygen -F/-l/-lf -/-t ed25519`, `ssh-keyscan` for host keys.
 - rsync present on **both** ends for the bulk fast path (`rsync >/dev/null
-  && echo eldrun-rsync-yes`), pull-only.
+  && echo tabtivity-rsync-yes`), pull-only.
 - `git bundle create … --not …` and git's literal refusal text; `-c
   core.hooksPath=` suppresses hooks (verified against git 2.53.0);
   `GIT_OPTIONAL_LOCKS=0`.
@@ -925,6 +1100,7 @@ not written.
 |------------|----------------|------------------------|
 | WebKitGTK | 2.52 observed | no renderer-pid API (watchdog probes instead); scrollbar built once; DMABUF off (flicker + SIGBUS) |
 | Tauri / wry / plugins | `^2` | IPC fallback path evaluates PDF bytes as script — keep the custom protocol |
+| `tauri-runtime-wry` | patched 2.11.3 (`src-tauri/patches/`, root `Cargo.toml` `[patch.crates-io]`) | `Context.main_thread` behind an `Arc`, or off-thread `AppHandle` clones race tao's Linux `Rc` and corrupt the heap. On a tauri bump: re-copy the new version and re-apply the `TABTIVITY PATCH` hunk, or drop the patch once upstream fixes it |
 | `@xterm/xterm` + addons | `^5.5`, webgl `^0.18` | key encodings (`ESC [ Z`, CSI-u) the mobile bridge relies on |
 | `pdfjs-dist` | `^6.3` (floor 6.0) | beamer shadow compositing |
 | `portable-pty` | 0.9 | PTY registry / reconnect |
@@ -941,17 +1117,17 @@ first), then `npm run package:dev` and click through the viewers.
 
 ---
 
-## 20. Eldrun's own updater
+## 20. Tabtivity's own updater
 
 **Where** `services/app_update.rs`, `commands/app_update.rs`.
 
-**Assumes** `https://api.github.com/repos/fseiffarth/ProjectEldrun/releases/latest`
+**Assumes** `https://api.github.com/repos/fseiffarth/tabtivity/releases/latest`
 (unauthenticated, rate-limited), asset names
-`eldrun_<v>_amd64.AppImage`, `Eldrun_<v>_x64-setup.exe`, `.dmg`, `.deb`,
-download only from `https://github.com/fseiffarth/ProjectEldrun/releases/download/`.
+`tabtivity_<v>_amd64.AppImage`, `Tabtivity_<v>_x64-setup.exe`, `.dmg`, `.deb`,
+download only from `https://github.com/fseiffarth/tabtivity/releases/download/`.
 A GitHub API or release-naming change breaks the update banner.
 
-**Verify** `curl -s https://api.github.com/repos/fseiffarth/ProjectEldrun/releases/latest | jq '.assets[].name'`.
+**Verify** `curl -s https://api.github.com/repos/fseiffarth/tabtivity/releases/latest | jq '.assets[].name'`.
 
 ---
 

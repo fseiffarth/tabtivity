@@ -15,7 +15,7 @@
 //! `services::agent_versions::VERIFIED` — and the prose note it mirrors — in the
 //! same commit.
 
-use eldrun_lib::services::agent_versions::{Direction, DriftState};
+use app_lib::services::agent_versions::{Direction, DriftState};
 
 fn main() {
     let refresh = std::env::args().any(|arg| arg == "--refresh" || arg == "-r");
@@ -24,7 +24,7 @@ fn main() {
         .enable_all()
         .build()
         .expect("tokio runtime");
-    let reports = runtime.block_on(eldrun_lib::commands::agents::agent_versions(Some(refresh)));
+    let reports = runtime.block_on(app_lib::commands::agents::agent_versions(Some(refresh)));
 
     if reports.is_empty() {
         println!("No agent CLI is installed on this machine.");

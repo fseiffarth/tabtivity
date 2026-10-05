@@ -1,5 +1,5 @@
 /**
- * Loading a local (Ollama) model at Eldrun start (`stores/agents/ollamaAutoload`).
+ * Loading a local (Ollama) model at Tabtivity start (`stores/agents/ollamaAutoload`).
  *
  * The rules worth pinning are the ones a user would experience as a bug if they
  * broke silently: Energy Saver **suppresses** the launch load and says so

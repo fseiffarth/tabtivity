@@ -92,12 +92,13 @@ const sizeBox = (box: HTMLElement, clientHeight: number, scrollHeight: number) =
 };
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const tab = { id: "tab", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 /** Long enough for the resize debounce and the frame it defers the scroll by. */
 const settle = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
 
-describe("Eldrun Mobile: the output follows the composer", () => {
+describe(`${BRAND.display} Mobile: the output follows the composer`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
@@ -113,7 +114,7 @@ describe("Eldrun Mobile: the output follows the composer", () => {
   });
 
   it("keeps Terminal view on the newest rows when the composer takes the height", async () => {
-    localStorage.setItem("eldrun.mobile.view.agent", "terminal");
+    localStorage.setItem(storageKey("mobile.view.agent"), "terminal");
     render(<Terminal tab={tab} back={() => {}} />);
     await settle();
 
@@ -132,7 +133,7 @@ describe("Eldrun Mobile: the output follows the composer", () => {
   });
 
   it("leaves Terminal view where a reader panned it", async () => {
-    localStorage.setItem("eldrun.mobile.view.agent", "terminal");
+    localStorage.setItem(storageKey("mobile.view.agent"), "terminal");
     render(<Terminal tab={tab} back={() => {}} />);
     await settle();
 
@@ -150,7 +151,7 @@ describe("Eldrun Mobile: the output follows the composer", () => {
   });
 
   it("keeps Focus on the newest turn when the composer takes the height", async () => {
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
     render(<Terminal tab={tab} back={() => {}} />);
     await settle();
 
@@ -166,7 +167,7 @@ describe("Eldrun Mobile: the output follows the composer", () => {
   });
 
   it("leaves Focus where a reader scrolled it", async () => {
-    localStorage.setItem("eldrun.mobile.view.agent", "focus");
+    localStorage.setItem(storageKey("mobile.view.agent"), "focus");
     render(<Terminal tab={tab} back={() => {}} />);
     await settle();
 

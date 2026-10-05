@@ -46,6 +46,19 @@ describe("root-agent write review", () => {
     expect(screen.queryByText("Hidden sibling")).toBeNull();
     expect(screen.getAllByText("Visible change").length).toBeGreaterThan(0);
   });
+  it("gives each MCP group its own Approve all, approving only that group's pending proposals", () => {
+    const cal = proposal({ id: "c", tool: "calendar_add_event", digest: "dc" });
+    const todo = proposal({ id: "t", tool: "todo_add", digest: "dt" });
+    const todo2 = proposal({ id: "t2", tool: "todo_complete", digest: "dt2" });
+    useRootReviewStore.setState({ proposals: [cal, todo, todo2], count: 3 });
+    render(<RootReviewStrip />);
+    expect(screen.getByText("Calendar (1)")).toBeTruthy();
+    expect(screen.getByText("To-do board (2)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "✓ Approve all (2)" }));
+    expect(applyAll).toHaveBeenCalledWith([todo, todo2]);
+    fireEvent.click(screen.getByRole("button", { name: "✓ Approve all (1)" }));
+    expect(applyAll).toHaveBeenLastCalledWith([cal]);
+  });
   it("folds already-decided proposals shut until asked for", () => {
     useRootReviewStore.setState({ proposals: [proposal(), proposal({ id: "done", tool: "calendar_event_create", status: "applied" })], count: 1 });
     render(<RootReviewStrip />);

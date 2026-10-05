@@ -2,7 +2,7 @@
  * An empty layout must not be able to erase a saved one.
  *
  * Saving empty is destructive on the backend: it drops `tab_layout` + `tab_groups`
- * from project.json AND overwrites the `.eldrun` session mirror, both from the same
+ * from project.json AND overwrites the `.tabtivity` session mirror, both from the same
  * array in the same call — so the mirror is no backup, and a resumable agent tab's
  * `sessionId` (the only handle on its conversation) goes with them.
  *
@@ -62,7 +62,7 @@ function seed(tabs: TabEntry[] | undefined) {
 
 /** The `allowClear` flag on the save_tab_layout invoke, plus the tabs it sent. */
 function lastSave() {
-  const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+  const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
   if (!call) return null;
   const arg = call[1] as { tabs: unknown[]; allowClear: boolean };
   return { tabs: arg.tabs, allowClear: arg.allowClear };

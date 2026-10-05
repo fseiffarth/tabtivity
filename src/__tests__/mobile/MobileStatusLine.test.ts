@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { sessionStatus, shortenPath, statusFrameLines } from "../../../mobile-web/src/terminal/statusLine";
+import { BRAND } from "../../lib/brand";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
 
-describe("Eldrun Mobile session status line", () => {
+describe(`${BRAND.display} Mobile session status line`, () => {
   it("reads path, branch, model, mode and context from a statusline", () => {
     // The Claude Code shape: input box (already unframed by readableScreen),
     // then the configured statusline below it.
@@ -11,9 +12,9 @@ describe("Eldrun Mobile session status line", () => {
       "● Done.",
       "",
       ">",
-      "~/eldrun/projects/projecteldrun (develop) · Opus 4.1 · plan mode on (shift+tab to cycle) · 85% context left",
+      `~/${BRAND.slug}/projects/project${BRAND.slug} (develop) · Opus 4.1 · plan mode on (shift+tab to cycle) · 85% context left`,
     ))).toEqual({
-      path: "~/eldrun/projects/projecteldrun",
+      path: `~/${BRAND.slug}/projects/project${BRAND.slug}`,
       branch: "develop",
       model: "Opus 4.1",
       mode: "plan",
@@ -124,26 +125,26 @@ describe("Eldrun Mobile session status line", () => {
   });
 
   it("shortens a long path to its last two components", () => {
-    expect(shortenPath("~/eldrun/projects/projecteldrun")).toBe("…/projects/projecteldrun");
+    expect(shortenPath(`~/${BRAND.slug}/projects/project${BRAND.slug}`)).toBe(`…/projects/project${BRAND.slug}`);
     expect(shortenPath("~/proj")).toBe("~/proj");
     expect(shortenPath("/home/dev/work/app")).toBe("…/work/app");
   });
 });
 
-describe("Eldrun Mobile status frame lines", () => {
+describe(`${BRAND.display} Mobile status frame lines`, () => {
   it("returns the rows under a Claude-style input box", () => {
     // readableScreen has already stripped the box: the rules are gone and the
     // labelled top edge survives only as frameText.
     expect(statusFrameLines([
       { text: "● Done." },
       { text: "" },
-      { text: "ProjectEldrun", frameText: "──────── ProjectEldrun ─" },
+      { text: `Project${BRAND.display}`, frameText: `──────── Project${BRAND.display} ─` },
       { text: ">" },
       { text: "  ⏵⏵ accept edits on (shift+tab to cycle)   " },
-      { text: "  ~/eldrun/projects/projecteldrun (develop) · Opus 4.1 · 85% context left" },
+      { text: `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop) · Opus 4.1 · 85% context left` },
     ])).toEqual([
       "  ⏵⏵ accept edits on (shift+tab to cycle)",
-      "  ~/eldrun/projects/projecteldrun (develop) · Opus 4.1 · 85% context left",
+      `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop) · Opus 4.1 · 85% context left`,
     ]);
     expect(statusFrameLines(lines("> ", "? for shortcuts · 85% context left")))
       .toEqual(["? for shortcuts · 85% context left"]);
@@ -202,7 +203,7 @@ describe("Eldrun Mobile status frame lines", () => {
   });
 
   it("keeps a custom statusline verbatim, emoji and segments included", () => {
-    const custom = "🤖 Opus 4.1 │ 📁 projecteldrun │ 🌿 develop │ 💰 $0.42 │ ⏱ 12m";
+    const custom = `🤖 Opus 4.1 │ 📁 project${BRAND.slug} │ 🌿 develop │ 💰 $0.42 │ ⏱ 12m`;
     expect(statusFrameLines(lines("> ", custom, "", "✨ vibes: immaculate"))).toEqual([custom, "✨ vibes: immaculate"]);
     // Recognized even while a draft is typed: the branch marks it as status.
     expect(statusFrameLines(lines("> draft", `  ${custom}`))).toEqual([`  ${custom}`]);

@@ -1,13 +1,13 @@
 /**
- * **Careful hosts** — "this machine is someone else's, so keep Eldrun's
+ * **Careful hosts** — "this machine is someone else's, so keep Tabtivity's
  * background load off it."
  *
- * The case it exists for is an HPC login node, where three separate things Eldrun
+ * The case it exists for is an HPC login node, where three separate things Tabtivity
  * does casually are things the site watches: CPU on the login node itself, a
  * recursive `du` over a `$HOME` that usually sits on a *parallel* filesystem
  * (a metadata storm against a shared Lustre/GPFS server), and repeated account
  * lookups against a shared directory service. None of those are expensive for
- * Eldrun. All of them are rude at a cadence.
+ * Tabtivity. All of them are rude at a cadence.
  *
  * Three things about the shape, each of which is the whole reason it works:
  *
@@ -21,7 +21,7 @@
  * **It is not named for HPC**, and — since it is now simply the default for every
  * remote host — it no longer *detects* HPC either. There is no cluster-vs-dev-box
  * classification anywhere in this module: an unanswered remote machine is treated
- * carefully because Eldrun cannot know whose machine it is, and detection that
+ * carefully because Tabtivity cannot know whose machine it is, and detection that
  * guessed would only ever guess wrong in the expensive direction. What the flag
  * means is a property of the machine's *politics*, not its hardware, and only the
  * user knows that.
@@ -50,7 +50,7 @@ export type { Target };
  * rather than over-collected; the cost of a wrong careful is a thinner monitor
  * pane and a skipped host census, the cost of a wrong *normal* is a policy
  * violation on someone else's cluster. Only a local machine (no target) reads
- * `false` — Eldrun is never a guest on the machine it runs on.
+ * `false` — Tabtivity is never a guest on the machine it runs on.
  */
 export function isCarefulHost(
   settings: Settings | null | undefined,

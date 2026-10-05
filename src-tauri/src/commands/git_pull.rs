@@ -21,13 +21,13 @@
 //! and push (`require_hook_trust`) and are the only calls here that go through
 //! `run_git_hooked`; everything else — the fetch, the branch fast-forward, the
 //! merge-state probes, the abort — runs with hooks pinned off like every other
-//! Eldrun git call (#862: the conflicted-file probe rewrites the index and would
+//! Tabtivity git call (#862: the conflicted-file probe rewrites the index and would
 //! fire `post-index-change` on merely opening the Git panel).
 
 use std::path::{Path, PathBuf};
 
 use crate::commands::git::{
-    check_rev, hardened_git_command_in, local_non_repo, require_hook_trust, run_git,
+    selected_git_context, GitWorktreeSelection, check_rev, hardened_git_command_in, local_non_repo, require_hook_trust, run_git,
     run_git_hooked, run_off_thread, scoped_token_config,
 };
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
@@ -193,8 +193,30 @@ fn is_merging(target: Option<&RemoteTarget>, dir: &str) -> bool {
 // ── Fetch ────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn git_fetch(project_dir: String, project_id: Option<String>) -> Result<String, String> {
-    run_off_thread(move || git_fetch_blocking(project_dir, project_id)).await
+pub async fn git_fetch(
+    project_dir: String,
+    project_id: Option<String>,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<String, String> {
+    run_off_thread(move || {
+        if worktree.is_none() {
+            return git_fetch_blocking(project_dir, project_id);
+        }
+        let (dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
+        let out = if let Some(target) = target {
+            run_git(Some(&target), &dir, &["fetch"])?
+        } else {
+            let token = project_id
+                .as_deref()
+                .and_then(|id| crate::commands::git_hosting::effective_git_creds(id).1);
+            fetch_local(Path::new(&dir), token.as_deref(), project_id.as_deref())?
+        };
+        if !out.status.success() {
+            return Err(err_of(&out));
+        }
+        Ok(err_of(&out))
+    })
+    .await
 }
 
 /// `git fetch` in a local directory with push's scoped token auth.
@@ -207,7 +229,7 @@ fn fetch_local(dir: &Path, token: Option<&str>, project_id: Option<&str>) -> Res
     args.push("fetch".to_string());
     let mut cmd = hardened_git_command_in(dir, &args);
     if let Some(tok) = token {
-        cmd.env("ELDRUN_GIT_TOKEN", tok);
+        cmd.env(crate::app_env!("GIT_TOKEN"), tok);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
     cmd.output().map_err(|e| e.to_string())
@@ -240,12 +262,31 @@ fn git_fetch_blocking(project_dir: String, project_id: Option<String>) -> Result
 // ── Preview ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn git_pull_preview(project_dir: String, branch: Option<String>) -> Result<PullPreview, String> {
-    run_off_thread(move || git_pull_preview_blocking(project_dir, branch)).await
+pub async fn git_pull_preview(
+    project_dir: String,
+    branch: Option<String>,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<PullPreview, String> {
+    run_off_thread(move || match worktree {
+        None => git_pull_preview_blocking(project_dir, branch),
+        Some(selection) => git_pull_preview_blocking_selected(project_dir, branch, Some(selection)),
+    })
+    .await
 }
 
-fn git_pull_preview_blocking(project_dir: String, branch: Option<String>) -> Result<PullPreview, String> {
-    let target = remote_target_for_dir(&project_dir);
+fn git_pull_preview_blocking(
+    project_dir: String,
+    branch: Option<String>,
+) -> Result<PullPreview, String> {
+    git_pull_preview_blocking_selected(project_dir, branch, None)
+}
+
+fn git_pull_preview_blocking_selected(
+    project_dir: String,
+    branch: Option<String>,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<PullPreview, String> {
+    let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     let t = target.as_ref();
     if local_non_repo(t, &project_dir) {
         return Err("not a git repository".to_string());
@@ -260,7 +301,14 @@ fn git_pull_preview_blocking(project_dir: String, branch: Option<String>) -> Res
     let theirs = git_ok(
         t,
         &project_dir,
-        &["diff", "--no-renames", "--name-status", "-z", &format!("{local}...{up}"), "--"],
+        &[
+            "diff",
+            "--no-renames",
+            "--name-status",
+            "-z",
+            &format!("{local}...{up}"),
+            "--",
+        ],
     )?;
     let mine: std::collections::HashSet<String> = if outgoing.is_empty() {
         Default::default()
@@ -268,16 +316,34 @@ fn git_pull_preview_blocking(project_dir: String, branch: Option<String>) -> Res
         nul_paths(&git_ok(
             t,
             &project_dir,
-            &["diff", "--no-renames", "--name-only", "-z", &format!("{up}...{local}"), "--"],
+            &[
+                "diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                &format!("{up}...{local}"),
+                "--",
+            ],
         )?)
         .into_iter()
         .collect()
     };
     let files = parse_name_status(&theirs)
         .into_iter()
-        .map(|(status, path)| PullFile { both: mine.contains(&path), status, path })
+        .map(|(status, path)| PullFile {
+            both: mine.contains(&path),
+            status,
+            path,
+        })
         .collect();
-    Ok(PullPreview { branch, upstream, is_current, incoming, outgoing, files })
+    Ok(PullPreview {
+        branch,
+        upstream,
+        is_current,
+        incoming,
+        outgoing,
+        files,
+    })
 }
 
 // ── Apply ────────────────────────────────────────────────────────────────────
@@ -287,12 +353,32 @@ pub async fn git_pull_apply(
     project_dir: String,
     branch: Option<String>,
     merge: bool,
+    worktree: Option<GitWorktreeSelection>,
 ) -> Result<PullOutcome, String> {
-    run_off_thread(move || git_pull_apply_blocking(project_dir, branch, merge)).await
+    run_off_thread(move || match worktree {
+        None => git_pull_apply_blocking(project_dir, branch, merge),
+        Some(selection) => {
+            git_pull_apply_blocking_selected(project_dir, branch, merge, Some(selection))
+        }
+    })
+    .await
 }
 
-fn git_pull_apply_blocking(project_dir: String, branch: Option<String>, merge: bool) -> Result<PullOutcome, String> {
-    let target = remote_target_for_dir(&project_dir);
+fn git_pull_apply_blocking(
+    project_dir: String,
+    branch: Option<String>,
+    merge: bool,
+) -> Result<PullOutcome, String> {
+    git_pull_apply_blocking_selected(project_dir, branch, merge, None)
+}
+
+fn git_pull_apply_blocking_selected(
+    project_dir: String,
+    branch: Option<String>,
+    merge: bool,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<PullOutcome, String> {
+    let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     let t = target.as_ref();
     let (branch, is_current) = resolve_branch(t, &project_dir, branch.as_deref())?;
     let (up, _) = upstream_of(t, &project_dir, &branch)?;
@@ -307,7 +393,10 @@ fn git_pull_apply_blocking(project_dir: String, branch: Option<String>, merge: b
         // refuses a branch checked out in another worktree.
         let refspec = format!("{up}:refs/heads/{branch}");
         let message = git_ok(t, &project_dir, &["fetch", ".", &refspec])?;
-        return Ok(PullOutcome { conflicts: vec![], message });
+        return Ok(PullOutcome {
+            conflicts: vec![],
+            message,
+        });
     }
 
     require_hook_trust(t, &project_dir)?;
@@ -318,13 +407,19 @@ fn git_pull_apply_blocking(project_dir: String, branch: Option<String>, merge: b
     };
     let out = run_git_hooked(t, &project_dir, &args)?;
     if out.status.success() {
-        return Ok(PullOutcome { conflicts: vec![], message: stdout_of(&out) });
+        return Ok(PullOutcome {
+            conflicts: vec![],
+            message: stdout_of(&out),
+        });
     }
     // A merge that stopped on conflicts is not an error: it is the next step.
     if merge && is_merging(t, &project_dir) {
         let conflicts = conflicted(t, &project_dir);
         if !conflicts.is_empty() {
-            return Ok(PullOutcome { conflicts, message: stdout_of(&out) });
+            return Ok(PullOutcome {
+                conflicts,
+                message: stdout_of(&out),
+            });
         }
     }
     Err(err_of(&out))
@@ -333,22 +428,34 @@ fn git_pull_apply_blocking(project_dir: String, branch: Option<String>, merge: b
 // ── The merge it can leave ───────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn git_merge_state(project_dir: String) -> Result<MergeState, String> {
+pub async fn git_merge_state(
+    project_dir: String,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<MergeState, String> {
     run_off_thread(move || {
-        let target = remote_target_for_dir(&project_dir);
+        let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
         let t = target.as_ref();
         if local_non_repo(t, &project_dir) || !is_merging(t, &project_dir) {
-            return Ok(MergeState { merging: false, conflicts: vec![] });
+            return Ok(MergeState {
+                merging: false,
+                conflicts: vec![],
+            });
         }
-        Ok(MergeState { merging: true, conflicts: conflicted(t, &project_dir) })
+        Ok(MergeState {
+            merging: true,
+            conflicts: conflicted(t, &project_dir),
+        })
     })
     .await
 }
 
 #[tauri::command]
-pub async fn git_merge_abort(project_dir: String) -> Result<(), String> {
+pub async fn git_merge_abort(
+    project_dir: String,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<(), String> {
     run_off_thread(move || {
-        let target = remote_target_for_dir(&project_dir);
+        let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
         git_ok(target.as_ref(), &project_dir, &["merge", "--abort"]).map(|_| ())
     })
     .await
@@ -357,16 +464,34 @@ pub async fn git_merge_abort(project_dir: String) -> Result<(), String> {
 /// Conclude the merge with git's prepared message. Refuses while a file is
 /// still unmerged, which git itself would too — but with a clearer sentence.
 #[tauri::command]
-pub async fn git_merge_commit(project_dir: String) -> Result<(), String> {
-    run_off_thread(move || git_merge_commit_blocking(project_dir)).await
+pub async fn git_merge_commit(
+    project_dir: String,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<(), String> {
+    run_off_thread(move || match worktree {
+        None => git_merge_commit_blocking(project_dir),
+        Some(selection) => git_merge_commit_blocking_selected(project_dir, Some(selection)),
+    })
+    .await
 }
 
 fn git_merge_commit_blocking(project_dir: String) -> Result<(), String> {
-    let target = remote_target_for_dir(&project_dir);
+    git_merge_commit_blocking_selected(project_dir, None)
+}
+
+fn git_merge_commit_blocking_selected(
+    project_dir: String,
+    worktree: Option<GitWorktreeSelection>,
+) -> Result<(), String> {
+    let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     let t = target.as_ref();
     let left = conflicted(t, &project_dir);
     if !left.is_empty() {
-        return Err(format!("{} file(s) still have conflicts: {}", left.len(), left.join(", ")));
+        return Err(format!(
+            "{} file(s) still have conflicts: {}",
+            left.len(),
+            left.join(", ")
+        ));
     }
     require_hook_trust(t, &project_dir)?;
     let out = run_git_hooked(t, &project_dir, &["commit", "--no-edit"])?;
@@ -396,9 +521,7 @@ fn git_merge_sides_blocking(path: String) -> Result<MergeSides, String> {
     while !probe.is_dir() {
         probe = probe.parent().ok_or("no existing parent directory")?.to_path_buf();
     }
-    let top = hardened_git_command_in(&probe, &["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let top = crate::services::git_bounded::output(hardened_git_command_in(&probe, &["rev-parse", "--show-toplevel"]))?;
     if !top.status.success() {
         return Err(err_of(&top));
     }

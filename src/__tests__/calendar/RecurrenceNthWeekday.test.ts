@@ -10,6 +10,7 @@ import { translate, type TranslationKey } from "../../lib/i18n";
 // Registers the lazy dictionaries, so `translate("de", …)` answers in German.
 import "../../lib/i18nDicts/all";
 import type { CalendarEvent, Rrule } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const t = (key: TranslationKey, params?: Record<string, string | number>) =>
   translate("en", key, params);
@@ -172,7 +173,7 @@ describe("an .ics round trip", () => {
     expect(parseIcs(text).events[0].rrule).toEqual(e.rrule);
   });
 
-  it("pushes a rule Eldrun could not hold back unreduced", () => {
+  it(`pushes a rule ${BRAND.display} could not hold back unreduced`, () => {
     const src = [
       "BEGIN:VCALENDAR", "BEGIN:VEVENT", "UID:a@b", "DTSTART:20260930T090000",
       "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1", "SUMMARY:report", "END:VEVENT", "END:VCALENDAR",

@@ -192,7 +192,7 @@ export interface AlertGateInput {
   visible: boolean;
   /**
    * Ignore `visible`. Because that key is the desktop group's visibility, a
-   * surface the file viewer does not own — Eldrun Mobile's own Alerts screen —
+   * surface the file viewer does not own — Tabtivity Mobile's own Alerts screen —
    * must not go dark because the strip beside the tree was closed on the
    * laptop. The source switches, the lookahead and the mutes still apply: those
    * say *which alerts exist*, which is a different question from which window

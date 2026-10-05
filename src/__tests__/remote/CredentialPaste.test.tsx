@@ -2,7 +2,7 @@
  * "Type it for me" above a login terminal (`CredentialPasteBar`).
  *
  * The point of the feature is that a *saved* credential is reachable from a
- * *terminal* login — the mode in which Eldrun deliberately handles no passwords —
+ * *terminal* login — the mode in which Tabtivity deliberately handles no passwords —
  * without the secret ever entering the frontend. So the two things worth locking in
  * are exactly the two that could regress into a leak or into uselessness:
  *

@@ -1,11 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { HIGHLIGHT_MAX_CHARS, highlight, languageForPath } from "../../lib/viewers/highlight";
+import { HIGHLIGHT_MAX_CHARS, escapeHtml, highlight, languageForPath, type Lang } from "../../lib/viewers/highlight";
+import { BRAND } from "../../lib/brand";
 
 describe("languageForPath", () => {
   it("maps extensions to languages", () => {
     expect(languageForPath("/a/b/main.rs")).toBe("rust");
     expect(languageForPath("script.py")).toBe("python");
-    expect(languageForPath("app.tsx")).toBe("js");
+    expect(languageForPath("app.tsx")).toBe("tsx");
+    expect(languageForPath("app.ts")).toBe("ts");
+    expect(languageForPath("lib.mts")).toBe("ts");
+    expect(languageForPath("app.jsx")).toBe("jsx");
+    expect(languageForPath("main.cpp")).toBe("cpp");
+    expect(languageForPath("kernel.cu")).toBe("cpp");
+    expect(languageForPath("main.c")).toBe("c");
+    expect(languageForPath("App.java")).toBe("java");
+    expect(languageForPath("Program.cs")).toBe("csharp");
+    expect(languageForPath("build.gradle.kts")).toBe("kotlin");
+    expect(languageForPath("app.rb")).toBe("ruby");
+    expect(languageForPath("init.lua")).toBe("lua");
+    expect(languageForPath("Main.hs")).toBe("haskell");
     expect(languageForPath("data.json")).toBe("json");
     expect(languageForPath("page.html")).toBe("markup");
     expect(languageForPath("icon.svg")).toBe("markup");
@@ -19,6 +32,8 @@ describe("languageForPath", () => {
   it("maps well-known extensionless filenames", () => {
     expect(languageForPath("/proj/Dockerfile")).toBe("shell");
     expect(languageForPath(".gitignore")).toBe("shell");
+    expect(languageForPath("/proj/Makefile")).toBe("shell");
+    expect(languageForPath("/proj/Gemfile")).toBe("ruby");
   });
 
   it("returns plain for unknown or binary-ish names", () => {
@@ -87,9 +102,9 @@ describe("highlight", () => {
   });
 
   it("treats JSON object keys as props, not strings", () => {
-    const html = highlight('{ "name": "eldrun" }', "json")!;
+    const html = highlight(`{ "name": "${BRAND.slug}" }`, "json")!;
     expect(html).toContain('<span class="tok-prop">&quot;name&quot;</span>');
-    expect(html).toContain('<span class="tok-string">&quot;eldrun&quot;</span>');
+    expect(html).toContain(`<span class="tok-string">&quot;${BRAND.slug}&quot;</span>`);
   });
 
   it("escapes HTML so source can never inject markup", () => {
@@ -252,3 +267,180 @@ describe("highlight", () => {
     expect(html).not.toContain("tok-md-strong");
   });
 });
+
+describe("escapeHtml", () => {
+  it("escapes all five specials in one pass, never double-escaping its own output", () => {
+    expect(escapeHtml(`<a href="x" title='y'>&amp;</a>`)).toBe(
+      "&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;amp;&lt;/a&gt;",
+    );
+    for (const [c, e] of [["&", "&amp;"], ["<", "&lt;"], [">", "&gt;"], ['"', "&quot;"], ["'", "&#39;"]]) {
+      expect(escapeHtml(c)).toBe(e);
+    }
+  });
+
+  it("hands back text with nothing to escape unchanged", () => {
+    expect(escapeHtml("")).toBe("");
+    expect(escapeHtml("x")).toBe("x");
+    expect(escapeHtml("plain prose, no specials")).toBe("plain prose, no specials");
+  });
+
+  it("escapes a run the same as its characters one by one", () => {
+    const s = `if (a < b && c > "d") return 'e';`;
+    expect(escapeHtml(s)).toBe([...s].map(escapeHtml).join(""));
+  });
+});
+
+describe("highlight — prose runs", () => {
+  // The TeX and markdown scanners take a run of plain text in one piece; the
+  // run must stop at exactly the characters that can open a token, and still
+  // escape what it carries.
+  it("ends a TeX prose run at a command, a comment, math and a number", () => {
+    const html = highlight(`a < b & "c" \\emph{x} d 12 e $y$ f % g`, "tex")!;
+    expect(html).toBe(
+      "a &lt; b &amp; &quot;c&quot; " +
+        '<span class="tok-keyword">\\emph</span>{<span class="tok-arg">x</span>}' +
+        ' d <span class="tok-num">12</span> e ' +
+        '<span class="tok-math">$y$</span> f <span class="tok-comment">% g</span>',
+    );
+  });
+
+  it("ends a markdown prose run at every inline opener", () => {
+    const html = highlight("a<b `c` d [e](f) g *h* i_j k", "markdown")!;
+    expect(html).toBe(
+      'a&lt;b <span class="tok-md-code">`c`</span> d [<span class="tok-md-link">e</span>](' +
+        '<span class="tok-md-url">f</span>) g <span class="tok-md-em">*h*</span> i_j k',
+    );
+  });
+
+  it("passes whitespace runs through code untouched", () => {
+    expect(highlight("let  x\t=\n\n  1;", "js")).toBe(
+      '<span class="tok-keyword">let</span>  x\t=\n\n  <span class="tok-num">1</span>;',
+    );
+  });
+});
+
+/** The text a highlighted HTML string displays: tags dropped, entities undone.
+ *  The editor lays this over its <textarea>, so it must equal the source. */
+function shownText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+}
+
+// The samples below are source code in other languages, so `${…}` inside a plain
+// string is the point, not a mistyped template literal.
+/* eslint-disable no-template-curly-in-string */
+describe("per-language code highlighting", () => {
+  const SAMPLES: [Lang, string][] = [
+    ["ts", 'type A = { n: number };\n@Component({ a: 1 })\nclass B implements A { readonly n = 1 / 2; }\nconst r = /["\\/]+/g.test(`x ${f({ y: "}" })} z`);'],
+    ["tsx", 'const App = () => (<div className="a" onClick={() => go(<b/>)}>Hi {name}<Foo.Bar x={1} /></div>);\nconst id = <T,>(x: T) => x;\nif (a < b && c > d) {}'],
+    ["jsx", "return <>{items.map((i) => <li key={i}>{i}</li>)}</>;"],
+    ["cpp", '#include <vector>\n#define N 3\ntemplate <typename T> constexpr auto f(std::vector<T> v) { return nullptr; }'],
+    ["c", '#include "x.h"\n  #ifdef X\nint main(void) { return sizeof(int); }'],
+    ["java", '@Override\npublic final class A extends B { int x = 0; String s = """\ntext""""; }'],
+    ["kotlin", 'val s = "hi $name and ${user.id}"\n@JvmStatic fun f() = 1'],
+    ["ruby", 'def hi(name)\n  @count += 1\n  puts "Hi #{name}" if x == :ok\nend'],
+    ["lua", "--[[ block\ncomment ]] local x = 1 -- line\nprint(x)"],
+    ["haskell", "{- block -}\nmain :: IO ()\nmain = putStrLn \"hi\" -- line\nf x' = x'"],
+    ["rust", '#[derive(Debug)]\nfn main<\'a>(x: &\'a str) { println!("{}", \'"\'); let r = br##"a"#b"##; }'],
+    ["shell", 'echo "home is $HOME and ${PWD}" $1'],
+    ["sql", "SELECT name FROM users WHERE id = 1"],
+  ];
+
+  it("keeps the shown text identical to the source for every sample", () => {
+    for (const [lang, code] of SAMPLES) {
+      expect(shownText(highlight(code, lang)!), lang).toBe(code);
+    }
+  });
+
+  it("splits TypeScript keywords from JavaScript ones", () => {
+    expect(highlight("type", "ts")).toBe('<span class="tok-keyword">type</span>');
+    expect(highlight("type", "js")).toBe("type");
+    expect(highlight("let n: number", "ts")).toContain('<span class="tok-type">number</span>');
+    expect(highlight("let number = 1", "js")).not.toContain("tok-type");
+  });
+
+  it("colours decorators, and template interpolation as code", () => {
+    const html = highlight("@Input() x = `a ${b + 1} c`;", "ts")!;
+    expect(html).toContain('<span class="tok-attr">@Input</span>');
+    expect(html).toContain('<span class="tok-string">`a </span><span class="tok-keyword">${</span>b + <span class="tok-num">1</span><span class="tok-keyword">}</span><span class="tok-string"> c`</span>');
+  });
+
+  it("reads a regex literal as one token, so a quote inside it opens no string", () => {
+    const html = highlight('const r = /"/; const s = 1;', "ts")!;
+    expect(html).toContain('<span class="tok-string">/&quot;/</span>');
+    expect(html).toContain('<span class="tok-keyword">const</span> s');
+    // Division stays division.
+    expect(highlight("a / b / c", "js")).toBe("a / b / c");
+  });
+
+  it("highlights JSX tags, components and attributes in .tsx, not TS generics", () => {
+    const html = highlight('const x = <div id="a"><Btn on={f} /></div>;', "tsx")!;
+    expect(html).toContain('<span class="tok-tag">div</span>');
+    expect(html).toContain('<span class="tok-type">Btn</span>');
+    expect(html).toContain('<span class="tok-attr">on</span>');
+    expect(highlight("const f = <T,>(x: T) => x;", "tsx")).not.toContain("tok-tag");
+    expect(highlight("a < b", "tsx")).toBe("a &lt; b");
+    // Plain .ts never reads `<` as JSX.
+    expect(highlight("const x = <div/>;", "ts")).not.toContain("tok-tag");
+  });
+
+  it("marks C preprocessor lines and included headers", () => {
+    const html = highlight("#include <stdio.h>\nint x = a #b;", "c")!;
+    expect(html).toContain('<span class="tok-keyword">#include</span> <span class="tok-string">&lt;stdio.h&gt;</span>');
+    expect(html).toContain('<span class="tok-type">int</span>');
+  });
+
+  it("gives C++ its own keywords and C only C's", () => {
+    expect(highlight("template", "cpp")).toBe('<span class="tok-keyword">template</span>');
+    expect(highlight("template", "c")).toBe("template");
+  });
+
+  it("matches SQL keywords in any case without calling them types", () => {
+    expect(highlight("SELECT a", "sql")).toBe('<span class="tok-keyword">SELECT</span> a');
+  });
+
+  it("tries Lua's block comment before its line comment", () => {
+    expect(highlight("--[[ a\nb ]]x", "lua")).toBe('<span class="tok-comment">--[[ a\nb ]]</span>x');
+  });
+
+  it("marks Ruby symbols, instance variables and interpolation", () => {
+    const html = highlight('@n = :ok; "a #{b}"', "ruby")!;
+    expect(html).toContain('<span class="tok-attr">@n</span>');
+    expect(html).toContain('<span class="tok-prop">:ok</span>');
+    expect(html).toContain('<span class="tok-keyword">#{</span>b<span class="tok-keyword">}</span>');
+  });
+
+  it("marks Rust attributes and macro calls", () => {
+    const html = highlight('#[derive(Debug)] println!("x")', "rust")!;
+    expect(html).toContain('<span class="tok-attr">#[derive(Debug)]</span>');
+    expect(html).toContain('<span class="tok-func">println</span>!');
+  });
+
+  it("tells Rust char literals from lifetimes, so a quote char opens no string", () => {
+    const html = highlight("fn f<'a>(s: &'a str) -> char { if s == \"\" { '\"' } else { '\\n' } }", "rust")!;
+    expect(html).toContain('<span class="tok-type">&#39;a</span>');
+    expect(html).toContain('<span class="tok-string">&#39;&quot;&#39;</span>');
+    expect(html).toContain('<span class="tok-string">&#39;\\n&#39;</span>');
+    expect(html).toContain("<span class=\"tok-keyword\">else</span>");
+    expect(highlight("'outer: loop {}", "rust")).toContain('<span class="tok-type">&#39;outer</span>');
+  });
+
+  it("reads Rust raw strings whole, and plain strings across lines", () => {
+    expect(highlight('r#"say "hi" \\"#; x', "rust")).toBe('<span class="tok-string">r#&quot;say &quot;hi&quot; \\&quot;#</span>; x');
+    expect(highlight('"a\nb" x', "rust")).toBe('<span class="tok-string">&quot;a\nb&quot;</span> x');
+  });
+
+  it("marks macro_rules! and vec! as macros but not a != comparison", () => {
+    expect(highlight("macro_rules! m", "rust")).toContain('<span class="tok-func">macro_rules</span>!');
+    expect(highlight("vec![1]", "rust")).toContain('<span class="tok-func">vec</span>!');
+    expect(highlight("a!=b", "rust")).toBe("a!=b");
+  });
+
+  it("survives deeply nested template interpolation", () => {
+    const code = "`${".repeat(200) + "x" + "}`".repeat(200);
+    expect(shownText(highlight(code, "ts")!)).toBe(code);
+  });
+});
+/* eslint-enable no-template-curly-in-string */

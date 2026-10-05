@@ -1,4 +1,4 @@
-//! One login per agent CLI, shared by every Eldrun-owned agent home.
+//! One login per agent CLI, shared by every Tabtivity-owned agent home.
 //!
 //! Each CLI keeps its sign-in in a plain file (or a small directory) under
 //! `$HOME` — see the `auth_paths` column of the registry in
@@ -151,7 +151,7 @@ fn content(bytes: Option<Vec<u8>>) -> Option<Vec<u8>> {
 }
 
 /// Write a store file (`0600`) by temporary and rename: the store dir is
-/// Eldrun's own, but a keeper pass and a spawn may run at once.
+/// Tabtivity's own, but a keeper pass and a spawn may run at once.
 fn write_store(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     let parent = path.parent().ok_or_else(|| io::Error::other("missing parent directory"))?;
@@ -295,7 +295,7 @@ impl Step {
 ///    if it does not switch the account.
 /// 2. Then the store's bytes go into the home, whatever it held: a refused
 ///    login is overwritten, a stale copy caught up, a hard link from an
-///    older Eldrun replaced by a copy of its own.
+///    older Tabtivity replaced by a copy of its own.
 fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
     let home_bytes = content(copy.read());
     let store_bytes = content(std::fs::read(store).ok());
@@ -321,6 +321,7 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
         }
         #[cfg(not(unix))]
         {
+            let _ = ino;
             false
         }
     });
@@ -494,9 +495,17 @@ pub struct LoginStatus {
     pub importable: bool,
     /// A tab signed in as another account and was not adopted.
     pub blocked: Option<Blocked>,
-    /// This CLI keeps its login somewhere Eldrun cannot share (a keyring, a
+    /// This CLI keeps its login somewhere Tabtivity cannot share (a keyring, a
     /// database mixed with other state): one login per scope.
     pub shared: bool,
+    /// The CLI is switched on for a stored provider API key and one of its
+    /// providers has one (`services::agent_api_keys`). Filled by the
+    /// `agent_logins` command, never here: this module stays keyring-free.
+    pub api_key: bool,
+    /// Of an `api_key` CLI: its provider's monthly budget is spent, or no
+    /// limit is set, so its keyed tabs are refused (`services::api_usage`).
+    /// Filled by the `agent_logins` command too.
+    pub api_budget_reached: bool,
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
@@ -523,6 +532,8 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
                 importable,
                 blocked,
                 shared: !paths.is_empty(),
+                api_key: false,
+                api_budget_reached: false,
             }
         })
         .collect()
@@ -557,7 +568,7 @@ fn remove_copies(home: &Path, paths: &[AuthPath]) {
 }
 
 /// Copy the user's own login files for `cli` into the store (the one safe
-/// direction: this computer → Eldrun), then place them into every home,
+/// direction: this computer → Tabtivity), then place them into every home,
 /// whatever it held. The account record is reset to whatever the imported
 /// file names. Instructions, skills and MCP entries are never imported.
 pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path, cli: &str) -> Result<usize, String> {
@@ -613,7 +624,7 @@ pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path, cli: &str) -
         }
     }
     if copied == 0 {
-        return Err("this computer holds no login file for that CLI (it may keep it in a keyring — log in once in an Eldrun tab instead)".into());
+        return Err(concat!("this computer holds no login file for that CLI (it may keep it in a keyring — log in once in a ", crate::app_name!(), " tab instead)").into());
     }
     for home in crate::services::agent_home::existing_homes_in(state_dir) {
         remove_copies(&home, paths);
@@ -960,12 +971,12 @@ mod tests {
         assert_eq!(names_command("codex", br#"{"tokens":{"access_token":"!x"}}"#), None);
     }
 
-    /// A home linked by an older Eldrun to the store's inode gets a copy of
+    /// A home linked by an older Tabtivity to the store's inode gets a copy of
     /// its own on the first pass, so its in-place writes stop reaching the
     /// store directly.
     #[test]
     #[cfg(unix)]
-    fn a_hard_link_from_an_older_eldrun_is_replaced_by_a_copy() {
+    fn a_hard_link_from_an_older_app_is_replaced_by_a_copy() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
         let a = crate::services::agent_home::scope_home_in(state, "a");

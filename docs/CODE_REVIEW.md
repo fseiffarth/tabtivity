@@ -54,7 +54,7 @@ directory reads at each level.
 - load `project.json`
 - update `project.tab_layout`
 - write `project.json`
-- mirror a `TerminalSession` to `.eldrun/sessions/terminals.json`
+- mirror a `TerminalSession` to `.tabtivity/sessions/terminals.json`
 
 Extract a private helper that accepts `active_tab_index`:
 
@@ -75,7 +75,7 @@ Then keep the public functions as compatibility wrappers. `save_tab_layout` shou
 - File: `src-tauri/src/services/terminal_service.rs:69`
 
 `load_tab_layout` and `load_terminal_session` duplicate the same "read
-`.eldrun/sessions/terminals.json`, else fall back to `project.json`" flow. Extract helpers such as:
+`.tabtivity/sessions/terminals.json`, else fall back to `project.json`" flow. Extract helpers such as:
 
 ```rust
 fn read_session_file(local_file: &str) -> Option<TerminalSession>

@@ -6,15 +6,15 @@
 //!   ever land inside the project root.
 //! - **Out:** [`copy_image_to_clipboard`] / [`copy_png_file_to_clipboard`] /
 //!   [`copy_png_bytes_to_clipboard`] put an image *on* the clipboard, so a
-//!   screenshot Eldrun files into the project — or a region selected in the PDF
+//!   screenshot Tabtivity files into the project — or a region selected in the PDF
 //!   viewer — is pasteable straight into a chat, an editor, or an agent tab.
 //!   [`copy_text_to_clipboard`] does the same for terminal text: OSC 52
 //!   requests and the user's own copies out of a pane.
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::commands::fs::enforce_confinement;
+use crate::commands::fs::{canonical_or_new, enforce_confinement};
 
 /// Whether the system clipboard currently holds an image. Used to decide if the
 /// file tree's context menu should offer "Paste screenshot". Any failure
@@ -50,17 +50,19 @@ pub fn save_clipboard_image(project_dir: String, rel_path: String) -> Result<(),
 
     let root = std::fs::canonicalize(&project_dir).map_err(|e| e.to_string())?;
     let dest = root.join(&rel_path);
-    let dest_c = canonical_or_new(&dest);
+    let dest_c = canonical_or_new(&dest)?;
     enforce_confinement(&root, &dest_c)?;
     if dest_c.exists() {
         return Err(format!("'{}' already exists", dest.display()));
     }
-    if let Some(parent) = dest.parent() {
+    if let Some(parent) = dest_c.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
     let png = encode_png(img.width, img.height, &img.bytes)?;
-    std::fs::write(&dest, png).map_err(|e| e.to_string())
+    // `create_new` + `O_NOFOLLOW`: a file or link that appeared since the
+    // check is refused, never overwritten or followed.
+    crate::commands::projects::write_no_follow(&dest_c, &png, true).map_err(|e| e.to_string())
 }
 
 /// Put raw RGBA8 pixels on the system clipboard as an image.
@@ -70,7 +72,7 @@ pub fn save_clipboard_image(project_dir: String, rel_path: String) -> Result<(),
 /// as the last `Clipboard` handle drops — so a set-then-drop would leave nothing
 /// to paste. Hence the Linux path hands the image to a thread that calls
 /// `.wait()`, which keeps serving until another app takes the selection over
-/// (including the next Eldrun screenshot). It therefore returns before the image
+/// (including the next Tabtivity screenshot). It therefore returns before the image
 /// is necessarily on the clipboard, and a failure there is silent. Windows and
 /// macOS copy the bytes into an OS-owned clipboard, so there they are set inline.
 pub fn copy_image_to_clipboard(width: usize, height: usize, rgba: Vec<u8>) -> Result<(), String> {
@@ -244,20 +246,6 @@ pub(crate) fn encode_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec
     Ok(out)
 }
 
-/// Resolve a (possibly not-yet-existing) destination for confinement: existing
-/// paths canonicalize directly; new ones canonicalize the parent and re-join the
-/// final component. Mirrors `fs::canonical_or_new` (kept local to avoid widening
-/// that module's visibility for one helper).
-fn canonical_or_new(path: &std::path::Path) -> PathBuf {
-    if path.exists() {
-        return path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    }
-    match path.parent().and_then(|p| p.canonicalize().ok()) {
-        Some(parent) => parent.join(path.file_name().unwrap_or_default()),
-        None => path.to_path_buf(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +293,7 @@ mod tests {
         assert_eq!(rgba, vec![255, 0, 0, 255, 0, 255, 0, 255]);
     }
 
-    /// An RGBA PNG (what Eldrun itself writes) round-trips unchanged.
+    /// An RGBA PNG (what Tabtivity itself writes) round-trips unchanged.
     #[test]
     fn decode_png_rgba_round_trips_rgba() {
         let dir = tempfile::tempdir().unwrap();

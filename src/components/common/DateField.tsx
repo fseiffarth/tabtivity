@@ -26,11 +26,11 @@ import { CalendarIcon } from "./icons/Icon";
 
 /**
  * **The** day-entry field — `common/TimeField`'s other half, and the one control
- * a *date* is picked in, drawn by Eldrun rather than by the engine.
+ * a *date* is picked in, drawn by Tabtivity rather than by the engine.
  *
  * It exists for the reason `TimeField` does, twice over. `<input type="date">`
  * takes its segment order (`MM/DD/YYYY` vs `DD.MM.YYYY`) from the **process**
- * locale, so a German-language Eldrun still asked for the month first; and under
+ * locale, so a German-language Tabtivity still asked for the month first; and under
  * WebKitGTK its calendar popover is its own grabbing widget that never dismisses
  * on its own — the click that picks a day does not even reach the document, so
  * every caller grew the same blur-on-change/blur-on-outside-pointerdown pair of

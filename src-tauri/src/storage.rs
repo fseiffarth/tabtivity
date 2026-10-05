@@ -84,6 +84,10 @@ where
     let _guard = JSON_MUTATION_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // The process-wide lock serialises this process; the file lock serialises
+    // a second Tabtivity process patching the same file (#171's lesson applied
+    // to every read-modify-write here).
+    let _file_lock = FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
     let mut value = if path.exists() {
         read_json(path).map_err(|e| e.to_string())?
     } else {
@@ -115,8 +119,118 @@ where
     serde_json::to_writer_pretty(staged.as_file_mut(), value)?;
     staged.as_file_mut().write_all(b"\n")?;
     staged.as_file_mut().sync_all()?;
+    durability::record(DurabilityStep::FileSynced, staged.path());
     staged.persist(path)?;
+    durability::record(DurabilityStep::Persisted, path);
+    // The data is durable, but the directory entry pointing at it is not until
+    // the parent directory is flushed too: a crash after the rename can
+    // otherwise roll the directory back to the old (or no) file (#172). Best
+    // effort — a filesystem that refuses to fsync a directory (some network
+    // and FUSE mounts) must not turn every state write into an error after the
+    // bytes are already in place.
+    sync_parent_dir(parent);
+    durability::record(DurabilityStep::DirSynced, parent);
     Ok(())
+}
+
+/// Flush a directory's entries to disk after a rename into it.
+#[cfg(unix)]
+fn sync_parent_dir(parent: &Path) {
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+}
+
+/// Windows cannot open a directory as a plain file, and NTFS journals the
+/// rename itself; nothing to flush from here.
+#[cfg(not(unix))]
+fn sync_parent_dir(_parent: &Path) {}
+
+/// The steps of one atomic replacement, in the order they must happen: the
+/// staged file's bytes, the rename, then the parent directory's entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DurabilityStep {
+    FileSynced,
+    Persisted,
+    DirSynced,
+}
+
+/// A seam the tests observe the durability steps through: pulling the power
+/// is not a unit test, so the write path records each step it took and a test
+/// asserts the order. Compiled away outside tests.
+pub(crate) mod durability {
+    use super::DurabilityStep;
+    use std::path::Path;
+
+    #[cfg(test)]
+    static LOG: std::sync::Mutex<Vec<(DurabilityStep, std::path::PathBuf)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    #[cfg(test)]
+    pub(crate) fn record(step: DurabilityStep, path: &Path) {
+        LOG.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((step, path.to_path_buf()));
+    }
+
+    #[cfg(not(test))]
+    #[inline]
+    pub(crate) fn record(_step: DurabilityStep, _path: &Path) {}
+
+    /// The steps recorded for writes under `dir`, in order. Tests run in
+    /// parallel, so each one reads only its own temp directory's entries.
+    #[cfg(test)]
+    pub(crate) fn steps_under(dir: &Path) -> Vec<(DurabilityStep, std::path::PathBuf)> {
+        LOG.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|(_, path)| path.starts_with(dir))
+            .cloned()
+            .collect()
+    }
+}
+
+/// An advisory, cross-process lock on a sibling `<file>.lock` of a state
+/// file, held for the guard's lifetime.
+///
+/// `JSON_MUTATION_LOCK` serialises this process; a second Tabtivity process (a
+/// second window, the Mobile sidecar) needs the file system to do it. The
+/// lock file is never removed: deleting one out from under a holder is how
+/// two processes end up both holding "the" lock. Best effort — a filesystem
+/// without advisory locks still gets the caller's revision check, which
+/// closes the window for every practical interleaving.
+pub struct FileLock {
+    file: fs::File,
+}
+
+impl FileLock {
+    /// Take the exclusive lock beside `path`, blocking until it is free.
+    pub fn exclusive(path: &Path) -> std::io::Result<Self> {
+        let lock_path = lock_path_for(path);
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        let _ = file.lock();
+        Ok(Self { file })
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+/// `calendar.json` → `calendar.json.lock`.
+fn lock_path_for(path: &Path) -> std::path::PathBuf {
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".lock");
+    path.with_file_name(name)
 }
 
 /// Create the state dir if missing and make it owner-only (0700).
@@ -144,43 +258,73 @@ fn make_private_dir(dir: &Path) {
     }
 }
 
-/// State directory for Eldrun's JSON files.
+/// State directory for Tabtivity's JSON files.
 ///
-/// Linux: `~/.local/share/eldrun/` — matches the Python app's hard-coded path
-/// so that Python rollback finds the same files Rust wrote.
-/// Windows: `%APPDATA%\eldrun\`
-/// macOS:   `~/Library/Application Support/eldrun/`
+/// Linux: `~/.local/share/tabtivity/`
+/// Windows: `%APPDATA%\tabtivity\`
+/// macOS:   `~/Library/Application Support/tabtivity/`
+///
+/// An install made before the app was renamed has the folder under the old
+/// name until `services::brand_migration` has moved it; until then that
+/// folder is the state dir (`resolve_named_dir`).
 pub fn state_dir() -> std::path::PathBuf {
     // Test/sandbox override. The state dir is written to by tests (the
     // per-project session state moved here out of the project tree), and a test
-    // suite that writes into the developer's real `~/.local/share/eldrun/` is
-    // not a test suite. `start-eldrun-dev-sandbox.sh` sets it too, paired with
-    // `ELDRUN_HOME` (see `paths::eldrun_home`), so a dev window keeps its state
+    // suite that writes into the developer's real `~/.local/share/tabtivity/` is
+    // not a test suite. `start-tabtivity-dev-sandbox.sh` sets it too, paired with
+    // `TABTIVITY_HOME` (see `paths::app_home`), so a dev window keeps its state
     // away from the packaged daily-driver instance's. Still not a user-facing
     // knob — whatever sets it for the app already owns the process.
-    if let Ok(dir) = std::env::var("ELDRUN_STATE_DIR") {
-        if !dir.is_empty() {
-            return std::path::PathBuf::from(dir);
-        }
+    if let Some(dir) = state_dir_override() {
+        return dir;
     }
+    crate::services::brand_migration::resolve_named_dir(
+        &crate::brand::PAIR,
+        crate::brand::Name::STATE_DIR_NAME,
+        &state_dir_base(),
+        "state-dir",
+    )
+}
+
+/// The folder the environment names as the state dir, if it names one.
+pub fn state_dir_override() -> Option<std::path::PathBuf> {
+    crate::brand::env("STATE_DIR").map(std::path::PathBuf::from)
+}
+
+/// The per-OS folder the state dir sits in.
+pub fn state_dir_base() -> std::path::PathBuf {
     if cfg!(target_os = "windows") {
-        let base = std::env::var("APPDATA")
+        std::env::var("APPDATA")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| paths::home_dir());
-        base.join("eldrun")
+            .unwrap_or_else(|_| paths::home_dir())
     } else if cfg!(target_os = "macos") {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         std::path::PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("eldrun")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        std::path::PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("eldrun")
+        std::path::PathBuf::from(home).join(".local").join("share")
     }
+}
+
+/// `~/.local/share`, the folder [`home_share_dir`] sits in on every OS.
+pub fn home_share_base() -> std::path::PathBuf {
+    paths::home_dir().join(".local").join("share")
+}
+
+/// `~/.local/share/<state dir name>` on every OS, whatever the state-dir
+/// override says. The local-model CLI homes and the frozen dev build's files
+/// have always lived there — fixed per user, outside a sandboxed state dir —
+/// so this is the one place that path is built. On Linux without an override
+/// it is [`state_dir`].
+pub fn home_share_dir() -> std::path::PathBuf {
+    crate::services::brand_migration::resolve_named_dir(
+        &crate::brand::PAIR,
+        crate::brand::Name::STATE_DIR_NAME,
+        &home_share_base(),
+        "share-dir",
+    )
 }
 
 /// The scope id of the root terminal — the one scope that is not a project and
@@ -550,10 +694,22 @@ mod tests {
     // ── state_dir ─────────────────────────────────────────────────────────
 
     #[test]
-    fn state_dir_ends_with_eldrun() {
+    fn state_dir_ends_with_app() {
         let dir = state_dir();
         let last = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        assert_eq!(last, "eldrun", "state_dir must end in 'eldrun': {:?}", dir);
+        // The current name — or the old one on a machine whose state dir has
+        // not been moved yet (a developer's, whose installed build predates
+        // the rename): the lookup falls back to it rather than start empty.
+        let base = state_dir_base();
+        let expected = if state_dir_override().is_none()
+            && !base.join(crate::brand::STATE_DIR_NAME).exists()
+            && base.join(crate::brand::LEGACY_STATE_DIR_NAME).exists()
+        {
+            crate::brand::LEGACY_STATE_DIR_NAME
+        } else {
+            crate::brand::STATE_DIR_NAME
+        };
+        assert_eq!(last, expected, "state_dir must end in '{expected}': {dir:?}");
     }
 
     // ── private state files ───────────────────────────────────────────────
@@ -569,7 +725,7 @@ mod tests {
     fn make_private_dir_creates_and_tightens_owner_only() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let fresh = tmp.path().join("a").join("eldrun");
+        let fresh = tmp.path().join("a").join(crate::app_slug!());
         make_private_dir(&fresh);
         assert_eq!(mode_of(&fresh), 0o700);
 
@@ -616,14 +772,24 @@ mod tests {
     }
 
     #[test]
-    fn root_work_dir_parent_is_eldrun() {
+    fn root_work_dir_parent_is_app() {
         let dir = root_work_dir();
         let parent = dir
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("");
-        assert_eq!(parent, "eldrun");
+        // The home tree: the current name, or the old one where an install
+        // made before the rename keeps it.
+        let home = paths::home_dir();
+        let expected = if !home.join(crate::brand::HOME_DIR_NAME).exists()
+            && home.join(crate::brand::LEGACY_HOME_DIR_NAME).exists()
+        {
+            crate::brand::LEGACY_HOME_DIR_NAME
+        } else {
+            crate::brand::HOME_DIR_NAME
+        };
+        assert_eq!(parent, expected);
     }
 
     // ── write_json / read_json ─────────────────────────────────────────────
@@ -720,6 +886,36 @@ mod tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(strays.is_empty(), "temp files left behind: {strays:?}");
+    }
+
+    /// #172: the staged bytes are flushed, then renamed into place, then the
+    /// parent directory's entries are flushed — and all of it before the write
+    /// returns. Observed through the `durability` seam rather than a crash rig.
+    #[test]
+    fn write_json_atomic_syncs_file_then_persists_then_syncs_parent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        let path = dir.join("durable.json");
+        write_json_atomic(&path, &vec![1u32]).unwrap();
+
+        let steps = durability::steps_under(&dir);
+        let kinds: Vec<DurabilityStep> = steps.iter().map(|(step, _)| *step).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DurabilityStep::FileSynced,
+                DurabilityStep::Persisted,
+                DurabilityStep::DirSynced
+            ],
+            "steps recorded: {steps:?}"
+        );
+        // The file sync is of the *staged* sibling, not the target; the
+        // directory sync is of the target's parent.
+        let (_, staged) = &steps[0];
+        assert_eq!(staged.parent(), Some(dir.as_path()));
+        assert_ne!(staged, &path);
+        assert_eq!(steps[1].1, path);
+        assert_eq!(steps[2].1, dir);
     }
 
     #[test]

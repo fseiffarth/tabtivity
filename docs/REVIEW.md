@@ -1,6 +1,6 @@
-# Eldrun Code Review
+# Tabtivity Code Review
 
-A three-reviewer review of the Eldrun codebase (Tauri 2 + React 18 + TypeScript,
+A three-reviewer review of the Tabtivity codebase (Tauri 2 + React 18 + TypeScript,
 Rust backend). The review was conducted by three specialists working in
 parallel — **Security**, **Efficiency/Performance**, and **Structure &
 Features** — followed by a cross-cutting discussion to reconcile findings that
@@ -107,7 +107,7 @@ rendering.
   `rel="noopener noreferrer"`. The `dangerouslySetInnerHTML` sinks in
   `FileViewerPane.tsx` are fed only from these. Regression test confirms
   `<script>` renders as text.
-- **SessionStart hook is well-guarded.** No-ops unless `ELDRUN_TAB_UID` matches
+- **SessionStart hook is well-guarded.** No-ops unless `TABTIVITY_TAB_UID` matches
   `[a-zA-Z0-9-]` (`agent_session.rs:100`); `read_live_session_in` rejects
   non-uuid keys; Claude `settings.json` merge is idempotent and preserves
   unrelated keys.
@@ -128,7 +128,7 @@ these take an absolute path with no project confinement. Any code reaching the
 IPC bridge (an XSS, a malicious file-link, a compromised renderer dependency) can
 read/overwrite any user-accessible file (`~/.ssh/id_rsa`, `~/.aws/credentials`).
 `write_file_text` can overwrite any existing regular file. *Recommendation:*
-restrict writes to known roots (project dirs, `~/eldrun`, mounts dir) or require
+restrict writes to known roots (project dirs, `~/tabtivity`, mounts dir) or require
 the path to have been surfaced by a prior `list_dir`; at minimum refuse secret
 dotfiles outside project roots; and re-enable CSP (#2).
 
@@ -138,10 +138,10 @@ IPC surface. *Recommendation:* set an explicit restrictive policy, e.g.
 `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost`.
 
-**#3 — Global hook injection (Low/Info).** Eldrun writes a SessionStart hook into
+**#3 — Global hook injection (Low/Info).** Tabtivity writes a SessionStart hook into
 `~/.claude/settings.json` and `~/.codex/config.toml` on every startup, so every
-Claude/Codex session anywhere runs Eldrun's script. The script is benign and
-no-ops without `ELDRUN_TAB_UID`; this is a transparency/trust concern, not
+Claude/Codex session anywhere runs Tabtivity's script. The script is benign and
+no-ops without `TABTIVITY_TAB_UID`; this is a transparency/trust concern, not
 escalation. *Recommendation:* document it prominently; ensure `hooks/` dir +
 script have restrictive perms so another local user can't pre-create/replace it.
 
@@ -277,7 +277,7 @@ files), 13 Zustand stores, `hooks/`, `lib/`, `types/`, with 59 Vitest suites.
 
 ## Features & Roadmap
 
-Eldrun tracks features on three axes: **written**, **automated test passing
+Tabtivity tracks features on three axes: **written**, **automated test passing
 (🤖)**, **live QA done (🖐️)**. Per TODO.md's self-assessment, **all automated
 tests pass but no feature has been live-QA'd** — the dominant gap between
 "code-complete" and "shipped."

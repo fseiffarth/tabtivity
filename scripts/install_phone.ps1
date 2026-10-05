@@ -1,4 +1,4 @@
-# Eldrun Mobile phone-install handoff (Windows). The PowerShell twin of
+# Tabtivity Mobile phone-install handoff (Windows). The PowerShell twin of
 # install_phone.sh: verifies that Tailscale Serve maps the verified private
 # origin onto the configured loopback port, then prints the trusted URL and a
 # scannable QR code. It does not enable Mobile or change your Tailscale
@@ -7,8 +7,14 @@ param([switch]$Url)
 
 $ErrorActionPreference = 'Stop'
 
-# Match storage::state_dir on Windows: ELDRUN_STATE_DIR, else %APPDATA%\eldrun.
-$stateDir = if ($env:ELDRUN_STATE_DIR) { $env:ELDRUN_STATE_DIR } else { Join-Path $env:APPDATA 'eldrun' }
+# The app writes this script into <state dir>\mobile-control\ and runs it from
+# there, so the state dir is the folder above - whatever it is called and
+# wherever an override put it. Run from a checkout instead, fall back to
+# storage::state_dir on Windows: TABTIVITY_STATE_DIR, else %APPDATA%\tabtivity.
+$stateDir = Split-Path -Parent $PSScriptRoot
+if (-not (Test-Path -LiteralPath (Join-Path $stateDir 'settings.json'))) {
+  $stateDir = if ($env:TABTIVITY_STATE_DIR) { $env:TABTIVITY_STATE_DIR } else { Join-Path $env:APPDATA 'tabtivity' }
+}
 $settingsPath = Join-Path $stateDir 'settings.json'
 
 if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
@@ -16,12 +22,12 @@ if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
   exit 1
 }
 if (-not (Test-Path -LiteralPath $settingsPath)) {
-  Write-Error 'Eldrun settings are unavailable'
+  Write-Error 'Tabtivity settings are unavailable'
   exit 1
 }
 
 $settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-$mobile = $settings.eldrun_mobile_host
+$mobile = $settings.tabtivity_mobile_host
 $port = if ($mobile -and $mobile.port) { [int]$mobile.port } else { 8742 }
 $origin = if ($mobile) { [string]$mobile.serve_origin } else { '' }
 if (-not ($origin -match '^https://([^/:]+)(:([0-9]+))?$')) {
@@ -59,4 +65,4 @@ if (Get-Command qrencode -ErrorAction SilentlyContinue) {
 } else {
   Write-Output 'Install qrencode (winget install qrencode, or scoop) to print a terminal QR code.'
 }
-Write-Output 'Then use Install app / Add to Home Screen and pair it from Eldrun Settings.'
+Write-Output 'Then use Install app / Add to Home Screen and pair it from Tabtivity Settings.'

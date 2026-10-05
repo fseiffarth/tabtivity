@@ -705,7 +705,7 @@
   flex-shrink: 0;
 }
 
-/* Per-project Eldrun Mobile opt-in. Shown only while the local Mobile host is
+/* Per-project Tabtivity Mobile opt-in. Shown only while the local Mobile host is
    live, so this control never suggests a project is reachable from a stopped
    companion service. Kept visually apart from the `.pill-popup-tag` chips on
    the same row: those are static labels (pill, uppercase, tinted by kind),
@@ -1092,6 +1092,16 @@
   padding: 4px 6px;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-color);
+}
+
+/* An agent's push request card sits in this footer, and the footer never
+   shrinks: a card listing a long run of commits (plus its output) grew it until
+   the history scroll above was squeezed to nothing — history and its
+   scrollbar both gone. Capped like the commit box, the cards scroll on their
+   own. Scoped here: the Agents view's copy lives in an ordinary scroll. */
+.git-action-bar .git-push-proposals {
+  max-height: 33vh;
+  overflow-y: auto;
 }
 
 .git-action-error {
@@ -1504,19 +1514,57 @@
   padding: 1px 5px;
 }
 
+.git-worktree-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.git-worktree-context > span:first-child {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-branch-worktree {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
 .git-worktree-list {
+  flex-direction: column;
   border-bottom: none;
 }
-
 .git-worktree-pill {
-  cursor: var(--cur-default, default);
-  gap: 3px;
+  border-radius: var(--radius);
+  gap: 6px;
 }
-
-.git-worktree-pill:hover {
-  /* Not a button — the pill itself does nothing, so it must not offer to. */
-  border-color: var(--border-color);
-  color: var(--text-primary);
+.git-worktree-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.git-worktree-select:disabled {
+  cursor: var(--cur-default, default);
+  opacity: 0.6;
+}
+.git-worktree-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.git-worktree-branch, .git-worktree-main {
+  color: var(--text-muted);
 }
 
 /* A worktree whose checkout is gone. git says so in `worktree list --porcelain`

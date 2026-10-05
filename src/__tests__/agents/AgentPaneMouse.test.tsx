@@ -14,7 +14,7 @@
  * Enters.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, act, screen, within } from "@testing-library/react";
 
 class ResizeObserverStub {
   observe() {}
@@ -435,16 +435,45 @@ describe("terminal links", () => {
     useProjectsStore.setState({ switchToast: null });
   });
 
-  it("a click opens the link in the real browser", async () => {
+  it("a click asks first, then opens the link in the real browser", async () => {
     vi.useFakeTimers();
     try {
       await agentPane("p:link-open");
       linkSpy.activate?.(click(1), URL);
-      // Held back for the double-click window, then opened through the backend
-      // (the webview's own `window.open` does nothing).
+      // Held back for the double-click window, then asked about — never opened
+      // on the click alone.
       expect(calls("open_external_url")).toHaveLength(0);
-      vi.advanceTimersByTime(400);
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).toContain(URL);
+      expect(calls("open_external_url")).toHaveLength(0);
+      // Confirmed → opened through the backend (the webview's own
+      // `window.open` does nothing).
+      await act(async () => {
+        within(dialog).getByRole("button", { name: "Open link" }).click();
+      });
       expect(calls("open_external_url")).toEqual([["open_external_url", { url: URL }]]);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("declining the question opens nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      await agentPane("p:link-decline");
+      linkSpy.activate?.(click(1), URL);
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+      await act(async () => {
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }).click();
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(calls("open_external_url")).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }

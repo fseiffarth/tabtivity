@@ -25,6 +25,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND, MOBILE_ACCESS_KEY, NAMES } from "../../lib/brand";
 
 const paper: ProjectEntry = {
   id: "p-paper",
@@ -33,10 +34,10 @@ const paper: ProjectEntry = {
   position: 1,
   local_file: "/projects/paper/project.json",
   directory: "/projects/paper",
-  eldrun_mobile_access: true,
+  [MOBILE_ACCESS_KEY]: true,
 };
 
-const TMUX = "eldrun-p_paper--agent-111111111";
+const TMUX = `${BRAND.slug}-p_paper--agent-111111111`;
 const PTY = `${paper.id}:agent-1`;
 
 /** The session has been switched to Sonnet since its last answer: its status
@@ -68,7 +69,7 @@ function pane(rows: string[]): Terminal {
 }
 
 async function ask(request: Record<string, unknown>) {
-  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === "eldrun-mobile-desktop-request");
+  const listener = vi.mocked(listen).mock.calls.find(([name]) => name === NAMES.mobileDesktopEvent);
   const deliver = listener![1] as (event: { payload: unknown }) => void;
   const invokeMock = vi.mocked(invoke);
   deliver({ payload: request });
@@ -94,7 +95,7 @@ describe("Mobile bridge — the model beside a tab", () => {
     vi.mocked(listen).mockResolvedValue(() => {});
     useProjectsStore.setState({ projects: [paper], activeId: paper.id, loaded: true });
     useSettingsStore.setState({ settings: {} as Settings, loaded: true });
-    useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {}, screenByTab: {} });
+    useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {}, screenByTab: {}, modeByTab: {}, goalByTab: {} });
     clearAgentModelFloorForTest();
     useTabsStore.setState({
       scope: paper.id,
@@ -115,7 +116,7 @@ describe("Mobile bridge — the model beside a tab", () => {
     vi.mocked(invoke).mockReset();
     vi.mocked(listen).mockReset();
     useActivityStore.setState({ busyByTab: {}, attentionByTab: {}, attentionByScope: {} });
-    useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {}, screenByTab: {} });
+    useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {}, screenByTab: {}, modeByTab: {}, goalByTab: {} });
   });
 
   it("is what the session's own status line says, in its own words", async () => {
@@ -176,6 +177,54 @@ describe("Mobile bridge — the model beside a tab", () => {
     await useAgentModelsStore.getState().refreshScreen(paper.id, useTabsStore.getState().tabsByScope[paper.id][0], true);
     const answer = await ask({ type: "catalog", request_id: "m6", project_id: paper.id });
     expect(answer.statuses).toMatchObject([{ tmux_session: TMUX, model: "Sonnet 4.5" }]);
+  });
+
+  it("carries the PLAN and GOAL marks the desktop's tab strip reads, and only while on", async () => {
+    liveScreen = [">", "⏸ plan mode on (shift+tab to cycle) · ◎ /goal active (3m)"].join("\n");
+    clearAgentModelFloorForTest();
+    await vi.waitFor(async () => {
+      const answer = await ask({ type: "catalog", request_id: "m8", project_id: paper.id });
+      expect(answer.statuses).toMatchObject([{ tmux_session: TMUX, plan: true, goal: true }]);
+    });
+    liveScreen = SCREEN.join("\n");
+    clearAgentModelFloorForTest();
+    await useAgentModelsStore.getState().refreshScreen(paper.id, useTabsStore.getState().tabsByScope[paper.id][0], true);
+    const answer = await ask({ type: "activity", request_id: "m9" });
+    const [row] = answer.statuses as Record<string, unknown>[];
+    expect(row).not.toHaveProperty("plan");
+    expect(row).not.toHaveProperty("goal");
+  });
+
+  it("takes the goal from the session's own record, whatever the footer shows", async () => {
+    const fallback = vi.mocked(invoke).getMockImplementation()!;
+    let goal: boolean | null = true;
+    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) =>
+      command === "agent_tab_goal" ? Promise.resolve(goal) : fallback(command, args as never));
+    // A footer the parser reads no goal in: a statusline and the mode row only.
+    liveScreen = [">", "me@box:~/paper (main) · Opus 5.5", "⏵⏵ auto mode on (shift+tab to cycle)"].join("\n");
+    clearAgentModelFloorForTest();
+    await vi.waitFor(async () => {
+      const answer = await ask({ type: "catalog", request_id: "g1", project_id: paper.id });
+      expect(answer.statuses).toMatchObject([{ tmux_session: TMUX, goal: true }]);
+    });
+    // Met: the record says so, and the mark goes, though no footer ever showed it.
+    goal = false;
+    clearAgentModelFloorForTest();
+    await vi.waitFor(async () => {
+      const answer = await ask({ type: "catalog", request_id: "g2", project_id: paper.id });
+      expect((answer.statuses as Record<string, unknown>[])[0]).not.toHaveProperty("goal");
+    });
+  });
+
+  it("marks a quiet tab in plan mode", async () => {
+    useActivityStore.setState({ busyByTab: {} });
+    useAgentModelsStore.setState({ byTab: {} });
+    liveScreen = [">", "⏸ plan mode on (shift+tab to cycle)"].join("\n");
+    clearAgentModelFloorForTest();
+    await vi.waitFor(async () => {
+      const answer = await ask({ type: "catalog", request_id: "m10", project_id: paper.id });
+      expect(answer.timings).toMatchObject([{ tmux_session: TMUX, plan: true }]);
+    });
   });
 
   it("tags a quiet tab too", async () => {

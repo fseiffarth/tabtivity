@@ -2,7 +2,7 @@
  * Persistent remote sessions (TODO #85) — the frontend half of the tmux wrap.
  *
  * A remote shell/script tab can run inside a **tmux** session on the host, so a
- * long run survives an SSH drop, a laptop sleep, or Eldrun quitting: the session
+ * long run survives an SSH drop, a laptop sleep, or Tabtivity quitting: the session
  * keeps running and the tab reattaches on reconnect/relaunch. The backend
  * (`services::ssh_exec`) owns the actual wrap; these helpers decide *whether* a
  * tab persists and mirror the session-name derivation so the frontend can address
@@ -10,6 +10,8 @@
  */
 
 import type { RemoteSpec } from "../../types";
+import { NAMES } from "../brand";
+import { tmuxSessionRest } from "../brandMigration";
 
 /**
  * A project id can appear verbatim in a tmux session name (it's practice a uuid),
@@ -31,7 +33,7 @@ function sanitizeForTmuxName(id: string): string {
  * (`[0-9a-f-]`, no `:`/`.`), so it needs no sanitising.
  *
  * `scope` (the owning project id, or `"root"`/a box id) is embedded right after
- * the `eldrun-` prefix, separated from the uuid by a `--` that can never occur
+ * the `tabtivity-` prefix, separated from the uuid by a `--` that can never occur
  * inside either half (uuids and project ids are single-hyphenated) — so the
  * Sessions view (`remote_tmux_list`) can tell one project's sessions apart from
  * another's on a host multiple projects share, instead of listing every session
@@ -47,20 +49,20 @@ function sanitizeForTmuxName(id: string): string {
  * misclassified. See {@link sessionKindFromName}.
  */
 export function newTmuxSessionName(scope: string, kind: TmuxSessionKind = "shell"): string {
-  return `eldrun-${sanitizeForTmuxName(scope)}--${kind}-${crypto.randomUUID()}`;
+  return `${NAMES.tmuxPrefix}${sanitizeForTmuxName(scope)}--${kind}-${crypto.randomUUID()}`;
 }
 
 /**
  * The kind of tab a persistent tmux session backs, for the Sessions view's
  * per-machine grouping. `"other"` is every session whose name carries no
  * recognizable token: a foreign/hand-started one, one hand-renamed through the
- * Sessions view, or one Eldrun minted before the token existed.
+ * Sessions view, or one Tabtivity minted before the token existed.
  */
 export type TmuxSessionKind = "agent" | "shell" | "other";
 
 /**
  * Classify a tmux session by its name — the inverse of {@link newTmuxSessionName}.
- * Reads the token at the front of the uuid half (`eldrun-<scope>--<kind>-<uuid>`),
+ * Reads the token at the front of the uuid half (`tabtivity-<scope>--<kind>-<uuid>`),
  * which is the only place a kind is recorded; anything the token does not name is
  * `"other"`, so an unrecognized/foreign/legacy session degrades gracefully rather
  * than being forced into one of the two real buckets. Pure — the Sessions view's
@@ -68,7 +70,8 @@ export type TmuxSessionKind = "agent" | "shell" | "other";
  */
 export function sessionKindFromName(name: string): TmuxSessionKind {
   const sep = name.indexOf("--");
-  if (!name.startsWith("eldrun-") || sep < 0) return "other";
+  // Under the current prefix or the one an older build minted.
+  if (tmuxSessionRest(name) === null || sep < 0) return "other";
   const rest = name.slice(sep + 2);
   if (rest.startsWith("agent-")) return "agent";
   if (rest.startsWith("shell-")) return "shell";
@@ -126,7 +129,7 @@ export function shouldPersistTab(
  * (interactive shells + Python/script runs) that runs on the **local machine** —
  * a local project's tab, or a remote project's local (mirror) tab. `localEnabled`
  * folds the `persist_local_sessions` setting **and** the platform check (off on
- * Windows, where there is no tmux). Keeps the run alive across an Eldrun crash
+ * Windows, where there is no tmux). Keeps the run alive across a Tabtivity crash
  * and reattaches on restart.
  *
  * The **root** scope is included, and the `scopeKey !== "root"` gate that used to
@@ -135,7 +138,7 @@ export function shouldPersistTab(
  * was a daemon nobody could reach. Root tabs restore like a project's now, and
  * they already carry a minted `tmuxSession` name (`withTmuxSession` never
  * excluded root) — so the exclusion had stopped meaning anything except that a
- * long build started in the root terminal was the one shell an Eldrun crash
+ * long build started in the root terminal was the one shell a Tabtivity crash
  * still killed. **Box** scopes are included for the same reason since they
  * persist + restore first-class (`sessions/box_<id>/`): a box shell's tmux
  * session has a tab to come back to, so it persists like root's/a project's.

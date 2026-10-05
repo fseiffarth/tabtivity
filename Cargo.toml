@@ -1,3 +1,23 @@
 [workspace]
 members = ["src-tauri"]
+exclude = ["src-tauri/patches"]
 resolver = "2"
+
+# tauri-runtime-wry 2.11.3 with one fix (search "TABTIVITY PATCH"): its `Context`
+# clones an `Rc` inside tao's Linux `EventLoopWindowTarget` on whatever thread
+# clones an `AppHandle`, which corrupted the main process's heap. Drop this
+# once upstream stops cloning it off the main thread; keep the version in step
+# with `tauri` (docs/third_party_update_checklist.md).
+[patch.crates-io]
+tauri-runtime-wry = { path = "src-tauri/patches/tauri-runtime-wry" }
+
+# Optimize every dependency in dev builds; Tabtivity's own crate stays at
+# opt-level 0, so an edit-and-rebuild of the app is as fast as before. The
+# `tauri dev` window spends much of its backend time inside dependencies —
+# serde_json serializing every terminal-output event, tokio, wry/tao's IPC,
+# notify, regex — which unoptimized cost several times what they do in a
+# release build. The price is a slower first build of the dependency tree
+# (once per target dir; CI's rust-cache keeps it). Release builds are
+# unaffected.
+[profile.dev.package."*"]
+opt-level = 2

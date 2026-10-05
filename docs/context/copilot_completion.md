@@ -12,7 +12,7 @@ acceptance counts UTF-16 units from the start of the original `insertText`, even
 when editor line endings differ. Ollama streaming and cache behavior are behind
 `OllamaCompletionProvider`; the editor still owns visibility and caret guards.
 
-Consent is stored in Eldrun's `settings.json`, never project metadata. The new
+Consent is stored in Tabtivity's `settings.json`, never project metadata. The new
 `completion_project_policies` map binds each project id to a canonical directory;
 `local_only` overrides `copilot`. The backend policy rejects disabled providers,
 remote projects, changed roots and symlinks resolving outside the approved tree.
@@ -45,11 +45,11 @@ verified token-injection interface, which 1.547.0 has not been shown to have.
 ## Standalone protocol evidence
 
 On 2026-09-18, npm reported `@github/copilot-language-server` 1.547.0. Installed
-without lifecycle scripts under `/tmp/eldrun-copilot-probe`, outside the app's
+without lifecycle scripts under `/tmp/tabtivity-copilot-probe`, outside the app's
 dependencies. The npm package offers native Linux/macOS/Windows builds on x64
 and arm64; upstream also documents Node >=20.8. Only Linux x64 was exercised.
 
-Run without starting Eldrun:
+Run without starting Tabtivity:
 
 ```
 python3 scripts/copilot-probe.py /absolute/path/to/copilot-language-server
@@ -114,6 +114,6 @@ and all integration suites. The sandboxed run failed unrelated socket/process
 tests, so it is not the authoritative gate result. Clippy with `--all-targets --
 -D warnings` passes. `npm run lint` exits 0 but reports 31 warnings outside the
 Copilot changes; the repository's zero-warning target is not established.
-`git diff --check` passes. `npm run backend:stale` reports no Eldrun running.
+`git diff --check` passes. `npm run backend:stale` reports no Tabtivity running.
 No live app checks were performed. These results verify the foundation only,
 not the unfinished end-to-end provider.

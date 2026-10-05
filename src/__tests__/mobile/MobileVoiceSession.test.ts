@@ -6,6 +6,7 @@ import type {
   MobileSpeechRecognitionResultEvent,
 } from "../../../mobile-web/src/voiceInput";
 import { startDictation, type DictationSessionHandlers } from "../../../mobile-web/src/voiceSession";
+import { BRAND } from "../../lib/brand";
 
 class FakeRecognition implements MobileSpeechRecognition {
   static instances: FakeRecognition[] = [];
@@ -38,7 +39,7 @@ function session() {
   return { handlers, running, speech: FakeRecognition.instances[FakeRecognition.instances.length - 1] };
 }
 
-describe("Eldrun Mobile dictation session", () => {
+describe(`${BRAND.display} Mobile dictation session`, () => {
   beforeEach(() => {
     FakeRecognition.instances = [];
     vi.useFakeTimers();

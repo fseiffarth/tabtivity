@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useT } from "../../lib/i18n";
 import { formatSize } from "../../lib/mail";
 import { UntestedTag } from "../common/UntestedTag";
+import { BRAND } from "../../lib/brand";
+import { LegacyNamesSummary } from "./LegacyNamesSummary";
 import { SettingRow, SettingsHeader } from "./settingsUi";
 import type {
   InstallOutcome,
@@ -13,19 +15,19 @@ import type {
 } from "../../types/update";
 
 /**
- * Settings → Updates: is there a newer Eldrun on the project's GitHub releases
+ * Settings → Updates: is there a newer Tabtivity on the project's GitHub releases
  * page, and install it.
  *
  * The panel checks on mount, which is the one place an automatic request is
  * honest — the user navigated to a screen whose entire subject is that
- * question. Nothing else here polls, and Eldrun never checks in the background.
+ * question. Nothing else here polls, and Tabtivity never checks in the background.
  *
  * The three-step shape (check → download → install) is deliberate rather than
  * one button: the middle step can take minutes on a 150 MB artifact, and the
  * last one closes the app on two of the three platforms. A user who has just
  * been told what changed should be the one to decide when that happens.
  *
- * Restarting is *always* the user's: no branch here relaunches Eldrun, because
+ * Restarting is *always* the user's: no branch here relaunches Tabtivity, because
  * a window holds live terminals and open tabs.
  */
 export function UpdatesPanel({
@@ -155,6 +157,11 @@ export function UpdatesPanel({
         onClose={onClose}
       />
       <div className="dialog-scroll">
+      {/* The name with its tagline: there is no About panel, and the bare
+          name reads like a browser extension's. */}
+      <p className="settings-help app-update-tagline">
+        <strong>{BRAND.display}</strong> — {t("brand.tagline")}
+      </p>
       <p className="settings-help">{t("updates.help")}</p>
 
       <SettingRow
@@ -268,6 +275,7 @@ export function UpdatesPanel({
           </button>
         )}
       </div>
+      <LegacyNamesSummary />
       </div>
     </>
   );

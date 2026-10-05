@@ -13,7 +13,9 @@ vi.mock("../../components/header/MachinesIndicator", () => ({
   MachinesIndicator: () => <i data-testid="machines" />,
 }));
 vi.mock("../../components/header/AppResourceDisplay", () => ({
-  AppResourceDisplay: () => <i data-testid="resources" />,
+  AppResourceDisplay: ({ folded, peek }: { folded?: boolean; peek?: number }) => (
+    <i data-testid="resources" data-folded-prop={String(!!folded)} data-peek={peek ?? 0} />
+  ),
 }));
 vi.mock("../../components/header/DevBuildIndicator", () => ({
   DevBuildIndicator: () => <i data-testid="devBuild" />,
@@ -59,10 +61,22 @@ describe("StatusCluster", () => {
     expect(toggle.querySelector("[aria-label]")).toBeTruthy();
   });
 
+  it("tells the resource readout it is folded, and asks it for a reading on hover", () => {
+    // Folded, the readout stops polling; the toggle's tooltip is its only reader,
+    // so reaching the toggle is what asks for a fresh figure.
+    render(<StatusCluster />);
+    const readout = screen.getByTestId("resources");
+    expect(readout.getAttribute("data-folded-prop")).toBe("true");
+    expect(readout.getAttribute("data-peek")).toBe("0");
+    fireEvent.pointerEnter(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByTestId("resources").getAttribute("data-peek")).toBe("1");
+  });
+
   it("shows every member once expanded", () => {
     useSettingsStore.setState({ settings: { header_status_expanded: true } as never } as never);
     render(<StatusCluster />);
     for (const id of ["vpn", "machines", "resources"]) expect(folded(id)).toBe("false");
+    expect(screen.getByTestId("resources").getAttribute("data-folded-prop")).toBe("false");
     fireEvent.click(screen.getByRole("button", { expanded: true }));
     expect(updateSettings).toHaveBeenCalledWith({ header_status_expanded: false });
   });

@@ -10,6 +10,9 @@
  * `hardenPrototype()` runs before bootstrap in both branches, so no app or
  * library code ever sees a mutable `Object.prototype` (#159).
  */
+// First: storage keys an older build wrote move to their current names
+// before any store reads them (a no-op while the app's name is unchanged).
+import "./lib/brandMigrationBoot";
 import { hardenPrototype } from "./lib/hardenPrototype";
 
 if (import.meta.env.DEV) {

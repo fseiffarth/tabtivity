@@ -30,7 +30,7 @@ describe("nextWindowState", () => {
   });
 
   it("records the maximized rect on first run, when there is no floating rect yet", () => {
-    // Eldrun opens maximized and the user may never un-maximize it. Storing nothing
+    // Tabtivity opens maximized and the user may never un-maximize it. Storing nothing
     // would mean never learning which monitor it is on — the whole point of the
     // feature. The maximized rect is at least a correct monitor hint.
     const got = nextWindowState(undefined, { x: 1920, y: 0, w: 1920, h: 1080 }, true);

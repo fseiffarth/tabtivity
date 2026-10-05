@@ -301,7 +301,7 @@ const DeckView = lazy(() => import("./deck/DeckView").then((m) => ({ default: m.
  * reader left it on mount, rather than reacting to its own later writes) and
  * returns a stable `persist` that merges a patch back into the tab — flushed to
  * project.json by CenterPanel's debounced saveLayout, so the position survives an
- * Eldrun restart. A no-op when `tabKey` is absent (e.g. tests).
+ * Tabtivity restart. A no-op when `tabKey` is absent (e.g. tests).
  */
 /**
  * A tab's persisted `ViewerState` seed, read once. Normally from `useTabsStore`
@@ -378,7 +378,7 @@ function pathToFileUri(path: string): string {
 
 /**
  * Populate a dragstart's dataTransfer so an image (or file) can be dropped OUT of
- * Eldrun into another app — a browser file-upload field, a chat, etc. (#53).
+ * Tabtivity into another app — a browser file-upload field, a chat, etc. (#53).
  * Publishes:
  *  - `text/uri-list` + `text/plain`: the canonical `file://` URI (most targets).
  *  - `DownloadURL`: `mime:name:url`, used by Chromium-family drop targets.
@@ -1338,6 +1338,10 @@ function useEditHistory(initial: string) {
 
 // Poll interval for the diff-aware auto-reload (#43), ~1.5s.
 const RELOAD_POLL_MS = 1500;
+
+/** How long Source-mode typing in a YAML/JSON file must pause before the Cards
+ *  toggle re-asks whether the file nests anything to card (a whole-file parse). */
+const GRID_PROBE_SETTLE_MS = 400;
 
 /**
  * Editable-file state shared by the editable viewers — the code and markdown
@@ -2941,7 +2945,7 @@ function CodeEditor({
   breakpoints?: ReadonlySet<number>;
   onToggleBreakpoint?: (line: number) => void;
   /** Persisted vertical scroll (px) to restore once the file loads, so reopening
-   *  it (or an Eldrun restart) lands the reader where they left off (#viewerpos).
+   *  it (or a Tabtivity restart) lands the reader where they left off (#viewerpos).
    *  Applied once on first load; user scrolling thereafter reports via
    *  `onScrollPersist`. */
   initialScrollTop?: number;
@@ -5848,7 +5852,7 @@ function ValidationBanner({
 
 /** Reusable Preview/Edit (Source) segmented toggle, styled like the existing
  *  markdown mode buttons. */
-function ModeToggle<T extends string>({
+export function ModeToggle<T extends string>({
   value,
   onChange,
   options,
@@ -6062,7 +6066,7 @@ export interface TabAiPrefs {
  * on/off, completion-length mode, and spelling on/off, overriding the per-type
  * `viewer_prefs` default for that tab only. The override is seeded once from the
  * tab's persisted `viewerState` and written back there (like scroll/zoom), so it
- * survives reopening the file and an Eldrun restart. Until the user touches a
+ * survives reopening the file and a Tabtivity restart. Until the user touches a
  * control, the value tracks the per-type setting reactively; once toggled, that
  * tab pins its own value. The `preferred` autocomplete model is its 🧠-menu tag
  * (`ollama_roles.autocomplete`), falling back to `ollama_model`.
@@ -6683,7 +6687,7 @@ export function useZoomModifierWheel(handler: (e: WheelEvent) => void) {
  * changing it resizes only this viewer tab, not every other tab of the same
  * type. The size is seeded once from the tab's persisted `viewerState.fontSize`
  * and written back there (like scroll/zoom), so it survives reopening the file
- * and an Eldrun restart. Until the user zooms this tab it tracks the per-type
+ * and a Tabtivity restart. Until the user zooms this tab it tracks the per-type
  * `viewer_prefs[type].font_size` default reactively; once zoomed, the tab pins
  * its own size. `reset` clears the override, dropping back to that default.
  */
@@ -6908,7 +6912,7 @@ function BlameButton({ active, toggle }: { active: boolean; toggle: () => void }
  *    breakpoint pdb would reject at startup (`snapBreakpointLine`).
  *
  * They persist in the tab's `ViewerState`, so they survive closing the file and
- * an Eldrun restart — the same plumbing (and the same `project.json` write) as the
+ * a Tabtivity restart — the same plumbing (and the same `project.json` write) as the
  * reader's scroll position.
  */
 function useBreakpoints(
@@ -7416,7 +7420,7 @@ function TextView({
   // path in global settings), not per tab, so every viewer of the same script
   // shares one set of args — edit them in one tab and the others follow live,
   // because both read this same store selector — and so they survive closing the
-  // viewer and an Eldrun restart, and show in the Run button's hover tooltip.
+  // viewer and a Tabtivity restart, and show in the Run button's hover tooltip.
   const pyArgs = useSettingsStore((s) => s.settings?.python_run_args?.[path] ?? "");
   const setPyArgs = useCallback(
     (v: string) => {
@@ -7583,10 +7587,7 @@ function TextView({
   // cards, editing the same draft by splice (see YamlGrid). Offered only when the
   // file actually nests a collection worth carding, so the Cards toggle appears
   // exactly where it does something (the tree's honesty rule).
-  const gridAvailable = useMemo(
-    () => (isYaml && loaded ? hasCards(draft, jsonStrict) : false),
-    [isYaml, loaded, draft, jsonStrict],
-  );
+  // (`gridAvailable` itself is computed below, once the mode is known.)
   // A `.bib` gets the bibliography CARD list as its "preview" half (see BibCards):
   // one card per entry, its `field = {value}` pairs as rows, splicing this same
   // draft — so Cards and Source are two views on one text exactly as Tree and
@@ -7603,6 +7604,30 @@ function TextView({
   // nests something to card) but is no longer the default — it still needs work.
   const [mode, setMode] = useState<"preview" | "grid" | "edit">(
     structured ? "preview" : previewKind === "html" || previewKind === "svg" ? "preview" : "edit",
+  );
+  // Whether the Cards toggle is offered re-parses the whole file. In Source mode
+  // that question only decides a header button, so it is asked of the draft once
+  // typing settles rather than on every keystroke — a parse of a large JSON file
+  // is tens of milliseconds of UI thread per key. The tree and the cards always
+  // see the live draft (an edit there must retire the card mode at once).
+  const editingSource = mode === "edit";
+  const [settledDraft, setSettledDraft] = useState(draft);
+  // Entering (or leaving) Source starts from the live draft, set during render
+  // (React's derived-state pattern) so the toggle never shows a stale answer.
+  const [settledFor, setSettledFor] = useState(editingSource);
+  if (settledFor !== editingSource) {
+    setSettledFor(editingSource);
+    setSettledDraft(draft);
+  }
+  useEffect(() => {
+    if (!isYaml || !editingSource) return;
+    const id = window.setTimeout(() => setSettledDraft(draft), GRID_PROBE_SETTLE_MS);
+    return () => window.clearTimeout(id);
+  }, [isYaml, editingSource, draft]);
+  const gridText = editingSource ? settledDraft : draft;
+  const gridAvailable = useMemo(
+    () => (isYaml && loaded ? hasCards(gridText, jsonStrict) : false),
+    [isYaml, loaded, gridText, jsonStrict],
   );
   // A flat file (or a card edit that removes all nesting) has no card view — retire
   // the mode rather than strand it on a toggle with no button, dropping to the tree.
@@ -8239,7 +8264,7 @@ function MarkdownView({
         return;
       }
       if (!a.classList.contains("file-link")) return;
-      // Keep local paths inside Eldrun rather than allowing the webview to
+      // Keep local paths inside Tabtivity rather than allowing the webview to
       // navigate away from the native preview.
       e.preventDefault();
       const hinted = splitLineHint(href);
@@ -9753,7 +9778,7 @@ function TexView({
       const flags = extraFlags.trim().split(/\s+/).filter(Boolean);
       // A compile the reader asked for always builds: latexmk's `-g` overrides
       // its "every source unchanged, nothing to do" no-op, which otherwise hands
-      // back the old PDF (say after an \input'd file changed outside Eldrun or a
+      // back the old PDF (say after an \input'd file changed outside Tabtivity or a
       // package was updated). The direct-engine path always runs the engine.
       if (cap?.latexmk && !flags.some((f) => /^-g+$/.test(f))) flags.unshift("-g");
       const res = await invokeTrusted<TexCompileResult>("compile_tex", {
@@ -10543,7 +10568,7 @@ function ImageView({
     setNatural(nat);
     if (!prev) {
       // First load: restore the session-persisted zoom/pan (#viewerpos) so an
-      // Eldrun restart reopens the image where the reader left it; otherwise fit.
+      // Tabtivity restart reopens the image where the reader left it; otherwise fit.
       const init = viewPos.initial;
       if (init?.scale != null) {
         setScale(init.scale);
@@ -10560,7 +10585,7 @@ function ImageView({
   };
 
   // #viewerpos: persist zoom + pan (throttled, trailing-edge) once an image is
-  // up, so reopening it or restarting Eldrun restores this exact view.
+  // up, so reopening it or restarting Tabtivity restores this exact view.
   const persistTimer = useRef<number | null>(null);
   useEffect(() => {
     if (!natural) return;

@@ -2,14 +2,14 @@
 //! Phase 1): `{project, path}` pairs resolved under the **same-roots rule** and
 //! read without following a link.
 //!
-//! Eldrun (the MCP process) is not fenced, so every path an agent names makes
-//! Eldrun read on the agent's behalf. What holds that to the tab's own view:
+//! Tabtivity (the MCP process) is not fenced, so every path an agent names makes
+//! Tabtivity read on the agent's behalf. What holds that to the tab's own view:
 //!
 //! - the caller's session recorded at spawn that its fence shows the projects
 //!   (`root_mcp::Session::projects_grant`) — checked by `root_mcp_mail`;
 //! - the roots are the ones a fenced tab *of that project* would get
 //!   ([`agent_fence::attach_roots`]), minus any at `/`, at or above `$HOME`, or
-//!   inside Eldrun's state (the fence masks those);
+//!   inside Tabtivity's state (the fence masks those);
 //! - the path is checked component by component before any I/O, and opened by
 //!   an `openat(O_NOFOLLOW)` walk from the root: a link at any component is
 //!   refused, and there is no window between a check and the read;
@@ -39,12 +39,12 @@ pub const MAX_DRAFT_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_TAB_BYTES: u64 = 100 * 1024 * 1024;
 
 /// The session's spawn record says its fence hides the projects.
-pub const NEEDS_PROJECTS_READABLE: &str = "attaching needs a root tab that can read the projects: switch on \"Root agent reads projects\" under Agent sandbox in Eldrun's Settings, then start a new root tab";
+pub const NEEDS_PROJECTS_READABLE: &str = concat!("attaching needs a root tab that can read the projects: switch on \"Root agent reads projects\" under Agent sandbox in ", crate::app_name!(), "'s Settings, then start a new root tab");
 /// Reader and local-model tabs never attach.
 pub const NOT_FOR_CALLER: &str = "`attach` is not available to this agent";
 /// No fence exists on Windows to hold the read to what the tab could see, and
 /// no `openat`; a handle-based check is a filed follow-up.
-pub const WINDOWS_REFUSED: &str = "attaching project files is not available on Windows yet: there is no agent sandbox there to bound what Eldrun would read";
+pub const WINDOWS_REFUSED: &str = concat!("attaching project files is not available on Windows yet: there is no agent sandbox there to bound what ", crate::app_name!(), " would read");
 
 /// One `attach` item as the agent sent it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +63,7 @@ pub struct Resolved {
     pub bytes: Vec<u8>,
 }
 
-/// What resolution reads from: the trusted lists and where Eldrun's own
+/// What resolution reads from: the trusted lists and where Tabtivity's own
 /// state and the user's home are.
 pub struct Lists<'a> {
     pub projects: &'a ProjectsList,
@@ -73,7 +73,7 @@ pub struct Lists<'a> {
     /// The project paths the calling tab's fence exposed when it was spawned
     /// (`root_mcp::ProjectsGrant::Paths`); `None` for an unfenced tab, which
     /// already reads everything. A project added after the spawn is in
-    /// `projects.json` but not in the tab's sandbox, and Eldrun never reads
+    /// `projects.json` but not in the tab's sandbox, and Tabtivity never reads
     /// what the tab's fence hides.
     pub granted: Option<&'a [PathBuf]>,
 }
@@ -159,7 +159,7 @@ fn within_grant(granted: Option<&[PathBuf]>, root: &Path) -> bool {
 }
 
 /// Why a root is not attachable from at all: `/`, `$HOME` or an ancestor of it
-/// (the fence shows neither), or a place inside Eldrun's state (masked).
+/// (the fence shows neither), or a place inside Tabtivity's state (masked).
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static str> {
     let forms: Vec<PathBuf> = [Some(root.to_path_buf()), root.canonicalize().ok()].into_iter().flatten().collect();
@@ -170,7 +170,7 @@ fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static s
             return Some("that project's folder is `/` or your home folder, which no sandboxed tab sees");
         }
         if private.iter().any(|p| r.starts_with(p)) {
-            return Some("that project's folder lies inside Eldrun's own state, which no sandboxed tab sees");
+            return Some(concat!("that project's folder lies inside ", crate::app_name!(), "'s own state, which no sandboxed tab sees"));
         }
     }
     None
@@ -240,7 +240,7 @@ fn read_from_roots(lists: &Lists, roots: &[PathBuf], parts: &[&str], asked: &str
         }
         let joined = parts.iter().fold(root.clone(), |p, c| p.join(c));
         if private.iter().any(|p| joined.starts_with(p)) {
-            return Err("that file lies inside Eldrun's own state, which no sandboxed tab sees".into());
+            return Err(concat!("that file lies inside ", crate::app_name!(), "'s own state, which no sandboxed tab sees").into());
         }
         match read_under(root, parts, crate::schema::mail::MAX_STAGED_BYTES) {
             Ok(bytes) => {
@@ -412,7 +412,7 @@ mod tests {
     fn roots_at_slash_home_or_state_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        let state = home.join(".local/share/eldrun");
+        let state = home.join(concat!(".local/share/", crate::app_slug!()));
         std::fs::create_dir_all(&state).unwrap();
         assert!(root_refusal(Path::new("/"), &home, &state).is_some());
         assert!(root_refusal(&home, &home, &state).is_some());

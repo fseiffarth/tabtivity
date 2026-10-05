@@ -20,7 +20,7 @@ Referenced from `AGENTS.md`.
     this is now the DEFAULT for a newly added machine** (`ComputeHost.shared_fs`,
     schema default `false` for back-compat but the "Add machine" form ticks it on;
     untick "Sync a copy" ⇒ shared). A shared-fs worker sees the primary's project
-    folder at its own `remote_path` (an HPC compute node on a shared home), so Eldrun
+    folder at its own `remote_path` (an HPC compute node on a shared home), so Tabtivity
     copies **nothing** and **never runs git on it** — a tab just `cd`s into that folder
     and runs there (`wrap_pty_options` already uses `spec.remote_path`, so tab spawn is
     unchanged). This is load-bearing for safety: the code path that would `git init` +

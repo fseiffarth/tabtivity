@@ -22,7 +22,7 @@ Related: `todo/group-e-worktree.md` #23, `docs/context/git_sync.md`,
 
 **The backend is a competent, safe wrapper around four git verbs. The frontend
 is a stub that was never finished, never styled and never exercised end to end.
-And neither side knows the rest of Eldrun exists.**
+And neither side knows the rest of Tabtivity exists.**
 
 The feature is currently a strictly worse `git worktree add`: fewer options than
 the CLI, no shell completion, and it hands back a pill you cannot click. That
@@ -90,7 +90,7 @@ and "it holds the only copy" look identical from a button.
 (`:862`), which never passes it. The inverse of B2, and both are true at once:
 **the safe removal is unguarded and the deliberate one is impossible.** A
 worktree with one modified file yields a raw `use --force to delete it` string
-and no control anywhere in Eldrun that can supply it.
+and no control anywhere in Tabtivity that can supply it.
 
 ### B4. A locked worktree is permanently unremovable
 `git.rs:1490-1494` passes at most **one** `--force`. Verified:
@@ -141,7 +141,7 @@ For contrast, `git branch -f feat HEAD~1` correctly refuses with `fatal: cannot
 force update the branch 'feat' used by worktree at '…'`.
 
 The consequence chain is silent and real: lockstep runs in the background, the
-worktree's index now disagrees with its HEAD, and Eldrun's own commit UI does
+worktree's index now disagrees with its HEAD, and Tabtivity's own commit UI does
 `git add -A` + commit — so **committing from that worktree commits a revert of
 the incoming change**. A `reset --hard` there destroys it outright.
 
@@ -163,7 +163,7 @@ user answer. Result: a full second copy of the source tree pushed over SFTP,
 counted in the big-folder census, landing on the peer as a plain directory with
 **no `.git`** — a dead copy that then drifts. On a large repo this doubles every
 sync pass. Related: `git add -A` in the parent records an embedded worktree as a
-bogus gitlink (mode 160000) with a warning Eldrun surfaces to nobody.
+bogus gitlink (mode 160000) with a warning Tabtivity surfaces to nobody.
 
 ### D3. `copy_dir_all` cross-links two trees to one admin dir
 `projects.rs:3157-3159` skips `.git` only when `is_dir()`:
@@ -193,7 +193,7 @@ sandbox bind mount.
 
 ---
 
-## Part 3 — Integration with Eldrun's own machinery
+## Part 3 — Integration with Tabtivity's own machinery
 
 ### I1. A worktree is invisible inside a project container
 `sandbox.rs` bind-mounts `<project_dir>` at its identical absolute path plus a
@@ -212,7 +212,7 @@ for a deferred hardening item.**
 (`remote_target_for_dir`), but for a remote project that `project_dir` is the
 **local mirror** (`remote.rs:151-160`). So a path the user picked from a local
 file tree is created **on the host**: `git worktree add
-'/home/…/.local/share/eldrun/projects/<id>/wt-feature'` runs on the login node,
+'/home/…/.local/share/tabtivity/projects/<id>/wt-feature'` runs on the login node,
 creating a mirror of the mirror's path inside the cluster `$HOME`. Nothing
 errors. `git_worktree_list` then returns host-absolute paths the frontend
 renders as if local. The mirror's own repo can never have its worktrees managed
@@ -225,7 +225,7 @@ are is not where the operation runs" problem and is the precedent to follow.
 `valid_positional_path` rejects only empty/whitespace and a leading `-`; `..` is
 explicitly accepted (`git.rs:2216` asserts it). `git worktree add <path>`
 creates and populates `<path>`, so the command is a **"write repo-controlled
-content to any writable absolute path"** primitive — including a path Eldrun
+content to any writable absolute path"** primitive — including a path Tabtivity
 would later read as intent. (`remove` is *not* a matching arbitrary-rm: git
 refuses an unregistered path, so the delete side is bounded.)
 
@@ -267,7 +267,7 @@ Three rungs, each shippable on its own, each making the next cheaper.
 
 ### Rung 1 — worktree-aware tabs (the cheapest real win)
 
-Eldrun already has a per-tab "which machine" axis (`TabEntry.location`). A
+Tabtivity already has a per-tab "which machine" axis (`TabEntry.location`). A
 worktree selector is the exact filesystem analogue: per-tab "which checkout" —
 same mental model, same place in the UI, no new concept.
 
@@ -297,15 +297,15 @@ Three things must be handled or it is a footgun:
 ### Rung 2 — worktree as a first-class project
 
 `todo/group-e-worktree.md` defers this as a stretch goal. It is, on the evidence, the
-only thing that justifies the feature's existence in Eldrun — and it is a
+only thing that justifies the feature's existence in Tabtivity — and it is a
 composition of existing parts, not a subsystem. Verified free:
 
-| An orchestrator must build | Eldrun already has, keyed per project |
+| An orchestrator must build | Tabtivity already has, keyed per project |
 |---|---|
 | a workspace per branch | `ProjectEntry.directory` |
 | terminal + agent per workspace | `stores/tabs` scoped by project id |
 | a file tree per workspace | `ProjectFilesView` |
-| isolation per workspace | `SandboxSpec` → `eldrun-<id>` (`sandbox.rs:180`) |
+| isolation per workspace | `SandboxSpec` → `tabtivity-<id>` (`sandbox.rs:180`) |
 | switching between them | the project switcher |
 | session survival | `<state_dir>/sessions/<id>/` (`storage.rs:127`) + tmux |
 
@@ -472,13 +472,13 @@ Phases 0–2, plus the test plan. Two deviations, both deliberate.
   which proposed hiding the section "until D1"; D1 is here.
 
 ### Phase 2 — locality and containment
-- **I3** — one sanctioned root per project: `<root>/.eldrun/worktrees/`.
+- **I3** — one sanctioned root per project: `<root>/.tabtivity/worktrees/`.
   `resolve_worktree_path` takes a bare **name** (or an absolute path already
   inside the root) and refuses everything else, `..` included. That location is
-  not arbitrary: `.eldrun` is already a walk boundary for byte-sync, and it sits
+  not arbitrary: `.tabtivity` is already a walk boundary for byte-sync, and it sits
   inside the directory the container bind-mounts at its identical absolute path,
   so a linked worktree's `gitdir:` pointer resolves *inside* the container — I1,
-  addressed rather than deferred. `.eldrun/` is added to the repo's own
+  addressed rather than deferred. `.tabtivity/` is added to the repo's own
   `info/exclude` on first use, because otherwise `git add -A` records the
   checkout as a bogus gitlink (mode 160000, verified).
 - **I2** — `site: "host" | "mirror"` on all five commands, following

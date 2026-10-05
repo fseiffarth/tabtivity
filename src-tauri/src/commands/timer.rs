@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::schema::time_log;
 
-pub const APP_TIMER_ID: &str = "__eldrun__";
+pub const APP_TIMER_ID: &str = crate::brand::APP_TIMER_ID;
 
-/// Flush elapsed app (Eldrun itself) usage seconds into the time log.
+/// Flush elapsed app (Tabtivity itself) usage seconds into the time log.
 #[tauri::command]
 pub fn timer_flush_app(secs: f64) -> Result<(), String> {
     if secs <= 0.0 {

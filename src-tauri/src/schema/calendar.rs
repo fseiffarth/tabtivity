@@ -1,10 +1,10 @@
-//! `~/.local/share/eldrun/calendar.json` — the native calendar's on-disk model.
+//! `~/.local/share/tabtivity/calendar.json` — the native calendar's on-disk model.
 //!
 //! The file is an object (`CalendarData`): a list of named calendars, the events
 //! filed under them, and the tasks (VTODO-style to-dos). Version 1 of this file
 //! was a bare JSON array of start-time-only events; `CalendarFile` still reads
 //! that shape and `migrate_legacy` lifts it into the current model, so an
-//! existing calendar survives the upgrade untouched. Eldrun always *writes* the
+//! existing calendar survives the upgrade untouched. Tabtivity always *writes* the
 //! current shape.
 //!
 //! Times are **local wall-clock**, never UTC: `"YYYY-MM-DDTHH:MM"` for a timed
@@ -30,7 +30,7 @@ use serde_json::Value;
 ///
 /// **Nothing branches on it, and nothing may.** `CalendarFile` dispatches on the
 /// file's *shape* (it is `#[serde(untagged)]`), and `normalize` stamps this value
-/// unconditionally — so an older Eldrun that reads a v3 file writes it back
+/// unconditionally — so an older Tabtivity that reads a v3 file writes it back
 /// stamped `2`, with the v3 fields intact in the `extra` flattens. The number can
 /// therefore go *backwards* on the same file, and a migration gated on it would
 /// run, or fail to run, non-deterministically. Every backfill below is instead
@@ -79,12 +79,22 @@ pub struct Calendar {
     /// Read-only calendars (e.g. an imported feed) reject edits in the UI.
     #[serde(default)]
     pub readonly: bool,
+    /// Bumped by every write that changed this record (#171), so a client can
+    /// tell a record it holds from the one on disk. `0` until a revision-aware
+    /// Tabtivity first rewrites the record, and not serialized then, so an
+    /// untouched file keeps its bytes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rev: u64,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl Calendar {
@@ -96,6 +106,7 @@ impl Calendar {
             color: "#4aa3df".to_string(),
             visible: true,
             readonly: false,
+            rev: 0,
             extra: HashMap::new(),
         }
     }
@@ -104,7 +115,7 @@ impl Calendar {
 // ── Recurrence ──────────────────────────────────────────────────────────────
 
 /// How often a recurring event repeats. Mirrors the iCalendar `RRULE` subset
-/// Eldrun supports.
+/// Tabtivity supports.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Freq {
@@ -237,6 +248,12 @@ pub struct CalendarEvent {
     pub overrides: Vec<EventOverride>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alarms: Vec<Alarm>,
+    /// Bumped by every write that changed this record (#171), so a client can
+    /// tell a record it holds from the one on disk. `0` until a revision-aware
+    /// Tabtivity first rewrites the record, and not serialized then, so an
+    /// untouched file keeps its bytes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rev: u64,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -393,7 +410,7 @@ pub struct Subtask {
 /// is path-free by rule (`commands::mail`'s own `no_command_takes_a_path`
 /// tripwire), and a type that carries mail data *out* of that surface and into
 /// `calendar.json` must not be where the rule quietly stops holding.
-/// `message_id` is `MailHeader::id` — Eldrun's `{folder_id}-{uid}` store key,
+/// `message_id` is `MailHeader::id` — Tabtivity's `{folder_id}-{uid}` store key,
 /// which is exactly what `mail_body`, `mail_flag` and `mail_priority_set` take.
 ///
 /// `subject`/`from` are a **snapshot taken at conversion**, not a live lookup, for
@@ -462,7 +479,7 @@ pub struct TaskFileLink {
 ///
 /// It is also a **board card**: `column` and `rank` place it, and the remaining
 /// board fields (`tags`, `subtasks`, `mail`, `event`, `project_id`, `created`) are
-/// Eldrun's own and are not exported to ICS — see `CalendarData::normalize` for
+/// Tabtivity's own and are not exported to ICS — see `CalendarData::normalize` for
 /// how board state and VTODO completion are kept from contradicting each other.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CalendarTask {
@@ -497,7 +514,7 @@ pub struct CalendarTask {
     // to compile.
     /// Id of the [`TaskColumn`] this card sits in. Empty means "not placed yet",
     /// which `normalize` backfills — so a task created by the calendar's Tasks
-    /// view, by an ICS import, or by an older Eldrun still appears on the board.
+    /// view, by an ICS import, or by an older Tabtivity still appears on the board.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub column: String,
     /// Manual position within `column`: a fractional rank, ascending (smallest is
@@ -548,6 +565,12 @@ pub struct CalendarTask {
     /// than an absent one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub created: String,
+    /// Bumped by every write that changed this record (#171), so a client can
+    /// tell a record it holds from the one on disk. `0` until a revision-aware
+    /// Tabtivity first rewrites the record, and not serialized then, so an
+    /// untouched file keeps its bytes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rev: u64,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -573,15 +596,22 @@ pub struct CalendarData {
     /// One-time board upgrades already applied to this file, by name.
     ///
     /// A marker rather than a `version` check, because `version` explicitly may
-    /// not be branched on (see [`CALENDAR_VERSION`]: an older Eldrun stamps the
+    /// not be branched on (see [`CALENDAR_VERSION`]: an older Tabtivity stamps the
     /// number *backwards*, so a version-gated migration runs, or fails to run,
     /// non-deterministically). This list only ever grows, an unknown entry is
-    /// harmless, and an older Eldrun round-trips it in its `extra` flatten — so
+    /// harmless, and an older Tabtivity round-trips it in its `extra` flatten — so
     /// it is the one thing here that can honestly say "already done, do not do it
     /// again", which is what keeps an upgrade from resurrecting a column the user
     /// deleted afterwards.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub board_upgrades: Vec<String>,
+    /// The file's revision, bumped by every write (#171). A writer commits its
+    /// read-modify-write only while the revision on disk is still the one it
+    /// read — the in-process lock cannot see a second Tabtivity process, and the
+    /// board rewrites this file on every drag. `0` for a file no
+    /// revision-aware Tabtivity has written yet.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rev: u64,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -589,6 +619,7 @@ pub struct CalendarData {
 impl Default for CalendarData {
     fn default() -> Self {
         Self {
+            rev: 0,
             version: CALENDAR_VERSION,
             calendars: vec![Calendar::default_calendar()],
             events: Vec::new(),
@@ -891,7 +922,7 @@ impl CalendarData {
             //
             //    `percent`/`completed` are authoritative: they are the
             //    ICS-round-trippable, cross-tool truth that `TasksView` and
-            //    `serializeIcs` both read, while `column` is Eldrun's own and is
+            //    `serializeIcs` both read, while `column` is Tabtivity's own and is
             //    the field that can be absent. So this writes **only `column`**,
             //    and never `percent`/`completed` — it also has no clock to mint a
             //    completion stamp with.
@@ -1053,6 +1084,7 @@ pub fn migrate_legacy(events: Vec<LegacyEvent>) -> CalendarData {
         .collect();
 
     CalendarData {
+        rev: 0,
         version: CALENDAR_VERSION,
         calendars: vec![Calendar::default_calendar()],
         events,
@@ -1073,7 +1105,7 @@ fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-fn days_in_month(y: i32, m: u32) -> u32 {
+pub(crate) fn days_in_month(y: i32, m: u32) -> u32 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -1307,6 +1339,7 @@ mod tests {
     #[test]
     fn normalize_refiles_orphaned_events() {
         let mut data = CalendarData {
+            rev: 0,
             version: CALENDAR_VERSION,
             calendars: vec![Calendar::default_calendar()],
             events: vec![CalendarEvent {
@@ -1348,6 +1381,7 @@ mod tests {
     /// by `normalize` (see `no_board_means_normalize_leaves_tasks_alone`).
     fn board(tasks: Vec<CalendarTask>) -> CalendarData {
         CalendarData {
+            rev: 0,
             version: CALENDAR_VERSION,
             calendars: vec![Calendar::default_calendar()],
             events: Vec::new(),
@@ -1522,6 +1556,7 @@ mod tests {
     #[test]
     fn no_board_means_normalize_leaves_tasks_unplaced() {
         let mut data = CalendarData {
+            rev: 0,
             version: CALENDAR_VERSION,
             calendars: vec![Calendar::default_calendar()],
             events: Vec::new(),
@@ -1543,6 +1578,7 @@ mod tests {
     #[test]
     fn tags_and_subtask_ids_normalize_without_a_board() {
         let mut data = CalendarData {
+            rev: 0,
             version: CALENDAR_VERSION,
             calendars: vec![Calendar::default_calendar()],
             events: Vec::new(),
@@ -1851,7 +1887,7 @@ mod tests {
         }
     }
 
-    /// The "an older Eldrun does not lose data" claim, mechanically: a build that
+    /// The "an older Tabtivity does not lose data" claim, mechanically: a build that
     /// has never heard of the board fields keeps them in its `extra` flatten and
     /// writes them back out.
     #[test]

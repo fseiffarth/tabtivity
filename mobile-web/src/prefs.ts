@@ -5,7 +5,9 @@
 // phone the same toggle sits above a one-column list that is re-mounted by every
 // tab switch, so "hide done" was being asked for again a dozen times a session.
 
-const PREFIX = "eldrun.mobile.";
+import { storageKey } from "../../src/lib/brand";
+
+const PREFIX = storageKey("mobile.");
 
 type FlagStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -18,8 +20,13 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * whoever listens to one session while their hands are busy listens to the
  * next one too. `voiceRemote` sends dictation to the phone's speech service
  * even where the browser could recognize on the device: often the better ear,
- * at the price of the audio leaving the phone — so it is a choice, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote";
+ * at the price of the audio leaving the phone — so it is a choice, off unset.
+ * `markupAutoReload` loads a PDF the agent changed under the marks as soon as
+ * it finishes (`MarkupView`), read with an on fallback. `markupSubagents`
+ * has each Submit handed to a new subagent of the tab's agent
+ * (`markupForSubagent`), off unset. `markupDirect` is **Apply marks
+ * directly** (`markupInstruction.ts`), read with an on fallback. */
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -57,8 +64,17 @@ export function writeFlag(name: MobileFlag, value: boolean, storage?: FlagStorag
  * looking at the list for the same reason. `projectTabsSort` is the same choice
  * for one project screen's tab list, kept apart from it because the two lists
  * are read for different things: the cross-project Agents list is triage, while
- * a project's own tabs are a place the reader arranges by hand. */
-export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang";
+ * a project's own tabs are a place the reader arranges by hand. `mailAccount`
+ * is the mail account the Mail tab opens on: an id the desktop handed out,
+ * checked against the accounts it lists before it is used. `theme` is the
+ * phone's own theme (`theme.ts`), and `desktopTheme` the desktop's as last
+ * reported, so a cold open that follows it paints right before the bridge
+ * answers. `markupInstruction` is free text rather than a choice — what a
+ * Mark up Submit tells the agent (`markupInstruction.ts`) — kept here all the
+ * same, since it is just as much this phone's own; `markupAsk` is its
+ * asking dial, a digit 0–4. `markupOpen` is the mode
+ * a markable PDF opens in (`markupOpen.ts`). */
+export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen";
 
 export function readChoice<T extends string>(name: MobileChoice, accept: (value: unknown) => value is T, fallback: T, storage?: FlagStorage): T {
   try {

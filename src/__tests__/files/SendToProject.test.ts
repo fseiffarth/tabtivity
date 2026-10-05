@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { loadLastSendTarget, saveLastSendTarget } from "../../lib/projects/sendToProject";
+import { storageKey } from "../../lib/brand";
 
 describe("sendToProject memory", () => {
   beforeEach(() => {
@@ -21,12 +22,12 @@ describe("sendToProject memory", () => {
   });
 
   it("treats a malformed stored value as no memory", () => {
-    localStorage.setItem("eldrun.sendToProject.last", "{not json");
+    localStorage.setItem(storageKey("sendToProject.last"), "{not json");
     expect(loadLastSendTarget()).toBeNull();
   });
 
   it("treats a wrong-shaped stored value as no memory", () => {
-    localStorage.setItem("eldrun.sendToProject.last", JSON.stringify({ projectId: 7 }));
+    localStorage.setItem(storageKey("sendToProject.last"), JSON.stringify({ projectId: 7 }));
     expect(loadLastSendTarget()).toBeNull();
   });
 });

@@ -1,9 +1,9 @@
 /**
  * The one-click fix for Codex's hook trust gate.
  *
- * Codex refuses to run Eldrun's SessionStart hook until the user enables it in
+ * Codex refuses to run Tabtivity's SessionStart hook until the user enables it in
  * Codex's own `/hooks` list, and until then Codex tabs resume off a heuristic
- * fallback rather than the exact recorded session. Per Eldrun's install-via-tab
+ * fallback rather than the exact recorded session. Per Tabtivity's install-via-tab
  * policy, the remedy must be a click that *opens Codex on that list* — never a
  * command handed to the user to run themselves. See lib/agents/codexHooks.ts.
  */
@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undef
 import { codexHookNeedsTrust, openCodexHooksTab } from "../../lib/agents/codexHooks";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
+import { BRAND, envName } from "../../lib/brand";
 
 describe("codexHookNeedsTrust", () => {
   it("flags only the states in which Codex won't run the hook", () => {
@@ -30,7 +31,7 @@ describe("codexHookNeedsTrust", () => {
 describe("openCodexHooksTab", () => {
   beforeEach(() => {
     useTabsStore.setState({ tabsByScope: {} });
-    useProjectsStore.setState({ rootDir: "/home/u/eldrun/root", activeId: "p1" });
+    useProjectsStore.setState({ rootDir: `/home/u/${BRAND.slug}/root`, activeId: "p1" });
   });
 
   it("opens a real Codex tab in the root scope, already on /hooks", () => {
@@ -45,7 +46,7 @@ describe("openCodexHooksTab", () => {
     const tab = root[0];
     expect(tab.cmd).toBe("codex");
     expect(tab.kind).toBe("agent");
-    expect(tab.cwd).toBe("/home/u/eldrun/root");
+    expect(tab.cwd).toBe(`/home/u/${BRAND.slug}/root`);
     // TerminalView types + submits this once Codex is up, so the user lands in
     // the hooks list rather than being told to type it.
     expect(tab.initialInput).toBe("/hooks");
@@ -58,7 +59,7 @@ describe("openCodexHooksTab", () => {
     // Built through buildStaticTabSpec, so it mints a session key like any other
     // Codex tab: it is itself resumable, and the binder can follow it.
     expect(tab.sessionId).toBeTruthy();
-    expect(tab.env?.ELDRUN_TAB_UID).toBe(tab.sessionId);
+    expect(tab.env?.[envName("TAB_UID")]).toBe(tab.sessionId);
     // Codex mints its own session id, so nothing is passed on the command line.
     expect(tab.args ?? []).toEqual([]);
   });

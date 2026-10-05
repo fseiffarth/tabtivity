@@ -46,6 +46,7 @@ import { isCalDavConflict, useCalDavStore } from "../../stores/calendar/caldav";
 import type { CalDavAccount } from "../../types/caldav";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
+import { BRAND } from "../../lib/brand";
 
 interface Props {
   /** Whether this pane's tab is the visible one in its group. */
@@ -513,7 +514,7 @@ export function CalendarPane({ visible }: Props) {
 
   async function exportIcs() {
     const path = await saveDialog({
-      defaultPath: "eldrun-calendar.ics",
+      defaultPath: `${BRAND.slug}-calendar.ics`,
       filters: [{ name: "iCalendar", extensions: ["ics"] }],
     });
     if (typeof path !== "string") return;

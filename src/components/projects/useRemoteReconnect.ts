@@ -94,7 +94,7 @@ const adoptTerm = (term: LoginTerm | undefined): LoginTerm | null =>
  * address / config + folder browse:
  *
  *  - an embedded OpenVPN login terminal (the user types the passphrase there;
- *    Eldrun never handles it; the VPN lamp flips green on the ready marker), and
+ *    Tabtivity never handles it; the VPN lamp flips green on the ready marker), and
  *  - an embedded SSH login terminal that establishes the ControlMaster; once a
  *    credential-less `ssh_connect` rides it, the pooled SSH/SFTP connection is
  *    opened (`remote_connect`) and the SSH lamp goes green — which un-gates the
@@ -151,7 +151,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   // created (`user@host` in the new/extend dialog), so a project created with no
   // user — or the wrong one — had no surface that could correct it. That is not a
   // headless-only gap, and it fails differently on each side. In **headless** mode
-  // there was simply no field, so Eldrun authenticated as the local account name and
+  // there was simply no field, so Tabtivity authenticated as the local account name and
   // no password could ever be right. In **non-headless** the same wrong name is typed
   // into the login terminal (`initialInput` submits it on the user's behalf) and the
   // host rejects it in plain view — and the obvious recovery, retyping
@@ -258,7 +258,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   // eligible and then fail on every launch (`record_key_auth`, backend). Which is
   // why this gate is headless-only in the first place: the non-headless branch
   // renders its own ungated toggle, since there "auto-connect" means the login
-  // opening in the root terminal, not a connect Eldrun completes by itself.
+  // opening in the root terminal, not a connect Tabtivity completes by itself.
   const [keyAuth, setKeyAuth] = useState(remote?.key_auth === true);
   useEffect(() => setKeyAuth(remote?.key_auth === true), [remote?.key_auth]);
   // One formula for all four surfaces (`autoConnectEligibility`), which is also
@@ -370,7 +370,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
       .catch((e) => console.warn("persist openvpn config failed", e));
   };
 
-  // Select a previously-stored config (its path is already an Eldrun-stored copy).
+  // Select a previously-stored config (its path is already a Tabtivity-stored copy).
   const selectVpnConfig = (path: string) => {
     setVpnConfig(path);
     setVpnError("");
@@ -378,7 +378,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
     persistVpnConfig(path);
   };
 
-  // Pick a `.ovpn` file and copy it into Eldrun's store, then adopt it. Joins the
+  // Pick a `.ovpn` file and copy it into Tabtivity's store, then adopt it. Joins the
   // recents list for future reuse.
   const browseVpnConfig = async () => {
     const picked = await open({
@@ -472,7 +472,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
 
   // Bring the OpenVPN tunnel up in an embedded terminal. The connect command
   // runs interactively so the user types the passphrase in that visible terminal
-  // — Eldrun never handles it. The PTY persists past this panel so the tunnel
+  // — Tabtivity never handles it. The PTY persists past this panel so the tunnel
   // stays up for the reconnected project; we pre-mark the dedupe key so any later
   // activation root-terminal fallback is suppressed.
   const startVpnTerm = async () => {
@@ -589,7 +589,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
 
   // Open the interactive SSH login in an embedded terminal. It establishes the
   // ControlMaster the pooled connection then rides, so reconnect completes
-  // without Eldrun ever handling the password. Persisted past the panel; the
+  // without Tabtivity ever handling the password. Persisted past the panel; the
   // dedupe mark suppresses any activation root-terminal login.
   const startSshTerm = async () => {
     if (!remote || sshTermRef.current || winManual) return;
@@ -629,7 +629,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
   };
 
   // ── Headless connect path (Connect modal, `connections_headless` ON) ─────────
-  // Eldrun feeds the password to the backend itself (no visible login terminal);
+  // Tabtivity feeds the password to the backend itself (no visible login terminal);
   // the OpenVPN handshake streams into `vpnLog` as a read-only progress view.
 
   // Stream the live OpenVPN handshake into `vpnLog` (only lines for this

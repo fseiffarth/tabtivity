@@ -18,7 +18,7 @@ interface Props {
  * Phase-1 host for an "embed" tab (TODO Group K #40).
  *
  * The faithful frameless-embedding path (X11-reparent the app's top-level into
- * an Eldrun-owned container sized to this pane) is Phase 2. For now, on first
+ * a Tabtivity-owned container sized to this pane) is Phase 2. For now, on first
  * mount we open the file EXTERNALLY via the existing windows-store openFile and
  * render a placeholder pane. This delivers the full drag/drop/capability/tab UX
  * and graceful degradation; live in-tab rendering arrives with the X11 layer.

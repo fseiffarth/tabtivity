@@ -4,7 +4,7 @@
 `src/styles/themes.css`, plus the surfaces each item names.*
 
 *The group exists because none of the others fit and the subject is real: what
-Eldrun **spends** to show what it shows. Every feature here is somebody else's
+Tabtivity **spends** to show what it shows. Every feature here is somebody else's
 feature seen from the other side — a folder size is a recursive walk, a git dot
 is a `git status`, a hover card is a poll — and the question "is this worth its
 cost, on this machine, right now?" belongs to the user rather than to whichever
@@ -12,7 +12,7 @@ group shipped the aid. Energy Saver (`stores/power`) was the first answer and
 is a different one: it widens timers off a live **battery** reading, this group
 is about a standing **preference**.*
 
-*The rule for anything added here: nothing may make Eldrun say something
+*The rule for anything added here: nothing may make Tabtivity say something
 untrue. Withdrawing a figure is fair; leaving a stale or unresolvable one on
 screen is not.*
 
@@ -39,7 +39,7 @@ screen is not.*
     - **The tab hover card** — its own ticking clock and store subscriptions per
       hover; the tab keeps its label as a `title`.
     - **The header CPU/RAM/GPU readout** — a poll every 2.5 s for a figure that
-      is, by construction, a readout of Eldrun's own overhead.
+      is, by construction, a readout of Tabtivity's own overhead.
     - **The Python ▶ gate** — deciding whether a `.py` has a `__main__` guard
       means reading it, an SFTP round trip per file on a remote listing. Files
       already in the persisted cache keep their ▶: it stops the *scanning*, not
@@ -206,7 +206,7 @@ screen is not.*
       persistence; the frontend applies live regardless). Cross-window:
       `APPEARANCE_CHANGED_EVENT` (DetachedApp listener) + the popout's own
       settings load. Pre-paint: `index.html` re-applies validated
-      `eldrun-accent`/`eldrun-corners` localStorage caches before first paint.
+      `tabtivity-accent`/`tabtivity-corners` localStorage caches before first paint.
     - [x] 🤖 Automated test — `src/__tests__/theme/Appearance.test.ts` (normalize/
       apply/clear/invalid-input for both overrides; "system" resolution).
     - [ ] 🖐️ Manual test — pick a swatch: pills, focus rings, scrollbar and
@@ -293,7 +293,7 @@ screen is not.*
       colors at all (the fancy themes' gradient `--bg-header`), which fall back
       to a twin token.
     - Cross-window via `APPEARANCE_CHANGED_EVENT` (payload grew `themeVars`);
-      pre-paint via a validated `eldrun-theme-vars` localStorage cache in
+      pre-paint via a validated `tabtivity-theme-vars` localStorage cache in
       `index.html`.
     - **Per-token examples** (2026-08-31): every row carries a line under the
       variable name saying what *visibly* changes when it does ("Menus,
@@ -395,7 +395,7 @@ screen is not.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
-    - **Top frame** (2026-08-31): a section of its own for Eldrun's title bar,
+    - **Top frame** (2026-08-31): a section of its own for Tabtivity's title bar,
       the group the customizer was missing most. The bar is a composite — a
       fill (`--bg-header`, a gradient in the fancy themes, `--glass-header` in
       the glass pair), a 32%-accent wash laid over it, and the 1px seam under
@@ -622,11 +622,11 @@ screen is not.*
     2026-09-01, code-complete; the loop guard is **live-verified** (it
     hot-reloaded into the running window and ended the loop at 08:03Z), the
     per-window attribution is **live-unverified** (two new backend commands,
-    needs a restart). Reported as "Eldrun restarts suddenly" every 30–60 s
+    needs a restart). Reported as "Tabtivity restarts suddenly" every 30–60 s
     while a Codex tab was failing to resume. crash.log showed the restarts
     were the watchdog's own `location.reload()`: it read the **largest**
     renderer under the app but always reloaded the **main** window, and the
-    large one was a popout's (`Eldrun win-1`, 4.7 GB of JS heap against main's
+    large one was a popout's (`Tabtivity win-1`, 4.7 GB of JS heap against main's
     1.4 GB) — so the reload freed nothing and fired again at every poll. The
     Codex `already has an active writer` error was the restore churn's
     symptom, not the cause.
@@ -730,7 +730,7 @@ screen is not.*
     - [ ] 🖐️ Manual test (what is the 4 GB) — after a backend restart, work as
       before with the talk in a popout until the footer's `win-1` reading
       climbs; then read the newest `renderer-watchdog` entry in
-      `~/.local/share/eldrun/crash.log`: it now ends in `[anon … MB, file … MB,
+      `~/.local/share/tabtivity/crash.log`: it now ends in `[anon … MB, file … MB,
       shmem … MB; largest mappings: …]`. Anon ≈ total means JS heap / decoded
       images; a large `memfd:` or shmem share means compositor or IPC buffers;
       an `ipc-fallback` entry above it means the fallback theory is confirmed.
@@ -810,7 +810,7 @@ screen is not.*
       let one agent stream output for 10 min and note it again. Idle-flat but
       streaming-climbs points at the paint path (canvas/compositor), climbing
       either way at the page. Also worth one try on this GNOME/Wayland host:
-      `WEBKIT_DISABLE_DMABUF_RENDERER=0 ./start-eldrun-tauri-hotreload.sh` —
+      `WEBKIT_DISABLE_DMABUF_RENDERER=0 ./start-tabtivity-tauri-hotreload.sh` —
       the 2026-08 verdict that kept DMABUF off was taken on Cinnamon/X11 with
       an older Mesa, and the DMABUF-off path is what runs here.
       - [ ] ✅ Works on Linux (X11)
@@ -826,7 +826,7 @@ screen is not.*
 
 822. **A native fault must kill the process, not spin its thread.** ✅ Fixed
     2026-09-05, code-complete and **live-unverified** (needs a backend restart).
-    Reported as "Eldrun (dev) crashed after tex compilation (not reacting)":
+    Reported as "Tabtivity (dev) crashed after tex compilation (not reacting)":
     the frozen build had compiled an A0 `poster_catchy.tex` (lualatex, one
     page, 2.9 MB PDF), then the window stopped responding while `crash.log`
     grew by ~6 MB/s — 538 MB of the single line `=== CRASH: SIGSEGV ===`, over
@@ -864,7 +864,7 @@ screen is not.*
       entry to `function at file:line` against the executable the entry names
       (the frozen binary keeps its symbol table; offsets are only valid for
       that exact file, so run it before the next `package:dev`). Verified
-      outside Eldrun with a standalone repro that installs a WTF-style
+      outside Tabtivity with a standalone repro that installs a WTF-style
       chaining handler over it: plain, chained, and chained-from-a-worker-
       thread faults each die with exit 139 and exactly one entry whose trace
       names the faulting function. The thread name says which side it was:
@@ -872,9 +872,9 @@ screen is not.*
       backend worker. When a trace stops at a WebKit frame, install
       `libwebkit2gtk-4.1-0-dbgsym` (or point `DEBUGINFOD_URLS` at Ubuntu's
       server) so addr2line can go further.
-    - [ ] 🖐️ Manual test — after a backend restart, `kill -SEGV <eldrun pid>`
+    - [ ] 🖐️ Manual test — after a backend restart, `kill -SEGV <tabtivity pid>`
       from a shell: the process must die at once (exit by signal 11), and
-      `~/.local/share/eldrun/crash.log` must gain exactly ONE
+      `~/.local/share/tabtivity/crash.log` must gain exactly ONE
       `=== CRASH: SIGSEGV code=… addr=0x0 ===` line, not a stream.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -1030,23 +1030,23 @@ screen is not.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-859. **A screen reader killed the renderer: Eldrun opts out of WebKit's AT-SPI
+859. **A screen reader killed the renderer: Tabtivity opts out of WebKit's AT-SPI
     bridge.** Clicking the Downloads section's `→` (file a download into the
     project) blanked the window twice on 2026-09-17 and copied nothing. The
     copy path was never the problem: the apport core shows `WebKitWebProcess`
     aborting in WebKit 2.48's `org.a11y.atspi.Text` handler — it remaps the
     requested offset through a table whose bounds check is a `CRASH()`, not a
     clamp, so an offset that went stale between an assistive client's cache and
-    its query takes the whole renderer down. Eldrun is the worst case for it
+    its query takes the whole renderer down. Tabtivity is the worst case for it
     (terminals, lamps and trees rewrite text continuously), GNOME's Orca was
     running — it binds Super+Alt+S, and it crash-loops against the same bridge —
     and the same path's `g_utf8_substring: assertion 'end_pos >= start_pos'`
-    criticals had been in `eldrun-dev.log` for days. `services::webkit_a11y`
+    criticals had been in `tabtivity-dev.log` for days. `services::webkit_a11y`
     now exports `WEBKIT_A11Y_BUS_ADDRESS` empty at the top of `run()`, before
-    the first webview exists; `ELDRUN_ENABLE_A11Y=1` hands the bridge back, and
+    the first webview exists; `TABTIVITY_ENABLE_A11Y=1` hands the bridge back, and
     an address the environment already carries always wins. The variable is
     process-wide, so `terminal::build_command` and `commands::apps::
-    launch_command` strip it again when Eldrun was the one that set it — no
+    launch_command` strip it again when Tabtivity was the one that set it — no
     *other* WebKitGTK app launched from a tab loses its own accessibility.
     Files: `services/webkit_a11y.rs`, `lib.rs`, `terminal/mod.rs`,
     `commands/apps.rs`. Implemented 2026-09-17, **not live-verified; needs a
@@ -1057,7 +1057,7 @@ screen is not.*
       `systemctl --user start orca`), then work the UI that crashed before:
       open the side panel's Downloads section and click `→` on a file. The file
       lands in the project and the window stays up. Confirm the bridge is
-      really off — `tr '\0' '\n' < /proc/<eldrun pid>/environ | grep A11Y`
+      really off — `tr '\0' '\n' < /proc/<tabtivity pid>/environ | grep A11Y`
       prints `WEBKIT_A11Y_BUS_ADDRESS=` — and that a GUI app launched from a
       terminal tab does *not* inherit it.
       - [ ] ✅ Works on Linux (X11)

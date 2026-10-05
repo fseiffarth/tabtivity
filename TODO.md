@@ -1,4 +1,4 @@
-# ProjectEldrun Plan — Grouped & Numbered Open Ideas
+# Tabtivity Plan — Grouped & Numbered Open Ideas
 
 ## Context
 
@@ -43,7 +43,7 @@ Three independent axes are tracked per item:
   works.
 - **🤖 Automated** — an automated test (vitest under `src/__tests__/` or a Rust
   `cargo test`) exercises the behavior and passes on the current code.
-- **🖐️ Manual** — runtime QA in a live Eldrun confirms the behavior by hand.
+- **🖐️ Manual** — runtime QA in a live Tabtivity confirms the behavior by hand.
 
 Each done feature carries two checkboxes — one per verification axis — with an
 example test in words to guide both. A feature is fully **🧪 Tested** only when
@@ -52,21 +52,21 @@ example test in words to guide both. A feature is fully **🧪 Tested** only whe
 > ✅ **Automated coverage complete; 🖐️ manual QA still pending** for every done
 > group (see [`todo/done.md`](todo/done.md) for the current exception list —
 > a couple of items are visual-only or partial-coverage). No 🖐️ Manual box is
-> ticked yet — nothing has been runtime-QA'd in a live Eldrun, so treat each
+> ticked yet — nothing has been runtime-QA'd in a live Tabtivity, so treat each
 > feature as fully 🧪 Tested only once its manual box also flips.
 
 ---
 
 ## Evaluation — Idea & Current State vs. Competitors
 
-*Strategic assessment of Eldrun's concept and current feature set against the
+*Strategic assessment of Tabtivity's concept and current feature set against the
 competitive landscape (as of 2026-06). Not a numbered work item — context for
 prioritization. Competitor specifics are current to ~early 2026; that field
 moves monthly.*
 
 ### The core bet
 
-Eldrun's thesis: **"you don't open apps, you open projects"** — switching a
+Tabtivity's thesis: **"you don't open apps, you open projects"** — switching a
 project swaps the *entire desktop context* (windows, downloads folder,
 default-app mappings, time tracking) as one unit, with built-in agent terminals
 riding on top. The bet targets a real, under-served pain (window/context sprawl
@@ -76,33 +76,33 @@ structural vulnerabilities that matter more than the feature checklist suggests.
 
 ### Competitive map
 
-- **Agent orchestrators — the gold rush Eldrun opts out of.** Vibe Kanban,
+- **Agent orchestrators — the gold rush Tabtivity opts out of.** Vibe Kanban,
   Conductor, Claude Squad, Crystal, the Claude Code desktop/web app, Cursor
   background agents, plus cloud players (Devin, OpenAI Codex cloud, Google
   Jules, Sculptor). These parallelize agents across git worktrees with task
-  queues, diff review, and merge flow. Eldrun's "agent cockpit" is just
+  queues, diff review, and merge flow. Tabtivity's "agent cockpit" is just
   `claude`/`codex`/`gemini` in PTY tabs — i.e. *running the CLI*, nothing more.
-  This is where funding and momentum are, and Eldrun explicitly doesn't play.
+  This is where funding and momentum are, and Tabtivity explicitly doesn't play.
   **Verdict: complementary, not competitive — and the right call.** You can run
-  Vibe Kanban *inside* an Eldrun project terminal. Building a weak orchestrator
+  Vibe Kanban *inside* a Tabtivity project terminal. Building a weak orchestrator
   here would be a mistake.
 - **AI IDEs/editors — Cursor, Windsurf, Zed, VS Code+Copilot, JetBrains.** Where
-  developers actually live. Eldrun's center surface is a *terminal*, and it
+  developers actually live. Tabtivity's center surface is a *terminal*, and it
   pushes the editor out to an external `xdg-open`'d window. **Biggest conceptual
-  gap:** Eldrun is a shell *around* the dev experience, not the dev experience.
+  gap:** Tabtivity is a shell *around* the dev experience, not the dev experience.
 - **Terminal/session restorers — tmux+tmuxinator/tmuxp, Zellij, Warp, WezTerm.**
-  tmux restores terminal layouts; Warp adds AI to the terminal. **Eldrun wins on
+  tmux restores terminal layouts; Warp adds AI to the terminal. **Tabtivity wins on
   scope (whole desktop, not just the terminal), but these are far more mature
   and cross-platform.**
 - **Desktop context tools — KDE Activities, GNOME workspaces, i3/sway
   scratchpads, Arc Spaces, Workona.** Each solves one slice (Activities move
   windows but have no project model/restore; Workona/Arc are browser-tabs only).
-  **Eldrun's "context as one unit" (windows + downloads + default apps + time)
+  **Tabtivity's "context as one unit" (windows + downloads + default apps + time)
   is more complete than any of these** — the downloads-rerouting and per-project
   default-app remapping are genuinely novel touches nobody bundles.
 - **Dev-env managers — devcontainers, Gitpod/Coder, DevPod, Nix/direnv, mise.**
   Reproducible per-project *environments*, no desktop/window layer. Orthogonal
-  (and the #38 Docker work moves Eldrun partway into this space).
+  (and the #38 Docker work moves Tabtivity partway into this space).
 
 ### Honest strengths
 
@@ -122,7 +122,7 @@ structural vulnerabilities that matter more than the feature checklist suggests.
   ship the differentiator missing. This caps the audience to roughly "the author
   and people like him." Cross-compositor support (Hyprland, Sway, GNOME) is
   make-or-break for adoption beyond personal use.
-- **The editor gap (above):** without a first-class editor story, Eldrun risks
+- **The editor gap (above):** without a first-class editor story, Tabtivity risks
   being a layer people immediately tab away from.
 - **Maturity vs. a fast-moving field:** ~75h logged, v0.1.0, single developer,
   and the entire "AI roadmap" (semantic search, startup suggestions, terminal
@@ -130,13 +130,13 @@ structural vulnerabilities that matter more than the feature checklist suggests.
 - **Single-user, local-only** while the market trend is cloud/async/team agents.
 - **Existential risk:** if an orchestrator or IDE grows a "workspaces" feature
   that manages windows/context (e.g. Cursor or the Claude Code desktop app adding
-  project-scoped desktop state), Eldrun's gap closes from above. Its moat is
+  project-scoped desktop state), Tabtivity's gap closes from above. Its moat is
   desktop-integration depth — which is also its portability ceiling.
 
 ### Strategic take
 
-Eldrun is best understood **not as an agent tool but as a project-context OS
-layer**, and should lean all the way into that: *Eldrun is the desktop shell;
+Tabtivity is best understood **not as an agent tool but as a project-context OS
+layer**, and should lean all the way into that: *Tabtivity is the desktop shell;
 inside each project you run whatever the best orchestrator/IDE is.* That framing
 turns its biggest "weakness" (not being an orchestrator) into the product.
 
@@ -171,17 +171,17 @@ toward broad, cloud, team-scale agent automation — and the defensibility
 | L | [`todo/group-l-tabs.md`](todo/group-l-tabs.md) | Center Panel: Tabs, Subwindows & Navigation — detach-to-window, tab UX fixes, keyboard nav, on top of the done tiling split model. **Installs in the root console** (#215, 2026-09-17, untested live): every one-click install opens its root tab in the root console — the separate install overlay was merged into it; closing the console leaves the install running. |
 | M | [`todo/group-m-viewers.md`](todo/group-m-viewers.md) | In-App Viewers — text/TeX/image enhancements (Phase 2+) on top of the done file→tab viewer infrastructure. |
 | N | [`todo/group-n-i18n.md`](todo/group-n-i18n.md) | Internationalization (i18n) — full app-wide translation coverage. **DONE** (6233 keys, 5-language parity, 2026-09-14). |
-| O | [`todo/group-o-security.md`](todo/group-o-security.md) | Project Security & Permissions — per-project policy for downloads, agent spawn, and git-push guardrails, plus the **sandbox-audit follow-ups** (#142–#151: move `.eldrun/sessions/` out of the project tree, confirm a repo-supplied Dockerfile, per-window capabilities, narrow `~/.claude/projects`, drop the env-var host-bound marker, stop the mounted `.git/config` from executing on the host). Phased plan: [`docs/sandbox_hardening_plan.md`](docs/sandbox_hardening_plan.md). |
+| O | [`todo/group-o-security.md`](todo/group-o-security.md) | Project Security & Permissions — per-project policy for downloads, agent spawn, and git-push guardrails, plus the **sandbox-audit follow-ups** (#142–#151: move `.tabtivity/sessions/` out of the project tree, confirm a repo-supplied Dockerfile, per-window capabilities, narrow `~/.claude/projects`, drop the env-var host-bound marker, stop the mounted `.git/config` from executing on the host). Phased plan: [`docs/sandbox_hardening_plan.md`](docs/sandbox_hardening_plan.md). |
 | R | [`todo/group-r-panel.md`](todo/group-r-panel.md) | Right Panel: Polish & App-Window Tracking — follow-on polish + a tracking-display bug on the done pin toggle. |
 | S | [`todo/group-s-agents.md`](todo/group-s-agents.md) | Local Agents via Ollama — generalize the local `vibe` model tab into a family of local Ollama-backed agent tabs. Also the two things the local-model stack must stop *assuming*: the GPU (#200, done) and the runtime itself (**#201** — Ollama is wired in across 33 commands and a hardcoded `127.0.0.1:11434`; the survey says keep it as the default, since `ollama launch` has no equivalent, but put a seam behind it — starting with `ollama_host`, a setting that is read by nothing). |
 | T | [`todo/group-t-shell.md`](todo/group-t-shell.md) | Smart / Native Shell Terminal — research done, not yet built; shell-completion via a new Ollama command. |
-| U | [`todo/group-u-performance.md`](todo/group-u-performance.md) | **Interface Cost & Responsiveness (#210, #214)** — what Eldrun spends to show what it shows. **Fast mode** ships (done 2026-08-26, untested live): one global toggle that withdraws the display aids whose cost is a directory walk, a standing poll or a read of every file in view — folder sizes, the pills' git dots, both hover cards, the header CPU/RAM row, the Python ▶ scan, the tree's remote re-stat, and every animation. Composes with Energy Saver rather than replacing it: that one widens timers off a battery reading, this removes features off a standing preference. Open: the backend sync/lockstep loops are untouched, and nothing is measured yet. **The side panel repopulates from a snapshot** (#214, done 2026-08-30, untested live): a closed panel unmounts its tree, so every reveal used to rebuild from nothing — listing, git statuses, one recursive walk per folder. `lib/projects/fileViewSnapshots` keeps the last state of each (project, root, folder) in module scope, the reveal seeds its first committed frame from it, and the upgrade goes out a frame later. Also the group's **appearance** strand (#217–#220, all untested live): derived accent tokens, the accent/corner overrides, an accent-colored seam under the top bar with a shared `--bg-subheader` for the subwindow tab bars and the file panel's header rows, and the **Theme Customizer** — every color variable editable in a window of its own, with the accent picker and the corner style folded in. |
+| U | [`todo/group-u-performance.md`](todo/group-u-performance.md) | **Interface Cost & Responsiveness (#210, #214)** — what Tabtivity spends to show what it shows. **Fast mode** ships (done 2026-08-26, untested live): one global toggle that withdraws the display aids whose cost is a directory walk, a standing poll or a read of every file in view — folder sizes, the pills' git dots, both hover cards, the header CPU/RAM row, the Python ▶ scan, the tree's remote re-stat, and every animation. Composes with Energy Saver rather than replacing it: that one widens timers off a battery reading, this removes features off a standing preference. Open: the backend sync/lockstep loops are untouched, and nothing is measured yet. **The side panel repopulates from a snapshot** (#214, done 2026-08-30, untested live): a closed panel unmounts its tree, so every reveal used to rebuild from nothing — listing, git statuses, one recursive walk per folder. `lib/projects/fileViewSnapshots` keeps the last state of each (project, root, folder) in module scope, the reveal seeds its first committed frame from it, and the upgrade goes out a frame later. Also the group's **appearance** strand (#217–#220, all untested live): derived accent tokens, the accent/corner overrides, an accent-colored seam under the top bar with a shared `--bg-subheader` for the subwindow tab bars and the file panel's header rows, and the **Theme Customizer** — every color variable editable in a window of its own, with the accent picker and the corner style folded in. |
 | P | [`todo/group-p-hosting.md`](todo/group-p-hosting.md) | Git Hosting: Multi-Host Publishing — generalize the GitHub-only publish flow to GitLab + generic remote URLs. |
 | V | [`todo/group-v-presenter.md`](todo/group-v-presenter.md) | Native Presenter ("Deck") — post-Phase-7 hardening. **V.1 + V.2 (#93–#122) ✅ done:** both data-loss defects, the first-real-use failures, the anchoring rework (SyncTeX line anchors now exist at runtime), and real font embedding. V.3 (#123–#141 — performance and the differentiated bet) mostly open, but **not untouched**: #131 (deck i18n) is complete, #126 is 4/6 done, #124 partly paid. Follows Group M #90. |
 | W | [`todo/group-w-skills.md`](todo/group-w-skills.md) | Agent Skills (MVP) — browse/preview/one-click-install `SKILL.md` bundles into a project's `.claude/skills/`, Claude-only. Plan: [`docs/skills_plan.md`](docs/skills_plan.md). |
 | Y | [`todo/group-y-verification.md`](todo/group-y-verification.md) | **Verification, Release Gates & Code Health (#161–#166)** — gaps in the machinery that checks the work: the 2476-test frontend suite never runs in CI, `privacy-check.sh` is mandated but wired to nothing on a public repo, no lint/clippy gate, the first live-QA session, promoted security items, and the three god-files. Created 2026-07-28 from a full-repo evaluation; **#161–#164 outrank feature work**. #161/#162 done and #163 mostly done 2026-07-28 (CI now runs vitest, the privacy scan, ESLint and clippy); #164 needs a human at the keyboard, #166 is unblocked. |
 | X | [`todo/group-x-caldav.md`](todo/group-x-caldav.md) | CalDAV Accounts — calendars synced from a server the user has an account on (typed URL + login, scheduled read-only sync, identity-based merge that preserves board placement). Phases 0–3 done/untested — including two-way push (opt-in per account, default off), the conflict dialog, the redirect-credential fix and the pre-import `.ics` review. Rationale: [`docs/context/caldav.md`](docs/context/caldav.md). |
-| Z | [`todo/group-z-server.md`](todo/group-z-server.md) | **Eldrun Server — plan only, nothing built.** One Linux server running every user's projects, terminals and agents, with desktop browsers and the phone as thin clients: a daemon per user under their own uid, a gateway grown from the Mobile host, and the React app over a `__TAURI_INTERNALS__` WebSocket shim. Each user signs in to their own agent CLIs. Shared projects are a bare hub repo with a clone per member. Mail, calendar and todo are per user: mail is private, and calendars and todo lists can be shared. P1 first moves live state out of the window into the Mobile sidecar. Only the old design's prerequisites #169–#172 remain listed; phase items follow once plan §12 Q1, Q3 and Q4 are answered. Design: [`docs/eldrun_hosted_plan.md`](docs/eldrun_hosted_plan.md). |
+| Z | [`todo/group-z-server.md`](todo/group-z-server.md) | **Tabtivity Server — plan only, nothing built.** One Linux server running every user's projects, terminals and agents, with desktop browsers and the phone as thin clients: a daemon per user under their own uid, a gateway grown from the Mobile host, and the React app over a `__TAURI_INTERNALS__` WebSocket shim. Each user signs in to their own agent CLIs. Shared projects are a bare hub repo with a clone per member. Mail, calendar and todo are per user: mail is private, and calendars and todo lists can be shared. P1 first moves live state out of the window into the Mobile sidecar, planned separately as desktop work in [`docs/headless_owner_plan.md`](docs/headless_owner_plan.md). Only the old design's prerequisites #169–#172 remain listed; every §12 question is answered (2026-09-29). Design: [`docs/tabtivity_hosted_plan.md`](docs/tabtivity_hosted_plan.md). |
 
 Completed groups (code-complete, automated tests green, manual QA pending
 across the board) live in [`todo/done.md`](todo/done.md).
@@ -235,18 +235,18 @@ share files and context:
 - **Cross-platform (parallel track):** H (Windows #30 / macOS #31 follow-ups) —
   validate builds & packaging per OS; can proceed alongside the above.
 - **Backend runtime (ongoing):** I (#32) — backend-owned runtime hardening
-  (PTY resurrection, `.eldrun/` promotion, durable window metadata, tests);
+  (PTY resurrection, `.tabtivity/` promotion, durable window metadata, tests);
   pairs with F (session restore).
 
 - **Multi-person (largest net-new concept, plan only):** Z (#169–#199) — the
-  self-hosted Eldrun server. **Do not start it at #173.** Its first four items
+  self-hosted Tabtivity server. **Do not start it at #173.** Its first four items
   are pre-existing debt worth paying regardless of whether the server is ever
   built: **#169** is now down to *live-testing* the CalDAV push work (it is
   code-complete with the conflict dialog, and `todo/group-x-caldav.md` #160 plus
   `docs/context/caldav.md` describe that state — but nothing in the stack has
   ever spoken to a real server), **#170** is Group P #79's one open bullet, and **#171/#172** fix two
   real single-machine defects — `calendar.json` writes have no compare-and-swap,
-  so two Eldrun windows already lose an edit silently today, and
+  so two Tabtivity windows already lose an edit silently today, and
   `write_json_atomic` has no `fsync`. Then the calendar/board track (Z.1–Z.3),
   which is the half that actually delivers what was asked and is largely
   configuration over the existing CalDAV client. **Read-only project sharing
@@ -262,7 +262,7 @@ share files and context:
 - Frontend changes: `npx tsc --noEmit`, plus existing/added tests under
   `src/__tests__/` (e.g. the session-restore test for Group F).
 - Backend changes: `cargo test --manifest-path src-tauri/Cargo.toml`.
-- Runtime validation: Claude **must not** launch Eldrun (user, 2026-07-29), and
+- Runtime validation: Claude **must not** launch Tabtivity (user, 2026-07-29), and
   must not stop an instance it did not start. The user runs the app; Claude
   either asks them to click through and report back, or reuses an already-open
   window (`src/` edits hot-reload into it). See `AGENTS.md` § Running.

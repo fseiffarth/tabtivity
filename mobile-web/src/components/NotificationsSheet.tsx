@@ -44,7 +44,7 @@ const AGENT_CHOICES: { key: AgentNotices; label: TranslationKey }[] = [
 ];
 
 /**
- * What this phone is notified about, even with Eldrun Mobile closed: calendar
+ * What this phone is notified about, even with Tabtivity Mobile closed: calendar
  * reminders, agent tabs waiting on an answer (and, if asked, finished turns),
  * and whether a notification names what it is about. Choosing nothing is the
  * same as off, and unsubscribes the browser.

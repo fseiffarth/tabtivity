@@ -42,13 +42,13 @@ pub fn detached_label(scope: &str, group_id: &str) -> String {
 }
 
 /// Human-friendly, per-session-unique OS window title for a detached group,
-/// e.g. "Eldrun win-1". This string is load-bearing on X11: the resolver in
+/// e.g. "Tabtivity win-1". This string is load-bearing on X11: the resolver in
 /// `platform::x11::find_window_for_title` matches on it exactly to recover the
 /// native window id, so it must stay unique among live detached windows.
 /// Uniqueness comes from the caller assigning a distinct sequence number per
 /// live window (lowest free positive int); see `detach_subwindow`.
 pub fn detached_title(seq: u32) -> String {
-    format!("Eldrun win-{seq}")
+    format!("{app} win-{seq}", app = crate::brand::DISPLAY)
 }
 
 /// The query string the DetachedApp renderer reads to mount a single group.
@@ -94,7 +94,7 @@ pub fn detached_decorations(os: crate::paths::OsKind) -> bool {
     os == crate::paths::OsKind::Macos
 }
 
-/// Reserve the lowest free display number for `label` (the N in "Eldrun
+/// Reserve the lowest free display number for `label` (the N in "Tabtivity
 /// win-N"). Must run under the registry lock so a concurrent detach (or a
 /// restart batch respawning several popouts) can't pick the same one.
 pub fn reserve_detached_seq(reg: &mut WindowRegistry, label: &str) -> u32 {
@@ -255,7 +255,7 @@ pub async fn detach_subwindow(
     // Wayland) is waited out, bounded, before the rebuild.
     //
     // The reservation carries the lowest free display number. It becomes the
-    // OS title "Eldrun win-N" and, on X11, the resolver key — hence it must be
+    // OS title "Tabtivity win-N" and, on X11, the resolver key — hence it must be
     // unique per live window. It's freed on dock-back/close
     // (`attach_subwindow`) AND on any other destruction via the
     // `WindowEvent::Destroyed` hook in `lib.rs` (the popout self-destroys on
@@ -370,7 +370,7 @@ pub async fn detach_subwindow(
 
     if let Some(wid) = window_id {
         // Opt the detached window into the parkable override so the switch path
-        // can actually park it despite its `eldrun` WM_CLASS. The MAIN window id
+        // can actually park it despite its `tabtivity` WM_CLASS. The MAIN window id
         // can never enter this set (structural guard in the backend).
         workspace.lock().unwrap().backend.set_parkable(wid);
     }
@@ -382,7 +382,7 @@ pub async fn detach_subwindow(
     let scope = project_id.clone();
     let win = TrackedWindow {
         id: label.clone(),
-        exec: "eldrun-detached".to_string(),
+        exec: concat!(crate::app_slug!(), "-detached").to_string(),
         file: None,
         pid: std::process::id(),
         project_id: Some(project_id),
@@ -558,8 +558,9 @@ const MONITOR_HOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// "showing for the first time"). So the popout is shown fullscreen on its
 /// screen, dropped out of fullscreen as soon as GTK reports it, then given its
 /// size back. That round trip is a real OS resize, which is also what paints
-/// WebKitGTK's first frame, so no nudge. A screen that is gone → a plain show
-/// wherever the compositor puts it.
+/// WebKitGTK's first frame, so no nudge. A screen that is gone → the main
+/// window's screen, the size capped to it; no screen to name at all → a plain
+/// show wherever the compositor puts it.
 #[cfg(target_os = "linux")]
 fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: Option<Size>) {
     let on_main = app.clone();
@@ -569,16 +570,37 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
         let Some(win) = on_main.get_webview_window(&label) else {
             return;
         };
+        // The screen it was retired from, or — that display unplugged since —
+        // the main window's, so it comes back as its own window beside the main
+        // one rather than on whatever screen the pointer is on.
+        let main = on_main.get_webview_window(crate::services::window_service::MAIN_WINDOW_LABEL);
         let index = gtk::gdk::Display::default().and_then(|d| {
-            (0..d.n_monitors())
-                .find(|&i| d.monitor(i).is_some_and(|m| gdk_monitor_rect(&m) == monitor))
+            let index_of = |rect: MonitorRect| {
+                (0..d.n_monitors())
+                    .find(|&i| d.monitor(i).is_some_and(|m| gdk_monitor_rect(&m) == rect))
+            };
+            match index_of(monitor) {
+                Some(i) => Some((i, None)),
+                None => main
+                    .as_ref()
+                    .and_then(gdk_monitor_of)
+                    .and_then(|rect| index_of(rect).map(|i| (i, Some(rect)))),
+            }
         });
-        let (Some(index), Ok(gtk_win), Some(screen)) =
+        let (Some((index, fallback)), Ok(gtk_win), Some(screen)) =
             (index, win.gtk_window(), gtk::gdk::Screen::default())
         else {
             let _ = win.show();
             spawn_first_paint_nudge(on_main.clone(), label);
             return;
+        };
+        // Sized on the screen that is gone: no larger than the one it lands on.
+        let size = match (size, fallback) {
+            (Some(size), Some(rect)) => {
+                let scale = win.scale_factor().unwrap_or(1.0);
+                Some(fit_size_to(size, rect, scale))
+            }
+            (size, _) => size,
         };
         let restore = {
             let win = win.clone();
@@ -628,6 +650,22 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
     });
 }
 
+/// `size` capped to `monitor` (GDK's logical rect, `scale` to physical px).
+#[cfg(any(target_os = "linux", test))]
+fn fit_size_to(size: Size, monitor: MonitorRect, scale: f64) -> Size {
+    let cap = |logical: u32| (f64::from(logical) * scale).round() as u32;
+    match size {
+        Size::Physical(p) => Size::Physical(PhysicalSize::new(
+            p.width.min(cap(monitor.w)),
+            p.height.min(cap(monitor.h)),
+        )),
+        Size::Logical(l) => Size::Logical(tauri::LogicalSize::new(
+            l.width.min(f64::from(monitor.w)),
+            l.height.min(f64::from(monitor.h)),
+        )),
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 fn present_on_monitor(app: &AppHandle, label: &str, _monitor: MonitorRect, _size: Option<Size>) {
     spawn_first_paint_nudge(app.clone(), label.to_string());
@@ -661,13 +699,36 @@ fn fit_detached_bounds(
         maximized: false,
     };
     let monitors = crate::services::window_service::monitor_rects(win);
-    match crate::services::window_state::resolve_detached_geometry(saved, &monitors) {
+    // The screen it was on is gone: onto the main window's screen, as its own
+    // window still — never docked, never wherever the WM drops new windows.
+    let g = crate::services::window_state::resolve_detached_geometry(saved, &monitors)
+        .or_else(|| onto_main_screen(win.app_handle(), saved.w, saved.h));
+    match g {
         Some(g) => (
             Some(Position::Physical(PhysicalPosition::new(g.x, g.y))),
             Some(Size::Physical(PhysicalSize::new(g.w, g.h))),
         ),
         None => (None, None),
     }
+}
+
+/// `w`×`h` centred on the screen the main window is on (physical px), for a
+/// popout whose own screen was unplugged. `None` without a main window or a
+/// monitor reading — the caller then leaves the WM's placement.
+fn onto_main_screen(
+    app: &AppHandle,
+    w: u32,
+    h: u32,
+) -> Option<crate::schema::settings::WindowState> {
+    let main = app.get_webview_window(crate::services::window_service::MAIN_WINDOW_LABEL)?;
+    let m = main.current_monitor().ok()??;
+    let monitor = MonitorRect {
+        x: m.position().x,
+        y: m.position().y,
+        w: m.size().width,
+        h: m.size().height,
+    };
+    crate::services::window_state::center_on_monitor(w, h, monitor)
 }
 
 /// Whether a window's on-screen position can be read back and set at all.
@@ -875,11 +936,18 @@ pub fn show_detached_windows(
             // The display this popout was parked on is gone. Leaving the WM's
             // placement puts it on a real screen but at the size it had on the
             // old one — on a laptop panel that is a borderless window hanging off
-            // two edges, with no resize border left to grab. Fit it to the screen
-            // it actually landed on instead (#240).
-            None => {
-                snap_detached_to_screen(app, label);
-            }
+            // two edges, with no resize border left to grab. Put it on the main
+            // window's screen, fitted; failing that, fit it to the screen it
+            // actually landed on (#240).
+            None => match onto_main_screen(app, b.w, b.h) {
+                Some(g) => {
+                    let _ = win.set_size(PhysicalSize::new(g.w, g.h));
+                    let _ = win.set_position(PhysicalPosition::new(g.x, g.y));
+                }
+                None => {
+                    snap_detached_to_screen(app, label);
+                }
+            },
         }
     }
     if presented && restore_main_focus {
@@ -1246,6 +1314,24 @@ pub fn snap_detached_window(app: AppHandle, label: String) -> bool {
     snap_detached_to_screen(&app, &label)
 }
 
+/// Raise one of the active scope's popouts and give it the keyboard —
+/// steering's J (the main window walks no popout itself). Popout labels only,
+/// so this can never bring up the main window or a presenter. Wayland's
+/// `set_focus` presents the surface (`gtk_window_present_with_time`), which
+/// also undoes a minimize there.
+#[tauri::command]
+pub fn focus_detached_window(app: AppHandle, label: String) -> bool {
+    if !label.starts_with("detached-") {
+        return false;
+    }
+    let Some(win) = app.get_webview_window(&label) else {
+        return false;
+    };
+    let _ = win.unminimize();
+    let _ = win.show();
+    win.set_focus().is_ok()
+}
+
 /// How often the monitor-arrangement watcher re-reads the connected displays.
 /// One cheap runtime query; the cost of noticing an unplug late is a popout the
 /// user cannot reach, so this stays in the "within a breath" range rather than
@@ -1474,8 +1560,8 @@ mod tests {
 
     #[test]
     fn title_is_a_human_friendly_sequence_name() {
-        assert_eq!(detached_title(1), "Eldrun win-1");
-        assert_eq!(detached_title(2), "Eldrun win-2");
+        assert_eq!(detached_title(1), concat!(crate::app_name!(), " win-1"));
+        assert_eq!(detached_title(2), concat!(crate::app_name!(), " win-2"));
         // Distinct numbers produce distinct titles (the X11 resolver key must be
         // unique per live window).
         assert_ne!(detached_title(1), detached_title(2));
@@ -1544,7 +1630,7 @@ mod tests {
     fn tracked(label: &str, window_id: Option<u64>) -> TrackedWindow {
         TrackedWindow {
             id: label.to_string(),
-            exec: "eldrun-detached".to_string(),
+            exec: concat!(crate::app_slug!(), "-detached").to_string(),
             file: None,
             pid: 1,
             project_id: Some("p1".to_string()),
@@ -1639,6 +1725,18 @@ mod tests {
         // Its Destroyed lands: the retire was planned, so no dock-back report.
         assert_eq!(on_detached_destroyed(&mut reg, label), (None, false));
         assert_eq!(plan_detach(&mut reg, label, false), DetachPlan::Build(1));
+    }
+
+    #[test]
+    fn a_respawn_on_the_main_windows_screen_is_capped_to_it() {
+        let laptop = MonitorRect { x: 0, y: 0, w: 1280, h: 800 };
+        let big = Size::Physical(PhysicalSize::new(2400, 1300));
+        assert_eq!(
+            fit_size_to(big, laptop, 1.5),
+            Size::Physical(PhysicalSize::new(1920, 1200))
+        );
+        let small = Size::Physical(PhysicalSize::new(900, 640));
+        assert_eq!(fit_size_to(small, laptop, 1.0), small);
     }
 
     #[test]

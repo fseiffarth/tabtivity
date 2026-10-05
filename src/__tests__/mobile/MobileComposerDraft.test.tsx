@@ -43,9 +43,10 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
-const KEY = "eldrun.mobile.drafts";
+const KEY = storageKey("mobile.drafts");
 
 function memoryStorage(seed: Record<string, string> = {}) {
   const map = new Map(Object.entries(seed));
@@ -59,7 +60,7 @@ function memoryStorage(seed: Record<string, string> = {}) {
 
 const settle = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
 
-describe("Eldrun Mobile composer drafts — the store", () => {
+describe(`${BRAND.display} Mobile composer drafts — the store`, () => {
   it("round-trips one tab's draft, and keeps the tabs apart", () => {
     const storage = memoryStorage();
     writeDraft("tab-a", "half a thought", storage, 1_000);
@@ -110,7 +111,7 @@ describe("Eldrun Mobile composer drafts — the store", () => {
   });
 });
 
-describe("Eldrun Mobile composer drafts — the composer", () => {
+describe(`${BRAND.display} Mobile composer drafts — the composer`, () => {
   beforeEach(() => {
     // The kept draft is what these tests are about, so each starts on a clean
     // store — and it is wiped here rather than in `afterEach`, since the unmount
@@ -118,7 +119,7 @@ describe("Eldrun Mobile composer drafts — the composer", () => {
     localStorage.clear();
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ error: "not_found" }), { status: 404 }))));
-    localStorage.setItem("eldrun.mobile.view.agent", "terminal");
+    localStorage.setItem(storageKey("mobile.view.agent"), "terminal");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 

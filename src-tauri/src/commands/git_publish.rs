@@ -195,10 +195,11 @@ fn mirror_repo(project_id: &str) -> Option<PathBuf> {
 /// Whether a local repo has an `origin` remote — i.e. whether a publish wired
 /// one here.
 fn has_origin(dir: &Path) -> bool {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .current_dir(dir)
         .args(["remote", "get-url", "origin"])
-        .output()
+        .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
@@ -533,10 +534,11 @@ fn unpublish_project_blocking(project_id: String) -> Result<(), String> {
     match origin_site(&project, &project_id)? {
         PublishSite::Local(dir) => {
             // Ignore failure (e.g. origin already absent) — desired end state is "no origin".
-            let _ = crate::paths::command_no_window("git")
-                .current_dir(&dir)
-                .args(["remote", "remove", "origin"])
-                .output();
+            let _ = crate::services::git_bounded::BoundedOutput::bounded_output(
+                crate::paths::command_no_window("git")
+                    .current_dir(&dir)
+                    .args(["remote", "remove", "origin"]),
+            );
         }
         PublishSite::Host => {
             let remote = project
@@ -754,14 +756,15 @@ fn remote_visibility_script(provider: Provider, remote_path: &str, visibility: &
 fn rename_origin_aside(site: PublishSite, project: &Project) -> Result<(), String> {
     match site {
         PublishSite::Local(dir) => {
+            use crate::services::git_bounded::BoundedOutput;
             let _ = crate::paths::command_no_window("git")
                 .current_dir(&dir)
                 .args(["remote", "remove", "origin-old"])
-                .output();
+                .bounded_output();
             let _ = crate::paths::command_no_window("git")
                 .current_dir(&dir)
                 .args(["remote", "rename", "origin", "origin-old"])
-                .output();
+                .bounded_output();
         }
         PublishSite::Host => {
             let remote = project
@@ -860,7 +863,7 @@ fn local_publish(
             args.extend(["push", "-u", "origin", "HEAD"].map(String::from));
             let mut push = crate::commands::git::hooked_git_command_in(dir, &args);
             if let Some(tok) = token {
-                push.env("ELDRUN_GIT_TOKEN", tok);
+                push.env(crate::app_env!("GIT_TOKEN"), tok);
                 push.env("GIT_TERMINAL_PROMPT", "0");
             }
             out.push('\n');

@@ -60,7 +60,7 @@ export async function openPromptChartTab(scope: string): Promise<void> {
     {
       label: translate(useI18nStore.getState().lang, "promptChart.heading"),
       cmd: PROMPTCHART_TAB_CMD,
-      // Empty resolves to ~/eldrun/root on the backend, as the root shell's does.
+      // Empty resolves to ~/tabtivity/root on the backend, as the root shell's does.
       cwd: project ? resolveProjectDirectory(project) : "",
       kind: "promptchart",
     },

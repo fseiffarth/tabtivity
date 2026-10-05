@@ -18,6 +18,8 @@ import type { ProjectBox, ProjectEntry } from "../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue(null) }));
+const startWindowDrag = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/window/startWindowDrag", () => ({ startWindowDrag }));
 
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
@@ -115,10 +117,10 @@ function boxPillNames(container: HTMLElement): string[] {
   );
 }
 
-/** Open the chip's dropdown (it opens on hover — a click is "All projects")
- *  and hand back its portaled menu. */
+/** Open the chip's dropdown (hovering its caret opens it — a click on the
+ *  logo is "All projects") and hand back its portaled menu. */
 async function openChipMenu(container: HTMLElement): Promise<HTMLElement> {
-  const chip = container.querySelector(".box-chip") as HTMLElement;
+  const chip = container.querySelector(".box-chip-caret-btn") as HTMLElement;
   await act(async () => {
     fireEvent.mouseEnter(chip);
   });
@@ -291,6 +293,60 @@ describe("box chip rendering (slice model)", () => {
     });
     expect(pillNames(container).sort()).toEqual(["p1", "p2"]);
     expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+
+  it("the logo moves the window once the press travels, and only the caret opens the list", async () => {
+    startWindowDrag.mockClear();
+    useBoxesStore.setState({
+      boxes: [box("boxA", ["p1"])],
+      openBox: vi.fn(openBoxScope),
+    });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+    });
+
+    const container = await renderSwitcher();
+    const logo = container.querySelector(".box-chip:not(.box-scope-pill) .box-chip-main") as HTMLElement;
+
+    // Hovering the logo opens nothing.
+    await act(async () => {
+      fireEvent.mouseEnter(logo);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+
+    // Narrow down to boxA first, so a stray "All projects" click would show.
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    expect(pillNames(container)).toEqual(["p1"]);
+
+    // A press that wobbles within the slop is not a move.
+    await act(async () => {
+      fireEvent.mouseDown(logo, { button: 0, clientX: 10, clientY: 10 });
+      fireEvent.mouseMove(window, { clientX: 12, clientY: 11 });
+    });
+    expect(startWindowDrag).not.toHaveBeenCalled();
+
+    // Past it, the OS move loop takes over and the trailing click is swallowed.
+    await act(async () => {
+      fireEvent.mouseMove(window, { clientX: 30, clientY: 10 });
+      fireEvent.mouseUp(window);
+      fireEvent.click(logo);
+    });
+    expect(startWindowDrag).toHaveBeenCalledTimes(1);
+    expect(pillNames(container)).toEqual(["p1"]);
+
+    // A later plain click is "All projects" again.
+    await act(async () => {
+      fireEvent.mouseDown(logo, { button: 0, clientX: 10, clientY: 10 });
+      fireEvent.mouseUp(window);
+      fireEvent.click(logo);
+    });
+    expect(startWindowDrag).toHaveBeenCalledTimes(1);
+    expect(pillNames(container).sort()).toEqual(["p1", "p2"]);
   });
 
   it("“All projects” hands the scope back to the project the strip was on", async () => {

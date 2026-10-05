@@ -2,7 +2,7 @@
 
 Start here. This file links every scaffold file with what it is for, so the
 project can be navigated from one place. The links are relative and open
-in Eldrun's markdown viewer.
+in Tabtivity's markdown viewer.
 
 ## Docs
 

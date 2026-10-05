@@ -8,7 +8,7 @@
  * **A remark is a real PDF annotation, not a sidecar.** It is read out of the file's
  * own `/Text` annotations and written back into them, so a remark made here opens in
  * Acrobat, Okular and a browser's viewer, and one made *there* opens here. Nothing is
- * stored beside the document, which is the whole point: a comment that only Eldrun
+ * stored beside the document, which is the whole point: a comment that only Tabtivity
  * can see is a comment that may as well not have been written.
  *
  * **A sheet's remarks are owned all-or-nothing.** `PageRef.notes` is absent on a sheet

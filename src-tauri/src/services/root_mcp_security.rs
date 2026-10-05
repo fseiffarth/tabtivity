@@ -138,7 +138,7 @@ impl Policy {
         }
     }
     pub fn serves(&self, caller: Caller) -> bool {
-        if matches!(caller, Caller::Scheduler | Caller::Pusher | Caller::Helper) { return false; }
+        if matches!(caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker) { return false; }
         self.enabled
             && (!self.local_only || caller == Caller::LocalModel)
             && (caller != Caller::Reader || self.serves_mail(caller))
@@ -159,7 +159,7 @@ impl Policy {
             && match caller {
                 Caller::Reader => true,
                 Caller::LocalModel => self.mail_local_read,
-                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper => false,
+                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker => false,
             }
     }
 }
@@ -296,12 +296,16 @@ pub struct ToolPolicy {
     /// Served to [`Caller::Helper`] (`services::help_mcp`) — and then to no
     /// other class: the help tools set it and nothing else.
     help: bool,
+    /// Served to [`Caller::Marker`] (`services::markup_mcp`) — and then to
+    /// no other class: the three markup tools set it and nothing else.
+    marker: bool,
 }
 impl ToolPolicy {
     pub fn serves(&self, caller: Caller) -> bool {
         match caller {
             Caller::Scheduler | Caller::Pusher => false,
             Caller::Helper => self.help,
+            Caller::Marker => self.marker,
             Caller::Reader => self.reader,
             Caller::LocalModel => self.root || self.local,
             Caller::Agent => self.root,
@@ -335,13 +339,23 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         "todo_update" | "todo_delete" => ("board", true, true, true, true),
         "mail_accounts_list" | "mail_drafts_list" => ("mail", false, false, true, true),
         "mail_folders" | "mail_search" | "mail_read" | "mail_thread" => {
-            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false });
+            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false });
         }
         // The help corpus (`services::help_mcp`): read-only, compiled in, and
         // served to the help identity alone — never to a root or reader tab
         // through `/mcp`, so the root tool list stays what it was.
-        "eldrun_help_search" | "eldrun_help_read" | "eldrun_help_topics" | "eldrun_help_status" => {
-            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true });
+        crate::brand::HELP_TOOL_SEARCH
+        | crate::brand::HELP_TOOL_READ
+        | crate::brand::HELP_TOOL_TOPICS
+        | crate::brand::HELP_TOOL_STATUS => {
+            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false });
+        }
+        // The markup questions and ticks (`services::markup_mcp`): they only
+        // put a card or a tick in front of the user, served to the markup
+        // identity alone on `/mcp/markup` — never to a root or reader tab
+        // through `/mcp`.
+        "markup_ask" | "markup_withdraw" | "markup_done" => {
+            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true });
         }
         "mail_draft_create" => ("mail", true, false, true, true),
         "mail_draft_update" | "mail_draft_delete" => ("mail", true, true, true, true),
@@ -355,6 +369,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         reader,
         local: false,
         help: false,
+        marker: false,
     })
 }
 
@@ -543,7 +558,7 @@ mod tests {
         assert!(validate(&narrow, &json!("12345678")).is_ok());
     }
 
-    /// Audit rows name a tool only when it is one Eldrun serves; anything else
+    /// Audit rows name a tool only when it is one Tabtivity serves; anything else
     /// — a method name an agent made up, private text included — is written
     /// down as `protocol`. The ring holds 500 rows, and the admission failures
     /// in it are bounded on their own so a probe flood cannot evict the rest.

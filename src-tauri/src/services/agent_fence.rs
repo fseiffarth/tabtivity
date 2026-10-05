@@ -3,7 +3,7 @@
 //! The project container remains the stronger, opt-in boundary.  For ordinary
 //! local agent tabs this module wraps the agent in the OS's unprivileged
 //! sandbox: `bubblewrap` on Linux (the host root is read-only, the scope's
-//! Eldrun-owned agent home (`services::agent_home`) is bound over `$HOME`,
+//! Tabtivity-owned agent home (`services::agent_home`) is bound over `$HOME`,
 //! `/tmp`, `/run` and `~/.cache` are private, and only the owning project plus
 //! every box it belongs to is mounted read-write) and `sandbox-exec` on macOS
 //! (a Seatbelt profile that denies writes outside the same roots and hides the
@@ -26,7 +26,7 @@ use crate::terminal::PtyOptions;
 use crate::{paths, storage};
 
 /// A package the fence may ask the user to install. Only bubblewrap for now: it
-/// is the one missing tool that makes Eldrun fail closed.
+/// is the one missing tool that makes Tabtivity fail closed.
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallPkg {
@@ -121,7 +121,7 @@ pub fn fence_tool_name() -> &'static str {
 
 /// Whether this OS has a fence implementation at all: Linux (bubblewrap) and
 /// macOS (sandbox-exec). Windows has no fence: AppContainer is the one
-/// unprivileged sandbox there, and it cuts loopback, which every Eldrun MCP
+/// unprivileged sandbox there, and it cuts loopback, which every Tabtivity MCP
 /// endpoint, local model and agent sign-in needs (`docs/context/agent_authority.md`).
 /// Agents there run unfenced, the pill says so, and the first one is refused
 /// until the user accepts that ([`platform_accepted`]).
@@ -138,13 +138,13 @@ pub fn platform_accepted() -> bool {
 /// The marker `pty_spawn`'s refusal carries when a fence-less platform has not
 /// been accepted yet. The frontend (`lib/agents/agentFence.ts`) matches it,
 /// asks, and retries; no other refusal starts with it.
-pub const PLATFORM_UNACCEPTED_SENTINEL: &str = "ELDRUN_FENCE_PLATFORM_UNACCEPTED";
+pub const PLATFORM_UNACCEPTED_SENTINEL: &str = crate::app_env!("FENCE_PLATFORM_UNACCEPTED");
 
 /// The spawn refusal on a fence-less platform nobody has accepted yet.
 pub fn platform_unaccepted_message() -> String {
     format!(
-        "{PLATFORM_UNACCEPTED_SENTINEL} Agent sandbox: {} has no agent sandbox, so this agent would run with your full rights. Accept that once in the prompt Eldrun shows, or open the project in a container.",
-        platform_reason()
+        "{PLATFORM_UNACCEPTED_SENTINEL} Agent sandbox: {} has no agent sandbox, so this agent would run with your full rights. Accept that once in the prompt {app} shows, or open the project in a container.",
+        platform_reason(), app = crate::brand::DISPLAY
     )
 }
 
@@ -372,7 +372,7 @@ fn read_lists() -> (BoxesList, ProjectsList) {
 pub const ROOT_SCOPE: &str = "root";
 
 /// `Settings::root_fence_projects_readable`: what a **root** agent's fence
-/// exposes read-only on top of `~/eldrun/root` — every local project's
+/// exposes read-only on top of `~/tabtivity/root` — every local project's
 /// directory, every box folder, and every remote project's local mirror (the
 /// explicit one, else the default under the state dir, which the private-state
 /// mask keeps hidden). Pure, so the planner test drives it with lists.
@@ -524,7 +524,7 @@ pub fn configured_read_only_paths() -> Vec<String> {
 /// Pure over the filesystem: it reads links but never mounts anything, and a
 /// command that cannot be found on the host yields nothing — bubblewrap then
 /// reports the same not-found error the shell would.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 pub(crate) fn command_bind_paths(
     cmd: &str,
     path_dirs: &[PathBuf],
@@ -539,7 +539,7 @@ pub(crate) fn command_bind_paths(
     out
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn collect_command_bind_paths(
     cmd: &str,
     path_dirs: &[PathBuf],
@@ -601,7 +601,7 @@ fn collect_command_bind_paths(
 }
 
 /// `<venv>` when `exe` sits in `<venv>/bin` next to a `pyvenv.cfg`.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn python_venv_root(exe: &Path) -> Option<PathBuf> {
     let bin = exe.parent()?;
     let venv = bin.parent()?;
@@ -611,7 +611,7 @@ fn python_venv_root(exe: &Path) -> Option<PathBuf> {
 /// The base interpreter's install prefix (`home = <prefix>/bin` in
 /// `pyvenv.cfg`): its stdlib sits in `<prefix>/lib`. Never the home itself or
 /// `~/.local`, which a venv made from a `pip --user` Python would name.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn venv_base_prefix(venv: &Path, home: &Path) -> Option<PathBuf> {
     let cfg = std::fs::read_to_string(venv.join("pyvenv.cfg")).ok()?;
     let bin = cfg.lines().find_map(|line| {
@@ -625,7 +625,7 @@ fn venv_base_prefix(venv: &Path, home: &Path) -> Option<PathBuf> {
 
 /// The interpreter a `#!` script names, as a path or (behind `env`) a bare
 /// command for `path_dirs`. Anything that is not a script yields nothing.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn shebang_interpreter(exe: &Path) -> Option<String> {
     use std::io::Read;
     let mut head = [0u8; 256];
@@ -644,7 +644,7 @@ fn shebang_interpreter(exe: &Path) -> Option<String> {
 
 /// Collapse `.` and `..` without touching the filesystem, so a relative link
 /// target like `../share/claude/versions/2.1.251` yields a clean mount path.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn normalize_lexically(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
@@ -676,7 +676,7 @@ fn command_search_dirs(opts: &PtyOptions) -> Vec<PathBuf> {
 }
 
 /// Cache successful probes only: installing/unblocking the tool must let the
-/// next tab start without restarting Eldrun. Serialize probes across callers.
+/// next tab start without restarting Tabtivity. Serialize probes across callers.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn probe_until_available(cache: &Mutex<bool>, probe: impl FnOnce() -> bool) -> bool {
     let mut available = cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -716,7 +716,7 @@ pub fn bwrap_available() -> bool {
             let Some(bwrap) = crate::paths::system_executable("bwrap") else {
                 return false;
             };
-            crate::paths::command_no_window(bwrap)
+            let probe = crate::paths::command_no_window(bwrap)
                 .args([
                     "--ro-bind",
                     "/",
@@ -730,14 +730,64 @@ pub fn bwrap_available() -> bool {
                     "--",
                     "/bin/true",
                 ])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+                .output();
+            match probe {
+                Ok(out) if out.status.success() => true,
+                Ok(out) => {
+                    report_probe_failure(&String::from_utf8_lossy(&out.stderr));
+                    false
+                }
+                Err(e) => {
+                    report_probe_failure(&e.to_string());
+                    false
+                }
+            }
         })
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+/// Say once per process why a `bwrap` that *exists* still could not sandbox —
+/// on stderr, which is the window's log or the sidecar's journal. The refusal
+/// the user sees stays the install advice, which is right for the common case;
+/// this is for the other one, where the binary is fine and the *process* is
+/// not, and nothing else in the log would ever say so.
+#[cfg(target_os = "linux")]
+fn report_probe_failure(stderr: &str) {
+    static REPORTED: std::sync::Once = std::sync::Once::new();
+    REPORTED.call_once(|| {
+        let label = std::fs::read_to_string("/proc/self/attr/current").ok();
+        eprintln!("agent_fence: {}", probe_failure_note(stderr, label.as_deref()));
+    });
+}
+
+/// The log line for a failed probe: bwrap's own words and this process's
+/// AppArmor label. A label under Ubuntu's `unprivileged_userns` profile is
+/// named for what it is — the process already sits in a user namespace that
+/// denies every capability (a systemd unit with a mount-namespace directive
+/// puts a user service there, see `commands::mobile_control::systemd_unit`),
+/// so no bwrap it spawns can ever create a sandbox, whatever is installed.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn probe_failure_note(stderr: &str, apparmor_label: Option<&str>) -> String {
+    let detail = match stderr.trim() {
+        "" => "no output",
+        words => words,
+    };
+    let label = apparmor_label
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .unwrap_or("unknown");
+    let mut note = format!(
+        "bubblewrap is installed but its probe failed (AppArmor label of this process: {label}): {detail}"
+    );
+    if label.contains("unprivileged_userns") {
+        note.push_str(
+            " — this process already runs inside a user namespace AppArmor confines, so nothing it starts can create a sandbox; a systemd user unit with a mount-namespace directive (ProtectSystem=, ProtectHome=, PrivateTmp=, …) lands there on Ubuntu",
+        );
+    }
+    note
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn mount_pair(pair: &str, read_only: bool) -> Option<BindMount> {
     let (src, dst) = pair.split_once(':')?;
     Some(BindMount {
@@ -771,7 +821,7 @@ pub(crate) fn local_model_mounts(home: Option<&Path>) -> Vec<BindMount> {
     let Some(home) = home else {
         return Vec::new();
     };
-    // Eldrun's hook alone, whatever an earlier tab left in the file.
+    // Tabtivity's hook alone, whatever an earlier tab left in the file.
     if let Err(e) = crate::services::agent_session::register_vibe_hook_in(home) {
         eprintln!("agent_fence: reset local vibe hooks: {e}");
     }
@@ -813,7 +863,7 @@ const LOCAL_MODEL_CONTROL: &[(&str, bool)] = &[
 /// a path that doesn't exist can't be mounted read-only, and one the agent
 /// could create would be as good as writable. An empty `.env` or `AGENTS.md`
 /// changes nothing (vibe skips a blank instructions file). A symlink in one of
-/// these places is not Eldrun's and is replaced.
+/// these places is not Tabtivity's and is replaced.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 pub(crate) fn local_model_control_paths(home: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -859,10 +909,10 @@ pub(crate) fn local_model_home(
 /// The support mounts every fenced tab gets on top of its scope home
 /// (`services::agent_home`, bound over `$HOME`): the scope's own live-session
 /// slice at the canonical path the hook script writes, the hook scripts and
-/// Eldrun's commands read-only and the spawn's own local-model home.
+/// Tabtivity's commands read-only and the spawn's own local-model home.
 /// Everything else an agent keeps — config, transcripts, session stores, its
 /// copy of the shared logins — is simply in the home.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn agent_state_mounts(
     scope_id: &str,
     env: &std::collections::HashMap<String, String>,
@@ -967,20 +1017,20 @@ fn guard_git_control(args: &mut Vec<String>, guard: crate::services::git_guard::
 /// architecture and the 32-bit one its kernel also runs: a 32-bit binary
 /// reaches the same keyring through the compat table. x32 is x86-64's `arch`
 /// with bit 30 set in `nr` and shares its numbers, hence the mask.
-#[cfg(all(any(target_os = "linux", test), target_arch = "x86_64"))]
+#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "x86_64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_003E, 0xBFFF_FFFF, [248, 249, 250]),
     (0x4000_0003, u32::MAX, [286, 287, 288]),
 ];
-#[cfg(all(any(target_os = "linux", test), target_arch = "aarch64"))]
+#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "aarch64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_00B7, u32::MAX, [217, 218, 219]),
     (0x4000_0028, u32::MAX, [309, 310, 311]),
 ];
-#[cfg(all(any(target_os = "linux", test), target_arch = "riscv64"))]
+#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "riscv64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[(0xC000_00F3, u32::MAX, [217, 218, 219])];
 #[cfg(all(
-    any(target_os = "linux", test),
+    any(target_os = "linux", all(test, unix)),
     not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))
 ))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
@@ -990,7 +1040,7 @@ const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
 /// `EPERM`; everything else is allowed. `None` on an architecture without a
 /// table, which the fence refuses rather than launching without it.
 ///
-/// Only Eldrun needs the keyring. Its saved secrets (`remote_credentials`) are
+/// Only Tabtivity needs the keyring. Its saved secrets (`remote_credentials`) are
 /// cached there in front of the Secret Service, in the login session keyring
 /// every process inherits, bubblewrap included. The private `/run` hides the
 /// Secret Service's socket but nothing reached by syscall, so without this a
@@ -999,7 +1049,7 @@ const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
 ///
 /// Classic BPF over `seccomp_data` (`nr` at offset 0, `arch` at 4). An
 /// architecture outside the table gets `EPERM` for every syscall.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
     const LD_W_ABS: u16 = 0x20;
     const ALU_AND_K: u16 = 0x54;
@@ -1045,28 +1095,45 @@ pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
 /// closes inherited descriptors, tmux starts the command from its server), so
 /// the shell opens it at the last moment and `exec`s: the process is bwrap from
 /// then on. `$1` is the filter file, `$0` the program, the rest its argv.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 const SECCOMP_LAUNCHER: &str = "f=$1; shift; exec \"$0\" \"$@\" 9<\"$f\"";
 
 /// `(cmd, args)` that run bwrap with `argv` under [`keyring_seccomp_filter`],
-/// through `scope_helper` (`services::fence_scope`, `--fence-scope`) when
-/// there is one; the helper execs bwrap with descriptor 9 still open.
-#[cfg(any(target_os = "linux", test))]
+/// through `step` — Tabtivity's binary and its mode, [`launcher_step`] — when
+/// there is one; the step execs bwrap with descriptor 9 still open.
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn seccomp_launcher(
     bwrap: &str,
-    scope_helper: Option<&str>,
+    step: Option<(&str, &str)>,
     filter: &Path,
     argv: Vec<String>,
 ) -> (String, Vec<String>) {
     let filter = filter.to_string_lossy().into_owned();
     let mut args = vec!["-c".to_string(), SECCOMP_LAUNCHER.to_string()];
-    match scope_helper {
-        Some(helper) => args.extend([helper.to_string(), filter, "--fence-scope".into(), bwrap.to_string()]),
+    match step {
+        Some((helper, mode)) => args.extend([helper.to_string(), filter, mode.to_string(), bwrap.to_string()]),
         None => args.extend([bwrap.to_string(), filter]),
     }
     args.extend(["--seccomp".to_string(), "9".to_string()]);
     args.extend(argv);
     ("/bin/sh".to_string(), args)
+}
+
+/// The step in front of bwrap, as `(binary, mode)`: `--fence-scope` where this
+/// kernel and bwrap take the Landlock scope (it maps carriers too), else
+/// `--agent-exec` when the spawn carries a secret for `agent_exec` to map,
+/// else none. `scope_helper` is `fence_scope::helper_for`'s answer.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn launcher_step(
+    scope_helper: Option<String>,
+    carries: bool,
+    running_binary: impl FnOnce() -> String,
+) -> Option<(String, &'static str)> {
+    match scope_helper {
+        Some(helper) => Some((helper, "--fence-scope")),
+        None if carries => Some((running_binary(), crate::services::agent_exec::MODE_FLAG)),
+        None => None,
+    }
 }
 
 /// Write the filter where the launcher reads it: in the state dir, which the
@@ -1089,7 +1156,7 @@ fn write_keyring_filter() -> Result<PathBuf, String> {
 /// Pure bubblewrap argv builder.  Later mounts intentionally shadow earlier
 /// ones: the scope home (or, with no `home_src`, an empty tmpfs) replaces the
 /// user's home and hides everything in it, selected toolchain paths and
-/// Eldrun's support dirs are restored, and project/box roots finally become
+/// Tabtivity's support dirs are restored, and project/box roots finally become
 /// read-write. `~/.cache` is a tmpfs over the home either way.
 #[cfg(any(target_os = "linux", test))]
 #[allow(clippy::too_many_arguments)]
@@ -1160,7 +1227,7 @@ pub(crate) fn bwrap_args(
     args
 }
 
-/// Shadow the whole Eldrun state tree, including its canonical alias. Explicit
+/// Shadow the whole Tabtivity state tree, including its canonical alias. Explicit
 /// tool mounts are restored afterwards; future private files stay hidden too.
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
@@ -1184,7 +1251,7 @@ fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMo
         if path.is_dir() { mask.extend(["--tmpfs".into(), path.to_string_lossy().into_owned()]); }
         else if path.exists() { mask.extend(["--ro-bind".into(), "/dev/null".into(), path.to_string_lossy().into_owned()]); }
     }
-    // Only Eldrun's explicit agent support mounts may pierce the state mask.
+    // Only Tabtivity's explicit agent support mounts may pierce the state mask.
     // Project roots and user allowlists are intentionally never restored here.
     for m in mounts.iter().filter(|m| Path::new(&m.dst).starts_with(state_dir)) {
         mask.extend([if m.read_only { "--ro-bind" } else { "--bind" }.into(), m.src.clone(), m.dst.clone()]);
@@ -1213,9 +1280,11 @@ pub fn wrap_pty_options_bwrap(
         return Err(fence_unavailable_message());
     }
     let bwrap = crate::paths::system_executable("bwrap").ok_or_else(fence_unavailable_message)?;
-    // Before `opts.cmd` becomes bwrap below.
+    // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let mounts = agent_state_mounts(scope_id, &opts.env);
     let support_mounts = mounts.clone();
     let mut extra_ro = configured_read_only_paths();
@@ -1223,10 +1292,10 @@ pub fn wrap_pty_options_bwrap(
     // the same channel as the allowlist, so the state mask below still wins.
     extra_ro.extend(root_project_read_only_paths_for(&opts.id, scope_id));
     let search_dirs = command_search_dirs(opts);
-    // The CLI's own install — Eldrun's (`agent_install`) or the host's — is
+    // The CLI's own install — Tabtivity's (`agent_install`) or the host's — is
     // read-only in the fence, every hop of it: a payload one scope's agent
     // could rewrite would run in every other scope and the user's own shell
-    // next. Updates run through Manage CLIs (a reinstall) or outside Eldrun;
+    // next. Updates run through Manage CLIs (a reinstall) or outside Tabtivity;
     // the CLI's own updater is switched off below where it has a switch.
     let visible = extra_ro.clone();
     extra_ro.extend(command_bind_paths(
@@ -1255,18 +1324,36 @@ pub fn wrap_pty_options_bwrap(
     // Last: overlapping roots and allowlists must not reopen private stores.
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
     let filter = write_keyring_filter()?;
-    let scope = crate::services::fence_scope::helper_for(&bwrap);
-    (opts.cmd, opts.args) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, args);
     opts.env
-        .insert("ELDRUN_AGENT_FENCE".to_string(), "1".to_string());
+        .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Keep the CLI's login in its file: the keyring is not reachable here.
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
-    // The fence hides the keyring Copilot signs in through; Eldrun holds the
+    // The fence hides the keyring Copilot signs in through; Tabtivity holds the
     // sign-in for it instead (`copilot_auth`).
     if copilot {
         crate::services::copilot_auth::inject_env(&mut opts.env);
     }
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier.
+    // The step in front of bwrap maps it to the CLI's variable (`agent_exec`);
+    // bwrap keeps the environment and the launcher `exec`s, so it reaches the
+    // CLI. Hence the launcher last: the step is needed whenever the
+    // environment carries something.
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    let step = launcher_step(
+        crate::services::fence_scope::helper_for(&bwrap),
+        crate::services::agent_exec::has_carriers(&opts.env),
+        crate::services::fence_scope::running_binary,
+    );
+    (opts.cmd, opts.args) = seccomp_launcher(
+        &bwrap.to_string_lossy(),
+        step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
+        &filter,
+        args,
+    );
     Ok(())
 }
 
@@ -1483,6 +1570,9 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
+    // Before `opts.args` becomes sandbox-exec's below.
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let inputs = sandbox_exec_inputs(opts, roots, scope_id, scope_home);
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1504,7 +1594,7 @@ pub fn wrap_pty_options_sandbox_exec(
     opts.cmd = "/usr/bin/sandbox-exec".to_string();
     opts.args = args;
     opts.env
-        .insert("ELDRUN_AGENT_FENCE".to_string(), "1".to_string());
+        .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Seatbelt cannot redirect a path: the agent's home is the scope home by
     // environment, with the user's git config and toolchains passed through.
     for (k, v) in home_env(scope_home, &paths::home_dir()) {
@@ -1512,12 +1602,21 @@ pub fn wrap_pty_options_sandbox_exec(
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
     crate::services::agent_install::apply_fence_env(&agent_cmd, &mut opts.env);
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
+    // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
+    // sandbox-exec passes the environment through. The step runs outside the
+    // Seatbelt profile, which need not grant Tabtivity's binary.
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
 
 /// Whether an agent launch runs one of the CLI's subcommands (`claude auth
 /// login`, a sign-in tab) rather than a session: its first argument is not a
-/// flag. The session flags Eldrun adds (`--add-dir`, `--remote-control`,
+/// flag. The session flags Tabtivity adds (`--add-dir`, `--remote-control`,
 /// `--name`) belong to the session command, and a subcommand refuses them.
 pub fn runs_subcommand(args: &[String]) -> bool {
     args.first().is_some_and(|arg| !arg.starts_with('-'))
@@ -1580,6 +1679,7 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
         tmux_session: None,
         tmux_attach: None,
         host_bound_uid: None,
+        local_model: false,
         schedule_target_id: None,
         host_session: false,
     };
@@ -1654,7 +1754,7 @@ pub fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
     fenced_tabs().lock().unwrap_or_else(|e| e.into_inner()).get(tab_id).map(|t| t.scope_id.clone())
 }
 
-/// A one-shot command inside the fence of `scope_id`, for work Eldrun runs on
+/// A one-shot command inside the fence of `scope_id`, for work Tabtivity runs on
 /// a fenced tab's behalf (an agent-requested push's `pre-push` preflight,
 /// `services::git_push_mcp`). Built from the same primitives as the tab's own
 /// boundary — project and box roots read-write, the allowlist read-only, the
@@ -1690,10 +1790,11 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
-    let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, argv);
+    let step = scope.as_deref().map(|helper| (helper, "--fence-scope"));
+    let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), step, &filter, argv);
     let mut command = crate::paths::command_no_window(cmd);
     command.args(argv);
-    command.env("ELDRUN_AGENT_FENCE", "1");
+    command.env(crate::app_env!("AGENT_FENCE"), "1");
     Ok(command)
 }
 
@@ -1709,6 +1810,9 @@ pub fn on_tab_gone(tab_id: &str) {
         .remove(tab_id)
         .is_some();
     untrack_host_agent_tab(tab_id);
+    // Its API proxy tokens go with it (those of a tmux-held agent once the
+    // session is gone too).
+    crate::services::api_proxy::on_tab_gone(tab_id);
     // A tab's end is when a login it made lands in its home: carry it to the
     // other scopes now rather than at the keeper's next tick. Off-thread —
     // this runs on the PTY's teardown path.
@@ -1762,7 +1866,7 @@ pub enum LiveFence {
 pub struct ProcView {
     pub argv0: String,
     pub argv1: Option<String>,
-    /// Whether it runs in Eldrun's own mount namespace. bubblewrap always
+    /// Whether it runs in Tabtivity's own mount namespace. bubblewrap always
     /// unshares it, so a fenced agent never does.
     pub host_ns: bool,
 }
@@ -1798,7 +1902,7 @@ pub fn classify_live(agent_cmd: &str, procs: &[ProcView]) -> LiveFence {
 }
 
 /// Parse `tmux list-panes -a -F '#{session_name}\t#{pane_pid}'`. A session
-/// with several panes keeps its first, which is the one Eldrun created.
+/// with several panes keeps its first, which is the one Tabtivity created.
 pub fn parse_tmux_pane_pids(out: &str) -> HashMap<String, u32> {
     let mut panes = HashMap::new();
     for line in out.lines() {
@@ -1927,6 +2031,26 @@ mod tests {
     use crate::schema::boxes::ProjectBox;
     use serde_json::{json, Value};
 
+    #[test]
+    fn a_failed_probe_under_the_userns_profile_names_the_namespace_not_the_package() {
+        // The Mobile sidecar's case: bwrap installed and root-owned, the
+        // window fencing fine, and the probe still failing because systemd put
+        // the service in a user namespace Ubuntu's AppArmor confines.
+        let note = probe_failure_note(
+            "bwrap: No permissions to create a new namespace\n",
+            Some("unprivileged_userns (enforce)\n"),
+        );
+        assert!(note.contains("unprivileged_userns (enforce)"), "{note}");
+        assert!(note.contains("No permissions to create a new namespace"), "{note}");
+        assert!(note.contains("mount-namespace directive"), "{note}");
+        // An unconfined process that fails gets bwrap's words and no such guess.
+        let plain = probe_failure_note("", Some("unconfined\n"));
+        assert!(plain.contains("unconfined"), "{plain}");
+        assert!(plain.contains("no output"), "{plain}");
+        assert!(!plain.contains("mount-namespace"), "{plain}");
+        assert!(probe_failure_note("x", None).contains("label of this process: unknown"));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn the_keyring_table_matches_the_native_syscall_numbers() {
@@ -1999,16 +2123,40 @@ mod tests {
             std::fs::read_to_string(dir.path().join("args")).unwrap(),
             "--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n"
         );
-        // With the scope helper, it runs first and is handed bwrap and fd 9.
-        std::fs::remove_file(dir.path().join("fd9")).unwrap();
-        let (cmd, args) = seccomp_launcher("/usr/bin/bwrap", Some(&fake.to_string_lossy()), &filter, argv);
-        let status = std::process::Command::new(cmd).args(args).env("OUT", dir.path()).status().unwrap();
-        assert!(status.success());
-        assert_eq!(std::fs::read(dir.path().join("fd9")).unwrap(), b"program bytes");
+        // With a step, it runs first and is handed its mode, bwrap and fd 9.
+        for mode in ["--fence-scope", crate::services::agent_exec::MODE_FLAG] {
+            std::fs::remove_file(dir.path().join("fd9")).unwrap();
+            let fake = fake.to_string_lossy();
+            let (cmd, args) = seccomp_launcher("/usr/bin/bwrap", Some((&fake, mode)), &filter, argv.clone());
+            let status = std::process::Command::new(cmd).args(args).env("OUT", dir.path()).status().unwrap();
+            assert!(status.success());
+            assert_eq!(std::fs::read(dir.path().join("fd9")).unwrap(), b"program bytes");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("args")).unwrap(),
+                format!("{mode}\n/usr/bin/bwrap\n--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n")
+            );
+        }
+    }
+
+    #[test]
+    fn a_carried_secret_gets_the_exec_step_even_without_the_scope() {
+        let bin = || "/opt/app/bin".to_string();
+        // The scope's helper maps carriers too, so it is the one step.
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("args")).unwrap(),
-            "--fence-scope\n/usr/bin/bwrap\n--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n"
+            launcher_step(Some("/proc/1/exe".into()), true, bin),
+            Some(("/proc/1/exe".to_string(), "--fence-scope"))
         );
+        assert_eq!(
+            launcher_step(Some("/proc/1/exe".into()), false, bin),
+            Some(("/proc/1/exe".to_string(), "--fence-scope"))
+        );
+        // No Landlock scope here: a carried secret still gets mapped.
+        assert_eq!(
+            launcher_step(None, true, bin),
+            Some(("/opt/app/bin".to_string(), crate::services::agent_exec::MODE_FLAG))
+        );
+        // Nothing to map, nothing in front of bwrap (as before).
+        assert_eq!(launcher_step(None, false, || unreachable!()), None);
     }
 
     #[test]
@@ -2077,8 +2225,8 @@ mod tests {
 
     #[test]
     fn tmux_pane_pids_parse_and_keep_the_first_pane() {
-        let panes = parse_tmux_pane_pids("eldrun-a--agent-1\t100\neldrun-a--agent-1\t200\nbad line\nx\tnope\n");
-        assert_eq!(panes.get("eldrun-a--agent-1"), Some(&100));
+        let panes = parse_tmux_pane_pids(concat!(crate::app_slug!(), "-a--agent-1\t100\n", crate::app_slug!(), "-a--agent-1\t200\nbad line\nx\tnope\n"));
+        assert_eq!(panes.get(concat!(crate::app_slug!(), "-a--agent-1")), Some(&100));
         assert_eq!(panes.len(), 1);
     }
 
@@ -2118,12 +2266,12 @@ mod tests {
             ["/w/alpha", "/w/beta-mirror", "/state/remote-projects/p3/mirror", "/w/box"],
             "a remote project's mirror, never its remote directory string"
         );
-        let args = bwrap_args("/home/u", None, "/home/u/eldrun/root", "claude", &[], &[PathBuf::from("/home/u/eldrun/root")], &paths, &[]);
+        let args = bwrap_args("/home/u", None, concat!("/home/u/", crate::app_slug!(), "/root"), "claude", &[], &[PathBuf::from(concat!("/home/u/", crate::app_slug!(), "/root"))], &paths, &[]);
         for p in &paths {
             assert!(args.windows(3).any(|w| w[0] == "--ro-bind-try" && w[1] == *p && w[2] == *p), "{p} not read-only: {args:?}");
             assert!(!args.windows(2).any(|w| (w[0] == "--bind" || w[0] == "--bind-try") && w[1] == *p), "{p} bound read-write");
         }
-        let plain = bwrap_args("/home/u", None, "/home/u/eldrun/root", "claude", &[], &[PathBuf::from("/home/u/eldrun/root")], &[], &[]);
+        let plain = bwrap_args("/home/u", None, concat!("/home/u/", crate::app_slug!(), "/root"), "claude", &[], &[PathBuf::from(concat!("/home/u/", crate::app_slug!(), "/root"))], &[], &[]);
         assert!(!plain.iter().any(|a| a == "/w/alpha"));
         // A project scope: the flag changes nothing about its roots.
         assert_eq!(compute_fence_roots(&boxes, &projects, "p1", true), Some(vec![PathBuf::from("/w/alpha"), PathBuf::from("/w/box")]));
@@ -2277,6 +2425,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         }
@@ -2286,12 +2435,12 @@ mod tests {
     fn seatbelt_profile_denies_writes_then_restores_roots_and_protects_hooks() {
         let inputs = SeatbeltInputs {
             home: "/Users/a".into(),
-            roots: vec!["/Users/a/eldrun/projects/p".into()],
+            roots: vec![concat!("/Users/a/", crate::app_slug!(), "/projects/p").into()],
             writable: vec!["/Users/a/.claude".into(), "/private/tmp".into()],
             readable: vec!["/Users/a/.gitconfig".into()],
             protected: vec![
                 "/Users/a/.claude/settings.json".into(),
-                "/Users/a/.local/share/eldrun/hooks".into(),
+                concat!("/Users/a/.local/share/", crate::app_slug!(), "/hooks").into(),
             ],
             hidden: Vec::new(),
             own_home: None,
@@ -2310,7 +2459,7 @@ mod tests {
         assert!(pos("(deny file-read* (subpath \"/Users/a\"))") < pos("(allow file-read* (subpath \"/Users/a/.gitconfig\"))"));
         assert!(profile.contains("(allow file-read-metadata (literal \"/Users/a\"))"));
         // Writes are denied globally, then the root and the agent state come back.
-        assert!(pos("(deny file-write*)") < pos("(allow file-write* (subpath \"/Users/a/eldrun/projects/p\"))"));
+        assert!(pos("(deny file-write*)") < pos(concat!("(allow file-write* (subpath \"/Users/a/", crate::app_slug!(), "/projects/p\"))")));
         assert!(pos("(deny file-write*)") < pos("(allow file-write* (subpath \"/Users/a/.claude\"))"));
         // The device allowlist comes right after the global deny, before any
         // protected deny, and never opens other terminals' ttys.
@@ -2325,7 +2474,7 @@ mod tests {
         // The protected paths are denied LAST so they win over the .claude allow.
         let hook_deny = pos("(deny file-write* (subpath \"/Users/a/.claude/settings.json\"))");
         assert!(hook_deny > pos("(allow file-write* (subpath \"/Users/a/.claude\"))"));
-        assert_eq!(lines.last().unwrap(), &"(deny file-write* (subpath \"/Users/a/.local/share/eldrun/hooks\"))");
+        assert_eq!(lines.last().unwrap(), &concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
         // Quoting: a path with a quote or backslash stays one Scheme string.
         assert_eq!(sbpl_string("/a/b\"c\\d"), "\"/a/b\\\"c\\\\d\"");
     }
@@ -2521,7 +2670,7 @@ mod tests {
     #[test]
     fn command_bind_paths_follow_installer_symlinks_under_home() {
         let tmp = std::env::temp_dir().join(format!(
-            "eldrun-fence-bind-{}-{}",
+            concat!(crate::app_slug!(), "-fence-bind-{}-{}"),
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

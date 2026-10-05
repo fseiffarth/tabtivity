@@ -1,4 +1,4 @@
-# Code Review — Group L #42 (Detach a Subwindow Out of the Eldrun Main Window)
+# Code Review — Group L #42 (Detach a Subwindow Out of the Tabtivity Main Window)
 
 Reviewer pass over the #42 implementation on `develop`, cross-checked against
 `docs/group_l_42_detach_plan.md`, `docs/group_l_42_detach_plan_review.md`

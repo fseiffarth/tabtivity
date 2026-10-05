@@ -1,4 +1,4 @@
-# ProjectEldrun — Status
+# Tabtivity — Status
 
 Current implementation snapshot, reviewed **2026-09-15** against **v0.1.68**
 (`c5c0e2d`). Product overview: [README.md](README.md). Remaining direction:
@@ -16,24 +16,24 @@ Current implementation snapshot, reviewed **2026-09-15** against **v0.1.68**
   and local Ollama-backed tabs. Claude/Codex preserve per-tab conversations;
   several other CLIs, including Gemini and Vibe, restore through continue-latest
   arguments. Claude/Codex hooks report turn activity, with output heuristics as
-  the fallback. Permission modes belong to the agent CLI; the Eldrun Plan/Auto
+  the fallback. Permission modes belong to the agent CLI; the Tabtivity Plan/Auto
   toggle has been removed.
 - **Prompt workflows:** a per-scope chart tab combines a zoomable timeline,
   Markdown drafts, a free-position draft board, tags, filters, multi-selection,
   prompt/model history, scheduled delivery, and related/after links. After-links
   wait for completion plus five idle minutes. One-time, daily, and weekday
-  schedules run while desktop Eldrun is open, with a one-hour catch-up window.
+  schedules run while desktop Tabtivity is open, with a one-hour catch-up window.
   The chart permits one independent schedule rule per tab; chains add follow-ups.
 - **Remote and runtime support:** mount-free SSH/SFTP projects, Git lockstep for
   tracked commits, opt-in byte-sync for other files, multi-host workers, tmux
   sessions, system/GPU monitoring, OpenVPN, and HPC/SLURM tools. Local projects
   can use Docker session containers or QEMU VMs. The local-agent fence uses
   bubblewrap on Linux and Seatbelt on macOS; Windows reports no agent fence.
-- **Eldrun Mobile:** opt-in PWA and loopback sidecar over a private Tailscale
+- **Tabtivity Mobile:** opt-in PWA and loopback sidecar over a private Tailscale
   tailnet. Agent/session lists, touch terminal, chat-style Focus, model selection,
   schedules, tab closing, project boxes, to-do/Alerts actions, gated mail writes,
   and the file outbox are implemented. Focus reads stored Claude/Codex prompts
-  and answers when available, falling back to the terminal. `eldrun-send`
+  and answers when available, falling back to the terminal. `tabtivity-send`
   supports local/container file transfers up to 24 MiB. Mobile project access
   excludes remote, VM, and ordinary container projects; Trash is the exception.
 - **Workspace apps and viewers:** embedded mail, calendar/CalDAV, to-do board,
@@ -82,7 +82,7 @@ Neither a build nor a commit restarts a running window.
   Project-local session files are legacy/export-only; adoption requires an
   explicit request and never imports their open-app commands.
 - `project.json` keeps identity, remote/runtime configuration, and viewer
-  preferences. Global state normally lives in `~/.local/share/eldrun/`.
+  preferences. Global state normally lives in `~/.local/share/tabtivity/`.
   Prompt drafts/history/links use `agent_prompts.json`; per-tab schedules and
   delivery receipts use `agent_tasks.json` with bindings in the tab layout.
 - Shell, file, and supported resumable agent tabs restore. Ordinary PTYs do not
@@ -90,7 +90,7 @@ Neither a build nor a commit restarts a running window.
   remote tmux work running. Detached windows re-dock on restart; closing a
   detached window closes its tabs.
 - Download source folders are browsed in the file panel. Screenshots and saved
-  mail attachments use ignored Eldrun-prefixed folders. Eldrun does not edit
+  mail attachments use ignored Tabtivity-prefixed folders. Tabtivity does not edit
   another browser's preferences or redirect its download directory.
 
 ## Quality and Verification
@@ -110,7 +110,7 @@ The configured gates are:
 This documentation review inspected source, history, and CI configuration; it
 is not a fresh application build/test result or a live run. Historical test
 counts have been removed because they do not establish the current verdict.
-Agents must never launch Eldrun or stop the user's instance for verification.
+Agents must never launch Tabtivity or stop the user's instance for verification.
 
 **Implemented, automated, and live-tested are separate states.** Mail and
 selected calendar, to-do, Mobile, import, file-tree, and monitor controls have

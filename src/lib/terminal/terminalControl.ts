@@ -6,7 +6,7 @@ const claimedInitialInputs = new Set<string>();
 
 /** xterm answers terminal identity probes by emitting CSI ... c back through
  *  `onData`, for example secondary DA: `ESC [ > 0 ; 276 ; 0 c`. During an
- *  auto-run tab startup that response can land in readline before Eldrun types
+ *  auto-run tab startup that response can land in readline before Tabtivity types
  *  `initialInput`, making the shell execute `0;276;0c...` instead of the command.
  *  Suppress only the standalone identity replies while an auto-input is pending;
  *  normal interactive terminal programs can still receive them afterward. */
@@ -159,7 +159,7 @@ export const OSC52_MAX_CHARS = 4096;
  *
  * OSC 52 is how a TUI (Claude Code's copy action among them) sets the system
  * clipboard when it can't reach it itself — over SSH, inside tmux, inside a
- * container. Eldrun honours it, because xterm parses OSC 52 but performs no
+ * container. Tabtivity honours it, because xterm parses OSC 52 but performs no
  * action without a handler, so the CLI's "copied!" would otherwise be a lie.
  *
  * But *any* process whose output reaches a terminal pane can emit it — a
@@ -184,7 +184,7 @@ export function decodeOsc52Clipboard(data: string): string | null {
   // Pc (parts[0]) names the target selection buffer(s) — "c" (clipboard), ""
   // (spec default, also clipboard), or a combination like "cp"/"cs" that includes
   // clipboard alongside primary/select. Anything without "c" (e.g. a
-  // primary-selection-only "p") isn't Eldrun's one clipboard.
+  // primary-selection-only "p") isn't Tabtivity's one clipboard.
   if (parts.length < 2 || (parts[0] !== "" && !parts[0].includes("c"))) return null;
   if (parts[1] === "?") return null;
   let text: string;
@@ -348,7 +348,7 @@ export type SilentStartNotice = "pending" | "noOutput";
  * a spawn error prints itself, and an exit prints `[process exited]`, but a
  * spawn call that simply never resolves looks exactly like a program that is
  * slow to draw, and on a light theme the pane is plain white. So a silent start
- * names which of the two it is: `pending` (Eldrun never heard back from the
+ * names which of the two it is: `pending` (Tabtivity never heard back from the
  * launch) or `noOutput` (the program runs and has shown nothing). A failed spawn
  * has already explained itself and an exited program has its own line, so
  * neither gets a second one.

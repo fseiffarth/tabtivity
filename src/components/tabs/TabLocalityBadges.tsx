@@ -15,7 +15,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useT } from "../../lib/i18n";
 import { CloudIcon, HomeIcon } from "../common/icons/Icon";
-import { useAgentModelsStore, agentTabLabel } from "../../stores/agents/agentModels";
+import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 
@@ -420,7 +420,8 @@ export function TabStatusMark({ stateClass }: { stateClass: string }) {
 const MODE_TICK_MS = 2_000;
 
 /** The plan / goal marks on an agent tab: PLAN while the session's own status
- *  line says plan mode, GOAL while it says a `/goal` is running. Read-only — the
+ *  line says plan mode, GOAL while a `/goal` is running — per the session's own
+ *  record where the CLI keeps one (`tabModeMarks`), else its footer. Read-only — the
  *  mode is the agent CLI's to set (see the note in `TabBar` about the removed
  *  Plan/Auto toggle); this only shows what the session prints, with the parser
  *  the phone's Mode chip uses (`lib/agents/agentModel.screenModeMarks`).
@@ -435,7 +436,9 @@ export function TabAgentModeMarks({ scope, tab, isActive }: { scope: string; tab
   const t = useT();
   const agent = tab.kind === "agent" || tab.kind === "local_agent";
   const ptyId = `${scope}:${tab.key}`;
-  const marks = useAgentModelsStore((state) => state.modeByTab[ptyId]);
+  const modeByTab = useAgentModelsStore((state) => state.modeByTab);
+  const goalByTab = useAgentModelsStore((state) => state.goalByTab);
+  const marks = tabModeMarks({ modeByTab, goalByTab }, ptyId);
   useEffect(() => {
     if (!agent) return;
     const readXterm = () => {

@@ -11,7 +11,7 @@
    sizing, the period switch and the stat primitives live here.
 
    The stat tile (.stats-metric) and the bar rows deliberately mirror
-   .network-metric — one visual language for "a number Eldrun measured". */
+   .network-metric — one visual language for "a number Tabtivity measured". */
 .stats-dialog {
   width: min(760px, calc(100vw - 32px));
   max-height: min(860px, calc(100vh - 40px));
@@ -129,6 +129,18 @@
 .stats-bar-value {
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
+}
+
+/* Tokens: the split line under a bar row, and a CLI's per-model rows nested
+   under it — the same bar rows and help text, only placed. */
+.stats-token-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: -3px 0 2px;
+}
+.stats-token-models {
+  padding-left: 14px;
 }
 
 /* Hour-of-day sparkline. */

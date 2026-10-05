@@ -47,7 +47,7 @@ missing capability — is the project's dominant risk.
        a hit aborts without leaving a stray bump commit. The base is the remote
        tip, or — for a brand-new remote branch — the parent of the oldest commit
        no remote branch has yet, falling back to the empty tree at a root commit.
-       `ELDRUN_SKIP_PRIVACY_CHECK=1` is the documented one-time override.
+       `TABTIVITY_SKIP_PRIVACY_CHECK=1` is the documented one-time override.
      - A `privacy` CI job runs the same scan over `merge-base(base, head)..head`
        and now **gates all three package jobs**: a leak must never become a
        downloadable artifact, let alone a release asset.
@@ -114,7 +114,7 @@ missing capability — is the project's dominant risk.
        - [ ] ❌ Doesn't work on macOS
 
 164. **First live-QA session — unblock the 145 manual boxes.** `TODO.md`'s
-     verification section used to say *"do not launch Eldrun from the agent"*,
+     verification section used to say *"do not launch Tabtivity from the agent"*,
      contradicting `CLAUDE.md`'s explicit 2026-07-28 permission; that line was
      removed on 2026-07-28 and this item replaces it. Pick the three
      most-shipped subsystems and QA them by hand **before starting a fourth
@@ -216,10 +216,10 @@ missing capability — is the project's dominant risk.
        window it exists to serve.
      - **Declines** in CI, from a linked worktree (freezing an agent's tree
        over the user's binary is the surprise this must not be), and under
-       `git config eldrun.autoDevBuild false` / `ELDRUN_NO_AUTO_DEV_BUILD=1`.
+       `git config tabtivity.autoDevBuild false` / `TABTIVITY_NO_AUTO_DEV_BUILD=1`.
      - **Skips a no-op**: the signature is HEAD plus the dirty tree, stamped
        after each successful install.
-     - Builds and installs only. It never launches or stops Eldrun; a running
+     - Builds and installs only. It never launches or stops Tabtivity; a running
        frozen window keeps its old inode, and the completion notification is
        what says to relaunch.
      - **Since 2026-09-13/14 it freezes the commit, not the tree** (`374c650`,
@@ -229,7 +229,7 @@ missing capability — is the project's dominant risk.
        git environment, so a hook's inherited `GIT_DIR`/`GIT_INDEX_FILE` cannot
        point the checkout at the main tree, and it falls back to a plain build
        when inotify is out of watches. From an agent tab it builds and stops;
-       `start-eldrun-dev-build.sh` adopts `target/release/eldrun` on its `.frozen`
+       `start-tabtivity-dev-build.sh` adopts `target/release/tabtivity` on its `.frozen`
        record (`2aa8f34`). The "dirty tree" signature and "LAST tree" wording
        above predate this; AGENTS.md holds the current contract.
      - [ ] 🖐️ Manual test — with uncommitted edits in the tree, commit an
@@ -245,8 +245,8 @@ missing capability — is the project's dominant risk.
        - [ ] ❌ Doesn't work on macOS
      - [ ] 🖐️ Manual test — commit twice in quick succession: expect one
        "rebuilding the frozen snapshot" line per commit, a single build in
-       `~/.local/share/eldrun/package-dev-auto.log` with a second pass at the
-       end, and one "Eldrun (dev) rebuilt" notification naming the newer sha.
+       `~/.local/share/tabtivity/package-dev-auto.log` with a second pass at the
+       end, and one "Tabtivity (dev) rebuilt" notification naming the newer sha.
        - [ ] ✅ Works on Linux (X11)
        - [ ] ❌ Doesn't work on Linux (X11)
        - [ ] ✅ Works on Linux (Wayland)
@@ -264,15 +264,15 @@ missing capability — is the project's dominant risk.
        arrives from an agent tab. Now the loop goes on while `.pending`
        exists, a failure is recorded in `package-dev-auto.failed`, `--status`
        and `backend:stale` print it plus "N commit(s) behind HEAD", the
-       `.frozen` record is installed beside `eldrun-dev` (by `package-dev.sh`
+       `.frozen` record is installed beside `tabtivity-dev` (by `package-dev.sh`
        and by the launcher's adoption), and the launcher — in the user's own
        session — notifies how far behind the snapshot it opens is and why.
      - [ ] 🖐️ Manual test — make a commit that does not compile, then one
        that fixes it, within a minute: the log shows pass 1 failing, "a newer
        commit is queued — building it despite the failure", and pass 2
        succeeding; `scripts/package-dev-auto.sh --status` shows no failure
-       afterwards. Then relaunch "Eldrun (dev)" with two unfrozen commits
-       (`git config eldrun.autoDevBuild false` for the test): a notification
+       afterwards. Then relaunch "Tabtivity (dev)" with two unfrozen commits
+       (`git config tabtivity.autoDevBuild false` for the test): a notification
        says "2 commit(s) behind".
        - [ ] ✅ Works on Linux (X11)
        - [ ] ❌ Doesn't work on Linux (X11)
@@ -282,7 +282,7 @@ missing capability — is the project's dominant risk.
        - [ ] ❌ Doesn't work on Windows
        - [ ] ✅ Works on macOS
        - [ ] ❌ Doesn't work on macOS
-     - [ ] 🖐️ Manual test — `git config eldrun.autoDevBuild false`, commit:
+     - [ ] 🖐️ Manual test — `git config tabtivity.autoDevBuild false`, commit:
        expect no line, no build, and `--status` to say why.
        - [ ] ✅ Works on Linux (X11)
        - [ ] ❌ Doesn't work on Linux (X11)
@@ -303,5 +303,35 @@ missing capability — is the project's dominant risk.
        - [ ] ❌ Doesn't work on Windows
        - [ ] ✅ Works on macOS
        - [ ] ❌ Doesn't work on macOS
+
+168. **Release A of the rename (Eldrun → Tabtivity): the upgrade has never run
+     live.** The flip is on the `rename` branch (`docs/rename_phase3_handoff.md`);
+     the migrator's launch steps passed against a *copy* of a real install
+     (`scripts/brand-copy-run.sh`), nothing else was run. Before merging to
+     `develop`: the post-commit hook freezes every commit there into the dev
+     build, so the first launch after the merge IS the migration of the real
+     install.
+     - [x] 🤖 Automated test — `cargo test brand_migration` (upgrade, fresh
+       install, crash mid-step, second run), `BrandMigration.test.ts`,
+       `BrandMirror.test.ts` (static pages, the pre-paint fallback).
+     - [ ] 🖐️ Manual test — upgrade an existing install with a packaged build:
+       one entry in the app menu / package list; projects, tabs, UI settings
+       and theme (first paint included) and agent sessions restore; the phone
+       host restarts under its new name and the phone stays paired; mail
+       unlocks; remote tmux sessions reattach; `eldrun-send` and
+       `tabtivity-send` both work in a fenced tab; Settings → Updates lists
+       what was still found under the old name; `npm run backend:stale` and
+       the frozen build still find the binary.
+       - [ ] ✅ Works on Linux (X11)
+       - [ ] ❌ Doesn't work on Linux (X11)
+       - [ ] ✅ Works on Linux (Wayland)
+       - [ ] ❌ Doesn't work on Linux (Wayland)
+       - [ ] ✅ Works on Windows
+       - [ ] ❌ Doesn't work on Windows
+       - [ ] ✅ Works on macOS
+       - [ ] ❌ Doesn't work on macOS
+     - [ ] Not built: the NSIS hook that removes the old Windows install (it
+       cannot be verified here); the webview-data copy on Windows and macOS
+       (paths unknown); a retake of `screenshots/eldrun-current.png`.
 
 ---

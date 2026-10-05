@@ -17,7 +17,7 @@
  * way that matters: it is unconditional. A withdrawal waits for settings to load
  * (a flag might be on); a retired kind cannot come back, and the fall-through for
  * its unrecognized `cmd` is `"shell"` — so waiting would mean restoring a
- * terminal that runs `__eldrun_mail__`.
+ * terminal that runs `__tabtivity_mail__`.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -243,7 +243,7 @@ describe("retirement — the mail tab", () => {
     // The whole point of being separate from `withdrawnTabKinds`: that one waits
     // for settings (a flag might still be on), and waiting here would restore the
     // tab as a *shell* — `cmdToKind` no longer maps this cmd, so its fall-through
-    // is a terminal that would try to run `__eldrun_mail__`.
+    // is a terminal that would try to run `__tabtivity_mail__`.
     useSettingsStore.setState({ settings: null });
     useTabsStore
       .getState()

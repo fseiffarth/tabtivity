@@ -2,7 +2,7 @@
 //!
 //! When a project's container toggle is on, every terminal/agent tab of the
 //! project (`shell` and `agent` kinds) execs into a single long-lived container
-//! named `eldrun-<project-id>`. `local_only` tabs (e.g. Ollama `local_agent`)
+//! named `tabtivity-<project-id>`. `local_only` tabs (e.g. Ollama `local_agent`)
 //! stay on the host verbatim. The container mounts **only the project
 //! directory** plus the minimal agent auth/state paths, so a process inside it
 //! physically cannot reach unrelated host files.
@@ -38,7 +38,7 @@
 //!
 //! Only these host paths are bind-mounted, each at its identical absolute path:
 //! - the **project directory** (rw) — the sole project bytes exposed;
-//! - the project's **Eldrun-owned agent home** (`services::agent_home`) at
+//! - the project's **Tabtivity-owned agent home** (`services::agent_home`) at
 //!   `$HOME` (rw): the agents' config, transcripts and session stores live
 //!   there, never in the user's own home, which the container never sees;
 //! - `<state_dir>/live_sessions/<project-id>` (rw) — where the in-container
@@ -79,7 +79,7 @@
 //!
 //! Every container is created with `--init` (PID 1 reaps zombies),
 //! `--security-opt no-new-privileges`, `--cap-drop ALL`, a `--pids-limit`
-//! (fork-bomb guard), and `--label eldrun.owner=eldrun` so anything we started
+//! (fork-bomb guard), and `--label tabtivity.owner=tabtivity` so anything we started
 //! is enumerable (and sweepable). Optional per-project knobs (`SandboxSpec`):
 //! `--memory`, `--cpus`, `--network` (e.g. `none` for no egress), and
 //! `--read-only` rootfs (+ `--tmpfs /tmp`). Docker's own socket is never
@@ -90,6 +90,7 @@
 //! All paths are built from Rust path helpers as absolute strings — never
 //! relying on `$HOME` shell-expansion, because `docker` is exec'd directly.
 
+use crate::brand::SLUG;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -105,15 +106,15 @@ use crate::terminal::PtyOptions;
 /// Default image used when a project does not override it. Building/providing
 /// this image is the user's responsibility; the toggle-time preflight offers a
 /// one-click build (see `preflight_report` / `docker/agent-sandbox/`).
-pub const DEFAULT_IMAGE: &str = "eldrun-agent-sandbox:latest";
+pub const DEFAULT_IMAGE: &str = crate::brand::SANDBOX_IMAGE;
 
 /// Default `--pids-limit` when a project does not override it. Generous enough
 /// for node + git + ripgrep + child processes, tight enough to blunt a fork bomb.
 pub const DEFAULT_PIDS_LIMIT: u32 = 1024;
 
-/// `--label` marking every container Eldrun starts, so anything we own is
+/// `--label` marking every container Tabtivity starts, so anything we own is
 /// enumerable (`docker ps --filter label=…`) and sweepable at startup/exit.
-pub const OWNER_LABEL: &str = "eldrun.owner=eldrun";
+pub const OWNER_LABEL: &str = crate::brand::DOCKER_OWNER_LABEL;
 
 /// The reference sandbox image's Dockerfile, embedded so an installed app (no
 /// repo checkout) can still materialize it for the one-click build flow.
@@ -156,16 +157,16 @@ fn sanitize_key(id: &str) -> String {
     crate::storage::project_key(id)
 }
 
-/// Name of the session container for a project: `eldrun-<sanitized-id>`.
+/// Name of the session container for a project: `tabtivity-<sanitized-id>`.
 pub fn container_name_for(project_id: &str) -> String {
-    format!("eldrun-{}", sanitize_key(project_id))
+    format!("{}{}", crate::brand::CONTAINER_PREFIX, sanitize_key(project_id))
 }
 
 /// Image tag to run for a project: a `dockerfile` spec builds a per-project tag,
 /// otherwise the spec's `image` override, otherwise the built-in default.
 pub fn image_for(project_id: &str, spec: Option<&SandboxSpec>) -> String {
     if spec.is_some_and(|s| s.dockerfile.is_some()) {
-        return format!("eldrun-{}:latest", sanitize_key(project_id));
+        return format!("{}{}:latest", crate::brand::CONTAINER_PREFIX, sanitize_key(project_id));
     }
     spec.and_then(|s| s.image.clone())
         .unwrap_or_else(|| DEFAULT_IMAGE.to_string())
@@ -175,7 +176,7 @@ pub fn image_for(project_id: &str, spec: Option<&SandboxSpec>) -> String {
 
 /// Stable FNV-1a hash of everything baked into `docker run` at create time
 /// (image, mounts, hardening — i.e. the create argv built with no fingerprint
-/// label). Stored on the container as `--label eldrun.spec=<hash>` so `up` can
+/// label). Stored on the container as `--label tabtivity.spec=<hash>` so `up` can
 /// detect a stale container whose spec/mounts no longer match and recreate it.
 /// Deliberately not `DefaultHasher` (unstable across Rust releases — a false
 /// mismatch would needlessly recreate on every app upgrade… of the hasher).
@@ -198,7 +199,7 @@ pub fn spec_fingerprint(create_args: &[String]) -> String {
 pub struct ContainerProbe {
     pub exists: bool,
     pub running: bool,
-    /// The `eldrun.spec` label recorded at create, when present.
+    /// The `tabtivity.spec` label recorded at create, when present.
     pub fingerprint: Option<String>,
 }
 
@@ -257,13 +258,13 @@ pub fn docker_create_args(
         "--label".to_string(),
         OWNER_LABEL.to_string(),
         "--label".to_string(),
-        format!("eldrun.project={project_id}"),
+        format!("{}={project_id}", crate::brand::DOCKER_PROJECT_LABEL),
     ];
     if let Some(fp) = fingerprint {
         // Keep the label out of its own hash input: it is appended only on the
         // second, real build of this argv.
         a.push("--label".to_string());
-        a.push(format!("eldrun.spec={fp}"));
+        a.push(format!("{}={fp}", crate::brand::DOCKER_SPEC_LABEL));
     }
     // `--user` carries the host identity in so files the container writes are
     // the user's. On Windows there is no host uid to carry (`host_uid_gid` is
@@ -328,7 +329,7 @@ pub fn docker_create_args(
 }
 
 /// Whether a tab variable's VALUE must stay off the `docker exec` argv (#864):
-/// the forwarded agent credentials and Eldrun's MCP bearer tokens. The docker
+/// the forwarded agent credentials and Tabtivity's MCP bearer tokens. The docker
 /// client stays alive for the tab's whole life, and `/proc/<pid>/cmdline` is
 /// readable by every local user — not only this uid.
 fn is_secret_exec_env(key: &str) -> bool {
@@ -338,6 +339,7 @@ fn is_secret_exec_env(key: &str) -> bool {
             crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
             crate::services::root_mcp::GIT_TOKEN_ENV,
             crate::services::root_mcp::HELP_TOKEN_ENV,
+            crate::services::root_mcp::MARKUP_TOKEN_ENV,
         ]
         .contains(&key)
 }
@@ -394,7 +396,11 @@ pub fn docker_exec_args(
             a.push(k.clone());
             continue;
         }
-        let value = if k == "ELDRUN_PROJECT_DIR" { container_path(v) } else { v.clone() };
+        // The project dir is spelled for the container — under the variable's
+        // old name too, when both are exported after a rename.
+        let project_dir = k == crate::app_env!("PROJECT_DIR")
+            || crate::brand::PAIR.legacy_env_name("PROJECT_DIR").as_deref() == Some(k.as_str());
+        let value = if project_dir { container_path(v) } else { v.clone() };
         a.push(format!("{k}={value}"));
     }
     for k in auth_env.keys() {
@@ -418,7 +424,7 @@ pub fn docker_exec_args(
 //
 // `PtyOptions.sandbox` and `PtyOptions.local_only` arrive from the renderer,
 // which derives them from the tab store — and the tab store is rehydrated from a
-// layout file that lives INSIDE the project tree (`.eldrun/sessions/terminals.json`
+// layout file that lives INSIDE the project tree (`.tabtivity/sessions/terminals.json`
 // and `project.json`), i.e. inside the container's own writable mount and inside
 // any cloned/imported repo. A persisted tab that declares `location: "local"`
 // therefore used to defeat the container it was supposed to be confined by:
@@ -437,7 +443,7 @@ pub struct SpawnAuthority {
     pub local_only: bool,
 }
 
-/// Env var Eldrun sets on every local-model tab (both the `vibe` per-model driver
+/// Env var Tabtivity sets on every local-model tab (both the `vibe` per-model driver
 /// and the `prepare_local_launch` drivers) to record which Ollama model it drives.
 ///
 /// **A usage label, and nothing else.** It used to double as the marker that
@@ -446,7 +452,7 @@ pub struct SpawnAuthority {
 /// local-agent tabs down by model, and *any* future surface that set it for a
 /// display reason would silently have handed out container escapes. The authority
 /// now comes from [`host_bound_marker_exists`].
-pub const LOCAL_MODEL_ENV: &str = "ELDRUN_LOCAL_MODEL";
+pub const LOCAL_MODEL_ENV: &str = crate::app_env!("LOCAL_MODEL");
 
 /// Directory of host-bound markers for a project:
 /// `<state_dir>/sessions/<project key>/host_bound/`.
@@ -524,7 +530,7 @@ pub const HOST_BOUND_LOCAL_AGENT_CMDS: &[&str] = &[
 /// [`host_bound_marker_exists`].
 ///
 /// **What this buys, precisely.** It removes an authority decision that was keyed
-/// on `ELDRUN_LOCAL_MODEL` — a label `TabBar.tsx` sets for the usage recap, which
+/// on `TABTIVITY_LOCAL_MODEL` — a label `TabBar.tsx` sets for the usage recap, which
 /// meant a display-only change elsewhere could hand out container escapes without
 /// anyone noticing. It does *not* defend against a compromised renderer: the
 /// registration is a command the renderer calls, so a renderer that can spawn can
@@ -546,7 +552,7 @@ pub fn is_host_bound_local_agent(cmd: &str, marker: bool) -> bool {
 /// *indirectly* (`sh -c 'claude'`, a wrapper script), which under `Agents` runs on
 /// the host — the same class of gap the host-bound marker documents, with the same
 /// answer: it takes a renderer that can already spawn, which is the CSP's problem
-/// and not this function's. Nothing in Eldrun's own UI opens an agent that way.
+/// and not this function's. Nothing in Tabtivity's own UI opens an agent that way.
 ///
 /// Matched on the **basename**, so a pinned `/usr/local/bin/claude` or a
 /// `~/.local/bin/codex` is still an agent.
@@ -728,7 +734,7 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
         (opts.cmd.clone(), opts.args.clone())
     };
 
-    // opts.env is already resolved (ELDRUN_TAB_UID, resume args' env, etc.).
+    // opts.env is already resolved (TABTIVITY_TAB_UID, resume args' env, etc.).
     let env: BTreeMap<String, String> = opts.env.clone().into_iter().collect();
     // Auth env is read at exec (not create) so rotated tokens are picked up
     // per tab spawn.
@@ -859,7 +865,7 @@ pub fn up(
     // path rather than a docker-auto-created (root-owned) one. Best effort.
     let _ = std::fs::create_dir_all(&live_sessions_own);
 
-    // The scope's Eldrun-owned agent home is the container's `$HOME`
+    // The scope's Tabtivity-owned agent home is the container's `$HOME`
     // (`services::agent_home`): the user's own home never enters it.
     let scope_home = crate::services::agent_home::prepare_scope_home(
         project_id,
@@ -997,7 +1003,7 @@ pub fn down_for_project(project_id: &str) {
         .retain(|_, t| t.container != name);
 }
 
-/// App-exit teardown: remove every eldrun-owned container. Skipped entirely
+/// App-exit teardown: remove every tabtivity-owned container. Skipped entirely
 /// when this run never created one (a crash's leftovers are `sweep_orphans`'s
 /// job next startup).
 pub fn down_all() {
@@ -1015,7 +1021,7 @@ pub fn clear_stage() {
     let _ = std::fs::remove_dir_all(storage::state_dir().join("sandbox-stage"));
 }
 
-/// Startup sweep: remove every container labelled `eldrun.owner=eldrun` (a
+/// Startup sweep: remove every container labelled `tabtivity.owner=tabtivity` (a
 /// previous run's containers are by definition stale). The staged config
 /// copies are cleared by [`clear_stage`], which must have run first
 /// and synchronously. Best-effort; cheap no-op when docker is absent.
@@ -1032,7 +1038,7 @@ pub fn sweep_orphans() {
 }
 
 /// Whether the startup sweep may spend a `docker` spawn at all: only when a
-/// docker CLI resolves on Eldrun's PATH. Pure so the gate is testable on any OS.
+/// docker CLI resolves on Tabtivity's PATH. Pure so the gate is testable on any OS.
 fn sweep_should_probe(docker_on_path: bool) -> bool {
     docker_on_path
 }
@@ -1040,19 +1046,25 @@ fn sweep_should_probe(docker_on_path: bool) -> bool {
 /// `docker rm -f` every container carrying our owner label. Best-effort.
 fn remove_all_owned() {
     let _guard = lifecycle_lock().lock().unwrap();
-    let Ok(out) = docker(&["ps", "-aq", "--filter", &format!("label={OWNER_LABEL}")]) else {
-        return;
-    };
-    let ids: Vec<&str> = std::str::from_utf8(&out.stdout)
-        .unwrap_or("")
-        .split_whitespace()
-        .collect();
-    if ids.is_empty() {
-        return;
+    // The owner label, and — after a rename — the one an older build put on
+    // its containers: both are this app's, and both are stale.
+    let pair = crate::brand::PAIR;
+    for label in crate::services::brand_migration::docker::owner_labels(&pair) {
+        let Ok(out) = docker(&["ps", "-aq", "--filter", &format!("label={label}")]) else {
+            return;
+        };
+        let ids: Vec<&str> = std::str::from_utf8(&out.stdout)
+            .unwrap_or("")
+            .split_whitespace()
+            .collect();
+        if ids.is_empty() {
+            continue;
+        }
+        crate::services::brand_migration::docker::swept_legacy(&pair, &label);
+        let mut args = vec!["rm", "-f"];
+        args.extend(ids);
+        let _ = docker(&args);
     }
-    let mut args = vec!["rm", "-f"];
-    args.extend(ids);
-    let _ = docker(&args);
 }
 
 /// Inspect the named container: does it exist, is it running, and which spec
@@ -1061,7 +1073,7 @@ fn probe_container(name: &str) -> ContainerProbe {
     let out = match docker(&[
         "inspect",
         "--format",
-        "{{.State.Running}}\t{{index .Config.Labels \"eldrun.spec\"}}",
+        &format!("{{{{.State.Running}}}}\t{{{{index .Config.Labels \"{}\"}}}}", crate::brand::DOCKER_SPEC_LABEL),
         name,
     ]) {
         Ok(o) if o.status.success() => o,
@@ -1178,7 +1190,7 @@ fn ensure_image(spec: Option<&SandboxSpec>, project_dir: &str, image: &str) -> R
     Err(format!(
         "Project container: image '{image}' not found. Toggle the container off and on again \
          to get a one-click build, or provide the image yourself (`docker build -t {image} \
-         docker/agent-sandbox` from the Eldrun repo, or `docker pull` for a registry image)."
+         docker/agent-sandbox` from the {app} repo, or `docker pull` for a registry image).", app = crate::brand::DISPLAY
     ))
 }
 
@@ -1218,9 +1230,17 @@ fn preflight_daemon() -> Result<(), String> {
 }
 
 fn image_exists(image: &str) -> bool {
-    docker(&["image", "inspect", image])
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let exists = |image: &str| {
+        docker(&["image", "inspect", image])
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    // The stock image an older build pulled or built carries the app's old
+    // name: it is tagged with the current one instead of being rebuilt. One
+    // `inspect`, as before, while the name is unchanged.
+    crate::services::brand_migration::docker::adopt_legacy_image(&crate::brand::PAIR, image, exists, |from, to| {
+        docker(&["tag", from, to]).map(|o| o.status.success()).unwrap_or(false)
+    })
 }
 
 /// Toggle-time preflight verdict, surfaced to the frontend so a missing image
@@ -1232,7 +1252,7 @@ pub struct PreflightReport {
     pub status: String,
     pub image: String,
     /// For "image_missing": the shell command that provides the image — a
-    /// `docker build` of the in-repo/embedded reference Dockerfile for eldrun
+    /// `docker build` of the in-repo/embedded reference Dockerfile for tabtivity
     /// images, a `docker pull` for registry images.
     pub build_command: Option<String>,
 }
@@ -1264,12 +1284,12 @@ pub fn preflight_report(project_id: &str) -> PreflightReport {
     report("image_missing", build)
 }
 
-/// The command that provides a missing image. Eldrun's own images build from
+/// The command that provides a missing image. Tabtivity's own images build from
 /// `docker/agent-sandbox` when the project carries a checkout, else from an
 /// embedded copy of the reference Dockerfile materialized under the state dir
 /// (an installed app has no repo checkout). Anything else is a registry pull.
 fn build_command(project_id: &str, image: &str) -> Option<String> {
-    if image != DEFAULT_IMAGE && !image.starts_with("eldrun-") {
+    if image != DEFAULT_IMAGE && !image.starts_with(crate::brand::CONTAINER_PREFIX) {
         return Some(format!("docker pull {image}"));
     }
     let windows = cfg!(target_os = "windows");
@@ -1328,7 +1348,7 @@ fn exec_tabs() -> &'static Mutex<HashMap<String, ExecTab>> {
 fn register_exec_tab(tab_id: &str, container: &str) -> String {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let n = NONCE.fetch_add(1, Ordering::Relaxed);
-    let pidfile = format!("/tmp/eldrun-tab-{}-{n}.pid", sanitize_key(tab_id));
+    let pidfile = format!("/tmp/{SLUG}-tab-{}-{n}.pid", sanitize_key(tab_id));
     let tab = ExecTab {
         container: container.to_string(),
         pidfile: pidfile.clone(),
@@ -1767,8 +1787,8 @@ mod tests {
     #[test]
     fn install_shell_quote_powershell_flavor() {
         assert_eq!(
-            install_shell_quote(r"C:\Users\a\AppData\Local\eldrun\agent-sandbox", true),
-            r"'C:\Users\a\AppData\Local\eldrun\agent-sandbox'"
+            install_shell_quote(concat!(r"C:\Users\a\AppData\Local\", crate::app_slug!(), r"\agent-sandbox"), true),
+            concat!(r"'C:\Users\a\AppData\Local\", crate::app_slug!(), r"\agent-sandbox'")
         );
         assert_eq!(
             install_shell_quote(r"C:\Users\Jane Doe\p", true),
@@ -1814,13 +1834,13 @@ mod tests {
 
     fn create(fingerprint: Option<&str>) -> Vec<String> {
         docker_create_args(
-            "eldrun-p1",
+            concat!(crate::app_slug!(), "-p1"),
             "p1",
             "img:latest",
             "/home/alice",
             1000,
             1000,
-            "/home/alice/eldrun/projects/p1",
+            concat!("/home/alice/", crate::app_slug!(), "/projects/p1"),
             &rw("/home/alice"),
             &ro(),
             &HardenOpts::default(),
@@ -1863,13 +1883,13 @@ mod tests {
     #[test]
     fn create_argv_without_a_host_identity_omits_user() {
         let out = docker_create_args(
-            "eldrun-p1",
+            concat!(crate::app_slug!(), "-p1"),
             "p1",
             "img:latest",
             "/home/alice",
             0,
             0,
-            "/home/alice/eldrun/projects/p1",
+            concat!("/home/alice/", crate::app_slug!(), "/projects/p1"),
             &rw("/home/alice"),
             &ro(),
             &HardenOpts::default(),
@@ -1883,9 +1903,9 @@ mod tests {
 
     #[test]
     fn container_name_is_sanitized_and_prefixed() {
-        assert_eq!(container_name_for("p1"), "eldrun-p1");
-        assert_eq!(container_name_for("my proj/α"), "eldrun-my_proj__");
-        assert_eq!(container_name_for(""), "eldrun-x");
+        assert_eq!(container_name_for("p1"), concat!(crate::app_slug!(), "-p1"));
+        assert_eq!(container_name_for("my proj/α"), concat!(crate::app_slug!(), "-my_proj__"));
+        assert_eq!(container_name_for(""), concat!(crate::app_slug!(), "-x"));
     }
 
     #[test]
@@ -1957,17 +1977,17 @@ mod tests {
         assert_eq!(out[0], "run");
         assert!(out.contains(&"-d".to_string()));
         assert!(out.contains(&"--init".to_string()));
-        assert!(has_flag_value(&out, "--name", "eldrun-p1"));
+        assert!(has_flag_value(&out, "--name", concat!(crate::app_slug!(), "-p1")));
         assert!(has_flag_value(&out, "--label", OWNER_LABEL));
-        assert!(has_flag_value(&out, "--label", "eldrun.project=p1"));
+        assert!(has_flag_value(&out, "--label", concat!(crate::app_slug!(), ".project=p1")));
         assert!(has_flag_value(
             &out,
             "--label",
-            "eldrun.spec=deadbeef00000000"
+            concat!(crate::app_slug!(), ".spec=deadbeef00000000")
         ));
         assert!(has_flag_value(&out, "--user", "1000:1000"));
         assert!(has_flag_value(&out, "-e", "HOME=/home/alice"));
-        assert!(has_flag_value(&out, "-w", "/home/alice/eldrun/projects/p1"));
+        assert!(has_flag_value(&out, "-w", concat!("/home/alice/", crate::app_slug!(), "/projects/p1")));
         // Hardening always on.
         assert!(has_flag_value(&out, "--security-opt", "no-new-privileges"));
         assert!(has_flag_value(&out, "--cap-drop", "ALL"));
@@ -1980,7 +2000,7 @@ mod tests {
         assert!(has_flag_value(
             &out,
             "-v",
-            "/home/alice/eldrun/projects/p1:/home/alice/eldrun/projects/p1"
+            concat!("/home/alice/", crate::app_slug!(), "/projects/p1:/home/alice/", crate::app_slug!(), "/projects/p1")
         ));
         // rw auth mounts.
         assert!(has_flag_value(
@@ -2019,7 +2039,7 @@ mod tests {
     fn create_argv_without_fingerprint_omits_spec_label_only() {
         let bare = create(None);
         let labeled = create(Some("feedface00000000"));
-        assert!(!bare.iter().any(|s| s.starts_with("eldrun.spec=")));
+        assert!(!bare.iter().any(|s| s.starts_with(concat!(crate::app_slug!(), ".spec="))));
         assert_eq!(
             labeled.len(),
             bare.len() + 2,
@@ -2028,7 +2048,7 @@ mod tests {
         assert!(has_flag_value(
             &labeled,
             "--label",
-            "eldrun.spec=feedface00000000"
+            concat!(crate::app_slug!(), ".spec=feedface00000000")
         ));
     }
 
@@ -2048,7 +2068,7 @@ mod tests {
             readonly_rootfs: true,
         };
         let out = docker_create_args(
-            "eldrun-p1",
+            concat!(crate::app_slug!(), "-p1"),
             "p1",
             "img",
             "/h",
@@ -2072,14 +2092,14 @@ mod tests {
 
     #[test]
     fn exec_argv_has_cwd_env_killwrapper_and_preserves_resume_args() {
-        let envs = env(&[("ELDRUN_TAB_UID", "tab-1")]);
+        let envs = env(&[(crate::app_env!("TAB_UID"), "tab-1")]);
         let auth = env(&[("ANTHROPIC_API_KEY", "sk-test")]);
         let out = docker_exec_args(
-            "eldrun-p1",
-            "/home/alice/eldrun/projects/p1/sub",
+            concat!(crate::app_slug!(), "-p1"),
+            concat!("/home/alice/", crate::app_slug!(), "/projects/p1/sub"),
             &envs,
             &auth,
-            "/tmp/eldrun-tab-t1-0.pid",
+            concat!("/tmp/", crate::app_slug!(), "-tab-t1-0.pid"),
             "claude",
             &args(&["--resume", "uuid-1"]),
         );
@@ -2091,10 +2111,10 @@ mod tests {
         assert!(has_flag_value(
             &out,
             "-w",
-            "/home/alice/eldrun/projects/p1/sub"
+            concat!("/home/alice/", crate::app_slug!(), "/projects/p1/sub")
         ));
         assert!(has_flag_value(&out, "-e", "TERM=xterm-256color"));
-        assert!(has_flag_value(&out, "-e", "ELDRUN_TAB_UID=tab-1"));
+        assert!(has_flag_value(&out, "-e", concat!(crate::app_upper!(), "_TAB_UID=tab-1")));
         // Auth env rides at exec (rotated tokens per spawn), before the name —
         // by NAME only; the value is in the docker client's env (#864).
         assert!(has_flag_value(&out, "-e", "ANTHROPIC_API_KEY"));
@@ -2102,14 +2122,14 @@ mod tests {
             .iter()
             .position(|s| s == "ANTHROPIC_API_KEY")
             .unwrap();
-        let name = pos(&out, "eldrun-p1").unwrap();
+        let name = pos(&out, concat!(crate::app_slug!(), "-p1")).unwrap();
         assert!(key < name, "env must precede the container name");
         // Kill-wrapper shape: name, sh -c '<pidfile script>' sh <cmd> <args…>.
         assert_eq!(out[name + 1], "sh");
         assert_eq!(out[name + 2], "-c");
         assert!(out[name + 3].starts_with("export PATH='"));
         assert!(out[name + 3].contains("/bin"));
-        assert!(out[name + 3].ends_with("echo $$ > /tmp/eldrun-tab-t1-0.pid; exec \"$@\""));
+        assert!(out[name + 3].ends_with(concat!("echo $$ > /tmp/", crate::app_slug!(), "-tab-t1-0.pid; exec \"$@\"")));
         assert_eq!(out[name + 4], "sh");
         // Original command + resume args preserved in order after the wrapper.
         assert_eq!(&out[name + 5..], &["claude", "--resume", "uuid-1"]);
@@ -2120,34 +2140,34 @@ mod tests {
         // #864: `/proc/<pid>/cmdline` is world-readable and the docker client
         // lives as long as the tab — a key or token VALUE must be on no argv item.
         let envs = env(&[
-            ("ELDRUN_TAB_UID", "tab-1"),
+            (crate::app_env!("TAB_UID"), "tab-1"),
             (crate::services::root_mcp::TOKEN_ENV, "root-s3cret"),
             ("OPENAI_API_KEY", "tab-s3cret"),
         ]);
         let auth = env(&[("ANTHROPIC_API_KEY", "auth-s3cret"), ("OPENAI_API_KEY", "auth-wins-s3cret")]);
-        let out = docker_exec_args("eldrun-p1", "/p", &envs, &auth, "/tmp/x.pid", "claude", &[]);
+        let out = docker_exec_args(concat!(crate::app_slug!(), "-p1"), "/p", &envs, &auth, "/tmp/x.pid", "claude", &[]);
         assert!(!out.iter().any(|a| a.contains("s3cret")), "{out:?}");
         for name in [crate::services::root_mcp::TOKEN_ENV, "ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
             assert_eq!(out.iter().filter(|a| *a == name).count(), 1, "{name} named once: {out:?}");
             assert!(has_flag_value(&out, "-e", name));
         }
-        assert!(has_flag_value(&out, "-e", "ELDRUN_TAB_UID=tab-1"));
+        assert!(has_flag_value(&out, "-e", concat!(crate::app_upper!(), "_TAB_UID=tab-1")));
         // …and the values reach the docker client's own environment instead.
         let client = docker_exec_client_env(&envs, &auth);
         assert_eq!(client.get(crate::services::root_mcp::TOKEN_ENV).map(String::as_str), Some("root-s3cret"));
         assert_eq!(client.get("ANTHROPIC_API_KEY").map(String::as_str), Some("auth-s3cret"));
         assert_eq!(client.get("OPENAI_API_KEY").map(String::as_str), Some("auth-wins-s3cret"));
-        assert!(!client.contains_key("ELDRUN_TAB_UID"));
+        assert!(!client.contains_key(crate::app_env!("TAB_UID")));
     }
 
     #[test]
     fn exec_argv_codex_resume_order_preserved() {
         let out = docker_exec_args(
-            "eldrun-p1",
+            concat!(crate::app_slug!(), "-p1"),
             "/p",
             &BTreeMap::new(),
             &BTreeMap::new(),
-            "/tmp/eldrun-tab-t2-1.pid",
+            concat!("/tmp/", crate::app_slug!(), "-tab-t2-1.pid"),
             "codex",
             &args(&["resume", "live-id"]),
         );
@@ -2163,7 +2183,7 @@ mod tests {
 
     #[test]
     fn detect_spec_sources_prefers_dockerfile_then_devcontainer_image() {
-        let base = std::env::temp_dir().join(format!("eldrun-det-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-det-{}"), std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
 
         // Nothing present → spec untouched.
@@ -2208,7 +2228,7 @@ mod tests {
             dockerfile: Some("Dockerfile".to_string()),
             ..Default::default()
         };
-        assert_eq!(image_for("p1", Some(&with_df)), "eldrun-p1:latest");
+        assert_eq!(image_for("p1", Some(&with_df)), concat!(crate::app_slug!(), "-p1:latest"));
     }
 
     // ── wrap ──────────────────────────────────────────────────────────────
@@ -2231,6 +2251,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         };
@@ -2248,7 +2269,7 @@ mod tests {
             cmd: "claude".to_string(),
             args: vec![],
             env: Default::default(),
-            cwd: "/home/u/eldrun/boxes/b".to_string(),
+            cwd: concat!("/home/u/", crate::app_slug!(), "/boxes/b").to_string(),
             cols: 80,
             rows: 24,
             local_only: false,
@@ -2259,6 +2280,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         };
@@ -2320,7 +2342,7 @@ mod tests {
         let resolved = resolve_all(true, false, true, want(false, true), "/tmp/pwn.sh", true);
         assert_eq!(resolved, want(true, false));
         // …and a known driver alone is not enough either. This is #150: the grant
-        // used to be the tab's `ELDRUN_LOCAL_MODEL` env var, which is a label the
+        // used to be the tab's `TABTIVITY_LOCAL_MODEL` env var, which is a label the
         // usage recap sets, so anything that set it for a display reason handed
         // out a container escape. It is now a file in the state dir.
         assert!(!is_host_bound_local_agent("vibe", false));
@@ -2575,7 +2597,7 @@ mod tests {
 
     #[test]
     fn spec_dockerfile_must_stay_inside_the_project() {
-        let base = std::env::temp_dir().join(format!("eldrun-df-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-df-{}"), std::process::id()));
         let proj = base.join("proj");
         std::fs::create_dir_all(proj.join("docker")).unwrap();
         std::fs::write(proj.join("Dockerfile"), b"FROM debian:stable").unwrap();
@@ -2626,10 +2648,10 @@ mod tests {
 
     #[test]
     fn register_exec_tab_mints_unique_pidfiles_per_respawn() {
-        let a = register_exec_tab("tab/α:1", "eldrun-p1");
-        let b = register_exec_tab("tab/α:1", "eldrun-p1");
+        let a = register_exec_tab("tab/α:1", concat!(crate::app_slug!(), "-p1"));
+        let b = register_exec_tab("tab/α:1", concat!(crate::app_slug!(), "-p1"));
         assert_ne!(a, b, "a respawn must never reuse its predecessor's pidfile");
-        assert!(a.starts_with("/tmp/eldrun-tab-tab___1-"));
+        assert!(a.starts_with(concat!("/tmp/", crate::app_slug!(), "-tab-tab___1-")));
         assert!(a.ends_with(".pid"));
         // Cleanup so other tests never see this entry.
         exec_tabs().lock().unwrap().remove("tab/α:1");

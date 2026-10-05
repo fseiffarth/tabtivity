@@ -12,7 +12,7 @@
 //! it must never run in CI. Point it at a scratch project.
 //!
 //! ```text
-//! ELDRUN_PROJECT=<project-id> cargo run --example lockstep_drv -- <script>
+//! TABTIVITY_PROJECT=<project-id> cargo run --example lockstep_drv -- <script>
 //! ```
 //!
 //! Script: one command per line, `#` comments, blank lines ignored.
@@ -36,8 +36,8 @@
 
 use std::process::Command;
 
-use eldrun_lib::services::git_peer::{self, ReconcileOpts};
-use eldrun_lib::services::{remote, remote_sync, ssh_exec, sync_auto};
+use app_lib::services::git_peer::{self, ReconcileOpts};
+use app_lib::services::{remote, remote_sync, ssh_exec, sync_auto};
 
 /// Print a `GitPeerState` as the one line that matters when reading a case log.
 fn show(state: &git_peer::GitPeerState) {
@@ -80,7 +80,7 @@ async fn main() {
     let script_path = std::env::args()
         .nth(1)
         .expect("usage: lockstep_drv <script>");
-    let project_id = std::env::var("ELDRUN_PROJECT").expect("set ELDRUN_PROJECT=<project-id>");
+    let project_id = std::env::var(app_lib::app_env!("PROJECT")).expect(concat!("set ", app_lib::app_upper!(), "_PROJECT=<project-id>"));
     let script = std::fs::read_to_string(&script_path).expect("cannot read script");
 
     let target = remote::remote_target_for(&project_id).expect("not an SSH remote project");

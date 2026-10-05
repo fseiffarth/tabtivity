@@ -1,14 +1,15 @@
+import { BRAND } from "../../brand";
 /**
  * Starter LaTeX for a new presentation.
  *
  * This is the "from blank" entry point: it exists so that **making a deck does
  * not require knowing TeX**, while leaving a real `.tex` on disk for anyone who
- * does. Eldrun never writes to it again — the deck's layers live in the sidecar —
+ * does. Tabtivity never writes to it again — the deck's layers live in the sidecar —
  * so the author owns the file from the moment it is created.
  *
  * Beamer is used because it is what an academic audience already has installed
- * and already knows how to edit; nothing in Eldrun understands `\frame` or
- * `\pause`, and nothing needs to. The one Eldrun-specific choice is `aspectratio=169`:
+ * and already knows how to edit; nothing in Tabtivity understands `\frame` or
+ * `\pause`, and nothing needs to. The one Tabtivity-specific choice is `aspectratio=169`:
  * the deck's normalized geometry adapts to any page box, but a 4:3 default in
  * 2026 is a worse first impression than any layer editor can rescue.
  */
@@ -48,9 +49,9 @@ export interface TemplateOptions {
 /** A minimal, compilable Beamer deck: title frame, outline, one content frame. */
 export function starterTex({ title, author, section }: TemplateOptions): string {
   const sec = section?.trim() || "Introduction";
-  return `% Created by Eldrun as the base for a presentation.
+  return `% Created by ${BRAND.display} as the base for a presentation.
 %
-% This file is yours: Eldrun compiles it to a PDF and lays its own editable
+% This file is yours: ${BRAND.display} compiles it to a PDF and lays its own editable
 % layers on top, in the .eldeck.json sidecar beside it. It never writes back to
 % this file, so edit it freely — recompiling keeps the layers, which re-anchor to
 % the slides they were placed on.
@@ -82,7 +83,7 @@ ${author ? `\\author{${texEscape(author)}}` : "% \\author{Your name}"}
 \\end{frame}
 
 \\begin{frame}{Results}
-  % A frame left deliberately empty: drop a figure, a table or Eldrun layers here.
+  % A frame left deliberately empty: drop a figure, a table or ${BRAND.display} layers here.
 \\end{frame}
 
 \\end{document}
@@ -102,7 +103,7 @@ ${author ? `\\author{${texEscape(author)}}` : "% \\author{Your name}"}
 export function starterTexFigure(): string {
   return `% A figure for one slide, compiled to a PDF and placed as an image.
 %
-% Eldrun rasterizes the compiled PDF's first page onto the slide and updates it
+% ${BRAND.display} rasterizes the compiled PDF's first page onto the slide and updates it
 % every time you recompile here — nothing to do on the deck's side but wait for
 % the change to appear. This file is yours; edit and compile it like any other.
 

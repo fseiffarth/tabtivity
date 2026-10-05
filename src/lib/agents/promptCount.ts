@@ -1,7 +1,7 @@
 /**
  * Counting what you *asked* — prompts sent to agents, commands run in shells.
  *
- * There is no API for this: an agent CLI is a TUI on a PTY, and Eldrun only sees
+ * There is no API for this: an agent CLI is a TUI on a PTY, and Tabtivity only sees
  * the bytes going into it. The one thing that reliably marks a submission is
  * Enter (`\r`) pressed after you typed something. So we track, per PTY, whether
  * any *content* has been typed since the last Enter, and count one submit each

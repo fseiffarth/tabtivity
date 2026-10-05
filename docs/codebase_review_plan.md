@@ -26,7 +26,7 @@ they land.
 6. `--accent-color` / phantom CSS tokens — styles silently not rendering, wrong colors in all themes (§7.1–7.2).
 7. Manual sync push/pull bypasses `drop_tracked` under lockstep (§1.2).
 8. Blurred-box-shadow animations violating the repo's own WebKitGTK rule (§7.3).
-9. Eldrun Mobile desktop surface fully hardcoded English (§8.1).
+9. Tabtivity Mobile desktop surface fully hardcoded English (§8.1).
 10. `fs-change` debounce drains 5 events/sec — minutes-stale file tree after bursts (§4.4).
 
 ---
@@ -38,12 +38,12 @@ mobile sidecar, and frontend remote gating were audited and came back **clean**
 (see §12).
 
 - [x] **1.1 HIGH (invariant violation)** — The rsync fast path copies `.git`,
-  `.eldrun`, nested repos, and symlinks — everything the SFTP walker exists to
+  `.tabtivity`, nested repos, and symlinks — everything the SFTP walker exists to
   exclude. `rsync_pull_args` (`src-tauri/src/services/remote_sync.rs:677-696`)
   builds exactly `["-a","-c","-e",<ssh>, target, dest]` with **no excludes**;
   `pull_subtree` (`src-tauri/src/commands/sync.rs:1707`) takes this path for any
   directory pull including whole-project "Sync all". The walker it bypasses
-  (`remote_sync.rs:530-540`) skips `.eldrun`, `.git`, nested-repo boundaries
+  (`remote_sync.rs:530-540`) skips `.tabtivity`, `.git`, nested-repo boundaries
   (#23 D2), and all symlinks (G3). Failure: with lockstep on and rsync present
   both ends (the common Linux case), a confirmed "Sync all" overwrites the
   mirror's `.git/` with the host repo's bytes — possibly mid-write — corrupting
@@ -51,7 +51,7 @@ mobile sidecar, and frontend remote gating were audited and came back **clean**
   (`commands/sync.rs:1230-1296`) prices from the walker listing so the user
   approves a transfer that writes files the preview never named, and
   `local_loss` audits none of them. Fix: add
-  `--exclude=/.git --exclude=.eldrun --exclude=.git` (plus a nested-`.git`
+  `--exclude=/.git --exclude=.tabtivity --exclude=.git` (plus a nested-`.git`
   pre-probe or dir-merge rule) and `--no-links`; or refuse the fast path when
   `rel == ""` on a git-backed mirror.
 - [x] **1.2 MED (invariant violation)** — Manual push/pull never subtracts the
@@ -465,7 +465,7 @@ findings are the divergences.
   `:~20260`).
 - [x] **7.11 LOW (dead CSS)** — Tokens defined in all five themes, used
   nowhere: `--helix-green` (`:546,598,642,686,730`), `--offline-bg`
-  (`:551,…`), `--scrollbar-track` (`:537`). (`--eldrun-scrollbar` looks unused
+  (`:551,…`), `--scrollbar-track` (`:537`). (`--tabtivity-scrollbar` looks unused
   to CSS greps but is read from JS — `lib/customScrollbar.ts:134` — keep.)
 - [ ] **7.12 INFO** — `mobile-web/src/style.css` is a self-contained hardcoded
   dark-only palette (248 lines of literal hexes, no shared tokens). Defensible
@@ -476,7 +476,7 @@ findings are the divergences.
 
 Rule: all display text goes through `src/lib/i18n.ts`.
 
-- [x] **8.1 HIGH (×2)** — The entire Eldrun Mobile desktop surface is
+- [x] **8.1 HIGH (×2)** — The entire Tabtivity Mobile desktop surface is
   hardcoded English: `src/components/mobile/MobileSettings.tsx` (no `useT`
   import at all — "Lock down now" :419, "Set up Tailscale Serve" :440,
   "Computer name" :475, the whole status paragraph :520-531, search
@@ -992,7 +992,7 @@ product proper nouns, not defects.
   boundary. The Unix admin socket chmods `0600` *and* checks
   `peer_cred().uid()` on every accept.
 - **`tmux_local.rs` — clean**: reap set prefix-scoped and pure-tested
-  (`sessions_to_reap`), `kill_eldrun_sessions` idempotent and treating "no
+  (`sessions_to_reap`), `kill_tabtivity_sessions` idempotent and treating "no
   server" as the desired end state, `wrap_pty_options_local` a no-op without a
   session name or tmux, both exit paths reaching it.
 - **Process-teardown invariant holds** for the transport slice: QEMU →

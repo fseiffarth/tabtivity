@@ -20,6 +20,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
+import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import type { ProjectEntry } from "../../types";
 
 function proj(id: string, position: number, extra: Partial<ProjectEntry> = {}): ProjectEntry {
@@ -38,6 +40,7 @@ describe("project switcher pill rendering", () => {
   beforeEach(() => {
     useBoxesStore.setState({ boxes: [] });
     useProjectsStore.setState({ projects: [], activeId: null, loaded: true });
+    useKeyboardSteeringStore.getState().exit();
   });
 
   it("renders one pill per active project", async () => {
@@ -54,6 +57,29 @@ describe("project switcher pill rendering", () => {
 
     const pills = container!.querySelectorAll(".project-pill");
     expect(pills.length).toBe(3);
+  });
+
+  it("shows project station digits only when digits select projects", async () => {
+    useProjectsStore.setState({ projects: [proj("a", 0)], activeId: "a", loaded: true });
+    useTabsStore.setState({ scope: ROOT_SCOPE });
+
+    let container: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<ProjectSwitcher open />));
+    });
+    const stationDigits = () =>
+      Array.from(container!.querySelectorAll(".steering-station-chip"))
+        .map((chip) => chip.textContent);
+
+    act(() => useKeyboardSteeringStore.getState().enter());
+    expect(useKeyboardSteeringStore.getState().level).toBe("tabs");
+    expect(stationDigits()).toEqual([]);
+
+    act(() => useKeyboardSteeringStore.getState().setLevel("projects"));
+    expect(stationDigits()).toEqual(["1", "2"]);
+
+    act(() => useKeyboardSteeringStore.getState().setLevel("panes"));
+    expect(stationDigits()).toEqual([]);
   });
 
   it("renders a pill for a remote project (matches real on-disk shape)", async () => {

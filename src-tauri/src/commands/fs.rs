@@ -121,8 +121,8 @@ pub fn list_dir_local(project_dir: &str, rel_path: &str) -> Result<Vec<FileEntry
             Err(_) => continue,
         };
         let name = entry.file_name().to_string_lossy().to_string();
-        // Always hide .eldrun/ — it is internal runtime storage, not user content.
-        if name == ".eldrun" {
+        // Always hide .tabtivity/ — it is internal runtime storage, not user content.
+        if crate::brand::is_project_dir(&name) {
             continue;
         }
         result.push(file_entry_from(&path, &meta, name));
@@ -217,8 +217,8 @@ async fn list_dir_remote(
 
     Ok(entries
         .into_iter()
-        // Always hide .eldrun/ — mirrors the local lister (internal runtime dir).
-        .filter(|e| e.name != ".eldrun")
+        // Always hide .tabtivity/ — mirrors the local lister (internal runtime dir).
+        .filter(|e| !crate::brand::is_project_dir(&e.name))
         .map(|e| remote_file_entry(&remote_dir, e))
         .collect())
 }
@@ -439,7 +439,7 @@ fn ignored_paths_under(root: &Path, rel_path: &str) -> HashSet<String> {
     // Hardened: `status` in a project directory a container mounts writable, so
     // the repo's config is untrusted (`commands::git`, Group O #151);
     // `hardened_git_command_in` sanitizes it first.
-    let Ok(out) = crate::commands::git::hardened_git_command_in(root, &args).output() else {
+    let Ok(out) = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(root, &args)) else {
         return HashSet::new();
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -789,7 +789,7 @@ pub fn rename_path_local(project_dir: &str, old_rel: &str, new_name: &str) -> Re
 
     let new = old.parent().ok_or("no parent")?.join(&new_name);
     // New path must also stay inside root.
-    let new_c = canonical_or_new(&new);
+    let new_c = canonical_or_new(&new)?;
     enforce_confinement(&root, &new_c)?;
 
     fs::rename(&old, &new).map_err(|e| e.to_string())
@@ -868,19 +868,13 @@ pub async fn create_file(
     create_file_local(&project_dir, &rel_path)
 }
 
-/// Local-fs empty-file create — byte-identical pre-Phase-3 body.
+/// Local-fs empty-file create, confined like every project write.
 pub fn create_file_local(project_dir: &str, rel_path: &str) -> Result<(), String> {
     let root = canonical(project_dir)?;
     let target = root.join(rel_path);
-    let target_c = canonical_or_new(&target);
+    let target_c = canonical_or_new(&target)?;
     enforce_confinement(&root, &target_c)?;
-
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::File::create(&target)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    write_confined(&target_c, &[])
 }
 
 /// Write a text file inside the project.
@@ -898,7 +892,7 @@ pub async fn write_project_file(
     write_project_file_local(&project_dir, &rel_path, &content)
 }
 
-/// Local-fs text write — byte-identical pre-Phase-3 body.
+/// Local-fs text write, confined like every project write.
 pub fn write_project_file_local(
     project_dir: &str,
     rel_path: &str,
@@ -906,13 +900,9 @@ pub fn write_project_file_local(
 ) -> Result<(), String> {
     let root = canonical(project_dir)?;
     let target = root.join(rel_path);
-    let target_c = canonical_or_new(&target);
+    let target_c = canonical_or_new(&target)?;
     enforce_confinement(&root, &target_c)?;
-
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&target, content).map_err(|e| e.to_string())
+    write_confined(&target_c, content.as_bytes())
 }
 
 /// Write raw bytes to a file inside the project (used for drag-and-drop uploads).
@@ -930,7 +920,7 @@ pub async fn write_project_file_bytes(
     write_project_file_bytes_local(&project_dir, &rel_path, &content)
 }
 
-/// Local-fs byte write — byte-identical pre-Phase-3 body.
+/// Local-fs byte write, confined like every project write.
 pub fn write_project_file_bytes_local(
     project_dir: &str,
     rel_path: &str,
@@ -938,13 +928,9 @@ pub fn write_project_file_bytes_local(
 ) -> Result<(), String> {
     let root = canonical(project_dir)?;
     let target = root.join(rel_path);
-    let target_c = canonical_or_new(&target);
+    let target_c = canonical_or_new(&target)?;
     enforce_confinement(&root, &target_c)?;
-
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&target, content).map_err(|e| e.to_string())
+    write_confined(&target_c, content)
 }
 
 #[tauri::command]
@@ -956,7 +942,7 @@ pub fn update_gitignore_rule(
 ) -> Result<(), String> {
     let root = canonical(&project_dir)?;
     let clean_rel = normalize_project_rel_path(&rel_path)?;
-    let target_c = canonical_or_new(&root.join(&clean_rel));
+    let target_c = canonical_or_new(&root.join(&clean_rel))?;
     enforce_confinement(&root, &target_c)?;
 
     let gitignore_path = root.join(".gitignore");
@@ -1003,13 +989,13 @@ pub async fn create_dir(
     create_dir_local(&project_dir, &rel_path)
 }
 
-/// Local-fs directory create — byte-identical pre-Phase-3 body.
+/// Local-fs directory create, confined like every project write.
 pub fn create_dir_local(project_dir: &str, rel_path: &str) -> Result<(), String> {
     let root = canonical(project_dir)?;
     let target = root.join(rel_path);
-    let target_c = canonical_or_new(&target);
+    let target_c = canonical_or_new(&target)?;
     enforce_confinement(&root, &target_c)?;
-    fs::create_dir_all(&target).map_err(|e| e.to_string())
+    fs::create_dir_all(&target_c).map_err(|e| e.to_string())
 }
 
 /// Copy a file or directory tree into another location. Both ends are confined
@@ -1131,7 +1117,7 @@ pub fn import_external_file_blocking(
     } else {
         root.join(&rel_dir)
     };
-    let dest_dir_c = canonical_or_new(&dest_dir);
+    let dest_dir_c = canonical_or_new(&dest_dir)?;
     enforce_confinement(&root, &dest_dir_c)?;
     // Block copying a directory into its own subtree (would recurse forever).
     if dest_dir_c.starts_with(&src) {
@@ -1151,7 +1137,7 @@ pub fn import_external_file_blocking(
     } else {
         unique_dest(&dest_dir_c, &file_name)
     };
-    enforce_confinement(&root, &canonical_or_new(&dest))?;
+    enforce_confinement(&root, &canonical_or_new(&dest)?)?;
 
     fs::create_dir_all(&dest_dir_c).map_err(|e| e.to_string())?;
     if replace && dest.exists() {
@@ -1182,7 +1168,7 @@ pub fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool
     } else {
         root.join(&rel)
     };
-    let target_c = canonical_or_new(&target);
+    let target_c = canonical_or_new(&target)?;
     enforce_confinement(&root, &target_c)?;
     Ok(target_c.exists())
 }
@@ -1221,7 +1207,7 @@ pub fn extract_archive_blocking(project_dir: String, rel_path: String) -> Result
     // Reuse the " (n)" collision suffixing — `stem` has no extension, so the
     // suffix simply lands at the end of the folder name.
     let dest_dir = unique_dest(&parent, &stem);
-    enforce_confinement(&root, &canonical_or_new(&dest_dir))?;
+    enforce_confinement(&root, &canonical_or_new(&dest_dir)?)?;
 
     let file = fs::File::open(&archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("read zip: {e}"))?;
@@ -1238,7 +1224,7 @@ pub fn extract_archive_blocking(project_dir: String, rel_path: String) -> Result
         };
         let out = dest_dir.join(&rel);
         // Defense in depth: confine the resolved output to the dest folder.
-        enforce_confinement(&dest_dir, &canonical_or_new(&out))?;
+        enforce_confinement(&dest_dir, &canonical_or_new(&out)?)?;
         if entry.is_dir() {
             fs::create_dir_all(&out).map_err(|e| e.to_string())?;
         } else {
@@ -1312,7 +1298,7 @@ fn resolve_transfer(
 
     let dest_root = canonical(dest_project_dir)?;
     let dest = dest_root.join(dest_rel);
-    let dest_c = canonical_or_new(&dest);
+    let dest_c = canonical_or_new(&dest)?;
     enforce_confinement(&dest_root, &dest_c)?;
 
     if dest_c.exists() {
@@ -1450,8 +1436,8 @@ const MAX_BINARY_VIEW_BYTES: u64 = 256 * 1024 * 1024;
 /// Read an absolute file path as UTF-8 text for the in-app text/markdown viewer.
 ///
 /// Takes an absolute path (the same `FileEntry.path` the file tree already uses
-/// to open files). Security #1: the path is confined to Eldrun's known roots
-/// (`~/eldrun`, the sshfs mounts dir, the state dir) so a content-injection in
+/// to open files). Security #1: the path is confined to Tabtivity's known roots
+/// (`~/tabtivity`, the sshfs mounts dir, the state dir) so a content-injection in
 /// a renderer cannot turn this into an arbitrary file read of e.g.
 /// `~/.ssh/id_rsa`. Refuses files over `MAX_TEXT_VIEW_BYTES` and non-UTF-8
 /// (binary) files.
@@ -1505,7 +1491,7 @@ pub fn read_file_text_local(path: &str, scope_id: Option<&str>) -> Result<String
 /// Write UTF-8 text to an absolute file path from the in-app editor.
 ///
 /// Counterpart to `read_file_text`: same absolute `FileEntry.path`, confined to
-/// Eldrun's known roots (Security #1 — without it any reachable IPC caller could
+/// Tabtivity's known roots (Security #1 — without it any reachable IPC caller could
 /// overwrite arbitrary user files), refuses to grow a file past
 /// `MAX_TEXT_VIEW_BYTES`, and only writes to an existing regular file (the
 /// editor edits files opened from the tree; it never creates new paths).
@@ -1558,7 +1544,7 @@ pub fn write_file_text_local(
     fs::write(&p, content).map_err(|e| e.to_string())
 }
 
-/// Write raw bytes to an absolute path, confined to Eldrun's known roots
+/// Write raw bytes to an absolute path, confined to Tabtivity's known roots
 /// (Security #1). Unlike `write_file_text` this may create a new file (so the
 /// image annotator can "Save as…" a sibling PNG), but still refuses paths
 /// outside the allowed roots and oversized payloads.
@@ -1572,7 +1558,7 @@ pub fn write_file_text_local(
 /// straight into it without anyone clicking anything.
 ///
 /// The header values are `encodeURIComponent`-encoded, because a header is ASCII and
-/// a path is not: `~/eldrun/projects/Übung/…` would otherwise be unsendable. Nothing
+/// a path is not: `~/tabtivity/projects/Übung/…` would otherwise be unsendable. Nothing
 /// about that is a trust boundary — the decoded path goes through exactly the same
 /// `confine_abs_write` as before.
 #[tauri::command]
@@ -1580,9 +1566,9 @@ pub async fn write_file_bytes(
     request: tauri::ipc::Request<'_>,
     pool: tauri::State<'_, RemotePoolState>,
 ) -> Result<(), String> {
-    let path = request_header(&request, "x-eldrun-path")
+    let path = request_header(&request, crate::brand::FILE_PATH_HEADER)
         .ok_or_else(|| "write_file_bytes: missing path".to_string())?;
-    let project_id = request_header(&request, "x-eldrun-project").filter(|s| !s.is_empty());
+    let project_id = request_header(&request, crate::brand::FILE_PROJECT_HEADER).filter(|s| !s.is_empty());
     // The raw body is the whole point of this command. A JSON one is still accepted,
     // because Tauri has a documented fallback (the postMessage interface, used when
     // the custom-protocol IPC is blocked) that carries the headers but re-encodes the
@@ -1683,7 +1669,7 @@ pub fn write_file_bytes_local(
 
 /// Read an absolute file path as raw bytes for the in-app PDF viewer.
 ///
-/// Confined to Eldrun's known roots (Security #1). Refuses files over
+/// Confined to Tabtivity's known roots (Security #1). Refuses files over
 /// `MAX_BINARY_VIEW_BYTES`.
 ///
 /// Answers with a **raw** IPC body (`ipc::Response`), not a serialized `Vec<u8>`.
@@ -1751,7 +1737,7 @@ pub fn read_file_bytes_local(path: &str, scope_id: Option<&str>) -> Result<Vec<u
 /// Return a file's last-modified time as whole seconds since the Unix epoch.
 ///
 /// Used by the in-app text/markdown/TeX viewer to poll for external changes
-/// (#43 diff-aware auto-reload). Confined to Eldrun's known roots (Security #1).
+/// (#43 diff-aware auto-reload). Confined to Tabtivity's known roots (Security #1).
 /// Mirrors the `FileEntry.modified_secs` machinery in `list_dir`.
 #[tauri::command]
 pub async fn file_mtime(
@@ -1809,9 +1795,54 @@ pub fn file_mtime_local(path: &str, scope_id: Option<&str>) -> Result<u64, Strin
 /// scope resolves to no project (e.g. first run), which makes every absolute-path
 /// command fail closed. See REVIEW.md Security #1.
 fn allowed_roots(scope_id: Option<&str>) -> Vec<PathBuf> {
-    let projects: ProjectsList = read_state_json("projects.json");
-    let boxes: BoxesList = read_state_json("boxes.json");
+    static PROJECTS: StateJsonCache<ProjectsList> = StateJsonCache::new();
+    static BOXES: StateJsonCache<BoxesList> = StateJsonCache::new();
+    let projects = PROJECTS.get("projects.json");
+    let boxes = BOXES.get("boxes.json");
     compute_allowed_roots(&projects, &boxes, scope_id, &storage::root_work_dir())
+}
+
+/// The last parse of one state file, reused while the file's bytes are unchanged.
+///
+/// Every confinement check (each `file_mtime` poll of every open viewer) used to
+/// parse all of `projects.json` — thousands of `serde_json::Value`s for the
+/// entries' flattened `extra` — making it the process's busiest allocator.
+/// Keyed on the bytes, not on mtime/len: the file is rewritten in place by many
+/// writers, and a project switch swaps two statuses without changing its length.
+struct StateJsonCache<T>(std::sync::Mutex<Option<(PathBuf, String, std::sync::Arc<T>)>>);
+
+impl<T> StateJsonCache<T>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    /// The state file `name`, parsed; `T::default()` when it is absent or
+    /// unparseable, so confinement degrades to fail-closed. Failures are not cached.
+    fn get(&self, name: &str) -> std::sync::Arc<T> {
+        self.load(storage::state_dir().join(name))
+    }
+
+    fn load(&self, path: PathBuf) -> std::sync::Arc<T> {
+        let Ok(content) = fs::read_to_string(&path) else {
+            return std::sync::Arc::new(T::default());
+        };
+        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_path, cached, value)) = slot.as_ref() {
+            if *cached_path == path && *cached == content {
+                return value.clone();
+            }
+        }
+        let Ok(parsed) = serde_json::from_str::<T>(&content) else {
+            *slot = None;
+            return std::sync::Arc::new(T::default());
+        };
+        let value = std::sync::Arc::new(parsed);
+        *slot = Some((path, content, value.clone()));
+        value
+    }
 }
 
 /// Pure core of [`allowed_roots`], split out so the project/box scoping logic is
@@ -1824,7 +1855,7 @@ fn compute_allowed_roots(
 ) -> Vec<PathBuf> {
     // The ROOT scope — a viewer with no owning project (`scope_id: None`), i.e.
     // the side panel's root view and any root-scope tab — browses the root
-    // terminal folder `~/eldrun/root`. Its *listing* passes confinement because
+    // terminal folder `~/tabtivity/root`. Its *listing* passes confinement because
     // `list_dir` confines against the project_dir argument, but every absolute-
     // path read a viewer then makes (`read_file_bytes`, `file_mtime`, …) lands
     // here — and a roots set without that folder refused each one, so a PDF
@@ -1923,19 +1954,6 @@ fn project_dir(entry: &ProjectEntry) -> Option<PathBuf> {
 fn mirror_override_dir(entry: &ProjectEntry) -> Option<PathBuf> {
     let raw = entry.extra.get("mirror").and_then(Value::as_str)?.trim();
     (!raw.is_empty()).then(|| PathBuf::from(raw))
-}
-
-/// Read a JSON state file under `state_dir()`, defaulting to `T::default()` when
-/// the file is absent or unparseable (so confinement degrades to fail-closed).
-fn read_state_json<T>(name: &str) -> T
-where
-    T: serde::de::DeserializeOwned + Default,
-{
-    let path = storage::state_dir().join(name);
-    if !path.exists() {
-        return T::default();
-    }
-    storage::read_json(&path).unwrap_or_default()
 }
 
 /// Resolve `p` to a canonical path for confinement checks. For existing paths
@@ -2109,7 +2127,7 @@ fn collect_project_paths(
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == ".eldrun" {
+        if crate::brand::is_project_dir(&name) {
             continue;
         }
         let rel_path = if rel_dir.is_empty() {
@@ -2138,10 +2156,9 @@ fn collect_project_paths(
 const MAX_SCAN_DEPTH: usize = 64;
 
 fn should_skip_ending_scan_dir(name: &str) -> bool {
-    matches!(
+    crate::brand::is_project_dir(name) || matches!(
         name,
         ".git"
-            | ".eldrun"
             | "node_modules"
             | "target"
             | "dist"
@@ -2157,16 +2174,65 @@ fn should_skip_ending_scan_dir(name: &str) -> bool {
     )
 }
 
-fn canonical_or_new(path: &Path) -> PathBuf {
-    // For new paths that don't exist yet, canonicalize the parent and join.
-    if path.exists() {
-        return path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+/// Resolve a path that may not exist yet, for confinement: existing paths
+/// canonicalize; a dangling link resolves to where it points; a missing path
+/// canonicalizes its deepest existing ancestor and applies the rest lexically.
+/// The result never keeps a `..` or a link, so neither `missing/../..` nor a
+/// planted link to a not-yet-existing file outside can pass a `starts_with`
+/// check. Callers write to the returned path, not the one they joined.
+pub(crate) fn canonical_or_new(path: &Path) -> Result<PathBuf, String> {
+    resolve_new(path, 0).ok_or_else(|| format!("cannot resolve '{}'", path.display()))
+}
+
+fn resolve_new(path: &Path, links: u32) -> Option<PathBuf> {
+    // The kernel's own ELOOP bound for a chain of links.
+    if links > 40 {
+        return None;
     }
-    let parent = path.parent().and_then(|p| p.canonicalize().ok());
-    match parent {
-        Some(p) => p.join(path.file_name().unwrap_or_default()),
-        None => path.to_path_buf(),
+    if let Ok(c) = path.canonicalize() {
+        return Some(c);
     }
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if !meta.file_type().is_symlink() {
+            // It exists yet will not canonicalize (an unreadable ancestor).
+            return None;
+        }
+        let link = fs::read_link(path).ok()?;
+        let target = match path.parent() {
+            Some(parent) => parent.join(link),
+            None => link,
+        };
+        return resolve_new(&target, links + 1);
+    }
+    let parent = resolve_new(path.parent()?, links)?;
+    match path.components().next_back()? {
+        std::path::Component::Normal(name) => Some(parent.join(name)),
+        std::path::Component::CurDir => Some(parent),
+        std::path::Component::ParentDir => parent.parent().map(Path::to_path_buf),
+        _ => None,
+    }
+}
+
+/// Write `content` to `target_c`, a path `canonical_or_new` resolved and
+/// `enforce_confinement` passed, creating its missing folders. The file itself
+/// is opened `O_NOFOLLOW`: a link swapped in after the check is refused rather
+/// than followed out of the project.
+fn write_confined(target_c: &Path, content: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    if let Some(parent) = target_c.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+        .open(target_c)
+        .and_then(|mut f| f.write_all(content))
+        .map_err(|e| e.to_string())
 }
 
 /// Enforce that `target` is inside `root` (relative-path project confinement).
@@ -2250,8 +2316,8 @@ mod tests {
     #[test]
     fn percent_decode_reads_what_encode_uri_component_writes() {
         assert_eq!(
-            percent_decode("/home/f/eldrun/projects/thesis/thesis.pdf").as_deref(),
-            Some("/home/f/eldrun/projects/thesis/thesis.pdf")
+            percent_decode(concat!("/home/f/", crate::app_slug!(), "/projects/thesis/thesis.pdf")).as_deref(),
+            Some(concat!("/home/f/", crate::app_slug!(), "/projects/thesis/thesis.pdf"))
         );
         // Non-ASCII: `encodeURIComponent("Übung")` is the UTF-8 bytes, percent-escaped.
         assert_eq!(
@@ -2913,13 +2979,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_project_file_local(
             &tmp.path().to_string_lossy(),
-            ".eldrun/scaffold-fill-claude.md",
+            concat!(".", crate::app_slug!(), "/scaffold-fill-claude.md"),
             "fill AGENTS.md",
         )
         .unwrap();
 
         let content =
-            std::fs::read_to_string(tmp.path().join(".eldrun/scaffold-fill-claude.md")).unwrap();
+            std::fs::read_to_string(tmp.path().join(concat!(".", crate::app_slug!(), "/scaffold-fill-claude.md"))).unwrap();
         assert_eq!(content, "fill AGENTS.md");
     }
 
@@ -2960,6 +3026,60 @@ mod tests {
         assert!(
             err.contains("escapes project root"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn write_project_file_blocks_escape_through_a_missing_folder() {
+        // `missing/..` cannot be canonicalized, so the confinement check used
+        // to compare the raw path — whose components still start with the root.
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let dir = root.to_string_lossy().to_string();
+
+        assert!(write_project_file_local(&dir, "missing/../../outside.md", "x").is_err());
+        assert!(write_project_file_bytes_local(&dir, "missing/../../outside.png", b"x").is_err());
+        assert!(!outer.path().join("outside.md").exists());
+        assert!(!outer.path().join("outside.png").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_project_file_never_follows_a_dangling_link_out_of_the_project() {
+        // A link to a not-yet-existing file outside passes `exists()` as false,
+        // so only its parent was canonicalized — and the write then created
+        // the link's target outside the project.
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("project");
+        std::fs::create_dir_all(root.join(concat!(crate::app_slug!(), "-screenshots"))).unwrap();
+        let outside = outer.path().join("planted.desktop");
+        std::os::unix::fs::symlink(&outside, root.join(concat!(crate::app_slug!(), "-screenshots/shot.png"))).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("notes.md")).unwrap();
+        let dir = root.to_string_lossy().to_string();
+
+        assert!(
+            write_project_file_bytes_local(&dir, concat!(crate::app_slug!(), "-screenshots/shot.png"), b"png").is_err()
+        );
+        assert!(write_project_file_local(&dir, "notes.md", "text").is_err());
+        assert!(!outside.exists(), "nothing may land outside the project");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_project_file_still_saves_through_a_link_inside_the_project() {
+        // A symlinked file whose target is inside the project is the user's own
+        // layout; saving it must keep writing the target, as before.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("real.md"), "old").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real.md"), tmp.path().join("alias.md"))
+            .unwrap();
+
+        write_project_file_local(&tmp.path().to_string_lossy(), "alias.md", "new").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("real.md")).unwrap(),
+            "new"
         );
     }
 
@@ -3021,7 +3141,35 @@ mod tests {
     }
 
     /// The root terminal folder the tests thread through `compute_allowed_roots`.
-    const ROOT_WORK: &str = "/home/u/eldrun/root";
+    const ROOT_WORK: &str = concat!("/home/u/", crate::app_slug!(), "/root");
+
+    #[test]
+    fn state_json_cache_follows_a_same_length_rewrite() {
+        // A project switch rewrites projects.json in place with two statuses
+        // swapped — same length, possibly the same mtime tick. The cache must
+        // still hand back the new current project.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("projects.json");
+        let write = |x: &str, y: &str| {
+            let list = vec![entry("x", x, "/home/u/code/projectx"), entry("y", y, "/home/u/code/projecty")];
+            fs::write(&path, serde_json::to_string(&list).unwrap()).unwrap();
+        };
+        let cache: StateJsonCache<ProjectsList> = StateJsonCache::new();
+        let current = |list: &ProjectsList| list.iter().find(|e| e.status == "current").unwrap().id.clone();
+
+        write("current", "stopped");
+        let first = cache.load(path.clone());
+        assert_eq!(current(&first), "x");
+        assert!(std::sync::Arc::ptr_eq(&first, &cache.load(path.clone())), "unchanged bytes reuse the parse");
+
+        write("stopped", "current");
+        assert_eq!(current(&cache.load(path.clone())), "y");
+
+        fs::write(&path, "{ not json").unwrap();
+        assert!(cache.load(path.clone()).is_empty(), "unparseable fails closed");
+        fs::remove_file(&path).unwrap();
+        assert!(cache.load(path).is_empty(), "absent fails closed");
+    }
 
     #[test]
     fn allowed_roots_scoped_to_named_project_not_current() {
@@ -3086,11 +3234,11 @@ mod tests {
         let mut r = entry(
             "r",
             "current",
-            "/home/u/.local/share/eldrun/remote-projects/r",
+            concat!("/home/u/.local/share/", crate::app_slug!(), "/remote-projects/r"),
         );
         r.extra.insert(
             "mirror".to_string(),
-            Value::String("/home/u/eldrun/projects-ssh/myproj".to_string()),
+            Value::String(concat!("/home/u/", crate::app_slug!(), "/projects-ssh/myproj").to_string()),
         );
         let roots = compute_allowed_roots(&vec![r], &Vec::new(), Some("r"), Path::new(ROOT_WORK));
         assert!(
@@ -3124,10 +3272,10 @@ mod tests {
         let mut y = entry("y", "inactive", "/home/u/code/projecty");
         y.extra.insert(
             "mirror".to_string(),
-            Value::String("/home/u/eldrun/projects-ssh/y".to_string()),
+            Value::String(concat!("/home/u/", crate::app_slug!(), "/projects-ssh/y").to_string()),
         );
         let projects = vec![entry("x", "current", "/home/u/code/projectx"), y];
-        let boxes = vec![mk_box("b1", &["x", "y"], Some("/home/u/eldrun/boxes/b1"))];
+        let boxes = vec![mk_box("b1", &["x", "y"], Some(concat!("/home/u/", crate::app_slug!(), "/boxes/b1")))];
         let roots = compute_allowed_roots(&projects, &boxes, Some("box:b1"), Path::new(ROOT_WORK));
         assert!(roots.iter().any(|r| r.ends_with("boxes/b1")));
         assert!(roots.iter().any(|r| r.ends_with("projectx")));
@@ -3178,7 +3326,7 @@ mod tests {
     fn allowed_roots_root_scope_includes_root_folder_beside_current() {
         // The ROOT scope (scope_id None) reads the root terminal folder — the
         // regression here was a PDF opened from the root tree failing every
-        // byte read and hanging on "Loading" (~/eldrun/root was never a root).
+        // byte read and hanging on "Loading" (~/tabtivity/root was never a root).
         let projects = vec![entry("x", "current", "/home/u/code/projectx")];
         let roots = compute_allowed_roots(&projects, &Vec::new(), None, Path::new(ROOT_WORK));
         assert!(roots.iter().any(|r| r == Path::new(ROOT_WORK)));
@@ -3270,7 +3418,7 @@ mod tests {
 
     #[test]
     fn dir_size_skips_an_excluded_subtree() {
-        let tmp = std::env::temp_dir().join(format!("eldrun-excl-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-excl-{}"), std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("keep")).unwrap();
         fs::create_dir_all(tmp.join("venv/lib")).unwrap();

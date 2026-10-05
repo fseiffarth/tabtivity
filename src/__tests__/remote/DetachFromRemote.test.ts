@@ -2,7 +2,7 @@
  * Detaching a project from its SSH host must re-point its tabs.
  *
  * The live bug this pins (DemoProj): while a project is remote its `directory` is the
- * state dir `~/.local/share/eldrun/remote-projects/<id>/`, and `loadFromLayout` stores
+ * state dir `~/.local/share/tabtivity/remote-projects/<id>/`, and `loadFromLayout` stores
  * exactly that as every tab's `cwd`. Nothing ever noticed, because `localTabCwd` rewrote
  * it at render time to the real mirror — an override gated on `isRemoteProject`.
  *
@@ -10,7 +10,7 @@
  * stored cwd it should never have had, and agents relaunch inside the state dir — which
  * detach has just emptied. Claude keys its session history by cwd, so `--resume` then finds
  * no conversation (it lives under the mirror's path) and the agent starts asking for
- * permissions under `.local/share/eldrun/remote-projects/…`.
+ * permissions under `.local/share/tabtivity/remote-projects/…`.
  *
  * So: the fallback path is real, it is reachable, and `detachScopeFromRemote` is what keeps
  * it from being taken.
@@ -22,8 +22,9 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
 import { localTabCwd, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { BRAND } from "../../lib/brand";
 
-const STATE_DIR = "/home/u/.local/share/eldrun/remote-projects/pid";
+const STATE_DIR = `/home/u/.local/share/${BRAND.slug}/remote-projects/pid`;
 const MIRROR = "/home/u/Documents/CodeProjectsGit/DemoProj";
 
 function tab(over: Partial<TabEntry>): TabEntry {
@@ -72,7 +73,7 @@ describe("localTabCwd — why detach breaks tabs", () => {
     ).toBe(MIRROR);
 
     // Detached: no override — the tab falls straight back to the cwd it was storing all
-    // along. THIS is the `.local/share/eldrun/remote-projects/…` the agent ends up in.
+    // along. THIS is the `.local/share/tabtivity/remote-projects/…` the agent ends up in.
     expect(
       localTabCwd(t, {
         isRemoteProject: false,

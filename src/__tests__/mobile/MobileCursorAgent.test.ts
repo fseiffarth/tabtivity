@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isCursorTab, readCursorPicker } from "../../../mobile-web/src/terminal/cursorAgent";
 import { mergeSelectRows, readSelectPrompt, revealSelectRow } from "../../../mobile-web/src/terminal/selectPrompt";
+import { BRAND } from "../../lib/brand";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
 
@@ -74,7 +75,7 @@ const NARROW = lines(
   " Tab to edit",
 );
 
-describe("Eldrun Mobile — Cursor agent's model dialog", () => {
+describe(`${BRAND.display} Mobile — Cursor agent's model dialog`, () => {
   it("names the Cursor tab by its registry label", () => {
     expect(isCursorTab("Cursor")).toBe(true);
     expect(isCursorTab("Claude")).toBe(false);
@@ -160,7 +161,7 @@ describe("Eldrun Mobile — Cursor agent's model dialog", () => {
   });
 });
 
-describe("Eldrun Mobile — revealing a windowed dialog", () => {
+describe(`${BRAND.display} Mobile — revealing a windowed dialog`, () => {
   const prompt = (numbers: number[], current: number, hidden: number) => ({
     options: numbers.map((number, index) => ({ index, number, label: `Row ${number}` })),
     current,

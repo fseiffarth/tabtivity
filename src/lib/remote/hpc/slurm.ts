@@ -276,7 +276,7 @@ export function openLogTab(opts: {
     initialInput: buildTailCommand(opts.outFile),
     // A `tail -F` is re-openable from the Jobs view at any time, so persisting it
     // buys nothing — and on a cluster login node it costs the one thing the HPC
-    // tag exists to prevent: a tmux daemon still running there after Eldrun quits,
+    // tag exists to prevent: a tmux daemon still running there after Tabtivity quits,
     // which nothing in the UI would then be pointing at. The job itself is
     // untouched; it is SLURM's, not this tab's.
     ephemeral: logTabIsEphemeral(opts.scope, opts.hostId),

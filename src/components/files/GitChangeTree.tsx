@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { useT } from "../../lib/i18n";
 import { FolderIcon } from "../common/icons/Icon";
 
@@ -134,6 +135,7 @@ function Row({
 interface Props {
   projectDir: string;
   scope: ChangeScope;
+  worktree?: GitWorktreeSelection | null;
 }
 
 /**
@@ -141,7 +143,7 @@ interface Props {
  * action, each row annotated with its `+added / -deleted` line stats. Folders
  * collapse/expand on click; the parent owns open/close (Escape, outside-click).
  */
-export function GitChangeTree({ projectDir, scope }: Props) {
+export function GitChangeTree({ projectDir, scope, worktree }: Props) {
   const t = useT();
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -158,13 +160,13 @@ export function GitChangeTree({ projectDir, scope }: Props) {
     let live = true;
     setChanges(null);
     setError(null);
-    invoke<FileChange[]>("git_change_stats", { projectDir, scope })
+    invoke<FileChange[]>("git_change_stats", { projectDir, ...gitWorktreeArgs(worktree), scope })
       .then((c) => live && setChanges(c))
       .catch((e) => live && setError(String(e)));
     return () => {
       live = false;
     };
-  }, [projectDir, scope]);
+  }, [projectDir, scope, worktree]);
 
   const tree = useMemo(() => (changes ? buildTree(changes) : null), [changes]);
 

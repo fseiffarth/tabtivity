@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { limitMeters, noteParts, parseUsageReport } from "../../../shared/usageReport";
+import { BRAND } from "../../lib/brand";
 
 /** The panel a real `claude -p "/usage" --output-format json` run returns, as
  * `services::agent_usage` hands it over. */
@@ -11,7 +12,7 @@ const CLAUDE_PANEL = [
   "Last 24h: 41 requests · 6 sessions",
 ].join("\n");
 
-describe("Eldrun Mobile agent usage panel", () => {
+describe(`${BRAND.display} Mobile agent usage panel`, () => {
   it("reads each window as a labelled bar, with its reset", () => {
     const report = parseUsageReport(CLAUDE_PANEL);
     expect(report.unparsed).toBe(false);
@@ -37,6 +38,38 @@ describe("Eldrun Mobile agent usage panel", () => {
       { label: "Current week (all models)", percent: 54, resets: "Sep 17, 2pm (Europe/Berlin)" },
       { label: "Current week (Fable)", percent: 94, resets: "Jan 3, 2027, 9am (Europe/Berlin)" },
     ]);
+  });
+
+  it("reads 2.1.284's contribution breakdown as notes, not as more windows", () => {
+    // What Claude Code 2.1.284 prints (2026-09-29): the three windows, then a
+    // "What's contributing" section whose `Label: name N%` lines are shares of
+    // usage. Read as meters they became a 39% "Top subagents" bar on the phone.
+    const report = parseUsageReport([
+      "You are currently using your subscription to power your Claude Code usage",
+      "",
+      "Current session: 11% used · resets Sep 29, 11:40pm (Europe/Berlin)",
+      "Current week (all models): 70% used · resets Oct 1, 2pm (Europe/Berlin)",
+      "Current week (Fable): 74% used · resets Oct 1, 2pm (Europe/Berlin)",
+      "",
+      "What's contributing to your limits usage?",
+      "Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.",
+      "",
+      "Last 24h · 3066 requests · 60 sessions",
+      "  49% of your usage was at >150k context",
+      "  47% of your usage came from subagent-heavy sessions",
+      "  Top subagents: general-purpose 39%, Explore 1%",
+      `  Top MCP servers: ${BRAND.slug}-git 1%`,
+    ].join("\n"));
+    expect(report.meters).toEqual([
+      { label: "Current session", percent: 11, resets: "Sep 29, 11:40pm (Europe/Berlin)" },
+      { label: "Current week (all models)", percent: 70, resets: "Oct 1, 2pm (Europe/Berlin)" },
+      { label: "Current week (Fable)", percent: 74, resets: "Oct 1, 2pm (Europe/Berlin)" },
+    ]);
+    expect(report.notes).toContainEqual({ label: "Top subagents", value: "general-purpose 39%, Explore 1%" });
+    expect(report.notes).toContainEqual({ label: undefined, value: "Last 24h · 3066 requests · 60 sessions" });
+    const { session, week } = limitMeters(report);
+    expect(session?.percent).toBe(11);
+    expect(week?.label).toBe("Current week (all models)");
   });
 
   it("keeps a readout with no percentage as a note rather than dropping it", () => {

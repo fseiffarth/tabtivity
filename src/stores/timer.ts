@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
+import { NAMES } from "../lib/brand";
 
-export const APP_TIMER_ID = "__eldrun__";
+export const APP_TIMER_ID = NAMES.appTimerId;
 
 /**
  * The root terminal's own bucket in `time_log.json`. Time spent there is
@@ -146,7 +147,7 @@ export const useTimerStore = create<TimerStore>((set, get) => ({
     ]);
     // Reload committed secs from the backend so day-boundary crossings are
     // handled correctly (in-memory accumulation would carry yesterday's total
-    // into today once Eldrun runs past midnight).
+    // into today once Tabtivity runs past midnight).
     if (!s.paused) {
       const [newAppSecs, newProjSecs] = await Promise.all([
         invoke<number>("get_time_today", { projectId: APP_TIMER_ID }).catch(

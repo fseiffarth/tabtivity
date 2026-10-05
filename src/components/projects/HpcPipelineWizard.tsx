@@ -79,7 +79,7 @@ type Step = "login" | "project" | "workspace" | "data" | "run" | "watch";
 
 /** Where the project's tree lives on the host once a workspace is chosen.
  *  `in-workspace` (the default) makes the workspace the project's remote root, so
- *  everything Eldrun already syncs lands on the parallel filesystem; `link` keeps
+ *  everything Tabtivity already syncs lands on the parallel filesystem; `link` keeps
  *  the project in the browsed folder (usually `$HOME`) and symlinks the workspace
  *  in for the host's own tools — see `linkedWorkspaceCaveat`. */
 type WsLayout = "in-workspace" | "link";
@@ -520,10 +520,10 @@ function StepTrail({ step }: { step: Step }) {
  *
  *  - **in the workspace** (default) — the workspace path becomes the project's
  *    remote root, so uploads, byte-sync, git lockstep and every run tab already
- *    land on the parallel filesystem. Nothing else in Eldrun changes.
+ *    land on the parallel filesystem. Nothing else in Tabtivity changes.
  *  - **linked** — the project stays in the browsed folder and the workspace is
  *    symlinked in as `./<name>` for the host's own tools, with the caveat that
- *    Eldrun's sync does not follow a symlink.
+ *    Tabtivity's sync does not follow a symlink.
  *
  * The project is created *here*, at the end, because its remote root is what this
  * step decides. A host without the tooling shows a one-line note and the same

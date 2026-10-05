@@ -111,7 +111,7 @@ export interface TourStep {
 
 /** Force the hover-revealed file panel open so a step has the whole panel to
  *  spotlight (same event the lessons use). */
-const revealFilePanel = () => window.dispatchEvent(new Event("eldrun:reveal-side-panel"));
+const revealFilePanel = () => window.dispatchEvent(new Event("app:reveal-side-panel"));
 
 /**
  * The files steps spotlight the *whole* panel, not the 6px reveal marker: a

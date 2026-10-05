@@ -15,6 +15,7 @@ import {
   useTabsStore,
   useGroup,
   useGroupTabs,
+  type AddTabOpts,
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
@@ -95,6 +96,7 @@ import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
+import { observeStripResize } from "../../lib/observeStripResize";
 
 /** Default fly-out card size when no live pane thumbnail is available (group
  *  detach via the bar drag carries no preview). */
@@ -206,9 +208,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const renameTab = useTabsStore((s) => s.renameTab);
   const setTabColor = useTabsStore((s) => s.setTabColor);
   const setTabStack = useTabsStore((s) => s.setTabStack);
-  const addTab = useTabsStore((s) => s.addTab);
+  const storeAddTab = useTabsStore((s) => s.addTab);
   const duplicateTab = useTabsStore((s) => s.duplicateTab);
-  const ensureTab = useTabsStore((s) => s.ensureTab);
+  const storeEnsureTab = useTabsStore((s) => s.ensureTab);
   const setTabLocation = useTabsStore((s) => s.setTabLocation);
   // Experimental — off for users, on in debug: the in-app browser (#61). This is
   // the entry-point half of the gate; the other half is the withdrawal
@@ -301,6 +303,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   });
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  // Steering's new tabs land right of the active tab (`besideActive` on its
+  // request): true while a direct request's handler runs, and for as long as a
+  // + menu steering opened stays up. A launch that awaits (worktree question,
+  // model prep) reads it with `placement()` before the await.
+  const besideActive = useRef(false);
+  const placement = (): AddTabOpts | undefined =>
+    besideActive.current ? { besideActive: true } : undefined;
+  const addTab = (tab: Omit<TabEntry, "key">, opts?: AddTabOpts) =>
+    storeAddTab(tab, { ...placement(), ...opts });
+  const ensureTab = (tab: Omit<TabEntry, "key">, matches: (tab: TabEntry) => boolean) =>
+    storeEnsureTab(tab, matches, placement());
+  useEffect(() => {
+    if (!menuPos) besideActive.current = false;
+  }, [menuPos]);
   // Tab currently hovered → drives the styled hover card (the tab-bar
   // counterpart to the project pill's hover popup). Anchored to the tab's
   // bottom-center; cleared on leave, drag, or when a menu opens.
@@ -325,6 +341,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // #56: Shift+right-click on a tab enters inline rename mode for that key (no
   // menu, no prompt dialog). The label becomes a focused, text-selected <input>.
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  // Selects the label once, when the input mounts. A stable callback: an
+  // inline one is a new ref every render, so React re-ran it on each re-render
+  // (agent status ticks) and the next keystroke replaced what was typed.
+  const selectOnMount = useCallback((el: HTMLInputElement | null) => {
+    if (el) el.select();
+  }, []);
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
@@ -364,11 +386,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     updateScrollState();
     const onScroll = () => updateScrollState();
     el.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(() => updateScrollState());
-    ro.observe(el);
+    // Children too: a tab growing inside a capped strip changes no strip box.
+    const stopResize = observeStripResize(el, updateScrollState);
     return () => {
       el.removeEventListener("scroll", onScroll);
-      ro.disconnect();
+      stopResize();
     };
   }, [updateScrollState]);
 
@@ -476,16 +498,17 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       setMenuPos(null);
       return;
     }
-    // Build the full launch spec (session-id minting, ELDRUN_TAB_UID, args,
+    // Build the full launch spec (session-id minting, TABTIVITY_TAB_UID, args,
     // session-rename input) via the shared helper so the main and detached add
     // menus can never drift. An agent on a project with linked worktrees is
     // asked which one first; the menu closes either way and the tab appears
     // once the question is answered (or not at all if it is dismissed).
     setMenuPos(null);
+    const place = placement();
     void worktreePicker.specFor(item).then((spec) => {
       if (!spec) return;
       focusGroup(groupId);
-      addTab(spec);
+      addTab(spec, place);
     });
   }
 
@@ -495,10 +518,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     scope !== "root" && !scope.startsWith(BOX_SCOPE_PREFIX)
       ? (item: StaticMenuItem, launch: CloudLaunch) => {
           setMenuPos(null);
+          const place = placement();
           void worktreePicker.cloudSpecFor(item, launch).then((spec) => {
             if (!spec) return;
             focusGroup(groupId);
-            addTab(spec);
+            addTab(spec, place);
           });
         }
       : undefined;
@@ -680,8 +704,14 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   };
   useEffect(() => {
     const onRequest = (e: Event) => {
-      const { request, groupId: target } = (e as CustomEvent<NewTabShortcutDetail>).detail;
-      if (target === groupId && onNewTabChord.current(request)) e.preventDefault();
+      const { request, groupId: target, besideActive: beside } = (
+        e as CustomEvent<NewTabShortcutDetail>
+      ).detail;
+      if (target !== groupId) return;
+      besideActive.current = !!beside;
+      if (onNewTabChord.current(request)) e.preventDefault();
+      // A menu keeps the placement until it closes (the effect on `menuPos`).
+      if (request.kind !== "menu") besideActive.current = false;
     };
     // Steering's legend names the agents behind 1–9 for the focused pane.
     const onSlots = (e: Event) => {
@@ -699,10 +729,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
 
   async function handleOllamaModel(model: string) {
     setMenuPos(null);
+    const place = placement();
     try {
       const spec = await vibeLocalTabSpec(scope, model, projectCwd);
       focusGroup(groupId);
-      addTab(spec);
+      addTab(spec, place);
     } catch {
       // Ollama not running or agent prep failed — don't create a tab with no model config.
     }
@@ -712,10 +743,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Codex, OpenCode, Droid) — `lib/agents/localTabSpec`.
   async function handleLocalLaunch(agentId: string, label: string, model: string) {
     setMenuPos(null);
+    const place = placement();
     try {
       const spec = await localLaunchTabSpec(scope, agentId, label, model, projectCwd);
       focusGroup(groupId);
-      addTab(spec);
+      addTab(spec, place);
     } catch {
       // ollama launch unavailable / agent prep failed — don't create a broken tab.
     }
@@ -767,16 +799,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   //  - interrupted (`--status-interrupted`, solid): you cut the agent's
   //    turn off; it holds until the next turn starts. Like finished, it is
   //    left off the viewed tab, whose screen already says "interrupted".
-  // Working wins. Working and finished are about output you HAVEN'T seen, so
-  // they never show on the viewed tab — its screen says it better. A pending
-  // decision is the exception: it's about an agent that is BLOCKED, and it
-  // stays blocked whether or not you're looking at it. The lamp holds until
-  // the prompt is answered, so a tab left on screen mid-prompt while you work
-  // elsewhere in the window still says so.
+  // Working wins, and shows on the viewed tab too: it says the tab is still
+  // RUNNING, which a screen that has paused scrolling (an agent thinking, a
+  // long build) doesn't always show. Finished is about output you HAVEN'T
+  // seen, so it never shows on the viewed tab — its screen says it better. A
+  // pending decision is the exception: it's about an agent that is BLOCKED,
+  // and it stays blocked whether or not you're looking at it. The lamp holds
+  // until the prompt is answered, so a tab left on screen mid-prompt while you
+  // work elsewhere in the window still says so.
   function tabStateClass(tab: TabEntry): string {
     const isActive = tab.key === activeKey;
     const ptyId = `${scope}:${tab.key}`;
-    const working = isPtyTabKind(tab.kind) && !isActive && !!busyByTab[ptyId];
+    const working = isPtyTabKind(tab.kind) && !!busyByTab[ptyId];
     const rawAttn =
       tab.kind === "agent" || tab.kind === "local_agent"
         ? attentionByTab[ptyId] ?? null
@@ -1088,7 +1122,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         return;
       }
       // Released in FREE SPACE — outside the main window and not over a FRONT popout,
-      // so no visible Eldrun window is under the cursor (e.g. dragged onto the desktop
+      // so no visible Tabtivity window is under the cursor (e.g. dragged onto the desktop
       // or another monitor). Pop this tab into its own standalone OS window. Client
       // coords outside [0,inner) is the outside-the-window signal (DOM clientX/Y is
       // reliable CSS px on every engine). An OCCLUDED popout is deliberately NOT
@@ -1429,9 +1463,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                 autoFocus
                 aria-label={t("tabBar.renameAriaLabel")}
                 // Mount focused with the whole label selected for a fast retype.
-                ref={(el) => {
-                  if (el) el.select();
-                }}
+                ref={selectOnMount}
                 // Keep editing keystrokes / clicks out of drag + activation.
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
@@ -1488,7 +1520,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             />
             {/* There is deliberately no Plan/Auto TOGGLE here. An agent's
                 permission mode is the agent's own to set, through its own CLI
-                (Claude's shift+tab, Codex's mode picker) — Eldrun launches the
+                (Claude's shift+tab, Codex's mode picker) — Tabtivity launches the
                 plain command and injects no mode flag. The badge that used to
                 sit here rewrote the tab's launch args, which respawned the PTY
                 on every flip; the mode a user sets inside the session still
@@ -1633,24 +1665,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         >
           <AddTabMenuList
             groups={[
-              // Closed agent tabs first: bringing one back is the likelier
-              // reason to reach for "+" right after a close than a new one.
-              ...(closedAgentTabs.length > 0
-                ? [{
-                    label: t("newTabMenu.groupRecentlyClosed"),
-                    entries: closedAgentTabs.slice(0, 3).map((closed, i) => ({
-                      key: `reopen:${closed.id}`,
-                      label: closed.tab.label,
-                      dot: "↺",
-                      color: TAB_ACCENT[closed.tab.kind],
-                      shortcut: i === 0 ? ("reopenClosedTab" as const) : undefined,
-                      onPick: () => {
-                        setMenuPos(null);
-                        reopenClosedAgentTab(scope, closed.id);
-                      },
-                    })),
-                  }]
-                : []),
               {
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
@@ -1864,6 +1878,24 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   },
                 }],
               },
+              // Last, so the fixed "new tab" entries keep their positions; the
+              // group only exists while something was closed.
+              ...(closedAgentTabs.length > 0
+                ? [{
+                    label: t("newTabMenu.groupRecentlyClosed"),
+                    entries: closedAgentTabs.slice(0, 3).map((closed, i) => ({
+                      key: `reopen:${closed.id}`,
+                      label: closed.tab.label,
+                      dot: "↺",
+                      color: TAB_ACCENT[closed.tab.kind],
+                      shortcut: i === 0 ? ("reopenClosedTab" as const) : undefined,
+                      onPick: () => {
+                        setMenuPos(null);
+                        reopenClosedAgentTab(scope, closed.id);
+                      },
+                    })),
+                  }]
+                : []),
             ]}
           />
         </ContextMenuPortal>

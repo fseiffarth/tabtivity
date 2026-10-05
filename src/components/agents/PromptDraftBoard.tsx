@@ -4,6 +4,7 @@ import { parseTags } from "../../lib/agents/prompt/tags";
 import { useT } from "../../lib/i18n";
 import { MarkdownPromptField } from "../common/MarkdownPromptField";
 import type { ChartDrag } from "./usePromptChartDrag";
+import { NAMES } from "../../lib/brand";
 
 interface Point { x: number; y: number }
 interface Layout { free: boolean; positions: Record<string, Point> }
@@ -44,7 +45,7 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
   onCreate: (message: string, tags: string[]) => Promise<string>;
 }>(function PromptDraftBoard({ scope, cards, drag, renderCard, onLayout, onCreate }, ref) {
   const t = useT();
-  const key = `eldrun.promptChart.drafts.${scope}`;
+  const key = `${NAMES.storagePrefix}promptChart.drafts.${scope}`;
   const [layout, setLayout] = useState(() => readLayout(key));
   const canvas = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);

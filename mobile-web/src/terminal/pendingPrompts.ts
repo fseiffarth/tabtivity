@@ -9,7 +9,9 @@ import type { TranscriptEntry } from "../api";
  * bubble; a prompt typed while the agent works is recorded only once the
  * agent takes it in, often after more of its messages, and swapping the
  * bubble for the record would move it. What is held lives as long as the
- * view: reopened, the chat is simply the session's record.
+ * view: reopened, the chat is simply the session's record — save the prompts
+ * the desktop still holds, which the record lacks until the agent takes them
+ * in; those come back with the tab (`heldPrompts.ts`).
  */
 export interface PendingPrompt {
   id: number;
@@ -36,6 +38,12 @@ export interface PendingPrompt {
   failed?: boolean;
   /** A resend is on its way and waiting for its acknowledgement. */
   retrying?: boolean;
+  /** Sent while the agent worked: the desktop holds it, by this id, and
+   * types it at the agent's next idle point. Until the session records it
+   * the reader can still change its words (`reworded`) — the one change a
+   * shown bubble takes, and only because the reader made it. `""` while the
+   * desktop has not answered with the id yet. */
+  held?: string;
 }
 
 /** At most this many are held; the oldest goes first. */
@@ -48,7 +56,13 @@ function words(text: string): string {
 }
 
 function isCopy(entry: TranscriptEntry, text: string): boolean {
-  return entry.kind === "prompt" && words(entry.text) === words(text);
+  return entry.kind === "prompt" && entry.pending === undefined && words(entry.text) === words(text);
+}
+
+/** `prompt` with the reader's new words. It keeps its place; only what tells
+ * its record apart is counted again, against the session as it stands. */
+export function reworded(prompt: PendingPrompt, text: string, entries: readonly TranscriptEntry[]): PendingPrompt {
+  return { ...prompt, text: text.trim(), seen: entries.filter((entry) => isCopy(entry, text)).length };
 }
 
 /** The pending prompt for `text`, sent against `entries`. */
@@ -78,26 +92,67 @@ function recordOf(prompt: PendingPrompt, entries: readonly TranscriptEntry[]): n
   return copies.length > prompt.seen ? copies[copies.length - 1] : -1;
 }
 
+/** `entries` without the records of the held prompts that have arrived, and
+ * which those are. A prompt the session recorded reached it, whatever the
+ * link said. A prompt the desktop held is the exception: it went in at the
+ * agent's idle point, after every answer it had waited below, so its bubble
+ * takes its record's place instead. */
+function takeRecords(entries: readonly TranscriptEntry[], pending: readonly PendingPrompt[]): { shown: TranscriptEntry[]; arrived: Set<number> } {
+  const shown = [...entries];
+  const arrived = new Set<number>();
+  for (const prompt of pending) {
+    const record = recordOf(prompt, shown);
+    if (record >= 0) {
+      if (prompt.held !== undefined) shown[record] = bubble(prompt, true);
+      else shown.splice(record, 1);
+      arrived.add(prompt.id);
+    }
+  }
+  return { shown, arrived };
+}
+
+/** `prompt`'s bubble, stamped with its place's time so the chat keys it the
+ * same wherever it stands. `queued` while the desktop still holds it. */
+function bubble(prompt: PendingPrompt, arrived: boolean): TranscriptEntry {
+  return {
+    kind: "prompt",
+    text: prompt.text,
+    at: prompt.after,
+    pending: prompt.id,
+    ...(prompt.sentAt ? { sentAt: prompt.sentAt } : {}),
+    ...(prompt.failed && !arrived ? { failed: true } : {}),
+    ...(prompt.retrying && !arrived ? { retrying: true } : {}),
+    ...(prompt.held && !arrived ? { held: true } : {}),
+    ...(prompt.held !== undefined && !arrived ? { queued: true } : {}),
+  };
+}
+
+/** The ids of the pending prompts the session has recorded: the agent has
+ * them, and their words are final. */
+export function arrivedPending(entries: readonly TranscriptEntry[], pending: readonly PendingPrompt[]): Set<number> {
+  return takeRecords(entries, pending).arrived;
+}
+
 /**
  * The session's entries as the chat shows them: each held prompt in its
  * place, its record — once there — left out. A held prompt is an ordinary
  * prompt entry stamped with its place's time, so the chat keys it, and
  * places the agent's files around it, the way it does a recorded one.
+ * A prompt the desktop holds and has not typed yet waits at the end,
+ * `queued`, below everything the agent still says before taking it in — the
+ * chat draws the agent at work above it — and, typed, stands where its
+ * record does, which is that same spot.
  */
 export function withPending(entries: readonly TranscriptEntry[], pending: readonly PendingPrompt[]): TranscriptEntry[] {
   if (pending.length === 0) return entries as TranscriptEntry[];
-  const shown = [...entries];
+  const { shown, arrived } = takeRecords(entries, pending);
   let lastSlot = -1;
-  // A prompt the session recorded reached it, whatever the link said.
-  const arrived = new Set<number>();
+  const queued: TranscriptEntry[] = [];
   for (const prompt of pending) {
-    const record = recordOf(prompt, shown);
-    if (record >= 0) {
-      shown.splice(record, 1);
-      arrived.add(prompt.id);
+    if (prompt.held !== undefined) {
+      if (!arrived.has(prompt.id)) queued.push(bubble(prompt, false));
+      continue;
     }
-  }
-  for (const prompt of pending) {
     // After the last entry at or before the send — an entry without a stamp
     // stands at the one before it (as `outboxPosts` reads them), and an
     // earlier held prompt carries the same stamp, so two sent in a row keep
@@ -128,16 +183,8 @@ export function withPending(entries: readonly TranscriptEntry[], pending: readon
       if (anchor >= 0) slot = anchor + 1;
     }
     slot = Math.max(slot, lastSlot + 1);
-    shown.splice(slot, 0, {
-      kind: "prompt",
-      text: prompt.text,
-      at: after,
-      pending: prompt.id,
-      ...(prompt.sentAt ? { sentAt: prompt.sentAt } : {}),
-      ...(prompt.failed && !arrived.has(prompt.id) ? { failed: true } : {}),
-      ...(prompt.retrying && !arrived.has(prompt.id) ? { retrying: true } : {}),
-    });
+    shown.splice(slot, 0, bubble(prompt, arrived.has(prompt.id)));
     lastSlot = slot;
   }
-  return shown;
+  return queued.length ? [...shown, ...queued] : shown;
 }

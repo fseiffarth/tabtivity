@@ -25,6 +25,7 @@ import {
   isTreePath,
   type YamlNode,
 } from "../../lib/viewers/yaml";
+import { BRAND } from "../../lib/brand";
 
 // The edits take the parsed doc (it carries the dialect and the indent step); in
 // the tests the doc is always the one the node came from, so bind it here.
@@ -429,7 +430,7 @@ describe("addChild", () => {
   });
 
   it("seeds an empty file", () => {
-    expect(addRootEntry("", "key", "name", '"eldrun"')).toBe('name: "eldrun"\n');
+    expect(addRootEntry("", "key", "name", `"${BRAND.slug}"`)).toBe(`name: "${BRAND.slug}"\n`);
     expect(addRootEntry("# just a comment\n", "item", "", "first")).toBe(
       "# just a comment\n- first\n",
     );

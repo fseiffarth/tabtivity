@@ -75,3 +75,46 @@ export function agentInputWrites(draft: string, bracketedPaste = false): string[
   writes.push("\r");
   return writes;
 }
+
+/** Which CLI an agent label names: the phone's tab label or the desktop's
+ * agent-item label. The families are matched on the label; any other label
+ * keys by its first word, so a CLI with no entry here still keeps its own
+ * commands apart from every other one's. */
+const AGENT_FAMILIES: [RegExp, string][] = [
+  [/claude/iu, "claude"],
+  [/codex/iu, "codex"],
+  [/gemini/iu, "gemini"],
+  [/qwen/iu, "qwen"],
+  [/opencode/iu, "opencode"],
+  [/aider/iu, "aider"],
+  [/kimi/iu, "kimi"],
+  [/copilot/iu, "copilot"],
+  [/cursor/iu, "cursor"],
+  [/antigravity/iu, "antigravity"],
+  // The new-tab menu labels Mistral's `vibe` "Mistral".
+  [/mistral|\bvibe\b/iu, "vibe"],
+];
+
+export function agentFamily(agentLabel: string): string {
+  for (const [pattern, key] of AGENT_FAMILIES) if (pattern.test(agentLabel)) return key;
+  const word = agentLabel.trim().toLowerCase().split(/\s+/u)[0]?.replace(/[^\p{L}\p{N}_-]/gu, "");
+  return word || "agent";
+}
+
+/** The commands a composer offers to lead a draft with — the phone's Plan /
+ * Goal chips, the desktop's steering keys — each followed by the user's own
+ * words. Each CLI (`agentFamily`) gets only the ones it documents (checked
+ * 2026-09-27); a CLI with neither gets none. */
+const DRAFT_PREFIXES: Record<string, readonly string[]> = {
+  claude: ["/plan", "/goal"],
+  codex: ["/plan", "/goal"],
+  antigravity: ["/plan", "/goal"],
+  gemini: ["/plan"],
+  copilot: ["/plan"],
+  cursor: ["/plan"],
+  kimi: ["/plan"],
+};
+
+export function agentDraftPrefixes(family: string): readonly string[] {
+  return DRAFT_PREFIXES[family] ?? [];
+}

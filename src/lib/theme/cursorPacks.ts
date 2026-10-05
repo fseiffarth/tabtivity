@@ -6,7 +6,7 @@
  *
  *  - **The art is PNG, not SVG.** WebKit has never supported SVG images as CSS
  *    cursors (a `cursor: url(x.svg)` silently falls through to the keyword),
- *    and Eldrun's window IS WebKitGTK on Linux. So every shape is rasterised
+ *    and Tabtivity's window IS WebKitGTK on Linux. So every shape is rasterised
  *    into a `<canvas>` and emitted as a `data:image/png` URL, which every
  *    engine and every platform accepts.
  *  - **The art is drawn, not shipped.** Because it is painted at runtime it can

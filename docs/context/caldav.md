@@ -97,7 +97,7 @@ No fourth credential mechanism: same OS keychain, same
 `services::remote_credentials`, same opt-in-default-off, same `true | null`
 (never bare `false`) remember argument, same "unreadable is not absence"
 tri-state, same `SavePasswordRow` off `useSavedCredentialSource`. The key is
-`caldav:<user>@<host>` — **server target, not Eldrun account id**, matching
+`caldav:<user>@<host>` — **server target, not Tabtivity account id**, matching
 `ssh_account`/`mail_account`, so two accounts pointed at one login share one
 entry instead of disagreeing about whether a password is saved. Only the origin
 goes into the key, because discovery routinely resolves a longer URL than the
@@ -227,7 +227,8 @@ Two fields had to start round-tripping for any of that to be correct, and neithe
 is displayed anywhere:
 
 - **`uid`** — the calendar object's identity everywhere outside this app. The
-  serializer used to mint `${row.id}@eldrun` unconditionally, which on a push
+  serializer used to mint `${row.id}@<pinned domain>` unconditionally (the
+  domain is `PINNED_ICS_UID_DOMAIN`, the app's old lowercase name, for good), which on a push
   means the server keeps its object under the old UID and files ours as a second
   one. A row now writes back under the UID it arrived with.
 - **`recurrence_id`** — which occurrence an override row replaces. Without it a
@@ -254,7 +255,7 @@ be silent: *what am I about to put in my calendar?* A `PROCEDURE` alarm, an
 `ATTACH`, a `zoommtg:` location, a `METHOD:REQUEST`, a title carrying a
 right-to-left override — all of them are dropped or cleaned today without a word.
 
-Two rules keep it from becoming noise. Every finding says **what Eldrun does
+Two rules keep it from becoming noise. Every finding says **what Tabtivity does
 about it** (`ignored` is a field, not a tone), because a warning that lists a
 hostile-sounding property without saying it is discarded reads as a threat rather
 than a fact. And the dialog is **not raised at all** for a file with no findings

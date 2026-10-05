@@ -2,8 +2,9 @@ import { useGitDirtyStore, type GitDirtyState } from "../stores/gitDirty";
 import { resolveProjectDirectory, type ProjectEntry } from "../types";
 
 /** A project's git dot as the phone gets it: the desktop pill's own level
- *  (`stores/gitDirty.ts`). "clean" never crosses — no dot, as on the desktop. */
-export type MobileGitDot = Exclude<GitDirtyState, "clean">;
+ *  (`stores/gitDirty.ts`). "clean" never crosses — no dot, as on the desktop —
+ *  and neither does "unknown" (an errored probe): the phone shows no dot. */
+export type MobileGitDot = Exclude<GitDirtyState, "clean" | "unknown">;
 
 export interface MobileGitStateRow {
   project_id: string;
@@ -12,7 +13,7 @@ export interface MobileGitStateRow {
 
 export function gitDotOf(projectId: string): MobileGitDot | undefined {
   const state = useGitDirtyStore.getState().byId[projectId];
-  return state && state !== "clean" ? state : undefined;
+  return state && state !== "clean" && state !== "unknown" ? state : undefined;
 }
 
 /** The phone's project list: whatever the desktop's pills last probed. No git

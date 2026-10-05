@@ -72,7 +72,7 @@ function sameRect(a: DOMRect | null, b: DOMRect | null): boolean {
 
 /**
  * Drives the guided walkthroughs — the lessons, the two tours among them:
- * listens for the `eldrun:start-tour` event, measures the active step's anchor (re-measuring as
+ * listens for the `tabtivity:start-tour` event, measures the active step's anchor (re-measuring as
  * the layout shifts), pulses the highlighted element, owns the keyboard
  * navigation, and renders the `TourCoachmark` overlay.
  *
@@ -113,8 +113,8 @@ export function TourHost() {
   // lesson directly; every other lesson starts from the Lessons picker.
   useEffect(() => {
     const onStart = () => start();
-    window.addEventListener("eldrun:start-tour", onStart);
-    return () => window.removeEventListener("eldrun:start-tour", onStart);
+    window.addEventListener("app:start-tour", onStart);
+    return () => window.removeEventListener("app:start-tour", onStart);
   }, [start]);
 
   // Run a step's optional prepare side-effect (e.g. reveal the file panel so

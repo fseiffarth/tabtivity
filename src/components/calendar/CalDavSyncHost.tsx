@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { installCalDavPush, useCalDavStore } from "../../stores/calendar/caldav";
 import { DEFAULT_CALDAV_SYNC_MIN } from "../../lib/calendar/caldav";
 import { useVpnTunnelUp, vpnGateAllows, vpnTunnelUp } from "../../lib/remote/vpn/vpnGate";
+import { holdsTimerLease } from "../../stores/timerLease";
 
 /** How often the scheduler wakes up. Each account is still synced on its own
  *  interval; this is only the granularity at which "is it due yet" is asked. */
@@ -82,6 +83,9 @@ export function CalDavSyncHost() {
     }
 
     const tick = () => {
+      // Another Tabtivity window holds the timer lease: it syncs, this one does
+      // not (headless owner plan, H2 interim).
+      if (!holdsTimerLease()) return;
       // Serialized across accounts: a slow server plus a short interval could
       // otherwise stack requests, and a burst of authenticated requests is how
       // a client gets rate-limited by an institutional gateway.

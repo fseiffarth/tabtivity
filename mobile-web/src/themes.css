@@ -1,0 +1,165 @@
+/* The desktop's themes on the phone (`theme.ts` picks one; `data-theme` on the
+   root says which). Every colour in style.css is rebuilt at build time from the
+   anchors below (`themeColors.ts`), so a theme is only these:
+
+   --m-n0…--m-n4  the tone curve, deepest surface to brightest ink, at q = 0,
+                  .16 (the page), .4 (just past borders), .7 (muted text), 1.
+                  Each stop carries the theme's tint. A light theme runs it the
+                  other way: white paper, the desktop's text colour as ink.
+   --m-accent …   the hues the authored palette used, set from the desktop's
+                  --accent, --danger, --warning, --success and --info.
+   --m-on-accent  text on an accent fill — the desktop's page colour, as its
+                  filled-accent buttons use (Plain Dark's accent IS white).
+
+   Bare :root (before theme.ts sets data-theme) paints Plain Dark; the
+   default theme is Light Lavender, the desktop's own default. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --m-n0: #000;
+  --m-n1: oklch(16% 0 0);
+  --m-n2: oklch(40% 0 0);
+  --m-n3: oklch(70% 0 0);
+  --m-n4: #fff;
+  --m-accent: #fff;
+  --m-red: #f85149;
+  --m-yellow: #e3b341;
+  --m-green: #3fb950;
+  --m-blue: #ccc;
+  --m-on-accent: #000;
+}
+:root[data-theme="fancy_dark"] {
+  color-scheme: dark;
+  --m-n0: oklch(5% 0.02 263);
+  --m-n1: oklch(20% 0.032 265);
+  --m-n2: oklch(42% 0.045 263);
+  --m-n3: oklch(70% 0.04 258);
+  --m-n4: oklch(98% 0.01 262);
+  --m-accent: #36c5f0;
+  --m-red: #ff5c8a;
+  --m-yellow: #ffd166;
+  --m-green: #7ee787;
+  --m-blue: #6cb6ff;
+  --m-on-accent: #101624;
+}
+:root[data-theme="soft_dark"] {
+  color-scheme: dark;
+  --m-n0: oklch(12% 0.006 272);
+  --m-n1: oklch(21% 0.009 272);
+  --m-n2: oklch(42% 0.015 270);
+  --m-n3: oklch(68% 0.02 268);
+  --m-n4: oklch(96% 0.008 271);
+  --m-accent: #6c9bf0;
+  --m-red: #ff5c8a;
+  --m-yellow: #ffd166;
+  --m-green: #7ee787;
+  --m-blue: #7fb3f5;
+  --m-on-accent: #17181c;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --m-n0: #fff;
+  --m-n1: oklch(97.5% 0 0);
+  --m-n2: oklch(83% 0 0);
+  --m-n3: oklch(50% 0 0);
+  --m-n4: #000;
+  --m-accent: #000;
+  --m-red: #d1242f;
+  --m-yellow: #9a6700;
+  --m-green: #1a7f37;
+  --m-blue: #3f3f3f;
+  --m-on-accent: #fff;
+}
+:root[data-theme="fancy_light"] {
+  color-scheme: light;
+  --m-n0: oklch(99.5% 0.004 248);
+  --m-n1: oklch(98% 0.01 245);
+  --m-n2: oklch(84% 0.025 245);
+  --m-n3: oklch(52% 0.04 257);
+  --m-n4: #1f2937;
+  --m-accent: #0969da;
+  --m-red: #d1242f;
+  --m-yellow: #9a6700;
+  --m-green: #1a7f37;
+  --m-blue: #0ea5e9;
+  --m-on-accent: #f7fbff;
+}
+:root[data-theme="light_lavender"] {
+  color-scheme: light;
+  --m-n0: oklch(99.5% 0.004 295);
+  --m-n1: oklch(97.8% 0.012 298);
+  --m-n2: oklch(84% 0.03 296);
+  --m-n3: oklch(53% 0.05 294);
+  --m-n4: #2e2a3d;
+  --m-accent: #7c5cdb;
+  --m-red: #d1242f;
+  --m-yellow: #9a6700;
+  --m-green: #2e7d5b;
+  --m-blue: #6d7fd4;
+  --m-on-accent: #faf9fe;
+}
+
+/* Plain Dark, Plain Light, Light Lavender and System (follow OS) draw the chat
+   bubbles as octagons, as the desktop Reader does in the same themes: 45° cut
+   corners, the tail corner left square so it still says whose the bubble is.
+   A clip-path would cut a border off the diagonals, so the bubble paints the
+   rim and a 1px-inset `::before` the fill, cut 0.59px less (1px perpendicular
+   inset of a 45° edge, minus the 1px shift) so the rim stays 1px on the
+   diagonals too. A picture post keeps its rounded rim: it is a photo frame. */
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer) {
+  --oct-tl: 10px;
+  --oct-tr: 10px;
+  --oct-br: 10px;
+  --oct-bl: 10px;
+  --cut-tl: var(--oct-tl);
+  --cut-tr: var(--oct-tr);
+  --cut-br: var(--oct-br);
+  --cut-bl: var(--oct-bl);
+  isolation: isolate;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: linear-gradient(var(--turn-rim), var(--turn-rim)), var(--turn-fill);
+}
+/* Declared on both so each resolves its own `--cut-*`. */
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer),
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer)::before {
+  clip-path: polygon(
+    var(--cut-tl) 0,
+    calc(100% - var(--cut-tr)) 0,
+    100% var(--cut-tr),
+    100% calc(100% - var(--cut-br)),
+    calc(100% - var(--cut-br)) 100%,
+    var(--cut-bl) 100%,
+    0 calc(100% - var(--cut-bl)),
+    0 var(--cut-tl)
+  );
+}
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer)::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  background: var(--turn-fill);
+  --cut-tl: max(0px, calc(var(--oct-tl) - 0.59px));
+  --cut-tr: max(0px, calc(var(--oct-tr) - 0.59px));
+  --cut-br: max(0px, calc(var(--oct-br) - 0.59px));
+  --cut-bl: max(0px, calc(var(--oct-bl) - 0.59px));
+}
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.user {
+  --oct-br: 0px;
+  --turn-fill: #2b2650;
+  --turn-rim: #4a3f8a;
+}
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.agent.answer {
+  --oct-bl: 0px;
+  --turn-fill: #1d2030;
+  --turn-rim: #2a2e42;
+}
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.user.command-args,
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.agent.answer.plan {
+  --turn-rim: #7a6ad8;
+}
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.agent.answer.plan {
+  --turn-fill: #1f1b36;
+}

@@ -18,6 +18,7 @@ vi.mock("../../stores/settings", () => ({
 
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
+import { BRAND } from "../../lib/brand";
 
 describe("unfenced-platform acceptance", () => {
   beforeEach(() => {
@@ -28,12 +29,12 @@ describe("unfenced-platform acceptance", () => {
   it("recognises only the backend's sentinel", () => {
     expect(
       unfencedPlatformRefusal(
-        "ELDRUN_FENCE_PLATFORM_UNACCEPTED Agent sandbox: Windows has no agent sandbox, so this agent would run with your full rights.",
+        `${BRAND.envPrefix}FENCE_PLATFORM_UNACCEPTED Agent sandbox: Windows has no agent sandbox, so this agent would run with your full rights.`,
       ),
     ).toBe(true);
-    expect(unfencedPlatformRefusal(new Error("ELDRUN_FENCE_PLATFORM_UNACCEPTED …"))).toBe(true);
+    expect(unfencedPlatformRefusal(new Error(`${BRAND.envPrefix}FENCE_PLATFORM_UNACCEPTED …`))).toBe(true);
     expect(unfencedPlatformRefusal("Agent sandbox: bubblewrap is unavailable")).toBe(false);
-    expect(unfencedPlatformRefusal("ELDRUN_HPC_GUARD connect u@h:22")).toBe(false);
+    expect(unfencedPlatformRefusal(`${BRAND.envPrefix}HPC_GUARD connect u@h:22`)).toBe(false);
   });
 
   it("refuses at once when no dialog is mounted in this window", async () => {

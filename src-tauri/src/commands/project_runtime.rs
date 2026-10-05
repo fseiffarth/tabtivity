@@ -35,6 +35,12 @@ pub fn switch_project_runtime(
     let win_registry = win_registry.inner().clone();
 
     std::thread::spawn(move || {
+        // A project an older build worked in keeps the app's folder and refs
+        // under the old name until it is next opened — here. Returns at once
+        // while the name is unchanged.
+        if let Some(id) = project_id.as_deref() {
+            crate::services::brand_migration::project::on_project_open(id);
+        }
         // Look up local_file paths from the global project list.
         let list_path = storage::state_dir().join("projects.json");
         let projects: ProjectsList = if list_path.exists() {

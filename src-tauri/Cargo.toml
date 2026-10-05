@@ -1,16 +1,17 @@
 [package]
-name = "eldrun"
-version = "0.1.96"
+name = "tabtivity"
+version = "0.1.107"
 edition = "2021"
+description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
-default-run = "eldrun"
+default-run = "tabtivity"
 
 [lib]
-name = "eldrun_lib"
+name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "eldrun"
+name = "tabtivity"
 path = "src/main.rs"
 
 # Switches the app from `devUrl` to the frontend embedded at compile time:
@@ -34,7 +35,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 # Desktop notifications for calendar reminders. The in-app alarm popup
-# (components/calendar/AlarmPopup.tsx) covers the case where Eldrun is focused;
+# (components/calendar/AlarmPopup.tsx) covers the case where Tabtivity is focused;
 # this covers the case where it is not — a reminder is worthless if the window
 # has to be open to see it.
 tauri-plugin-notification = "2"
@@ -47,7 +48,7 @@ tauri-plugin-drag = "2"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Merge the Eldrun-wide agent config layer into Codex's config.toml without
+# Merge the Tabtivity-wide agent config layer into Codex's config.toml without
 # losing its comments or layout (`services::agent_global`).
 toml_edit = "0.25"
 chrono = "0.4"
@@ -133,7 +134,7 @@ mail-builder = "0.4"
 # for `ring`, which needs no cmake on the Windows runner.
 mail-send = { version = "0.6", default-features = false, features = ["builder", "ring", "tls12"] }
 # IMAP. `default-features = false` is load-bearing: the crate's default runtime is
-# async-std, and `runtime-tokio` puts it on the runtime Eldrun already has. The
+# async-std, and `runtime-tokio` puts it on the runtime Tabtivity already has. The
 # `compress` feature is deliberately NOT enabled — COMPRESS=DEFLATE lets a hostile
 # server hand us a decompression bomb (plan B §3.6).
 async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
@@ -217,7 +218,7 @@ url = "2"
 axum = { version = "0.8", features = ["ws"] }
 base64ct = { version = "1", features = ["alloc"] }
 p256 = { version = "0.13", features = ["ecdsa", "ecdh", "pkcs8"] }
-# Web Push payload encryption for Eldrun Mobile (`mobile_control::push`, RFC
+# Web Push payload encryption for Tabtivity Mobile (`mobile_control::push`, RFC
 # 8291 `aes128gcm`). The RFC fixes AES-128-GCM, so the at-rest XChaCha choice
 # above does not apply; the nonce is derived per message from a fresh salt and
 # ephemeral key, never a counter. Already in the tree transitively.
@@ -284,6 +285,9 @@ gtk = "0.18"
 # `web-process-terminated` hook the Linux build takes from `webkit2gtk`).
 webview2-com = "0.38"
 windows = { version = "0.61", features = [
+    # Handle-relative, no-reparse project file reads for the phone browser.
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     # The user's regional time picture (`GetLocaleInfoEx`) for the default
     # 12/24-hour clock (`commands/os_clock.rs`).
@@ -295,6 +299,7 @@ windows = { version = "0.61", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Storage_FileSystem",
+    "Win32_Security",
     "Win32_System_Com",
     # SEH unhandled-exception filter → crash.log line (`install_seh_filter`).
     # Debug owns the module; Kernel gates EXCEPTION_POINTERS itself and IO gates

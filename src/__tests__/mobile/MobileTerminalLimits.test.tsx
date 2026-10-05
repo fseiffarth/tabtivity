@@ -37,6 +37,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 const NOW = 1_788_609_600; // 2026-09-04 12:00:00 UTC
@@ -62,7 +63,7 @@ function statusFetch(usage: unknown) {
 
 const settle = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
 
-describe("Eldrun Mobile facts row shows the account's 5h and weekly windows", () => {
+describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly windows`, () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -83,7 +84,8 @@ describe("Eldrun Mobile facts row shows the account's 5h and weekly windows", ()
 
     expect(fetchMock.mock.calls.some(([url]) => url === "/api/v1/tabs/tab-7/status")).toBe(true);
     const limits = [...container.querySelectorAll(".session-facts .fact-limit")];
-    expect(limits.map((node) => node.textContent)).toEqual(["5h 29%", "week 6%"]);
+    expect(limits[0].textContent).toMatch(/^5h 29% · in \d+h \d+m$/u);
+    expect(limits[1].textContent).toMatch(/^week 6% · in \d+h \d+m$/u);
     // Nearly spent is called out; the session window is not there yet.
     expect(limits.map((node) => node.classList.contains("high"))).toEqual([false, true]);
   });
@@ -126,7 +128,8 @@ describe("Eldrun Mobile facts row shows the account's 5h and weekly windows", ()
 
     const facts = container.querySelector(".session-facts");
     expect(facts?.querySelector(".fact-context")?.textContent).toBe("68% context");
-    expect([...container.querySelectorAll(".session-facts .fact-limit")].map((node) => node.textContent)).toEqual(["5h 85%", "week 5%"]);
+    expect([...container.querySelectorAll(".session-facts .fact-limit")].map((node) => node.textContent))
+      .toEqual(["5h 85% · in 1h 0m", "week 5% · in 24h 0m"]);
     expect(facts?.querySelector(".fact-path")).toBeNull();
   });
 

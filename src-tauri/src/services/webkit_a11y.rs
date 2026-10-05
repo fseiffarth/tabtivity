@@ -4,7 +4,7 @@
 //! accessibility bus from inside the *web process*, and on 2.48 that bridge
 //! aborts the whole renderer when a client asks for text at an offset the
 //! document no longer has: the `org.a11y.atspi.Text` handler remaps the offset
-//! through a table whose bounds check is a `CRASH()`, not a clamp. Eldrun is
+//! through a table whose bounds check is a `CRASH()`, not a clamp. Tabtivity is
 //! the worst case for it — terminals, activity lamps and file trees rewrite
 //! their text continuously, so an assistive client's cached offsets are stale
 //! by the time its query lands.
@@ -13,7 +13,7 @@
 //! (`…/atspi/Text` → `g_utf8_strlen` → bounds check → abort, read out of the
 //! apport core), the window blanking and reloading both times — and the same
 //! path's `g_utf8_substring: assertion 'end_pos >= start_pos'` criticals in
-//! `eldrun-dev.log` for days before that. Orca itself crash-loops against the
+//! `tabtivity-dev.log` for days before that. Orca itself crash-loops against the
 //! same bridge, so this is WebKit's bug, not the screen reader's.
 //!
 //! WebKit takes the bus address from `WEBKIT_A11Y_BUS_ADDRESS` whenever that
@@ -23,13 +23,13 @@
 //! accessibility bus" without touching anyone else's session. Default-on,
 //! because a renderer that dies whenever the desktop's screen reader is toggled
 //! on (GNOME binds Super+Alt+S to exactly that) costs the user every open tab;
-//! `ELDRUN_ENABLE_A11Y=1` hands the bridge back to someone who needs it and can
+//! `TABTIVITY_ENABLE_A11Y=1` hands the bridge back to someone who needs it and can
 //! live with the crash.
 //!
-//! The variable is process-wide, so it would otherwise reach every child Eldrun
+//! The variable is process-wide, so it would otherwise reach every child Tabtivity
 //! spawns and silently strip accessibility from any *other* WebKitGTK app
 //! launched from a terminal tab or the app launcher. [`installed`] lets those
-//! spawn sites drop a variable Eldrun invented; one the user set themselves is
+//! spawn sites drop a variable Tabtivity invented; one the user set themselves is
 //! left alone, because then [`install`] never ran.
 
 use std::ffi::OsStr;
@@ -37,13 +37,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// WebKitGTK's own override for the accessibility bus address.
 pub const BUS_ADDRESS_VAR: &str = "WEBKIT_A11Y_BUS_ADDRESS";
-/// Eldrun's opt-in: set it to put the bridge back.
-pub const OPT_IN_VAR: &str = "ELDRUN_ENABLE_A11Y";
+/// Tabtivity's opt-in: set it to put the bridge back.
+pub const OPT_IN_VAR: &str = crate::app_env!("ENABLE_A11Y");
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Whether a value counts as "yes" for [`OPT_IN_VAR`]. An empty value, `0` and
-/// `false` read as off, so `ELDRUN_ENABLE_A11Y=0` in a shell profile means what
+/// `false` read as off, so `TABTIVITY_ENABLE_A11Y=0` in a shell profile means what
 /// it says instead of accidentally opting in by existing.
 fn opted_in(value: Option<&OsStr>) -> bool {
     match value {
@@ -69,7 +69,7 @@ pub fn should_install(bus_address: Option<&OsStr>, opt_in: Option<&OsStr>) -> bo
 /// read once, when WebKit launches its first web process.
 pub fn install() {
     let bus = std::env::var_os(BUS_ADDRESS_VAR);
-    let opt_in = std::env::var_os(OPT_IN_VAR);
+    let opt_in = crate::brand::env_os("ENABLE_A11Y");
     if !should_install(bus.as_deref(), opt_in.as_deref()) {
         return;
     }
@@ -78,7 +78,7 @@ pub fn install() {
 }
 
 /// True when [`install`] set [`BUS_ADDRESS_VAR`] itself, i.e. when a child
-/// process inheriting it would be inheriting Eldrun's decision rather than the
+/// process inheriting it would be inheriting Tabtivity's decision rather than the
 /// user's.
 pub fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed)

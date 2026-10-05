@@ -22,6 +22,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
 import type { Settings } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
   beforeEach(() => {
@@ -32,7 +33,7 @@ describe("Mobile settings — Set up Tailscale Serve in terminal", () => {
       return Promise.resolve(undefined);
     });
     vi.mocked(listen).mockResolvedValue(() => {});
-    useProjectsStore.setState({ projects: [], activeId: "p1", loaded: true, rootDir: "/home/u/eldrun/root" });
+    useProjectsStore.setState({ projects: [], activeId: "p1", loaded: true, rootDir: `/home/u/${BRAND.slug}/root` });
     useBoxesStore.setState({ boxes: [], loaded: true });
     useSettingsStore.setState({ settings: {} as Settings, loaded: true });
     // Root already restored this session — the unhydrated path is

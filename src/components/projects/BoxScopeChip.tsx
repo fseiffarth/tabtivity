@@ -9,6 +9,7 @@ import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
+import { startWindowDrag } from "../../lib/window/startWindowDrag";
 import { StarIcon } from "../layout/StarIcon";
 import { LogoIcon } from "../layout/LogoIcon";
 import { ScopeSetStatusBars } from "./PillStatusBars";
@@ -27,6 +28,10 @@ const SCOPE_MENU_ID = "box-scope-chip";
  * dropdown, and the chip says how many it is holding.
  */
 export const MAX_BOX_PILLS = 6;
+
+/** How far (px) a press on the logo travels before it becomes a window move
+ *  rather than a click ("All projects"). */
+const LOGO_DRAG_SLOP = 4;
 
 /** Member rows a box pill's context menu lists before deferring to the editor. */
 const MAX_MENU_MEMBER_ROWS = 12;
@@ -118,6 +123,39 @@ export function BoxScopeChip({
     closeMenu(SCOPE_MENU_ID);
   };
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+
+  // The logo is the window's move handle. The move starts only once the press
+  // has travelled LOGO_DRAG_SLOP px, so a press that stays put is still the
+  // click that means "All projects". Once the OS move loop owns the pointer
+  // the webview may never see the release, so the listeners go at hand-off;
+  // `logoDragged` swallows the click that may still follow a move.
+  const logoDragged = useRef(false);
+  const logoPressCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => logoPressCleanup.current?.(), []);
+  const onLogoMouseDown = (e: React.MouseEvent) => {
+    // `button` (0 = left), not `buttons` — see HeaderBar's handleDrag.
+    if (e.button !== 0) return;
+    logoDragged.current = false;
+    logoPressCleanup.current?.();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const onMove = (ev: MouseEvent) => {
+      if (Math.abs(ev.clientX - x0) < LOGO_DRAG_SLOP && Math.abs(ev.clientY - y0) < LOGO_DRAG_SLOP)
+        return;
+      cleanup();
+      logoDragged.current = true;
+      dismiss();
+      startWindowDrag();
+    };
+    const cleanup = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", cleanup);
+      logoPressCleanup.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", cleanup);
+    logoPressCleanup.current = cleanup;
+  };
 
   // The boxes in row order, and the ones that get a pill: the first
   // MAX_BOX_PILLS by position that the user has not hidden from the row (the
@@ -273,19 +311,24 @@ export function BoxScopeChip({
         className={`box-chip${rootActive ? " active" : ""}${
           naming ? " filtering" : ""
         }`}
-        onMouseEnter={reveal}
-        onMouseLeave={scheduleClose}
       >
+        {/* The mark: drag it to move the window, click it for "All projects"
+            (the menu's own row — drop the box slice). It does not open the
+            list; only the caret beside it does. */}
         <button
           type="button"
           className="box-chip-main"
           title={chipTitle()}
-          // Same as the menu's "All projects" row: drop the box slice.
+          draggable={false}
+          onMouseDown={onLogoMouseDown}
           onClick={(e) => {
             e.stopPropagation();
+            if (logoDragged.current) {
+              logoDragged.current = false;
+              return;
+            }
             pick(null);
           }}
-          onFocus={reveal}
         >
           {naming === "root" ? (
             <StarIcon className="box-chip-star" />
@@ -293,6 +336,22 @@ export function BoxScopeChip({
             <LogoIcon className="box-chip-icon" />
           )}
           {chipLabel() && <span className="box-chip-label">{chipLabel()}</span>}
+        </button>
+        {/* The list's trigger: hover (or keyboard focus) opens it. */}
+        <button
+          type="button"
+          className="box-chip-caret-btn"
+          title={t("boxChip.pickerTitle")}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onMouseEnter={reveal}
+          onMouseLeave={scheduleClose}
+          onFocus={reveal}
+          onClick={(e) => {
+            e.stopPropagation();
+            reveal();
+          }}
+        >
           {/* How many boxes have no pill on the row — whatever the chip is
               naming, since those boxes are reachable only through its list. */}
           {overflow > 0 && (

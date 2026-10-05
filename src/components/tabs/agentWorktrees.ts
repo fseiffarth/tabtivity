@@ -17,7 +17,7 @@
  * the root found no such session and the restored tab came up as a fresh
  * conversation. `restoredAgentCwd` keeps the one class of saved cwd that is
  * *derived from* the project root rather than remembered from an old one —
- * `<root>/.eldrun/worktrees/<name>`, the single place a worktree may live
+ * `<root>/.tabtivity/worktrees/<name>`, the single place a worktree may live
  * (`commands::git::WorktreeCtx::worktrees_root`) — and resets everything else
  * exactly as before. A moved project is still safe: `rename_project_dir` rewrites
  * the prefix, and a cwd under a *different* root fails the check and resets.

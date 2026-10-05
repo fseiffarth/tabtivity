@@ -272,7 +272,7 @@ export function RemoteMachinesWindow({
   // This form only ever had the password field, in *both* modes — so a host that
   // asks anything else (a challenge code, a one-time code, a second prompt) could
   // not be added at all, and a `connections_headless: false` user was asked for a
-  // password their mode says Eldrun should never handle. The terminal login fixes
+  // password their mode says Tabtivity should never handle. The terminal login fixes
   // both, which is why the switch **defaults to on in non-headless mode**: there it
   // is the mode, and only here was it missing.
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
@@ -362,7 +362,7 @@ export function RemoteMachinesWindow({
   };
 
   // ── The terminal login, and the poll that turns it into a browsable session ──
-  // Eldrun sees no password here: the user authenticates in the terminal below, and
+  // Tabtivity sees no password here: the user authenticates in the terminal below, and
   // the only signal is that the login's **ControlMaster** has come up — at which
   // point a credential-less `ssh_connect` starts succeeding and rides it. That is
   // exactly what `browse.openSession` is for: freeze the session somebody else

@@ -62,7 +62,7 @@ export function isSentFilterActive(filter: SentPromptFilter): boolean {
 
 /**
  * The agents present in a project's history, sorted, so the picker offers the
- * ones this project actually talks to rather than a list of every agent Eldrun
+ * ones this project actually talks to rather than a list of every agent Tabtivity
  * can launch. An entry written before the agent was recorded has none, and is
  * simply not an option.
  */

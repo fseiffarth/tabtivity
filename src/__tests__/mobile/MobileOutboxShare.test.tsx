@@ -38,7 +38,8 @@ function host(files: unknown[], bytes: (url: string) => Promise<Response> = asyn
 }
 
 async function openGallery(count: number) {
-  fireEvent.click(await screen.findByRole("button", { name: `Files from the agent (${count})` }));
+  fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: `Files from the agent (${count})` }));
   return screen.getByRole("dialog", { name: "Files from the agent" });
 }
 

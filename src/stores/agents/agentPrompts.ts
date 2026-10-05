@@ -20,6 +20,9 @@ export interface ProjectAgentPrompt {
   /** The agent tab (`scheduleTargetId`) the prompt chart aims this draft at.
    *  Advisory until the draft is sent or scheduled; absent when unaimed. */
   target?: string;
+  /** The paired phone that wrote or last edited it (#2348). A send names it
+   *  on the rule, so revoking the phone cancels it; desktop edits keep it. */
+  phone_device?: string;
 }
 
 /**
@@ -85,6 +88,10 @@ export interface SentPromptFacts {
   /** The tab's `sessionId` — its launch id. The backend files the row under
    *  the live session the hook recorded for it and keeps this as `tab_id`. */
   sessionId?: string;
+  /** The tab's schedule target id, the `tab_id` of a tab without a
+   *  `sessionId` (`prompt/adopt.historyTabId`) — without it that tab's rows
+   *  could only be told apart by a label other tabs share. */
+  tabId?: string;
   preface?: string[];
   agent?: string;
   result?: SentAgentPrompt["result"];
@@ -99,6 +106,8 @@ function sentPayload(sent: SentPromptFacts) {
     ...(sent.scheduleOrigin ? { schedule_origin: sent.scheduleOrigin } : {}),
     tab_label: sent.tabLabel,
     session_id: sent.sessionId ?? null,
+    // With a session id the backend keeps the launch id as the tab id.
+    ...(!sent.sessionId && sent.tabId ? { tab_id: sent.tabId } : {}),
     preface: sent.preface ?? [],
     agent: sent.agent ?? null,
     result: sent.result ?? null,
@@ -118,10 +127,12 @@ interface AgentPromptsStore {
   loadLinks: (projectId: string) => Promise<PromptLink[]>;
   /** `tags` undefined leaves an existing prompt's tags alone (the phone edits
    *  text only); an array replaces them, empty included. `target` follows the
-   *  same rule: undefined keeps it, `""` clears it. */
+   *  same rule: undefined keeps it, `""` clears it. `phoneDevice` is the
+   *  paired phone writing it (it takes the prompt over); undefined keeps the
+   *  stored one. */
   upsert: (
     projectId: string,
-    prompt: { id: string; message: string; tags?: string[]; target?: string },
+    prompt: { id: string; message: string; tags?: string[]; target?: string; phoneDevice?: string },
   ) => Promise<ProjectAgentPrompt[]>;
   remove: (projectId: string, promptId: string) => Promise<ProjectAgentPrompt[]>;
   reorder: (projectId: string, ids: string[]) => Promise<ProjectAgentPrompt[]>;
@@ -174,7 +185,13 @@ export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
   upsert: async (projectId, prompt) => {
     const prompts = await invoke<ProjectAgentPrompt[]>("agent_prompt_upsert", {
       projectId,
-      prompt: { id: prompt.id, message: prompt.message, tags: prompt.tags ?? null, target: prompt.target ?? null },
+      prompt: {
+        id: prompt.id,
+        message: prompt.message,
+        tags: prompt.tags ?? null,
+        target: prompt.target ?? null,
+        phone_device: prompt.phoneDevice ?? null,
+      },
     });
     set((state) => ({ byProject: { ...state.byProject, [projectId]: prompts } }));
     return prompts;
@@ -286,7 +303,9 @@ export async function queuePromptForTab(
   projectId: string,
   scheduleTargetId: string,
   message: string,
-  options: { preface?: string[]; now?: Date; id?: string } = {},
+  /** `phoneDevice`: the paired phone the prompt came from, which the rule
+   * names so a revoke or a narrowed access cancels it (#2348). */
+  options: { preface?: string[]; now?: Date; id?: string; phoneDevice?: string } = {},
 ): Promise<{ pruned: number; id: string }> {
   const now = options.now ?? new Date();
   const schedules = useAgentSchedulesStore.getState();
@@ -300,10 +319,11 @@ export async function queuePromptForTab(
   const id = options.id !== undefined && !clash ? options.id : crypto.randomUUID();
   const prune = schedulesToPruneForSend(existing);
   for (const pruned of prune) await schedules.remove(projectId, scheduleTargetId, pruned);
+  const rule = buildSendNowSchedule(message, now, id, options.preface);
   await schedules.upsert(
     projectId,
     scheduleTargetId,
-    buildSendNowSchedule(message, now, id, options.preface),
+    options.phoneDevice ? { ...rule, phone_device: options.phoneDevice } : rule,
   );
   return { pruned: prune.length, id };
 }
@@ -319,8 +339,11 @@ export async function queuePromptForTab(
 export async function sendCollectedPrompt(
   projectId: string,
   target: { scheduleTargetId: string; label: string; sessionId?: string; agent?: string },
-  prompt: { id: string; message: string },
+  prompt: { id: string; message: string; phone_device?: string },
   preface?: string[],
+  /** `phoneDevice`: the phone sending it; else the phone that wrote the
+   *  prompt (`prompt.phone_device`, #2348) is the one the rule names. */
+  options: { phoneDevice?: string } = {},
 ): Promise<{ pruned: number }> {
   // The queued schedule carries the PROMPT's id, which is the id its history
   // entry is written under. When the scheduler delivers it, the record it
@@ -329,12 +352,14 @@ export async function sendCollectedPrompt(
   const result = await queuePromptForTab(projectId, target.scheduleTargetId, prompt.message, {
     preface,
     id: prompt.id,
+    phoneDevice: options.phoneDevice ?? prompt.phone_device,
   });
   await useAgentPromptsStore
     .getState()
     .archive(projectId, prompt.id, {
       tabLabel: target.label,
       sessionId: target.sessionId,
+      tabId: target.scheduleTargetId,
       preface,
       agent: target.agent,
     })

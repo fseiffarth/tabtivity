@@ -20,6 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AgentScheduleDialog } from "../../components/agents/AgentScheduleDialog";
 import { useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import type { TabEntry } from "../../stores/tabs";
+import { localOccurrenceKey } from "../../lib/agents/agentSchedule";
 
 const tab: TabEntry = {
   key: "agent-1",
@@ -149,5 +150,53 @@ describe("AgentScheduleDialog", () => {
     // default and silently undo the pick.
     expect((upsert![1] as { schedule: { preface?: string[] } }).schedule.preface)
       .toEqual(["/clear", "/model opus"]);
+  });
+
+  /**
+   * "In … h … min" is a one-time rule whose instant is read off the clock at
+   * Save: nothing new is stored, so the scheduler and the phone see a `once`.
+   */
+  it("turns In 1 h 30 min into a one-time rule that far from Save", async () => {
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      render(<AgentScheduleDialog scope="project-1" tab={tab} onClose={() => {}} />);
+    });
+
+    fireEvent.change(screen.getByDisplayValue("One time"), { target: { value: "in" } });
+    fireEvent.change(screen.getByLabelText("Minutes from now"), { target: { value: "30" } });
+    expect(screen.getByTestId("agent-schedule-in-at").textContent).toContain("Sends");
+    fireEvent.change(document.querySelector(".agent-schedule-form textarea")!, {
+      target: { value: "Check the build" },
+    });
+    const later = (ms: number) => localOccurrenceKey(new Date(Date.now() + ms));
+    const before = later(90 * 60_000);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    const after = later(90 * 60_000);
+
+    const upsert = vi.mocked(invoke).mock.calls.find(([command]) => command === "agent_schedule_upsert");
+    const rule = (upsert![1] as { schedule: { rule: { type: string; at: string } } }).schedule.rule;
+    expect(rule.type).toBe("once");
+    expect([before, after]).toContain(rule.at);
+  });
+
+  it("refuses an In delay of zero", async () => {
+    vi.mocked(invoke).mockClear();
+    await act(async () => {
+      render(<AgentScheduleDialog scope="project-1" tab={tab} onClose={() => {}} />);
+    });
+
+    fireEvent.change(screen.getByDisplayValue("One time"), { target: { value: "in" } });
+    fireEvent.change(screen.getByLabelText("Hours from now"), { target: { value: "0" } });
+    fireEvent.change(document.querySelector(".agent-schedule-form textarea")!, {
+      target: { value: "Check the build" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "agent_schedule_upsert")).toBe(false);
+    expect(screen.queryByTestId("agent-schedule-in-at")).toBeNull();
   });
 });

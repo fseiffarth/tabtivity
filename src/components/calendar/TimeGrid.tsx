@@ -16,6 +16,7 @@ import { eventColor } from "../../lib/calendar/calendarCategories";
 import { calendarColor } from "../../stores/calendar/calendar";
 import { useT } from "../../lib/i18n";
 import type { CalendarMenuTarget } from "./CalendarContextMenu";
+import { useArrivedMarks } from "../../stores/calendar/arrivals";
 
 /** Pixel height of one hour row. The whole grid's geometry derives from this. */
 const HOUR_PX = 44;
@@ -102,6 +103,7 @@ export function TimeGrid({
   onMenu,
 }: Props) {
   const t = useT();
+  const arrived = useArrivedMarks();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -305,7 +307,8 @@ export function TimeGrid({
                         (occ.status === "cancelled" ? " cal-block-cancelled" : "") +
                         (occ.status === "tentative" ? " cal-block-tentative" : "") +
                         (dragging ? " cal-block-dragging" : "") +
-                        (compact ? " cal-block-compact" : "")
+                        (compact ? " cal-block-compact" : "") +
+                        (arrived[occ.eventId] ? " arrived" : "")
                       }
                       style={{
                         top: (top / MINUTES_PER_DAY) * (24 * HOUR_PX),

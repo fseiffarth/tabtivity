@@ -14,11 +14,14 @@ import {
 import {
   scheduledAgentInput,
   submitScheduledAgentMessage,
+  type ScheduledAgentInput,
 } from "../../lib/agents/scheduledAgentInput";
+import { forgetPhoneHold, onPhoneHoldDue, phoneHoldDue } from "../../lib/agents/phoneHolds";
 import { agentDeliveryReady, agentDeliveryTurn, lastPtyOutputAt, noteScheduleProposal, useActivityStore } from "../../stores/activity";
 import { recordScheduledDelivery, sendCollectedPrompt, useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { holdsTimerLease } from "../../stores/timerLease";
 
 const TICK_MS = 15_000;
 const OUTPUT_SETTLE_MS = 1_200;
@@ -169,6 +172,7 @@ async function retire(
     {
       tabLabel: binding.tab.label,
       sessionId: binding.tab.sessionId,
+      tabId: binding.scheduleTargetId,
       agent: binding.tab.cmd,
       result: last.result,
       scheduledFor: last.occurrence || undefined,
@@ -262,6 +266,71 @@ async function retireCollected(projectId: string, schedule: { id: string; messag
   if (prompt) await store.remove(projectId, prompt.id).catch(() => {});
 }
 
+/** The tab may take a scheduled prompt now: the pane is up and settled, and
+ * the agent has stably finished its turn and is not asking anything. */
+function idleForDelivery(input: ScheduledAgentInput): boolean {
+  if (!input.ready() || !agentDeliveryReady(input.ptyId, COMPLETION_STABLE_MS)) return false;
+  const activity = useActivityStore.getState();
+  // `?? 0`, not `?? Date.now()`: a PTY that has produced no output this
+  // session has nothing to settle after, and reading "no output" as "output
+  // just now" made the gate permanently false — a tab whose whole TUI arrived
+  // as a restored snapshot could never be delivered to at all.
+  return !activity.busyByTab[input.ptyId]
+    && activity.attentionByTab[input.ptyId] !== "decision"
+    && Date.now() - (lastPtyOutputAt(input.ptyId) ?? 0) >= OUTPUT_SETTLE_MS;
+}
+
+/** The pane takes keystrokes and is not on a question, whose choices a typed
+ * line would answer. */
+function queueableWhileBusy(input: ScheduledAgentInput): boolean {
+  return (input.started ?? input.ready)()
+    && useActivityStore.getState().attentionByTab[input.ptyId] !== "decision";
+}
+
+/**
+ * Type a phone prompt (`phoneHolds.ts`) while the
+ * agent works, as a prompt typed then goes: into the CLI's own queue, which
+ * the agent takes in mid-turn. The idle gate stays for every other rule. The
+ * turn it lands in is not this delivery's, so nothing waits on its end; the
+ * next held prompt follows on the next sweep.
+ */
+async function queueDuePhoneHold(
+  binding: Binding,
+  input: ScheduledAgentInput,
+  schedules: ScheduledAgentPrompt[],
+  now: Date,
+): Promise<void> {
+  const schedule = sortSchedules(schedules, now)
+    .find((item) => phoneHoldDue(item.id) && scheduleVerdict(item, now).kind === "wait");
+  if (!schedule || !queueableWhileBusy(input)) return;
+  const verdict = scheduleVerdict(schedule, now);
+  if (verdict.kind !== "wait") return;
+  forgetPhoneHold(schedule.id);
+  const occurrence = verdict.occurrence.key;
+  const claimed = await invoke<boolean>("agent_schedule_claim", {
+    projectId: binding.projectId,
+    scheduleTargetId: binding.scheduleTargetId,
+    scheduleId: schedule.id,
+    occurrence,
+  }).catch(() => false);
+  if (!claimed) return;
+  let result: ScheduleResult = "delivered";
+  try {
+    if (scheduledAgentInput(binding.scheduleTargetId) !== input || !queueableWhileBusy(input)) {
+      throw new Error("agent readiness changed");
+    }
+    await submitScheduledAgentMessage(binding.scheduleTargetId, schedule.message, {
+      preface: schedule.preface,
+      settle: settleBetweenSubmissions,
+      whileBusy: true,
+    });
+  } catch {
+    result = "failed";
+  }
+  await complete(binding, schedule.id, occurrence, result).catch(() => {});
+  await retire(binding, schedule, { occurrence, result }).catch(() => {});
+}
+
 /**
  * Main-window-only owner of per-tab scheduled delivery. TerminalView remains the
  * PTY owner and exposes only a readiness/submission capability through the
@@ -288,9 +357,20 @@ export function AgentScheduleHost() {
       ));
     };
 
-    const tick = async () => {
-      if (disposed || running.current) return;
+    // A tick asked for while one runs (a phone prompt arriving mid-sweep)
+    // runs once more after it rather than waiting for the next sweep.
+    let again = false;
+    const tick = async (): Promise<void> => {
+      if (disposed) return;
+      if (running.current) {
+        again = true;
+        return;
+      }
+      // Another Tabtivity window holds the timer lease: it delivers, this one
+      // does not (headless owner plan, H2 interim).
+      if (!holdsTimerLease()) return;
       running.current = true;
+      again = false;
       try {
         const now = new Date();
         for (const binding of bindings()) {
@@ -312,6 +392,15 @@ export function AgentScheduleHost() {
             // prompt, even on another tab. The one exception is a tab whose
             // agent has never reported a verdict (see `completedTurn`).
             if (!ready()) {
+              // The turn a delivery started is still going: a phone prompt
+              // joins the CLI's queue all the same.
+              if (input) {
+                const pending = useAgentSchedulesStore.getState().byTarget[key]
+                  ?? await useAgentSchedulesStore.getState()
+                    .load(binding.projectId, binding.scheduleTargetId)
+                    .catch(() => []);
+                await queueDuePhoneHold(binding, input, pending, now);
+              }
               continue;
             } else {
               // Best-effort and off the delivery path: a row the user already
@@ -382,18 +471,13 @@ export function AgentScheduleHost() {
             // Delivery waits inside the one-hour window until the PTY exists,
             // has settled, is idle, and is not on an approval/decision prompt.
             // The tab being focused is deliberately not part of this gate.
-            if (!input || !input.ready()) break;
-            const latestActivity = useActivityStore.getState();
-            if (!agentDeliveryReady(input.ptyId, COMPLETION_STABLE_MS)) break;
-            // `?? 0`, not `?? Date.now()`: a PTY that has produced no output this
-            // session has nothing to settle after, and reading "no output" as
-            // "output just now" made the gate permanently false — a tab whose
-            // whole TUI arrived as a restored snapshot could never be delivered
-            // to at all.
-            if (latestActivity.busyByTab[input.ptyId]
-                || latestActivity.attentionByTab[input.ptyId] === "decision"
-                || Date.now() - (lastPtyOutputAt(input.ptyId) ?? 0) < OUTPUT_SETTLE_MS) break;
+            // Only a phone prompt goes in meanwhile.
+            if (!input || !idleForDelivery(input)) {
+              if (input) await queueDuePhoneHold(binding, input, schedules, now);
+              break;
+            }
 
+            forgetPhoneHold(schedule.id);
             const claimed = await invoke<boolean>("agent_schedule_claim", {
               projectId: binding.projectId,
               scheduleTargetId: binding.scheduleTargetId,
@@ -446,10 +530,13 @@ export function AgentScheduleHost() {
       } finally {
         running.current = false;
       }
+      if (again) return tick();
     };
 
     void loadBindings().then(tick);
     const timer = setInterval(() => void tick(), TICK_MS);
+    // A phone prompt goes in now, not on the next sweep.
+    const stopPhoneHolds = onPhoneHoldDue(() => void tick());
     // Backend reads prune proposals after seven days, even when no MCP client
     // or schedule dialog has been opened since they arrived.
     const proposalPruneTimer = setInterval(() => void loadBindings().then(tick), 60 * 60_000);
@@ -509,6 +596,7 @@ export function AgentScheduleHost() {
     return () => {
       disposed = true;
       clearInterval(timer);
+      stopPhoneHolds();
       clearInterval(proposalPruneTimer);
       clearTimeout(cleanupTimer);
       unsubscribe();

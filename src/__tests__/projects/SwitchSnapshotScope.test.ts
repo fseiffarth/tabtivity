@@ -22,6 +22,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() =
 
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore, type TabEntry, type GroupNode } from "../../stores/tabs";
+import { BRAND } from "../../lib/brand";
 
 function proj(id: string, position: number, status = "active"): ProjectEntry {
   return { id, name: id, status, position, local_file: `/p/${id}/project.json` };
@@ -108,7 +109,7 @@ describe("setActive — snapshots the PREVIOUS scope, not the drifted current on
     const remoteShell: TabEntry = {
       ...shellTab("ta1", "a", "A-shell"),
       location: "remote",
-      tmuxSession: "eldrun-a--shell-fixed-uuid",
+      tmuxSession: `${BRAND.slug}-a--shell-fixed-uuid`,
       hostBoundUid: "hb-1",
       ephemeral: true,
     };
@@ -130,7 +131,7 @@ describe("setActive — snapshots the PREVIOUS scope, not the drifted current on
     await useProjectsStore.getState().setActive("b");
 
     const [shell, attach] = snapshotTabs();
-    expect(shell.tmuxSession).toBe("eldrun-a--shell-fixed-uuid");
+    expect(shell.tmuxSession).toBe(`${BRAND.slug}-a--shell-fixed-uuid`);
     expect(shell.hostBoundUid).toBe("hb-1");
     expect(shell.ephemeral).toBe(true);
     expect(attach.tmuxAttach).toBe("train");

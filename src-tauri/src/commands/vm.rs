@@ -43,16 +43,25 @@ pub async fn vm_doctor() -> Result<vm::VmDoctorReport, String> {
         .map_err(|e| e.to_string())
 }
 
+/// `async` + blocking pool rather than a plain synchronous command, which would
+/// run on the main (GTK) thread: it parses `projects.json` and reads the VM
+/// registry, and every VM project's pill polls it every few seconds.
 #[tauri::command]
-pub fn vm_status(project_id: String) -> VmStatus {
-    let spec = vm::vm_spec_for(&project_id);
-    let running = vm::running_state(&project_id);
+pub async fn vm_status(project_id: String) -> Result<VmStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || vm_status_blocking(&project_id))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn vm_status_blocking(project_id: &str) -> VmStatus {
+    let spec = vm::vm_spec_for(project_id);
+    let running = vm::running_state(project_id);
     VmStatus {
         configured: spec.is_some(),
         running: running.is_some(),
         ssh_port: running.as_ref().map(|r| r.ssh_port),
         egress: spec.map(|s| s.egress),
-        blocked: vm_proxy::blocked_report(&project_id),
+        blocked: vm_proxy::blocked_report(project_id),
     }
 }
 
@@ -384,12 +393,12 @@ mod tests {
     #[test]
     fn remote_rel_stays_inside_the_root() {
         assert_eq!(
-            resolve_remote_rel("/home/eldrun/project/", "src/main.rs").unwrap(),
-            "/home/eldrun/project/src/main.rs"
+            resolve_remote_rel(concat!("/home/", crate::app_slug!(), "/project/"), "src/main.rs").unwrap(),
+            concat!("/home/", crate::app_slug!(), "/project/src/main.rs")
         );
         assert_eq!(
-            resolve_remote_rel("/home/eldrun/project", "").unwrap(),
-            "/home/eldrun/project"
+            resolve_remote_rel(concat!("/home/", crate::app_slug!(), "/project"), "").unwrap(),
+            concat!("/home/", crate::app_slug!(), "/project")
         );
         assert!(resolve_remote_rel("/root", "../etc/passwd").is_err());
         assert!(resolve_remote_rel("/root", "a//b").is_err());

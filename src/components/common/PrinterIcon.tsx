@@ -3,7 +3,7 @@ interface PrinterIconProps {
 }
 
 /**
- * Eldrun's printer mark. It uses `currentColor` so the same crisp outline works
+ * Tabtivity's printer mark. It uses `currentColor` so the same crisp outline works
  * in compact viewer buttons and in the themed Print Manager heading.
  */
 export function PrinterIcon({ className }: PrinterIconProps) {

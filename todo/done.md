@@ -266,7 +266,7 @@ backend `commands/terminal.rs` (`project_cpu_percent`), `commands/projects.rs`
 *Files: `src/assets/logo.svg` (new), `src/components/layout/HeaderBar.tsx`, `src-tauri/icons/*`.*
 🧪 Tested: 🤖 automated — N/A (purely visual) · 🖐️ manual ❌ (icons/header not visually verified in a live build)
 
-25. ✅ **Redraw the Eldrun logo in SVG.** Recreated the logo as a clean,
+25. ✅ **Redraw the Tabtivity logo in SVG.** Recreated the logo as a clean,
     symmetric vector (`logo.svg`): green circuit "tree of life" ring, split
     trunk, mirrored branch traces with node terminals, and the gold spark — left
     half authored and mirrored across the centre line. Header now imports the SVG
@@ -498,7 +498,7 @@ skip-scaffold checkbox), `ProjectPill.tsx` (Publish window + menu),
     a "Publish to GitHub…" entry in the project-pill context menu opening a
     visibility-picker window; the store's `publishProject` mirrors the new push
     target into state. Requires `gh` installed + authenticated. **Runtime QA
-    pending** (agents can't launch Eldrun).
+    pending** (agents can't launch Tabtivity).
     - *Test (e.g.):* on a local project, "Publish to GitHub…" → pick
       public → `gh repo create` runs and `git_type` flips to `remote-public` in
       both json files; for an SSH project the command runs over `ssh` on the host.
@@ -524,7 +524,7 @@ skip-scaffold checkbox), `ProjectPill.tsx` (Publish window + menu),
     new `Project.git_provider` field (mirrored into `projects.json`). Publish
     window gained a provider picker; pill label + menu, settings/hosting
     placeholders, lessons, README and DOCUMENTATION updated. **Runtime QA pending**
-    (needs `glab` installed + authenticated; agents can't launch Eldrun).
+    (needs `glab` installed + authenticated; agents can't launch Tabtivity).
     - *Test (e.g.):* on a local project, Publish → GitLab → private runs `glab repo
       create … --private --remoteName origin` then `git push`, and `git_type` flips
       to `remote-private` with `git_provider: "gitlab"` in both json files.
@@ -602,7 +602,7 @@ Tests: `src/__tests__/SplitLayout.test.ts`.*
     as `tab_groups` in `project.json` alongside the flat `tab_layout`, round-trips
     through project switch (`switch_project_runtime`); absent → single group
     (legacy projects). **Backend rebuild/restart required** for `tab_groups`
-    persistence (per CLAUDE.md; agents can't launch Eldrun).
+    persistence (per CLAUDE.md; agents can't launch Tabtivity).
     - *Test (e.g.):* drag a tab onto a subwindow's right edge → a 2-way row split
       with the dragged tab in a new group sized 50/50; close its only tab → split
       collapses back to one group with focus on the survivor; reload restores the
@@ -750,7 +750,7 @@ N3. **Recurrence.** Daily/weekly/monthly/yearly with interval, byweekday,
     - [x] 🤖 Automated test — `src/__tests__/Recurrence.test.ts` (39 cases)
 
 N4. **Reminders.** Fire on **both** channels: an OS notification
-    (`tauri-plugin-notification`) so it lands when Eldrun is unfocused, and an
+    (`tauri-plugin-notification`) so it lands when Tabtivity is unfocused, and an
     in-app popup with snooze/dismiss, mounted in `AppShell` so it shows on any
     tab. Fired alarms are keyed and persisted, so one never fires twice.
     - [x] 🤖 Automated test — `src/__tests__/Alarms.test.ts` (fire-once, snooze)
@@ -859,7 +859,7 @@ Design notes worth keeping in mind before extending it:
 90. **Only the recap reads the counters.** `usage_summary` already returns
     per-project buckets and the hour buckets are recorded but only used for the
     Day sparkline. Cheap follow-ups if wanted: a per-project stats view, an
-    all-time "since you started using Eldrun" panel, and streaks.
+    all-time "since you started using Tabtivity" panel, and streaks.
     - [ ] Not started.
 
 ---
@@ -875,7 +875,7 @@ role retirement in `components/layout/GlobalAppBar.tsx`.*
 W1. **The print manager became a tab.** `print_manager` was a **global-app
     slot** — a toolbar button that launched whatever external printer GUI the
     user had configured. What sat behind that button is a list of printers, a
-    queue and four verbs, so it is now Eldrun's own tab (⎙ in the new-tab menu,
+    queue and four verbs, so it is now Tabtivity's own tab (⎙ in the new-tab menu,
     one per scope), and the role joined `RETIRED_GLOBAL_APP_ROLES` beside mail,
     the calendar and the file manager. A configured command is filtered, not
     deleted: re-adding the role later finds it still there.

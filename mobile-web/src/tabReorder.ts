@@ -10,23 +10,43 @@
  */
 import type { TabPlace } from "./api";
 
-/** One listed row's vertical extent, as `getBoundingClientRect` gives it. */
+/** One listed row's extent, as `getBoundingClientRect` gives it; `left` and
+ * `right` only matter where the cards stand side by side. */
 export interface RowBox {
   id: string;
   top: number;
   bottom: number;
+  left?: number;
+  right?: number;
 }
 
 /** Which row the finger is over and which side of its midline — the slot the
  * dragged row would land in. Above the first row and below the last both clamp
  * to that end, so a drop in the screen's padding still lands somewhere.
  * `null` when the finger is over the dragged row itself: either side of it is
- * where it already is. */
-export function dropSlot(rows: RowBox[], key: string, clientY: number): { anchor: string; place: TabPlace } | null {
+ * where it already is.
+ *
+ * Where the cards stand two to a line (a wide screen's grid, read left to
+ * right, then down), the line is found by height and the card in it by
+ * `clientX`, and "before" is its left half rather than its top. */
+export function dropSlot(rows: RowBox[], key: string, clientY: number, clientX = 0): { anchor: string; place: TabPlace } | null {
   if (rows.length === 0) return null;
-  const hit = rows.find((row) => clientY < row.bottom) ?? rows[rows.length - 1];
+  const lines: RowBox[][] = [];
+  for (const row of rows) {
+    const line = lines[lines.length - 1];
+    if (line && Math.abs(line[0].top - row.top) < 1) line.push(row);
+    else lines.push([row]);
+  }
+  if (!lines.some((line) => line.length > 1)) {
+    const hit = rows.find((row) => clientY < row.bottom) ?? rows[rows.length - 1];
+    if (hit.id === key) return null;
+    return { anchor: hit.id, place: clientY < hit.top + (hit.bottom - hit.top) / 2 ? "before" : "after" };
+  }
+  const line = lines.find((cards) => clientY < Math.max(...cards.map((card) => card.bottom))) ?? lines[lines.length - 1];
+  const hit = line.find((card) => clientX < (card.right ?? 0)) ?? line[line.length - 1];
   if (hit.id === key) return null;
-  return { anchor: hit.id, place: clientY < hit.top + (hit.bottom - hit.top) / 2 ? "before" : "after" };
+  const left = hit.left ?? 0;
+  return { anchor: hit.id, place: clientX < left + ((hit.right ?? left) - left) / 2 ? "before" : "after" };
 }
 
 /** Pull one item out and drop it beside the anchor as the anchor sits in the

@@ -19,11 +19,11 @@
  * alarm, that carries an attachment, that names a `zoommtg:` URL, or whose event
  * titles contain right-to-left overrides is a file worth looking at twice, and
  * every one of those is *dropped without a word* today. Reporting them is the
- * difference between "Eldrun ignored it" and "you know it was there".
+ * difference between "Tabtivity ignored it" and "you know it was there".
  *
  * ## The rule the findings follow
  *
- * Each finding says what is in the file and **what Eldrun does about it**, and
+ * Each finding says what is in the file and **what Tabtivity does about it**, and
  * the second half is the part that matters: a warning that does not say "this is
  * ignored" reads as "this will happen to you". The two categories are
  * deliberately distinguishable in the type — `ignored: true` is "present in the
@@ -60,7 +60,7 @@ export interface IcsFinding {
   /** One short, already-trimmed example, so the report can be specific without
    *  reprinting the file. Never longer than `SAMPLE_MAX`. */
   sample: string;
-  /** Whether Eldrun discards this on import. See the module note: a finding that
+  /** Whether Tabtivity discards this on import. See the module note: a finding that
    *  does not say so reads as a threat rather than as a fact. */
   ignored: boolean;
 }
@@ -226,7 +226,7 @@ export function inspectIcs(text: string): IcsReport {
     }
   }
 
-  // Which findings describe something Eldrun *does* rather than something it
+  // Which findings describe something Tabtivity *does* rather than something it
   // drops. Only two of the seven reach the calendar at all.
   const REACHES_THE_CALENDAR = new Set<IcsFindingKind>(["non-web-link", "unbounded-repeat"]);
 

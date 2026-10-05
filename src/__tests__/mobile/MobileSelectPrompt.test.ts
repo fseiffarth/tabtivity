@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { mergeSelectRows, missingSelectRow, readQuestionTabs, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature } from "../../../mobile-web/src/terminal/selectPrompt";
+import { freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
+import { BRAND } from "../../lib/brand";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
 const ESC = String.fromCharCode(27);
 
-describe("Eldrun Mobile select dialog", () => {
+describe(`${BRAND.display} Mobile select dialog`, () => {
   it("reads the rows of a model picker, with the highlighted one", () => {
     // The Claude Code shape, after readableScreen stripped the box frame.
     const prompt = readSelectPrompt(lines(
@@ -116,6 +117,33 @@ describe("Eldrun Mobile select dialog", () => {
     expect(selectSignature(walked!)).toBe(selectSignature(levels!));
   });
 
+  it("collects a Codex model hidden above the visible rows without a hidden-row count", () => {
+    // 0.159.3 offers GPT-6.1 Sol first. A short picker can begin at row 2
+    // without the `… +N models` note used by Claude's windowed picker.
+    const clipped = readSelectPrompt(lines(
+      "Select Model and Effort",
+      "",
+      "  2. gpt-6-astra (current)  Frontier intelligence for the most demanding work.",
+      "› 3. gpt-6-sol            Previous generation workhorse model.",
+      "  4. gpt-6-luna           Fast and affordable model for easier tasks.",
+    ), "Codex");
+    expect(clipped?.options.map((option) => option.number)).toEqual([2, 3, 4]);
+    const first = mergeSelectRows(null, clipped!);
+    expect(missingSelectRow(first, clipped!)).toBe(1);
+    expect(selectMoveKeys(clipped!.options[clipped!.current].number, 1)).toEqual([`${ESC}[A`, `${ESC}[A`]);
+
+    const revealed = readSelectPrompt(lines(
+      "Select Model and Effort",
+      "",
+      "› 1. gpt-6.1-sol (default)  Latest workhorse model for coding and everyday work.",
+      "  2. gpt-6-astra (current)  Frontier intelligence for the most demanding work.",
+      "  3. gpt-6-sol            Previous generation workhorse model.",
+    ), "Codex");
+    expect(mergeSelectRows(first, revealed!).options.map((option) => option.label)).toContain("gpt-6.1-sol (default)");
+    expect(missingSelectRow(mergeSelectRows(first, revealed!), revealed!)).toBeUndefined();
+    expect(readSelectPrompt(lines("2. Alpha", "› 3. Beta"), "Claude")).toBeNull();
+  });
+
   it("keeps reading rows past a note wrapped at phone width", () => {
     // codex-cli 0.155.0 at 70 columns: sol's note fits, astra's wraps, and the
     // wrapped line used to end the list after the second row.
@@ -220,7 +248,7 @@ describe("Eldrun Mobile select dialog", () => {
       "\u276f 1. Restore it too               \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
       "  2. Just the question            \u2502 swipe \u2192 on the reading view",
       "\u250c\u2500 Status line \u2500\u2500\u2500\u2500\u2500\u2715\u2510",
-      "\u2502 ~/eldrun/\u2026/projecteldrun       \u2502",
+      `\u2502 ~/${BRAND.slug}/\u2026/project${BRAND.slug}       \u2502`,
       "",
       "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 n to add notes \u00b7 Esc to cancel",
     ), "Claude Code");
@@ -229,6 +257,53 @@ describe("Eldrun Mobile select dialog", () => {
       { index: 0, number: 1, label: "Restore it too", description: undefined },
       { index: 1, number: 2, label: "Just the question", description: undefined },
     ]);
+  });
+
+  it("offers a multi-select question's unnumbered Submit row", () => {
+    // Claude Code 2.1.286's AskUserQuestion with `multiSelect`, captured off a
+    // 46×30 pane through the phone's own attach and `readableScreen`. Enter on
+    // a checkbox row only ticks it; the question is sent from `Submit`, a row
+    // with no number that used to be read as the row above's note — so the
+    // phone ticked boxes and the question stayed up as answered.
+    const screen = (highlight: number) => {
+      const marker = (row: number) => (row === highlight ? "❯" : " ");
+      return lines(
+        "←  ☒ Colours  ✔ Submit  →",
+        "",
+        "Which colours do you like?",
+        "",
+        `${marker(0)} 1. [✔] Red`,
+        "         A warm, vibrant colour",
+        `${marker(1)} 2. [ ] Green`,
+        "         A cool, natural colour",
+        `${marker(2)} 3. [ ] Blue`,
+        `${marker(3)} 4. [ ] Type something`,
+        `${marker(4)}    Submit`,
+        `${marker(5)} 5. Chat about this`,
+        "",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+      );
+    };
+    const prompt = readSelectPrompt(screen(0), "Claude Code");
+    expect(prompt?.options).toEqual([
+      { index: 0, number: 1, label: "[✔] Red", description: "A warm, vibrant colour" },
+      { index: 1, number: 2, label: "[ ] Green", description: "A cool, natural colour" },
+      { index: 2, number: 3, label: "[ ] Blue", description: undefined },
+      { index: 3, number: 4, label: "[ ] Type something", description: undefined },
+      { index: 4, number: UNNUMBERED, label: "Submit" },
+      { index: 5, number: 5, label: "Chat about this", description: undefined },
+    ]);
+    // The highlight walks onto it in screen order, so a tap reaches it.
+    expect(selectKeys(prompt!.current, 4)).toEqual(["\u001b[B", "\u001b[B", "\u001b[B", "\u001b[B", "\r"]);
+    // Highlighted, it is still the dialog's row — not the input box's `❯`.
+    const onSubmit = screen(4);
+    expect(readSelectPrompt(onSubmit, "Claude Code")?.current).toBe(4);
+    expect(inputFrameStart(onSubmit, "Claude Code")).toBe(onSubmit.length);
+    // A question with more to come says `Next` there instead.
+    const next = screen(4).map((line) => ({ text: line.text.replace("Submit", "Next") }));
+    expect(readSelectPrompt(next, "Claude Code")?.options[4].label).toBe("Next");
+    // Only under a checkbox row: an ordinary list's `Submit` line is not a row.
+    expect(readSelectPrompt(lines("❯ 1. Red", "  2. Green", "   Submit"))?.options).toHaveLength(2);
   });
 
   it("keeps reading a Codex question whose label wraps beside its note", () => {
@@ -260,7 +335,7 @@ describe("Eldrun Mobile select dialog", () => {
     const prompt = readSelectPrompt(lines(
       ">_ OpenAI Codex (v0.155.1)",
       "model:     gpt-6-astra high   /model to change",
-      "directory: ~/eldrun/projects/projecteldrun",
+      `directory: ~/${BRAND.slug}/projects/project${BRAND.slug}`,
       "",
       "  Tip: New Use /fast to enable our fastest inference with increased plan usage.",
       "",
@@ -386,6 +461,122 @@ describe("Eldrun Mobile select dialog", () => {
     expect(prompt?.title).toBeUndefined();
   });
 
+  it("titles a permission prompt whose question sits under a dropped rule", () => {
+    // Claude Code 2.1.286, after readableScreen dropped its dashed `╌` rules:
+    // no blank separates the question from the command above it any more.
+    const prompt = readSelectPrompt([
+      { text: " Bash command" },
+      { text: " Write Unix timestamp to a.txt" },
+      { text: " date +%s > a.txt", afterRule: true },
+      { text: " Do you want to proceed?", afterRule: true },
+      { text: " \u276f 1. Yes" },
+      { text: "   2. No" },
+    ]);
+    expect(prompt?.options).toHaveLength(2);
+    expect(prompt?.title).toBe("Do you want to proceed?");
+  });
+
+  // Claude Code 2.1.286 asking to overwrite a plan file in a 60-column pane:
+  // the diff runs right up to the dashed rule over the question, and option 2
+  // wraps at the pane's edge onto its label's column.
+  const OVERWRITE = [
+    { text: "  14 +- Preserve original PDF integrity or export cleanly" },
+    { text: "  15 +- Fast, responsive interaction even with large docume" },
+    { text: "     +nts" },
+    { text: "  16 +- Clear visual feedback for all markup actions" },
+    { text: " Do you want to overwrite plan.md?", afterRule: true },
+    { text: " ❯ 1. Yes" },
+    { text: "   2. Yes, and switch to accept edits (auto-approve file" },
+    { text: "      edits and common file commands) for this session" },
+    { text: "      (shift+tab)" },
+    { text: "   3. No" },
+  ];
+
+  it("ends a permission prompt's question at the rule over it, leaving the diff as context", () => {
+    const prompt = readSelectPrompt(OVERWRITE, "Claude Code", 60);
+    expect(prompt?.title).toBe("Do you want to overwrite plan.md?");
+    expect(prompt?.question).toBe(4);
+    expect(prompt?.context).toBe(0);
+  });
+
+  it("keeps a long command's whole permission dialog above its rows", () => {
+    // Claude Code 2.1.287's dangerous-rm prompt in auto mode, after
+    // readableScreen dropped its rules: tool, description, the command
+    // fenced in dashed rules, why it asks and the auto-deny countdown, one
+    // block. Capped at ten lines, the phone showed the command's tail under
+    // no heading.
+    const command: { text: string; afterRule?: boolean }[] = Array.from({ length: 12 }, (_, line) => ({ text: ` diff -U0 $S/cum${line}/a.ts $S/cum${line + 1}/a.ts | grep '^[-+]' |` }));
+    command[0] = { ...command[0], afterRule: true };
+    const screen = [
+      { text: "⏺ Building the nine snapshots." },
+      { text: "" },
+      { text: " Bash command", afterRule: true },
+      { text: " Count each commit's changed lines per file" },
+      ...command,
+      { text: " Dangerous rm operation on possibly-empty variable path: $B/$f in `rm -f $B/$f`", afterRule: true },
+      { text: " ⚠ Claude Code will automatically deny this request in 1:23, to avoid blocking progress on an unattended session" },
+      { text: "" },
+      { text: " Do you want to proceed?" },
+      { text: " ❯ 1. Yes" },
+      { text: "   2. No" },
+    ];
+    const prompt = readSelectPrompt(screen, "Claude Code");
+    expect(prompt?.title).toBe("Do you want to proceed?");
+    expect(prompt?.question).toBe(screen.length - 3);
+    expect(screen[prompt?.context ?? -1].text).toBe(" Bash command");
+  });
+
+  it("still bounds a block of plain output above a question", () => {
+    const output = Array.from({ length: 15 }, (_, line) => ({ text: `output ${line}` }));
+    const prompt = readSelectPrompt([...output, { text: "" }, { text: "Pick one?" }, { text: "❯ 1. A" }, { text: "  2. B" }]);
+    expect(prompt?.context).toBe(6);
+  });
+
+  it("rejoins a row's label wrapped at the pane's edge instead of reading it as a note", () => {
+    const prompt = readSelectPrompt(OVERWRITE, "Claude Code", 60);
+    expect(prompt?.options.map((option) => [option.label, option.description])).toEqual([
+      ["Yes", undefined],
+      ["Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)", undefined],
+      ["No", undefined],
+    ]);
+    // A short label's note under it stays a note at any width.
+    const question = readSelectPrompt(lines("❯ 1. Red", "     Warm and loud", "  2. Green"), "Claude Code", 60);
+    expect(question?.options[0]).toMatchObject({ label: "Red", description: "Warm and loud" });
+  });
+
+  it("knows Claude's free-text row and types into it", () => {
+    const single = readSelectPrompt(lines(
+      "Which database?",
+      "",
+      "❯ 1. PostgreSQL",
+      "     Relational",
+      "  2. SQLite",
+      "  3. Type something.",
+      "  4. Chat about this",
+    ), "Claude Code");
+    const other = single!.options[2];
+    expect(freeTextRow(other)).toBe(true);
+    expect(single!.options.filter(freeTextRow)).toHaveLength(1);
+    // Walk onto the field, type the words as one line, Enter.
+    expect(freeTextWrites(single!.current, other, " use\n DuckDB ")).toEqual([`${ESC}[B`, `${ESC}[B`, "use DuckDB", "\r"]);
+    expect(freeTextWrites(single!.current, other, "   ")).toEqual([]);
+
+    // On a multi-select question typing ticks the box; Enter would untick it.
+    const multi = readSelectPrompt(lines(
+      "Pick some",
+      "",
+      "❯ 1. [ ] Red",
+      "  2. [ ] Green",
+      "  3. [ ] Type something",
+      "     Submit",
+    ), "Claude Code");
+    const box = multi!.options[2];
+    expect(freeTextRow(box)).toBe(true);
+    expect(freeTextWrites(multi!.current, box, "Blue")).toEqual([`${ESC}[B`, `${ESC}[B`, "Blue"]);
+    // A row that only mentions it is an ordinary choice.
+    expect(freeTextRow({ index: 0, number: 1, label: "Type something else" })).toBe(false);
+  });
+
   it("moves the highlight the way the arrow row does", () => {
     expect(selectKeys(1, 3)).toEqual([`${ESC}[B`, `${ESC}[B`, "\r"]);
     expect(selectKeys(2, 0)).toEqual([`${ESC}[A`, `${ESC}[A`, "\r"]);
@@ -466,7 +657,7 @@ describe("Eldrun Mobile select dialog", () => {
   });
 });
 
-describe("Eldrun Mobile permission modes", () => {
+describe(`${BRAND.display} Mobile permission modes`, () => {
   it("offers the family of the mode the session is showing", () => {
     expect(modeChoices("plan").map((choice) => choice.value))
       .toEqual(["default", "accept edits", "plan", "auto", "bypass permissions"]);
@@ -551,7 +742,7 @@ describe("Eldrun Mobile permission modes", () => {
   });
 });
 
-describe("Eldrun Mobile input frame", () => {
+describe(`${BRAND.display} Mobile input frame`, () => {
   const cut = (...texts: string[]) => {
     const rows = lines(...texts);
     return rows.slice(0, inputFrameStart(rows)).map((row) => row.text);
@@ -563,9 +754,9 @@ describe("Eldrun Mobile input frame", () => {
     expect(cut(
       "● Done — the reading view now stops above the box.",
       "",
-      `${"\u2500".repeat(40)} ProjectEldrun \u2500`,
+      `${"\u2500".repeat(40)} Project${BRAND.display} \u2500`,
       "\u276f",
-      "  ~/eldrun/projects/projecteldrun (develop) \u00b7 Opus 5 \u00b7 ctx 93%",
+      `  ~/${BRAND.slug}/projects/project${BRAND.slug} (develop) \u00b7 Opus 5 \u00b7 ctx 93%`,
       "  \u23f5\u23f5 auto mode on (shift+tab to cycle)",
     )).toEqual(["● Done — the reading view now stops above the box."]);
   });
@@ -589,7 +780,7 @@ describe("Eldrun Mobile input frame", () => {
   });
 });
 
-describe("Eldrun Mobile question tabs", () => {
+describe(`${BRAND.display} Mobile question tabs`, () => {
   it("reads the header row Claude Code draws over an agent's question", () => {
     expect(readQuestionTabs("☐ Push scope")).toEqual([{ label: "Push scope", answered: false }]);
     // Several questions: answered ones are ticked, and Submit is navigation.
@@ -603,5 +794,72 @@ describe("Eldrun Mobile question tabs", () => {
     expect(readQuestionTabs("✔ Done")).toBeNull();
     expect(readQuestionTabs("Push scope")).toBeNull();
     expect(readQuestionTabs("● ☐ is how the box looks")).toBeNull();
+  });
+
+  it("tells which step the dialog is on from the chip painted on a background", () => {
+    const tabs = readQuestionTabs("←  ☒ Scope  ☐ Release tag  ✔ Submit  →")!;
+    const row = (painted: string) => ["←  ", "☒ Scope", "  ", "☐ Release tag", "  ", "✔ Submit", "  →"].map((text) =>
+      text === painted ? { text: ` ${text} `, background: "#b1b9f9" } : { text });
+    expect(questionTabFocus(row("☒ Scope"), tabs)).toBe(0);
+    expect(questionTabFocus(row("☐ Release tag"), tabs)).toBe(1);
+    expect(questionTabFocus(row("✔ Submit"), tabs)).toBe(2);
+    // Nothing painted, or a chip that is not one of the steps: unknown.
+    expect(questionTabFocus(row(""), tabs)).toBeNull();
+    expect(questionTabFocus([{ text: "← " }, { text: "☐ Other", background: "#fff" }], tabs)).toBeNull();
+    // Painted by its colour alone, the dimmed arrow at an end aside.
+    expect(questionTabFocus([{ text: "← ", color: "#888" }, { text: "☒ Scope  " }, { text: "☐ Release tag", color: "#b1b9f9" }, { text: "  ✔ Submit  →" }], tabs)).toBe(1);
+    expect(questionTabsSubmit("←  ☒ Scope  ☐ Release tag  ✔ Submit  →")).toBe(true);
+    expect(questionTabsSubmit("☐ Push scope")).toBe(false);
+  });
+
+  it("reads Gemini CLI's tab row, its current step underlined, walked with Tab", () => {
+    const text = "← □ Scope │ ✓ Release tag │ ≡ Review →";
+    const tabs = readQuestionTabs(text)!;
+    expect(tabs).toEqual([{ label: "Scope", answered: false }, { label: "Release tag", answered: true }]);
+    expect(questionTabsSubmit(text)).toBe(true);
+    expect(questionTabRowKeys(text)).toBe("tabs");
+    expect(questionTabRowKeys("←  ☒ Scope  ☐ Release tag  ✔ Submit  →")).toBe("arrows");
+    // TabHeader: every icon and header in a colour, the current header bold
+    // and underlined.
+    const row = [
+      { text: "← ", color: "#888" }, { text: "□ ", color: "#888" }, { text: "Scope", color: "#888" },
+      { text: " │ ", color: "#888" }, { text: "✓ ", color: "#888" }, { text: "Release tag", color: "#6c6", className: "b u" },
+      { text: " │ ", color: "#888" }, { text: "≡ ", color: "#888" }, { text: "Review", color: "#888" }, { text: " →", color: "#888" },
+    ];
+    expect(questionTabFocus(row, tabs)).toBe(1);
+    expect(questionTabFocus(row.map((span) => (span.text === "Review" ? { ...span, className: "b u" } : { ...span, className: undefined })), tabs)).toBe(2);
+    expect(questionTabKeys(0, 2, "tabs")).toEqual(["\t", "\t"]);
+    expect(questionTabKeys(2, 1, "tabs")).toEqual([`${ESC}[Z`]);
+    // Without its Review step it is a sentence with boxes in it.
+    expect(readQuestionTabs("□ Scope │ ✓ Tag")).toBeNull();
+  });
+
+  it("reads Gemini CLI's Review page as one Submit row under its tab row", () => {
+    const screen = lines(
+      "> plan the release",
+      "",
+      "← ✓ Scope │ ✓ Release tag │ ≡ Review →",
+      "",
+      "Review your answers:",
+      "",
+      "Scope → Fix only",
+      "Release tag → v0.2.0",
+      "Enter to submit · Tab/Shift+Tab to edit answers · Esc to cancel",
+    );
+    for (const agent of ["Gemini", "Qwen Code"]) {
+      const review = readReviewStep(screen, agent);
+      expect(review?.options).toEqual([{ index: 0, number: 1, label: "Submit" }]);
+      expect(review?.current).toBe(0);
+      expect(screen[review!.question].text).toMatch(/≡ Review/);
+      expect(review?.start).toBe(8);
+    }
+    expect(readReviewStep(screen, "Claude")).toBeNull();
+    expect(readReviewStep(lines("Review your answers:", "Scope → Fix only"), "Gemini")).toBeNull();
+  });
+
+  it("walks the tabs with the arrows Claude Code switches them with", () => {
+    expect(questionTabKeys(2, 0)).toEqual([`${ESC}[D`, `${ESC}[D`]);
+    expect(questionTabKeys(0, 1)).toEqual([`${ESC}[C`]);
+    expect(questionTabKeys(1, 1)).toEqual([]);
   });
 });

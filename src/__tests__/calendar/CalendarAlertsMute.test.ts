@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 import { mutedCalendarIds } from "../../lib/calendar/alarms";
 import { useAlarmStore } from "../../stores/calendar/alarms";
 import { useCalendarStore } from "../../stores/calendar/calendar";
+import { _grantTimerLeaseForTest } from "../../stores/timerLease";
 import { useAlertsFeed } from "../../components/files/useAlertsFeed";
 
 const cal = (id: string, over: Partial<Calendar> = {}): Calendar => ({
@@ -45,6 +46,7 @@ function seed(calendars: Calendar[]) {
 }
 
 beforeEach(() => {
+  _grantTimerLeaseForTest();
   localStorage.clear();
   sendNotification.mockClear();
   useAlarmStore.setState({ active: [], snoozed: [], fired: new Set() });

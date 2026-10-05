@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TabtivityHotReload
+Comment=Terminal workspace manager hot reload
+Exec=/path/to/tabtivity/start-tabtivity-tauri-hotreload.sh
+Icon=/path/to/tabtivity/src-tauri/icons/128x128.png
+Terminal=false
+Categories=Utility;TerminalEmulator;Development;
+StartupWMClass=tabtivity

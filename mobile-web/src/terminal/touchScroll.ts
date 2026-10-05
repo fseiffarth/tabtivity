@@ -119,7 +119,8 @@ export function installTerminalTouchScroll(host: HTMLElement, terminal: Terminal
   };
 
   const pointerStart = (event: PointerEvent) => {
-    if (event.pointerType && event.pointerType !== "touch") return;
+    // A pen (the iPad's Pencil) drags like a finger; only a mouse is xterm's.
+    if (event.pointerType === "mouse") return;
     if (!begin(event.pointerId, event.clientX, event.clientY)) return;
     // Do not let xterm turn this drag into a terminal mouse gesture. Capture
     // waits for the first move: taking the pointer on the down event would

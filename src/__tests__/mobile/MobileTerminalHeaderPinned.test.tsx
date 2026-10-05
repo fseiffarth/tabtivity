@@ -54,11 +54,12 @@ class FakeWebSocket {
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import type { TabRow } from "../../../mobile-web/src/api";
+import { BRAND } from "../../lib/brand";
 
 const shell: TabRow = { id: "tab-3", label: "Shell", kind: "shell", available: true, viewer_busy: false };
 const agent: TabRow = { id: "tab-4", label: "Claude", kind: "agent", available: true, viewer_busy: false };
 
-describe("Eldrun Mobile — the terminal header stays on screen", () => {
+describe(`${BRAND.display} Mobile — the terminal header stays on screen`, () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });

@@ -8,6 +8,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  completedSlashCommand,
   draftPrefix,
   draftPrefixes,
   forgetSlashCommand,
@@ -47,13 +48,14 @@ class FakeWebSocket {
   onclose: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   constructor() { queueMicrotask(() => this.onopen?.()); }
-  send(data: string) { sent.push(String(data)); }
+  send(data: string | Uint8Array) { sent.push(ArrayBuffer.isView(data) ? new TextDecoder().decode(data) : String(data)); }
   close() { this.readyState = 3; }
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND, storageKey } from "../../lib/brand";
 
-const KEY = "eldrun.mobile.slashCommands";
+const KEY = storageKey("mobile.slashCommands");
 const CLAUDE_TAB = { id: "tab-c", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 
 function memoryStorage(seed: Record<string, string> = {}) {
@@ -67,9 +69,10 @@ function memoryStorage(seed: Record<string, string> = {}) {
 }
 
 const settle = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+const typedOut = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 400)); });
 const lines = (draft: string, cli: string, used: string[] = []) => slashSuggestions(draft, cli, used).map((row) => row.line);
 
-describe("Eldrun Mobile slash commands — which CLI", () => {
+describe(`${BRAND.display} Mobile slash commands — which CLI`, () => {
   it("keys the known families by their label, and any other CLI by its own first word", () => {
     expect(slashCli("Claude")).toBe("claude");
     expect(slashCli("Claude Code (fenced)")).toBe("claude");
@@ -90,7 +93,7 @@ describe("Eldrun Mobile slash commands — which CLI", () => {
   });
 });
 
-describe("Eldrun Mobile slash commands — the store", () => {
+describe(`${BRAND.display} Mobile slash commands — the store`, () => {
   it("keeps what was sent per CLI, newest first, arguments and all", () => {
     const storage = memoryStorage();
     rememberSlashCommand("claude", "/model opus", storage, 1);
@@ -143,7 +146,7 @@ describe("Eldrun Mobile slash commands — the store", () => {
   });
 });
 
-describe("Eldrun Mobile slash commands — the suggestions", () => {
+describe(`${BRAND.display} Mobile slash commands — the suggestions`, () => {
   it("offers nothing unless the draft is one line starting with a slash", () => {
     expect(lines("", "claude")).toEqual([]);
     expect(lines("compact", "claude")).toEqual([]);
@@ -169,13 +172,36 @@ describe("Eldrun Mobile slash commands — the suggestions", () => {
   });
 });
 
-describe("Eldrun Mobile slash commands — the composer", () => {
+describe(`${BRAND.display} Mobile slash commands — a prefix the CLI completes`, () => {
+  it("names the one known command a bare prefix continues", () => {
+    expect(completedSlashCommand("/clea", "claude", [])).toBe("/clear");
+    expect(completedSlashCommand(" /cle ", "codex", [])).toBe("/clear");
+  });
+
+  it("keeps a whole command, and anything that is not a bare /word, as typed", () => {
+    expect(completedSlashCommand("/clear", "claude", [])).toBe("/clear");
+    expect(completedSlashCommand("/model opus", "claude", [])).toBe("/model opus");
+    expect(completedSlashCommand("hello", "claude", [])).toBe("hello");
+  });
+
+  it("knows no pick when more than one command, or none, continues it", () => {
+    expect(completedSlashCommand("/c", "claude", [])).toBeNull();
+    expect(completedSlashCommand("/zzz", "claude", [])).toBeNull();
+  });
+
+  it("counts the commands sent to this CLI before", () => {
+    expect(completedSlashCommand("/cle", "claude", ["/cleanup now"])).toBeNull();
+    expect(completedSlashCommand("/my-sk", "claude", ["/my-skill arg"])).toBe("/my-skill");
+  });
+});
+
+describe(`${BRAND.display} Mobile slash commands — the composer`, () => {
   beforeEach(() => {
     localStorage.clear();
     sent.length = 0;
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ error: "not_found" }), { status: 404 }))));
-    localStorage.setItem("eldrun.mobile.view.agent", "terminal");
+    localStorage.setItem(storageKey("mobile.view.agent"), "terminal");
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   });
 
@@ -233,7 +259,7 @@ describe("Eldrun Mobile slash commands — the composer", () => {
     expect(within(menu).getByText("/review")).toBeTruthy();
   });
 
-  it("puts the keys button after ＋, then Plan, Goal and Clear, the mic in the field; a tap leads the draft and sends nothing", async () => {
+  it("puts the keys button after ＋, then Plan, Goal, Clear and Commit, the mic in the field; a tap leads the draft and sends nothing", async () => {
     render(<Terminal tab={CLAUDE_TAB} back={() => {}} />);
     await settle();
     const field = screen.getByLabelText("Message agent") as HTMLTextAreaElement;
@@ -241,7 +267,7 @@ describe("Eldrun Mobile slash commands — the composer", () => {
     const goal = screen.getByRole("button", { name: "Goal" });
     const bar = plan.closest(".composer-bar") as HTMLElement;
     const order = Array.from(bar.querySelectorAll("button")).map((button) => button.className.split(" ")[0]);
-    expect(order).toEqual(["composer-add", "composer-keys", "composer-prefix", "composer-prefix", "composer-prefix", "send-icon"]);
+    expect(order).toEqual(["composer-add", "composer-keys", "composer-prefix", "composer-prefix", "composer-prefix", "composer-prefix", "send-icon"]);
     expect(screen.getByRole("button", { name: "Start a new conversation" }).textContent).toBe("Clear");
     expect(bar.previousElementSibling?.querySelector(".composer-dictate")).toBeTruthy();
 
@@ -257,7 +283,37 @@ describe("Eldrun Mobile slash commands — the composer", () => {
     expect(sent.length).toBe(before);
   });
 
-  it("offers only the chips a CLI documents", async () => {
+  it("sends the Commit chip's prompts as prompts, the draft left alone", async () => {
+    render(<Terminal tab={CLAUDE_TAB} back={() => {}} />);
+    await settle();
+    const field = screen.getByLabelText("Message agent") as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: "half a thought" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    const sheet = screen.getByRole("dialog", { name: "Commit" });
+    const before = sent.length;
+    fireEvent.click(within(sheet).getByText("Split into commits"));
+    // The line is cleared first; the words follow a key gap later.
+    await typedOut();
+    expect(screen.queryByRole("dialog", { name: "Commit" })).toBeNull();
+    expect(sent.slice(before).join("")).toContain("Split the uncommitted changes into focused commits");
+    expect(field.value).toBe("half a thought");
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    const again = sent.length;
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Commit" })).getByText("Commit the current state"));
+    await typedOut();
+    expect(sent.slice(again).join("")).toContain("Commit the current state");
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+    const own = sent.length;
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Commit" })).getByText("Commit your changes only"));
+    await typedOut();
+    expect(sent.slice(own).join("")).toContain("Commit only the changes you made in this conversation");
+    expect(readSlashCommands("claude")).toEqual([]);
+  });
+
+    it("offers only the chips a CLI documents", async () => {
     render(<Terminal tab={{ ...CLAUDE_TAB, id: "tab-g", label: "Gemini" }} back={() => {}} />);
     await settle();
     expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
@@ -265,7 +321,7 @@ describe("Eldrun Mobile slash commands — the composer", () => {
   });
 });
 
-describe("Eldrun Mobile slash commands — the Plan / Goal chips", () => {
+describe(`${BRAND.display} Mobile slash commands — the Plan / Goal chips`, () => {
   const both = draftPrefixes("claude");
 
   it("knows which CLIs have which", () => {

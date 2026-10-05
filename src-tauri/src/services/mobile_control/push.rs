@@ -1,5 +1,5 @@
-//! Web Push for Eldrun Mobile (RFC 8030 delivery, RFC 8291 payload
-//! encryption, RFC 8292 VAPID) — `docs/eldrun_mobile_future_plan.md` §A.
+//! Web Push for Tabtivity Mobile (RFC 8030 delivery, RFC 8291 payload
+//! encryption, RFC 8292 VAPID) — `docs/tabtivity_mobile_future_plan.md` §A.
 //!
 //! The one channel that leaves the tailnet: a push subscription always routes
 //! through the browser vendor's push service (FCM, Apple, Mozilla, WNS). What
@@ -55,7 +55,7 @@ const AGENT_COOLDOWN_SECONDS: u64 = 30;
 const TTL_SECONDS: u32 = 60 * 60;
 /// The contact RFC 8292 asks for. The project, not the user: this reaches the
 /// push vendor in every request, so it must say nothing about who sent it.
-const VAPID_SUBJECT: &str = "https://github.com/fseiffarth/ProjectEldrun";
+const VAPID_SUBJECT: &str = concat!("https://github.com/", crate::app_repo!());
 
 fn now() -> u64 {
     SystemTime::now()
@@ -174,10 +174,21 @@ pub struct Subscription {
     #[serde(default)]
     pub agents: AgentNotices,
     pub created_at: u64,
+    /// The push service said this endpoint is gone (`PushStore::lapse_endpoint`).
+    /// The row stays as the phone's remembered choices and nothing more: its
+    /// keys are cleared, nothing is sent to it, and the phone it belongs to
+    /// re-subscribes with these choices the next time it signs in. Left out
+    /// while false, so a file written before the field existed and one written
+    /// after read alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lapsed: bool,
 }
 
 impl Subscription {
     fn wants(&self, notice: &Notice) -> bool {
+        if self.lapsed {
+            return false;
+        }
         match notice.kind {
             NoticeKind::Calendar => self.calendar,
             NoticeKind::Agent => match self.agents {
@@ -241,9 +252,15 @@ pub struct AgentTabRef {
     pub project_label: String,
     pub tab_id: String,
     pub tab_label: String,
-    /// A phone holds this tab's live terminal right now: it is already being
-    /// looked at, so a notice would only interrupt the reader.
+    /// A phone has this tab's live terminal on a visible page right now
+    /// (`TerminalRegistry::is_watched`): it is already being looked at, so a
+    /// notice would only interrupt the reader. A phone that merely still
+    /// holds the socket from a pocket is not that.
     pub attached: bool,
+    /// The phones the tab's scope is open to (`ResolvedProject::devices`):
+    /// `None` is every paired phone. Filters who is sent the notice; never
+    /// part of it.
+    pub devices: Option<Vec<String>>,
 }
 
 impl AgentTabRef {
@@ -389,6 +406,7 @@ impl PushStore {
             calendar: prefs.calendar,
             agents: prefs.agents,
             created_at: now(),
+            lapsed: false,
         });
         self.save()
     }
@@ -413,11 +431,28 @@ impl PushStore {
     }
 
     /// A push service said the endpoint is gone (404/410): the browser dropped
-    /// the subscription, so keeping it would only fail every notice after.
-    pub fn forget_endpoint(&mut self, endpoint: &str) {
-        let before = self.file.subscriptions.len();
-        self.file.subscriptions.retain(|s| s.endpoint != endpoint);
-        if before != self.file.subscriptions.len() {
+    /// the subscription, so posting to it would only fail every notice after.
+    ///
+    /// The row is kept as a lapsed record rather than deleted. Deleting it
+    /// took the phone's choices with it, the host then answered "not
+    /// subscribed", and the phone's silent refresh left a phone that never
+    /// switched notices on alone — so they stayed off until somebody noticed
+    /// and re-enabled them by hand. The keys go (nothing can be encrypted to
+    /// this row again, by this build or an older one reading the file); the
+    /// endpoint stays so the phone can tell a browser still handing out the
+    /// dead subscription from a fresh one. Unsubscribing, revoking the device
+    /// and forget-all still remove the row whole.
+    pub fn lapse_endpoint(&mut self, endpoint: &str) {
+        let mut changed = false;
+        for sub in &mut self.file.subscriptions {
+            if sub.endpoint == endpoint && !sub.lapsed {
+                sub.lapsed = true;
+                sub.p256dh.clear();
+                sub.auth.clear();
+                changed = true;
+            }
+        }
+        if changed {
             let _ = self.save();
         }
     }
@@ -435,6 +470,8 @@ impl PushStore {
 
     /// Encrypt `notice` once per subscription of a still-paired device.
     /// `tag` is the already-keyed, opaque tag. Nothing is sent from here.
+    /// `paired` is also who may get it: a notice for a scope open to some
+    /// phones arrives with only those.
     pub fn deliveries(
         &mut self,
         notice: &Notice,
@@ -448,7 +485,19 @@ impl PushStore {
                 return Ok(vec![]);
             }
         }
-        if !self.file.subscriptions.iter().any(|s| s.wants(notice)) {
+        // Who would get it, before anything is spent: a notice no eligible
+        // phone wants — every phone that wants it is outside the scope's list,
+        // or no longer paired — must neither use the minute's budget nor start
+        // the tab's cooldown.
+        let eligible: Vec<usize> = self
+            .file
+            .subscriptions
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.wants(notice) && paired.iter().any(|id| id == &s.device_id))
+            .map(|(index, _)| index)
+            .collect();
+        if eligible.is_empty() {
             return Ok(vec![]);
         }
         if !self.within_budget(t) {
@@ -469,12 +518,11 @@ impl PushStore {
         full["title"] = serde_json::json!(clip(&notice.title, MAX_TITLE_CHARS));
         full["body"] = serde_json::json!(clip(&notice.body, MAX_BODY_CHARS));
         let mut out = vec![];
-        for sub in self.file.subscriptions.iter().filter(|s| s.wants(notice)) {
-            // Revocation already dropped the row; this is the belt to that
-            // brace, for a push.json edited or restored behind our back.
-            if !paired.iter().any(|id| id == &sub.device_id) {
-                continue;
-            }
+        // `wants` is false for a lapsed row: it has no keys and gets nothing.
+        // The paired check is revocation's belt (it already dropped the row)
+        // for a push.json edited or restored behind our back, and the
+        // per-phone list's only gate.
+        for sub in eligible.into_iter().map(|index| &self.file.subscriptions[index]) {
             let Ok(origin) = endpoint_origin(&sub.endpoint) else {
                 continue;
             };
@@ -733,6 +781,87 @@ mod tests {
     }
 
     #[test]
+    fn a_gone_endpoint_lapses_and_keeps_the_phones_choices_until_it_resubscribes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut push = PushStore::open(dir.path()).unwrap();
+        let auth = Base64UrlUnpadded::encode_string(&[7u8; 16]);
+        let chosen = PushPrefs { details: false, calendar: true, agents: AgentNotices::Questions };
+        push.subscribe("phone", "https://fcm.googleapis.com/a", &phone_key(), &auth, chosen).unwrap();
+        push.subscribe("other", "https://fcm.googleapis.com/o", &phone_key(), &auth, prefs(true)).unwrap();
+        let paired = vec!["phone".to_string(), "other".to_string()];
+
+        push.lapse_endpoint("https://fcm.googleapis.com/a");
+        // Written through, and only the row the push service named.
+        let mut reopened = PushStore::open(dir.path()).unwrap();
+        let sub = reopened.subscription("phone").expect("the record is kept");
+        assert!(sub.lapsed);
+        assert!(!sub.details && sub.calendar);
+        assert_eq!(sub.agents, AgentNotices::Questions);
+        assert_eq!(sub.endpoint, "https://fcm.googleapis.com/a");
+        assert!(sub.p256dh.is_empty() && sub.auth.is_empty(), "nothing left to encrypt to");
+        assert!(!reopened.subscription("other").unwrap().lapsed);
+        // Nothing is sent to it — and a notice only it wanted costs no budget.
+        let out = reopened.deliveries(&calendar_notice(), "t", &paired).unwrap();
+        assert_eq!(out.iter().map(|d| d.endpoint.as_str()).collect::<Vec<_>>(), ["https://fcm.googleapis.com/o"]);
+        let question = agent_tab().notice(concat!(crate::app_slug!(), "-x"), AgentTurn::Question, None);
+        assert!(reopened.deliveries(&question, "q", &paired).unwrap().is_empty());
+        assert_eq!(reopened.sent.len(), 1);
+
+        // The phone's refresh registers a fresh subscription: live again.
+        reopened
+            .subscribe("phone", "https://fcm.googleapis.com/a2", &phone_key(), &auth, chosen)
+            .unwrap();
+        let sub = PushStore::open(dir.path()).unwrap();
+        let sub = sub.subscription("phone").unwrap();
+        assert!(!sub.lapsed);
+        assert_eq!(sub.endpoint, "https://fcm.googleapis.com/a2");
+        assert!(!serde_json::to_string(sub).unwrap().contains("lapsed"), "left out while false");
+    }
+
+    #[test]
+    fn a_lapsed_record_goes_with_an_unsubscribe_and_with_forget_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut push = PushStore::open(dir.path()).unwrap();
+        let auth = Base64UrlUnpadded::encode_string(&[7u8; 16]);
+        for device in ["a", "b"] {
+            let endpoint = format!("https://fcm.googleapis.com/{device}");
+            push.subscribe(device, &endpoint, &phone_key(), &auth, prefs(true)).unwrap();
+            push.lapse_endpoint(&endpoint);
+        }
+        push.forget_device("a").unwrap();
+        assert!(push.subscription("a").is_none());
+        assert!(push.subscription("b").is_some_and(|s| s.lapsed));
+        push.forget_all().unwrap();
+        assert!(PushStore::open(dir.path()).unwrap().subscription("b").is_none());
+    }
+
+    #[test]
+    fn a_push_file_written_before_lapsed_records_still_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = phone_key();
+        fs::write(
+            dir.path().join("push.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema": 1,
+                "subscriptions": [{
+                    "device_id": "phone",
+                    "endpoint": "https://fcm.googleapis.com/a",
+                    "p256dh": key,
+                    "auth": Base64UrlUnpadded::encode_string(&[7u8; 16]),
+                    "details": true,
+                    "created_at": 1,
+                }],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut push = PushStore::open(dir.path()).unwrap();
+        let sub = push.subscription("phone").expect("row");
+        assert!(!sub.lapsed && sub.calendar);
+        assert_eq!(push.deliveries(&calendar_notice(), "t", &["phone".into()]).unwrap().len(), 1);
+    }
+
+    #[test]
     fn forgetting_all_rotates_the_vapid_key() {
         let dir = tempfile::tempdir().unwrap();
         let mut push = PushStore::open(dir.path()).unwrap();
@@ -790,7 +919,33 @@ mod tests {
             tab_id: "t-opaque".into(),
             tab_label: "Claude".into(),
             attached: false,
+            devices: None,
         }
+    }
+
+    /// A scope open to some phones: its notice reaches only their
+    /// subscriptions, and one that no allowed phone wants costs nothing — no
+    /// budget, and no cooldown that would hold back the next turn.
+    #[test]
+    fn an_agent_notice_reaches_only_the_allowed_phones_and_spends_nothing_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut push = PushStore::open(dir.path()).unwrap();
+        let auth = Base64UrlUnpadded::encode_string(&[3u8; 16]);
+        let all = PushPrefs { details: true, calendar: true, agents: AgentNotices::All };
+        push.subscribe("d1", "https://fcm.googleapis.com/1", &phone_key(), &auth, all).unwrap();
+        push.subscribe("d2", "https://fcm.googleapis.com/2", &phone_key(), &auth, all).unwrap();
+        let question = agent_tab().notice(concat!(crate::app_slug!(), "-x"), AgentTurn::Question, None);
+
+        let out = push.deliveries(&question, "k", &["d2".into()]).unwrap();
+        assert_eq!(out.iter().map(|d| d.endpoint.as_str()).collect::<Vec<_>>(), ["https://fcm.googleapis.com/2"]);
+        assert_eq!(push.sent.len(), 1);
+
+        // Allowed only to a phone with no subscription: nothing is spent.
+        assert!(push.deliveries(&question, "k3", &["d3".into()]).unwrap().is_empty());
+        assert_eq!(push.sent.len(), 1, "no budget for a notice nobody may get");
+        assert!(!push.recent.contains_key("k3"), "no cooldown either");
+        // So the same tab's next notice, once a phone may get it, goes out.
+        assert_eq!(push.deliveries(&question, "k3", &["d1".into()]).unwrap().len(), 1);
     }
 
     #[test]
@@ -812,7 +967,7 @@ mod tests {
         }
         let paired: Vec<String> = (0..3).map(|i| format!("d{i}")).collect();
 
-        let question = agent_tab().notice("eldrun-raw-tmux", AgentTurn::Question, None);
+        let question = agent_tab().notice(concat!(crate::app_slug!(), "-raw-tmux"), AgentTurn::Question, None);
         let out = push.deliveries(&question, "k1", &paired).unwrap();
         assert_eq!(out.iter().map(|d| d.endpoint.as_str()).collect::<Vec<_>>(), [
             "https://fcm.googleapis.com/1",
@@ -827,7 +982,7 @@ mod tests {
         assert_eq!(full["body"], "Needs your answer");
 
         // Within the cooldown the same tab stays quiet, even for a new edge.
-        let done = agent_tab().notice("eldrun-raw-tmux", AgentTurn::Done, Some("fix the\n  tests"));
+        let done = agent_tab().notice(concat!(crate::app_slug!(), "-raw-tmux"), AgentTurn::Done, Some("fix the\n  tests"));
         assert!(push.deliveries(&done, "k1", &paired).unwrap().is_empty());
         // Another tab is not held back, and a finished turn reaches only "All",
         // quoting the prompt it answered on one line.

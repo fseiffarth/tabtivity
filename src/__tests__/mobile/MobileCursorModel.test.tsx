@@ -64,6 +64,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND } from "../../lib/brand";
 
 const ESC = String.fromCharCode(27);
 const DOWN = `${ESC}[B`;
@@ -121,7 +122,7 @@ const cursorTab = {
   viewer_busy: false,
 };
 
-describe("Eldrun Mobile — Cursor agent's model sheet", () => {
+describe(`${BRAND.display} Mobile — Cursor agent's model sheet`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];

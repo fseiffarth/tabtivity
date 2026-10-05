@@ -20,6 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
 import { useTabsStore, BLOB_TAB_CMD, type TabEntry } from "../../stores/tabs";
+import { BRAND } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -30,7 +31,7 @@ function shellTab(over: Partial<TabEntry> = {}): TabEntry {
     cmd: "bash",
     args: [],
     env: {},
-    cwd: "/home/u/eldrun/root",
+    cwd: `/home/u/${BRAND.slug}/root`,
     kind: "shell",
     scope: "root",
     ...over,
@@ -67,7 +68,7 @@ function seedRoot(tabs: TabEntry[]) {
 
 /** The last save_tab_layout invoke's projectId + tabs + allowClear. */
 function lastSave() {
-  const call = invokeMock.mock.calls.find((c) => c[0] === "save_tab_layout");
+  const call = invokeMock.mock.calls.find((c) => c[0] === "workspace_sync");
   if (!call) return null;
   const arg = call[1] as { projectId: unknown; tabs: unknown[]; allowClear: boolean };
   return { projectId: arg.projectId, tabs: arg.tabs, allowClear: arg.allowClear };
@@ -88,7 +89,7 @@ describe("persistScope — the root scope persists like a project", () => {
   });
 
   it("treats a root holding only the seeded 3D-blob as empty (vouches for a clear)", async () => {
-    // The blob is Eldrun's own default tab: not restorable, never persisted. A
+    // The blob is Tabtivity's own default tab: not restorable, never persisted. A
     // root at only its default IS empty, so it must license the clear — otherwise
     // a root closed back to default would resurrect its old tabs next launch.
     seedRoot([blobTab()]);

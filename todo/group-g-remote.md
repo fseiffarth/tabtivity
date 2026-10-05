@@ -9,7 +9,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
 
 28. ✅ **SSH-based projects (remote path, remote agent).** Implemented via an
     **sshfs mount**: a remote project's bytes live on `host:remote_path` and are
-    mounted to `~/.local/share/eldrun/mounts/<project-id>/`; the project's
+    mounted to `~/.local/share/tabtivity/mounts/<project-id>/`; the project's
     `directory` points at that mountpoint so the file tree, terminal cwd, and git
     keep working unchanged. New `RemoteSpec` (`user?`, `host`, `port?`,
     `remote_path`) on the project schema + `projects.json` `extra`. New
@@ -24,7 +24,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
     SSH-address field + Connect and an in-app remote folder browser. Active
     remote project is mounted on startup (best-effort, non-blocking) and on
     switch. Requires `sshfs`/FUSE locally. **Runtime QA pending** (agents can't
-    launch Eldrun); password/interactive auth out of scope for v1;
+    launch Tabtivity); password/interactive auth out of scope for v1;
     project-removal unmount is a follow-up (no delete command exists yet — stale
     mounts are cleaned up on next app exit).
     - *Test (e.g.):* add a project via SSH address against a key-auth host
@@ -42,7 +42,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
     - **Manual QA checklist (live, step-by-step).** Runtime test plan for
-      #28/#28b — agents can't launch Eldrun, so these are hand-checks. Each box is
+      #28/#28b — agents can't launch Tabtivity, so these are hand-checks. Each box is
       one check; a phase is done when all its boxes are ticked.
       - *Phase 0 — prerequisites / baseline.*
         - [ ] Local tooling on `PATH`: `sshfs`, `fusermount` (or `umount`); for
@@ -74,7 +74,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       - *Phase 3 — create remote project.*
         - [ ] Connect → browse → Use folder → Create → project created with a
           generated id.
-        - [ ] Mounted under `~/.local/share/eldrun/mounts/<id>/`; `directory`
+        - [ ] Mounted under `~/.local/share/tabtivity/mounts/<id>/`; `directory`
           points at the mountpoint (check `/proc/mounts`).
         - [ ] Scaffold files written **over the mount** only where missing.
         - [ ] `project.json` carries `remote`; `projects.json` entry mirrors it
@@ -131,7 +131,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         - [ ] `project.json`/`projects.json` round-trip `remote` across restart.
     - **28b — Remote agent execution (decided 2026-06-19: agents run ON the
       remote).** A remote project's bytes are sshfs-mounted **only** for
-      Eldrun's own file tree / git / `list_dir`; terminal **and agent** tabs
+      Tabtivity's own file tree / git / `list_dir`; terminal **and agent** tabs
       instead run on the remote host via `ssh -tt`. `services/ssh_exec.rs`
       (`wrap_pty_options`) rewrites any spawn whose cwd is under the mounts root
       into `ssh -tt [-p port] [user@]host '<remote_command>'`, multiplexed over a
@@ -208,7 +208,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
           a catch-all) + the registry tripwire above.
       - [ ] 🖐️ Manual test — connect (VPN if needed) → open a remote agent tab →
         the CLI is detected/installed, logs in on first run, and runs a pipeline
-        on the remote (remote GPU/env), with edits visible in Eldrun's file tree.
+        on the remote (remote GPU/env), with edits visible in Tabtivity's file tree.
         - [ ] ✅ Works on Linux (X11)
         - [ ] ❌ Doesn't work on Linux (X11)
         - [ ] ✅ Works on Linux (Wayland)
@@ -249,7 +249,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         `wrap_pty_options` rewrites `opts.cmd` `claude`/`codex`→`ssh`
         (`commands/terminal.rs`) *before* `spawn_pty`'s `resolve_agent_session`
         dispatches on `opts.cmd` (`terminal/mod.rs`), so `--resume`/`codex
-        resume` are never injected; the ELDRUN_TAB_UID + SessionStart mechanism
+        resume` are never injected; the TABTIVITY_TAB_UID + SessionStart mechanism
         is also local-only (it reads the local `~/.claude`/live_sessions while a
         remote agent logs on the remote). Resolve session args *before* the
         ssh-exec rewrite and embed them in `remote_command`, and install the
@@ -372,8 +372,8 @@ container) — as opposed to the git **push** axis (#21/#22).*
     resume valid), so the v1 `container_workdir` translation layer, the
     `ContainerSource` enum, `run_args`, and `engine` (podman) are all dropped
     for v1. `services/sandbox.rs` gains the lifecycle half itself
-    (`up`/`down`/`down_all`/`sweep_orphans`, `eldrun-<project-id>` naming +
-    `eldrun.owner`/`eldrun.spec-hash` labels, mirroring `services/remote.rs`'s
+    (`up`/`down`/`down_all`/`sweep_orphans`, `tabtivity-<project-id>` naming +
+    `tabtivity.owner`/`tabtivity.spec-hash` labels, mirroring `services/remote.rs`'s
     per-project connection lifecycle) instead of a new `docker_runtime.rs`;
     `wrap_pty_options_docker` becomes run-once-then-exec-per-tab instead of a
     new `docker_exec.rs`; no new `commands/docker.rs`. `pty_spawn`'s existing
@@ -384,7 +384,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       shippable, lands first because the lifecycle rewrite touches the same
       lines): preflight daemon-down vs image-missing misdiagnosis; toggle
       preserves existing `SandboxSpec` fields instead of resetting to
-      default; `--init` + `eldrun.owner`/`eldrun.project` labels on every
+      default; `--init` + `tabtivity.owner`/`tabtivity.project` labels on every
       container; hide/disable the toggle in the Windows UI (backend already
       refuses, #86).
     - [x] **38b — Phase 1: container lifecycle.** `up`/`down`/`down_all`/
@@ -415,7 +415,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       conversation on flip, same hazard class as `tabs/agentModes.ts`.
     - [x] **38e — Phase 4: spec sources & UX.** Auto-detect an in-repo
       `Dockerfile`/`.devcontainer/devcontainer.json` as the container source;
-      fall back to the existing `eldrun-agent-sandbox:latest` reference
+      fall back to the existing `tabtivity-agent-sandbox:latest` reference
       image; preflight's "image missing" error becomes a one-click
       open-new-tab-paste-run build flow (house convention); minimal spec UI
       for image/network/memory/cpus/readonly (safe now that 38a makes the
@@ -628,7 +628,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       badge that lists all diverged files with Take-host / Keep-local resolve
       actions. **Deferred:** deletion propagation is intentionally out of scope
       (a one-sided delete is skipped, never mirrored) — needs a tombstone design;
-      the mirror watcher fires on Eldrun's own pull writes (harmless: the next
+      the mirror watcher fires on Tabtivity's own pull writes (harmless: the next
       pass finds those files green) — add a post-write suppression window only if
       it proves chatty. Gates: `npx tsc --noEmit`, `cargo test` (448 lib) green;
       needs live-host QA (auto pull/push timing, orange skip, lifecycle).
@@ -636,11 +636,11 @@ container) — as opposed to the git **push** axis (#21/#22).*
     - [x] **28n — Git-aware local↔remote lockstep sync.** **Phases 1–3 ✅ Done
       (2026-07-02; opt-in per project; checkout lockstep + fast-forward-only ref
       transfer + desync detection/display · 🧪 live-host QA pending).** Phase 2
-      (Use-local/Use-remote resolution + `refs/eldrun/backup/*` reset) and Phase 3
+      (Use-local/Use-remote resolution + `refs/tabtivity/backup/*` reset) and Phase 3
       (initial-pairing authority + streaming transport for large bundles) landed
       2026-07-02: `transfer_and_apply` gained a `force` path that, for diverged /
       dest-ahead branches and conflicting tags, saves the overwritten tip to a
-      timestamped `refs/eldrun/backup/*` ref then resets to the authority (a
+      timestamped `refs/tabtivity/backup/*` ref then resets to the authority (a
       checked-out loser branch via `reset --hard`, moving ref + tree); `resolve`/
       `resolve_inner` (pause auto-sync → force winner→loser → restamp bases →
       reconcile) back the `git_peer_resolve(authority)` command + Use local / Use
@@ -658,7 +658,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       `npx tsc`, `vitest` (745) green.
       New `services/git_peer.rs` (AppHandle-free: `Peer` enum runner, pure parsers/
       `decide`/`bundle_create_args`, `probe`, `reconcile` via delta `git bundle` over
-      the pooled SFTP into `refs/eldrun/incoming/*` + ff-apply, `checkout_lockstep`,
+      the pooled SFTP into `refs/tabtivity/incoming/*` + ff-apply, `checkout_lockstep`,
       `.git`-watcher + host-poll detection loop, `GitPeerRegistry`) + `commands/
       git_peer.rs` (`git_peer_{status,set_enabled,sync_now,checkout}`, `git-peer-status`
       event). `services/sync_auto.rs` gained a per-project `paused` `AtomicBool` (checked
@@ -679,7 +679,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       stashes, or worktree metadata).
       - **Checkout lockstep.** A branch switch on either side checks out the same
         branch at the same commit on its peer; checking out a commit synchronizes
-        the same detached HEAD. Eldrun-triggered checkouts reconcile immediately;
+        the same detached HEAD. Tabtivity-triggered checkouts reconcile immediately;
         a local `.git` watcher plus connected-host polling detects CLI-driven
         changes. Pause ordinary file auto-sync during checkout, then refresh its
         tracked-file bases so checkout writes do not become false conflicts.
@@ -688,7 +688,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         Diverged histories, simultaneous incompatible checkouts, or a dirty peer
         that blocks checkout enter a visible **desynchronized** state; never
         force-checkout or discard work. Offer Retry after cleanup and an explicit
-        Use local / Use remote resolution, creating timestamped `refs/eldrun/backup/*`
+        Use local / Use remote resolution, creating timestamped `refs/tabtivity/backup/*`
         safety refs before resetting the losing side.
       - **Initial pairing.** Remote import initializes the mirror from the remote;
         extending a local project initializes the remote from local. If both
@@ -710,11 +710,11 @@ container) — as opposed to the git **push** axis (#21/#22).*
         local project shows no bar; Phase 2: resolve routes to `git_peer_resolve`,
         confirm-dismiss no-ops). Phase 2/3 pure-logic tests: `winner_is_local`,
         tag backup-ref naming, force-targets-diverged/dest-ahead pins.
-      - [ ] 🖐️ Manual test — live SSH host: edit/commit/checkout from Eldrun and
+      - [ ] 🖐️ Manual test — live SSH host: edit/commit/checkout from Tabtivity and
         from local/remote shells, verify both trees remain on the same branch or
         detached commit, then exercise dirty-peer recovery and Use-local/Use-remote
         resolution (confirm the loser's overwritten tip lands under
-        `refs/eldrun/backup/*` and both trees converge). Also verify initial pairing:
+        `refs/tabtivity/backup/*` and both trees converge). Also verify initial pairing:
         import a remote repo → mirror initializes from it; extend a local repo onto a
         host → remote initializes from local; and a large-history bundle streams
         through without the old 64 MiB rejection.
@@ -728,7 +728,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         - [ ] ❌ Doesn't work on macOS
 
     - [ ] **28o — Scaffold both sides of SSH projects.** New and imported SSH
-      projects must receive the canonical Eldrun scaffold in both their local
+      projects must receive the canonical Tabtivity scaffold in both their local
       mirror and remote project root. Create only missing files: existing content
       on either side is authoritative and must never be truncated or replaced.
       The existing **Skip scaffolding** option suppresses generation on both
@@ -780,7 +780,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       matrix over the shipped #28n code surfaced eight defects, two of them
       data-loss/correctness class. Root cause of most: **byte-sync
       (`sync_auto`) and git lockstep (`git_peer`) were blind to each other** —
-      byte-sync's candidate walk excludes only `.git`/`.eldrun` and has no notion
+      byte-sync's candidate walk excludes only `.git`/`.tabtivity` and has no notion
       of "git-tracked", so a file lockstep is about to deliver as a *commit* may
       first be shipped as *loose bytes* and land on the peer **untracked**, which
       then blocks the very fast-forward that would have delivered it. Verified
@@ -836,7 +836,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         batching. `can_early_out` skips the whole pass when neither side's ref signature
         moved and we were green — which is what kills the `git add` storm; a manual Retry
         always forces a full pass (`ReconcileOpts::forced`).
-      - [x] **D6 — backup refs were write-only.** `refs/eldrun/backup/*` accrued forever,
+      - [x] **D6 — backup refs were write-only.** `refs/tabtivity/backup/*` accrued forever,
         pinned objects, and had no list/restore/prune UI — which also hollowed out the
         "it's recoverable" defence of Use-local/Use-remote. Fixed: `git_peer_backups`
         (both peers, newest first) + a Backups affordance in the lockstep bar +
@@ -852,7 +852,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       - [x] **D8 — divergence offered authority, not merge.** Only Use-local/Use-remote:
         pick a winner, the loser's commits leave the tree. Fixed (deliberately minimal —
         no merge UI): a reconcile that detects a divergence parks the peer's tip at
-        `refs/eldrun/peer/<branch>` (`peer_ref_op`; the objects are already there from the
+        `refs/tabtivity/peer/<branch>` (`peer_ref_op`; the objects are already there from the
         bundle, so it is free) and clears it again once the branch is back in step; a
         **Resolve in terminal** action opens a local shell in the mirror so the user
         merges/rebases with plain git and the next pass fast-forwards the host normally.
@@ -868,7 +868,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         differs"); symmetric `probe_error` refusal truth table; cold-pool gate +
         `disconnected_state`; `parse_probe_block` round-trip; early-out predicate;
         backup-ref parse + prune selection; origin propagation skipped when the dest has
-        one; only diverged branches park `refs/eldrun/peer/*`. **Plus three that exercise
+        one; only diverged branches park `refs/tabtivity/peer/*`. **Plus three that exercise
         the real thing rather than a parser**, because the two riskiest behaviours here are
         git's and the shell's, not ours: the ff-retry against a real repo (it clears
         byte-identical untracked collisions and fast-forwards; one differing file aborts
@@ -944,7 +944,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
 
-82. **Split-tunnel the OpenVPN connection (per-project opt-in).** Eldrun passes
+82. **Split-tunnel the OpenVPN connection (per-project opt-in).** Tabtivity passes
     OpenVPN *no* routing flags (`services/openvpn::openvpn_args`), so whatever the
     `.ovpn` pushes applies to the whole machine — typically `redirect-gateway def1`
     plus DNS, which reroutes the browser and every other process while the tunnel is
@@ -980,12 +980,12 @@ container) — as opposed to the git **push** axis (#21/#22).*
     `connections_headless: false`, the tunnel is `pkexec openvpn` inside a terminal
     tab. It used to carry no `--writepid`, so it never entered the backend registry:
     `openvpn_status`/`openvpn_active` could not see it, `openvpn_disconnect` could not
-    kill it, and `disconnect_all()` at exit missed it — **it outlived Eldrun with the
+    kill it, and `disconnect_all()` at exit missed it — **it outlived Tabtivity with the
     machine's routing still changed**. `pollVpnUp` (`stores/projects.ts`) polls
     `openvpn_status`, so it could never observe such a tunnel come up either, and
     always timed out to a red lamp.
     Fixed by *arming* the interactive connect: `interactive_connect_command` now
-    picks a pidfile Eldrun owns, deletes any stale one, appends
+    picks a pidfile Tabtivity owns, deletes any stale one, appends
     `--writepid <runtime>/<stem>.interactive.pid`, and registers the claim in a new
     pid-keyed `interactive_registry` (`services/openvpn.rs`). `is_connected`,
     `active_configs`, `disconnect` and `disconnect_all` all consult it, so a
@@ -1000,7 +1000,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       (`services/openvpn.rs` tests).
     - [ ] 🖐️ Manual test — with headless connections off, bring a tunnel up in a
       terminal tab; the VPN lamp goes green by itself, the header indicator offers a
-      working Disconnect, and quitting Eldrun brings the tunnel down (`ip route`
+      working Disconnect, and quitting Tabtivity brings the tunnel down (`ip route`
       restored).
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
@@ -1050,18 +1050,18 @@ container) — as opposed to the git **push** axis (#21/#22).*
     frontend `lib/terminal/tmuxSession.ts`, `lib/remote/closeRemoteTab.ts`, CenterPanel/TabPane/TerminalView
     plumbing, the pill toggle + a global Settings toggle, and the multi-host Sessions view in
     `ProjectFilesView`.)* Shipped **default ON** rather than behind the experimental flag (per user).
-    Beyond the original remote scope it also covers: **local** persistence (Unix — survives an
-    Eldrun *crash*), **worker-host** sessions (the Sessions view aggregates every connected host),
+    Beyond the original remote scope it also covers: **local** persistence (Unix — survives a
+    Tabtivity *crash*), **worker-host** sessions (the Sessions view aggregates every connected host),
     and per-row **Rename**. Agent tabs are excluded (they resume via their own session).
     Live-QA on a real host / crash still pending (Done ≠ Tested). A remote shell/script is a child of
     the `ssh -tt` channel, so it dies (`SIGHUP`) on any channel break — network
-    blip, laptop sleep, VPN drop, or Eldrun quitting. Run it **inside a tmux
+    blip, laptop sleep, VPN drop, or Tabtivity quitting. Run it **inside a tmux
     server on the host** instead, decoupled from SSH: reconnect or relaunch and
     the same command reattaches to the still-running session. Server-side, so it
-    works identically for a Windows/macOS Eldrun (only the local `ssh` client
-    differs); **remote projects only** (a local process is Eldrun's own child,
+    works identically for a Windows/macOS Tabtivity (only the local `ssh` client
+    differs); **remote projects only** (a local process is Tabtivity's own child,
     not decoupled by SSH). One seam: `remote_command` (`ssh_exec.rs:117`) wraps
-    the final `exec` in `tmux new-session -A -D -s eldrun-<tab-uid> -- …`, nesting
+    the final `exec` in `tmux new-session -A -D -s tabtivity-<tab-uid> -- …`, nesting
     the existing `cd`/env-export/`remote_agents` prelude untouched — `-A` makes
     the one command both start and resume, the stable per-tab name is what
     reattach keys on. Restart-resume is then nearly free (a remote shell tab is
@@ -1072,7 +1072,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
     Headline surface is a **Sessions view** in the file viewer, alongside Files /
     Git / Search / Apps / Orange (`ProjectFilesView.tsx:33,607`) — a remote-only
     toolbar toggle (mirrors the Orange/diverged view) listing host `tmux ls`
-    sessions (incl. hand-started ones and orphans from a crashed Eldrun); click a
+    sessions (incl. hand-started ones and orphans from a crashed Tabtivity); click a
     row → open a shell tab that **attaches** (`tmux new-session -A -D -s <name>`),
     per-row kill/reveal. Renders in both the right panel and the Files tab for
     free (one component). Rationale: `docs/context/tmux_sessions.md`. `dtach`/`abduco`
@@ -1085,7 +1085,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       (uuid mint is tmux-safe, default-ON gate, shell-only rule, attach-tab restore,
       and the **key-regenerates-but-tmuxSession-stays-stable** reattach guarantee).
     - [ ] 🖐️ Manual test — remote long-running `python -u` run: kill network /
-      sleep → reconnect → output continues; quit Eldrun mid-run → relaunch →
+      sleep → reconnect → output continues; quit Tabtivity mid-run → relaunch →
       shell tab reattaches, run still going; explicit tab-close → `tmux ls` shows
       the session gone; tmux-less host → tab works, notice shown, no persistence;
       hand-start a session on the host → it appears in the `☰` Sessions view →
@@ -1101,7 +1101,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
 
 86. **HPC / SLURM pipeline (guided login → run → watch).** *(Phases A + B implemented —
     `docs/quirky-knitting-umbrella` plan.)* On a SLURM cluster, computation must go
-    through the scheduler (`sbatch`/`srun`), never the login node. Eldrun already
+    through the scheduler (`sbatch`/`srun`), never the login node. Tabtivity already
     connects to such a host as a remote project; this adds a guided run/watch layer
     so a newcomer never memorizes a SLURM command.
     **Phase A — run/watch core (done, untested on a cluster):** backend
@@ -1188,7 +1188,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       `docs/hpc_workspace_plan.md`).** Root-in-workspace is only safe if the two
       things it costs are handled: a workspace path nobody can remember, and an
       expiry that deletes the project's host tree on a ~1-year certainty.
-      **C.1 (anchor):** `hpc_ws_anchor` creates a small `~/eldrun/<project>/` on the
+      **C.1 (anchor):** `hpc_ws_anchor` creates a small `~/tabtivity/<project>/` on the
       cluster — `logs/`, a `workspace` symlink, and an **append-only**
       `workspaces.txt` (date, workspace id, path, project, local mirror) — because
       `ws_restore` is keyed by the workspace *name* and the tree that carried it is
@@ -1223,7 +1223,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
       and the prefix trap (`…-demo2` must not match `…-demo`, which would point
       Extend at the wrong allocation).
     - [ ] 🖐️ Manual test (cluster, C.1/C.2) — the wizard's anchor checkbox creates
-      `~/eldrun/<project>/{logs,workspace,workspaces.txt}` with the link resolving
+      `~/tabtivity/<project>/{logs,workspace,workspaces.txt}` with the link resolving
       and the record naming the workspace; a submitted job's log appears in
       `logs/` and the log tab tails it; **Watch** on a finished job still finds it;
       **Pull logs** lands them in the mirror's `logs/`; with the workspace inside a
@@ -1327,7 +1327,7 @@ container) — as opposed to the git **push** axis (#21/#22).*
         watcher observes; a non-green state never early-outs, so a diverged or
         blocked project re-ran the full SSH pass every ~1 s. `poll_loop` skips a
         burst that leaves the mirror's ref signature as the last pass left it
-        (`watcher_burst_is_own`); byte-sync's watcher ignores `.git`/`.eldrun`
+        (`watcher_burst_is_own`); byte-sync's watcher ignores `.git`/`.tabtivity`
         (`event_touches_synced_bytes`).
       - **A commit was a checkout.** `detect_and_sync` compared whole
         `HeadRef`s (sha included), so every mirror commit replayed
@@ -1410,7 +1410,7 @@ deliberately did **not** do, in priority order:
   ✅ Done · 🧪 Untested). `TerminalView`'s spawn `catch` runs the error through
   `hpcGuardRefusal` and, on a hit, raises the `HpcGuardDialog` (new **`connect`**
   kind, wording of its own) instead of printing
-  `[spawn error: ELDRUN_HPC_GUARD connect user@host:22]` into the pane. Going
+  `[spawn error: TABTIVITY_HPC_GUARD connect user@host:22]` into the pane. Going
   ahead is **connect-then-spawn**, not a flag — connecting the project is what
   actually lifts the refusal, since the pool then holds a standing authorization
   (`services::remote::connect_host`), which is the only distinction that seam can
@@ -1454,9 +1454,9 @@ deliberately did **not** do, in priority order:
 
 ### G.25 — The socketless ControlMaster has no reclaimer
 
-Observed 2026-08-03, with no Eldrun running: four `ssh … [mux]` masters alive,
+Observed 2026-08-03, with no Tabtivity running: four `ssh … [mux]` masters alive,
 21–31 min old, each holding an ESTABLISHED `:22` connection — and
-`~/.local/share/eldrun/ssh-control/` **empty**. Socket unlinked, master still
+`~/.local/share/tabtivity/ssh-control/` **empty**. Socket unlinked, master still
 running. (They expired on their own within the day, so this is a leak with a
 ceiling, not an unbounded one — but the ceiling is whatever the master decides,
 not anything we set: they had already outlived `ControlPersist=600` by 2–3×.)
@@ -1506,7 +1506,7 @@ connection and get none of the warm-reconnect benefit.
   `/home/My` — and the sweep would then have compared a wrong path, silently
   matching nothing. It anchors past the whole `<control_dir>/cm-` prefix now,
   where only the hex filename follows and no space can occur.
-- [ ] 🖐️ **Manual test** — quit Eldrun with remote projects connected, confirm the
+- [ ] 🖐️ **Manual test** — quit Tabtivity with remote projects connected, confirm the
   masters keep their sockets and answer `-O check`, and that the next launch's
   first reconnect does not re-prompt for credentials.
 
@@ -1528,11 +1528,11 @@ untested tag until a VM has actually booted on this machine).
   remote; no mirror, no lockstep), boot-on-connect inside `remote_connect`,
   teardown on deactivate (container rule) / exit, archive/restore/delete move
   the VM state dir, sandbox↔VM mutual exclusion both ways, the
-  **no-local-fallback spawn guard** (`vm_spawn_refusal`, `ELDRUN_VM_DOWN`
+  **no-local-fallback spawn guard** (`vm_spawn_refusal`, `TABTIVITY_VM_DOWN`
   sentinel), frontend locality pinning (`effectiveTabLocation` `vmProject`),
   and the "Download to…" size-confirmed SFTP exit in the file tree.
 - [x] Phase 3 — `bake-base.sh` build-tab command (provisioning boot streams
-  the serial console into the tab; converts to `eldrun-base-1.qcow2`).
+  the serial console into the tab; converts to `tabtivity-base-1.qcow2`).
 - [x] Phase 4 — `services::vm_proxy` allowlisting CONNECT proxy, guestfwd
   wiring, three-mode egress knob, blocked-CONNECT log surfaced in the VM
   settings dialog, clone-time temporary allow.
@@ -1548,7 +1548,7 @@ untested tag until a VM has actually booted on this machine).
   install tab, re-probing the doctor while it runs so the tier appears without
   reopening the dialog. What a package manager cannot fix — `/dev/kvm` access,
   disk space — carries no button, only the doctor's sentence. Untested live.
-- [ ] Frontend follow-ups — an `ELDRUN_VM_DOWN` spawn error currently renders
+- [ ] Frontend follow-ups — a `TABTIVITY_VM_DOWN` spawn error currently renders
   as terminal text; turn it into a "Boot VM" placeholder action (like
   `RemotePaneHold`). The locality *badges* (`TabLocalityBadges`) still label a
   VM project's agent tabs with the per-kind default; the spawn path is pinned,
@@ -1564,7 +1564,7 @@ untested tag until a VM has actually booted on this machine).
   (`commands::vm`); locality pinning (`src/__tests__/remote/VmTabLocation.test.ts`).
 - [ ] 🖐️ **Manual test (Phase 1 QA)** — fetch the base image, create a VM
   project, watch it boot, ssh lamp green, open a shell tab (lands in
-  `/home/eldrun/project`), `git init` + commit inside, deactivate (VM powers
+  `/home/tabtivity/project`), `git init` + commit inside, deactivate (VM powers
   down), reactivate, delete. Then a clone-into-VM import against a real repo,
   and a blocked-CONNECT check (curl example.com from inside → 403 + pill log).
 
@@ -1585,7 +1585,7 @@ untested tag until a VM has actually booted on this machine).
     the server drops the handshake in silence, and 60 seconds later the log says
     `TLS key negotiation failed to occur within 60 seconds (check your network
     connectivity)` — pointing at the one thing that is fine — then restarts on
-    `SIGUSR1[soft,tls-error]` and does it again. Eldrun matched only that timeout,
+    `SIGUSR1[soft,tls-error]` and does it again. Tabtivity matched only that timeout,
     so it repeated the wrong advice. The expired-cert check now runs *first*
     (symptom must not outrank cause), and a peer-chain `VERIFY ERROR` is reported
     separately, since an expired server cert needs a different person to fix it.
@@ -1638,8 +1638,8 @@ untested tag until a VM has actually booted on this machine).
     remote spec, compute hosts, container spec, interpreter, categories), the
     `project.json`, the tab layout in `<state_dir>/sessions/<key>/`, the time
     history and the box membership all live elsewhere, keyed by project id, so
-    every question Eldrun ever asked about that project had to be answered
-    again. The pill menu now has "Export project…" (writes one `.eldrunproj`
+    every question Tabtivity ever asked about that project had to be answered
+    again. The pill menu now has "Export project…" (writes one `.tabtivityproj`
     zip) and the ＋ menu "Import Project File", which registers it on the far
     side with its paths re-pointed. The manifest is the trusted half of the
     bundle and the payload is not: entries are zip-slip confined, symlinks are

@@ -4,6 +4,7 @@ export {
   AGENT_LINE_RESET,
   PASTE_END,
   PASTE_START,
+  agentFamily,
   agentInputWrites,
   bracketsAgentMessage,
   sanitizeAgentMessage,

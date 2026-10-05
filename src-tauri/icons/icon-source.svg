@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="Eldrun">
-  <title>Eldrun</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="Tabtivity">
+  <title>Tabtivity</title>
   <!-- Opaque black coaster so the white glyph reads on any OS taskbar/switcher. -->
   <rect x="0" y="0" width="512" height="512" rx="96" fill="#000000" />
   <!-- Glyph scaled so the ring nearly fills the coaster (0.97 * 512, centered). -->

@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...
 
 import { ExecTrustDeclinedError, parseTrustRequest, withExecTrust } from "../../lib/execTrust";
 import { useExecTrustStore } from "../../stores/execTrust";
+import { BRAND } from "../../lib/brand";
 
 const request = {
   kind: "latexmkrc",
@@ -13,7 +14,7 @@ const request = {
   changed: false,
   items: [{ label: "/p/.latexmkrc", preview: "system('x')", truncated: false }],
 };
-const gateError = `eldrun-trust-required:${JSON.stringify(request)}`;
+const gateError = `${BRAND.slug}-trust-required:${JSON.stringify(request)}`;
 
 /** Answer the next question the store raises. */
 function answerNext(approved: boolean) {
@@ -34,7 +35,7 @@ describe("exec trust", () => {
   it("parses only the gate's own error", () => {
     expect(parseTrustRequest(gateError)?.fingerprint).toBe("abc");
     expect(parseTrustRequest("fatal: not a git repository")).toBeNull();
-    expect(parseTrustRequest("eldrun-trust-required:{broken")).toBeNull();
+    expect(parseTrustRequest(`${BRAND.slug}-trust-required:{broken`)).toBeNull();
   });
 
   it("approves what was shown, then runs the action again", async () => {

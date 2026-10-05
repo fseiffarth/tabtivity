@@ -1,10 +1,10 @@
 # Careful mode on remote hosts
 
-Why Eldrun collects *less* from a machine it merely has an account on than from
+Why Tabtivity collects *less* from a machine it merely has an account on than from
 the machine it runs on, and what "less" is exactly.
 
 **Careful is the default for every remote machine.** It is not a cluster mode
-that has to be detected — Eldrun cannot tell whose machine a host is, and the two
+that has to be detected — Tabtivity cannot tell whose machine a host is, and the two
 wrong guesses do not cost the same: a wrong careful costs a thinner monitor pane
 and a skipped host census, a wrong full reading costs a usage-policy violation on
 somebody else's cluster. So the question is never asked of the host, only of the
@@ -17,7 +17,7 @@ rules that shaped it.
 ## The rules this exists for
 
 A university cluster is not a dev box someone lent you; it runs under usage
-regulations the account holder has agreed to. The ones Eldrun's host probes can
+regulations the account holder has agreed to. The ones Tabtivity's host probes can
 walk into (wording quoted from one university's usage regulations, but such
 rules are near-identical across sites, and the reasoning is not site-specific):
 
@@ -77,7 +77,7 @@ The load half:
   (`sysstat::OTHER_USERS`) rather than one row per uid, which would be a
   per-person breakdown by another name;
 - the pane polls a careful host every **12 s** instead of 3 s, and **not at all**
-  while Eldrun is in the background (`SystemMonitorPane`'s `CAREFUL_POLL_MS`);
+  while Tabtivity is in the background (`SystemMonitorPane`'s `CAREFUL_POLL_MS`);
 - the connect-time usage probe stops firing automatically at a host once it is
   known careful (`services::hpc_mode`); the report stays available on demand from
   the Machines menu.
@@ -97,7 +97,7 @@ system monitor's machine row (tab **and** the Machines-menu dialog), and the
 per-host connect dialog's "Go easy on this machine".
 
 The monitor passes that answer on every poll, and it is authoritative in **both**
-directions (`ELDRUN_CAREFUL=1`/`0` via `sysstat::remote_snapshot_script`) — the
+directions (`TABTIVITY_CAREFUL=1`/`0` via `sysstat::remote_snapshot_script`) — the
 only way a machine the user owns gets a full reading is for their answer to
 outrank anything the host says about itself.
 
@@ -105,7 +105,7 @@ outrank anything the host says about itself.
 whether SLURM is on `PATH` (`sbatch`/`sinfo`/`squeue`) and report the answer on
 their own first line, so the flag rides in the payload (`SystemSnapshot.careful`,
 `RemoteUsageReport.careful`). That still matters for a caller with no stored
-answer to pass — nothing in Eldrun hardcodes an institution's hostnames to guess
+answer to pass — nothing in Tabtivity hardcodes an institution's hostnames to guess
 with, so asking the host is the only signal left. `services::hpc_mode` remembers a
 positive verdict per SSH target for the process lifetime, for the caller holding
 no probe result at all (the connect path, deciding whether to fire the usage
@@ -149,7 +149,7 @@ Tagged, a machine gets:
 | network-traffic host poll (1 s) | polls | 12 s, and only while a session is open |
 | file-tree sync re-stat (15 s) | polls | never on a timer; window focus and an explicit re-list still refresh it |
 | "Remote host usage…" | reads every machine on open | not read automatically; the row offers **Read now** |
-| tmux persistence of a SLURM log tab | persists | not wrapped (`TabEntry.ephemeral`) — a `tail -F` must not outlive Eldrun on a login node. A real run (`srun --pty`) still persists |
+| tmux persistence of a SLURM log tab | persists | not wrapped (`TabEntry.ephemeral`) — a `tail -F` must not outlive Tabtivity on a login node. A real run (`srun --pty`) still persists |
 | Python run / debug, script run | runs | **asks first** when it would land on the tagged host |
 
 Three design notes worth keeping:
@@ -165,7 +165,7 @@ Three design notes worth keeping:
   warning everyone learns to click through. The gate sits on the two actions that
   actually compute.
 - **The gate is the backend's, not the UI's.** Every row above was once enforced
-  only in TypeScript, and the tag's central promise — *Eldrun never logs in here
+  only in TypeScript, and the tag's central promise — *Tabtivity never logs in here
   by itself* — was therefore only as good as the last surface anyone remembered
   to check. It wasn't: a hover over the header, a 15 s reconnect reconciler and a
   restored terminal tab each dialled a tagged login node. See below.
@@ -194,7 +194,7 @@ override, never into a silent login. The two shapes are:
 
 A **pooled** connection holds a standing authorization from `connect_host` to
 `teardown_pooled`: once the user has connected a tagged project, work riding that
-master — tabs, git, file reads — is not Eldrun connecting by itself, and this is
+master — tabs, git, file reads — is not Tabtivity connecting by itself, and this is
 also the only signal the backend has for telling a restored tab from a clicked
 one. The frontend gates stay in place on top of it; the redundancy is deliberate,
 because the two answer different questions ("should I offer this?" and "may this

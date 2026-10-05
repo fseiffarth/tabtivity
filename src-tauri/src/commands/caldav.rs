@@ -126,7 +126,7 @@ fn account_by_id(path: &Path, id: &str) -> Result<CalDavAccount, String> {
 /// The keychain account for a CalDAV login.
 ///
 /// Keyed by **server target, not account id** — the rule `ssh_account` and
-/// `mail_account` already hold to: one saved secret per login, so two Eldrun
+/// `mail_account` already hold to: one saved secret per login, so two Tabtivity
 /// accounts pointed at the same server share one entry instead of silently
 /// disagreeing about whether a password is saved. The backend owns the
 /// spelling; the frontend never mints one.
@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(
             account_key(&a),
             account_key(&b),
-            "two Eldrun accounts on one login share one saved secret"
+            concat!("two ", crate::app_name!(), " accounts on one login share one saved secret")
         );
         assert!(!account_key(&a).contains("account-1"));
     }

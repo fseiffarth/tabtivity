@@ -14,10 +14,10 @@
  *
  * The integration is deliberately *one line of consequence*: the wizard makes the
  * allocated workspace path the project's **remote root**, so every transport
- * Eldrun already has (SFTP upload, byte-sync, git lockstep, the run tabs) lands on
+ * Tabtivity already has (SFTP upload, byte-sync, git lockstep, the run tabs) lands on
  * the parallel filesystem instead of `$HOME` with no change of its own. The
  * alternative layout — project in `$HOME`, workspace symlinked in as `data/` — is
- * offered too, but its link is for the *host's* tools: Eldrun's byte-sync never
+ * offered too, but its link is for the *host's* tools: Tabtivity's byte-sync never
  * follows a symlink (`remote_sync::walk_host_files`, guard G3), so host-side files
  * under it are not mirrored. `linkedWorkspaceCaveat` is that sentence, in one
  * place, so both surfaces say it identically.
@@ -28,6 +28,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { HpcInfo, ProjectEntry } from "../../../types";
 import type { TranslationKey } from "../../i18n";
+import { BRAND } from "../../brand";
 
 export type { HpcInfo };
 
@@ -264,12 +265,12 @@ export function expiryTone(ws: HpcWorkspace): "none" | "ok" | "warn" | "urgent" 
   return "ok";
 }
 
-/** The default home-anchor location for a project: `eldrun/<safe-name>`, relative
+/** The default home-anchor location for a project: `tabtivity/<safe-name>`, relative
  *  to the cluster `$HOME` (the backend resolves and validates it there, so no
  *  caller has to know the remote home). */
 export function defaultAnchorRel(safeName: string): string {
   const clean = safeName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `eldrun/${clean || "project"}`;
+  return `${BRAND.slug}/${clean || "project"}`;
 }
 
 /** The `#SBATCH --output` value that routes a job's log into the home anchor —
@@ -309,7 +310,7 @@ export function shouldWarnExpiry(ws: HpcWorkspace | undefined): boolean {
 
 /** The caveat that must accompany every "link the workspace into the project"
  *  affordance — in ONE place so both the wizard and the Jobs view say it the
- *  same way. Eldrun's byte-sync walks the host tree lstat-typed and skips
+ *  same way. Tabtivity's byte-sync walks the host tree lstat-typed and skips
  *  symlinks by design, so a linked workspace is reachable to the *host's* tools
  *  (job scripts, `cd`), not to the mirror. */
 export const linkedWorkspaceCaveat: TranslationKey = "hpcWorkspace.linkCaveat";

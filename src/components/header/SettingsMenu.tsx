@@ -28,7 +28,7 @@ const MENU_ID = "settings";
  *
  * Every entry is a `window` event, so this component owns no dialog: the
  * settings dialog stays mounted in `ProjectSwitcher`, which already listened
- * for `eldrun:open-settings` (once the Local Model button's door into a
+ * for `tabtivity:open-settings` (once the Local Model button's door into a
  * specific panel; that button now opens the Models & agents overlay instead)
  * long before the gear left it.
  */
@@ -65,7 +65,7 @@ export function SettingsMenu() {
         // Hover reveals the menu; a click goes straight to the settings overlay,
         // the gear's obvious meaning. Keyboard still opens the menu: the hook
         // preventDefaults Enter/Space/↓ on the trigger, so they never click.
-        onClick={() => fire("eldrun:open-settings", "main")}
+        onClick={() => fire("app:open-settings", "main")}
       >
         <SettingsGlyph className="settings-menu-icon" />
       </button>
@@ -73,23 +73,23 @@ export function SettingsMenu() {
         // The app's canonical dropdown-list chrome, shared with the switcher's
         // + menu — one look for one kind of thing, not a second copy of it.
         <div className="project-switcher-add-menu" role="menu">
-          <button role="menuitem" onClick={() => fire("eldrun:open-settings", "main")}>
+          <button role="menuitem" onClick={() => fire("app:open-settings", "main")}>
             {t("settings.title")}
           </button>
-          <button role="menuitem" onClick={() => fire("eldrun:open-settings", "help")}>
+          <button role="menuitem" onClick={() => fire("app:open-settings", "help")}>
             {t("nav.help.title")}
           </button>
-          <button role="menuitem" onClick={() => fire("eldrun:open-shortcut-help")}>
+          <button role="menuitem" onClick={() => fire("app:open-shortcut-help")}>
             {t("shortcutHelp.title")}
             <MenuShortcut chord="shortcutHelp" />
           </button>
-          <button role="menuitem" onClick={() => fire("eldrun:open-how-to-start")}>
+          <button role="menuitem" onClick={() => fire("app:open-how-to-start")}>
             {t("projectSwitcher.howToStartMenu")}
           </button>
-          <button role="menuitem" onClick={() => fire("eldrun:open-lessons")}>
+          <button role="menuitem" onClick={() => fire("app:open-lessons")}>
             {t("settings.lessons")}
           </button>
-          <button role="menuitem" onClick={() => fire("eldrun:open-settings", "updates")}>
+          <button role="menuitem" onClick={() => fire("app:open-settings", "updates")}>
             {t("settings.checkForUpdates")}
           </button>
           <UntestedTag id="desktop.headerMenus" />

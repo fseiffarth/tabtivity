@@ -29,7 +29,7 @@ export function agentItemFor(cmd: string, customAgents: readonly CustomAgent[] =
  * The tab a draft's "New agent tab" opens, and the preface its prompt is
  * queued with. The tab spec is the "+" menu's own (`buildStaticTabSpec`), so
  * the tab is exactly what that menu would have opened — session id minted,
- * `ELDRUN_TAB_UID` set — plus a schedule target id minted HERE, so the prompt
+ * `TABTIVITY_TAB_UID` set — plus a schedule target id minted HERE, so the prompt
  * can be queued at the tab before the store has assigned one. The model is
  * typed as the agent's own `/model` ahead of the prompt, never a launch flag
  * (see `lib/agents/agentPrefaces`).

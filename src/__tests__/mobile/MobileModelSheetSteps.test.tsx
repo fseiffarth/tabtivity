@@ -66,6 +66,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
+import { BRAND } from "../../lib/brand";
 
 const ESC = String.fromCharCode(27);
 const DOWN = `${ESC}[B`;
@@ -117,7 +118,7 @@ const pick = (label: string) => {
   fireEvent.click(row);
 };
 
-describe("Eldrun Mobile — a multi-step /model picker", () => {
+describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
@@ -134,7 +135,7 @@ describe("Eldrun Mobile — a multi-step /model picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     await paint(MODEL_STEP);
 
-    // The heading is the session's, not Eldrun's: it says which step this is.
+    // The heading is the session's, not Tabtivity's: it says which step this is.
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Select Model and Effort");
     expect(rows()[0]).toContain("gpt-6-astra (default)");
 
@@ -164,6 +165,36 @@ describe("Eldrun Mobile — a multi-step /model picker", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("reveals GPT-6.1 Sol above a clipped Codex model list", async () => {
+    render(<Terminal tab={{ id: "tab", label: "Codex", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await settle(400);
+    FakeWebSocket.sent = [];
+    await paint([
+      "  Select Model and Effort",
+      "",
+      "  2. gpt-6-astra (current)  Frontier intelligence for the most demanding work.",
+      "› 3. gpt-6-sol            Previous generation workhorse model.",
+      "  4. gpt-6-luna           Fast and affordable model for easier tasks.",
+    ].join("\n"));
+    await settle(400);
+    expect(FakeWebSocket.sent).toEqual([UP, UP]);
+
+    FakeWebSocket.sent = [];
+    await paint([
+      "  Select Model and Effort",
+      "",
+      "› 1. gpt-6.1-sol (default)  Latest workhorse model for coding and everyday work.",
+      "  2. gpt-6-astra (current)  Frontier intelligence for the most demanding work.",
+      "  3. gpt-6-sol            Previous generation workhorse model.",
+    ].join("\n"));
+    expect(rows().some((row) => row.includes("gpt-6.1-sol (default)"))).toBe(true);
+    await settle(400);
+    expect(FakeWebSocket.sent).toEqual([DOWN, DOWN]);
+  });
+
   it("closes on a picker that has only one step", async () => {
     render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
@@ -181,7 +212,7 @@ describe("Eldrun Mobile — a multi-step /model picker", () => {
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Select Model");
 
     pick("Default (recommended)");
-    await paint("> \n\n  ~/projects/eldrun · Opus 5");
+    await paint(`> \n\n  ~/projects/${BRAND.slug} · Opus 5`);
     await settle(900);
     expect(screen.queryByRole("dialog")).toBeNull();
   });

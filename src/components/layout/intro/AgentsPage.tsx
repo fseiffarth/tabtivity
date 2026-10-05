@@ -232,7 +232,7 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
           type="button"
           className="settings-btn sm"
           onClick={() => {
-            window.dispatchEvent(new CustomEvent("eldrun:open-settings", { detail: "agents" }));
+            window.dispatchEvent(new CustomEvent("app:open-settings", { detail: "agents" }));
             onClose();
           }}
         >

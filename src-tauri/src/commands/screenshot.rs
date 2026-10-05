@@ -1,7 +1,7 @@
 //! Screenshots: capture the screen into a staging area and let the user decide
 //! where — or whether — the PNG is filed.
 //!
-//! Eldrun's global "Screenshot" app already launches a region-capture tool, but
+//! Tabtivity's global "Screenshot" app already launches a region-capture tool, but
 //! each tool otherwise saves to its own default location (`~/Pictures`, a
 //! prompt, …). This command instead drives the capture's *output path* into a
 //! staging directory under the state dir, then reports the shot to the frontend
@@ -11,7 +11,7 @@
 //! filed every shot straight into the active project's screenshots folder,
 //! which for a project with a public remote is a private-data leak one `git add
 //! -A` away — a screen grab holds whatever happened to be on the screen. The
-//! overlay is the consent step, and `eldrun-screenshots/` is in `GITIGNORE_DEFAULT` so
+//! overlay is the consent step, and `tabtivity-screenshots/` is in `GITIGNORE_DEFAULT` so
 //! a saved shot is ignored by default even after the user picks a project.
 //!
 //! The shot is *also* put on the system clipboard, so it can be pasted straight
@@ -76,7 +76,7 @@ struct CapturedShot {
 /// or bare name); the Linux backend uses it to pick a tool it can direct, while
 /// the Windows backend ignores it (it always does a native grab). Returns as
 /// soon as the tool is launched — region selection blocks the *tool*, not
-/// Eldrun — and the shot itself arrives later as an [`EV_CAPTURED`] event. A
+/// Tabtivity — and the shot itself arrives later as an [`EV_CAPTURED`] event. A
 /// cancelled capture writes no file and so reports nothing, which is normal.
 #[tauri::command]
 pub fn capture_screenshot(app: AppHandle, exec: Option<String>) -> Result<(), String> {
@@ -122,7 +122,7 @@ pub async fn save_pending_screenshot(
 ) -> Result<String, String> {
     let shot = pending_shot(&path)?;
     let bytes = std::fs::read(&shot).map_err(|e| e.to_string())?;
-    // When the shot goes to Eldrun's own folder, make sure git ignores that
+    // When the shot goes to Tabtivity's own folder, make sure git ignores that
     // folder before the PNG lands in it: scaffold repair is the only other way
     // the pattern arrives and it only runs when the user asks. A folder the
     // user typed instead is theirs, and `ensure_generated_dir_ignored` refuses
@@ -219,7 +219,7 @@ fn screenshot_filename() -> String {
 /// Spawn a capture tool detached and, once it exits, copy the PNG it produced
 /// onto the clipboard and hand it to `on_shot`.
 ///
-/// Region selection blocks the *tool*, not Eldrun, so the shot does not exist
+/// Region selection blocks the *tool*, not Tabtivity, so the shot does not exist
 /// until the child is gone — the wait therefore happens on a background thread,
 /// which also reaps the child (as `spawn_reaped` otherwise would). `expected` is
 /// the path the tool was directed at, or `None` for tools that name the file
@@ -316,7 +316,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 mod platform {
     //! Spawns the user-configured (or first available) native region-capture
     //! tool, routing its output into the staging folder. The tool is spawned
-    //! detached — region selection blocks the *tool*, not Eldrun — and the shot
+    //! detached — region selection blocks the *tool*, not Tabtivity — and the shot
     //! reaches the save overlay through `on_shot` once it lands.
 
     use std::path::{Path, PathBuf};
@@ -519,7 +519,7 @@ mod platform {
                 .ok_or_else(|| "session bus assigned no unique name".to_string())?
                 .to_string();
             let token = format!(
-                "eldrun_{}_{}",
+                concat!(crate::app_slug!(), "_{}_{}"),
                 std::process::id(),
                 SEQ.fetch_add(1, Ordering::Relaxed)
             );
@@ -567,7 +567,7 @@ mod platform {
         ///
         /// The portal's file is *copied*, not moved: where it lands is the
         /// portal's business (GNOME's keeps it under the user's Pictures), and
-        /// a file the user can already see must not vanish because Eldrun
+        /// a file the user can already see must not vanish because Tabtivity
         /// asked for a copy. A cancelled picker (`RESPONSE_CANCELLED`) writes
         /// nothing and stays silent, like a cancelled tool.
         pub fn watch(
@@ -631,7 +631,7 @@ mod platform {
     //! ubiquitous interactive region CLI, so rather than shelling out we grab the
     //! entire virtual screen (every monitor) with `BitBlt` + `GetDIBits` and
     //! encode it to PNG with the `png` crate, writing the file directly into the
-    //! project's `eldrun-screenshots/` folder. This is deterministic — it always
+    //! project's `tabtivity-screenshots/` folder. This is deterministic — it always
     //! produces image data — and needs no external tool. The configured `exec`
     //! (which names a Linux tool) is ignored. Every GDI object acquired here is
     //! released on both the success and error paths.
@@ -775,7 +775,7 @@ mod platform {
 mod platform {
     //! Drives macOS's built-in `screencapture` in interactive region mode,
     //! routing its output into the staging folder. Like the Linux backend, the
-    //! tool is spawned detached — region selection blocks the *tool*, not Eldrun
+    //! tool is spawned detached — region selection blocks the *tool*, not Tabtivity
     //! — and the shot reaches the save overlay through `on_shot` once it lands.
     //! The configured `exec` is ignored (the OS tool is always used).
 
@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn pending_shot_refuses_paths_outside_the_staging_area() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("ELDRUN_STATE_DIR", tmp.path());
+        std::env::set_var(crate::app_env!("STATE_DIR"), tmp.path());
         let dir = ensure_pending_dir().unwrap();
 
         let shot = dir.join("Screenshot-20260101-000000.png");
@@ -856,7 +856,7 @@ mod tests {
         assert!(pending_shot(&dir.to_string_lossy()).is_err());
         assert!(pending_shot(&dir.join("gone.png").to_string_lossy()).is_err());
 
-        std::env::remove_var("ELDRUN_STATE_DIR");
+        std::env::remove_var(crate::app_env!("STATE_DIR"));
     }
 
     /// An overlay that never got an answer (a crash, a relaunch) must not leave
@@ -900,8 +900,8 @@ mod tests {
     #[test]
     fn portal_request_path_follows_the_sender_convention() {
         assert_eq!(
-            platform::portal::request_path(":1.42", "eldrun_7_0"),
-            "/org/freedesktop/portal/desktop/request/1_42/eldrun_7_0"
+            platform::portal::request_path(":1.42", concat!(crate::app_slug!(), "_7_0")),
+            concat!("/org/freedesktop/portal/desktop/request/1_42/", crate::app_slug!(), "_7_0")
         );
     }
 
@@ -962,7 +962,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn capture_command_reports_the_file_it_directs() {
-        let dir = std::path::Path::new("/tmp/eldrun-shots");
+        let dir = std::path::Path::new(concat!("/tmp/", crate::app_slug!(), "-shots"));
         let (_, expected) = platform::capture_command("scrot", dir).unwrap();
         let expected = expected.expect("scrot is directed at an explicit file");
         assert_eq!(expected.parent(), Some(dir));
