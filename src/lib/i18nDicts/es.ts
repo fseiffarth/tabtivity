@@ -4618,7 +4618,6 @@ export const dict: Dict = {
   "vpnIndicator.titleOff": "OpenVPN — sin túnel. Conectar uno enruta el tráfico de este equipo a través de él.",
   "vpnIndicator.titleConnecting": "OpenVPN — conectando. Una vez activo, el tráfico de este equipo se enruta a través del túnel.",
   "vpnIndicator.titleConnected": "OpenVPN — activo. El tráfico de este equipo se enruta a través del túnel.",
-  "vpnIndicator.vpnLabel": "VPN",
   "vpnIndicator.note": "Un túnel enruta",
   "vpnIndicator.noteStrong": "todo el tráfico de este equipo",
   "vpnIndicator.notePost": "— no solo el de {app} — incluyendo tu navegador — mientras esté activo.",

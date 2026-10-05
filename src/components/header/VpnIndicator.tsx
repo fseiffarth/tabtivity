@@ -24,6 +24,7 @@ import { useT } from "../../lib/i18n";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { ErrorNote } from "../common/ErrorNote";
+import { VpnGlyph } from "./HeaderGlyphs";
 
 const MENU_ID = "vpn";
 
@@ -629,7 +630,7 @@ export function VpnIndicator() {
         onFocus={reveal}
       >
         <ConnLamp status={lamp} label="OpenVPN" />
-        <span className="vpn-indicator-label">{t("vpnIndicator.vpnLabel")}</span>
+        <VpnGlyph className="header-status-glyph" />
       </button>
       {open && (
         <div className="tab-new-menu vpn-indicator-menu" role="menu">

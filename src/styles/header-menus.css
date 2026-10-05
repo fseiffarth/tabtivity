@@ -2076,6 +2076,21 @@
 .dev-build-btn[aria-expanded="true"] .vpn-indicator-label {
   color: var(--text-primary);
 }
+/* VPN and Machines carry a drawn glyph after their lamps instead of a word;
+   it dims and lights like the label it replaced. */
+.header-status-glyph {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-secondary);
+  transition: color var(--transition);
+}
+.vpn-indicator-btn:hover .header-status-glyph,
+.vpn-indicator-btn[aria-expanded="true"] .header-status-glyph,
+.machines-indicator-btn:hover .header-status-glyph,
+.machines-indicator-btn[aria-expanded="true"] .header-status-glyph {
+  color: var(--text-primary);
+}
 .vpn-indicator-label {
   font-size: var(--text-xs);
   line-height: 1;

@@ -2533,7 +2533,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </span>
           ))}
         </span>
-        <span className="vpn-indicator-label">{t("machines.label")}</span>
+        <MachinesGlyph className="header-status-glyph" />
       </button>
       {menuOpen && (
         <div className="tab-new-menu vpn-indicator-menu machines-indicator-menu" role="menu">

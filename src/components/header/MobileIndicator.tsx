@@ -360,130 +360,136 @@ export function MobileIndicator() {
     );
   }
 
+  // The guide and the Access dialog are portaled from outside the hover
+  // anchor: React routes a pointer entering a portal through the component
+  // tree, so from inside it every move over the dialog re-fired `reveal` and
+  // hung the menu back over it.
   return (
-    <div
-      className="global-apps-menu header-status-menu-anchor no-drag"
-      onMouseEnter={reveal}
-      onMouseLeave={scheduleClose}
-    >
-      <button
-        type="button"
-        className="global-apps-menu-btn mobile-indicator-btn"
-        aria-label={title}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={title}
-        onClick={reveal}
-        onFocus={reveal}
+    <>
+      <div
+        className="global-apps-menu header-status-menu-anchor no-drag"
+        onMouseEnter={reveal}
+        onMouseLeave={scheduleClose}
       >
-        <MobileIcon tone={tone} />
-      </button>
-      {open && (
-        <div className="tab-new-menu mobile-indicator-menu" role="menu">
-          <div className="tab-new-menu-group-label vpn-indicator-title">
-            <span>{t("mobile.title")}</span>
-            <button
-              type="button"
-              className="vpn-indicator-close"
-              aria-label={t("common.close")}
-              title={t("common.close")}
-              onClick={() => closeMenu(MENU_ID)}
-            >
-              ×
-            </button>
-          </div>
-          <div className="mobile-indicator-body">
-            <div className="mobile-indicator-status" aria-live="polite">
-              <MobileIcon tone={tone} />
-              <div>
-                <strong>
-                  {tone === "connected" ? t("mobile.indConnected") : tone === "connecting" ? t("mobile.indChecking") : t("mobile.indDisconnected")}
-                </strong>
-                <span>
-                  {tone === "connecting"
-                    ? t("mobile.indStarting")
-                    : status?.running
-                    ? t("mobile.indListening", { port: status.port ?? "?" })
-                    : status?.error ?? t("mobile.indNotRunning")}
-                </span>
-              </div>
+        <button
+          type="button"
+          className="global-apps-menu-btn mobile-indicator-btn"
+          aria-label={title}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          title={title}
+          onClick={reveal}
+          onFocus={reveal}
+        >
+          <MobileIcon tone={tone} />
+        </button>
+        {open && (
+          <div className="tab-new-menu mobile-indicator-menu" role="menu">
+            <div className="tab-new-menu-group-label vpn-indicator-title">
+              <span>{t("mobile.title")}</span>
+              <button
+                type="button"
+                className="vpn-indicator-close"
+                aria-label={t("common.close")}
+                title={t("common.close")}
+                onClick={() => closeMenu(MENU_ID)}
+              >
+                ×
+              </button>
             </div>
-            {status?.origin && <div className="mobile-indicator-origin">{status.origin}</div>}
-            {error && <ErrorNote className="mobile-indicator-error" error={error} />}
-            {updateNotice && <div className="mobile-indicator-notice" role="status">{updateNotice}</div>}
-            {pairCode && (
-              <div className="mobile-indicator-paircode" role="status">
-                <code>{pairCode.code}</code>
-                <span>{t("mobile.pairCodeValidity")}</span>
-              </div>
-            )}
-            {running && devices && (
-              <div className="mobile-indicator-devices">
-                <div className="mobile-indicator-devices-label">
-                  {t("mobile.pairedDevices")} <UntestedTag id="mobile.indDevices" />
+            <div className="mobile-indicator-body">
+              <div className="mobile-indicator-status" aria-live="polite">
+                <MobileIcon tone={tone} />
+                <div>
+                  <strong>
+                    {tone === "connected" ? t("mobile.indConnected") : tone === "connecting" ? t("mobile.indChecking") : t("mobile.indDisconnected")}
+                  </strong>
+                  <span>
+                    {tone === "connecting"
+                      ? t("mobile.indStarting")
+                      : status?.running
+                      ? t("mobile.indListening", { port: status.port ?? "?" })
+                      : status?.error ?? t("mobile.indNotRunning")}
+                  </span>
                 </div>
-                {devices.length === 0 && <span className="mobile-indicator-devices-empty">{t("mobile.indDevicesNone")}</span>}
-                {[...devices]
-                  .sort((a, b) => Number(b.online ?? false) - Number(a.online ?? false))
-                  .map((device) => (
-                    <div key={device.id} className="mobile-indicator-device">
-                      <span className={"mobile-indicator-device-lamp" + (device.online ? " online" : "")} aria-hidden="true" />
-                      <span className="mobile-indicator-device-text">
-                        <strong>{device.name}</strong>
-                        <span>{deviceCaption(device)}</span>
-                      </span>
-                      <button
-                        type="button"
-                        className="inbox-menu-delete mobile-indicator-device-access"
-                        title={t("mobile.indDeviceAccessHint", { name: device.name })}
-                        aria-label={`${t("mobile.indDeviceAccess")} ${device.name}`}
-                        onClick={() => {
-                          closeMenu(MENU_ID);
-                          setAccessFor(device.id);
-                        }}
-                      >
-                        {t("mobile.indDeviceAccess")} <UntestedTag id="mobile.indDeviceAccess" />
-                      </button>
-                      <button
-                        type="button"
-                        className={"inbox-menu-delete mobile-indicator-device-disconnect" + (armed === device.id ? " armed" : "")}
-                        title={t("mobile.indDisconnectHint")}
-                        aria-label={`${t("mobile.indDisconnect")} ${device.name}`}
-                        disabled={disconnecting !== null || lockingDown}
-                        onClick={() => (armed === device.id ? void disconnect(device) : setArmed(device.id))}
-                      >
-                        {armed === device.id ? t("mobile.indDisconnectConfirm") : t("mobile.indDisconnect")}
-                      </button>
-                    </div>
-                  ))}
               </div>
-            )}
-            <div className="mobile-indicator-actions">
-              <button type="button" className="vpn-indicator-connect" disabled={busy} onClick={() => void restartHost("reconnect")}>
-                {restarting === "reconnect" ? t("mobile.indReconnecting") : t("mobile.indReconnect")}
-              </button>
-              <button type="button" className="vpn-indicator-connect" disabled={busy || !status?.running} onClick={() => void createPairingCode()}>
-                {pairing ? t("mobile.creatingCode") : t("mobile.newPairingCode")}
-              </button>
-              {(status?.update_available || restarting === "update") && (
-                <button
-                  type="button"
-                  className="vpn-indicator-connect"
-                  disabled={busy}
-                  onClick={() => void restartHost("update")}
-                >
-                  {restarting === "update" ? t("mobile.indUpdating") : t("mobile.indUpdate")}
-                </button>
+              {status?.origin && <div className="mobile-indicator-origin">{status.origin}</div>}
+              {error && <ErrorNote className="mobile-indicator-error" error={error} />}
+              {updateNotice && <div className="mobile-indicator-notice" role="status">{updateNotice}</div>}
+              {pairCode && (
+                <div className="mobile-indicator-paircode" role="status">
+                  <code>{pairCode.code}</code>
+                  <span>{t("mobile.pairCodeValidity")}</span>
+                </div>
               )}
-              <button type="button" className="vpn-indicator-connect mobile-indicator-lockdown" disabled={busy || !status?.running} onClick={() => void lockDownNow()}>
-                {lockingDown ? t("mobile.indLocking") : t("mobile.indLock")}
-              </button>
+              {running && devices && (
+                <div className="mobile-indicator-devices">
+                  <div className="mobile-indicator-devices-label">
+                    {t("mobile.pairedDevices")} <UntestedTag id="mobile.indDevices" />
+                  </div>
+                  {devices.length === 0 && <span className="mobile-indicator-devices-empty">{t("mobile.indDevicesNone")}</span>}
+                  {[...devices]
+                    .sort((a, b) => Number(b.online ?? false) - Number(a.online ?? false))
+                    .map((device) => (
+                      <div key={device.id} className="mobile-indicator-device">
+                        <span className={"mobile-indicator-device-lamp" + (device.online ? " online" : "")} aria-hidden="true" />
+                        <span className="mobile-indicator-device-text">
+                          <strong>{device.name}</strong>
+                          <span>{deviceCaption(device)}</span>
+                        </span>
+                        <button
+                          type="button"
+                          className="inbox-menu-delete mobile-indicator-device-access"
+                          title={t("mobile.indDeviceAccessHint", { name: device.name })}
+                          aria-label={`${t("mobile.indDeviceAccess")} ${device.name}`}
+                          onClick={() => {
+                            closeMenu(MENU_ID);
+                            setAccessFor(device.id);
+                          }}
+                        >
+                          {t("mobile.indDeviceAccess")} <UntestedTag id="mobile.indDeviceAccess" />
+                        </button>
+                        <button
+                          type="button"
+                          className={"inbox-menu-delete mobile-indicator-device-disconnect" + (armed === device.id ? " armed" : "")}
+                          title={t("mobile.indDisconnectHint")}
+                          aria-label={`${t("mobile.indDisconnect")} ${device.name}`}
+                          disabled={disconnecting !== null || lockingDown}
+                          onClick={() => (armed === device.id ? void disconnect(device) : setArmed(device.id))}
+                        >
+                          {armed === device.id ? t("mobile.indDisconnectConfirm") : t("mobile.indDisconnect")}
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
+              <div className="mobile-indicator-actions">
+                <button type="button" className="vpn-indicator-connect" disabled={busy} onClick={() => void restartHost("reconnect")}>
+                  {restarting === "reconnect" ? t("mobile.indReconnecting") : t("mobile.indReconnect")}
+                </button>
+                <button type="button" className="vpn-indicator-connect" disabled={busy || !status?.running} onClick={() => void createPairingCode()}>
+                  {pairing ? t("mobile.creatingCode") : t("mobile.newPairingCode")}
+                </button>
+                {(status?.update_available || restarting === "update") && (
+                  <button
+                    type="button"
+                    className="vpn-indicator-connect"
+                    disabled={busy}
+                    onClick={() => void restartHost("update")}
+                  >
+                    {restarting === "update" ? t("mobile.indUpdating") : t("mobile.indUpdate")}
+                  </button>
+                )}
+                <button type="button" className="vpn-indicator-connect mobile-indicator-lockdown" disabled={busy || !status?.running} onClick={() => void lockDownNow()}>
+                  {lockingDown ? t("mobile.indLocking") : t("mobile.indLock")}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
       {setupGuide}
       {accessFor && createPortal(<PairedDeviceDialog deviceId={accessFor} onClose={closeAccess} />, document.body)}
-    </div>
+    </>
   );
 }

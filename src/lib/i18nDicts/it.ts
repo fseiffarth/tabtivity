@@ -4618,7 +4618,6 @@ export const dict: Dict = {
   "vpnIndicator.titleOff": "OpenVPN — nessun tunnel. Connetterne uno instrada il traffico di questo computer attraverso di esso.",
   "vpnIndicator.titleConnecting": "OpenVPN — connessione in corso. Una volta attivo, il traffico di questo computer passa attraverso il tunnel.",
   "vpnIndicator.titleConnected": "OpenVPN — attivo. Il traffico di questo computer passa attraverso il tunnel.",
-  "vpnIndicator.vpnLabel": "VPN",
   "vpnIndicator.note": "Un tunnel instrada",
   "vpnIndicator.noteStrong": "tutto il traffico di questo computer",
   "vpnIndicator.notePost": "— non solo quello di {app} — incluso il tuo browser — finché è attivo.",

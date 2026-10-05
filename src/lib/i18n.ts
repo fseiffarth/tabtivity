@@ -4766,7 +4766,6 @@ export const enSource = {
   "vpnIndicator.titleOff": "OpenVPN — no tunnel. Connecting one routes this computer's traffic through it.",
   "vpnIndicator.titleConnecting": "OpenVPN — connecting. Once it is up, this computer's traffic routes through the tunnel.",
   "vpnIndicator.titleConnected": "OpenVPN — up. This computer's traffic routes through the tunnel.",
-  "vpnIndicator.vpnLabel": "VPN",
   "vpnIndicator.note": "A tunnel routes",
   "vpnIndicator.noteStrong": "this whole computer's",
   "vpnIndicator.notePost": "traffic, not just {app}'s — including your browser — for as long as it is up.",
