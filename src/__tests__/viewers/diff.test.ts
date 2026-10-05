@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseUnifiedDiff } from "../../lib/viewers/diff";
+import { parseUnifiedDiff, wholeFileHunk } from "../../lib/viewers/diff";
 
 describe("parseUnifiedDiff", () => {
   it("parses a two-file git diff with adds/dels/context", () => {
@@ -152,5 +152,37 @@ describe("parseUnifiedDiff", () => {
     expect(second[1]).toMatchObject({ type: "context", oldNo: 10, newNo: 10 });
     expect(second[2]).toMatchObject({ type: "del", oldNo: 11 });
     expect(second[3]).toMatchObject({ type: "add", newNo: 11 });
+  });
+});
+
+describe("wholeFileHunk", () => {
+  const diff = ["--- a/f.txt", "+++ b/f.txt", "@@ -2,3 +2,3 @@", " b", "-c", "+C", " d"].join("\n");
+  const text = "a\nb\nC\nd\ne\n";
+  const cells = (text: string, file = parseUnifiedDiff(diff)[0]) =>
+    wholeFileHunk(file, text)?.lines.map((l) => `${l.type}:${l.oldNo ?? "-"}:${l.newNo ?? "-"}:${l.text}`);
+
+  it("spreads the hunks over every line of the file", () => {
+    expect(cells(text)).toEqual([
+      "context:1:1:a",
+      "context:2:2:b",
+      "del:3:-:c",
+      "add:-:3:C",
+      "context:4:4:d",
+      "context:5:5:e",
+    ]);
+  });
+
+  it("shows an unchanged file whole, as context", () => {
+    expect(wholeFileHunk(undefined, "x\r\ny")?.lines.map((l) => l.text)).toEqual(["x", "y"]);
+  });
+
+  it("gives up when the hunks no longer fit the file", () => {
+    expect(cells("a\nb\nX\nd\ne\n")).toBeUndefined();
+    expect(cells("a\nb\n")).toBeUndefined();
+  });
+
+  it("gives up on a deleted file", () => {
+    const deleted = parseUnifiedDiff(["--- a/f.txt", "+++ /dev/null", "@@ -1 +0,0 @@", "-a"].join("\n"))[0];
+    expect(wholeFileHunk(deleted, "")).toBeNull();
   });
 });

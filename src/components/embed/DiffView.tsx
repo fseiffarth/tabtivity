@@ -1,11 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ViewerHeader, useReadonlyFile } from "./FileViewerPane";
+import { ModeToggle, ViewerHeader, useReadonlyFile } from "./FileViewerPane";
 import { useT } from "../../lib/i18n";
 import { useProjectsStore } from "../../stores/projects";
 import { resolveProjectDirectory } from "../../types";
 import { relFromAbs } from "../../lib/viewers/fileUtils";
-import { parseUnifiedDiff, type DiffLine } from "../../lib/viewers/diff";
+import { parseUnifiedDiff, wholeFileHunk, type DiffHunk, type DiffLine } from "../../lib/viewers/diff";
+import { basename, dirname } from "../../lib/paths";
+import { UntestedTag } from "../common/UntestedTag";
+import { storageKey } from "../../lib/brand";
+
+/** The Changes / Whole file switch, remembered for every git diff tab. */
+const WHOLE_KEY = storageKey("diffView.wholeFile");
+
+function readWholePref(): boolean {
+  try {
+    return localStorage.getItem(WHOLE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeWholePref(whole: boolean): void {
+  try {
+    localStorage.setItem(WHOLE_KEY, whole ? "1" : "0");
+  } catch {
+    // Not remembered — the switch still works for this tab.
+  }
+}
 
 /** True when `path` is a literal diff/patch file (read its raw content) rather
  *  than a source path (compute the diff via the backend). */
@@ -34,6 +56,7 @@ export function DiffLineRow({ line }: { line: DiffLine }) {
   return (
     <div
       className="diff-line"
+      data-type={line.type}
       style={{
         display: "flex",
         background: lineBackground(line.type),
@@ -83,7 +106,10 @@ export function DiffLineRow({ line }: { line: DiffLine }) {
  * for that file fetched from the backend (`git_diff_file`). The diff is parsed
  * with `parseUnifiedDiff` and rendered with a two-column (old/new) line-number
  * gutter and add/del/context colouring. All line text is rendered as React
- * children (auto-escaped) — never as raw HTML.
+ * children (auto-escaped) — never as raw HTML. A git diff shows the whole
+ * file by default — the working-tree diff spread over the file as it is on
+ * disk (`wholeFileHunk`), opened at its first change; the header's switch
+ * narrows it to the changes.
  */
 export function DiffView({
   path,
@@ -103,6 +129,8 @@ export function DiffView({
 }) {
   const t = useT();
   const patchMode = isPatchFile(path);
+  const [wholePref, setWholePref] = useState(readWholePref);
+  const whole = mode === "git" && !patchMode && wholePref;
 
   // Hooks must run unconditionally. In patch mode we use this file's content; in
   // source mode we ignore it (and fetch the diff via the backend instead).
@@ -110,25 +138,38 @@ export function DiffView({
 
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   const projectDir = resolveProjectDirectory(project);
-  const relPath = relFromAbs(projectDir, path);
+  // A file outside the project (or no project — the root console) asks git
+  // from its own folder.
+  const inProject = relFromAbs(projectDir, path);
+  const gitDir = inProject ? projectDir : dirname(path);
+  const relPath = inProject || basename(path);
 
   // Source-mode: fetch the diff on mount (and whenever the target changes) — the
   // working-tree diff via `git_diff_file`, or the host-vs-mirror diff via
-  // `sync_diff` when this pane is a sync diff.
+  // `sync_diff` when this pane is a sync diff. The whole-file view asks once
+  // the file is read and again whenever it is re-read, keeping the text each
+  // answer was taken against: the shown pair stays until the next one lands.
+  const against = whole ? fileState.content : null;
+  const [gitAgainst, setGitAgainst] = useState<string | null>(null);
   const [gitText, setGitText] = useState<string | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
   useEffect(() => {
-    if (patchMode) return;
+    if (patchMode || (whole && against == null)) return;
     let cancelled = false;
-    setGitText(null);
-    setGitError(null);
+    if (!whole) {
+      setGitText(null);
+      setGitError(null);
+    }
     const req =
       mode === "sync"
         ? invoke<string>("sync_diff", { projectId, relPath })
-        : invoke<string>("git_diff_file", { projectDir, relPath });
+        : invoke<string>("git_diff_file", { projectDir: gitDir, relPath });
     req
       .then((text) => {
-        if (!cancelled) setGitText(text);
+        if (cancelled) return;
+        setGitText(text);
+        setGitAgainst(against);
+        setGitError(null);
       })
       .catch((e) => {
         if (!cancelled) setGitError(String(e));
@@ -136,17 +177,48 @@ export function DiffView({
     return () => {
       cancelled = true;
     };
-  }, [patchMode, mode, projectId, projectDir, relPath]);
+  }, [patchMode, whole, mode, projectId, gitDir, relPath, against]);
 
   const text = patchMode ? fileState.content : gitText;
-  const error = patchMode ? fileState.error : gitError;
-  const loaded = text != null;
+  const error = patchMode || whole ? (fileState.error ?? gitError) : gitError;
+  const loaded = text != null && (!whole || gitAgainst != null);
 
   const files = useMemo(() => (text != null ? parseUnifiedDiff(text) : []), [text]);
+  /** Whole mode: the one file's diff over the text it was taken against —
+   * null when it doesn't fit (the file moved on mid-ask: the bare hunks show). */
+  const wholeHunk = useMemo<DiffHunk | null>(
+    () => (whole && gitAgainst != null ? wholeFileHunk(files[0], gitAgainst) : null),
+    [whole, files, gitAgainst],
+  );
+
+  // Open the whole file at its first change, once per file shown.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrolledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!wholeHunk || scrolledFor.current === path) return;
+    scrolledFor.current = path;
+    scrollRef.current
+      ?.querySelector('.diff-line[data-type="add"], .diff-line[data-type="del"]')
+      ?.scrollIntoView({ block: "center" });
+  }, [wholeHunk, path]);
 
   return (
     <ViewerHeader onOpenExternally={onOpenExternally}>
+      {mode === "git" && !patchMode && (
+        <ModeToggle
+          value={wholePref ? "whole" : "changes"}
+          onChange={(value) => {
+            setWholePref(value === "whole");
+            writeWholePref(value === "whole");
+          }}
+          options={[
+            { value: "changes", label: t("diffView.changesOnly") },
+            { value: "whole", label: t("diffView.wholeFile") },
+          ]}
+        />
+      )}
       <div
+        ref={scrollRef}
         className="diff-viewer"
         style={{
           position: "absolute",
@@ -167,6 +239,27 @@ export function DiffView({
         ) : !loaded ? (
           <div className="diff-loading" style={{ padding: "1rem", color: "var(--text-secondary, #8b949e)" }}>
             {t("diffView.loading")}
+          </div>
+        ) : wholeHunk ? (
+          <div className="diff-file">
+            <div
+              className="diff-file-header"
+              style={{
+                padding: "0.4em 0.75em",
+                background: "var(--bg-elevated, rgba(255,255,255,0.04))",
+                borderBottom: "1px solid var(--border-color)",
+                fontWeight: 600,
+                position: "sticky",
+                top: 0,
+              }}
+            >
+              {relPath} <UntestedTag id="diffView.wholeFile" />
+            </div>
+            <div className="diff-hunk">
+              {wholeHunk.lines.map((line, li) => (
+                <DiffLineRow line={line} key={li} />
+              ))}
+            </div>
           </div>
         ) : files.length === 0 ? (
           <div className="diff-empty" style={{ padding: "1rem", color: "var(--text-secondary, #8b949e)" }}>

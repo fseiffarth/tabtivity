@@ -5852,7 +5852,7 @@ function ValidationBanner({
 
 /** Reusable Preview/Edit (Source) segmented toggle, styled like the existing
  *  markdown mode buttons. */
-function ModeToggle<T extends string>({
+export function ModeToggle<T extends string>({
   value,
   onChange,
   options,

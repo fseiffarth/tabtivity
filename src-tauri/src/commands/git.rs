@@ -2509,9 +2509,14 @@ fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<Strin
         return Ok(stdout);
     }
 
-    // Tracked diff is empty (e.g. untracked file). Show the whole file as added.
-    // `--no-index` exits non-zero when differences exist, which is the normal
-    // case here, so treat any non-empty stdout as success.
+    // Tracked diff is empty. A tracked file is simply unchanged; an untracked
+    // one shows whole, as added. `--no-index` exits non-zero when differences
+    // exist, which is the normal case here, so treat any non-empty stdout as
+    // success.
+    let tracked = run_git(target.as_ref(), &project_dir, &["ls-files", "--", &rel_path])?;
+    if tracked.status.success() && !tracked.stdout.is_empty() {
+        return Ok(stdout);
+    }
     let fallback = run_git(
         target.as_ref(),
         &project_dir,
@@ -3914,6 +3919,35 @@ mod tests {
             diff.contains("CHANGED line"),
             "expected changed line, got: {diff}"
         );
+    }
+
+    #[test]
+    fn git_diff_file_unchanged_tracked_file_is_empty() {
+        if !git_available() {
+            eprintln!("git not on PATH — skipping git_diff_file_unchanged_tracked_file_is_empty");
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        init_repo(dir);
+
+        // Committed and untouched: no diff, not the whole file as added.
+        fs::write(dir.join("kept.txt"), "kept\n").expect("write");
+        for args in [&["add", "kept.txt"][..], &["commit", "-m", "init"][..]] {
+            let ok = crate::paths::command_no_window("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .expect("git runs")
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        }
+
+        let diff =
+            git_diff_file_blocking(dir.to_string_lossy().to_string(), "kept.txt".to_string())
+                .expect("git_diff_file should succeed");
+        assert!(diff.is_empty(), "expected no diff, got: {diff}");
     }
 
     #[test]
