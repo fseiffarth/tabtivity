@@ -1765,6 +1765,51 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+241a. **PDF present window: a bottom bar with a talk timer, laser and blanking.**
+    Implemented (2026-10-05, untested live) · `PdfPresentBar` over the bottom of
+    the present window; `H` hides and shows it (remembered per machine), and
+    with it hidden the old bottom-right `n / N` pill comes back. It carries:
+    - **Talk timer** from the first painted sheet (not the window: a slow open
+      is not part of the talk) — pause/resume (`T`), reset to 0:00 (`R`; a
+      paused reset stays armed at 0:00), and a target that cycles 5…90 min and
+      off, turning the clock amber in the last tenth and red past it, with the
+      time left (`−m:ss`, then `+m:ss` over). The clock is timestamps
+      (`present.ts` `TalkClock`), so it keeps counting while the bar is hidden;
+      the one-second tick runs only while the bar is up.
+    - Time on the current sheet, the wall clock (the app's 12/24 h setting), the
+      file name, first/prev/next/last and a thin progress line.
+    - **Black / white screen** (`B`/`.` and `W`/`,` — what clickers send): the
+      next turn only lifts the blank, back onto the same sheet; a digit jump
+      lifts it and goes; `Esc` lifts it before it closes the window.
+    - **Laser pointer** (`L`): the viewers' `PresentationOverlay` dot and trail,
+      its painting now shared through `embed/laserPaint.ts`; it never takes the
+      pointer (a click still turns the sheet) and goes dark over the bar.
+    - Fullscreen toggle and close. Bar buttons never take focus, so Space/Enter
+      after a press still turn sheets.
+    - i18n: `pdfPresent.{barLabel,…,laserOnTitle,laserOffTitle}` + the longer
+      `keyHint`, 24 strings × 5 languages. Untested pill `pdfPresent.barLabel`.
+    - [x] 🤖 Automated test (`src/__tests__/pdf/PdfPresent.test.ts` "talk
+      clock": banks across a pause, reset keeps run state, `m:ss`/`h:mm:ss`,
+      target cycle, amber/red thresholds)
+    - [ ] 🖐️ Manual test — present a PDF with `▶ Fullscreen`: the bar is at the
+      bottom and the timer starts at 0:00 with the first sheet. Turn sheets and
+      watch the progress line and the sheet time restart. `T` pauses (clock
+      greys), `R` resets, click the timer button until a target shows and
+      confirm the time left. `H` hides the bar (counter pill bottom-right) and
+      brings it back; close and re-present — the bar is as you left it. `B`
+      blacks out, `→` brings back the SAME sheet; `W` likewise. `L` turns on the
+      laser: a red dot follows the mouse over the sheet, vanishes over the bar,
+      clicking still advances. Click bar buttons and confirm no click reaches
+      the sheet (no extra page turn), and that Space afterwards turns a sheet.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 242. **TeX editor: grey out `comment` blocks, and a linewise comment toggle.** ✅
     Implemented (2026-09-01, untested live) · Two halves of the same gesture —
     seeing what is commented out, and commenting it out.

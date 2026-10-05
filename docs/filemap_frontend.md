@@ -234,7 +234,10 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/pdf/scrollBox.ts` | `scrollIntoPdfBox`: the one way to scroll to a spot on a page. Never `Element.scrollIntoView` (it scrolls `overflow: hidden` ancestors too). |
 | `embed/pdf/PdfLinkDialog.tsx` | Confirm before a PDF link leaves the app: `MailMessageView`'s link confirm, full URL never truncated, no "always open". |
 | `embed/pdf/present.ts` | PDF present-window link (pure): `present-pdf-…` label derived from the PDF path (re-present reuses the window); only the path crosses, never bytes. |
-| `embed/pdf/PdfPresentApp.tsx` | PDF present window: one sheet fitted on black, own heap, sleep inhibitor, off-screen paint then blit; fullscreens only after the first sheet paints. |
+| `embed/pdf/PdfPresentApp.tsx` | PDF present window: one sheet fitted on black, own heap, sleep inhibitor, off-screen paint then blit; fullscreens only after the first sheet paints. Owns the bar's state (talk clock, blank, laser) because its keys drive it too. |
+| `embed/pdf/PdfPresentBar.tsx` | The present window's bottom bar (`H` hides it, remembered): talk timer + target, time left, time on sheet, wall clock, sheet nav + progress, black/white blank, laser, fullscreen, close. Presentational; clicks never reach click-to-advance. |
+| `embed/pdf/PdfPresentLaser.tsx` | The present window's laser: full-window canvas, never takes the pointer, dark over the bar. |
+| `embed/laserPaint.ts` | One laser frame (fading trail + glowing head, no `shadowBlur`), shared by `PresentationOverlay` and the PDF present window. |
 | `common/PageStrip.tsx` | **The** page-thumbnail strip: drag-reorder, shift-select, turn, delete, right-click. Used twice — horizontally by the print preview, vertically as the PDF viewer's page rail. |
 | `common/mountPageStrip.tsx` | `createRoot` adapter letting the imperative print modal host `PageStrip`. |
 | `common/Dropdown.tsx`, `common/OrbitSpinner.tsx` | Shared primitives. |

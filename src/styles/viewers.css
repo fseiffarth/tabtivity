@@ -6197,6 +6197,165 @@
   left: 16px;
 }
 
+/* The laser is the pointer while it is on, windowed or not. */
+.pdf-present.is-laser {
+  cursor: none;
+}
+
+/* Above the sheet and any blank, under the bar; never takes the pointer. */
+.pdf-present-laser {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* With the bar up, the hint sits above it rather than under it. */
+.pdf-present.has-bar .pdf-present-hint {
+  bottom: 62px;
+}
+
+/* A blanked screen: the sheet is covered, not unmounted, so lifting the blank
+   is instant. The bar stays above it — the reader still needs it. */
+.pdf-present-blank {
+  position: absolute;
+  inset: 0;
+}
+.pdf-present-blank.is-black { background: #000; }
+.pdf-present-blank.is-white { background: #fff; }
+
+/* The bottom bar (`PdfPresentBar`). Its own colours, like the rest of this
+   window's chrome: it has to read over any sheet and any blank. The pointer
+   comes back over it even while the window hides it everywhere else. */
+.pdf-present-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-radius: 9px;
+  background: rgba(16, 16, 16, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: var(--cur-default, default);
+  user-select: none;
+  overflow: hidden;
+}
+
+.pdf-present-bar-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.pdf-present-bar-progress > span {
+  display: block;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.5);
+  transition: width 0.2s ease;
+}
+
+.pdf-present-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.pdf-present-bar-group.is-file {
+  flex: 1 1 0;
+  gap: 8px;
+}
+.pdf-present-bar-group.is-actions {
+  flex: 1 1 0;
+  justify-content: flex-end;
+}
+
+.pdf-present-bar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.pdf-present-bar-page {
+  min-width: 64px;
+  text-align: center;
+}
+
+.pdf-present-bar-dim {
+  margin-left: 6px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
+.pdf-present-bar-timer {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 48px;
+  text-align: right;
+}
+
+/* Fixed colours, not --warning/--danger: the bar ignores the theme. */
+.pdf-present-bar-timer.is-near,
+.pdf-present-bar-dim.is-near { color: #f0b429; }
+.pdf-present-bar-timer.is-over,
+.pdf-present-bar-dim.is-over { color: #ff6b6b; }
+.pdf-present-bar-timer.is-paused { color: rgba(255, 255, 255, 0.45); }
+
+.pdf-present-bar-wall {
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.pdf-present-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: var(--cur-pointer, pointer);
+}
+.pdf-present-bar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.pdf-present-bar-btn.is-active {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.pdf-present-bar-btn.is-key {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pdf-present-swatch {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+.pdf-present-swatch.is-black { background: #000; }
+.pdf-present-swatch.is-white { background: #fff; }
+
 /* ── Markdown relationship graph (md_graph experimental) ──────────────────
    The "Graph" mode of the markdown viewer (MdGraphView): local-file links
    crawled from the viewed document, drawn as SVG on concentric BFS rings.
