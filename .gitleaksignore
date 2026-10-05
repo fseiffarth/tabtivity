@@ -11,7 +11,7 @@
 c428ed80ea1ff8faa81b72a2da9cf5caac10620d:src-tauri/src/services/mail_store.rs:generic-api-key:3425
 c428ed80ea1ff8faa81b72a2da9cf5caac10620d:src-tauri/src/services/mail_store.rs:generic-api-key:3441
 de2bb12562f18507b4bfcaf544078a4057912c18:src-tauri/src/services/mail_store.rs:generic-api-key:3926
-# src-tauri/src/services/mobile_control/host.rs: test fixture idempotency_key "0123456789abcdef"
+# src-tauri/src/services/mobile_control/host.rs: test fixture idempotency_key "0123456789abcdef" (some prefixed)
 bcc365a42430739a4581897421ecf6c5de48cb56:src-tauri/src/services/mobile_control/host.rs:generic-api-key:1323
 bcc365a42430739a4581897421ecf6c5de48cb56:src-tauri/src/services/mobile_control/host.rs:generic-api-key:1396
 bcc365a42430739a4581897421ecf6c5de48cb56:src-tauri/src/services/mobile_control/host.rs:generic-api-key:1657
@@ -20,6 +20,8 @@ bcc365a42430739a4581897421ecf6c5de48cb56:src-tauri/src/services/mobile_control/h
 e6b05a4f7c3807b5d041a93ea5f29a79b1985465:src-tauri/src/services/mobile_control/host.rs:generic-api-key:5701
 84a8677deaff199fb17500f161559c74a4605171:src-tauri/src/services/mobile_control/host.rs:generic-api-key:4451
 84a8677deaff199fb17500f161559c74a4605171:src-tauri/src/services/mobile_control/host.rs:generic-api-key:4554
+c399b0149b2064283c076d2cb78d1a4b7ba4778f:src-tauri/src/services/mobile_control/host.rs:generic-api-key:6090
+ba4e141da2e8868584098aeb7bd183d996574aa5:src-tauri/src/services/mobile_control/host.rs:generic-api-key:8761
 # src/__tests__/mobile/*.test.tsx: the same "0123456789abcdef" idempotency_key fixture
 e6696f9027558c775c38ecc16de42184330dcc02:src/__tests__/mobile/MobileLocalAgents.test.tsx:generic-api-key:48
 6e91414578ff4b408266b71e4a9b4a98d497e198:src/__tests__/mobile/MobileSignInCreate.test.tsx:generic-api-key:47
@@ -46,3 +48,11 @@ caf5ffb95803b60dbf33b7b73aa02154c77f9a22:src-tauri/src/services/mobile_control/p
 71d0575f1f5f94abb79d69005e77902db95ba6f9:src-tauri/src/services/tmux_local.rs:generic-api-key:832
 # src/lib/i18nDicts/de.ts: German key label "Umschalt+Enter" (Shift+Enter)
 94f6180c62878f8652b632ab0bceb9329ae85291:src/lib/i18nDicts/de.ts:generic-api-key:1221
+# hosted branch fixtures (triaged ahead of its merge into develop):
+# scripts/server-isolation-test.sh: placeholder x-api-key "broker-not-a-token"
+2371b0cdfa5207e2207d1b0a0e6128f0e263da97:scripts/server-isolation-test.sh:curl-auth-header:238
+# src-gateway/src/server/tests.rs: rejected-body fixture key "sk-0123456789abcdef"
+ccadf849295743c9c9c88a73392b1465516781c6:src-gateway/src/server/tests.rs:generic-api-key:380
+# the re-pin test vector's auth nonce, shared by the vault test and the phone test
+0e6ba8282359ca082645aba93e1d43568178d6a4:src-tauri/src/services/server/vault/tests.rs:generic-api-key:462
+f49778aa6513650ebe03570fe61375f8f6f527b0:src/__tests__/mobile/MobileSecretsRelease.test.ts:generic-api-key:88
