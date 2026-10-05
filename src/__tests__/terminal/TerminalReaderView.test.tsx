@@ -629,6 +629,33 @@ describe("the Reader's live rows", () => {
     expect(facts.textContent).toContain("high effort");
   });
 
+  it("shows the effort the transcript records and changes it with /effort, or Codex's /model", async () => {
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, effort: "medium" } : []));
+    term = fakeTerminal([">", "⏵⏵ accept edits on (shift+tab to cycle)"]);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    // No busy row has named it: the transcript does.
+    await act(async () => { fireEvent.click(await screen.findByRole("button", { name: /medium effort/ })); });
+    const list = screen.getByRole("dialog", { name: "Reasoning effort" });
+    await act(async () => { fireEvent.click(within(list).getByRole("button", { name: /xhigh effort/ })); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/effort xhigh");
+    expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.getByRole("button", { name: /xhigh effort/ })).toBeTruthy();
+    view.unmount();
+
+    // Codex sets it on its /model picker's next step.
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    reader(host);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    await act(async () => { fireEvent.click(await screen.findByRole("button", { name: /medium effort/ })); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/model");
+  });
+
   it("switches the mode from its list by walking Shift+Tab until the session shows it", async () => {
     const rows = [">", "⏵⏵ accept edits on (shift+tab to cycle)"];
     term = fakeTerminal(rows);

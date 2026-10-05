@@ -7,6 +7,7 @@ import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInpu
 import { shortPath } from "../../lib/agents/agentReader";
 import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { UntestedTag } from "../common/UntestedTag";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
@@ -34,6 +35,9 @@ const NEXT_STEP_WAIT_MS = 700;
  * take before the walk gives up. */
 const MODE_SETTLE_MS = 340;
 const MODE_CYCLE_LIMIT = 6;
+/** The levels Claude Code's `/effort` takes (2.1.288); the session lowers one
+ * its model does not support and says so. `auto` hands it back to the model. */
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 
 /**
  * The Reader's facts row — the phone's (`mobile-web` `Terminal.tsx`
@@ -41,13 +45,14 @@ const MODE_CYCLE_LIMIT = 6;
  * that opens its own `/model` picker as a list here), the branch, the
  * context left and the account's 5-hour and weekly limits — plus, as the
  * phone's chips, the permission mode (a list walked with Shift+Tab, or one
- * press where the session's modes are unknown) and the reasoning effort, and
- * the folder the agent works in with the worktree it is. The status facts
+ * press where the session's modes are unknown) and the reasoning effort (a
+ * list sent as Claude's `/effort`; elsewhere the `/model` picker, whose next
+ * step it is), and the folder the agent works in with the worktree it is. The status facts
  * come off the pane's live screen (`ReaderLive.status`); the limits from the
  * CLI's usage panel (`agent_usage`, which spends no quota), or — Codex, which
  * has none — from the figures its rollout stores.
  */
-export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, path, effort, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose }: {
+export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, usage, path, effort, onEffortPicked, visible, typeKeys, onPicking, statusOpen, statusRequest, onStatusRequest, onStatusClose }: {
   tab: TabEntry;
   ptyId: string;
   agentLabel: string;
@@ -59,8 +64,11 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   usage: SessionUsage | undefined;
   /** The folder the agent works in, when the screen prints none. */
   path: string | undefined;
-  /** The reasoning effort last seen on screen, when the status line has none. */
+  /** The reasoning effort last seen (busy row, transcript), when the status
+   * line has none. */
   effort: string | undefined;
+  /** A level was sent from the effort list: shown until the session says. */
+  onEffortPicked: (effort: string) => void;
   visible: boolean;
   typeKeys: (keys: string[]) => Promise<void>;
   /** Whether the model list is up: the Reader then leaves the picker out of
@@ -169,6 +177,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     if (picking) return;
     onStatusClose();
     closeModes();
+    closeEffort();
     sawPicker.current = false;
     setAnswered(null);
     setPicker(null);
@@ -224,6 +233,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       void typeKeys([shiftTab]).catch(() => {});
       return;
     }
+    closeEffort();
     setSwitchFailed("");
     setModeOpen(true);
   };
@@ -259,6 +269,52 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     if (modeWalk.current !== walk) return;
     setSwitching("");
     setSwitchFailed(value);
+  };
+
+  // --- The reasoning effort ------------------------------------------------
+  const claude = isClaudeCommand(tab.cmd);
+  const [effortOpen, setEffortOpen] = useState(false);
+  const [effortSending, setEffortSending] = useState("");
+  const [effortFailed, setEffortFailed] = useState(false);
+  const closeEffort = () => {
+    setEffortOpen(false);
+    setEffortSending("");
+  };
+  /** Claude takes the level as `/effort <level>`; every other CLI sets it on
+   * its `/model` picker's next step, so that picker opens instead. */
+  const openEffort = () => {
+    if (!claude) {
+      openPicker();
+      return;
+    }
+    onStatusClose();
+    if (effortOpen) {
+      closeEffort();
+      return;
+    }
+    close();
+    closeModes();
+    setEffortFailed(false);
+    setEffortOpen(true);
+  };
+  const chooseEffort = (level: string) => {
+    if (effortSending) return;
+    if (!tab.scheduleTargetId) {
+      setEffortFailed(true);
+      return;
+    }
+    setEffortFailed(false);
+    setEffortSending(level);
+    void submitScheduledAgentCommand(tab.scheduleTargetId, `/effort ${level}`).then(
+      () => {
+        onEffortPicked(level);
+        closeEffort();
+      },
+      () => {
+        setEffortSending("");
+        setEffortFailed(true);
+      },
+    );
   };
 
   const contextLeft = status?.context ?? (usage?.contextLeft != null ? `${usage.contextLeft}%` : undefined);
@@ -331,6 +387,38 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           {step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
         </div>
       )}
+      {effortOpen && (
+        <div
+          className="terminal-reader-picker"
+          role="dialog"
+          aria-label={t("terminal.reader.effortTitle")}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeEffort(); } }}
+        >
+          <div className="terminal-reader-picker-head">
+            <strong>{t("terminal.reader.effortTitle")}</strong>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeEffort} aria-label={t("terminal.reader.effortClose")} title={t("terminal.reader.effortClose")}>✕</button>
+          </div>
+          <div className="terminal-reader-options">
+            {CLAUDE_EFFORTS.map((level, index) => (
+              <button
+                key={level}
+                type="button"
+                className={level === effortLabel ? "terminal-reader-option current" : "terminal-reader-option"}
+                disabled={!!effortSending}
+                aria-busy={level === effortSending}
+                onClick={() => chooseEffort(level)}
+              >
+                <span className="terminal-reader-option-number">{level === effortSending ? "…" : index + 1}</span>
+                <span className="terminal-reader-option-label">
+                  <span>{level === "auto" ? t("terminal.reader.effortAuto") : t("terminal.reader.effort", { effort: level })}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+          {effortFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.effortFailed")}</small>}
+          <small className="terminal-reader-question-more">{t("terminal.reader.effortNote")}</small>
+        </div>
+      )}
       {modeOpen && (
         <div
           className="terminal-reader-picker"
@@ -363,7 +451,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       )}
       <div className="terminal-reader-facts">
         {tab.cmd === "codex" && <button type="button" className="terminal-reader-fact-model"
-          onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); onStatusRequest(); }}
+          onClick={statusOpen ? onStatusClose : () => { close(); closeModes(); closeEffort(); onStatusRequest(); }}
           aria-haspopup="dialog" aria-expanded={statusOpen} title={t("terminal.reader.status.hint")}>
           {t("terminal.reader.status.button")} <UntestedTag id="terminal.reader.codexStatus" />
         </button>}
@@ -378,7 +466,20 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         >
           {modelLabel ?? t("terminal.reader.model")}
         </button>
-        {effortLabel && <span className="terminal-reader-fact" title={t("terminal.reader.effortHint")}>{t("terminal.reader.effort", { effort: effortLabel })}</span>}
+        {(effortLabel || claude) && (
+          <button
+            type="button"
+            className="terminal-reader-fact-model"
+            onClick={claude ? openEffort : picking ? close : openEffort}
+            disabled={claude ? !effortOpen && (!!live.question || picking) : !picking && (!!live.working || !!live.question)}
+            aria-haspopup="dialog"
+            aria-expanded={claude ? effortOpen : picking}
+            title={t(claude ? "terminal.reader.effortHint" : "terminal.reader.effortModelHint")}
+          >
+            {effortLabel ? t("terminal.reader.effort", { effort: effortLabel }) : t("terminal.reader.effortUnknown")}
+            <UntestedTag id="terminal.reader.effortPick" />
+          </button>
+        )}
         {tab.kind === "agent" && (
           <button
             type="button"

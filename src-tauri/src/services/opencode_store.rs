@@ -126,6 +126,7 @@ pub fn session_transcript(
         running_agents,
         usage: None,
         model: None,
+        effort: None,
         tokens: None,
         shells: Vec::new(),
         cwd: None,

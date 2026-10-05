@@ -758,6 +758,9 @@ export interface SessionTranscript {
   usage?: SessionUsage;
   /** The model its newest record names, as an API id — a subagent's own. */
   model?: string;
+  /** The reasoning effort its newest record names (`high`) — Claude's
+   * answers and `/effort`, Codex's turn context. */
+  effort?: string;
   /** The tokens its newest request carried (context plus answer), the count
    * Claude Code's own subagent row shows — read off a subagent's own file. */
   tokens?: number;

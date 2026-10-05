@@ -196,6 +196,12 @@ pub struct AgentTranscript {
     /// off its own conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The reasoning effort the newest record that names one ran with
+    /// (`high`, `xhigh`, …): Claude's assistant records and its `/effort`
+    /// confirmation, Codex's turn context. Claude prints it on screen only
+    /// while it thinks, so the Reader's facts row reads it here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// The tokens the newest request that records its usage carried — the
     /// context it sent plus what came back, the figure Claude Code's own row
     /// for a subagent counts (Codex's `last_token_usage`). The phone's
@@ -756,6 +762,7 @@ fn read_transcript_in(
         TranscriptKind::Claude => None,
     };
     let model = newest_model(&lines, kind);
+    let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
     let (mut entries, calls, shell_calls) = parse_entries(lines.into_iter(), kind, sidechain);
     let shells = running_shells(path, &current, shell_calls);
@@ -813,6 +820,7 @@ fn read_transcript_in(
         running_agents,
         usage,
         model,
+        effort,
         tokens,
         shells,
         cwd,
@@ -915,6 +923,40 @@ fn running_shells(path: &Path, version: &str, calls: ShellCalls) -> Vec<RunningS
 /// reads it ([`agent_session::model_in_record`]).
 fn newest_model(lines: &[&str], kind: TranscriptKind) -> Option<String> {
     lines.iter().rev().find_map(|line| agent_session::model_in_record(line, kind))
+}
+
+/// The reasoning effort the newest record in `lines` names
+/// ([`AgentTranscript::effort`]).
+fn newest_effort(lines: &[&str], kind: TranscriptKind) -> Option<String> {
+    lines.iter().rev().filter(|line| line.contains("ffort")).find_map(|line| {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        let effort = match (kind, value.get("type").and_then(Value::as_str)?) {
+            (TranscriptKind::Claude, "assistant") => value.get("effort")?.as_str()?.to_string(),
+            (TranscriptKind::Claude, "user") => claude_effort_switch(&value)?,
+            (TranscriptKind::Codex, "turn_context") => value.pointer("/payload/effort")?.as_str()?.to_string(),
+            _ => return None,
+        };
+        let effort = effort.trim().to_lowercase();
+        (!effort.is_empty() && effort.len() <= 16 && effort.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then_some(effort)
+    })
+}
+
+/// The level a `/effort` set, from the confirmation Claude writes as a user
+/// record (`<local-command-stdout>Set effort level to high (this session
+/// only): …`, or `Effort 'max' exceeds the cap for … set to 'high' instead`)
+/// — the session's next answer is the first to carry it otherwise.
+fn claude_effort_switch(value: &Value) -> Option<String> {
+    let content = value.get("message")?.get("content")?.as_str()?;
+    let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
+    let body = crate::services::agent_usage::strip_ansi(body);
+    let level = if let Some(rest) = body.strip_prefix("Set effort level to ") {
+        rest.split(|c: char| c.is_whitespace() || c == ':' || c == '<').next()?.to_string()
+    } else if body.starts_with("Effort '") {
+        body.split(" set to '").nth(1)?.split('\'').next()?.to_string()
+    } else {
+        return None;
+    };
+    Some(level)
 }
 
 /// The tokens the newest record in `lines` that carries usage counts
@@ -2258,6 +2300,38 @@ mod tests {
         let read = read_transcript_in(&sub, TranscriptKind::Claude, &Spawns::None, true, None, DEFAULT_LIMIT).unwrap();
         assert_eq!(read.model.as_deref(), Some("claude-haiku-4-5-20251001"));
         assert_eq!(read.tokens, None);
+    }
+
+    #[test]
+    fn the_newest_record_names_the_reasoning_effort() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let answer = |effort: &str| format!("{{\"type\":\"assistant\",\"effort\":\"{effort}\",\"message\":{{\"model\":\"claude-opus-5-5\",\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"ok\"}}]}}}}\n");
+        let said = |text: &str| format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"<local-command-stdout>{text}</local-command-stdout>\"}}}}\n");
+        std::fs::write(&path, [answer("medium"), answer("High")].concat()).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.effort.as_deref(), Some("high"));
+        assert_eq!(serde_json::to_value(&read).unwrap()["effort"], "high");
+
+        // A `/effort` counts at once, before the next answer carries it.
+        std::fs::write(&path, [answer("high"), said("Set effort level to xhigh (this session only): Deeper reasoning")].concat()).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.effort.as_deref(), Some("xhigh"));
+        std::fs::write(&path, [answer("high"), said("Effort 'max' exceeds the cap for Sonnet 5 set by your settings or organization; set to 'high' instead: x")].concat()).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.effort.as_deref(), Some("high"));
+
+        // None recorded: nothing shown, never a guess.
+        std::fs::write(&path, said("Set model to Opus 5")).unwrap();
+        let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.effort, None);
+        assert!(serde_json::to_value(&read).unwrap().get("effort").is_none());
+
+        // Codex: the turn context's.
+        let rollout = dir.path().join("rollout.jsonl");
+        std::fs::write(&rollout, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\",\"effort\":\"low\"}}\n").unwrap();
+        let read = read_transcript(&rollout, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+        assert_eq!(read.effort.as_deref(), Some("low"));
     }
 
     #[test]
