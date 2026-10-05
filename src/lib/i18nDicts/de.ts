@@ -4588,7 +4588,6 @@ export const dict: Dict = {
   "devBuild.openLog": "Build-Log verfolgen",
   "devBuild.paused": "Auto-Builds pausiert",
   "devBuild.pausedDetail": "Commits bauen {app} (dev) erst nach dem Fortsetzen neu.",
-  "devBuild.chipPaused": "pausiert",
   "devBuild.pause": "Auto-Builds pausieren",
   "devBuild.pauseHint": "{app} (dev) nicht mehr bei jedem Commit neu bauen und einen laufenden Build abbrechen, um den Rechner zu entlasten. Bleibt pausiert, bis du fortsetzt.",
   "devBuild.resume": "Auto-Builds fortsetzen",

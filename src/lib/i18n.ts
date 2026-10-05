@@ -4727,7 +4727,6 @@ export const enSource = {
   "devBuild.openLog": "Follow build log",
   "devBuild.paused": "Auto-builds paused",
   "devBuild.pausedDetail": "Commits don't rebuild {app} (dev) until you resume.",
-  "devBuild.chipPaused": "paused",
   "devBuild.pause": "Pause auto-builds",
   "devBuild.pauseHint": "Stop rebuilding {app} (dev) on every commit and cancel a running compile, to free the machine. Stays paused until you resume.",
   "devBuild.resume": "Resume auto-builds",

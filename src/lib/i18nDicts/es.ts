@@ -4579,7 +4579,6 @@ export const dict: Dict = {
   "devBuild.openLog": "Seguir el registro",
   "devBuild.paused": "Compilaciones automáticas en pausa",
   "devBuild.pausedDetail": "Los commits no recompilan {app} (dev) hasta que reanudes.",
-  "devBuild.chipPaused": "en pausa",
   "devBuild.pause": "Pausar compilaciones automáticas",
   "devBuild.pauseHint": "Deja de recompilar {app} (dev) en cada commit y cancela la compilación en curso para liberar el equipo. Sigue en pausa hasta que reanudes.",
   "devBuild.resume": "Reanudar compilaciones automáticas",
