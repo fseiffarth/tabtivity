@@ -5,7 +5,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, PoisonError,
+        Arc, Condvar, Mutex, PoisonError,
     },
 };
 
@@ -295,13 +295,23 @@ fn replay_frames(history: &[u8]) -> Vec<Vec<u8>> {
 /// A phone that reads slower than a flooding pane fills this. It used to be a
 /// channel whose full state ended the reader thread and closed the socket
 /// with 1013, and the phone then reconnected into a replay of the very flood
-/// that had closed it. The link is kept instead: the oldest queued bytes are
-/// shed, and the newest — the screen the pane is drawing now — go out. A
-/// terminal is a repaint stream, so what a shed costs is a screen the next
-/// redraw replaces, not a connection.
+/// that had closed it. Then it shed its oldest bytes — on the theory that the
+/// next redraw replaces them. It does not: tmux sends a client only the cells
+/// it believes changed, so every dropped byte left cells on the phone's screen
+/// that tmux never repainted (a long-gone diff interleaved with an agent's
+/// question card), and a cut could land inside an escape sequence.
+///
+/// So a full queue *blocks* the reader instead. The PTY then stops draining,
+/// the client's output backs up inside tmux, and tmux's own slow-client path
+/// (`tty_block_maybe`) discards it and redraws the whole screen once the
+/// client catches up — the one party that knows what the phone holds decides
+/// what to resend. The link stays open throughout.
 struct OutputQueue {
     state: Mutex<OutputState>,
     ready: Notify,
+    /// Wakes a reader parked on a full queue: a chunk went out, or the queue
+    /// was closed.
+    space: Condvar,
 }
 
 #[derive(Default)]
@@ -310,8 +320,6 @@ struct OutputState {
     bytes: usize,
     /// The reader has stopped: the PTY reached EOF or the queue was closed.
     closed: bool,
-    /// Bytes were dropped at least once.
-    shed: bool,
 }
 
 impl OutputQueue {
@@ -319,31 +327,33 @@ impl OutputQueue {
         Arc::new(Self {
             state: Mutex::new(OutputState::default()),
             ready: Notify::new(),
+            space: Condvar::new(),
         })
     }
 
-    /// Queue one chunk, shedding the oldest ones past the byte budget.
-    fn push(&self, chunk: Vec<u8>) {
+    /// Queue one chunk, waiting while the queue is past its byte budget.
+    /// Blocking — call it from the reader thread only. `false` once the queue
+    /// is closed: the chunk is dropped and the reader should stop.
+    fn push(&self, chunk: Vec<u8>) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        while !state.closed && state.bytes > 0 && state.bytes + chunk.len() > MAX_OUTPUT_QUEUE {
+            state = self.space.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        if state.closed {
+            return false;
+        }
         state.bytes += chunk.len();
         state.chunks.push_back(chunk);
-        while state.bytes > MAX_OUTPUT_QUEUE && state.chunks.len() > 1 {
-            if let Some(oldest) = state.chunks.pop_front() {
-                state.bytes -= oldest.len();
-                state.shed = true;
-            }
-        }
         drop(state);
         self.ready.notify_one();
+        true
     }
 
+    /// Stop the queue: a parked `push` returns, and `pop` ends once drained.
     fn close(&self) {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).closed = true;
         self.ready.notify_one();
-    }
-
-    fn shed(&self) -> bool {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).shed
+        self.space.notify_all();
     }
 
     /// The next chunk; `None` once the reader has stopped and nothing is left.
@@ -353,6 +363,7 @@ impl OutputQueue {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if let Some(chunk) = state.chunks.pop_front() {
                     state.bytes -= chunk.len();
+                    self.space.notify_all();
                     return Some(chunk);
                 }
                 if state.closed {
@@ -431,11 +442,15 @@ struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     output_task: tokio::task::JoinHandle<()>,
     window_task: tokio::task::JoinHandle<()>,
+    output: Arc<OutputQueue>,
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Kill and reap first. The reader is parked in a blocking read on a
+        // A reader parked on a full queue never sees the PTY close: wake it
+        // first, or its blocking thread outlives the attach.
+        self.output.close();
+        // Kill and reap. The reader is parked in a blocking read on a
         // cloned master fd, so it unblocks only once the child is gone and the
         // remaining write ends close; `abort()` cannot interrupt a blocking task.
         let _ = self.child.kill();
@@ -506,7 +521,9 @@ pub async fn attach(
                 break;
             }
             bytes.truncate(read);
-            reader_queue.push(bytes);
+            if !reader_queue.push(bytes) {
+                break;
+            }
         }
         reader_queue.close();
     });
@@ -539,6 +556,7 @@ pub async fn attach(
         child,
         output_task,
         window_task,
+        output: output.clone(),
     };
     let (mut ws_tx, mut ws_rx) = socket.split();
     // An explicit replay boundary. The client keeps its last rendered screen
@@ -622,7 +640,7 @@ pub async fn attach(
             chunk = output.pop() => match chunk {
                 Some(bytes) => if !deliver(&mut ws_tx, Message::Binary(bytes.into())).await { break Ok(()); },
                 // The pane's output ended: tmux detached the client, or the
-                // session is gone. A shed on the way is not a reason to close.
+                // session is gone.
                 None => break Ok(()),
             },
             incoming = ws_rx.next() => match incoming {
@@ -691,8 +709,6 @@ pub async fn attach(
     drop(session);
     drop(writer);
     drop(master);
-    // Observable in tests only: a shed is a repaint the next redraw covers.
-    let _ = output.shed();
     result
 }
 
@@ -996,30 +1012,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_flooding_pane_sheds_its_oldest_output_and_keeps_the_link() {
+    async fn a_flooding_pane_waits_for_the_phone_and_loses_nothing() {
         let queue = OutputQueue::new();
         let chunk = vec![b'x'; 16 * 1024];
         let fits = MAX_OUTPUT_QUEUE / chunk.len();
         for _ in 0..fits {
-            queue.push(chunk.clone());
+            assert!(queue.push(chunk.clone()));
         }
-        assert!(!queue.shed(), "within budget nothing is dropped");
-        // The phone stalls; the pane keeps painting.
-        for _ in 0..3 {
-            queue.push(vec![b'y'; chunk.len()]);
-        }
-        assert!(queue.shed());
-        {
-            let state = queue.state.lock().unwrap();
-            assert!(state.bytes <= MAX_OUTPUT_QUEUE);
-            assert_eq!(state.chunks.len(), fits);
-            // The newest bytes — the screen as it is now — are what is kept.
-            assert_eq!(state.chunks.back().unwrap()[0], b'y');
-        }
-        // …and the link is still open: the consumer drains rather than closes.
-        assert!(queue.pop().await.is_some());
+        // The phone stalls; the pane keeps painting. The reader parks rather
+        // than dropping bytes tmux believes the phone already has.
+        let (pushed_tx, pushed_rx) = std::sync::mpsc::channel();
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || {
+                let pushed = queue.push(vec![b'y'; 16 * 1024]);
+                pushed_tx.send(pushed).expect("report");
+            })
+        };
+        assert!(
+            pushed_rx.recv_timeout(std::time::Duration::from_millis(100)).is_err(),
+            "a full queue blocks the reader"
+        );
+        // The phone takes one chunk: the reader goes on, and every byte is
+        // still there, in order.
+        assert_eq!(queue.pop().await.as_deref(), Some(&chunk[..]));
+        assert_eq!(pushed_rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true));
+        reader.join().expect("reader");
+        let mut drained = Vec::new();
         queue.close();
-        while queue.pop().await.is_some() {}
+        while let Some(next) = queue.pop().await {
+            drained.push(next[0]);
+        }
+        assert_eq!(drained.len(), fits);
+        assert_eq!(drained.last(), Some(&b'y'));
+    }
+
+    #[test]
+    fn closing_wakes_a_reader_parked_on_a_full_queue() {
+        let queue = OutputQueue::new();
+        let chunk = vec![b'x'; MAX_OUTPUT_QUEUE];
+        assert!(queue.push(chunk.clone()), "one oversized chunk always fits an empty queue");
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || queue.push(chunk))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        queue.close();
+        assert!(!reader.join().expect("reader"), "a closed queue tells the reader to stop");
     }
 
     #[tokio::test]
