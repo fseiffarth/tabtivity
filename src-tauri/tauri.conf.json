@@ -1,6 +1,6 @@
 {
   "productName": "Tabtivity",
-  "version": "0.1.107",
+  "version": "0.1.108",
   "identifier": "io.github.fseiffarth.tabtivity",
   "build": {
     "frontendDist": "../dist",
