@@ -560,6 +560,7 @@ fn without_device_id(request: &DesktopRequest) -> Option<DesktopRequest> {
         DesktopRequest::ScheduleMutate { device_id, .. }
         | DesktopRequest::PromptMutate { device_id, .. }
         | DesktopRequest::HoldPrompt { device_id, .. }
+        | DesktopRequest::EditHeldPrompt { device_id, .. }
         | DesktopRequest::MarkupAnswer { device_id, .. } => {
             device_id.take()?;
         }
@@ -751,6 +752,25 @@ mod tests {
             super::desktop_call(&dir.path().join("none.sock"), &hold(Some("device-1"))).await.unwrap_err(),
             super::DESKTOP_UNAVAILABLE
         );
+    }
+
+    /// A held prompt's edit names the phone too (#2348), so an older window
+    /// gets it again without the field.
+    #[test]
+    fn a_held_edit_is_retried_without_the_phone() {
+        let edit = |device_id: Option<&str>| super::DesktopRequest::EditHeldPrompt {
+            request_id: "r".into(),
+            project_id: "p".into(),
+            tmux_session: "t".into(),
+            held_id: "held-1".into(),
+            message: "and the lint".into(),
+            device_id: device_id.map(str::to_string),
+        };
+        assert!(matches!(
+            super::without_device_id(&edit(Some("device-1"))),
+            Some(super::DesktopRequest::EditHeldPrompt { device_id: None, .. })
+        ));
+        assert!(super::without_device_id(&edit(None)).is_none());
     }
 }
 

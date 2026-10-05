@@ -1099,6 +1099,10 @@
   color: #8b949e;
 }
 
+.pill-popup-git.git-unknown {
+  color: #8b949e;
+}
+
 .pill-popup-time {
   font-size: 11px;
   color: var(--text-secondary);

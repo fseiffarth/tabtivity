@@ -579,12 +579,15 @@ export function ProjectFilesView({
     const worktreeArgs = gitWorktreeArgs(selectedGitWorktree);
     void Promise.all([
       invoke<GitStatus>("git_status", { projectDir: dir, ...worktreeArgs }).catch(() => null),
-      invoke<string[]>("git_unpushed_commits", { projectDir: dir, ...worktreeArgs }).catch(() => [] as string[]),
+      // A failed read (git refused or timed out, #2349) is no reading, not
+      // "nothing to push": `null`, so neither this bar nor the pill draws clean.
+      invoke<string[]>("git_unpushed_commits", { projectDir: dir, ...worktreeArgs }).catch(() => null),
     ]).then(([status, unpushed]) => {
       if (context !== gitContextKeyRef.current) return;
       setGitStatus(status);
-      setUnpushedCommits(unpushed);
-      if (!selectedGitWorktree) writeGitBarSnapshot(dir, { status, unpushed });
+      // Unknown keeps the last list shown rather than emptying it.
+      if (unpushed) setUnpushedCommits(unpushed);
+      if (!selectedGitWorktree && unpushed) writeGitBarSnapshot(dir, { status, unpushed });
       // Keep the project's pill dot in sync from the data we just fetched (no
       // extra git subprocesses), so edits/commits/pushes reflect immediately
       // instead of waiting for the switcher's periodic poll.
@@ -592,7 +595,10 @@ export function ProjectFilesView({
       // that dot tracks the project repo (the switcher's poll recomputes it).
       // Gate on `active` so a background tab never churns the shared store.
       if (active && projectId && status && !onNestedRepo && !selectedGitWorktree) {
-        useGitDirtyStore.getState().set(projectId, gitDirtyState(status, unpushed.length));
+        const level = gitDirtyState(status, unpushed?.length ?? 0);
+        // Without the unpushed count a clean tree may still be "unpushed":
+        // leave the dot to the switcher's probe instead of writing "clean".
+        if (unpushed || level !== "clean") useGitDirtyStore.getState().set(projectId, level);
       }
     });
   };

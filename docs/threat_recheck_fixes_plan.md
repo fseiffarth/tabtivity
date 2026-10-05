@@ -25,3 +25,13 @@ adjust the rows that cite it.
 | 7 | #2349 | 15 | `commands::git::run_git` and callers | Found in step 5's review: a FIFO ignore/attributes file hangs git. Bounded timeout (reap the child subtree) on background and window-path git calls; refuse non-regular `info/exclude`/`.gitignore`/`.gitattributes` where cheap. |
 
 Final: full gates (`AGENTS.md` → Gates) and `backend:stale`.
+
+## Follow-ups decided 2026-10-05
+
+The open design calls from steps 1, 6 and 7, answered by the user:
+
+| Step | Todo | Decision |
+|---|---|---|
+| 8 | #2348 | A phone's edit of a desktop- or agent-made rule (schedule, held or collected prompt) stamps `phone_device`: the phone takes the rule over, so revoking it or narrowing its access cancels the rule. |
+| 9 | #2349 | An errored dirty probe gets its own "unknown" mark in the project pill (muted/hollow, tooltip "Git status unavailable", i18n), never drawn as clean. |
+| 10 | #2343 | The API proxy reserves the model's full context window when the body names input by reference (a URL, file or `cachedContent` source, or a fetch/search tool); other requests keep today's reservation. |

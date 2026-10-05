@@ -152,11 +152,15 @@ fn validate_input(input: ProjectAgentPromptInput) -> Result<ProjectAgentPromptIn
         }
         None => None,
     };
+    if let Some(device) = &input.phone_device {
+        validate_id("phone device", device)?;
+    }
     Ok(ProjectAgentPromptInput {
         id: input.id,
         message,
         tags,
         target,
+        phone_device: input.phone_device,
     })
 }
 
@@ -182,6 +186,11 @@ fn apply_upsert(
             if let Some(target) = input.target {
                 prompts[index].target = Some(target).filter(|value| !value.is_empty());
             }
+            // A phone's edit takes the prompt over (#2348); the desktop's
+            // names no phone and keeps the stored one.
+            if input.phone_device.is_some() {
+                prompts[index].phone_device = input.phone_device;
+            }
         }
         None => {
             if prompts.len() >= MAX_PROMPTS_PER_PROJECT {
@@ -196,6 +205,7 @@ fn apply_upsert(
                 updated_at: now.to_string(),
                 tags: input.tags.unwrap_or_default(),
                 target: input.target.filter(|value| !value.is_empty()),
+                phone_device: input.phone_device,
             });
         }
     }
@@ -1034,6 +1044,7 @@ mod tests {
             message: message.into(),
             tags: None,
             target: None,
+            phone_device: None,
         }
     }
 
@@ -1124,6 +1135,35 @@ mod tests {
         let prompts = apply_upsert(&mut file, "p", aimed("b", "x", ""), "t4").unwrap();
         assert_eq!(prompts[1].target, None);
         assert!(validate_input(aimed("c", "x", "bad\u{1}id")).is_err());
+    }
+
+    /// #2348: a phone's create or edit names the phone (it takes a desktop
+    /// prompt over); a desktop edit names none and keeps it.
+    #[test]
+    fn a_phone_edit_takes_a_prompt_over_and_a_desktop_edit_keeps_it() {
+        let by = |id: &str, message: &str, phone: &str| ProjectAgentPromptInput {
+            phone_device: Some(phone.into()),
+            ..input(id, message)
+        };
+        let mut file = AgentPromptsFile::default();
+        let prompts = apply_upsert(&mut file, "p", input("desk", "one"), "t1").unwrap();
+        assert_eq!(prompts[0].phone_device, None);
+        assert!(!serde_json::to_string(&prompts[0]).unwrap().contains("phone_device"));
+        let prompts = apply_upsert(&mut file, "p", by("desk", "two", "phone-a"), "t2").unwrap();
+        assert_eq!(prompts[0].phone_device.as_deref(), Some("phone-a"));
+        let prompts = apply_upsert(&mut file, "p", input("desk", "three"), "t3").unwrap();
+        assert_eq!(prompts[0].phone_device.as_deref(), Some("phone-a"), "the desktop's edit keeps it");
+        let prompts = apply_upsert(&mut file, "p", by("desk", "four", "phone-b"), "t4").unwrap();
+        assert_eq!(prompts[0].phone_device.as_deref(), Some("phone-b"));
+        let prompts = apply_upsert(&mut file, "p", by("new", "x", "phone-a"), "t5").unwrap();
+        assert_eq!(prompts[1].phone_device.as_deref(), Some("phone-a"));
+        assert!(validate_input(by("c", "x", "bad\u{1}id")).is_err());
+        // An older build's row (no field) reads back as desktop-made.
+        let old: ProjectAgentPrompt = serde_json::from_str(
+            r#"{"id":"o","message":"m","created_at":"t","updated_at":"t"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.phone_device, None);
     }
 
     #[test]

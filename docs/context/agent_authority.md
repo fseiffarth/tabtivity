@@ -462,7 +462,10 @@ limits existed), answers 429 in the provider's shape (`rate_limit_error` /
 Manage CLIs. Requests in flight count (gap 9, 2026-10-04, not live): after
 the body is read each billed request reserves its worst case
 (`api_meter::Meter::worst_case` — whole output cap, input bytes/3 as 1-hour
-cache writes, ten grounding queries if a Gemini body may ground) in
+cache writes — the model's whole context window when the body names input
+by URL, file, cache or a fetch/search tool (#2343 follow-up, 2026-10-05,
+`names_input_by_reference`) — ten grounding queries if a Gemini body may
+ground) in
 `api_usage::Book::reserve`; spent + held + this one past the limit answers
 429 (same shapes, a "could cost more than is left" message). The
 `Reservation` drops after the actual charge, or with the meter on a connect

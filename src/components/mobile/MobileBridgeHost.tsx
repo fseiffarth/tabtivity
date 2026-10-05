@@ -273,7 +273,7 @@ type DesktopRequest =
   | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string }
   | { type: "hold_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
-  | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string }
+  | { type: "edit_held_prompt"; request_id: string; project_id: string; tmux_session: string; held_id: string; message: string; device_id?: string }
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
   | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
@@ -1285,9 +1285,10 @@ async function mutateSchedule(
         id: action.type === "create" ? crypto.randomUUID() : action.schedule_id,
         ...action.schedule,
         ...(existing ? { preface: existing.preface ?? [] } : {}),
-        // The phone a new rule came from, so revoking it or narrowing its
-        // access cancels the rule (#2348); an update keeps the stored one.
-        ...(action.type === "create" && phoneDevice ? { phone_device: phoneDevice } : {}),
+        // The phone a rule came from, so revoking it or narrowing its access
+        // cancels the rule (#2348). A phone's update takes a desktop or agent
+        // rule over; with no phone named the backend keeps the stored one.
+        ...(phoneDevice ? { phone_device: phoneDevice } : {}),
       },
     });
     void persistScopeLayout(projectId);
@@ -1337,6 +1338,9 @@ async function mutatePrompt(projectId: string, action: PromptMutation, phoneDevi
     await store.upsert(projectId, {
       id: action.type === "create" ? crypto.randomUUID() : action.prompt_id,
       message: action.prompt.message,
+      // The phone writing it takes the prompt over (#2348): a later send from
+      // either surface names it on the rule.
+      phoneDevice,
     });
   }
   return promptsFor(projectId);
@@ -2229,7 +2233,7 @@ async function dismissMarkupFromPhone(projectId: string, tmuxSession: string, as
  * still waiting: `expectExistingOn` makes the backend refuse a rule already
  * delivered (`schedule_gone`) or being typed (`schedule_busy`) instead of
  * creating it afresh, which would send the prompt a second time. */
-async function editHeldTabPrompt(projectId: string, tmuxSession: string, heldId: string, message: string): Promise<DesktopResponse> {
+async function editHeldTabPrompt(projectId: string, tmuxSession: string, heldId: string, message: string, phoneDevice?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
@@ -2246,7 +2250,9 @@ async function editHeldTabPrompt(projectId: string, tmuxSession: string, heldId:
   // happens to name is not one to rewrite from the chat.
   if (!held || held.rule.type !== "once" || held.last) return gone;
   try {
-    await useAgentSchedulesStore.getState().upsert(scope.id, target, { ...held, message: text }, { expectExistingOn: target });
+    // The editing phone takes the rule over (#2348), as when it held it.
+    const rule = phoneDevice ? { ...held, message: text, phone_device: phoneDevice } : { ...held, message: text };
+    await useAgentSchedulesStore.getState().upsert(scope.id, target, rule, { expectExistingOn: target });
   } catch (cause) {
     const code = String(cause);
     if (code.includes("schedule_busy")) return { status: "error", code: "held_busy", message: "The prompt is being delivered" };
@@ -2475,7 +2481,7 @@ async function handleRequest(
     case "tab_input": return markTabInput(request.project_id, request.tmux_session);
     case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message);
     case "hold_prompt": return holdTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);
-    case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message);
+    case "edit_held_prompt": return editHeldTabPrompt(request.project_id, request.tmux_session, request.held_id, request.message, request.device_id);
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
     case "desktop_images": return desktopImagesFor(request.project_id);
     case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);

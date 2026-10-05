@@ -357,9 +357,13 @@ pub(crate) fn apply_upsert(
             let mut next = prompt;
             next.last = target.schedules[index].last.clone();
             next.origin = target.schedules[index].origin.clone();
-            // So is the phone that made it: an edit from anywhere neither
-            // adopts nor disowns a phone's rule.
-            next.phone_device = target.schedules[index].phone_device.clone();
+            // The phone that made it stays unless the edit names one: a
+            // phone's edit takes the rule over (revoking that phone cancels
+            // it, #2348); a desktop or agent edit names none and never
+            // disowns a phone's rule.
+            if next.phone_device.is_none() {
+                next.phone_device = target.schedules[index].phone_device.clone();
+            }
             let next = validate_prompt(next)?;
             target.schedules[index] = next;
         }

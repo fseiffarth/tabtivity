@@ -347,4 +347,33 @@ mod tests {
         assert_eq!(raw["projects"]["p"]["t"]["schedules"][0]["phone_device"], PHONE_A);
         assert!(agent_tasks::upsert_in(&path, "p", "t", rule("x", AgentScheduleRule::Daily { time: "09:00".into() }, Some("bad\u{7}")), None).is_err());
     }
+
+    /// #2348 follow-up: a phone's edit takes a desktop rule (or another
+    /// phone's) over, so revoking the editing phone cancels it and revoking
+    /// the earlier one no longer does; a desktop edit afterwards keeps it.
+    #[test]
+    fn a_phone_edit_takes_a_rule_over_and_its_revoke_cancels_it() {
+        let dir = tempfile::tempdir().unwrap();
+        scopes(dir.path(), &[PHONE_A, PHONE_B]);
+        pair(dir.path(), &[PHONE_A, PHONE_B]);
+        seed(dir.path());
+        let path = agent_tasks::file_path(dir.path());
+        let edit = |id: &str, phone: Option<&str>| {
+            let row = agent_tasks::list_at(dir.path(), "p-all", "t").unwrap().into_iter().find(|row| row.id == id).unwrap();
+            let edited = ScheduledAgentPrompt { message: format!("{} again", row.message), phone_device: phone.map(str::to_string), ..row };
+            agent_tasks::upsert_in(&path, "p-all", "t", edited, Some("t")).unwrap();
+        };
+        edit("desk", Some(PHONE_B));
+        edit("a-daily", Some(PHONE_B));
+        edit("desk", None);
+        let device = |id: &str| agent_tasks::list_at(dir.path(), "p-all", "t").unwrap().into_iter().find(|row| row.id == id).unwrap().phone_device;
+        assert_eq!(device("desk").as_deref(), Some(PHONE_B), "the desktop's later edit keeps the phone");
+
+        pair(dir.path(), &[PHONE_B]);
+        sweep_in(dir.path(), "after revoking A").unwrap();
+        assert_eq!(ids(dir.path(), "p-all"), ["a-daily", "b-daily", "desk"], "A's edited-away rule now belongs to B");
+        pair(dir.path(), &[]);
+        sweep_in(dir.path(), "after revoking B").unwrap();
+        assert!(ids(dir.path(), "p-all").is_empty(), "B's edits made the desktop rule B's");
+    }
 }

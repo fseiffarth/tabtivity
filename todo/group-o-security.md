@@ -1206,6 +1206,17 @@ and #2346 were spot-checked against the source.
       Near the limit ordinary turns are refused. Tests: `api_usage`
       (reserve/release), `api_proxy` e2e (third concurrent request refused;
       released on success, client hang-up, upstream break, connect error).
+    - **Follow-up 2026-10-05 (not live).** A body that names input by
+      reference reserves the model's whole context window as input
+      (`api_meter::names_input_by_reference`: an Anthropic document/image
+      `url`/`file` source or `file_id`, a `web_fetch`/`web_search` tool; a
+      Gemini `fileData`/`file_uri`, `cachedContent`, `urlContext`,
+      `fileSearch` or grounding tool; matched as keys anywhere, every
+      spelling, unparseable = yes). Windows from `api_prices::context_window`
+      (1M Anthropic, 200K for Haiku 4.5 / Opus ≤ 4.5; 1,048,576 Gemini;
+      unknown → the largest). Other requests keep body bytes/3. ~$4–20 held
+      per such turn. Tests: `api_meter` (detection both ways, window held,
+      inline unchanged), `api_prices` (window table).
 2344. **An approved agent push can send commits the user did not see.**
     `git_push_mcp::approve` checks `refs/heads/<b> == head`, then waits on
     `ls_remote` (up to 120 s), then pushes the refspec built by `refspec()`
@@ -1316,6 +1327,20 @@ and #2346 were spot-checked against the source.
       `phone_origin` (revoke, Lock down, narrowing, claim backstop, old rules
       still fire, unreadable access), `admin` forget-all, `headless` stamping,
       `protocol` field, `MobileSchedulePreface.test.tsx`.
+    - **Follow-up 2026-10-05 (not live).** A phone's edit takes a rule over:
+      a schedule update, a held-prompt edit (`EditHeldPrompt` now carries
+      `device_id`, retried without it for an older window) and a collected
+      prompt it creates or edits (new `ProjectAgentPrompt::phone_device`)
+      stamp that phone, so revoking it or narrowing its access cancels the
+      rule — a desktop or agent rule included. The rule a send makes of a
+      collected prompt names the sending phone, else the phone that wrote it,
+      whichever surface sends it (`sendCollectedPrompt`, headless
+      `prompt_mutate`). A desktop or agent edit names no phone and keeps a
+      stamp (`agent_tasks::apply_upsert`, `agent_prompts::apply_upsert`).
+      Both owners. Tests: `phone_origin` takeover + revoke, `headless`
+      (update, held edit, collected edit then send), `agent_prompts`,
+      `admin` retry, `protocol`, `MobileSchedulePreface.test.tsx` (schedule
+      update, held edit, prompt edit, desktop send).
 
 2349. **A FIFO in a repo hangs Tabtivity's git calls.** A named pipe at
     `.git/info/exclude` or an in-tree `.gitignore` makes `git status` block
@@ -1362,6 +1387,15 @@ and #2346 were spot-checked against the source.
       (`stores/gitDirty.ts`, test in `GitDirtyState.test.ts`). Bounded too:
       the provider sniff (`detect_git_providers`) and `git_init`'s Publish
       branch checks. Work-tree writes moved to the 1 h ceiling.
+    - **Follow-up 2026-10-05 (not live).** An errored dirty probe is its own
+      `"unknown"` state (`stores/gitDirty.ts`), drawn as a hollow grey folder
+      (`.pill-folder-icon.git-unknown`) with the hover-card line "Git status
+      unavailable" (`pill.gitUnknown`, the card is the pill's tooltip;
+      `UntestedTag`), never as clean; the phone gets no dot for it. The
+      Files/Git view no longer turns a failed `git_unpushed_commits` into
+      `[]`: it keeps the last list and leaves a clean-looking pill to the
+      switcher's probe. Tests: `GitDirtyState`, `ProjectHoverCardGitState`,
+      `MobileGitDots`, `GitBarRefresh`.
 
 ### Safe for everyone — non-expert users (2026-09-24)
 

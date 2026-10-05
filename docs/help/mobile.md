@@ -380,7 +380,8 @@ section shown.
 
 The header's Mobile button shows the host status. **Revoke** drops one device;
 **Lock down** forgets every paired device and stops the host. Both also cancel
-the prompts that phone was holding for an agent and the schedules it made, so
+the prompts that phone was holding for an agent, the schedules it made or
+last edited, and the collected prompts it wrote once they are sent, so
 nothing it left behind is typed later; so does taking a project or box away
 from a phone. Also remove the device from your Tailscale machines.
 

@@ -1147,6 +1147,12 @@ pub enum DesktopRequest {
         tmux_session: String,
         held_id: String,
         message: String,
+        /// The paired phone editing, which takes the rule over
+        /// (`ScheduledAgentPrompt::phone_device`, #2348): a prompt the desktop
+        /// held then names it, so a revoke or a narrowed access cancels it.
+        /// Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// Take back the last `/clear` of this agent tab: the desktop types the
     /// CLI's resume of the conversation that clear ended into the tab
@@ -2208,11 +2214,20 @@ mod tests {
             tmux_session: concat!(crate::app_slug!(), "-project-0--agent-123456789").into(),
             held_id: "held-1".into(),
             message: "fix the tests, then the docs".into(),
+            device_id: Some("device-1".into()),
         };
         assert_eq!(request.request_id(), "request-held");
         let json = serde_json::to_value(&request).expect("serialize held edit");
         assert_eq!(json["type"], "edit_held_prompt");
         assert_eq!(json["held_id"], "held-1");
+        assert_eq!(json["device_id"], "device-1");
+        // An older sidecar's edit names no phone and still parses (#2348).
+        let mut older_edit = json.clone();
+        older_edit.as_object_mut().unwrap().remove("device_id");
+        assert!(matches!(
+            serde_json::from_value::<DesktopRequest>(older_edit),
+            Ok(DesktopRequest::EditHeldPrompt { device_id: None, .. })
+        ));
         let mut hostile = json.clone();
         hostile["schedule_target_id"] = "must-not-cross".into();
         assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());

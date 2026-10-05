@@ -110,7 +110,7 @@ describe("useGitDirtyStore.refresh", () => {
     expect(useGitDirtyStore.getState().byId.p1).toBe("clean");
   });
 
-  it("drops the reading when the probe fails, never writing it as clean (#2349)", async () => {
+  it("marks a failed probe unknown, never writing it as clean (#2349)", async () => {
     mockInvoke.mockReset();
     mockInvoke.mockResolvedValueOnce({
       status: { staged: 0, unstaged: 1, untracked: 0, has_remote: false, is_repo: true },
@@ -124,7 +124,7 @@ describe("useGitDirtyStore.refresh", () => {
     mockInvoke.mockRejectedValueOnce("git status timed out after 120 s and was stopped.");
     await refresh("p2", "/p2");
     expect(mockInvoke).toHaveBeenCalledTimes(2);
-    expect(useGitDirtyStore.getState().byId).not.toHaveProperty("p2");
+    expect(useGitDirtyStore.getState().byId.p2).toBe("unknown");
 
     // An outdated backend without the combined command still gets the fallback.
     mockInvoke

@@ -534,6 +534,20 @@
   border-radius: 2px;
 }
 
+/* "unknown": the git probe errored (refused, timed out, host down), so there is
+   no reading. The same muted grey as "broken", but a hollow folder (outline
+   only) rather than a filled one: never the resting yellow of "clean", which
+   would claim nothing is pending in a tree nobody could read. */
+.pill-folder-icon.git-unknown {
+  color: #8b949e;
+}
+
+.pill-folder-icon.git-unknown svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+}
+
 .project-search-wrap {
   position: relative;
   width: 150px;

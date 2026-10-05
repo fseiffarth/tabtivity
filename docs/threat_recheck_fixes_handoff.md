@@ -921,3 +921,117 @@ and ProjectHoverCardGitState: 20/20 pass. `npm run lint`: 0 errors, 31
 warnings, none in the touched files. `git diff --check` clean. brand-check:
 the one known hit (`inboxRefs.ts`). `backend:stale`: no Tabtivity process
 identified, so the Rust side was not checked. Never live.
+
+## Follow-ups 8–10 — implementer
+
+**Step 8 (#2348, a phone's edit takes a rule over).**
+- `agent_tasks::apply_upsert`: an edit that names a phone (`phone_device:
+  Some`) stamps it; one that names none (desktop, agent, older sidecar)
+  keeps the stored stamp. Schema doc updated.
+- Collected prompts: new `ProjectAgentPrompt::phone_device` (persisted,
+  optional; persisted struct tolerates unknown fields, so older builds read
+  it) and `ProjectAgentPromptInput::phone_device` (`Some` stamps, `None`
+  keeps), validated as an id. `MobileCollectedPrompt` copies its own fields,
+  so it never reaches the browser (host test asserts it).
+- Headless: `schedule_mutate` Update stamps the phone; `prompt_mutate`
+  Create/Update stamp it, Send names the sending phone else the prompt's;
+  `edit_held_prompt` gained `phone: Option<&str>` (stamps, else keeps).
+- Window: `DesktopRequest::EditHeldPrompt.device_id` (optional; added to
+  `admin::without_device_id` so an older window is retried without it);
+  `MobileBridgeHost`: `mutateSchedule` stamps on update too, `mutatePrompt`
+  passes `phoneDevice` to `store.upsert` (new `phoneDevice` → `phone_device`),
+  `editHeldTabPrompt` stamps; `sendCollectedPrompt` uses
+  `options.phoneDevice ?? prompt.phone_device`, so a desktop send (Prompt
+  chart, after-links) of a phone-written prompt names the phone.
+- Not covered (documented): a schedule the desktop composes in the schedule
+  dialog from a phone-written prompt is the desktop's.
+- Tests: `phone_origin::a_phone_edit_takes_a_rule_over_and_its_revoke_cancels_it`,
+  `headless::a_rule_a_phone_makes_with_no_window_names_the_phone` (extended:
+  update by another phone, desktop rule update, held edit of a desktop hold,
+  desktop prompt edited by phone then sent with no phone),
+  `agent_prompts::a_phone_edit_takes_a_prompt_over_and_a_desktop_edit_keeps_it`,
+  `admin::a_held_edit_is_retried_without_the_phone`, protocol held test
+  extended, `MobileSchedulePreface.test.tsx` (schedule update stamps, unnamed
+  update doesn't; held edit; prompt edit; desktop send carries/omits).
+
+**Step 9 (#2349, "unknown" git mark).** `GitDirtyState` gains `"unknown"`,
+written by an errored probe. Pill: `.pill-folder-icon.git-unknown` (grey
+#8b949e like `git-broken`, hollow: `svg { fill: none; stroke }`, nothing
+animated). The "tooltip" is the hover-card line `pill.gitUnknown` "Git status
+unavailable" (+ `UntestedTag`): commit 303fc164 moved every git-state
+explanation from a native `title` on the icon into the card, and
+`ProjectHoverCardGitState` asserts the icon has no title, so no `title` was
+added. The phone gets no dot for unknown (`MobileGitDot` excludes it).
+`ProjectFilesView`: a failed `git_unpushed_commits` is `null`, not `[]` —
+the bar keeps its last list, no snapshot is written, and a clean-looking
+pill is left to the switcher's probe. Tests: `GitDirtyState`,
+`ProjectHoverCardGitState` (card line + pill class), `MobileGitDots`,
+`GitBarRefresh` ("never turns a failed unpushed read into a clean dot").
+
+**Step 10 (#2343, window for input by reference).**
+`api_prices::context_window(provider, model)` (Claude API model table via
+the claude-api skill, cached 2026-09-25: 1M current models, Sonnet 4/4.5 1M
+with the beta; 200K Haiku 4.5, Opus 4.5/4.1/4, 3.5 Haiku. Gemini model pages
+fetched 2026-10-05: 1,048,576 for 3.8 Flash, 3.5 Flash, 3.1 Pro, 2.5 Pro —
+taken for every Gemini model; image/TTS/embedding hold less, an overcount).
+Unknown → the largest. `api_meter::names_input_by_reference` (serde visitor,
+every key and duplicate seen, unparseable = yes): Anthropic `type` value
+`url`/`file`/`web_fetch*`/`web_search*` or a `file_id` key; Gemini keys
+`fileData`, `fileUri`, `cachedContent`, `urlContext`, `fileSearch`,
+`googleSearch(Retrieval)`, `googleMaps`, `enterpriseWebSearch`, `retrieval`
+(case and `_` folded). `worst_case` only: input = max(body/3, window); the
+cut-off charge is unchanged. The existing grounding worst-case expectation
+was updated (a grounding tool now holds the window). Tests:
+`api_meter::input_by_reference_is_found_however_the_body_spells_it`,
+`input_by_reference_holds_the_models_whole_window` (Opus 5.5 1M, Haiku
+200K, inline unchanged, Gemini 3.1 Pro long-tier), `api_prices` window table.
+Residual: web searches, >10 grounding queries, a server tool re-reading its
+results over iterations, code-execution/MCP results.
+
+**Docs.** todo #2343/#2348/#2349 follow-up lines; threat model gaps 8, 9,
+14, 15, Agent API proxy, lost/stolen and Background git rows;
+`docs/context/mobile_access.md` (new paragraph + Known gap rewritten);
+`docs/context/agent_authority.md` (reservation sentence);
+`docs/help/mobile.md` (revoke paragraph); `filemap_backend.md` api rows.
+
+**Gates.** `cargo test -q --no-fail-fast`: 3689 pass, 3 ignored (14
+suites). clippy `--all-targets -D warnings`: clean. `npm run build`: ok.
+`npm test`: 7358 pass, 1 fail — `MobileIndicator.test.tsx` "multiple Close
+buttons", the known pre-existing one. `npm run lint`: 0 errors, 31 warnings,
+none in touched lines. brand-check: the 3 known hits. `git diff --check`
+clean. `mobile-web/` untouched (no bundle). `backend:stale`: no Tabtivity
+process identified, sidecar serves the built bundle, Rust side not checked.
+Never live.
+
+**Already committed by someone else — HEAD does not build alone.** Commit
+23286344 ("Count working, waiting and done agent tabs…", another session)
+swept in these hunks of mine: `mobile_control/host.rs` (`edit_held_prompt`
+handler: `device_id: Some(phone.device_id()…)` and the 6-arg
+`headless::edit_held_prompt` call; the `phone_device:
+Some("device-that-wrote-it")` line + comment in
+`successful_prompt_response_omits_internal_target`), `"pill.gitUnknown"` in
+`src/lib/i18n.ts` and the four dicts, and the `"pill.gitUnknown"` row in
+`src/lib/untested.ts`. Their definitions are still uncommitted, so HEAD
+fails to compile (and `UntestedRegistry` would flag the row) until the files
+below land.
+
+**Files changed (uncommitted, all hunks mine unless noted).**
+- `src-tauri/src/schema/agent_prompts.rs`, `src-tauri/src/schema/agent_tasks.rs`
+- `src-tauri/src/services/agent_prompts.rs`, `agent_tasks.rs`, `api_meter.rs`, `api_prices.rs`
+- `src-tauri/src/services/mobile_control/{admin,headless,phone_origin,protocol}.rs`
+  (headless.rs: every hunk is mine, incl. the doc comments at ~1098 and ~1162)
+- `src/components/mobile/MobileBridgeHost.tsx`, `src/stores/agents/agentPrompts.ts`,
+  `src/stores/gitDirty.ts`, `src/lib/mobileGitDots.ts`,
+  `src/components/projects/ProjectHoverCard.tsx`, `src/components/files/ProjectFilesView.tsx`,
+  `src/styles/apps.css`, `src/styles/projects-tabs.css`
+- Tests: `src/__tests__/mobile/MobileSchedulePreface.test.tsx`,
+  `src/__tests__/git/GitDirtyState.test.ts`, `src/__tests__/mobile/MobileGitDots.test.ts`,
+  `src/__tests__/projects/ProjectHoverCardGitState.test.tsx`, `src/__tests__/shell/GitBarRefresh.test.tsx`
+- Docs: `todo/group-o-security.md`, `docs/threat_model.md`,
+  `docs/context/mobile_access.md`, `docs/context/agent_authority.md`,
+  `docs/help/mobile.md`, this handoff.
+- **Mixed:** `docs/filemap_backend.md` — mine are the `api_meter.rs` and
+  `api_prices.rs` rows (lines 119–120); the `mobile_control/` row (line 88,
+  pty_bridge wording) is another session's.
+- Not mine: `docs/threat_recheck_fixes_plan.md` (lead),
+  `src-tauri/src/services/mobile_control/pty_bridge.rs`, `docs/overlay_agent_plan.md`.

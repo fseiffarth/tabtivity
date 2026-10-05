@@ -51,7 +51,12 @@
 //! estimate at its ceiling — the whole output cap, input as 1-hour cache
 //! writes (Anthropic's dearest input kind), the grounding estimate — so the
 //! proxy can hold it against the monthly limit while the request is in
-//! flight (`api_usage::Book::reserve`).
+//! flight (`api_usage::Book::reserve`). A body that names input by
+//! reference ([`names_input_by_reference`]: an Anthropic document or image
+//! `url`/`file` source or web fetch/search tool, a Gemini `fileData`,
+//! `cachedContent`, URL context, file search or grounding tool) has the
+//! model's whole context window held as input (`api_prices::context_window`):
+//! the provider bills what it fetches, which the body's size does not bound.
 //!
 //! Memory is bounded per answer: a nesting stack of [`MAX_DEPTH`] frames, a
 //! [`MAX_STRING`]-byte window on the current string, and a [`MAX_CAPTURE`]
@@ -478,6 +483,8 @@ struct RequestFacts {
     us_only: bool,
     /// Gemini answer: the request may ground ([`may_ground`]).
     may_ground: bool,
+    /// The request names input by reference ([`names_input_by_reference`]).
+    by_reference: bool,
 }
 
 /// Whether a Gemini request body may ask for Search or Maps grounding: one
@@ -489,6 +496,111 @@ pub fn may_ground(body: &[u8]) -> bool {
     let mut de = serde_json::Deserializer::from_slice(body);
     let parsed = KeyScan(&mut found).deserialize(&mut de).and_then(|()| de.end()).is_ok();
     found || !parsed
+}
+
+/// Anthropic `type` values that name input the body does not hold: a
+/// document or image `source` of type `url` or `file`, and the web fetch and
+/// web search server tools (`web_fetch_20260209`, `web_search_20250305`, …),
+/// whose results join the input during the turn.
+fn anthropic_reference_type(value: &str) -> bool {
+    matches!(value, "url" | "file") || value.starts_with("web_fetch") || value.starts_with("web_search")
+}
+
+/// Gemini keys (ASCII lowercase, `_` dropped) that name input by reference:
+/// `fileData` / `file_uri` parts, a `cachedContent`, and the URL context,
+/// file search and grounding tools, whose fetched content joins the input.
+const GEMINI_REFERENCE_KEYS: &[&str] = &[
+    "filedata",
+    "fileuri",
+    "cachedcontent",
+    "urlcontext",
+    "filesearch",
+    "googlesearch",
+    "googlesearchretrieval",
+    "googlemaps",
+    "enterprisewebsearch",
+    "retrieval",
+];
+
+/// Whether a request body names input it does not hold (#2343): input the
+/// provider bills on top of the body, up to the model's context window.
+/// Anthropic: a `type` of `url` or `file` (a document or image source), a
+/// `file_id`, or a web fetch/search tool. Gemini: one of
+/// [`GEMINI_REFERENCE_KEYS`]. Keys are matched anywhere in the body, every
+/// occurrence and spelling seen (as [`may_ground`]); a body that does not
+/// parse counts as one that does.
+pub fn names_input_by_reference(provider: Provider, body: &[u8]) -> bool {
+    use serde::de::DeserializeSeed;
+    let mut found = false;
+    let mut de = serde_json::Deserializer::from_slice(body);
+    let parsed = RefScan { provider, found: &mut found, type_value: false }
+        .deserialize(&mut de)
+        .and_then(|()| de.end())
+        .is_ok();
+    found || !parsed
+}
+
+/// Walks a JSON value for [`names_input_by_reference`]; `type_value` marks
+/// the value of a `type` key.
+struct RefScan<'a> {
+    provider: Provider,
+    found: &'a mut bool,
+    type_value: bool,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for RefScan<'_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for RefScan<'_> {
+    type Value = ();
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E>(self, value: &str) -> Result<(), E> {
+        if self.type_value && self.provider == Provider::Anthropic && anthropic_reference_type(value) {
+            *self.found = true;
+        }
+        Ok(())
+    }
+    fn visit_unit<E>(self) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let (provider, found) = (self.provider, self.found);
+        while seq.next_element_seed(RefScan { provider, found: &mut *found, type_value: false })?.is_some() {}
+        Ok(())
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let (provider, found) = (self.provider, self.found);
+        while let Some(key) = map.next_key::<String>()? {
+            let key: String = key.chars().filter(|c| *c != '_').map(|c| c.to_ascii_lowercase()).collect();
+            let hit = match provider {
+                Provider::Anthropic => key == "fileid",
+                Provider::Gemini => GEMINI_REFERENCE_KEYS.contains(&key.as_str()),
+            };
+            if hit {
+                *found = true;
+            }
+            map.next_value_seed(RefScan { provider, found: &mut *found, type_value: key == "type" })?;
+        }
+        Ok(())
+    }
 }
 
 /// Walks a JSON value, setting the flag at a grounding tool key.
@@ -625,6 +737,9 @@ impl Meter {
         if self.provider == Provider::Gemini && matches!(self.billing, Billing::Usage { .. }) {
             self.request.may_ground = may_ground(body);
         }
+        if matches!(self.billing, Billing::Usage { .. }) {
+            self.request.by_reference = names_input_by_reference(self.provider, body);
+        }
         if self.provider == Provider::Anthropic {
             if let Ok(r) = serde_json::from_slice::<AnthropicRequest>(body) {
                 self.request.max_output = r.max_tokens;
@@ -754,7 +869,9 @@ impl Meter {
     /// USD, priced in UTC month `month` — for before it is sent (after
     /// [`Meter::request`]): the whole output cap (Anthropic's `max_tokens`,
     /// else the provider's cap), input from the body's size as 1-hour cache
-    /// writes (Anthropic), [`GROUNDING_QUERIES_ESTIMATE`] queries for a
+    /// writes (Anthropic) — the model's whole context window when the body
+    /// names input by reference ([`names_input_by_reference`], #2343) —
+    /// [`GROUNDING_QUERIES_ESTIMATE`] queries for a
     /// Gemini request that may ground. Held against the monthly limit while
     /// the request is in flight; the answer is then charged what it cost.
     pub fn worst_case(&self, month: &str) -> f64 {
@@ -784,7 +901,12 @@ impl Meter {
             }
             Provider::Gemini => (GEMINI_MAX_INPUT, GEMINI_MAX_OUTPUT, GEMINI_TOKENS_PER_SEC),
         };
-        let input_estimate = (self.request.body_bytes as u64).div_ceil(3).min(max_input);
+        let mut input_estimate = (self.request.body_bytes as u64).div_ceil(3).min(max_input);
+        if worst && self.request.by_reference {
+            // Input the body only names (a URL, file or cache, a fetch or
+            // search tool's results) can fill the model's whole window.
+            input_estimate = input_estimate.max(super::api_prices::context_window(self.provider, model));
+        }
         let output_estimate = match self.billing {
             Billing::Embedding { .. } => 0,
             Billing::Usage { .. } => ((end.elapsed.as_secs_f64() * per_sec as f64).ceil() as u64).min(max_output),
@@ -1407,13 +1529,93 @@ mod tests {
         let tools = r#"{"contents":[],"tools":[{"googleSearch":{}}]}"#;
         let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: Some("gemini-3.5-flash".into()) });
         m.request(tools.as_bytes());
-        let input = (tools.len() as u64).div_ceil(3);
-        let expect = (input as f64 * 1.50 + GEMINI_MAX_OUTPUT as f64 * 9.0) / 1e6 + GROUNDING_QUERIES_ESTIMATE as f64 * 0.014;
-        assert!((m.worst_case(MONTH) - expect).abs() < 1e-12);
+        // A grounding tool's results join the input too (#2343): the window.
+        let expect = (1_048_576.0 * 1.50 + GEMINI_MAX_OUTPUT as f64 * 9.0) / 1e6 + GROUNDING_QUERIES_ESTIMATE as f64 * 0.014;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, "{}", m.worst_case(MONTH));
         // The answer itself is charged what it reports, not the worst case.
         let mut m = anthropic_meter(body);
         m.answer(200, Some("text/event-stream"));
         m.feed(ANTHROPIC_SSE.as_bytes());
         assert_eq!(m.charge(MONTH, DONE), Some(anthropic_expected()));
+    }
+
+    // ---- input named by reference (#2343) ---------------------------------
+
+    #[test]
+    fn input_by_reference_is_found_however_the_body_spells_it() {
+        let anthropic = |body: &str| names_input_by_reference(Provider::Anthropic, body.as_bytes());
+        let gemini = |body: &str| names_input_by_reference(Provider::Gemini, body.as_bytes());
+        for body in [
+            r#"{"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":"https://example.com/a.pdf"}}]}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"file","file_id":"file_1"}}]}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"image","source":{"file_id":"file_1"}}]}]}"#,
+            r#"{"tools":[{"type":"web_fetch_20260209","name":"web_fetch"}]}"#,
+            r#"{"tools":[{"type":"web_search_20250305","name":"web_search"}]}"#,
+            // A repeated key and an escaped spelling are seen too.
+            r#"{"source":{"type":"url","type":"base64"}}"#,
+            r#"{"source":{"type":"url"}}"#,
+            "not json",
+        ] {
+            assert!(anthropic(body), "{body}");
+        }
+        for body in [
+            r#"{"model":"claude-opus-5-5","max_tokens":10,"messages":[{"role":"user","content":"type url file_id"}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}"#,
+            r#"{"tools":[{"name":"fetch","input_schema":{"type":"object","properties":{"url":{"type":"string"}}}}]}"#,
+            r#"{"contents":[{"parts":[{"fileData":{"fileUri":"x"}}]}]}"#,
+        ] {
+            assert!(!anthropic(body), "{body}");
+        }
+        for body in [
+            r#"{"contents":[{"parts":[{"fileData":{"mimeType":"application/pdf","fileUri":"https://generativelanguage.googleapis.com/v1beta/files/a"}}]}]}"#,
+            r#"{"contents":[{"parts":[{"file_data":{"file_uri":"gs://b/a.pdf"}}]}]}"#,
+            r#"{"cachedContent":"cachedContents/abc","contents":[]}"#,
+            r#"{"tools":[{"urlContext":{}}]}"#,
+            r#"{"tools":[{"url_context":{}}]}"#,
+            r#"{"tools":[{"googleSearch":{}}]}"#,
+            r#"{"tools":[{"google_search_retrieval":{}}]}"#,
+            r#"{"tools":[{"fileSearch":{"fileSearchStoreNames":["s"]}}]}"#,
+            "not json",
+        ] {
+            assert!(gemini(body), "{body}");
+        }
+        for body in [
+            r#"{"contents":[{"parts":[{"text":"fileData cachedContent urlContext"}]}]}"#,
+            r#"{"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}],"tools":[{"codeExecution":{}}]}"#,
+            r#"{"tools":[{"functionDeclarations":[{"name":"url_context","parameters":{}}]}]}"#,
+        ] {
+            assert!(!gemini(body), "{body}");
+        }
+    }
+
+    #[test]
+    fn input_by_reference_holds_the_models_whole_window() {
+        // Anthropic: the window as 1-hour cache writes, plus the output cap.
+        let body = r#"{"model":"claude-opus-5-5","max_tokens":10000,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":"https://example.com/a.pdf"}}]}]}"#;
+        let m = anthropic_meter(body);
+        let expect = (1_000_000.0 * 8.0 + 10_000.0 * 20.0) / 1e6;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, "{}", m.worst_case(MONTH));
+        // A 200K model holds 200K.
+        let body = r#"{"model":"claude-haiku-4-5","max_tokens":1000,"tools":[{"type":"web_fetch_20250910","name":"web_fetch"}],"messages":[]}"#;
+        let m = anthropic_meter(body);
+        let expect = (200_000.0 * 2.0 + 1_000.0 * 5.0) / 1e6;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, "{}", m.worst_case(MONTH));
+        // The same request inline keeps today's reservation (body bytes / 3).
+        let inline = r#"{"model":"claude-opus-5-5","max_tokens":10000,"messages":[{"role":"user","content":"read the pdf"}]}"#;
+        let m = anthropic_meter(inline);
+        let input = (inline.len() as u64).div_ceil(3);
+        let expect = (input as f64 * 8.0 + 10_000.0 * 20.0) / 1e6;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-12);
+        // Gemini: the window at the long-context rate past 200K (3.1 Pro).
+        let cached = r#"{"cachedContent":"cachedContents/abc","contents":[]}"#;
+        let mut m = Meter::new(Provider::Gemini, Billing::Usage { model: Some("gemini-3.1-pro-preview".into()) });
+        m.request(cached.as_bytes());
+        let expect = (1_048_576.0 * 4.0 + GEMINI_MAX_OUTPUT as f64 * 18.0) / 1e6;
+        assert!((m.worst_case(MONTH) - expect).abs() < 1e-9, "{}", m.worst_case(MONTH));
+        // The settled answer is still charged what it reports.
+        let mut m = anthropic_meter(body);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(ANTHROPIC_SSE.as_bytes());
+        assert_eq!(m.charge(MONTH, DONE).map(|c| c.input), Some(anthropic_expected().input));
     }
 }

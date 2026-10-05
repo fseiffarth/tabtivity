@@ -98,6 +98,16 @@ the catalog's own rule):
   covers a change made while the other owner was down, root access turned
   off, or a hand edit.
 
+**A phone's edit takes a rule over** (follow-up, 2026-10-05): a schedule
+update, a held-prompt edit (`EditHeldPrompt` carries `device_id` too) and a
+collected prompt the phone creates or edits stamp that phone — on a desktop
+or agent rule as well — so the rewritten words go with the phone. A collected
+prompt keeps the phone that wrote it (`ProjectAgentPrompt::phone_device`,
+never sent to the browser), and the rule a send makes of it names the sending
+phone, else that one, whichever surface sends it. An edit naming no phone (the
+desktop, an agent, an older sidecar) keeps the stored stamp
+(`agent_tasks::apply_upsert`, `agent_prompts::apply_upsert`).
+
 A rule with no `phone_device` (desktop, agent, or written before the field)
 is left alone. An access that cannot be read (`devices.json`,
 `projects.json`, or for a box or root rule `boxes.json` / `settings.json`)
@@ -119,11 +129,12 @@ row keeps saying *queued*.
   asks once more without it when the window accepted and then dropped the
   connection — the older window makes the rule unstamped, as before, instead
   of the sidecar taking the headless path with the window open.
-- **A phone's edit of someone else's rule.** An update keeps the rule's
-  origin, so a desktop or agent schedule a phone rewrote (words, time) stays
-  of desktop origin and survives that phone's revoke. Collected prompts a
-  phone wrote are sent later by the desktop unstamped too. Open: whether an
-  edit from a phone should adopt the rule.
+- **A phone's edit of someone else's rule.** Decided 2026-10-05: the phone
+  takes it over (see above), so it no longer survives that phone's revoke.
+  Left: a schedule the desktop composes in the schedule dialog from a
+  phone-written collected prompt is the desktop's (the user wrote and saved
+  it there); an older window behind a newer sidecar drops the `device_id`
+  of an edit, as of every phone request.
 - **To-do board names.** The board's project picker and card tags list every
   registry project to every phone, switch or not (`MobileBridgeHost`
   `todoBoard` → `publicProjects`, headless `project_names`). Not a secret

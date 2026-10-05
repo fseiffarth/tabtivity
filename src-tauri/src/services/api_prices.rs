@@ -361,6 +361,44 @@ pub fn output_rate(provider: Provider, model: &str) -> f64 {
     }
 }
 
+/// Context windows (input tokens a request can hold), read 2026-10-05: the
+/// Claude API model table (1M on every current model but Haiku 4.5; Sonnet
+/// 4 / 4.5 reach 1M with the long-context beta, so the larger is taken) and
+/// the Gemini model pages ("Input token limit" 1,048,576 on the chat models).
+/// `api_meter` reserves a model's whole window for a request that names
+/// input by reference (#2343). Anthropic models listed here hold 200K; every
+/// other Anthropic model in [`ANTHROPIC`] holds 1M.
+const ANTHROPIC_200K: &[&str] = &[
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "claude-opus-4",
+    "claude-opus-4-0",
+    "claude-haiku-4-5",
+    "claude-3-5-haiku",
+];
+const ANTHROPIC_WINDOW: u64 = 1_000_000;
+const ANTHROPIC_SMALL_WINDOW: u64 = 200_000;
+/// Every Gemini model in [`GEMINI`] is taken at the chat models' window; the
+/// image, speech and embedding models hold less (an overcount for them).
+const GEMINI_WINDOW: u64 = 1_048_576;
+
+/// The context window of `model`, in input tokens. An unknown model is taken
+/// at its provider's largest known window.
+pub fn context_window(provider: Provider, model: &str) -> u64 {
+    match provider {
+        Provider::Anthropic => {
+            let id = normalize(Provider::Anthropic, model);
+            let known = ANTHROPIC.iter().any(|(m, _)| *m == id);
+            if known && ANTHROPIC_200K.contains(&id.as_str()) {
+                ANTHROPIC_SMALL_WINDOW
+            } else {
+                ANTHROPIC_WINDOW
+            }
+        }
+        Provider::Gemini => GEMINI_WINDOW,
+    }
+}
+
 /// One answer's Anthropic usage, as reported (`usage` of `message_start`,
 /// `message_delta` or a non-streaming message; counts are cumulative).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -494,6 +532,23 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn context_windows_by_model_and_the_largest_for_an_unknown_one() {
+        assert_eq!(context_window(Provider::Anthropic, "claude-opus-5-5"), 1_000_000);
+        assert_eq!(context_window(Provider::Anthropic, "claude-sonnet-4-5-20250929"), 1_000_000, "1M with the beta");
+        assert_eq!(context_window(Provider::Anthropic, "claude-haiku-4-5-20251001"), 200_000);
+        assert_eq!(context_window(Provider::Anthropic, "claude-opus-4-1"), 200_000);
+        assert_eq!(context_window(Provider::Anthropic, "claude-next-9"), 1_000_000);
+        assert_eq!(context_window(Provider::Gemini, "models/gemini-3.5-flash"), 1_048_576);
+        assert_eq!(context_window(Provider::Gemini, "gemini-unknown"), 1_048_576);
+        for (model, _) in ANTHROPIC {
+            assert!(context_window(Provider::Anthropic, model) <= ANTHROPIC_WINDOW);
+        }
+        for id in ANTHROPIC_200K {
+            assert!(ANTHROPIC.iter().any(|(m, _)| m == id), "{id} is a priced model");
+        }
     }
 
     #[test]

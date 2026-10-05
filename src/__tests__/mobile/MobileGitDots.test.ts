@@ -33,9 +33,9 @@ beforeEach(() => {
 });
 
 describe("mobile git dots", () => {
-  it("lists every pending level and leaves clean or unprobed projects out", () => {
-    useGitDirtyStore.setState({ byId: { a: "dirty", b: "staged", c: "unpushed", d: "clean", e: "broken" } });
-    const rows = gitDotRows(["a", "b", "c", "d", "e", "f"].map((id) => project(id)));
+  it("lists every pending level and leaves clean, unknown or unprobed projects out", () => {
+    useGitDirtyStore.setState({ byId: { a: "dirty", b: "staged", c: "unpushed", d: "clean", e: "broken", g: "unknown" } });
+    const rows = gitDotRows(["a", "b", "c", "d", "e", "f", "g"].map((id) => project(id)));
     expect(rows).toEqual([
       { project_id: "a", state: "dirty" },
       { project_id: "b", state: "staged" },
