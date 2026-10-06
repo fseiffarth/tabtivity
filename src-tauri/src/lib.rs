@@ -1813,6 +1813,7 @@ pub fn run() {
             commands::timer::get_time_activity_all,
             // File tree + file I/O (commands::fs)
             commands::fs::list_dir,
+            commands::fs::resolve_text_paths,
             commands::fs::list_recent_downloads,
             commands::fs::dir_size,
             commands::fs::dir_size_breakdown,

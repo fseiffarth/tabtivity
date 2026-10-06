@@ -38,6 +38,11 @@ import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { openPathLink } from "../../lib/terminal/pathLinks";
+import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
+import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
+import { relativePathWithin } from "../../lib/paths";
+import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
@@ -355,6 +360,16 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   // Keyboard select (Ctrl+Shift+X) is on: shows its key legend over the pane.
   const [keySelecting, setKeySelecting] = useState(false);
 
+  // Path links (`lib/terminal/pathLinks`), read by the link provider through
+  // a ref: it lives in the spawn effect, which must not respawn on a settings
+  // or project change.
+  const pathLinkContext = usePathLinkContext(projectId, cwd);
+  const pathLinkContextRef = useRef(pathLinkContext);
+  pathLinkContextRef.current = pathLinkContext;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+
   const focusedRef = useRef(focused);
   visibleRef.current = visible;
   focusedRef.current = focused;
@@ -458,6 +473,33 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
             leave: linkHover.leave,
           })),
         );
+      },
+    });
+    // A file path the program printed opens the file's tab, on the same click
+    // (after the double-click window) — no question first, since it only ever
+    // opens an in-app viewer of a file inside the tab's folder or project; a
+    // double-click copies it, like a URL.
+    const pathLinks = registerPathLinkProvider(term, () => pathLinkContextRef.current, {
+      activate: (event, entry, at) => {
+        if (event.detail > 1) return;
+        cancelLinkOpen();
+        setPathHover(null);
+        linkOpenTimer = setTimeout(() => {
+          linkOpenTimer = null;
+          const ctx = pathLinkContextRef.current;
+          const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
+          openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current });
+        }, LINK_OPEN_DELAY_MS);
+      },
+      hover: (event, entry, at, text) => {
+        hoveredLink = text;
+        const ctx = pathLinkContextRef.current;
+        const name = relativePathWithin(ctx.projectDir || cwd, entry.path) || entry.path;
+        setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir });
+      },
+      leave: () => {
+        hoveredLink = null;
+        setPathHover(null);
       },
     });
     // OSC 8 hyperlinks (a link whose text is not its URL) take the same path;
@@ -1705,6 +1747,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       oscHandler.dispose();
       mouseModeGuard.dispose();
       wrappedLinks.dispose();
+      pathLinks.dispose();
+      setPathHover(null);
       cancelLinkOpen();
       signInWatch.dispose();
       if (signInScanTimer) clearTimeout(signInScanTimer);
@@ -1989,6 +2033,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       </div>,
       host,
     )}
+    <PathLinkHint hover={visible ? pathHover : null} />
     {dialogs}
     </>
   );

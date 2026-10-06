@@ -53,6 +53,7 @@ export const UNTESTED = {
   "promptChart.heading": { area: "agents", what: "PromptChart · Prompt chart" },
   "stats.sectionTokens": { area: "agents", what: "StatsRecap · Tokens section: per CLI fresh in / cache write / cache read / output and output share for the period, Per model expands; Codex total-only rows say no split reported; other used CLIs say not reported; a first long scan says still counting and asks again a few times" },
   "terminal.openLink.title": { area: "agents", what: "Terminal link click · asks before opening, showing the URL (plain and OSC 8 links)" },
+  "terminal.pathLink.open": { area: "agents", what: "File paths an agent writes (terminal and chat view, e.g. docs/plan.md, src/a.ts:120) underline when the file exists in the tab's folder or project; a click opens its viewer tab (at the line), a folder its Files tab; the hover hint says so; terminal double-click copies; local projects only" },
   "terminal.signIn.title": { area: "agents", what: "Terminal sign-in card · open/copy an agent's login link, paste the code back; wrapped URLs click and copy whole" },
   "terminal.keySelect.title": { area: "agents", what: "Terminal keyboard select (Ctrl+Shift+X) · arrows/hjkl move, Shift/v select, V lines, Enter/y/Ctrl+C copy, Esc leaves; right-click copies a selection; a selection survives hovering an agent TUI; copies go through the backend clipboard" },
 

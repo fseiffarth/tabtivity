@@ -25,7 +25,7 @@ const MAX_ROWS = 40;
 
 /** The cell column where string index `index` of `line`'s text starts. Wide
  *  glyphs take two cells but one character, so the two drift apart. */
-function cellAt(line: LineLike, cols: number, index: number): number {
+export function cellAt(line: LineLike, cols: number, index: number): number {
   let chars = 0;
   for (let x = 0; x < cols; x++) {
     if (chars >= index) return x;

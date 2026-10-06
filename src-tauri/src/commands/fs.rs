@@ -131,6 +131,91 @@ pub fn list_dir_local(project_dir: &str, rel_path: &str) -> Result<Vec<FileEntry
     Ok(result)
 }
 
+/// The most path-shaped words one `resolve_text_paths` call looks up.
+const TEXT_PATHS_MAX: usize = 256;
+/// The most folders they are looked up under (the tab's folder, its project's).
+const TEXT_PATH_BASES_MAX: usize = 4;
+
+/// Which of `candidates` — path-shaped words an agent wrote in a terminal or
+/// its chat (`src/lib/terminal/pathLinks.ts`) — name an existing file or folder
+/// inside one of `bases`, for the frontend to make them links that open the
+/// file's tab. Local only: the frontend never asks for a remote-run tab.
+///
+/// A relative candidate is tried under each base in order, an absolute one
+/// against all of them; either must still lie inside that base once links are
+/// resolved, so `../` or a symlink can't reach out of it. The text is the
+/// agent's (and so whatever the project fed it), which is why nothing outside
+/// the bases is ever answered. The project's own `.tabtivity` folder is never
+/// answered either. The returned path is the lexical one (the base as given,
+/// joined), not the canonical one, so it prefix-matches the project directory
+/// the frontend holds. One answer per candidate, in order; `None` = no link.
+#[tauri::command]
+pub fn resolve_text_paths(bases: Vec<String>, candidates: Vec<String>) -> Vec<Option<FileEntry>> {
+    let bases: Vec<(PathBuf, PathBuf)> = bases
+        .iter()
+        .filter(|b| !b.is_empty())
+        .take(TEXT_PATH_BASES_MAX)
+        .filter_map(|b| {
+            let lexical = normalize_lexical(Path::new(b));
+            fs::canonicalize(&lexical).ok().map(|c| (lexical, c))
+        })
+        .collect();
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| if i < TEXT_PATHS_MAX { resolve_text_path(&bases, c) } else { None })
+        .collect()
+}
+
+fn resolve_text_path(bases: &[(PathBuf, PathBuf)], candidate: &str) -> Option<FileEntry> {
+    if candidate.is_empty() || candidate.len() > 4096 || candidate.contains('\0') {
+        return None;
+    }
+    let cand = Path::new(candidate);
+    for (lexical, canon) in bases {
+        let joined = normalize_lexical(&lexical.join(cand));
+        // A `..` that climbs above the base is refused before the fs is touched.
+        let Ok(rel) = joined.strip_prefix(lexical) else { continue };
+        if rel.components().any(|c| crate::brand::is_project_dir(&c.as_os_str().to_string_lossy())) {
+            continue;
+        }
+        let Ok(real) = fs::canonicalize(&joined) else { continue };
+        if !real.starts_with(canon) {
+            continue;
+        }
+        let Ok(meta) = fs::metadata(&real) else { continue };
+        let name = joined
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut entry = file_entry_from(&joined, &meta, name);
+        entry.path = display_path(&joined);
+        return Some(entry);
+    }
+    None
+}
+
+/// `path` with its `.` and `..` segments folded away without touching the fs
+/// (a `..` at the root stays at the root).
+fn normalize_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                None | Some(Component::ParentDir) => out.push(comp),
+                Some(_) => {
+                    out.pop();
+                }
+            },
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Scan one or more download *source* folders and return their recently-modified
 /// entries, merged and sorted newest-first. Backs the side-panel Downloads
 /// section (fast-copy of freshly downloaded files into a project).
@@ -2411,6 +2496,86 @@ mod tests {
         assert_eq!(fe.extension, None);
         assert_eq!(fe.mime, None);
         assert!(fe.is_dir);
+    }
+
+    // ── resolve_text_paths ─────────────────────────────────────────────────
+
+    #[test]
+    fn text_paths_resolve_under_the_bases_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join("docs")).unwrap();
+        fs::write(project.join("docs/plan.md"), "x").unwrap();
+        fs::write(tmp.path().join("secret.txt"), "x").unwrap();
+        let base = project.to_string_lossy().to_string();
+        let abs_inside = project.join("docs/plan.md").to_string_lossy().to_string();
+        let abs_outside = tmp.path().join("secret.txt").to_string_lossy().to_string();
+        let got = resolve_text_paths(
+            vec![base],
+            vec![
+                "docs/plan.md".into(),
+                "./docs/../docs/plan.md".into(),
+                "docs".into(),
+                abs_inside.clone(),
+                "missing.md".into(),
+                "../secret.txt".into(),
+                abs_outside,
+            ],
+        );
+        let found = |i: usize| got[i].as_ref().map(|e| (e.path.clone(), e.is_dir));
+        assert_eq!(found(0), Some((abs_inside.clone(), false)));
+        assert_eq!(found(1), Some((abs_inside.clone(), false)));
+        assert_eq!(found(2).map(|(_, dir)| dir), Some(true));
+        assert_eq!(found(3), Some((abs_inside, false)));
+        assert_eq!(found(4), None);
+        assert_eq!(found(5), None);
+        assert_eq!(found(6), None);
+    }
+
+    #[test]
+    fn text_paths_try_each_base_in_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let sub = project.join("crate");
+        fs::create_dir_all(sub.join("src")).unwrap();
+        fs::write(sub.join("src/lib.rs"), "x").unwrap();
+        fs::write(project.join("README.md"), "x").unwrap();
+        let got = resolve_text_paths(
+            vec![sub.to_string_lossy().into(), project.to_string_lossy().into()],
+            vec!["src/lib.rs".into(), "README.md".into()],
+        );
+        assert_eq!(got[0].as_ref().map(|e| e.name.as_str()), Some("lib.rs"));
+        assert_eq!(got[1].as_ref().map(|e| e.name.as_str()), Some("README.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn text_paths_refuse_a_symlink_out_of_the_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(tmp.path().join("secret.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("secret.txt"), project.join("link.txt")).unwrap();
+        let got = resolve_text_paths(vec![project.to_string_lossy().into()], vec!["link.txt".into()]);
+        assert!(got[0].is_none());
+    }
+
+    #[test]
+    fn text_paths_skip_the_project_state_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join(crate::brand::PROJECT_DIR);
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("project.json"), "{}").unwrap();
+        let rel = format!("{}/project.json", crate::brand::PROJECT_DIR);
+        let got = resolve_text_paths(vec![tmp.path().to_string_lossy().into()], vec![rel]);
+        assert!(got[0].is_none());
+    }
+
+    #[test]
+    fn normalize_lexical_folds_dots() {
+        assert_eq!(normalize_lexical(Path::new("/a/./b/../c")), PathBuf::from("/a/c"));
+        assert_eq!(normalize_lexical(Path::new("/..")), PathBuf::from("/"));
+        assert_eq!(normalize_lexical(Path::new("../a")), PathBuf::from("../a"));
     }
 
     // ── enforce_confinement ────────────────────────────────────────────────

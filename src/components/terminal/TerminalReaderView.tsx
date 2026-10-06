@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -31,6 +31,11 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { UntestedTag } from "../common/UntestedTag";
+import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
+import { PATH_LINK_ATTR, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
+import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
+import { relativePathWithin } from "../../lib/paths";
+import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
@@ -314,18 +319,30 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
 
 interface PendingPrompt { id: number; text: string; sentAt: number }
 
+/** The chat's path links (`lib/terminal/pathLinks`): every path-shaped word
+ * the shown conversation holds, looked up once — the file it opens, or null.
+ * A turn is drawn only once its words are in here (see the reads), and a word
+ * once looked up keeps its answer, so a shown bubble never gains or loses a
+ * link afterwards. */
+const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
+
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
- * nothing in it opens or loads). Memoized on the text, so a read that brings
- * a new turn does not re-render every answer above it. */
+ * nothing in it opens or loads), its file paths made links. Memoized on the
+ * text, so a read that brings a new turn does not re-render every answer
+ * above it. */
 const AnswerText = memo(function AnswerText({ text }: { text: string }) {
-  const html = useMemo(() => answerHtml(text), [text]);
+  const links = useContext(PathLinksContext);
+  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links), [text, links]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** A prompt, formatted the same way (`promptHtml`: an answer's formatting,
- * its single line breaks kept) — a subagent's brief reads as written. */
-const PromptText = memo(function PromptText({ text }: { text: string }) {
-  const html = useMemo(() => promptHtml(text), [text]);
+ * its single line breaks kept) — a subagent's brief reads as written. A
+ * prompt still sending is drawn `unlinked`: its paths are looked up only with
+ * the record, and its bubble must not restyle when that arrives. */
+const PromptText = memo(function PromptText({ text, unlinked = false }: { text: string; unlinked?: boolean }) {
+  const links = useContext(PathLinksContext);
+  const html = useMemo(() => (unlinked ? promptHtml(text) : linkPathsInHtml(promptHtml(text), links)), [text, links, unlinked]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
@@ -784,6 +801,72 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const sessionId = tab?.sessionId;
+
+  // Path links: the paths a read brings are looked up before it is drawn
+  // (`learnPaths`), each once (`PathLinksContext`).
+  const projectId = scope === "root" ? null : scope;
+  const tabDir = tab?.cwd || cwd || "";
+  const pathContext = usePathLinkContext(projectId, tabDir);
+  const pathContextRef = useRef(pathContext);
+  pathContextRef.current = pathContext;
+  const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());
+  const pathLinksRef = useRef(pathLinks);
+  const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+  const learnPaths = useCallback(async (entries: readonly { text: string }[]) => {
+    const ask = unknownPaths(entries.map((entry) => entry.text), pathLinksRef.current);
+    if (!ask.length) return;
+    const ctx = pathContextRef.current;
+    const found = ctx.bases.length ? await resolvePathCandidates(ctx.bases, ask) : new Map<string, FileEntry>();
+    const next = new Map(pathLinksRef.current);
+    for (const path of ask) {
+      const entry = found.get(path);
+      next.set(path, entry && isLinkable(entry, ctx.projectDir, ctx.disabled) ? entry : null);
+    }
+    pathLinksRef.current = next;
+    setPathLinks(next);
+  }, []);
+  const pathLinkAt = (target: EventTarget | null) =>
+    target instanceof Element ? target.closest<HTMLElement>(`[${PATH_LINK_ATTR}]`) : null;
+  const openPathAt = (el: HTMLElement) => {
+    const entry = pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "");
+    if (!entry) return;
+    const ctx = pathContextRef.current;
+    setPathHover(null);
+    openPathLink(
+      entry,
+      { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
+      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t },
+    );
+  };
+  const onPathClick = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    if (!el) return;
+    event.preventDefault();
+    openPathAt(el);
+  };
+  const onPathKey = (event: KeyboardEvent) => {
+    const el = event.key === "Enter" ? pathLinkAt(event.target) : null;
+    if (!el) return;
+    event.preventDefault();
+    openPathAt(el);
+  };
+  const onPathOver = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
+    if (!el || !entry) return;
+    const rect = el.getBoundingClientRect();
+    setPathHover({
+      left: rect.left,
+      top: rect.top,
+      name: relativePathWithin(pathContextRef.current.projectDir || tabDir, entry.path) || entry.path,
+      line: Number(el.dataset.line) || undefined,
+      isDir: entry.is_dir,
+    });
+  };
+  const onPathOut = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    if (el && pathLinkAt(event.relatedTarget) !== el) setPathHover(null);
+  };
   // A new session (a restart, a `/clear` the hook followed) is a new chat,
   // with subagents of its own.
   useEffect(() => {
@@ -808,6 +891,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       busy = true;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
+      await learnPaths(next.entries);
       busy = false;
       if (cancelled) return;
       if (!next.unchanged) version.current = next.version;
@@ -819,7 +903,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       cancelled = true;
       clearInterval(timer);
     };
-  }, [visible, scope, cwd, limit, sessionId, readTick]);
+  }, [visible, scope, cwd, limit, sessionId, readTick, learnPaths]);
 
   // The open subagent's conversation, read as the session is: at once, then
   // every POLL_MS while shown — a subagent still at work keeps writing.
@@ -836,6 +920,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       busy = true;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
+      await learnPaths(next.entries);
       busy = false;
       if (cancelled) return;
       if (!next.unchanged) subVersion = next.version;
@@ -850,7 +935,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       cancelled = true;
       clearInterval(timer);
     };
-  }, [visible, scope, cwd, subToken, subLimit, sessionId]);
+  }, [visible, scope, cwd, subToken, subLimit, sessionId, learnPaths]);
 
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card
@@ -1128,7 +1213,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         </nav>
       )}
       <div className="terminal-reader-stream">
-        <div ref={listRef} className="terminal-reader-list" onScroll={onScroll}>
+        <PathLinksContext.Provider value={pathLinks}>
+        <div
+          ref={listRef}
+          className="terminal-reader-list"
+          onScroll={() => { onScroll(); setPathHover(null); }}
+          onClick={onPathClick}
+          onKeyDown={onPathKey}
+          onMouseOver={onPathOver}
+          onMouseOut={onPathOut}
+        >
           {levelTruncated && (
             <button type="button" className="terminal-reader-earlier" onClick={showEarlier}>
               {t("terminal.reader.earlier")}
@@ -1165,7 +1259,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           })}
           {!openStep && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
-              <PromptText text={item.text} />
+              <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
                   queue at once. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
@@ -1224,6 +1318,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
         </div>
+        </PathLinksContext.Provider>
+        <PathLinkHint hover={visible ? pathHover : null} />
         {!openStep && pinnedPrompt && (
           <button
             type="button"
