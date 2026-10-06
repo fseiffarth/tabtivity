@@ -28,6 +28,7 @@ import { joinConference } from "../../lib/linkTarget";
 import { sameRule } from "../../lib/calendar/ics";
 import { describeNthWeekdays, describeRrule } from "../../lib/calendar/recurrence";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { DateField } from "../common/DateField";
 import { TimeField } from "../common/TimeField";
 import { UntestedTag } from "../common/UntestedTag";
 
@@ -500,43 +501,45 @@ export function EventDialog({
             </label>
 
             <div className="cal-field-row">
-              <label className="cal-field">
+              <div className="cal-field" role="group" aria-label={t("eventDialog.startsField")}>
                 <span className="cal-field-label">{t("eventDialog.startsField")}</span>
                 <div className="cal-datetime">
-                  <input
+                  <DateField
                     className="cal-input"
-                    type="date"
                     value={form.startDate}
-                    onChange={(e) => patchStart({ startDate: e.target.value })}
+                    aria-label={t("dateTime.date")}
+                    onChange={(startDate) => patchStart({ startDate })}
                   />
                   {!form.allDay ? (
                     <TimeField
                       className="cal-input"
                       value={form.startTime}
+                      aria-label={t("dateTime.time")}
                       onChange={(startTime) => patchStart({ startTime })}
                     />
                   ) : null}
                 </div>
-              </label>
+              </div>
 
-              <label className="cal-field">
+              <div className="cal-field" role="group" aria-label={t("eventDialog.endsField")}>
                 <span className="cal-field-label">{t("eventDialog.endsField")}</span>
                 <div className="cal-datetime">
-                  <input
+                  <DateField
                     className="cal-input"
-                    type="date"
                     value={form.endDate}
-                    onChange={(e) => patchEnd({ endDate: e.target.value })}
+                    aria-label={t("dateTime.date")}
+                    onChange={(endDate) => patchEnd({ endDate })}
                   />
                   {!form.allDay ? (
                     <TimeField
                       className="cal-input"
                       value={form.endTime}
+                      aria-label={t("dateTime.time")}
                       onChange={(endTime) => patchEnd({ endTime })}
                     />
                   ) : null}
                 </div>
-              </label>
+              </div>
             </div>
 
             <div className="cal-field-row">
@@ -690,15 +693,16 @@ export function EventDialog({
                     ) : null}
 
                     {form.endMode === "until" ? (
-                      <label className="cal-field">
+                      <div className="cal-field">
                         <span className="cal-field-label">{t("eventDialog.untilField")}</span>
-                        <input
+                        <DateField
                           className="cal-input"
-                          type="date"
                           value={form.until}
-                          onChange={(e) => patch({ until: e.target.value })}
+                          min={form.startDate || undefined}
+                          aria-label={t("eventDialog.untilField")}
+                          onChange={(until) => patch({ until })}
                         />
-                      </label>
+                      </div>
                     ) : null}
                   </div>
                 </div>
