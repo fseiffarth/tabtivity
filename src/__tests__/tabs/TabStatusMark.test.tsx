@@ -9,14 +9,14 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { TabStatusMark } from "../../components/tabs/TabLocalityBadges";
 
-// ▶ pinned to text presentation: without U+FE0E a window whose font fallback
-// reaches the emoji font draws a colour emoji that ignores the ring's colour.
-const PLAY = "▶\uFE0E";
+// ▶ is drawn, not typed: as a character, a popout's font fallback reached the
+// colour emoji font (even pinned with U+FE0E), which ignores the ring's colour.
+const PLAY = "svg";
 
 function marks(stateClass: string) {
   const { container } = render(<TabStatusMark stateClass={stateClass} />);
   return [...container.querySelectorAll(".tab-status-mark")].map((el) => ({
-    glyph: el.textContent,
+    glyph: el.querySelector("svg") ? (el.textContent ? `svg+${el.textContent}` : "svg") : el.textContent,
     shell: el.classList.contains("shell"),
   }));
 }
