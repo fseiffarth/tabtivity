@@ -3212,10 +3212,11 @@ function CodeEditor({
   // the textarea's own final empty line so scrolling stays aligned.
   const lang = useMemo(() => languageForPath(path), [path]);
   // #45a: Copilot serves this editor only for a consented local project's code
-  // file; everything else stays on Ollama. The backend enforces the same gates.
+  // file, or its text file under the second opt-in; everything else stays on
+  // Ollama. The backend enforces the same gates.
   const copilotEnabled = useExperimental("copilot_completion");
   const acRemote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang));
+  const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang, path));
   // Per mount, so a remount never inherits the previous mount's document versions.
   const [acEditorId] = useState(() => crypto.randomUUID());
   const acFeedback = useMemo(
@@ -6378,7 +6379,7 @@ function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
   const remote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path)));
+  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path), path));
   return (
     <div className="file-viewer-ai-controls" role="group" aria-label={t("fileViewer.aiAssistGroup")}>
       {/* Dictionary spelling needs no model, so it is offered regardless —

@@ -26,20 +26,28 @@ fn policy_code(error: PolicyError) -> String {
         PolicyError::LocalOnly => "copilot_local_only",
         PolicyError::InvalidPath => "copilot_invalid_path",
         PolicyError::OutsideProject => "copilot_outside_project",
+        PolicyError::SecretFile => "copilot_secret_file",
     }
     .into()
 }
 
-fn authorize(project_id: &str) -> Result<PathBuf, String> {
+fn load_settings() -> Result<Settings, String> {
     let path = settings_path();
-    let settings: Settings = if path.exists() {
-        storage::read_json(&path).map_err(|_| "copilot_disabled")?
+    if path.exists() {
+        storage::read_json(&path).map_err(|_| "copilot_disabled".into())
     } else {
-        Settings::default()
-    };
+        Ok(Settings::default())
+    }
+}
+
+fn authorize_in(settings: &Settings, project_id: &str) -> Result<PathBuf, String> {
     let directory = remote::project_directory(project_id).ok_or("copilot_no_consent")?;
     let is_remote = remote::remote_target_for(project_id).is_some();
-    policy::authorize_project(&settings, project_id, Path::new(&directory), is_remote).map_err(policy_code)
+    policy::authorize_project(settings, project_id, Path::new(&directory), is_remote).map_err(policy_code)
+}
+
+fn authorize(project_id: &str) -> Result<PathBuf, String> {
+    authorize_in(&load_settings()?, project_id)
 }
 
 /// A refusal is also a revocation: whatever was running for the project stops.
@@ -96,16 +104,19 @@ pub fn copilot_project_policy(project_id: String) -> Value {
     json!({
         "copilot": policy.is_some_and(|p| p.copilot),
         "localOnly": policy.is_some_and(|p| p.local_only),
+        "text": policy.is_some_and(|p| p.copilot_text),
         "remote": remote::remote_target_for(&project_id).is_some(),
         "authorized": authorize(&project_id).is_ok(),
     })
 }
 
 /// Consent binds the project id to the directory the backend resolves now.
-/// Returns the settings that won, like `patch_settings`, for the sender to
-/// broadcast.
+/// Text-file consent only stands on top of code consent; dropping that drops
+/// it too. Returns the settings that won, like `patch_settings`, for the
+/// sender to broadcast.
 #[tauri::command]
-pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local_only: bool) -> Result<Settings, String> {
+pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local_only: bool, text: Option<bool>)
+    -> Result<Settings, String> {
     let directory = remote::project_directory(&project_id).ok_or("copilot_invalid_path")?;
     if copilot && remote::remote_target_for(&project_id).is_some() {
         return Err("copilot_remote_project".into());
@@ -115,7 +126,8 @@ pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local
         let policies = settings.completion_project_policies.get_or_insert_with(Default::default);
         let extra = policies.remove(&project_id).map(|old| old.extra).unwrap_or_default();
         policies.insert(project_id.clone(), CompletionProjectPolicy {
-            directory: directory.to_string_lossy().into_owned(), copilot, local_only, extra,
+            directory: directory.to_string_lossy().into_owned(), copilot, local_only,
+            copilot_text: copilot && !local_only && text.unwrap_or(false), extra,
         });
         Ok(settings.clone())
     })?;
@@ -156,7 +168,8 @@ pub async fn copilot_complete(
         result = launch => result.map_err(|_| "copilot_server_closed")??,
     };
     // Consent may have changed while initialization was waiting on the server.
-    if authorize(&project_id).as_ref() != Ok(&root) {
+    let settings = load_settings()?;
+    if authorize_in(&settings, &project_id).as_ref() != Ok(&root) {
         sessions().stop(&project_id).await;
         return Err("copilot_no_consent".into());
     }
@@ -164,7 +177,7 @@ pub async fn copilot_complete(
     let uri = url::Url::from_file_path(&file).map_err(|_| "copilot_invalid_path")?;
     session.complete_cancellable(CompletionRequest {
         uri: uri.as_str(), editor: &editor, client_version: version, text: &text, language: &language,
-        position, automatic, tab_size: tab_size.clamp(1, 16), insert_spaces,
+        allow_text: policy::text_consented(&settings, &project_id), position, automatic, tab_size: tab_size.clamp(1, 16), insert_spaces,
     }, lease.signal.clone()).await
 }
 

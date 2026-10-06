@@ -7,6 +7,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { SETTINGS_CHANGED_EVENT, useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 import { Toggle } from "../common/Toggle";
+import { UntestedTag } from "../common/UntestedTag";
 import { SettingsCard } from "./settingsUi";
 
 /** Backend `copilot_setup`. */
@@ -64,11 +65,12 @@ export function CopilotCompletionCard() {
     return () => { alive = false; clearTimeout(timer); };
   }, [refreshAccount, consented, provider]);
 
-  const setPolicy = async (copilot: boolean, localOnly: boolean) => {
+  // The backend keeps text consent only on top of code consent.
+  const setPolicy = async (copilot: boolean, localOnly: boolean, text = policy?.copilot_text === true) => {
     if (!projectId) return;
     setError(null);
     try {
-      const saved = await invoke<Settings>("copilot_set_project_policy", { projectId, copilot, localOnly });
+      const saved = await invoke<Settings>("copilot_set_project_policy", { projectId, copilot, localOnly, text });
       // The backend already committed atomically. Broadcast a refresh, never
       // write this possibly stale nested map over another window's decision.
       await emit(SETTINGS_CHANGED_EVENT, saved);
@@ -143,6 +145,14 @@ export function CopilotCompletionCard() {
               checked={policy?.copilot === true && !remote}
               disabled={remote || policy?.local_only === true}
               onChange={(e) => void setPolicy(e.target.checked, false)}
+            />
+          </label>
+          <label className="settings-toggle-card-row">
+            <span>{t("settings.copilotProjectText")} <UntestedTag id="settings.copilotProjectText" /></span>
+            <Toggle
+              checked={consented && policy?.copilot_text === true}
+              disabled={!consented}
+              onChange={(e) => void setPolicy(true, false, e.target.checked)}
             />
           </label>
           <label className="settings-toggle-card-row">

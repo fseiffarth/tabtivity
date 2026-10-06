@@ -96,6 +96,11 @@ pub struct CompletionProjectPolicy {
     pub copilot: bool,
     #[serde(default)]
     pub local_only: bool,
+    /// Copilot also serves the project's text files (Markdown, LaTeX, plain
+    /// text). A second opt-in on top of `copilot`: notes and papers are what a
+    /// code consent should not quietly cover.
+    #[serde(default)]
+    pub copilot_text: bool,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }

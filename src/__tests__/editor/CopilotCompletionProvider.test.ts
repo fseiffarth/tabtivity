@@ -24,17 +24,33 @@ beforeEach(() => invoke.mockReset().mockResolvedValue(undefined));
 
 describe("copilotServes", () => {
   it("needs the flag, the provider, a consenting local project and a code language", () => {
-    expect(copilotServes(consented, true, "one", false, "typescript")).toBe(true);
-    expect(copilotServes(consented, false, "one", false, "typescript")).toBe(false);
-    expect(copilotServes(consented, true, "two", false, "typescript")).toBe(false);
-    expect(copilotServes(consented, true, null, false, "typescript")).toBe(false);
-    expect(copilotServes(consented, true, "one", true, "typescript")).toBe(false);
+    const ts = "/one/a.ts";
+    expect(copilotServes(consented, true, "one", false, "typescript", ts)).toBe(true);
+    expect(copilotServes(consented, false, "one", false, "typescript", ts)).toBe(false);
+    expect(copilotServes(consented, true, "two", false, "typescript", ts)).toBe(false);
+    expect(copilotServes(consented, true, null, false, "typescript", ts)).toBe(false);
+    expect(copilotServes(consented, true, "one", true, "typescript", ts)).toBe(false);
     for (const language of ["", "plain", "markdown", "tex"]) {
-      expect(copilotServes(consented, true, "one", false, language)).toBe(false);
+      expect(copilotServes(consented, true, "one", false, language, "/one/notes.md")).toBe(false);
     }
-    expect(copilotServes({ ...consented, code_completion_provider: undefined }, true, "one", false, "typescript")).toBe(false);
+    expect(copilotServes({ ...consented, code_completion_provider: undefined }, true, "one", false, "typescript", ts)).toBe(false);
     const localOnly = { ...consented, completion_project_policies: { one: { directory: "/one", copilot: true, local_only: true } } };
-    expect(copilotServes(localOnly, true, "one", false, "typescript")).toBe(false);
+    expect(copilotServes(localOnly, true, "one", false, "typescript", ts)).toBe(false);
+  });
+
+  it("serves text files only under the project's text consent, and never credential files", () => {
+    const text = { ...consented, completion_project_policies: {
+      one: { directory: "/one", copilot: true, local_only: false, copilot_text: true } } } as Settings;
+    for (const [language, path] of [["markdown", "/one/a.md"], ["tex", "/one/p.tex"], ["plain", "/one/n.txt"], ["plain", "/one/NOTES"]]) {
+      expect(copilotServes(text, true, "one", false, language, path)).toBe(true);
+    }
+    expect(copilotServes(text, true, "one", false, "", "/one/x")).toBe(false);
+    const textOnly = { ...consented, completion_project_policies: {
+      one: { directory: "/one", copilot: false, local_only: false, copilot_text: true } } } as Settings;
+    expect(copilotServes(textOnly, true, "one", false, "markdown", "/one/a.md")).toBe(false);
+    for (const path of ["/one/.env", "/one/.env.local", "/one/prod.env", "/one/id_ed25519", "/one/tls.pem", "C:\\one\\server.KEY"]) {
+      expect(copilotServes(text, true, "one", false, "toml", path)).toBe(false);
+    }
   });
 });
 

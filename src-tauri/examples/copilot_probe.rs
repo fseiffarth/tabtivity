@@ -25,7 +25,7 @@ async fn main() -> Result<(), String> {
     let uri = url::Url::from_file_path(&path).map_err(|_| "URI failed")?;
     let text = "# Return the square of a number.\ndef square(value):\n    return ";
     let request = |version| CompletionRequest { uri: uri.as_str(), editor: "probe", client_version: version,
-        text, language: "python", position: position(text), automatic: false, tab_size: 4, insert_spaces: true };
+        text, language: "python", allow_text: false, position: position(text), automatic: false, tab_size: 4, insert_spaces: true };
     let items = session.complete(request(1)).await?;
     println!("Unsaved-document completion candidates: {}", items.len());
     let (cancel, signal) = tokio::sync::watch::channel(false);

@@ -39,6 +39,27 @@ pub struct DocumentTicket {
 /// Notifications to write, in order, before the ticket may be used.
 pub type Synchronized = (DocumentTicket, Vec<(&'static str, Value)>);
 
+/// Prose and unclassified text, served only with the project's text consent.
+pub fn is_text_language(language: &str) -> bool {
+    matches!(language, "plain" | "text" | "plaintext" | "markdown" | "tex" | "latex")
+}
+
+/// The editor speaks its highlighter's short ids; the server expects VS Code's
+/// language identifiers. Anything already in that form passes through.
+fn lsp_language_id(language: &str) -> &str {
+    match language {
+        "js" => "javascript",
+        "jsx" => "javascriptreact",
+        "ts" => "typescript",
+        "tsx" => "typescriptreact",
+        "shell" => "shellscript",
+        "markup" => "html",
+        "tex" => "latex",
+        "plain" | "text" => "plaintext",
+        other => other,
+    }
+}
+
 struct Document { ticket: DocumentTicket, text: String, language: String }
 
 #[derive(Default)]
@@ -46,12 +67,14 @@ pub struct Documents { entries: HashMap<String, Document>, revision: u64 }
 
 impl Documents {
     /// Produce notifications under the same session lock used to write them.
-    pub fn synchronize(&mut self, uri: &str, editor: &str, client_version: u64, text: &str, language: &str)
-        -> Result<Synchronized, String> {
+    /// `allow_text` is the project's text-file consent; without it Copilot
+    /// sees code only.
+    pub fn synchronize(&mut self, uri: &str, editor: &str, client_version: u64, text: &str, language: &str,
+        allow_text: bool) -> Result<Synchronized, String> {
         if text.len() > MAX_DOCUMENT_BYTES || editor.is_empty() || editor.len() > 128 {
             return Err("copilot_document_limit".into());
         }
-        if matches!(language, "" | "plain" | "text" | "markdown" | "tex" | "latex") {
+        if language.is_empty() || (is_text_language(language) && !allow_text) {
             return Err("copilot_code_only".into());
         }
         let old = self.entries.get(uri);
@@ -71,7 +94,7 @@ impl Documents {
             notifications.push(("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":ticket.server_version},
                 "contentChanges":[incremental_change(&old.text, text)]})));
         } else {
-            notifications.push(("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":language,
+            notifications.push(("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":lsp_language_id(language),
                 "version":ticket.server_version,"text":text}})));
         }
         notifications.push(("textDocument/didFocus", json!({"textDocument":{"uri":uri}})));
@@ -102,16 +125,28 @@ mod tests {
     #[test]
     fn versions_and_editor_ownership_invalidate_late_responses() {
         let mut docs = Documents::default();
-        let (first, messages) = docs.synchronize("file:///one", "editor-a", 3, "one", "rust").unwrap();
+        let (first, messages) = docs.synchronize("file:///one", "editor-a", 3, "one", "rust", false).unwrap();
         assert_eq!(messages[0].0, "textDocument/didOpen");
-        assert!(docs.synchronize("file:///one", "editor-a", 2, "old", "rust").is_err());
-        assert!(docs.synchronize("file:///one", "editor-a", 3, "different", "rust").is_err());
-        let (second, messages) = docs.synchronize("file:///one", "editor-b", 1, "two", "rust").unwrap();
+        assert!(docs.synchronize("file:///one", "editor-a", 2, "old", "rust", false).is_err());
+        assert!(docs.synchronize("file:///one", "editor-a", 3, "different", "rust", false).is_err());
+        let (second, messages) = docs.synchronize("file:///one", "editor-b", 1, "two", "rust", false).unwrap();
         assert_eq!(messages[0].0, "textDocument/didChange");
         assert!(!docs.current(&first));
         assert!(docs.current(&second));
         assert!(docs.close_editor("editor-a").is_empty());
         assert_eq!(docs.close_editor("editor-b").len(), 1);
         assert!(!docs.current(&second));
+    }
+    #[test]
+    fn text_files_need_the_text_consent() {
+        let mut docs = Documents::default();
+        for language in ["markdown", "tex", "plain"] {
+            assert_eq!(docs.synchronize("file:///notes", "e", 1, "x", language, false).err().as_deref(), Some("copilot_code_only"));
+        }
+        assert!(docs.synchronize("file:///notes", "e", 1, "x", "", true).is_err());
+        let (_, messages) = docs.synchronize("file:///notes", "e", 1, "x", "tex", true).unwrap();
+        assert_eq!(messages[0].1["textDocument"]["languageId"], "latex");
+        let (_, messages) = docs.synchronize("file:///a.ts", "e", 1, "x", "ts", false).unwrap();
+        assert_eq!(messages[0].1["textDocument"]["languageId"], "typescript");
     }
 }

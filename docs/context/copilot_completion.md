@@ -5,6 +5,16 @@ live and never signed in (2026-09-18). Ollama stays the default and serves every
 file Copilot does not: no consent, remote project, prose, flag or provider off.
 That fallback is deliberate — it only ever moves work *onto* the machine.
 
+Text files (Markdown, LaTeX, plain text including unclassified files) take a
+second per-project opt-in, `copilot_text`, on top of code consent; dropping the
+code consent drops it too. Notes and papers are what a code consent should not
+quietly cover. Credential-shaped files (`.env*`, `*.env`, `.npmrc`, `.netrc`,
+SSH keys, `*.pem`/`*.key`/…) never reach Copilot under any consent —
+`policy::authorize_document` checks both the opened and the resolved name, and
+`copilotSecretFile` mirrors it so those stay on Ollama. The editor's short
+language ids are mapped to VS Code's (`ts`→`typescript`, `tex`→`latex`,
+`plain`→`plaintext`) for `didOpen`.
+
 The shared candidate contract keeps provider identity, document version, ranges,
 opaque ids and the untouched language-server item. Only replacements preserving
 the existing text on both sides of the caret become ghost insertions. Partial

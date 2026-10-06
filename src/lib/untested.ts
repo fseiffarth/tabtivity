@@ -256,6 +256,7 @@ export const UNTESTED = {
   "settings.browser": { area: "layout", what: "SettingsPanel · Browser" },
   "settings.calendarGlobalApp": { area: "layout", what: "SettingsPanel · Calendar in the header" },
   "settings.copilotCompletion": { area: "layout", what: "SettingsPanel · GitHub Copilot autocomplete" },
+  "settings.copilotProjectText": { area: "layout", what: "CopilotCompletionCard · Text files too: Copilot also completes the project's Markdown, LaTeX and plain-text files (.env and key files never)" },
   "settings.corners": { area: "layout", what: "ThemeCustomizer · Corners" },
   "settings.cursor": { area: "layout", what: "ThemeCustomizer · Mouse cursor" },
   "settings.fastMode": { area: "layout", what: "SettingsPanel · Fast mode" },

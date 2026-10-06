@@ -10,6 +10,7 @@ pub enum PolicyError {
     LocalOnly,
     InvalidPath,
     OutsideProject,
+    SecretFile,
 }
 
 /// `directory` and `remote` must come from the backend project resolver, not
@@ -56,6 +57,32 @@ pub fn authorize_project(
     Ok(root)
 }
 
+/// The project's second opt-in: Copilot may also see its text files. Only
+/// meaningful once `authorize_project` has passed.
+pub fn text_consented(settings: &Settings, project_id: &str) -> bool {
+    settings
+        .completion_project_policies
+        .as_ref()
+        .and_then(|policies| policies.get(project_id))
+        .is_some_and(|policy| policy.copilot_text)
+}
+
+/// Files that hold credentials rather than code or prose. No consent covers
+/// them: a project's `.env` or a key file never reaches the cloud.
+fn secret_shaped(file: &Path) -> bool {
+    let Some(name) = file.file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    let name = name.to_ascii_lowercase();
+    let extension = Path::new(&name).extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    name == ".env"
+        || name.starts_with(".env.")
+        || extension == "env"
+        || matches!(name.as_str(), ".npmrc" | ".netrc" | ".pgpass" | ".pypirc" | ".git-credentials" | "credentials")
+        || ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"].iter().any(|key| name.starts_with(key))
+        || matches!(extension, "pem" | "key" | "p12" | "pfx" | "jks" | "keystore")
+}
+
 pub fn authorize_document(root: &Path, path: &Path) -> Result<PathBuf, PolicyError> {
     if !path.is_absolute() {
         return Err(PolicyError::InvalidPath);
@@ -63,6 +90,10 @@ pub fn authorize_document(root: &Path, path: &Path) -> Result<PathBuf, PolicyErr
     let file = path.canonicalize().map_err(|_| PolicyError::InvalidPath)?;
     if !file.starts_with(root) || !file.is_file() {
         return Err(PolicyError::OutsideProject);
+    }
+    // Both names: a symlink called `notes.txt` must not export `.env`.
+    if secret_shaped(path) || secret_shaped(&file) {
+        return Err(PolicyError::SecretFile);
     }
     Ok(file)
 }
@@ -146,6 +177,47 @@ mod tests {
             authorize_document(one.path(), &link),
             Err(PolicyError::OutsideProject)
         );
+    }
+
+    #[test]
+    fn text_files_need_their_own_consent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = settings(dir.path());
+        assert!(!text_consented(&config, "one"));
+        config.completion_project_policies.as_mut().unwrap().get_mut("one").unwrap().copilot_text = true;
+        assert!(text_consented(&config, "one"));
+        assert!(!text_consented(&config, "two"));
+        let raw: Settings = serde_json::from_value(json!({
+            "completion_project_policies":{"one":{"directory":"/p","copilot":true,"copilot_text":true}}
+        })).unwrap();
+        assert!(text_consented(&raw, "one"));
+    }
+
+    #[test]
+    fn secret_files_never_reach_copilot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for name in [".env", ".env.local", "prod.env", ".npmrc", "id_ed25519", "id_rsa.pub", "server.pem", "tls.KEY"] {
+            let file = root.join(name);
+            std::fs::write(&file, "synthetic").unwrap();
+            assert_eq!(authorize_document(&root, &file), Err(PolicyError::SecretFile), "{name}");
+        }
+        for name in ["notes.txt", "README.md", "paper.tex", "environment.ts", "keys.rs"] {
+            let file = root.join(name);
+            std::fs::write(&file, "synthetic").unwrap();
+            assert_eq!(authorize_document(&root, &file), Ok(file.clone()), "{name}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cannot_launder_a_secret_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join(".env"), "synthetic").unwrap();
+        let link = root.join("notes.txt");
+        std::os::unix::fs::symlink(root.join(".env"), &link).unwrap();
+        assert_eq!(authorize_document(&root, &link), Err(PolicyError::SecretFile));
     }
 
     #[test]

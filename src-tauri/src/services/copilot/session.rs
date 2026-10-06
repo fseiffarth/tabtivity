@@ -50,6 +50,8 @@ pub struct CompletionRequest<'a> {
     pub client_version: u64,
     pub text: &'a str,
     pub language: &'a str,
+    /// The project's text-file consent, read with the rest of the policy.
+    pub allow_text: bool,
     pub position: Position,
     pub automatic: bool,
     pub tab_size: u32,
@@ -281,7 +283,7 @@ impl Session {
             // would leave `Documents` ahead of the server, or tear a frame and
             // close the connection along with its RAM-only sign-in.
             let (ticket, notifications) = documents.synchronize(
-                request.uri, request.editor, request.client_version, request.text, request.language)?;
+                request.uri, request.editor, request.client_version, request.text, request.language, request.allow_text)?;
             for (method, params) in notifications {
                 self.notify(method, params).await?;
             }
@@ -653,7 +655,7 @@ mod tests {
 
     fn request<'a>(editor: &'a str, version: u64, text: &'a str) -> CompletionRequest<'a> {
         CompletionRequest {
-            uri: "file:///project/a.rs", editor, client_version: version, text, language: "rust",
+            uri: "file:///project/a.rs", editor, client_version: version, text, language: "rust", allow_text: false,
             position: super::super::documents::position(text), automatic: true, tab_size: 4, insert_spaces: true,
         }
     }
@@ -860,7 +862,7 @@ mod tests {
         let uri = url::Url::from_file_path(root.join("a.py")).unwrap();
         let text = "def square(x):\n    return ";
         let result = session.complete(CompletionRequest {
-            uri: uri.as_str(), editor: "main:1", client_version: 1, text, language: "python",
+            uri: uri.as_str(), editor: "main:1", client_version: 1, text, language: "python", allow_text: false,
             position: super::super::documents::position(text), automatic: false, tab_size: 4, insert_spaces: true,
         }).await;
         assert_eq!(result, Err("copilot_not_signed_in".into()));
