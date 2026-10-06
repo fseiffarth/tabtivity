@@ -7956,7 +7956,7 @@ export const enSource = {
   "texWorkspace.newFileDirty": "{name} has unsaved changes — save it before adding a file.",
   "fileViewer.latexEngineTitle": "LaTeX engine",
   "fileViewer.latexEngineSharedTitle": "LaTeX engine — used for every file in this document",
-  "fileViewer.engineDefault": "{engine} (default)",
+  "fileViewer.engineAuto": "Auto ({engine})",
   "fileViewer.compilerOptionsTitle": "Compiler options (output folder, extra flags)",
   "fileViewer.optionsBtn": "Options",
   "fileViewer.openCompiledPdfTitle": "Open the compiled PDF in its own tab",

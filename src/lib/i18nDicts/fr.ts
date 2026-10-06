@@ -7638,7 +7638,7 @@ export const dict: Dict = {
   "texWorkspace.newFileDirty": "{name} a des modifications non enregistrées — enregistrez-le avant d'ajouter un fichier.",
   "fileViewer.latexEngineTitle": "Moteur LaTeX",
   "fileViewer.latexEngineSharedTitle": "Moteur LaTeX — utilisé pour tous les fichiers de ce document",
-  "fileViewer.engineDefault": "{engine} (par défaut)",
+  "fileViewer.engineAuto": "Auto ({engine})",
   "fileViewer.compilerOptionsTitle": "Options du compilateur (dossier de sortie, indicateurs supplémentaires)",
   "fileViewer.optionsBtn": "Options",
   "fileViewer.openCompiledPdfTitle": "Ouvrir le PDF compilé dans son propre onglet",

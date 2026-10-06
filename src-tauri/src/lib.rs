@@ -1881,6 +1881,7 @@ pub fn run() {
             commands::tex::synctex_page_lines,
             commands::tex::list_fonts,
             commands::tex::resolve_tex_root,
+            commands::tex::tex_auto_engine,
             // Terminal
             commands::terminal::pty_spawn,
             commands::terminal::agent_fence_status,

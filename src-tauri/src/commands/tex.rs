@@ -121,6 +121,280 @@ pub fn tex_capability() -> TexCapability {
     detect_capability()
 }
 
+// ---------------------------------------------------------------------------
+// Engine auto-detection
+// ---------------------------------------------------------------------------
+//
+// With no engine chosen, a build used to run pdflatex — and a document written
+// for fontspec, luacode or xeCJK then failed on its first package ("fontspec
+// requires either XeTeX or LuaTeX") until the reader found the engine menu. The
+// document usually says what it needs: a magic comment names the engine
+// outright, and a handful of packages and primitives exist under one engine
+// only. Read those, and build under what they ask for.
+
+/// What a document's source says about the engine it needs, strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineHint {
+    /// Named outright: `% !TEX program = …` / `% !TeX TS-program = …` /
+    /// `% arara: …` in the file's head.
+    Named(&'static str),
+    /// Runs under LuaTeX only (luacode, luatexja, `\directlua`, …).
+    Lua,
+    /// Runs under XeTeX only (xeCJK, xltxtra, bidi, mathspec, `\XeTeX…`).
+    Xe,
+    /// Needs a Unicode engine, either one (fontspec, unicode-math, polyglossia).
+    Unicode,
+}
+
+/// Packages that load under XeTeX only. Compared case-insensitively.
+const XE_ONLY_PACKAGES: &[&str] = &[
+    "xecjk", "xltxtra", "xunicode", "xepersian", "xgreek", "xecyr", "xetexko",
+    "xesearch", "xespotcolor", "xecolor", "xeindex", "bidi", "mathspec",
+];
+/// Packages that need a Unicode engine but run under either.
+const UNICODE_PACKAGES: &[&str] = &[
+    "fontspec", "unicode-math", "polyglossia", "realscripts", "fontsetup",
+    "newcomputermodern",
+];
+/// Packages that load under LuaTeX only, besides every `lua…`/`ltj…` one.
+const LUA_ONLY_PACKAGES: &[&str] = &["piton", "emoji", "pyluatex", "chickenize"];
+/// Font commands only fontspec defines — a preamble that calls them got
+/// fontspec from somewhere (a class, a package outside the document's folder).
+const UNICODE_COMMANDS: &[&str] = &[
+    "setmainfont", "setsansfont", "setmonofont", "newfontfamily", "setmathfont",
+    "defaultfontfeatures", "setdefaultlanguage", "setmainlanguage",
+];
+/// Primitives and environments that exist under LuaTeX only.
+const LUA_COMMANDS: &[&str] = &["directlua", "luaexec", "luadirect", "luaescapestring", "latelua"];
+
+/// The engine a `% !TEX program = …`-style value names, if one we drive.
+fn engine_named(value: &str) -> Option<&'static str> {
+    let v = value.trim().to_ascii_lowercase();
+    let v = v.split(|c: char| c.is_whitespace() || c == ':' || c == '{').next().unwrap_or("");
+    match v {
+        "lualatex" | "luatex" | "lualatexmk" | "lualatex-dev" => Some("lualatex"),
+        "xelatex" | "xetex" | "xelatexmk" | "xelatex-dev" => Some("xelatex"),
+        "pdflatex" | "pdftex" | "pdflatexmk" | "pdflatex-dev" | "latex" => Some("pdflatex"),
+        _ => None,
+    }
+}
+
+/// An engine named in the file's leading comments: `% !TEX program = X`,
+/// `% !TeX TS-program = X` (TeXShop / TeXstudio / VS Code LaTeX Workshop) or an
+/// `% arara: X` directive. Read from the same 20 head lines {@link magic_root}
+/// reads, which is where every editor that writes these puts them.
+fn magic_engine(source: &str) -> Option<&'static str> {
+    for raw in source.lines().take(20) {
+        let l = raw.trim_start();
+        if !l.starts_with('%') {
+            continue;
+        }
+        let body = l.trim_start_matches('%').trim();
+        let lower = body.to_ascii_lowercase();
+        let rest = lower
+            .strip_prefix("!tex ts-program")
+            .or_else(|| lower.strip_prefix("!tex program"));
+        if let Some(rest) = rest {
+            let rest = rest.trim_start();
+            if let Some(v) = rest.strip_prefix('=').or_else(|| rest.strip_prefix(':')) {
+                if let Some(e) = engine_named(v) {
+                    return Some(e);
+                }
+            }
+            continue;
+        }
+        if let Some(v) = lower.strip_prefix("arara:") {
+            if let Some(e) = engine_named(v) {
+                return Some(e);
+            }
+        }
+    }
+    None
+}
+
+/// `text` with every comment cut: from an unescaped `%` to the end of its line.
+/// A commented-out `%\usepackage{fontspec}` asks for nothing.
+fn strip_tex_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let bytes = line.as_bytes();
+        let mut cut = bytes.len();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2, // `\%` is a literal percent, `\\` a line break
+                b'%' => {
+                    cut = i;
+                    break;
+                }
+                _ => i += 1,
+            }
+        }
+        out.push_str(&line[..cut.min(line.len())]);
+        out.push('\n');
+    }
+    out
+}
+
+/// The hint carried by one file's (comment-stripped) text: the packages it
+/// loads, the class it is, and the engine-only commands it calls. The strongest
+/// one found wins (Lua/Xe over Unicode); `None` for a document any engine runs.
+fn engine_hint_in(text: &str) -> Option<EngineHint> {
+    let mut lua = false;
+    let mut xe = false;
+    let mut unicode = false;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < bytes.len() && (bytes[j] as char).is_ascii_alphabetic() {
+            j += 1;
+        }
+        let cmd = &text[i + 1..j];
+        match cmd {
+            "usepackage" | "RequirePackage" | "documentclass" | "LoadClass" => {
+                // The brace list, past an optional `[...]`.
+                let mut k = j;
+                while k < bytes.len() && (bytes[k] as char).is_ascii_whitespace() {
+                    k += 1;
+                }
+                if k < bytes.len() && bytes[k] == b'[' {
+                    k = text[k..].find(']').map_or(bytes.len(), |c| k + c + 1);
+                    while k < bytes.len() && (bytes[k] as char).is_ascii_whitespace() {
+                        k += 1;
+                    }
+                }
+                if k < bytes.len() && bytes[k] == b'{' {
+                    if let Some(close) = text[k + 1..].find('}') {
+                        for name in text[k + 1..k + 1 + close].split(',') {
+                            let name = name.trim().to_ascii_lowercase();
+                            // `luatex85` is the exception: a shim classes load
+                            // under every engine, a no-op off LuaTeX.
+                            if (name.starts_with("lua") && name != "luatex85")
+                                || name.starts_with("ltj")
+                                || LUA_ONLY_PACKAGES.contains(&name.as_str())
+                            {
+                                lua = true;
+                            } else if XE_ONLY_PACKAGES.contains(&name.as_str()) {
+                                xe = true;
+                            } else if UNICODE_PACKAGES.contains(&name.as_str()) {
+                                unicode = true;
+                            }
+                        }
+                        i = k + 1 + close + 1;
+                        continue;
+                    }
+                }
+            }
+            "begin" if text[j..].starts_with("{luacode") => lua = true,
+            // `\XeTeX` alone is metalogo's logo, harmless anywhere; a primitive
+            // carries a suffix (`\XeTeXinputencoding`, `\XeTeXlinebreaklocale`).
+            _ if cmd.len() > 5 && cmd.starts_with("XeTeX") => xe = true,
+            _ if LUA_COMMANDS.contains(&cmd) => lua = true,
+            _ if UNICODE_COMMANDS.contains(&cmd) => unicode = true,
+            _ => {}
+        }
+        i = j.max(i + 1);
+    }
+    if lua {
+        Some(EngineHint::Lua)
+    } else if xe {
+        Some(EngineHint::Xe)
+    } else if unicode {
+        Some(EngineHint::Unicode)
+    } else {
+        None
+    }
+}
+
+/// What `source` (a document, or a hover preview's preamble) asks for, reading
+/// the local files its preamble pulls in from `dir` too — a `\input{preamble}`
+/// or a project `.sty` is where `fontspec` usually lives. Bounded: at most
+/// {@link ENGINE_SCAN_MAX_FILES} files, each read up to its first MiB, so a
+/// pathological project cannot turn a compile into a filesystem walk.
+fn detect_engine_hint(source: &str, dir: &Path) -> Option<EngineHint> {
+    const ENGINE_SCAN_MAX_FILES: usize = 32;
+    const MAX_READ: usize = 1024 * 1024;
+    if let Some(e) = magic_engine(source) {
+        return Some(EngineHint::Named(e));
+    }
+    let mut best: Option<EngineHint> = None;
+    let rank = |h: Option<EngineHint>| match h {
+        Some(EngineHint::Lua) => 3,
+        Some(EngineHint::Xe) => 2,
+        Some(EngineHint::Unicode) => 1,
+        _ => 0,
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut queue: Vec<String> = vec![strip_tex_comments(source)];
+    let mut read = 0;
+    while let Some(text) = queue.pop() {
+        let hint = engine_hint_in(&text);
+        if rank(hint) > rank(best) {
+            best = hint;
+        }
+        if rank(best) == 3 || read >= ENGINE_SCAN_MAX_FILES {
+            break;
+        }
+        for name in preamble_local_dep_names(&text) {
+            let p = dir.join(&name);
+            if read >= ENGINE_SCAN_MAX_FILES || !seen.insert(p.clone()) || !p.is_file() {
+                continue;
+            }
+            read += 1;
+            let Ok(bytes) = fs::read(&p) else { continue };
+            let bytes = &bytes[..bytes.len().min(MAX_READ)];
+            queue.push(strip_tex_comments(&String::from_utf8_lossy(bytes)));
+        }
+    }
+    best
+}
+
+/// The installed engine `hint` resolves to, or `None` to keep the default (no
+/// hint, or the engine it asks for is not installed — a build under the wrong
+/// one fails just as it would have, and says why in its log).
+fn engine_for_hint(hint: Option<EngineHint>, installed: &[String]) -> Option<String> {
+    let has = |e: &str| installed.iter().any(|g| g == e);
+    let pick = |order: &[&str]| order.iter().find(|e| has(e)).map(|e| e.to_string());
+    match hint? {
+        EngineHint::Named(e) => pick(&[e]),
+        EngineHint::Lua => pick(&["lualatex"]),
+        EngineHint::Xe => pick(&["xelatex"]),
+        // LuaLaTeX first: the LaTeX team's recommended Unicode engine, and the
+        // one fontspec's own manual leads with.
+        EngineHint::Unicode => pick(&["lualatex", "xelatex"]),
+    }
+}
+
+/// The engine a build of `src` with no engine chosen runs: what the document
+/// asks for when an installed engine serves it, else the first installed one
+/// (the {@link ENGINES} order). `None` only with no engine on `PATH` at all.
+fn auto_engine(src: &Path, installed: &[String]) -> Option<String> {
+    let dir = src.parent().unwrap_or_else(|| Path::new("."));
+    fs::read_to_string(src)
+        .ok()
+        .and_then(|text| engine_for_hint(detect_engine_hint(&text, dir), installed))
+        .or_else(|| installed.first().cloned())
+}
+
+/// The engine "Auto" builds `path` with — the label on the viewer's engine menu.
+/// `path` is the file Compile builds (the resolved root). `None` with no engine
+/// installed. Reads only; never runs anything.
+#[tauri::command]
+pub async fn tex_auto_engine(path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cap = detect_capability();
+        auto_engine(Path::new(&path), &cap.engines)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 struct RunOut {
     ok: bool,
     text: String,
@@ -893,9 +1167,13 @@ fn compile_tex_blocking(
     // SECURITY: filter user-supplied flags so none can enable shell-escape.
     let extra = filter_extra_flags(&extra_flags.unwrap_or_default());
 
-    // Only honour an explicitly requested engine we actually have; otherwise let
-    // latexmk / the first installed engine decide.
-    let engine = engine.filter(|e| cap.engines.iter().any(|g| g == e));
+    // Only honour an explicitly requested engine we actually have; otherwise run
+    // what the document asks for, else the first installed engine (see
+    // {@link auto_engine}). Resolved here rather than left to latexmk, whose
+    // default is pdflatex whether or not it is installed.
+    let engine = engine
+        .filter(|e| cap.engines.iter().any(|g| g == e))
+        .or_else(|| auto_engine(&src, &cap.engines));
     // The PDF lands in the output dir if one was given, else beside the source.
     let pdf = match &out_path {
         Some(p) => p.join(format!("{stem}.pdf")),
@@ -1574,8 +1852,10 @@ fn preview_snippet_blocking(
 
     let cap = detect_capability();
     // latexmk alone cannot serve this path: the preview runs the engine itself.
+    // No engine chosen: the one the preamble asks for, as a build would pick.
     let eng = engine
         .filter(|e| cap.engines.iter().any(|g| g == e))
+        .or_else(|| engine_for_hint(detect_engine_hint(&preamble, &cwd), &cap.engines))
         .or_else(|| cap.engines.first().cloned())
         .ok_or_else(|| "no TeX engine found on PATH".to_string())?;
 
@@ -2896,6 +3176,76 @@ Count:2
         assert_eq!(latexmk_flag(Some("xelatex")), "-pdfxe");
         assert_eq!(latexmk_flag(Some("pdflatex")), "-pdf");
         assert_eq!(latexmk_flag(None), "-pdf");
+    }
+
+    fn hint(src: &str) -> Option<EngineHint> {
+        detect_engine_hint(src, Path::new("/nonexistent-tex-dir"))
+    }
+
+    #[test]
+    fn engine_hint_reads_magic_comments() {
+        assert_eq!(hint("% !TEX program = lualatex\n\\documentclass{article}"), Some(EngineHint::Named("lualatex")));
+        assert_eq!(hint("%!TeX TS-program = xelatex\n"), Some(EngineHint::Named("xelatex")));
+        assert_eq!(hint("% !TEX TS-program: pdflatex\n\\usepackage{fontspec}"), Some(EngineHint::Named("pdflatex")));
+        assert_eq!(hint("% arara: xelatex: { shell: false }\n"), Some(EngineHint::Named("xelatex")));
+        // `!TEX root` is the build root, not an engine; an unknown program is no hint.
+        assert_eq!(hint("% !TEX root = main.tex\n"), None);
+        assert_eq!(hint("% !TEX program = context\n"), None);
+    }
+
+    #[test]
+    fn engine_hint_reads_packages_and_primitives() {
+        let doc = |pre: &str| format!("\\documentclass{{article}}\n{pre}\n\\begin{{document}}x\\end{{document}}\n");
+        assert_eq!(hint(&doc("\\usepackage{amsmath}")), None);
+        assert_eq!(hint(&doc("\\usepackage{fontspec}\n\\setmainfont{Libertinus Serif}")), Some(EngineHint::Unicode));
+        assert_eq!(hint(&doc("\\usepackage[math-style=ISO]{unicode-math}")), Some(EngineHint::Unicode));
+        assert_eq!(hint(&doc("\\setmainfont{TeX Gyre Pagella}")), Some(EngineHint::Unicode));
+        assert_eq!(hint(&doc("\\usepackage{amsmath, luacode}")), Some(EngineHint::Lua));
+        assert_eq!(hint(&doc("\\usepackage{fontspec}\n\\directlua{tex.print(1)}")), Some(EngineHint::Lua));
+        assert_eq!(hint("\\documentclass{ltjsarticle}\n"), Some(EngineHint::Lua));
+        assert_eq!(hint(&doc("\\usepackage{xeCJK}\n\\usepackage{fontspec}")), Some(EngineHint::Xe));
+        assert_eq!(hint(&doc("\\XeTeXinputencoding \"utf8\"")), Some(EngineHint::Xe));
+        // metalogo's `\XeTeX` logo and the engine-agnostic luatex85 shim ask for nothing.
+        assert_eq!(hint(&doc("\\usepackage{metalogo}\\XeTeX{} and \\LuaTeX")), None);
+        assert_eq!(hint(&doc("\\usepackage{luatex85}")), None);
+        // A commented-out package is no request; an escaped percent is not a comment.
+        assert_eq!(hint(&doc("%\\usepackage{fontspec}\n50\\% \\usepackage{luacode}")), Some(EngineHint::Lua));
+        assert_eq!(hint(&doc("% \\usepackage{fontspec}")), None);
+    }
+
+    #[test]
+    fn engine_hint_follows_local_preamble_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("preamble.tex"), "\\usepackage{mystyle}\n").unwrap();
+        fs::write(tmp.path().join("mystyle.sty"), "\\RequirePackage{fontspec}\n").unwrap();
+        let main = "\\documentclass{article}\n\\input{preamble}\n\\begin{document}\\end{document}\n";
+        assert_eq!(detect_engine_hint(main, tmp.path()), Some(EngineHint::Unicode));
+    }
+
+    #[test]
+    fn engine_for_hint_picks_an_installed_engine() {
+        let all: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
+        let only = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(engine_for_hint(None, &all), None);
+        assert_eq!(engine_for_hint(Some(EngineHint::Unicode), &all).as_deref(), Some("lualatex"));
+        assert_eq!(engine_for_hint(Some(EngineHint::Unicode), &only(&["pdflatex", "xelatex"])).as_deref(), Some("xelatex"));
+        assert_eq!(engine_for_hint(Some(EngineHint::Xe), &all).as_deref(), Some("xelatex"));
+        // An engine-only document never lands on the other Unicode engine.
+        assert_eq!(engine_for_hint(Some(EngineHint::Xe), &only(&["pdflatex", "lualatex"])), None);
+        assert_eq!(engine_for_hint(Some(EngineHint::Named("lualatex")), &only(&["pdflatex"])), None);
+    }
+
+    #[test]
+    fn auto_engine_falls_back_to_the_first_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plain = tmp.path().join("plain.tex");
+        let lua = tmp.path().join("lua.tex");
+        fs::write(&plain, "\\documentclass{article}\n").unwrap();
+        fs::write(&lua, "\\documentclass{article}\n\\usepackage{fontspec}\n").unwrap();
+        let installed: Vec<String> = ENGINES.iter().map(|e| e.to_string()).collect();
+        assert_eq!(auto_engine(&plain, &installed).as_deref(), Some("pdflatex"));
+        assert_eq!(auto_engine(&lua, &installed).as_deref(), Some("lualatex"));
+        assert_eq!(auto_engine(&lua, &[]), None);
     }
 
     #[test]

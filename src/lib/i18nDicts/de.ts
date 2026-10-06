@@ -7640,7 +7640,7 @@ export const dict: Dict = {
   "texWorkspace.newFileDirty": "{name} hat ungespeicherte Änderungen — zuerst speichern, dann eine Datei hinzufügen.",
   "fileViewer.latexEngineTitle": "LaTeX-Engine",
   "fileViewer.latexEngineSharedTitle": "LaTeX-Engine — für jede Datei dieses Dokuments",
-  "fileViewer.engineDefault": "{engine} (Standard)",
+  "fileViewer.engineAuto": "Automatisch ({engine})",
   "fileViewer.compilerOptionsTitle": "Compiler-Optionen (Ausgabeordner, zusätzliche Flags)",
   "fileViewer.optionsBtn": "Optionen",
   "fileViewer.openCompiledPdfTitle": "Das kompilierte PDF in einem eigenen Tab öffnen",

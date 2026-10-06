@@ -294,11 +294,32 @@ describe("TexView", () => {
     await renderTexView();
 
     await screen.findByRole("button", { name: /compile/i });
-    // Custom themed dropdown (not a native <select>); its trigger shows the
-    // default engine's name rather than the literal word "Default".
+    // Custom themed dropdown (not a native <select>); its trigger names the
+    // engine "Auto" would build with — the first installed one until the
+    // backend's read of the document says otherwise.
     const engine = screen.getByTitle("LaTeX engine");
     expect(engine).toBeTruthy();
-    expect(engine.textContent).toContain("pdflatex (default)");
+    expect(engine.textContent).toContain("Auto (pdflatex)");
+  });
+
+  it("labels Auto with the engine the document asks for, and builds with no engine named", async () => {
+    setupInvoke(true, ["pdflatex", "lualatex", "xelatex"]);
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "tex_auto_engine" ? Promise.resolve("lualatex") : base(cmd, args),
+    );
+    await renderTexView();
+
+    const compileBtn = await screen.findByRole("button", { name: /compile/i });
+    const engine = screen.getByTitle("LaTeX engine");
+    await waitFor(() => expect(engine.textContent).toContain("Auto (lualatex)"));
+    expect(mockInvoke).toHaveBeenCalledWith("tex_auto_engine", { path: "/p/paper.tex" });
+
+    // "Auto" stays a request for the backend to pick, not a pinned engine.
+    fireEvent.click(compileBtn);
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("compile_tex", expect.objectContaining({ engine: null })),
+    );
   });
 
   it("remembers the chosen engine on the tab, so a restart still builds under it", async () => {

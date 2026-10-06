@@ -103,6 +103,7 @@ export const UNTESTED = {
   "fileViewer.compileUnchangedMsg": { area: "embed", what: "FileViewerPane · Nothing changed since the last build — every source on disk still matches the previous ru…" },
   "fileViewer.syncNoPdfMsg": { area: "embed", what: "FileViewerPane · Ctrl+click before any compile: \"hasn't been compiled\" note (+ Ctrl+click anywhere on \\input{…} opens it)" },
   "fileViewer.texPreviewLabel": { area: "embed", what: "FileViewerPane · Preview" },
+  "fileViewer.engineAuto": { area: "embed", what: "FileViewerPane · LaTeX engine Auto: picks lualatex/xelatex from magic comments, fontspec/luacode/xeCJK (build + hover preview)" },
   "fileViewerPane.1": { area: "embed", what: "FileViewerPane · Interactive session…" },
   "fileViewerPane.2": { area: "embed", what: "FileViewerPane · Add file remark…" },
   "fileViewerPane.3": { area: "embed", what: "FileViewerPane · Remote images not loaded ({count}) · {hosts}" },

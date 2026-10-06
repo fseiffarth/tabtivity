@@ -7636,7 +7636,7 @@ export const dict: Dict = {
   "texWorkspace.newFileDirty": "{name} tiene cambios sin guardar — guárdalo antes de añadir un archivo.",
   "fileViewer.latexEngineTitle": "Motor LaTeX",
   "fileViewer.latexEngineSharedTitle": "Motor LaTeX: se usa para todos los archivos de este documento",
-  "fileViewer.engineDefault": "{engine} (predeterminado)",
+  "fileViewer.engineAuto": "Automático ({engine})",
   "fileViewer.compilerOptionsTitle": "Opciones del compilador (carpeta de salida, flags adicionales)",
   "fileViewer.optionsBtn": "Opciones",
   "fileViewer.openCompiledPdfTitle": "Abrir el PDF compilado en su propia pestaña",
