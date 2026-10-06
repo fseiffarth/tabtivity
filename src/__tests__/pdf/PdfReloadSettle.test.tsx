@@ -23,42 +23,51 @@ const io = vi.hoisted(() => ({
   events: [] as string[],
   /** `getPage` calls by page number. */
   pagesAsked: {} as Record<number, number>,
+  /** A page's own [width, height] in points, where it is not 600 × 800. */
+  pageSize: {} as Record<number, [number, number]>,
   invoke: vi.fn(),
 }));
 
-/** A five-page pdf.js document: 600 × 800 points, nothing drawn, no text. */
+/** A five-page pdf.js document: 600 × 800 points (unless `io.pageSize` says
+ *  otherwise for a page), nothing drawn, no text. */
 vi.mock("pdfjs-dist", () => {
-  const viewport = ({ scale = 1, rotation = 0 }: { scale?: number; rotation?: number } = {}) => {
+  const viewport = (
+    [pw, ph]: [number, number],
+    { scale = 1, rotation = 0 }: { scale?: number; rotation?: number } = {},
+  ) => {
     const turned = rotation % 180 !== 0;
-    const width = (turned ? 800 : 600) * scale;
-    const height = (turned ? 600 : 800) * scale;
+    const width = (turned ? ph : pw) * scale;
+    const height = (turned ? pw : ph) * scale;
     return {
       width,
       height,
       scale,
       rotation,
       transform: [scale, 0, 0, -scale, 0, height],
-      viewBox: [0, 0, 600, 800],
-      clone: () => viewport({ scale, rotation }),
+      viewBox: [0, 0, pw, ph],
+      clone: () => viewport([pw, ph], { scale, rotation }),
       convertToViewportPoint: (x: number, y: number) => [x * scale, height - y * scale],
       convertToPdfPoint: (x: number, y: number) => [x / scale, (height - y) / scale],
     };
   };
-  const page = () => ({
-    rotate: 0,
-    view: [0, 0, 600, 800],
-    getViewport: viewport,
-    render: () => ({ promise: Promise.resolve(), cancel() {} }),
-    getTextContent: async () => ({ items: [], styles: {} }),
-    getAnnotations: async () => [],
-    getOperatorList: async () => ({ fnArray: [], argsArray: [] }),
-    cleanup() {},
-  });
+  const page = (n: number) => {
+    const size = io.pageSize[n] ?? ([600, 800] as [number, number]);
+    return {
+      rotate: 0,
+      view: [0, 0, size[0], size[1]],
+      getViewport: (opts?: { scale?: number; rotation?: number }) => viewport(size, opts),
+      render: () => ({ promise: Promise.resolve(), cancel() {} }),
+      getTextContent: async () => ({ items: [], styles: {} }),
+      getAnnotations: async () => [],
+      getOperatorList: async () => ({ fnArray: [], argsArray: [] }),
+      cleanup() {},
+    };
+  };
   const doc = () => ({
     numPages: 5,
     getPage: async (n: number) => {
       io.pagesAsked[n] = (io.pagesAsked[n] ?? 0) + 1;
-      return page();
+      return page(n);
     },
     getOutline: async () => null,
     getMetadata: async () => ({ info: {}, metadata: null }),
@@ -101,6 +110,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { PdfView, RELOAD_SETTLE_MS } from "../../components/embed/pdf/PdfViewer";
 import { FileScopeContext } from "../../components/embed/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
+import { SCREENSHOT_CAPTURE_EVENT } from "../../lib/window/screenshot";
 
 const PATH = "/home/u/paper/paper.pdf";
 
@@ -108,6 +118,17 @@ const PATH = "/home/u/paper/paper.pdf";
  *  reads are the viewer's own metadata pass. */
 class IntersectionObserverStub {
   observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() { return []; }
+}
+
+/** Every page is near the viewport from the moment it is observed. */
+class EveryPageNearStub {
+  constructor(private cb: IntersectionObserverCallback) {}
+  observe(target: Element) {
+    this.cb([{ target, isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+  }
   unobserve() {}
   disconnect() {}
   takeRecords() { return []; }
@@ -133,6 +154,7 @@ beforeEach(() => {
   io.sizes = [];
   io.events = [];
   io.pagesAsked = {};
+  io.pageSize = {};
   io.invoke.mockReset();
   io.invoke.mockImplementation(async (command: string) => {
     if (command === "read_file_bytes") {
@@ -209,5 +231,40 @@ describe("reading a PDF the compiler is rewriting", () => {
     expect(io.pagesAsked[2] ?? 0).toBe(0);
     expect(io.pagesAsked[3] ?? 0).toBe(0);
     expect(io.pagesAsked[4] ?? 0).toBe(0);
+  });
+
+  it("corrects a middle page the build resized under a kept measurement", async () => {
+    // Pages are near, so they render — and a render has the page in hand.
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = EveryPageNearStub;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage() {},
+    } as unknown as CanvasRenderingContext2D);
+    await mounted();
+    // The copy-region layer is sized from the RESERVED page size alone — what a
+    // remark, a markup stroke or a link box is laid out by too.
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SCREENSHOT_CAPTURE_EVENT, { detail: { claimed: false } }));
+    });
+    const layers = () => [...document.querySelectorAll<HTMLElement>(".file-viewer-pdf-copy-layer")];
+    await waitFor(() => expect(layers().length).toBe(5));
+    const scale = parseFloat(layers()[0].style.width) / 600;
+    expect(scale).toBeGreaterThan(0);
+    // The build turned page 3 landscape; the count and both end pages are as
+    // they were, so the reload keeps the measured sizes …
+    io.pageSize[3] = [800, 600];
+    io.pagesAsked = {};
+    act(() => usePdfSyncStore.getState().applyReload(PATH));
+    await waitFor(() => expect(reads()).toBe(2));
+    // … and the page's own render corrects the one that changed.
+    await waitFor(() => expect(layers()[2].style.width).toBe(`${800 * scale}px`));
+    expect(layers()[2].style.height).toBe(`${600 * scale}px`);
+    expect(layers().map((l) => l.style.width)).toEqual(
+      [600, 600, 800, 600, 600].map((w) => `${w * scale}px`),
+    );
+    // The correction is what the next reload compares against: still kept, still right.
+    act(() => usePdfSyncStore.getState().applyReload(PATH));
+    await waitFor(() => expect(reads()).toBe(3));
+    await sleep(RELOAD_SETTLE_MS);
+    expect(layers()[2].style.width).toBe(`${800 * scale}px`);
   });
 });

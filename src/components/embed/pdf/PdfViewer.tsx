@@ -606,6 +606,7 @@ function PdfPageCanvas({
   markup,
   questionPins,
   tickBadges,
+  onSize,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -620,6 +621,12 @@ function PdfPageCanvas({
    *  grows page-by-page and a deep restored scroll position is unreachable until
    *  every page above it has rendered (#viewerpos PDF restore). */
   cssSize?: { w: number; h: number };
+  /** The page's own scale-1 size turned out to differ from `cssSize`: a reload
+   *  kept the reserved sizes (same page count, same first and last page) and
+   *  this page, in the middle, was the one the build resized. Reported from the
+   *  fetch the render needs anyway, so the reservation and every layer laid out
+   *  by it (remarks, markup, copy region) follow the page as drawn. */
+  onSize?: (size: { w: number; h: number }) => void;
   /** SyncTeX reverse search: a click maps to big points on this page. */
   onSyncClick?: (page: number, xBp: number, yBp: number) => void;
   /** True while Ctrl/⌘ is held, so the page shows the reverse-search cursor. */
@@ -848,6 +855,12 @@ function PdfPageCanvas({
   // The document whose page this canvas last fetched to draw (or compare) —
   // the one a scroll-away's `cleanup()` has something to give back for.
   const touchedDoc = useRef<PDFDocumentProxy | null>(null);
+  // Read by the render effect without being among its deps: a corrected
+  // reservation must not repaint the page that corrected it.
+  const cssSizeRef = useRef(cssSize);
+  cssSizeRef.current = cssSize;
+  const onSizeRef = useRef(onSize);
+  onSizeRef.current = onSize;
 
   useEffect(() => {
     // Scrolled well away: release the backing store (keeping the reserved CSS
@@ -899,6 +912,17 @@ function PdfPageCanvas({
       if (cancelled) return;
       touchedDoc.current = doc;
       const rotation = (((page.rotate + rot) % 360) + 360) % 360;
+      // The reserved box was measured once per document, or kept across a
+      // reload whose ends did not change (`measuredRef` in the viewer); a page
+      // the build resized in between is caught here, from the page already in
+      // hand, and the viewer corrects the reservation.
+      const reserved = cssSizeRef.current;
+      if (reserved) {
+        const natural = page.getViewport({ scale: 1, rotation });
+        if (reserved.w !== natural.width || reserved.h !== natural.height) {
+          onSizeRef.current?.({ w: natural.width, h: natural.height });
+        }
+      }
       // The screen's pixel ratio, capped so one page canvas stays within
       // `PDF_MAX_CANVAS_PIXELS` at high zoom or on a poster-sized page (see
       // `raster.ts`); the canvas is still laid out at its full CSS size.
@@ -4138,6 +4162,47 @@ function PdfCanvas({
   useEffect(() => {
     measuredRef.current = null;
   }, [path, scope]);
+  // A page canvas found its page a different size from the one reserved for it
+  // (`onSize`): a reload kept the measurement because the count and the two end
+  // pages were unchanged, and this page in the middle was the one that changed.
+  // Correct the reservation — and the kept measurement, so the next reload's
+  // comparison starts from the truth. A page above the viewport that changes
+  // height would shift everything on screen by the difference; the page under
+  // the viewport's top edge is pinned where it is, through the same anchored
+  // target a zoom commit uses, unless one is already pending.
+  const correctPageSize = useCallback((i: number, size: { w: number; h: number }) => {
+    const kept = measuredRef.current;
+    if (kept && i < kept.n) {
+      measuredRef.current = { n: kept.n, sizes: kept.sizes.map((s, k) => (k === i ? size : s)) };
+    }
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (el && content && !pendingScroll.current && !zoomPreviewRef.current) {
+      const wraps = content.querySelectorAll<HTMLElement>(":scope > .file-viewer-pdf-page-wrap");
+      const er = el.getBoundingClientRect();
+      const top = er.top + el.clientTop;
+      const left = er.left + el.clientLeft;
+      const changed = wraps[i]?.getBoundingClientRect();
+      if (changed && changed.height > 0 && changed.bottom <= top) {
+        const anchor = pageAnchorAt(content, left, top);
+        if (anchor) {
+          const r = anchor.wrap.getBoundingClientRect();
+          pendingScroll.current = {
+            ...anchor,
+            cursorX: r.left + anchor.fx * r.width - left,
+            cursorY: r.top + anchor.fy * r.height - top,
+          };
+        }
+      }
+    }
+    setPageSizes((prev) => {
+      const cur = prev?.[i];
+      if (!prev || !cur || (cur.w === size.w && cur.h === size.h)) return prev;
+      const next = prev.slice();
+      next[i] = size;
+      return next;
+    });
+  }, []);
   useEffect(() => {
     if (pages.length === 0) {
       setPageSizes(null);
@@ -5238,6 +5303,7 @@ function PdfCanvas({
                     rot={ref.rot}
                     scale={scale}
                     cssSize={pageSizes?.[i]}
+                    onSize={(size) => correctPageSize(i, size)}
                     // SyncTeX only means anything for pages of the file itself: a
                     // page merged in from another PDF has no line in this source.
                     // Wired whether or not a map exists: without one the click
