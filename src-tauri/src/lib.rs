@@ -1856,6 +1856,7 @@ pub fn run() {
             commands::pdf_markup::pdf_markup_undo_preview,
             commands::pdf_markup::pdf_markup_undo,
             commands::fs::file_mtime,
+            commands::fs::file_size,
             commands::format::format_source,
             commands::format::formatter_available,
             commands::format::check_syntax,

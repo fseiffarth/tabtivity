@@ -9769,6 +9769,10 @@ function TexView({
   const compile = useCallback(async () => {
     if (compiling) return;
     setCompiling(true);
+    // The PDF this build rewrites (known from the last one) holds its mtime
+    // poll until the build is over and asks for the one reload itself below.
+    const rewriting = pdfPath;
+    if (rewriting) usePdfSyncStore.getState().beginCompile(rewriting);
     setCompileError(null);
     setErrors([]);
     setWarnings([]);
@@ -9872,10 +9876,12 @@ function TexView({
     } catch (e) {
       setCompileError(String(e));
     } finally {
+      if (rewriting) usePdfSyncStore.getState().endCompile(rewriting);
       setCompiling(false);
     }
   }, [
     compiling,
+    pdfPath,
     save,
     onSaveAll,
     path,

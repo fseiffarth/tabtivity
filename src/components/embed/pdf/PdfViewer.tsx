@@ -25,6 +25,7 @@ import {
   readFileText,
   writeFileBytes,
   fileMtime,
+  fileSize,
   describeFileErrorKey,
 } from "../fileAccess";
 import { useExperimental } from "../../../lib/experimental";
@@ -188,6 +189,44 @@ const RELOAD_POLL_MS = 1500;
  *  error, at this spacing, while the last good document stays on screen. */
 const RELOAD_RETRY_MS = 250;
 const RELOAD_MAX_RETRIES = 12;
+
+/** The stat-twice gate before a reload's read: the file's size must agree across
+ *  two stats this far apart (a compiler writes a PDF in one go, so a size that
+ *  held for this long is a finished one), for at most this many rounds before
+ *  the read goes ahead regardless and the parse retry above takes over. */
+export const RELOAD_SETTLE_MS = 300;
+const RELOAD_SETTLE_ROUNDS = 10;
+
+/** The longest a running build (`beginCompile`) holds the viewer's mtime poll:
+ *  a compile that long is not a compile, it is a window that died mid-build. */
+const PDF_COMPILE_HOLD_MAX_MS = 10 * 60_000;
+
+/**
+ * Wait until the file's size holds still across two stats `RELOAD_SETTLE_MS`
+ * apart, or `RELOAD_SETTLE_ROUNDS` have passed. A stat that fails, or a backend
+ * without the command (a test's mocked `invoke`), ends the wait at once — the
+ * read that follows carries its own retry.
+ */
+async function settledFileSize(
+  path: string,
+  scope: string | null,
+  cancelled: () => boolean,
+): Promise<void> {
+  let last: number | null = null;
+  for (let round = 0; round < RELOAD_SETTLE_ROUNDS; round++) {
+    let size: unknown;
+    try {
+      size = await fileSize(path, scope);
+    } catch {
+      return;
+    }
+    if (cancelled() || typeof size !== "number") return;
+    if (last === size) return;
+    last = size;
+    await new Promise<void>((r) => setTimeout(r, RELOAD_SETTLE_MS));
+    if (cancelled()) return;
+  }
+}
 
 /** How long after the last remark edit the file is written, when autosaving remarks
  *  is on (#pdf-notes). Long enough that writing a sentence, correcting it and moving
@@ -740,6 +779,9 @@ function PdfPageCanvas({
      *  highlight the viewer has since taken over and is now drawing itself. */
     hidden: string;
   } | null>(null);
+  // The document whose page this canvas last fetched to draw (or compare) —
+  // the one a scroll-away's `cleanup()` has something to give back for.
+  const touchedDoc = useRef<PDFDocumentProxy | null>(null);
 
   useEffect(() => {
     // Scrolled well away: release the backing store (keeping the reserved CSS
@@ -761,7 +803,14 @@ function PdfPageCanvas({
       // `cleanup()` keeps the page itself (so returning to it re-renders from the
       // file rather than reloading the document) and refuses while a render is in
       // flight, which is exactly the case this must not disturb.
-      void doc.getPage(pageNumber).then((p) => p.cleanup()).catch(() => {});
+      //
+      // Only for a document this canvas has actually drawn from: a reload hands
+      // every page a fresh document, and fetching a page this canvas never
+      // touched just to clean it was a worker round trip per page per build.
+      if (touchedDoc.current === doc) {
+        touchedDoc.current = null;
+        void doc.getPage(pageNumber).then((p) => p.cleanup()).catch(() => {});
+      }
       return;
     }
     if (!paneVisibleRef.current) {
@@ -782,6 +831,7 @@ function PdfPageCanvas({
         return;
       }
       if (cancelled) return;
+      touchedDoc.current = doc;
       const rotation = (((page.rotate + rot) % 360) + 360) % 360;
       // The screen's pixel ratio, capped so one page canvas stays within
       // `PDF_MAX_CANVAS_PIXELS` at high zoom or on a poster-sized page (see
@@ -2739,6 +2789,19 @@ function PdfCanvas({
   // routed through the stale banner when page edits are pending, exactly like
   // the poll — a reload replaces the arrangement.
   const reloadNonce = usePdfSyncStore((s) => s.reloadByPath[path] ?? 0);
+
+  // A build of this PDF is running (`beginCompile`): the mtime poll stands
+  // down until it ends — bounded, so a window that dies mid-build (its
+  // `endCompile` never arrives) cannot leave the poll off for good.
+  const compiling = usePdfSyncStore((s) => (s.compilingByPath[path] ?? 0) > 0);
+  const [compileHoldExpired, setCompileHoldExpired] = useState(false);
+  useEffect(() => {
+    setCompileHoldExpired(false);
+    if (!compiling) return;
+    const id = window.setTimeout(() => setCompileHoldExpired(true), PDF_COMPILE_HOLD_MAX_MS);
+    return () => window.clearTimeout(id);
+  }, [compiling]);
+  const compileHeld = compiling && !compileHoldExpired;
   useEffect(() => {
     if (!reloadNonce || (!doc && !error)) return;
     diskChanged(() => {
@@ -3759,8 +3822,16 @@ function PdfCanvas({
   // TeX PDF behind another tab in its group) polled an SFTP stat per tick on a
   // remote project forever. The immediate check on re-show catches a recompile
   // that happened while the tab was hidden.
+  //
+  // Held while a build of this PDF is running in a TeX editor (`beginCompile`):
+  // latexmk rewrites the file once per pass, and the poll used to read every
+  // intermediate PDF — retrying each one it caught mid-write — before the
+  // compile's own reload request at the end read the one that counts.
+  const wasCompiling = useRef(false);
   useEffect(() => {
-    if (!paneVisible) return;
+    const afterCompile = wasCompiling.current;
+    wasCompiling.current = compileHeld;
+    if (!paneVisible || compileHeld) return;
     let cancelled = false;
     const check = () => {
       fileMtime(path, scope)
@@ -3776,10 +3847,15 @@ function PdfCanvas({
         })
         .catch(() => {});
     };
-    check();
+    // Resuming after a build: its reload request (or its SyncTeX reveal) has
+    // just asked for the bytes and is recording the mtime it read them at. An
+    // immediate check here would see the same advance first and read the file
+    // a second time; the interval's first tick is soon enough for a build that
+    // ended without asking (a failed one).
+    if (!afterCompile) check();
     const id = setInterval(check, RELOAD_POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
-  }, [path, scope, paneVisible, diskChanged]);
+  }, [path, scope, paneVisible, diskChanged, compileHeld]);
 
   // Load (and reload on path / disk change) the document. pdf.js detaches the
   // backing buffer, so each load gets a fresh Uint8Array; the prior documents are
@@ -3847,6 +3923,15 @@ function PdfCanvas({
     (async () => {
       for (let attempt = 0; ; attempt++) {
         try {
+          // A recompile is caught mid-write more often than not: the mtime
+          // advances on the compiler's first write, the poll fires, and a read
+          // of a 100 MB thesis moves the whole truncated file over IPC — once
+          // per retry. So a same-path reload (and any retry) first waits for
+          // the size to hold still across two stats, and reads once.
+          if (attempt > 0 || (samePathReload && hasPrevDoc)) {
+            await settledFileSize(path, scope, () => cancelled);
+            if (cancelled) return;
+          }
           const bytes = await readFileBytes(path, scope);
           if (cancelled) return;
           // Taken before pdf.js detaches the buffer: the markup mode's size gate
@@ -3962,6 +4047,16 @@ function PdfCanvas({
   // restore deadline. getPage()/getViewport() read only page metadata (no
   // rasterisation), so this is cheap relative to actually rendering the pages.
   const [pageSizes, setPageSizes] = useState<{ w: number; h: number }[] | null>(null);
+  // The last full measurement of THIS file's own pages, in file order: a
+  // same-path reload (a recompile) with the same page count and unchanged
+  // first and last pages keeps it instead of asking the worker about every
+  // page again — on a long document that pass was the first thing between a
+  // build and its pages. Only the identity arrangement is ever kept, and never
+  // across a file switch (reset with the path below).
+  const measuredRef = useRef<{ n: number; sizes: { w: number; h: number }[] } | null>(null);
+  useEffect(() => {
+    measuredRef.current = null;
+  }, [path, scope]);
   useEffect(() => {
     if (pages.length === 0) {
       setPageSizes(null);
@@ -3982,6 +4077,19 @@ function PdfCanvas({
           });
           return { w: vp.width, h: vp.height };
         };
+        const identity = pages.every((r, i) => r.src === SELF && r.page === i + 1 && r.rot === 0);
+        const kept = measuredRef.current;
+        if (identity && kept && kept.n === pages.length && pages.length > 0) {
+          const same = (a: { w: number; h: number }, b: { w: number; h: number }) =>
+            a.w === b.w && a.h === b.h;
+          const first = await measure(pages[0]);
+          const last = pages.length > 1 ? await measure(pages[pages.length - 1]) : first;
+          if (cancelled) return;
+          if (same(first, kept.sizes[0]) && same(last, kept.sizes[kept.n - 1])) {
+            // The sizes already reserved stand; `pageSizes` is still that array.
+            return;
+          }
+        }
         // Windowed for the reason the text scan is (see `PAGE_SCAN_CONCURRENCY`):
         // this runs on every load, so on a long document it is the first thing
         // between the reader and their pages.
@@ -3992,7 +4100,9 @@ function PdfCanvas({
             sizes[i + j] = s;
           });
         }
-        if (!cancelled) setPageSizes(sizes);
+        if (cancelled) return;
+        measuredRef.current = identity ? { n: pages.length, sizes } : null;
+        setPageSizes(sizes);
       } catch {
         /* leave heights unreserved — restore falls back to the old behaviour */
       }

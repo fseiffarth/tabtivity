@@ -1857,6 +1857,38 @@ pub fn file_mtime_local(path: &str, scope_id: Option<&str>) -> Result<u64, Strin
     Ok(secs)
 }
 
+/// Return a file's size in bytes.
+///
+/// The PDF viewer's companion to `file_mtime`: before re-reading a PDF a
+/// compiler is rewriting it stats the size twice, a few hundred ms apart, and
+/// reads only once the two agree — a stat instead of a whole-file IPC read per
+/// retry of a mid-write parse. Same confinement and remote routing as the mtime.
+#[tauri::command]
+pub async fn file_size(
+    path: String,
+    project_id: Option<String>,
+    pool: tauri::State<'_, RemotePoolState>,
+) -> Result<u64, String> {
+    if let Some(pid) = project_id.as_deref() {
+        if let Some(target) = crate::services::remote::remote_target_for(pid) {
+            if !crate::services::remote_sync::is_under_mirror(pid, &path) {
+                confine_remote_abs(&target.spec.remote_path, &path)?;
+                let (size, _) = remote_metadata(pool.inner(), &target, &path).await?;
+                return Ok(size);
+            }
+        }
+    }
+    file_size_local(&path, project_id.as_deref())
+}
+
+/// Local-fs size, confined like `file_mtime_local`.
+pub fn file_size_local(path: &str, scope_id: Option<&str>) -> Result<u64, String> {
+    let p = PathBuf::from(path);
+    confine_abs_read(&p, scope_id)?;
+    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    Ok(meta.len())
+}
+
 // ── Absolute-path confinement (Security #1) ────────────────────────────────
 
 /// The set of directories the absolute-path file commands may touch for a given
