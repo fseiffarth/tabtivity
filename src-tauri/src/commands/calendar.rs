@@ -344,6 +344,15 @@ pub(crate) fn relocate_event(
     Ok(())
 }
 
+/// [`relocate_event`] for a to-do card: the server address is dropped so the
+/// next push creates the card in its new collection, and the caller deletes
+/// the old copy. A VTODO is one row per resource, so there is no series to split.
+pub(crate) fn relocate_task(task: &mut CalendarTask, to: &str) {
+    task.extra.remove(CALDAV_HREF_KEY);
+    task.extra.remove(CALDAV_ETAG_KEY);
+    task.calendar_id = to.to_string();
+}
+
 /// Move the events `ids` into calendar `to`, in **one** atomic write: either
 /// every event moves or none does, so a refusal halfway through a batch leaves
 /// no half-moved calendar behind. An event already in `to` is left alone and

@@ -1297,6 +1297,29 @@ mod tests {
         );
     }
 
+    /// `todo_update`'s `calendar` stages the same delete + address-free upsert.
+    #[test]
+    fn an_approved_card_calendar_move_retires_the_server_copy() {
+        let f = Fixture::new();
+        f.mode("off");
+        let target = f.call("root:a", "calendar_create", json!({"name":"Target"}));
+        let a = f.call("root:a", "todo_add", json!({"title":"A"}));
+        calendar::set_caldav_identity_at(&f.calendar, "task", a["id"].as_str().unwrap(), "/t.ics", "etag")
+            .unwrap();
+        f.mode("all");
+        f.call("root:a", "todo_update", json!({"id":a["id"], "calendar":target["id"]}));
+        let p = f.proposals()[0].clone();
+        let effects = f.approve(&p);
+        assert_eq!(f.proposals()[0].status, "applied");
+        assert_eq!((effects[0].kind, effects[0].op), ("task", "delete"));
+        assert_eq!(effects[0].row["caldav_href"], "/t.ics");
+        assert_eq!(effects[1].op, "upsert");
+        assert!(effects[1].row.get("caldav_href").is_none());
+        let real = data_at(&f.calendar).unwrap();
+        assert_eq!(real["tasks"][0]["calendar_id"], target["id"]);
+        assert!(real["tasks"][0].get("caldav_href").is_none());
+    }
+
     /// A reader's taint is its class: with review `off`, its additive write
     /// still stages, carries the mark, and leaves the real store untouched.
     #[test]

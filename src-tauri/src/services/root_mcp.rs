@@ -47,7 +47,7 @@ use super::root_mcp_security::{self as security, Access, Policy};
 
 use serde_json::{json, Value};
 
-use crate::schema::calendar::{add_minutes, CalendarEvent, CalendarTask};
+use crate::schema::calendar::{add_minutes, CalendarEvent, CalendarTask, Subtask};
 use crate::terminal::PtyOptions;
 
 /// The env var a root agent finds its token in. Codex reads it by name
@@ -1187,6 +1187,20 @@ fn tool_schemas() -> Value {
                             "until": { "type": "string", "description": "Last day it may fall on, \"YYYY-MM-DD\"." },
                             "count": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "Total occurrences, instead of `until`." }
                         });
+    let subtasks = json!({
+        "type": "array",
+        "description": "The card's checklist, top first; replaces the whole list. Ticking items never changes `percent`.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "An existing item's id (see todo_list), to keep it; omit for a new item." },
+                "title": { "type": "string" },
+                "done": { "type": "boolean", "description": "Default: the kept item's state, else false." }
+            },
+            "required": ["title"]
+        }
+    });
+    let percent = json!({ "type": "integer", "minimum": 0, "maximum": 99, "description": "Progress, 0–99. Use todo_complete to mark the card done." });
     let mut tools = json!([
         { "name": "proposals_list", "description": "List only this tab's proposals and whether each is pending, applied, rejected, conflicted, undone (the user reverted an automatic write) or failed (an automatic write could not be stored; propose it again). A staged write is a proposal, not a completed change.",
           "inputSchema": { "type": "object", "properties": {} } },
@@ -1327,7 +1341,7 @@ fn tool_schemas() -> Value {
         },
         {
             "name": "todo_add",
-            "description": "Add a card to the to-do board, optionally linked to a project and with a due time.",
+            "description": "Add a card to the to-do board, optionally linked to a project and with a due time, progress and a checklist.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1336,8 +1350,11 @@ fn tool_schemas() -> Value {
                     "due": { "type": "string", "description": stamp },
                     "project": { "type": "string", "description": "Project id or name to link the card to." },
                     "column": { "type": "string", "description": "Board column id or name; the first column when absent." },
+                    "calendar": { "type": "string", "description": "Calendar id or name (see calendar_list); the default calendar when absent." },
                     "tags": { "type": "array", "items": { "type": "string" } },
-                    "priority": { "type": "integer", "minimum": 0, "maximum": 9, "description": "iCalendar priority: 0 unset, 1 highest, 9 lowest." }
+                    "priority": { "type": "integer", "minimum": 0, "maximum": 9, "description": "iCalendar priority: 0 unset, 1 highest, 9 lowest." },
+                    "percent": percent,
+                    "subtasks": subtasks
                 },
                 "required": ["title"]
             }
@@ -1365,7 +1382,7 @@ fn tool_schemas() -> Value {
         },
         {
             "name": "todo_update",
-            "description": "Edit one to-do card, by id. Only the fields given change; an empty string clears `notes`, `due` or `project`, and `tags` replaces the whole list. Use todo_move for the column and todo_complete / todo_reopen for done-ness.",
+            "description": "Edit one to-do card, by id. Only the fields given change; an empty string clears `notes`, `due` or `project`, and `tags` / `subtasks` replace the whole list. Use todo_move for the column and todo_complete / todo_reopen for done-ness.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1374,8 +1391,11 @@ fn tool_schemas() -> Value {
                     "notes": { "type": "string" },
                     "due": { "type": "string", "description": stamp },
                     "project": { "type": "string", "description": "Project id or name to link the card to." },
+                    "calendar": { "type": "string", "description": "Calendar id or name to move the card to (see calendar_list)." },
                     "tags": { "type": "array", "items": { "type": "string" } },
-                    "priority": { "type": "integer", "minimum": 0, "maximum": 9, "description": "iCalendar priority: 0 unset, 1 highest, 9 lowest." }
+                    "priority": { "type": "integer", "minimum": 0, "maximum": 9, "description": "iCalendar priority: 0 unset, 1 highest, 9 lowest." },
+                    "percent": percent,
+                    "subtasks": subtasks
                 },
                 "required": ["id"]
             }
@@ -2191,16 +2211,20 @@ fn calendar_update_event(stores: &Stores, args: &Value) -> Result<(Value, Vec<Ch
 /// `caldav_href` any more, it is pushed as a create. Emitted *before* that
 /// upsert, since the window merges the two in order.
 fn server_copy_delete(before: &CalendarEvent) -> Result<Option<Change>, String> {
-    let href = before
-        .extra
-        .get(crate::commands::calendar::CALDAV_HREF_KEY)
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if href.trim().is_empty() {
+    server_copy_delete_row("event", before, &before.extra)
+}
+
+/// [`server_copy_delete`] for any row kind: `extra` is the row's own.
+fn server_copy_delete_row<T: serde::Serialize>(
+    kind: &'static str,
+    before: &T,
+    extra: &HashMap<String, Value>,
+) -> Result<Option<Change>, String> {
+    if !has_server_copy(extra) {
         return Ok(None);
     }
     let row = serde_json::to_value(before).map_err(|e| e.to_string())?;
-    Ok(Some(Change { kind: "event", op: "delete", row, local: false }))
+    Ok(Some(Change { kind, op: "delete", row, local: false }))
 }
 
 /// A calendar colour: `#rrggbb`, the only form every surface renders as itself
@@ -2376,6 +2400,63 @@ fn task_upsert(task: &CalendarTask) -> Result<(Value, Change), String> {
     Ok((task_view(task), Change { kind: "task", op: "upsert", row, local: false }))
 }
 
+/// A card's `percent` short of done: 100 is done, which only todo_complete
+/// may say, since it also stamps `completed`.
+fn parse_percent(v: &Value) -> Result<u8, String> {
+    match v.as_u64() {
+        Some(p) if p < 100 => Ok(p as u8),
+        Some(_) => Err("`percent` must be below 100; use todo_complete to mark the card done".into()),
+        None => Err("`percent` must be an integer from 0 to 99".into()),
+    }
+}
+
+/// The `subtasks` argument as a checklist, in order. An item naming one of
+/// `kept`'s ids keeps that id (and its done-ness when `done` is absent). A new
+/// item on an existing card gets an id minted the way the board mints one
+/// (`mintSubtaskId`), because `normalize`'s `{task}-{index}` backfill could
+/// land on a kept id; on a card not yet created (`task_id` empty) the backfill
+/// is safe and is left to do it.
+fn parse_subtasks(v: &Value, task_id: &str, kept: &[Subtask]) -> Result<Vec<Subtask>, String> {
+    let items = v.as_array().ok_or("`subtasks` must be an array")?;
+    let mut out: Vec<Subtask> = Vec::with_capacity(items.len());
+    for item in items {
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or("every subtask needs a non-empty `title`")?;
+        let old = item
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| kept.iter().find(|s| s.id == id))
+            .filter(|s| !out.iter().any(|o| o.id == s.id));
+        let done = match item.get("done") {
+            None | Some(Value::Null) => old.is_some_and(|s| s.done),
+            Some(d) => d.as_bool().ok_or("`subtasks[].done` must be true or false")?,
+        };
+        out.push(Subtask {
+            id: old.map(|s| s.id.clone()).unwrap_or_default(),
+            title: title.to_string(),
+            done,
+            extra: old.map(|s| s.extra.clone()).unwrap_or_default(),
+        });
+    }
+    if !task_id.is_empty() {
+        let mut n = out.len();
+        for i in 0..out.len() {
+            while out[i].id.is_empty() {
+                let id = format!("{task_id}-s{n}");
+                n += 1;
+                if !out.iter().any(|s| s.id == id) {
+                    out[i].id = id;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn todo_add(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
     let title = str_arg(args, "title").ok_or("`title` is required")?;
     let due = str_arg(args, "due").map(parse_due).transpose()?;
@@ -2402,6 +2483,10 @@ fn todo_add(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
         column,
         tags,
         priority: args.get("priority").and_then(Value::as_u64).unwrap_or(0).min(9) as u8,
+        // Empty: `normalize` files the card into the default calendar.
+        calendar_id: resolve_calendar(&data, str_arg(args, "calendar"))?,
+        percent: args.get("percent").map(parse_percent).transpose()?.unwrap_or(0),
+        subtasks: args.get("subtasks").map(|v| parse_subtasks(v, "", &[])).transpose()?.unwrap_or_default(),
         ..Default::default()
     };
     task_upsert(&crate::commands::calendar::create_task_at(stores.calendar, task)?)
@@ -2432,9 +2517,11 @@ fn todo_reopen(stores: &Stores, args: &Value) -> Result<(Value, Change), String>
     task_upsert(&crate::commands::calendar::update_task_at(stores.calendar, task)?)
 }
 
-fn todo_update(stores: &Stores, args: &Value) -> Result<(Value, Change), String> {
+fn todo_update(stores: &Stores, args: &Value) -> Result<(Value, Vec<Change>), String> {
     let id = str_arg(args, "id").ok_or("`id` is required")?;
     let mut task = find_task(stores, id)?;
+    // The row as its server holds it, for the delete a calendar move owes it.
+    let before = task.clone();
     // Present-but-empty clears; absent keeps. `str_arg` cannot tell the two apart.
     let given = |key: &str| args.get(key).and_then(Value::as_str).map(str::trim);
     if let Some(title) = given("title") {
@@ -2465,7 +2552,40 @@ fn todo_update(stores: &Stores, args: &Value) -> Result<(Value, Change), String>
         }
         task.priority = priority as u8;
     }
-    task_upsert(&crate::commands::calendar::update_task_at(stores.calendar, task)?)
+    if let Some(percent) = args.get("percent") {
+        // A done card's `percent` is what holds it in the done column; lowering
+        // it would move the card out while `completed` still says done.
+        if task.completed.is_some() || task.percent >= 100 {
+            return Err(format!("card '{id}' is done; todo_reopen it first"));
+        }
+        task.percent = parse_percent(percent)?;
+    }
+    if let Some(subtasks) = args.get("subtasks") {
+        task.subtasks = parse_subtasks(subtasks, &task.id, &before.subtasks)?;
+    }
+    if let Some(calendar) = given("calendar") {
+        if calendar.is_empty() {
+            return Err("`calendar` cannot be empty; name the calendar to move the card to".into());
+        }
+        let data = crate::commands::calendar::read_data(stores.calendar)?;
+        let to = resolve_calendar(&data, Some(calendar))?;
+        if to != task.calendar_id {
+            // As for an event: the window would refuse the CalDAV delete a move
+            // out of a read-only calendar owes.
+            if data.calendars.iter().any(|c| c.id == task.calendar_id && c.readonly) {
+                return Err(format!("card '{id}' is in a read-only calendar"));
+            }
+            crate::commands::calendar::relocate_task(&mut task, &to);
+        }
+    }
+    let moved = before.calendar_id != task.calendar_id;
+    let (view, upsert) = task_upsert(&crate::commands::calendar::update_task_at(stores.calendar, task)?)?;
+    let mut changes = Vec::new();
+    if moved {
+        changes.extend(server_copy_delete_row("task", &before, &before.extra)?);
+    }
+    changes.push(upsert);
+    Ok((view, changes))
 }
 
 /// A move can change more than the card it names (a column reindex), so every
@@ -3132,7 +3252,7 @@ fn call_store_tool(stores: &Stores, name: &str, args: &Value) -> Result<(Value, 
         "todo_add" => wrote(todo_add(stores, args)),
         "todo_complete" => wrote(todo_complete(stores, args)),
         "todo_reopen" => wrote(todo_reopen(stores, args)),
-        "todo_update" => wrote(todo_update(stores, args)),
+        "todo_update" => todo_update(stores, args),
         "todo_move" => todo_move(stores, args),
         "todo_delete" => wrote(todo_delete(stores, args)),
         "time_summary" => time_summary(stores, args).map(|v| (v, Vec::new())),
@@ -4465,6 +4585,98 @@ mod tests {
         }
         let (r, _) = f.call("todo_list", json!({}));
         assert_eq!(text(&r)["cards"][0]["title"], "Final", "a refused edit wrote nothing");
+    }
+
+    /// Every field the card dialog edits is reachable: calendar, progress and
+    /// the checklist too, not only the title-row fields.
+    #[test]
+    fn a_card_takes_its_calendar_progress_and_checklist() {
+        let f = Fixture::new();
+        f.call("calendar_create", json!({ "name": "Work" }));
+        let (r, _) = f.call("todo_add", json!({
+            "title": "Plan", "calendar": "Work", "percent": 40,
+            "subtasks": [{ "title": "Outline" }, { "title": "Draft", "done": true }],
+        }));
+        assert_eq!(r["isError"], false, "{r}");
+        let card = text(&r);
+        let id = card["id"].as_str().unwrap().to_string();
+        let work = card["calendar_id"].clone();
+        assert_ne!(work, "default");
+        assert_eq!(card["percent"], 40);
+        let steps = card["subtasks"].clone();
+        assert_eq!((steps[0]["title"].clone(), steps[0]["done"].clone()), (json!("Outline"), json!(false)));
+        assert_eq!(steps[1]["done"], true);
+        let outline = steps[0]["id"].as_str().unwrap().to_string();
+        let draft = steps[1]["id"].as_str().unwrap().to_string();
+
+        // The list is replaced as given: a kept id keeps its tick unless told,
+        // a dropped item goes, and a new one gets an id no kept item holds.
+        let (r, change) = f.call("todo_update", json!({
+            "id": id, "percent": 60,
+            "subtasks": [{ "id": draft, "title": "Draft v2" }, { "title": "Review" }, { "title": "Ship" }],
+        }));
+        assert_eq!(r["isError"], false, "{r}");
+        assert_eq!(change.len(), 1);
+        let card = text(&r);
+        assert_eq!(card["percent"], 60);
+        let steps = card["subtasks"].as_array().unwrap().clone();
+        assert_eq!(steps.len(), 3);
+        assert_eq!((steps[0]["id"].as_str().unwrap(), steps[0]["title"].clone(), steps[0]["done"].clone()), (draft.as_str(), json!("Draft v2"), json!(true)));
+        let ids: std::collections::HashSet<_> = steps.iter().map(|s| s["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(ids.len(), 3, "ids stay unique: {steps:?}");
+        assert!(!ids.contains(&outline), "the dropped item is gone");
+
+        f.call("calendar_create", json!({ "name": "Home" }));
+        let (r, change) = f.call("todo_update", json!({ "id": id, "calendar": "Home" }));
+        assert_eq!(r["isError"], false, "{r}");
+        assert_ne!(text(&r)["calendar_id"], work);
+        assert_eq!(change.len(), 1, "an unsynced card owes no server delete");
+
+        for bad in [
+            json!({ "id": id, "percent": 100 }),
+            json!({ "id": id, "percent": -1 }),
+            json!({ "id": id, "subtasks": [{ "title": " " }] }),
+            json!({ "id": id, "subtasks": "x" }),
+            json!({ "id": id, "calendar": "" }),
+            json!({ "id": id, "calendar": "nowhere" }),
+        ] {
+            let (r, change) = f.call("todo_update", bad.clone());
+            assert_eq!(r["isError"], true, "{bad}");
+            assert!(change.is_empty(), "{bad}");
+        }
+        let (r, _) = f.call("todo_add", json!({ "title": "x", "percent": 100 }));
+        assert_eq!(r["isError"], true);
+
+        // A done card's progress is its done-ness: reopen first.
+        f.call("todo_complete", json!({ "id": id, "completed_at": "2026-09-17T12:00" }));
+        let (r, _) = f.call("todo_update", json!({ "id": id, "percent": 50 }));
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("todo_reopen"));
+    }
+
+    /// As for an event: a synced card moved to another calendar retires its
+    /// server copy first and arrives with no address to `PUT` back to.
+    #[test]
+    fn moving_a_synced_card_deletes_the_server_copy_first() {
+        let f = Fixture::new();
+        f.call("calendar_create", json!({ "name": "Work" }));
+        let id = add_card(&f, "Synced");
+        let mut data = crate::commands::calendar::read_data(&f.calendar).unwrap();
+        let task = data.tasks.iter_mut().find(|t| t.id == id).unwrap();
+        task.extra.insert("caldav_href".into(), json!("/cal/personal/t.ics"));
+        task.extra.insert("caldav_etag".into(), json!("\"e1\""));
+        std::fs::write(&f.calendar, serde_json::to_string(&data).unwrap()).unwrap();
+
+        let (_, changes) = f.call("todo_update", json!({ "id": id, "calendar": "Work" }));
+        let [delete, upsert] = changes.as_slice() else { panic!("two rows: {changes:?}") };
+        assert_eq!((delete.kind, delete.op), ("task", "delete"));
+        assert_eq!(delete.row["calendar_id"], "default");
+        assert_eq!(delete.row["caldav_href"], "/cal/personal/t.ics");
+        assert_eq!((upsert.kind, upsert.op), ("task", "upsert"));
+        assert!(upsert.row.get("caldav_href").is_none() && upsert.row.get("caldav_etag").is_none(), "{}", upsert.row);
+
+        // An edit that stays put keeps the address.
+        let (_, changes) = f.call("todo_update", json!({ "id": id, "calendar": "Work", "title": "Still" }));
+        assert_eq!(changes.len(), 1);
     }
 
     #[test]
