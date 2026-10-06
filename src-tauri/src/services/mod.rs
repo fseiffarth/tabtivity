@@ -210,3 +210,5 @@ pub mod window_state;
 pub mod worker_sync;
 
 pub mod text_completion;
+// One FIFO worker thread: the state-file commands' way off the GTK thread.
+pub mod ordered_lane;

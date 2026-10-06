@@ -88,13 +88,26 @@ where
     // a second Tabtivity process patching the same file (#171's lesson applied
     // to every read-modify-write here).
     let _file_lock = FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
-    let mut value = if path.exists() {
-        read_json(path).map_err(|e| e.to_string())?
+    // The bytes as read, kept to tell a patch that changed nothing from one
+    // that did. A missing file has none, so its first patch always writes.
+    let (mut value, on_disk) = if path.exists() {
+        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        (value, Some(content))
     } else {
-        default
+        (default, None)
     };
     let result = patch(&mut value)?;
-    write_json_atomic_unlocked(path, &value).map_err(|e| e.to_string())?;
+    let bytes = atomic_json_bytes(&value).map_err(|e| e.to_string())?;
+    // A patch that leaves the file byte-for-byte as it is costs no rewrite and
+    // no fsync pair: `get_projects` patches on every read and the layout
+    // autosave re-sends unchanged state, both many times a minute. A file in
+    // another layout (hand-edited, written by `write_json`) differs in bytes
+    // and is still rewritten, exactly as before.
+    if on_disk.as_deref().map(str::as_bytes) == Some(bytes.as_slice()) {
+        return Ok(result);
+    }
+    write_bytes_atomic_unlocked(path, &bytes).map_err(|e| e.to_string())?;
     Ok(result)
 }
 
@@ -107,6 +120,21 @@ fn write_json_atomic_unlocked<T>(path: &Path, value: &T) -> Result<(), Box<dyn s
 where
     T: serde::Serialize,
 {
+    write_bytes_atomic_unlocked(path, &atomic_json_bytes(value)?)
+}
+
+/// The exact bytes an atomic write puts on disk for `value`: pretty JSON and a
+/// trailing newline. [`patch_json`] compares them with what it read.
+fn atomic_json_bytes<T>(value: &T) -> Result<Vec<u8>, serde_json::Error>
+where
+    T: serde::Serialize,
+{
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn write_bytes_atomic_unlocked(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -116,8 +144,7 @@ where
     // never rename or truncate one another's staging file.
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
-    serde_json::to_writer_pretty(staged.as_file_mut(), value)?;
-    staged.as_file_mut().write_all(b"\n")?;
+    staged.as_file_mut().write_all(bytes)?;
     staged.as_file_mut().sync_all()?;
     durability::record(DurabilityStep::FileSynced, staged.path());
     staged.persist(path)?;
@@ -931,6 +958,64 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+    }
+
+    /// What identifies one written file: a rewrite goes through a fresh temp
+    /// file, so the inode moves even when the clock is too coarse to move mtime.
+    #[cfg(unix)]
+    fn file_identity(path: &Path) -> (u64, std::time::SystemTime) {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(path).unwrap();
+        (meta.ino(), meta.modified().unwrap())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn patch_json_skips_the_write_when_nothing_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("list.json");
+        // A missing file is created even by a patch that changes nothing.
+        patch_json(&path, vec![1_u32, 2], |_| Ok(())).unwrap();
+        assert_eq!(read_json::<Vec<u32>>(&path).unwrap(), vec![1, 2]);
+        let before = file_identity(&path);
+        let steps = durability::steps_under(dir.path()).len();
+
+        let seen = patch_json(&path, Vec::<u32>::new(), |values| Ok(values.len())).unwrap();
+        assert_eq!(seen, 2, "the patch still runs and answers");
+        assert_eq!(file_identity(&path), before, "a no-op patch rewrote the file");
+        assert_eq!(durability::steps_under(dir.path()).len(), steps, "a no-op patch fsynced");
+
+        patch_json(&path, Vec::<u32>::new(), |values| {
+            values.push(3);
+            Ok(())
+        })
+        .unwrap();
+        assert_ne!(file_identity(&path).0, before.0, "a real patch must replace the file");
+        assert_eq!(read_json::<Vec<u32>>(&path).unwrap(), vec![1, 2, 3]);
+        assert_eq!(
+            durability::steps_under(dir.path()).len(),
+            steps + 3,
+            "a real patch keeps the synced → persisted → dir-synced order",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn patch_json_rewrites_a_file_in_another_layout() {
+        // Same value, different bytes (compact, no trailing newline — what a
+        // hand edit or `write_json` leaves): normalised as it always was.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("map.json");
+        fs::write(&path, r#"{"b":1,"a":[2]}"#).unwrap();
+        let before = file_identity(&path);
+        patch_json(&path, serde_json::Value::Null, |_| Ok(())).unwrap();
+        assert_ne!(file_identity(&path).0, before.0);
+        let value: serde_json::Value = read_json(&path).unwrap();
+        assert_eq!(value, serde_json::json!({ "b": 1, "a": [2] }));
+        // …and from then on an unchanged patch leaves it alone.
+        let settled = file_identity(&path);
+        patch_json(&path, serde_json::Value::Null, |_| Ok(())).unwrap();
+        assert_eq!(file_identity(&path), settled);
     }
 
     #[test]

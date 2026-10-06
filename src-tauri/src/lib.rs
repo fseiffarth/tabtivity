@@ -1352,7 +1352,8 @@ pub fn run() {
             restore_main_window(_app);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        // The state-file commands run on an ordered worker, not the GTK thread.
+        .invoke_handler(commands::persist_lane::ordered(tauri::generate_handler![
             // Settings
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -2147,7 +2148,7 @@ pub fn run() {
             commands::spell::spell_dictionaries,
             commands::spell::spell_install_language,
             commands::spell::spell_remove_language,
-        ])
+        ]))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())
@@ -2239,6 +2240,9 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                // Saves the window sent on its way out are still queued on the
+                // ordered worker; let them land before anything is torn down.
+                commands::persist_lane::drain_at_exit();
                 // Old-name lookups counted since the last write (nothing
                 // while the app's name is unchanged).
                 services::brand_migration::hits::flush();
