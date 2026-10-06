@@ -169,3 +169,145 @@ the range touches no TS) · `cargo clippy --all-targets -D warnings` clean ·
   close handler until the user kills the window. Not seen; left as is.
 - The implementer's section has no "Gates (worktree)" table; the counts
   above stand in for it.
+
+## S2 — PDF render + reload
+
+*Written 2026-10-07 by the S2 implementer. Base `c633b0b4`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `45472270` | §4.1 Ctrl+wheel zoom previewed with a CSS transform, rasterised and persisted once per gesture (`PDF_ZOOM_COMMIT_MS` 120 ms) |
+| `3261bc4a` | §4.2 hidden pane keeps painted pages for `PDF_PAGE_RELEASE_MS` (30 s); `rootMargin` 150 % → 100 %; a document that changed while hidden is painted on show |
+| `6ce389d5` | §4.4 size-settled reload (`file_size` command), poll held during a TeX build (`beginCompile`/`endCompile`), page-size pass skipped on an unchanged reload, no per-page `cleanup()` fetch on a fresh document |
+
+### What was built / choices made
+- **§4.1:** `scale` stays the one committed zoom (layout, layers, persist,
+  find-bar and link math all read it). A wheel tick writes a `ZoomPreview`
+  (`{scale, originX, originY}`) and re-arms a 120 ms timer; the page stack
+  gets `transform: scale(preview/scale)` with `transform-origin` at the
+  cursor's stack coordinate measured on the gesture's first tick (later ticks
+  keep it — the stack is already transformed). The cursor-anchored
+  `pendingScroll` is computed against the committed scale and overwritten per
+  tick; the existing ResizeObserver applies it when the stack relays out at
+  the commit, in the same React commit that removes the transform. `+`/`−`
+  commit a pending preview first; `fitWidth` drops one. The toolbar % shows the
+  preview. Persist is untouched: its effect depends on `scale`, which only
+  moves at the commit.
+- **§4.2:** `PdfPageCanvas` reads `usePaneVisible()` through a ref (so a tab
+  flip re-runs nothing). The observer callback: intersecting → `near=true`
+  (and cancel a hold); not intersecting while the pane is hidden → a 30 s
+  timer that sets `near=false`; not intersecting while visible → release at
+  once. On show the engine reports again, so a page the pane is no longer near
+  is released then. The render effect returns early when the pane is hidden
+  (`hiddenStale`); a `catchUp` counter re-runs it on show, where the
+  fingerprint decides whether the pixels can stay. No `paneVisible` in the
+  render effect's deps on purpose: that would re-fingerprint every near page
+  on every tab switch (`getOperatorList` is the parse half of a render).
+- **§4.4, stat gate:** a new backend command `file_size` (`commands/fs.rs`,
+  registered in `lib.rs`; local + remote via `remote_metadata`, confined like
+  `file_mtime`) and `fileSize()` in `embed/fileAccess.ts`. `settledFileSize`
+  stats until two stats 300 ms apart agree (≤ 10 rounds), on same-path reloads
+  with a document on screen and on every parse retry; a failing or unknown
+  command (tests' mocked `invoke` answers `null`) ends the wait at once. A
+  first open reads immediately. `file_mtime` is whole seconds, so it could not
+  carry this — the plan's "stat twice" needed the size.
+- **§4.4, compile hold:** the existing compile → PDF linkage is the
+  `pdfSync` store (`requestReload` / `requestReveal(afterReload)` after a
+  build); it was extended with `compilingByPath` + `beginCompile`/`endCompile`
+  (+ `PDF_COMPILE_EVENT` across windows, registered in `listenPdfReveal`).
+  `TexView.compile` marks the PDF it will rewrite (the previous build's
+  `pdfPath`; the first build of a session has none and is not held) and
+  releases it in `finally`. The viewer's mtime poll effect returns while held
+  and, on resuming, skips its immediate check (the build's reload request is
+  recording the mtime it read at — an immediate check would read the file a
+  second time); the interval's first tick covers a build that ended without
+  asking. The hold is bounded at 10 min (`PDF_COMPILE_HOLD_MAX_MS`) so a window
+  that dies mid-build cannot leave the poll off.
+- **§4.4, metadata pass:** `measuredRef` keeps the last full measurement of the
+  identity arrangement; a reload with the same count measures page 1 and N and
+  keeps the array when both match. Reset on `path`/`scope` change — never kept
+  across a file switch. Found while testing: the render effect's not-near
+  branch fetched `doc.getPage(n)` on every fresh document for every page just
+  to `cleanup()` it — one worker round trip per page per build. Now only for
+  a document the canvas actually drew from (`touchedDoc`).
+
+### Gotchas for later steps
+- **S3 (hidden PDF release / viewPos seeding):** `PdfPageCanvas` now holds
+  `near=true` for 30 s after its pane hides and defers a hidden repaint to
+  `catchUp` on show. An unmount/remount of the viewer (the plan's suggested
+  shape) clears all of that naturally. If S3 instead destroys the document in
+  place, note `touchedDoc` (compared by `PDFDocumentProxy` identity) and
+  `measuredRef` (reset only on path/scope change — a destroyed-and-reloaded
+  same-path document will hit the first/last skip, which is correct).
+  `zoomPreview` holds a window timer; unmount clears it. `compileHeld` gates
+  the poll alongside `paneVisible`; a hidden viewer never polls anyway.
+- The viewer's `scale` state is the committed zoom; `zoomPreview?.scale ??
+  scale` is what the reader sees. Anything S3 persists at release time should
+  use `scale` (a preview is never persisted).
+- The pdfSync store's `compilingByPath` count must be balanced: any new
+  compile path (phone-triggered builds, a future `compile_tex` caller) must
+  call `endCompile` in a `finally`.
+- Tests mounting `PdfView` need a 2D context to exercise the render path
+  (`vi.spyOn(HTMLCanvasElement.prototype, "getContext")` returning
+  `{ drawImage() {} }`); `PdfMarkupViewer.test.tsx` returns `null` on purpose.
+  An `IntersectionObserver` stub must be installed before mount — `near`'s
+  initial value is decided at mount.
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles) |
+| `npm test` | 731 files / 7520 tests passed (S1: 728 / 7507; +3 files, +13 tests) |
+| `cargo test -q` | 3722 passed, 0 failed |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing, unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+### Flagged for user
+- The step touched two files the brief did not list: `src-tauri/src/commands/fs.rs`
+  + `src-tauri/src/lib.rs` (the `file_size` command — `file_mtime` is whole
+  seconds and cannot gate a 300 ms settle) and `src/stores/viewers/pdfSync.ts`
+  (the compile hold; this IS the existing compile → PDF linkage, extended).
+  `lib.rs` is modified in the main checkout by another session: the change here
+  is one line in the `generate_handler!` list next to `file_mtime`.
+- `FileViewerPane.tsx`: besides nothing in `onCompiled` itself, three small
+  hunks inside `TexView.compile` (lines ~9770 and ~9880: `beginCompile` at the
+  start, `endCompile` in `finally`, `pdfPath` in the deps) — inside the
+  9602–10098 region the brief warned about. They are the only place the compile's
+  START is known; `onCompiled` fires only at its end, and the end was already
+  wired (`requestReload`/`requestReveal`). Expect a trivial merge conflict there.
+- Plan §4.1's "fingerprint op-list runs again on each success" is per zoom
+  commit, not per tick, after this step; it still runs once per near page per
+  commit (`finalFp`). Not changed — it is what makes a recompile's unchanged
+  pages keep their pixels.
+- The CSS preview is a `transform: scale()` on the whole `.file-viewer-pdf-pages`
+  stack. On the WebKitGTK software path this is a layer scale of the painted
+  canvases; it was not measured live. If it stutters, the alternative is a
+  per-page `transform` (same math, one origin per wrap). A transform does not
+  change layout, so during the ≤ 120 ms preview the scroll range is the old one
+  (a zoom-out shows a blank band at the bottom until the commit).
+- §4.2's hidden-pane repaint gate means a recompile while a PDF tab is hidden
+  paints on the next show, not before (one fingerprint per near page then).
+- No Rust unit test for `file_size_local`: it is `file_mtime_local` with
+  `meta.len()`, and the confinement it calls has no test fixture in `fs.rs`.
+- Not done from the plan text: nothing in §4.4 named `onCompiled` needed changing.
+
+### Live click-through (user)
+1. Open a dense PDF, Ctrl+wheel five notches quickly: the page scales under the
+   cursor at once (slightly soft), sharpens ~120 ms after the last notch, the
+   point under the cursor stays put, the % label follows every notch. Text
+   selection and link boxes line up after it sharpens. `+`/`−`/Fit width
+   behave as before.
+2. Switch from the PDF tab to a terminal and back within a few seconds: the
+   pages are there instantly, no blank-then-paint. Leave it hidden > 30 s and
+   come back: pages repaint (as before).
+3. In a TeX workspace, Compile a document whose PDF is open: the PDF reloads
+   once at the end of the build; during a multi-pass latexmk run the page does
+   not flicker through intermediate builds. A build that fails leaves the old
+   PDF; a later change outside Tabtivity (e.g. `latexmk` in a shell) still
+   reloads within ~2 s.
+4. `strace -e trace=read -p <app pid>` is overkill; cheaper: watch the
+   renderer's RSS during a build of a large PDF — it should not climb by a file
+   size per retry.
