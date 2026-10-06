@@ -3459,43 +3459,7 @@ cover what it touched.
 
 ## Open points (2026-10-05)
 
-*Collected after the final fix round; nothing below has been run live. Every
-phase is code-complete on `hosted` (`f3efd50b..b07779bd`, 212 commits).*
-
-### Decisions the user still owes
-
-- **`open_external_url` in the Connect window** — keep or drop (#2387).
-
-### Work left
-
-- **Merge** `develop` → `hosted` → `develop` (#2386). `develop` already has
-  #2339 and the desktop agent API keys (`api_proxy`), which must be
-  reconciled with the server keeper and key broker; the root-MCP lane needs
-  the model allowlist.
-- **`src-tauri/gen/schemas/macOS-schema.json`** — commit or ignore (#2388).
-- **Lint warnings** — 31 pre-existing on `develop`; fix there, then
-  `--max-warnings 0` (#2385).
-- **Still deferred from the phases:** phone push for windowless turn edges
-  (#2384), a second page re-typing a shared-PTY tab's launch input (#2358),
-  the rest of the gateway/helper security review and a gateway body cap
-  (#2353), Connect's Rust enrol/release half (#2379), hub GC and quotas
-  (#2372), shared-calendar headless views (#2369), presence chip and "no
-  longer shared" pill (#2367, #2373), an agent's push through a proxy
-  (#2368), shared to-do column order (#2370), Codex never gets the admin key
-  (#2359, decided).
-
-### Admin note
-
-- Removing a user does not rotate a directly delivered admin key: their
-  saved copy keeps working and counts as their own login once they are off
-  the list. Replace the key when removing someone who used it (now in
-  `DOCUMENTATION.md` § the administrator's agent API keys).
-
-### Live runs owed (each section's "Live steps")
-
-P2 localhost browser client (start here; checks 5 changed after #2347), P3
-two-account server (#2357, `sudo scripts/server-isolation-test.sh alice
-bob`), P3 part 2 / vault / mail re-key steps, P3b (#2363, #2365), P4
-(#2366), key broker (#2377), OIDC (#2378), Connect (#2379), rootless Podman
-(#2380), worktree review gate (#2381), and the 15 steps of the final fix
-round. UntestedTag rows stay until the user says an item is tested.
+Moved to [`server.md`](server.md) (2026-10-06), the server version's front
+door: status, every user decision in one list, open problems (incl. #2389,
+the desktop vs server agent-API-key overlap) and open decisions, and the
+order of the live runs. Keep them there, not here.

@@ -885,18 +885,16 @@ the desktop groundwork the hosted plan's P1 builds on.*
     `develop` has moved ~145 commits past the branch base `f3efd50b` and
     already holds #2339 (root MCP lanes served from the Mobile host,
     `55dec5b2`; the markup lane stays window-only) and the desktop agent API
-    keys (`b0143c80`: keychain key, loopback `api_proxy`, per-tab tokens,
-    monthly USD limit). At the merge: resolve the ~11 conflicts the final
-    review previewed (B14, `root_mcp.rs`, `terminal/mod.rs`, `tmux_local.rs`,
-    `commands/agents.rs`, `services/mod.rs`, docs); wire the root-MCP
-    local-model lane into `model_allowlist::check_model` (the `TODO(#2339)`
-    in `model_allowlist.rs`); give every new develop command a class row, the
+    keys (`b0143c80`, settled in #2389 first). At the merge: resolve the ~11
+    conflicts the final review previewed (B14, `root_mcp.rs`,
+    `terminal/mod.rs`, `tmux_local.rs`, `commands/agents.rs`,
+    `services/mod.rs`, docs); wire the root-MCP local-model lane into
+    `model_allowlist::check_model` (the `TODO(#2339)` in
+    `model_allowlist.rs`); give every new develop command a class row, the
     `cfg_attr(feature = "desktop", tauri::command)` attribute and `Ctx`
-    (AGENTS.md); decide how the desktop `api_proxy` and the server keeper /
-    key broker (P3b, P5) relate — two key paths for the same CLIs must not
-    both apply on a server; renumber TODOs if `develop` reused 2350+. Run
-    every gate incl. the Windows/macOS all-targets checks before
-    `hosted` → `develop`. (Open points, 2026-10-05.)
+    (AGENTS.md); renumber TODOs if `develop` reused 2350+. Run every gate
+    incl. the Windows/macOS all-targets checks before `hosted` → `develop`.
+    (Open points, 2026-10-05.)
 
 2387. **Decide `open_external_url` in the Connect window.** The final fix
     round narrowed the Connect window to its socket bridge, clipboard,
@@ -911,3 +909,23 @@ the desktop groundwork the hosted plan's P1 builds on.*
     tracked, this one is not (left untracked in the `hosted` worktree).
     Commit it beside them, or add it to `.gitignore` so cross-checks stop
     leaving it behind. (Open points, 2026-10-05.)
+
+2389. **One agent-API-key path per CLI on a server (desktop keys vs admin keys).**
+    `develop`'s desktop agent API keys (`b0143c80`, `docs/api_chat_plan.md`
+    Part A: a key per provider in the OS keychain, the loopback
+    `services::api_proxy` handing each tab a token in `ANTHROPIC_AUTH_TOKEN`
+    + `ANTHROPIC_BASE_URL`, a monthly USD limit from `api_prices`) and this
+    branch's admin keys (keeper; Claude via `apiKeyHelper`) plus key broker
+    (`ANTHROPIC_BASE_URL` → `127.0.0.1:8739`, token budgets) both decide
+    which credential an agent runs on. Collisions: both set Claude's base
+    URL; the server's "never both" logic (own login vs admin key) ignores a
+    user's own keychain key; the server daemon has no OS keychain (the
+    `desktop` feature is off), so `api_proxy` cannot store a key there as
+    built; the budgets count in USD vs tokens; `api_proxy` adds a loopback
+    listener per daemon that the §4.4 inventory must cover. Decide (user):
+    on a server, may a user also bring their own key, and through which
+    path; then extend one mechanism rather than keep two (user rule "no
+    redundant variants") — e.g. the desktop `api_proxy` as the one
+    per-tab token path with the keeper/broker as its key source on a
+    server, one budget model, one Manage CLIs control. Before or during
+    #2386. (Open problems, `docs/server.md`, 2026-10-06.)

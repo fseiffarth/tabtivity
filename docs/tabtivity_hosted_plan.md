@@ -1,6 +1,9 @@
 # Tabtivity Hosted — one server, several users, desktop and phone as thin clients
 
-*Plan only. Nothing here is implemented. The desktop-side groundwork (the
+*Status, the user's decisions and open points: [`server.md`](server.md).
+All phases are built on branch `hosted` (2026-10-06, unmerged, never run
+live); the build log is [`hosted_handoff.md`](hosted_handoff.md). The text
+below is the design as planned. The desktop-side groundwork (the
 headless owner, P1) is split out into
 [`headless_owner_plan.md`](headless_owner_plan.md). Written 2026-09-29 against the tree at
 `1441eb0e`, and revised the same day, against `923e0202`, after three

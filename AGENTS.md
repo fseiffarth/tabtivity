@@ -76,6 +76,8 @@ tool is unavailable, say so — never skip silently.
   multi_host_remote, openvpn, project_boxes, project_transfer,
   release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console, server_gateway, sharing,
   tmux_sessions, usage_stats, vm_projects, web_client.
+- Server version (hosted plan, gateway, daemon, sharing): start at
+  `docs/server.md` — status, the user's decisions, open problems, doc map.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
 - Updating a wrapped third-party tool: `docs/third_party_update_checklist.md`.
 - New TODOs go in the matching `todo/<group>.md`. A 🖐️ manual box gets a
