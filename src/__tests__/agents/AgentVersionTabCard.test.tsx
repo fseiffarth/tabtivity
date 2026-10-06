@@ -118,9 +118,9 @@ describe("agent tab version card", () => {
     render(<TerminalVersionCard host={a} cmd="claude" />);
     await waitFor(() => expect(a.textContent).toContain("2.1.290"));
 
-    mockVersions([report({ version: "2.1.291" })]);
+    mockVersions([report({ version: "2.1.299" })]);
     act(() => window.dispatchEvent(new Event("focus")));
-    await waitFor(() => expect(a.textContent).toContain("2.1.291"));
+    await waitFor(() => expect(a.textContent).toContain("2.1.299"));
     expect(a.textContent).not.toContain("2.1.290");
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "agent_versions")).toHaveLength(2);
   });

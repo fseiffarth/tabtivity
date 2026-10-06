@@ -192,7 +192,14 @@ Claude's `/fast` — different thing.
   `--permission-mode manual` reported as `default`; new and unread:
   `prompt_id` on every event but SessionStart, Stop `session_crons`, a resume
   start `estimated_cache_write_usd` and `prompt_cache_likely_expired`; the
-  hook's `sed` extractions match `jq` on every payload). That probe unset only
+  hook's `sed` extractions match `jq` on every payload). Re-checked against
+  2.1.291 (2026-10-06, live, the same dump with both `*_TAB_UID` names unset:
+  identical keys on all six events; `-p --resume` does not restore `plan`, the
+  2.1.290 plan restore is terminal-only, so `agent_session`'s re-applied mode
+  stays needed; `/usage` parsed into three meters, resets resolved; the
+  binary still carries the three notification types and six modes; 2.1.290's
+  `❯` on the selected `/`/`@` suggestion row does not trip `POINTER_WORD`,
+  which needs a bare word right after the glyph). That probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
   counted no `claude` — the `--resume` took the record again, emptying the
