@@ -107,3 +107,65 @@ Section template:
    than before (§7.3 + §7.2).
 5. Quit with unsaved layout changes made in the last second: layout restored
    on next launch (lane drain at exit).
+
+### Review (S1 reviewer, 2026-10-07)
+Range `be7260da..c9a339f1` (`2857a41a`, `ecb98708`, `8440c3a8` + handoff).
+**No bugs confirmed; no code commits.** Checked and found sound:
+- Lane wrapper: non-lane commands pay one 10-entry string scan, no
+  allocation, no blocking; a lane command's body runs unchanged and answers
+  through Tauri's thread-safe resolver (the same path async commands use).
+  The worker is spawned once (lazily, under the sender mutex); `drain` posts
+  a sentinel and waits ≤ 5 s on the main thread at `RunEvent::Exit`.
+- Quit: `AppShell.onCloseRequested` awaits `save_window_state`, the layout
+  flush and `shutdownDetachedWindows` before `destroy()`, so those saves are
+  on disk before Exit; the drain only covers the exits that never run
+  frontend code (SIGTERM → `app.exit`). No lane command needs the main
+  thread (`workspace_sync`'s emit posts to the event-loop proxy without
+  waiting; `invalidate_copilot` → `stop_all_now` is non-blocking).
+- No deadlock: lane jobs take `JSON_MUTATION_LOCK` + the file lock, which
+  the main thread never holds while waiting on the lane. A panicking job is
+  caught; the lane continues, that one promise never settles (Tauri's own
+  async commands behave the same on panic). Read-after-write holds:
+  `get_projects` after `save_projects` from the same window is FIFO.
+- `patch_json`: compares `to_vec_pretty` + `\n`, the exact bytes
+  `write_bytes_atomic_unlocked` writes; both locks still release on the skip;
+  legacy normalisation (`get_projects`) still rewrites since its bytes differ;
+  `patch_settings`/`save_window_state` bump `rev` and never no-op.
+  `services::remote`'s `(mtime, len)` projects cache stays consistent (same
+  bytes, same stamp).
+- `agent_auth` gate: a stamp is recorded only when every mtime is ≥ 3 s old,
+  so an equal-length rewrite lands ≥ 3 s after the recorded mtime — distinct
+  on any filesystem with ≤ 2 s granularity; `symlink_metadata` means a
+  symlink swapped in stats differently; unix adds dev/ino/ctime. A pair is
+  cached only when `reconcile_file_now` wrote nothing and found home == store
+  — adoption, refusal and placement all take the full path, so logins stay
+  shared per CLI. Test `an_unchanged_login_is_not_read_again` counts full
+  passes through a thread-local, so it does exercise the gate.
+- `descendant_pids_relaxed`: keyed per sorted root set; a 1.5–4 s-old entry
+  now survives `retain` but the default lookup still recomputes past 1.5 s
+  (`relaxed_lookup_reuses_an_entry_the_default_would_recompute`). Neither
+  cache holds its mutex across the `/proc` walk or the GPU read.
+- Cross-OS: `cargo check --target x86_64-pc-windows-msvc` (RC/lib shims)
+  passes; the range has no macOS-only code.
+
+Gates after (worktree, 2026-10-07): `npm run build` ok · `cargo test -q`
+3722 passed, 0 failed · `npm run lint` 0 errors, 28 warnings (pre-existing;
+the range touches no TS) · `cargo clippy --all-targets -D warnings` clean ·
+`scripts/brand-check.sh` ok · `git diff --check` clean · `npm test` not run
+(no frontend change in the range).
+
+**Flagged for user**
+- Ordering against non-lane sync commands is gone (as the plan's own
+  `command(async)` form would also lose it). Concrete shape: a `void
+  setActive()` / `updateSettings()` followed at once by a sync command that
+  reads `projects.json` (`fs.rs` `allowed_roots` with no scope, `boxes.rs`,
+  `project_runtime.rs`) or `settings.json` (`ide.rs`, `browser.rs`,
+  `mail.rs`, `ollama.rs`) can read the pre-save file while the lane is mid-
+  fsync. `save_projects` merges status/position by id, so nothing is lost,
+  only briefly stale. No caller found that depends on it; not fixed.
+- A lane job that panics leaves its JS promise pending (before, the panic
+  would have unwound the GTK thread). The quit path awaits lane promises, so
+  a panic in `save_window_state`/`save_tab_layout` at quit would stall the
+  close handler until the user kills the window. Not seen; left as is.
+- The implementer's section has no "Gates (worktree)" table; the counts
+  above stand in for it.
