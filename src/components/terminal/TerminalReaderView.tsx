@@ -10,7 +10,7 @@ import {
   readerRequest,
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
-import { NO_LIVE, STOP_KEY, answerKeys, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
 import { onSentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
@@ -115,20 +115,36 @@ const RECOMMENDED = /\s+\(Recommended\)$/u;
  * its question, then one row per option. A click sends the arrow keys and
  * Enter a walked highlight would. A question that asks several has its
  * headers as steps: ←/→ and a click on one walk the dialog's tabs, so an
- * answer can be changed before Submit. */
-function LiveQuestion({ live, answered, busy, onAnswer, onStep }: {
+ * answer can be changed before Submit. Claude Code's "Type something." row
+ * opens a field under it instead: its answer is words, sent as the phone's
+ * are (`answerTextKeys`). */
+function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
   live: ReaderLive;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
   /** Keys of any kind are on their way: nothing can be clicked. */
   busy: boolean;
   onAnswer: (index: number) => void;
+  /** Answers the free-text row `index` with `text`. */
+  onType: (index: number, text: string) => void;
   /** Walks the tab row from step `from` to step `to`. */
   onStep: (from: number, to: number) => void;
 }) {
   const t = useT();
+  /** The free-text row whose field is open, and what is typed in it. A field
+   * belongs to the dialog step it was opened on. */
+  const [typing, setTyping] = useState<number | null>(null);
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    setTyping(null);
+    setTyped("");
+  }, [live.signature]);
   const question = live.question;
   if (!question) return null;
+  const sendTyped = (index: number) => {
+    if (!typed.trim()) return;
+    onType(index, typed);
+  };
   const last = live.tabs.length - (live.tabSubmit ? 0 : 1);
   const stepped = last > 0;
   const focus = live.tabFocus;
@@ -190,23 +206,56 @@ function LiveQuestion({ live, answered, busy, onAnswer, onStep }: {
         {question.options.map((option) => {
           const recommended = RECOMMENDED.exec(option.label);
           const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
+          const freeText = !question.review && freeTextRow(option);
+          const open = freeText && typing === option.index;
           return (
-            <button
-              key={`${option.index}:${option.label}`}
-              type="button"
-              className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
-              disabled={busy}
-              onClick={() => onAnswer(option.index)}
-            >
-              <span className="terminal-reader-option-number">{option.number}</span>
-              <span className="terminal-reader-option-label">
-                <span>
-                  {recommended ? option.label.slice(0, recommended.index) : label}
-                  {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+            <Fragment key={`${option.index}:${option.label}`}>
+              <button
+                type="button"
+                className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
+                aria-expanded={freeText ? open : undefined}
+                disabled={busy}
+                onClick={() => (freeText ? setTyping(open ? null : option.index) : onAnswer(option.index))}
+              >
+                <span className="terminal-reader-option-number">{option.number}</span>
+                <span className="terminal-reader-option-label">
+                  <span>
+                    {recommended ? option.label.slice(0, recommended.index) : label}
+                    {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+                  </span>
+                  {option.description && <small>{option.description}</small>}
                 </span>
-                {option.description && <small>{option.description}</small>}
-              </span>
-            </button>
+              </button>
+              {open && (
+                <form
+                  className="terminal-reader-question-type"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    sendTyped(option.index);
+                  }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={typed}
+                    disabled={busy}
+                    placeholder={t("mobile.question.typePlaceholder")}
+                    aria-label={t("mobile.question.typePlaceholder")}
+                    onChange={(event) => setTyped(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setTyping(null);
+                    }}
+                  />
+                  <button type="submit" className="file-viewer-zoom-btn file-viewer-zoom-text active" disabled={busy || !typed.trim()}>
+                    {t("mobile.question.typeSend")}
+                  </button>
+                  <UntestedTag id="terminal.reader.freeText" />
+                </form>
+              )}
+            </Fragment>
           );
         })}
       </div>
@@ -703,10 +752,24 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
     if (!question || !option || answered) return;
+    const keys = answerKeys(question, option);
+    if (keys.length === 0) return;
     setAnswered(live.signature);
     setAnsweredBy("row");
     stuck.current = true;
-    void typeKeys(ptyId, answerKeys(question, option)).catch(() => setAnswered(""));
+    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+  };
+  /** Answers the free-text row with the words typed under it. */
+  const answerText = (index: number, text: string) => {
+    const question = live.question;
+    const option = question?.options.find((entry) => entry.index === index);
+    if (!question || !option || answered) return;
+    const keys = answerTextKeys(question, option, text);
+    if (keys.length === 0) return;
+    setAnswered(live.signature);
+    setAnsweredBy("row");
+    stuck.current = true;
+    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
@@ -1119,6 +1182,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             busy={!!answered && answered === live.signature}
             onAnswer={answer}
+            onType={answerText}
             onStep={step}
           />
           {openStep ? subagentWorking && (

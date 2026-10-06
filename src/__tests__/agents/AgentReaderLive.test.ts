@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answerKeys, readReaderLive, sameReaderLive, tabStepKeys } from "../../lib/agents/readerLive";
+import { answerKeys, answerTextKeys, readReaderLive, sameReaderLive, tabStepKeys } from "../../lib/agents/readerLive";
 import type { ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 
 function plainBuffer(rows: string[]): ReadableBufferLike {
@@ -163,6 +163,28 @@ describe("the desktop Reader's live screen", () => {
     const question = live.question!;
     expect(answerKeys(question, question.options[2])).toEqual(["\u001b[B", "\u001b[B", "\r"]);
     expect(answerKeys(question, question.options[0])).toEqual(["\r"]);
+  });
+
+  // Claude Code 2.1.288, captured: Enter on the empty "Type something." row
+  // answers "User declined to answer questions" — the whole dialog is gone.
+  it("never presses Enter on the free-text row; it answers it with words", () => {
+    const live = readReaderLive(plainBuffer([
+      "> ask me", "", "←  ☐ Fruit  ☐ Color  ✔ Submit  →", "", "Which fruit?", "",
+      "❯ 1. Apple", "     A red fruit that grows on trees in the garden.",
+      "  2. Banana", "     A yellow fruit.",
+      "  3. Cherry", "     A small red fruit.",
+      "  4. Type something.",
+      "──────────────────────────────────────────────────────────────────────",
+      "  5. Chat about this", "",
+      "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+    ]), "Claude");
+    const question = live.question!;
+    const free = question.options[3];
+    expect(free.label).toBe("Type something.");
+    expect(answerKeys(question, free)).toEqual([]);
+    expect(answerTextKeys(question, free, "  a pear\nplease ")).toEqual(["\u001b[B", "\u001b[B", "\u001b[B", "a pear please", "\r"]);
+    expect(answerTextKeys(question, free, "   ")).toEqual([]);
+    expect(answerTextKeys(question, question.options[0], "words")).toEqual([]);
   });
 
   it("reads the agent at work, with its timer and tokens, and nothing when idle", () => {

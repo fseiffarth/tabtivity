@@ -491,6 +491,30 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("answers Claude's \"Type something.\" row with typed words, never with Enter on the empty row", async () => {
+    term = fakeTerminal([
+      "> ask me", "", "☐ Fruit", "", "Which fruit?", "",
+      "❯ 1. Apple", "     A red fruit.",
+      "  2. Banana", "     A yellow fruit.",
+      "  3. Type something.",
+      "──────────────────────────────────────────────────────────────────────",
+      "  4. Chat about this", "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    // The click opens a field: the empty row's Enter would decline the question.
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(written).toEqual([]);
+    const field = screen.getByRole("textbox", { name: "Your answer…" });
+    fireEvent.change(field, { target: { value: "a pear" } });
+    fireEvent.submit(field.closest("form")!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(written).toEqual(["\u001b[B", "\u001b[B", "a pear", "\r"]);
+  });
+
   it("shows an agent's own question as its header, its question and tagged rows — not the screen", async () => {
     term = fakeTerminal([
       "> push it", "",
