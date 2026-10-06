@@ -17,6 +17,31 @@ pub struct AppResourceUsage {
     pub gpus: Vec<GpuSample>,
 }
 
+/// The GPU half of [`debug_app_resource_usage`] (a loopback request to the
+/// model server plus the device read), kept this long: the header asks every
+/// 2.5 s and a VRAM figure that is ten seconds old reads the same.
+const GPU_SECTION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+type GpuSection = (u64, Vec<GpuSample>);
+static GPU_SECTION: std::sync::Mutex<Option<(std::time::Instant, GpuSection)>> = std::sync::Mutex::new(None);
+
+/// `compute`'s last answer while it is younger than `ttl`, else a fresh one.
+fn reuse_within<T: Clone>(
+    slot: &std::sync::Mutex<Option<(std::time::Instant, T)>>,
+    ttl: std::time::Duration,
+    compute: impl FnOnce() -> T,
+) -> T {
+    if let Some((at, value)) = slot.lock().ok().and_then(|slot| slot.clone()) {
+        if at.elapsed() < ttl {
+            return value;
+        }
+    }
+    let value = compute();
+    if let Ok(mut slot) = slot.lock() {
+        *slot = Some((std::time::Instant::now(), value.clone()));
+    }
+    value
+}
+
 /// Debug-only live resource usage for Tabtivity's own process tree.
 ///
 /// In `tauri dev`, the useful total is the npm/tauri/vite tree that owns the
@@ -37,7 +62,8 @@ pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUs
 
     let (pids, t0) = tauri::async_runtime::spawn_blocking(|| {
         let root = app_process_root(std::process::id());
-        let pids = sysstat::descendant_pids(&[root]);
+        // Relaxed reuse: this is polled every 2.5 s for a header number.
+        let pids = sysstat::descendant_pids_relaxed(&[root]);
         let t0 = sysstat::sum_jiffies(&pids);
         (pids, t0)
     })
@@ -52,12 +78,20 @@ pub async fn debug_app_resource_usage(gpu: Option<bool>) -> Result<AppResourceUs
         let cpu_percent = busy_secs / interval.as_secs_f64() * 100.0;
         let rss_bytes = sysstat::sum_rss_kib(&pids) * 1024;
 
+        let gpu = if with_gpu {
+            reuse_within(&GPU_SECTION, GPU_SECTION_TTL, || {
+                (crate::commands::ollama::total_vram_in_use(), crate::gpustat::snapshot())
+            })
+        } else {
+            (0, Vec::new())
+        };
+
         AppResourceUsage {
             cpu_percent: (cpu_percent * 10.0).round() / 10.0,
             rss_bytes,
             process_count: pids.len(),
-            vram_bytes: if with_gpu { crate::commands::ollama::total_vram_in_use() } else { 0 },
-            gpus: if with_gpu { crate::gpustat::snapshot() } else { Vec::new() },
+            vram_bytes: gpu.0,
+            gpus: gpu.1,
         }
     })
     .await
@@ -487,6 +521,20 @@ fn app_process_root(pid: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reuse_within_recomputes_only_after_the_ttl() {
+        use std::time::{Duration, Instant};
+        let slot = std::sync::Mutex::new(None::<(Instant, u32)>);
+        let mut calls = 0;
+        let mut next = || {
+            calls += 1;
+            calls
+        };
+        assert_eq!(super::reuse_within(&slot, Duration::from_secs(60), &mut next), 1);
+        assert_eq!(super::reuse_within(&slot, Duration::from_secs(60), &mut next), 1, "served from the slot");
+        assert_eq!(super::reuse_within(&slot, Duration::ZERO, &mut next), 2, "expired");
+    }
+
     use super::*;
 
     #[test]
