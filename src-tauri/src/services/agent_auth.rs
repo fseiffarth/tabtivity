@@ -271,7 +271,7 @@ fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -
 /// Which half of a reconciliation runs. A pass over every home adopts from
 /// all of them first and places into all of them after, so a login made in
 /// any home reaches every other in the same pass whatever the order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Step {
     Adopt,
     Place,
@@ -296,7 +296,22 @@ impl Step {
 /// 2. Then the store's bytes go into the home, whatever it held: a refused
 ///    login is overwritten, a stale copy caught up, a hard link from an
 ///    older Tabtivity replaced by a copy of its own.
-fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
+///
+/// Answers whether the pair is *settled*: the home holds the store's bytes
+/// (or neither exists) and this call wrote nothing. Only a settled pair may be
+/// skipped by [`reconcile_file`]'s stat gate — a pending or refused adoption
+/// also depends on the home's account file, so it is looked at again each pass.
+fn reconcile_file_now(
+    cli: &str,
+    store_dir: &Path,
+    store: &Path,
+    leaf: &str,
+    home: &Path,
+    copy: &HomeFile,
+    step: Step,
+) -> bool {
+    #[cfg(test)]
+    FULL_PASSES.with(|n| n.set(n.get() + 1));
     let home_bytes = content(copy.read());
     let store_bytes = content(std::fs::read(store).ok());
     if let (Some(bytes), true) = (&home_bytes, step.adopts()) {
@@ -305,13 +320,13 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
         let changed = placed.as_deref() != Some(hash.as_str()) && store_bytes.as_deref() != Some(bytes.as_slice());
         if changed && adopt(cli, store_dir, store, home, bytes) {
             write_placed(store_dir, home, leaf, &hash);
-            return;
+            return false;
         }
     }
     if !step.places() {
-        return;
+        return home_bytes == store_bytes;
     }
-    let Some(bytes) = store_bytes else { return };
+    let Some(bytes) = store_bytes else { return home_bytes.is_none() };
     let hash = digest(&bytes);
     let linked = copy.metadata().and_then(|m| m.ino).is_some_and(|ino| {
         #[cfg(unix)]
@@ -330,8 +345,104 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
             Ok(()) => write_placed(store_dir, home, leaf, &hash),
             Err(e) => eprintln!("agent_auth: {cli}: place {}: {e}", copy.path().display()),
         }
+        false
     } else if read_placed(store_dir, home, leaf).as_deref() != Some(hash.as_str()) {
         write_placed(store_dir, home, leaf, &hash);
+        false
+    } else {
+        true
+    }
+}
+
+/// What a `stat` says about one of the three files a pair is made of. Any
+/// write, truncate, replace-by-rename or removal moves at least one field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    /// `(device, inode, ctime)` on unix: a rename onto the path moves the
+    /// inode, and ctime moves even when a writer restores mtime.
+    identity: Option<(u64, u64, i64, i64)>,
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()))
+    };
+    #[cfg(not(unix))]
+    let identity = None;
+    Some(FileStamp { len: meta.len(), modified: meta.modified().ok(), identity })
+}
+
+/// The stamps of a pair: the home's copy, the store's file, the placed sidecar.
+type PairStamp = [Option<FileStamp>; 3];
+
+fn pair_stamp(store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile) -> PairStamp {
+    [file_stamp(&copy.path()), file_stamp(store), file_stamp(&placed_file(store_dir, home, leaf))]
+}
+
+/// A file touched this recently may be rewritten again inside the same
+/// timestamp tick on a coarse filesystem, with the same length (a refreshed
+/// token usually is): such a stamp proves nothing yet, so it is not trusted.
+const STAMP_SETTLE: Duration = Duration::from_secs(3);
+
+fn stamp_is_trustworthy(stamp: &PairStamp, now: std::time::SystemTime) -> bool {
+    stamp.iter().flatten().all(|file| {
+        file.modified
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= STAMP_SETTLE)
+    })
+}
+
+/// The pairs last seen settled, by home copy, store file and step.
+type SettledPairs = std::collections::HashMap<(PathBuf, PathBuf, Step), PairStamp>;
+
+fn settled_pairs() -> &'static Mutex<SettledPairs> {
+    static SETTLED: OnceLock<Mutex<SettledPairs>> = OnceLock::new();
+    SETTLED.get_or_init(Default::default)
+}
+
+/// Homes come and go; past this many remembered pairs the gate starts over
+/// (one full pass re-learns it).
+const SETTLED_CAP: usize = 4096;
+
+#[cfg(test)]
+thread_local! {
+    /// Full (read + hash) reconciles run on this thread, for the gate's tests.
+    static FULL_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`reconcile_file_now`] behind a stat gate. The keeper visits every home ×
+/// CLI × path every [`POLL`], forever; reading and SHA-256ing both sides each
+/// time was its whole cost. A pair that was settled and whose three files
+/// still `stat` exactly as they did then cannot need anything, so it is
+/// skipped without a read. Everything else — a changed size, mtime, ctime or
+/// inode on either side, a missing or new file, a pair never seen settled, a
+/// file touched within [`STAMP_SETTLE`] — takes the full path as before.
+fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
+    let key = (copy.path(), store.to_path_buf(), step);
+    let before = pair_stamp(store_dir, store, leaf, home, copy);
+    {
+        let settled = settled_pairs().lock().unwrap_or_else(|p| p.into_inner());
+        if settled.get(&key) == Some(&before) {
+            return;
+        }
+    }
+    let settled_now = reconcile_file_now(cli, store_dir, store, leaf, home, copy, step);
+    let after = pair_stamp(store_dir, store, leaf, home, copy);
+    let mut settled = settled_pairs().lock().unwrap_or_else(|p| p.into_inner());
+    // `after == before`: nothing was written under the full pass, by it or by
+    // a tab, so `after` is the stamp of exactly the bytes it compared.
+    if settled_now && after == before && stamp_is_trustworthy(&after, std::time::SystemTime::now()) {
+        if settled.len() >= SETTLED_CAP {
+            settled.clear();
+        }
+        settled.insert(key, after);
+    } else {
+        settled.remove(&key);
     }
 }
 
@@ -776,6 +887,99 @@ mod tests {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(path).unwrap();
         f.write_all(bytes.as_bytes()).unwrap();
+    }
+
+    /// Push a file's mtime far enough back that the gate trusts its stamp.
+    fn age(path: &Path, secs: u64) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(secs)).unwrap();
+    }
+
+    fn full_passes() -> usize {
+        FULL_PASSES.with(|n| n.get())
+    }
+
+    /// A home and store holding the same Codex login, reconciled until settled.
+    fn settled_codex_pair(state: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let home = crate::services::agent_home::scope_home_in(state, "a");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let copy = home.join(".codex/auth.json");
+        std::fs::write(&copy, r#"{"tokens":{"account_id":"one"}}"#).unwrap();
+        reconcile_home_in(state, &home);
+        let store = store_of(state, "codex", ".codex/auth.json");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap(), "login adopted");
+        let placed = placed_file(&store_dir_in(state, "codex"), &home, &leaf_of(".codex/auth.json"));
+        for path in [&copy, &store, &placed] {
+            age(path, 60);
+        }
+        // The pass that learns the (now old enough) stamps.
+        reconcile_home_in(state, &home);
+        (home, copy, store)
+    }
+
+    #[test]
+    fn an_unchanged_login_is_not_read_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let (home, copy, store) = settled_codex_pair(&state);
+        let before = full_passes();
+        for _ in 0..5 {
+            reconcile_home_in(&state, &home);
+        }
+        assert_eq!(full_passes(), before, "an unchanged pair took the read + hash path");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+    }
+
+    #[test]
+    fn a_changed_size_or_mtime_reconciles_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let (home, copy, store) = settled_codex_pair(&state);
+
+        // A refresh in place, new length: adopted into the store.
+        write_in_place(&copy, r#"{"tokens":{"account_id":"one","access_token":"longer"}}"#);
+        let before = full_passes();
+        reconcile_home_in(&state, &home);
+        assert!(full_passes() > before, "a changed size must reconcile");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+
+        // Settle again, then a refresh of the SAME length with only mtime moved.
+        let placed = placed_file(&store_dir_in(&state, "codex"), &home, &leaf_of(".codex/auth.json"));
+        for path in [&copy, &store, &placed] {
+            age(path, 60);
+        }
+        reconcile_home_in(&state, &home);
+        let quiet = full_passes();
+        reconcile_home_in(&state, &home);
+        assert_eq!(full_passes(), quiet, "settled again");
+        write_in_place(&copy, r#"{"tokens":{"account_id":"one","access_token":"LONGER"}}"#);
+        age(&copy, 30);
+        reconcile_home_in(&state, &home);
+        assert!(full_passes() > quiet, "a changed mtime must reconcile");
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap(), "same-size refresh adopted");
+
+        // The other direction: the store moves, the home is caught up.
+        for path in [&copy, &store, &placed] {
+            age(path, 60);
+        }
+        reconcile_home_in(&state, &home);
+        std::fs::write(&store, r#"{"tokens":{"account_id":"one","access_token":"from-store"}}"#).unwrap();
+        let other = crate::services::agent_home::scope_home_in(&state, "b");
+        std::fs::create_dir_all(&other).unwrap();
+        reconcile_all_in(&state);
+        assert_eq!(std::fs::read(&store).unwrap(), std::fs::read(&copy).unwrap());
+    }
+
+    #[test]
+    fn a_freshly_written_login_is_not_trusted_by_its_stamp() {
+        let now = std::time::SystemTime::now();
+        let stamp = |age: u64| {
+            Some(FileStamp { len: 1, modified: Some(now - Duration::from_secs(age)), identity: None })
+        };
+        assert!(stamp_is_trustworthy(&[stamp(10), stamp(10), None], now));
+        assert!(!stamp_is_trustworthy(&[stamp(10), stamp(1), stamp(10)], now), "touched this second");
+        let ahead = Some(FileStamp { len: 1, modified: Some(now + Duration::from_secs(5)), identity: None });
+        assert!(!stamp_is_trustworthy(&[ahead, None, None], now), "a clock ahead of ours");
     }
 
     #[test]
