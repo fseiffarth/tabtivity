@@ -213,6 +213,23 @@ const PDF_MAX_SCALE = 8;
 const PDF_ZOOM_STEP = 1.2;
 const clampPdfScale = (s: number) => Math.min(PDF_MAX_SCALE, Math.max(PDF_MIN_SCALE, s));
 
+/** How long after the last Ctrl+wheel tick the zoom is COMMITTED — the page
+ *  canvases rasterised at the new scale and the scale persisted. Until then the
+ *  page stack is scaled with a CSS transform, so a wheel gesture of a dozen ticks
+ *  costs one render per page instead of a dozen (each allocating a canvas up to
+ *  `PDF_MAX_CANVAS_PIXELS` and cancelling the one before it). Short enough that
+ *  the crisp page follows the gesture almost at once. */
+export const PDF_ZOOM_COMMIT_MS = 120;
+
+/** A zoom in progress: the scale the reader has wheeled to, previewed by scaling
+ *  the page stack with CSS around the point under the cursor (in the stack's own
+ *  untransformed coordinates), until it is committed (`PDF_ZOOM_COMMIT_MS`). */
+interface ZoomPreview {
+  scale: number;
+  originX: number;
+  originY: number;
+}
+
 /** Is the key going to somewhere that types? The host div wraps the find bar, the
  *  go-to-page box and every remark card, so the page-stepping arrow keys have to
  *  leave the caret alone wherever one of those has focus. */
@@ -2387,6 +2404,37 @@ function PdfCanvas({
   // new size asynchronously. We stash the scroll target that keeps the cursor's
   // document point fixed and apply it once the content has actually resized.
   const pendingScroll = useRef<{ top: number; left: number } | null>(null);
+  // A Ctrl+wheel zoom between its first tick and its commit (`ZoomPreview`).
+  // `scale` — what the canvases are rasterised at, what the layers are laid out
+  // by, what is persisted — does not move until the gesture has paused for
+  // `PDF_ZOOM_COMMIT_MS`; the stack is CSS-scaled by `preview.scale / scale`
+  // meanwhile. The ref is the wheel handler's view of it (bound once).
+  const [zoomPreview, setZoomPreview] = useState<ZoomPreview | null>(null);
+  const zoomPreviewRef = useRef<ZoomPreview | null>(null);
+  const zoomCommitTimer = useRef<number | null>(null);
+  /** Forget a pending preview without committing it — for a zoom set by other
+   *  means (fit width) that would otherwise be overwritten by the stale commit. */
+  const dropZoomPreview = useCallback(() => {
+    if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
+    zoomCommitTimer.current = null;
+    zoomPreviewRef.current = null;
+    setZoomPreview(null);
+  }, []);
+  /** Commit the previewed zoom: one raster render per near page, one persist. The
+   *  cursor-anchored scroll target was computed against the committed scale at
+   *  the last tick, so the ResizeObserver applies it once the stack has relaid
+   *  out at the new size — and the CSS preview comes off in the same commit. */
+  const commitZoomPreview = useCallback(() => {
+    const preview = zoomPreviewRef.current;
+    dropZoomPreview();
+    if (preview) setScale(preview.scale);
+  }, [dropZoomPreview]);
+  useEffect(
+    () => () => {
+      if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
+    },
+    [],
+  );
   // Bumped whenever the file's mtime advances on disk, forcing a byte reload.
   const [diskVersion, setDiskVersion] = useState(0);
   // The diskVersion that produced `doc`. Compile-triggered forward search waits
@@ -3905,6 +3953,7 @@ function PdfCanvas({
         restoreScroll.current = rescaleScrollTarget(restoreScroll.current, from, nextScale);
         restoreScale.current = nextScale;
       }
+      dropZoomPreview();
       setScale(nextScale);
       fittedRef.current = true;
       setInitialZoomReady(true);
@@ -3914,7 +3963,7 @@ function PdfCanvas({
       // fires — and the flag is the whole point. `viewPos.persist` dedups.
       viewPos.persist({ pdfFitted: true });
     }
-  }, [viewPos]);
+  }, [viewPos, dropZoomPreview]);
 
   // Fit to width when a document loads — UNLESS this is the first load and a
   // DELIBERATE zoom was persisted from a prior session, in which case honour the
@@ -4148,9 +4197,13 @@ function PdfCanvas({
   );
 
   // Ctrl/Cmd+wheel zooms the page stack toward the cursor (a plain wheel keeps
-  // native scrolling). Because the canvases resize asynchronously, we only
-  // compute the cursor-anchored scroll target here and let the ResizeObserver
-  // below apply it once the content has grown/shrunk.
+  // native scrolling). A tick does not rasterise: it moves the PREVIEW (the
+  // stack CSS-scaled around the cursor) and re-arms the commit timer, so a
+  // gesture of many ticks lands as one render at its final scale. The
+  // cursor-anchored scroll target is computed against the committed scale —
+  // the scroll offset does not move while the preview is up — and overwritten
+  // on every tick, so whichever tick is last has the one the ResizeObserver
+  // below applies once the stack has relaid out at the committed size.
   const onWheel = useCallback((e: WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
@@ -4161,19 +4214,36 @@ function PdfCanvas({
     const rect = el.getBoundingClientRect();
     const cursorX = e.clientX - rect.left;
     const cursorY = e.clientY - rect.top;
-    setScale((prev) => {
-      const factor = e.deltaY < 0 ? PDF_ZOOM_STEP : 1 / PDF_ZOOM_STEP;
-      const next = clampPdfScale(prev * factor);
-      if (next === prev) return prev;
-      fittedRef.current = false; // manual zoom opts out of resize re-fit
-      const eff = next / prev;
-      pendingScroll.current = {
-        top: (el.scrollTop + cursorY) * eff - cursorY,
-        left: (el.scrollLeft + cursorX) * eff - cursorX,
-      };
-      return next;
-    });
-  }, []);
+    const committed = scaleRef.current;
+    const held = zoomPreviewRef.current;
+    const factor = e.deltaY < 0 ? PDF_ZOOM_STEP : 1 / PDF_ZOOM_STEP;
+    const next = clampPdfScale((held?.scale ?? committed) * factor);
+    if (next === (held?.scale ?? committed)) return;
+    fittedRef.current = false; // manual zoom opts out of resize re-fit
+    const eff = next / committed;
+    pendingScroll.current = {
+      top: (el.scrollTop + cursorY) * eff - cursorY,
+      left: (el.scrollLeft + cursorX) * eff - cursorX,
+    };
+    // The preview scales the stack around the point under the cursor, measured
+    // on the gesture's first tick while the stack is still untransformed; later
+    // ticks keep that origin, or the picture would jump as the origin moved
+    // under its own transform.
+    let originX = held?.originX ?? 0;
+    let originY = held?.originY ?? 0;
+    if (!held) {
+      const content = contentRef.current?.getBoundingClientRect();
+      if (content) {
+        originX = e.clientX - content.left;
+        originY = e.clientY - content.top;
+      }
+    }
+    const preview = { scale: next, originX, originY };
+    zoomPreviewRef.current = preview;
+    setZoomPreview(preview);
+    if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
+    zoomCommitTimer.current = window.setTimeout(commitZoomPreview, PDF_ZOOM_COMMIT_MS);
+  }, [commitZoomPreview]);
 
   // Bind the zoom wheel non-passively so `preventDefault()` above actually
   // cancels the native scroll — a React `onWheel` is passive, so Ctrl+wheel
@@ -4276,6 +4346,7 @@ function PdfCanvas({
           className="file-viewer-zoom-btn"
           onClick={() => {
             fittedRef.current = false;
+            commitZoomPreview();
             setScale((s) => clampPdfScale(s / PDF_ZOOM_STEP));
           }}
           disabled={!doc || scale <= PDF_MIN_SCALE}
@@ -4284,11 +4355,12 @@ function PdfCanvas({
         >
           −
         </button>
-        <span className="file-viewer-zoom-level">{Math.round(scale * 100)}%</span>
+        <span className="file-viewer-zoom-level">{Math.round((zoomPreview?.scale ?? scale) * 100)}%</span>
         <button
           className="file-viewer-zoom-btn"
           onClick={() => {
             fittedRef.current = false;
+            commitZoomPreview();
             setScale((s) => clampPdfScale(s * PDF_ZOOM_STEP));
           }}
           disabled={!doc || scale >= PDF_MAX_SCALE}
@@ -4867,7 +4939,23 @@ function PdfCanvas({
           ) : !doc ? (
             <div className="file-viewer-loading">{t("common.loading")}</div>
           ) : (
-            <div className="file-viewer-pdf-pages" ref={contentRef}>
+            <div
+              className="file-viewer-pdf-pages"
+              ref={contentRef}
+              // A zoom in progress: the stack scaled with CSS around the cursor
+              // until the gesture pauses and the canvases are rendered at the new
+              // size (`PDF_ZOOM_COMMIT_MS`). A transform changes no layout, so the
+              // scroll offset holds still underneath it — which is what lets the
+              // committed, cursor-anchored scroll target be computed up front.
+              style={
+                zoomPreview
+                  ? {
+                      transform: `scale(${zoomPreview.scale / scale})`,
+                      transformOrigin: `${zoomPreview.originX}px ${zoomPreview.originY}px`,
+                    }
+                  : undefined
+              }
+            >
               {/* The reader renders the ARRANGEMENT, sheet by sheet — each pulled
                   from its own source document — so an edit shows up immediately with
                   nothing re-parsed. An unedited PDF is the identity arrangement over
