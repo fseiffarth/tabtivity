@@ -34,9 +34,9 @@ Section template:
 ### Commits
 | Commit | Content |
 |---|---|
-| (filled below) | §7.1 state-file commands off the GTK thread (ordered lane) + `patch_json` no-op skip |
-| (filled below) | §7.3 `agent_auth` keeper stat gate |
-| (filled below) | §7.2 quick wins: relaxed descendant cache for the header poll, GPU section cached 10 s |
+| `2857a41a` | §7.1 state-file commands off the GTK thread (ordered lane) + `patch_json` no-op skip |
+| `ecb98708` | §7.3 `agent_auth` keeper stat gate |
+| `8440c3a8` | §7.2 quick wins: relaxed descendant cache for the header poll, GPU section cached 10 s |
 
 ### What was built / choices made
 - **§7.1, ordering kept:** not `#[tauri::command(async)]`. Tauri's pool loses
