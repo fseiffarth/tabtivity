@@ -311,3 +311,67 @@ the range touches no TS) · `cargo clippy --all-targets -D warnings` clean ·
 4. `strace -e trace=read -p <app pid>` is overkill; cheaper: watch the
    renderer's RSS during a build of a large PDF — it should not climb by a file
    size per retry.
+
+### Review (S2 reviewer, 2026-10-07)
+Range reviewed: `c633b0b4..727fae72` (45472270, 3261bc4a, 6ce389d5, 727fae72).
+Nothing run live.
+
+**Bugs fixed**
+- `c5bf7c62` — §4.1 the zoom commit's scroll target was the pre-S2 formula
+  (stack scales uniformly from the scroll origin). The scroller's 12 px padding
+  and the constant 28 px page-number gap under every page do not scale, so the
+  target drifted by `pagesAbove × 28 × (eff − 1)` (≈ 280 px for one notch at
+  page 50) — the preview (which scales gaps) made that a visible jump at the
+  commit. Also: a gesture wheeled back to its start left a `pendingScroll`
+  armed for the next unrelated relayout to apply (and `1.2 × 1.2 / 1.2` is not
+  always `1.2` in floating point, so it could also re-render every near page at
+  a scale a rounding error away). Now the first tick records the page wrap under
+  the cursor and the point as a fraction of its box (`pageAnchorAt`); the commit
+  pins that point to where the preview shows it (a plain scroll meanwhile is
+  accounted for), resolved by the ResizeObserver against the wrap's live box
+  (`anchoredScrollTarget`); a net-zero gesture commits nothing. The +/− button
+  after a tick now lands exactly too (the fraction is scale-free). Tests:
+  `PdfZoomRaster` "lands where the preview showed …" and "commits nothing …".
+- `d3af5bbb` — §4.4 the kept measurement (same count, same first/last page)
+  left a middle page the build resized with its old reservation: the canvas drew
+  the true size (the render effect sets its CSS box), but the remark, markup,
+  copy-region and link layers are laid out by `cssSize` and sat on the stale
+  box. `PdfPageCanvas` now compares the page it already fetched to render
+  against `cssSize` (`onSize`, via refs — the effect's deps are unchanged) and
+  the viewer patches that one entry and the kept measurement; a corrected page
+  above the viewport pins the page under the viewport's top edge through the
+  same anchored target. Zero extra worker round trips. Test: `PdfReloadSettle`
+  "corrects a middle page the build resized under a kept measurement".
+
+**Checked and found sound**
+- §4.1 text/annotation/markup/search layers: all sized by `scale` (committed) under one stack transform — aligned during preview and after; `fitWidth` drops, +/− commit, no other `setScale` path (no keyboard zoom exists); persist effect reads `scale` only; unmount clears the timer; transform only, no shadow animation; reduced-motion moot (no transition).
+- §4.1 wheel mid-render: the commit is one `setScale`, the render effect's existing cancel/`task.cancel()` path handles it; no per-tick canvases.
+- §4.2 hold timer cleared in the observer effect's cleanup (unmount); `catchUp` only increments when `hiddenStale` was set in the dark and the pane is shown — cannot loop; hidden-at-mount pages never paint in the dark; the visible-page tracker scans live rects and thumbnails use their own observer, so the `rootMargin` change touches only page canvases/text/link layers (all `near`-gated together).
+- §4.4 `file_size`: confinement and mirror/remote routing byte-for-byte `file_mtime`'s; `remote_metadata`/`sftp::metadata_on` return `(size, modified)` so the right field is read; registered in `generate_handler!`. `beginCompile`/`endCompile` balanced (begin → sync `setState`s → `try … finally endCompile`); popouts and the main window both `listenPdfReveal`; 10 min bound resumes the poll if a window dies. First build of a session not held = lost optimisation only (the poll + settle gate still reload). Resume skips the immediate check; the test proves no second read. Removed not-near `getPage(n).cleanup()` on a document the canvas never drew from: it fetched the page to free it — net zero; text scans/link reads keep their own pages.
+- Mobile `MarkupView` imports none of this.
+- Tests: all three assert the claimed behaviour (render counts, persist writes, transform, timer windows, stat/read order, page-ask counts).
+
+**Gates (worktree, after fixes)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok |
+| `npm test` | 731 files / 7523 tests passed (+3 regression tests) |
+| `cargo test -q` | 3722 passed, 0 failed |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing, unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+**Flagged for user**
+- No Rust unit test for `file_size_local` (confirmed: `confine_abs_read` reads
+  `projects.json` from the state dir; `fs.rs` has fixtures only for the pure
+  `compute_allowed_roots`/`confine_abs_within` — the same gap `file_mtime_local`
+  has always had).
+- The preview scales the inter-page gaps, the commit does not: the anchor point
+  is exact, pages far above/below it shift by 28 px × (eff − 1) per gap at the
+  commit. Exact everywhere would need per-page transforms (the implementer's
+  flagged alternative) — a design choice, not changed.
+- A corrected middle page (d3af5bbb) that lies above the viewport is pinned by
+  anchor, but one that intersects the viewport resizes in place (unavoidable: it
+  is what the reader is looking at). Only reachable through the §4.4 skip path.
+- `FileViewerPane.tsx` / `lib.rs`: untouched by the review (merge note stands).
