@@ -221,6 +221,13 @@ const clampPdfScale = (s: number) => Math.min(PDF_MAX_SCALE, Math.max(PDF_MIN_SC
  *  the crisp page follows the gesture almost at once. */
 export const PDF_ZOOM_COMMIT_MS = 120;
 
+/** How long a painted page keeps its canvas after its pane is hidden. Long
+ *  enough that flipping to another tab and back repaints nothing; short enough
+ *  that a PDF left behind a terminal for a while does give its memory up (a
+ *  near page at fit width on a 2× screen is tens of MB). Mirrors the terminal's
+ *  `RENDERER_RELEASE_MS`. */
+export const PDF_PAGE_RELEASE_MS = 30_000;
+
 /** A zoom in progress: the scale the reader has wheeled to, previewed by scaling
  *  the page stack with CSS around the point under the cursor (in the stack's own
  *  untransformed coordinates), until it is committed (`PDF_ZOOM_COMMIT_MS`). */
@@ -650,18 +657,70 @@ function PdfPageCanvas({
   // unaffected. In jsdom (tests) there is no observer, so it renders eagerly as
   // before.
   const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
+  // Whether the pane this page sits in is on screen. A hidden pane
+  // (`display:none`) reports every page as not intersecting, which used to
+  // release every painted page the moment the reader switched tabs — and
+  // re-decode and repaint all of them on the way back. Read through a ref by the
+  // observer callback and the render effect, so neither re-runs on a tab switch.
+  const paneVisible = usePaneVisible();
+  const paneVisibleRef = useRef(paneVisible);
+  paneVisibleRef.current = paneVisible;
   useEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
+    // A page that leaves the margin because its PANE was hidden keeps its pixels
+    // for `PDF_PAGE_RELEASE_MS` (the terminal's `RENDERER_RELEASE_MS` pattern):
+    // flipping to another tab and back costs nothing, a tab left behind for a
+    // while still gives its canvases up. On show the observer reports again —
+    // a page still near is kept, one the pane is no longer near is released
+    // then, as a scroll-away would have.
+    let holdTimer: number | null = null;
     const io = new IntersectionObserver(
-      (entries) => setNear(entries.some((e) => e.isIntersecting)),
-      // A generous margin paints a page a screenful or two before it scrolls into
-      // view (no blank flash in normal scrolling) and drops it once well past.
-      { root: null, rootMargin: "150% 0px" },
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          if (holdTimer != null) window.clearTimeout(holdTimer);
+          holdTimer = null;
+          setNear(true);
+          return;
+        }
+        if (!paneVisibleRef.current) {
+          if (holdTimer == null) {
+            holdTimer = window.setTimeout(() => {
+              holdTimer = null;
+              setNear(false);
+            }, PDF_PAGE_RELEASE_MS);
+          }
+          return;
+        }
+        if (holdTimer != null) window.clearTimeout(holdTimer);
+        holdTimer = null;
+        setNear(false);
+      },
+      // A screenful either side paints a page before it scrolls into view (no
+      // blank flash in normal scrolling) and drops it once well past — about
+      // three pages at fit width, rather than the four or five a wider margin
+      // held (and rebuilt) at once.
+      { root: null, rootMargin: "100% 0px" },
     );
     io.observe(el);
-    return () => io.disconnect();
+    return () => {
+      if (holdTimer != null) window.clearTimeout(holdTimer);
+      io.disconnect();
+    };
   }, []);
+
+  // A near page whose document changed while its pane was hidden is NOT
+  // repainted there (work in a hidden pane); the render effect notes it and
+  // this re-runs it on show, where the fingerprint decides whether the pixels
+  // can stay. A counter rather than `paneVisible` in the effect's deps, so a
+  // plain tab flip with nothing changed re-runs nothing.
+  const [catchUp, setCatchUp] = useState(0);
+  const hiddenStale = useRef(false);
+  useEffect(() => {
+    if (!paneVisible || !hiddenStale.current) return;
+    hiddenStale.current = false;
+    setCatchUp((n) => n + 1);
+  }, [paneVisible]);
 
   // What is currently ON this canvas: the fingerprint of the content it was
   // painted from, and the geometry it was painted at. A recompile hands the
@@ -703,6 +762,12 @@ function PdfPageCanvas({
       // file rather than reloading the document) and refuses while a render is in
       // flight, which is exactly the case this must not disturb.
       void doc.getPage(pageNumber).then((p) => p.cleanup()).catch(() => {});
+      return;
+    }
+    if (!paneVisibleRef.current) {
+      // Held while its pane is hidden (see the observer above): whatever changed
+      // — a recompile's new document, a turn — is painted on show, not now.
+      hiddenStale.current = true;
       return;
     }
     let cancelled = false;
@@ -821,7 +886,7 @@ function PdfPageCanvas({
       cancelled = true;
       task?.cancel();
     };
-  }, [doc, pageNumber, rot, scale, near, hiddenHighlights]);
+  }, [doc, pageNumber, rot, scale, near, hiddenHighlights, catchUp]);
 
   // The page's own hyperlinks (#pdf-links). Keyed off the sheet and its turn but
   // NOT off `scale` — the boxes are stored in big points and multiplied into CSS
