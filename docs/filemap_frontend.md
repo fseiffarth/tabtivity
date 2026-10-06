@@ -35,6 +35,7 @@ stores stay at the top. No `index.ts` barrels.
 | `src/lib/window/unsavedWork.ts` | Per-heap registry of unsaved editor work; a popout answers the Wayland retire request (`detached-retire-request-<label>`) by flushing autosave and reporting clean/dirty. Tests: `DetachedRetire.test.ts`. |
 | `src/lib/window/fullscreenMode.ts` | The window's own fullscreen mode (F11 / `WindowControls` button, main + popouts); records the request so the stray guard spares it. Per window, never persisted. |
 | `src/lib/window/strayFullscreen.ts` | Clears a stray OS fullscreen (it silently makes a popout unmovable). `isFullscreen()` can't be trusted, so it clears unconditionally; judgement in pure `mayClearStrayFullscreen`. |
+| `src/lib/window/closePdfPresent.ts` | Closes every PDF present window (`present-pdf-*`) on a scope change (`tabs.setScope`), releasing the sleep inhibitor first; closed, not parked like popouts. Tests: `PdfPresentScopeClose.test.ts`. |
 | `src/types/index.ts` | Shared TypeScript types. |
 
 **Layout (`src/components/layout/`)**

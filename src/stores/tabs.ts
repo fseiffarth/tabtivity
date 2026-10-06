@@ -19,6 +19,7 @@ import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
 import { getDetachedWindowContext } from "./detachedContext";
+import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { envName, tabCommand } from "../lib/brand";
 import { currentTabCommand } from "../lib/brandMigration";
 
@@ -2466,6 +2467,9 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         .then(() => {
           if (get().scope === scope) get().respawnDetachedForScope(scope);
         });
+      // A PDF presented fullscreen belongs to a tab of the scope just left;
+      // unlike a popout it is closed, not parked (see `closePdfPresent`).
+      void closePdfPresentWindows();
     }
     set((s) => {
       const tabs = s.tabsByScope[scope] ?? [];
