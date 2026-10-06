@@ -360,8 +360,11 @@ fn trailing_shell(fenced: bool, carries: bool) -> String {
         if !carries {
             return "exec \"${SHELL:-/bin/bash}\" -l".to_string();
         }
-        let unset: String = crate::services::agent_api_keys::CARRIERS
+        // Every carrier `SECRET_ENV` knows: the proxy tokens' and the
+        // administrator's keys' (`server::agent_keys`), not only the first two.
+        let unset: String = SECRET_ENV
             .iter()
+            .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
             .map(|k| format!("-u {k} "))
             .collect();
         return format!("exec env {unset}\"${{SHELL:-/bin/bash}}\" -l");
@@ -1059,6 +1062,21 @@ mod tests {
         // A shell tab has no command line and so no trailing shell to guard.
         let args = local_tmux_args_with(concat!(crate::app_slug!(), "-x"), "", &[], &env, true);
         assert!(!args.iter().any(|a| a.contains("stty")));
+    }
+
+    /// The shell after an unfenced command that carried a key (the Host
+    /// session) loses every carrier — the administrator's key's as much as
+    /// the proxy token's (merge review 2026-10-07) — and nothing else.
+    #[test]
+    fn the_shell_after_a_carrying_host_command_drops_every_carrier() {
+        let line = trailing_shell(false, true);
+        for key in SECRET_ENV {
+            let carrier = key.starts_with(crate::services::agent_exec::CARRIER_PREFIX);
+            assert_eq!(line.contains(&format!("-u {key} ")), carrier, "{key}");
+        }
+        assert!(line.contains(&format!("-u {} ", crate::services::agent_exec::carrier_name("MISTRAL_API_KEY"))));
+        assert!(!line.contains("stty"), "{line}");
+        assert_eq!(trailing_shell(false, false), "exec \"${SHELL:-/bin/bash}\" -l");
     }
 
     #[test]

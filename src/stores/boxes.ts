@@ -352,9 +352,9 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
       void tabsStore.persistScope(outgoing, localFile).catch(() => {});
     }
     // Lazily create the box folder and capture the resolved path back into
-    // state — with the revision a first open stamps, or the next whole-list
-    // save is refused as stale. (A backend from before answers the folder
-    // alone; it stamps nothing the store could adopt.)
+    // state — with the revision a first open stamps, so the store's copy is
+    // the file's. (A backend from before answers the folder alone; it stamps
+    // nothing the store could adopt.)
     const answer = await invoke<ProjectBox | string>("ensure_box_folder", { boxId });
     const folder = typeof answer === "string" ? answer : answer?.folder;
     const answeredRev = typeof answer === "string" ? undefined : answer?.rev;
@@ -363,10 +363,10 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
         if (b.id !== boxId) return b;
         // The answer is the box as the FILE holds it, which may carry an edit
         // this store never saw (another writer: a project import joining the
-        // box, a second window). Adopting that revision without that edit
-        // would let the next whole-list save erase it unrefused, so the
-        // revision is taken only when it is exactly the first open's own
-        // stamp: no folder held here, and one step past the held revision.
+        // box, a second window). A revision is not an edit, so it is taken
+        // only when it is exactly the first open's own stamp: no folder held
+        // here, and one step past the held revision; the rest of the box
+        // stays as shown until a reload or a `patch_box` answer replaces it.
         const stampedHere =
           answeredRev !== undefined && !b.folder && answeredRev === (b.rev ?? 0) + 1;
         return { ...b, folder, ...(stampedHere ? { rev: answeredRev } : {}) };

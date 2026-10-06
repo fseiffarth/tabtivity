@@ -57,23 +57,41 @@ fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> 
 /// own name is the user's, and is not touched here), so one the tab brought
 /// itself would have no business riding the argv either. The `agent_exec`
 /// step may still be in front of the command; with nothing to map it only
-/// execs. Names only in the log.
+/// execs. Names only in the log. On a hosted server the administrator's key
+/// (`server::agent_keys`, the registry's `api_key_env` carriers) is never
+/// dropped silently — the home holds no login to fall back to — so such a
+/// spawn fails naming the way back (the server's tmux must be 3.2 or newer).
 #[cfg(unix)]
-fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) {
+fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
     if opts.tmux_session.is_none()
         || !crate::services::tmux_local::tmux_available()
         || crate::services::tmux_local::tmux_supports_session_env()
     {
-        return;
+        return Ok(());
     }
     let dropped = drop_carriers(&mut opts.env);
-    if !dropped.is_empty() {
-        eprintln!(
-            "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
-            dropped.join(", "),
-            opts.id
-        );
+    if dropped.is_empty() {
+        return Ok(());
     }
+    if crate::services::server::is_server() {
+        let admin_keys: Vec<&str> = dropped
+            .iter()
+            .filter_map(|c| c.strip_prefix(crate::services::agent_exec::CARRIER_PREFIX))
+            .filter(|var| crate::commands::agents::api_key_envs().contains(var))
+            .collect();
+        if !admin_keys.is_empty() {
+            return Err(format!(
+                "the administrator's API key ({}) needs tmux 3.2 or newer on this server, which keeps it off the tmux argv; ask the administrator to update tmux, or switch to your own login in Settings → Manage CLIs",
+                admin_keys.join(", ")
+            ));
+        }
+    }
+    eprintln!(
+        "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
+        dropped.join(", "),
+        opts.id
+    );
+    Ok(())
 }
 
 /// Remove every `agent_exec` carrier from `env`, and the proxy base URL that
@@ -814,7 +832,7 @@ pub async fn prepare(
                 opts.env.entry("PATH".into()).or_insert_with(|| path.to_string_lossy().into_owned());
             }
         }
-        drop_api_keys_for_old_tmux(&mut opts);
+        drop_api_keys_for_old_tmux(&mut opts)?;
         crate::services::tmux_local::wrap_pty_options_local(&mut opts);
     }
 

@@ -3573,3 +3573,31 @@ Flaky on the first full run under load, green when rerun alone and in the
 second full run: `api_usage::the_book_writes_on_flush_and_reads_its_file_back`
 (a scheduled flush's sleep) and `git_bounded::a_fifo_nested_ignore_times_out…`
 (a 700 ms timeout).
+
+### Merge review (2026-10-07, one reviewer, Opus-class subagent at the user's request)
+
+Six findings, all closed in the follow-up commit on top of `828be59f`:
+
+1. **Confirmed.** `tmux_local::trailing_shell`'s unfenced-with-carriers branch
+   (the Host session's shell after its CLI) unset only the two proxy
+   carriers, so the administrator's Vibe key carrier stayed in the user's own
+   shell. Now every `SECRET_ENV` carrier is unset; a test holds it.
+2. `launch_prep::drop_api_keys_for_old_tmux` (tmux < 3.2) would have dropped
+   the administrator's key silently, against `prepare_spawn`'s "never a
+   silent fall-back": on a server that spawn now fails naming the way back
+   (tmux ≥ 3.2, or the user's own login).
+3. The daemon's `main` never called `agent_exec::forget_inherited_carriers()`
+   in its non-step modes (`--agent-shim`, the daemon, admin verbs); it does
+   now, as the desktop binary's `main` does.
+4. `markup_mcp_*` as `core`: kept, with the reason written beside the rows
+   (a daemon answers them empty until #2339 serves the markup lane there;
+   `off` would refuse the browser client's markup view the day it does).
+5. Filemap: `root_mcp.rs` row no longer claims a daemon runs `start`.
+6. Filemap `boxes.ts` row and `openBox`'s comments no longer speak of a
+   whole-list save the store no longer makes; the revision-adoption guard
+   itself stays (a revision is not an edit).
+
+Found sound by the reviewer: the `root_mcp.rs` port, every spawn path's
+carrier step, `fence_scope::run`'s hook, the boxes store, the `Phone`
+bindings, `auth.rs`'s union, the frontend joins, the i18n keys and the other
+filemap rows.

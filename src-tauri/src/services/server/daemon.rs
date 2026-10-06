@@ -54,6 +54,10 @@ pub fn main() -> ! {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(crate::services::agent_exec::run(&args));
     }
+    // A carrier is read only by the two launch steps above; every other mode
+    // (the daemon, `--agent-shim`, the admin verbs) drops any it inherited
+    // before a thread or a child exists, as the desktop binary's `main` does.
+    crate::services::agent_exec::forget_inherited_carriers();
     // Before anything reads a path, and while this is the only thread.
     separate_from_the_desktop();
     crate::services::brand_migration::hits::install();
