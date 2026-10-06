@@ -12,6 +12,20 @@ must be confirmed by §1 first.
 User request: "Tabtivity is too slow", in particular with many tabs open at
 once and with heavy PDF viewers.
 
+## Baseline (2026-10-06, `scripts/perf-numbers.sh before`, full log in `docs/performance_numbers.md`)
+
+Frozen dev build a6ed2c7a, usual tab set, app idle, machine load 72 on 24
+cores (agents running in tabs: opencode, claude).
+
+| Number | Before |
+|---|---|
+| Renderer main thread, idle | 47.3 % of one core (whole process 53.9 %); nice −10 applied, rtkit active |
+| Renderer runqueue wait | 1.95 s per 30 s |
+| App process, idle | 14.3 % of one core; main thread 4.5 %; 105 voluntary ctxt switches/s; 151 threads |
+| Renderer RSS, PDFs open → closed | 1,229 MB → 1,010 MB |
+| App RSS | 434 MB |
+| Stopwatch: agent tab / 100-page PDF | not yet recorded |
+
 ## 0. Diagnosis in one paragraph
 
 The renderer is a single WebKitGTK thread (DMABUF is off, so JS, layout and
