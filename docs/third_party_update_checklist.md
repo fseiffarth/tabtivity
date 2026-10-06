@@ -199,7 +199,16 @@ Claude's `/fast` — different thing.
   stays needed; `/usage` parsed into three meters, resets resolved; the
   binary still carries the three notification types and six modes; 2.1.290's
   `❯` on the selected `/`/`@` suggestion row does not trip `POINTER_WORD`,
-  which needs a bare word right after the glyph). That probe unset only
+  which needs a bare word right after the glyph). Re-checked against 2.1.292
+  (2026-10-06, live, the same dump, both `*_TAB_UID` names unset: identical
+  keys on SessionStart startup/resume, UserPromptSubmit, PostToolUse, Stop and
+  SessionEnd, `session_id` equal to the `--session-id` passed, the hook's `sed`
+  extractions match `jq` on every payload; its changelog's "plan mode not
+  being restored when resuming" fix still does not reach `-p --resume` — a
+  `plan` session resumed without a mode flag reports the default (`auto`
+  here), so the re-applied
+  mode stays needed; `/usage` three meters, resets resolved; the binary's
+  notification-type and mode-label strings count the same as 2.1.291's). That probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
   counted no `claude` — the `--resume` took the record again, emptying the
@@ -510,7 +519,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
 | Antigravity (`agy`) | `--continue` | — | `curl … antigravity.google/cli/install.sh` |
 | Kimi | — | `-p` | `curl … code.kimi.com/install.sh` |
-| Pi | — | `-p` | `npm i -g @mariozechner/pi-coding-agent` |
+| Pi | — | `-p` | `npm i -g @earendil-works/pi-coding-agent` |
 | Amp | — | `-x` | `npm i -g @sourcegraph/amp` |
 | Goose | — | `run -t` | GitHub release `download_cli.sh` |
 | Crush | — | `run` | `npm i -g @charmland/crush` |
