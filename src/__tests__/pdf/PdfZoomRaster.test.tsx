@@ -95,6 +95,56 @@ const PATH = "/home/u/paper/paper.pdf";
 const TAB = "pdf-tab";
 
 const scroller = () => document.querySelector(".file-viewer-pdf-scroll") as HTMLElement;
+const stack = () => document.querySelector(".file-viewer-pdf-pages") as HTMLElement;
+const wraps = () => [...document.querySelectorAll<HTMLElement>(".file-viewer-pdf-page-wrap")];
+
+/** The resize observers the viewer created on its page stack, so a test can
+ *  report "the stack has relaid out" after a zoom commit (jsdom has none). */
+const resizeObservers: ResizeObserverCallback[] = [];
+class ResizeObserverStub {
+  constructor(cb: ResizeObserverCallback) { resizeObservers.push(cb); }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+const relaidOut = () =>
+  resizeObservers.forEach((cb) => cb([], undefined as unknown as ResizeObserver));
+
+/** The scroller's geometry as a browser would lay it out: a 700 × 500 viewport,
+ *  the stack behind its 12 px padding, the wraps stacked top to bottom, each
+ *  its canvas's CSS box plus the 28 px page-number gap that does NOT scale. */
+const VIEW_W = 700;
+const VIEW_H = 500;
+const PAD = 12;
+const GAP = 28;
+const rect = (x: number, y: number, w: number, h: number) =>
+  ({ x, y, width: w, height: h, top: y, left: x, right: x + w, bottom: y + h, toJSON() {} }) as DOMRect;
+function canvasBox(wrap: HTMLElement) {
+  const c = wrap.querySelector("canvas") as HTMLCanvasElement;
+  return { w: parseFloat(c.style.width) || 0, h: parseFloat(c.style.height) || 0 };
+}
+function layOut() {
+  const el = scroller();
+  const boxes = new Map<Element, DOMRect>();
+  boxes.set(el, rect(0, 0, VIEW_W, VIEW_H));
+  const x = PAD - el.scrollLeft;
+  let y = PAD - el.scrollTop;
+  const top = y;
+  let width = 0;
+  for (const wrap of wraps()) {
+    const { w, h } = canvasBox(wrap);
+    boxes.set(wrap, rect(x, y, w, h + GAP));
+    y += h + GAP;
+    width = Math.max(width, w);
+  }
+  boxes.set(stack(), rect(x, top, width, y - top));
+  return boxes;
+}
+function mockLayout() {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return layOut().get(this) ?? rect(0, 0, 0, 0);
+  });
+}
 const zoomLabel = () => document.querySelector(".file-viewer-zoom-level")!.textContent;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -127,6 +177,8 @@ async function mounted() {
 
 beforeEach(() => {
   io.renders = 0;
+  resizeObservers.length = 0;
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
   io.invoke.mockReset();
   io.invoke.mockImplementation(async (command: string) => {
     if (command === "read_file_bytes") return [37, 80, 68, 70];
@@ -152,6 +204,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  delete (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
   useTabsStore.setState({ setViewerState });
   vi.restoreAllMocks();
 });
@@ -191,6 +244,59 @@ describe("Ctrl+wheel zoom", () => {
     expect(io.renders).toBe(4);
     expect(scaleWrites).toHaveLength(1);
     expect(scaleWrites[0]).toBeCloseTo(1.2 * 1.2 ** 3, 6);
+  });
+
+  it("lands where the preview showed: the point under the cursor, on ITS page, stays put", async () => {
+    await mounted();
+    mockLayout();
+    const el = scroller();
+    const before = canvasBox(wraps()[0]);
+    const s0 = before.w / 600;
+    // Scrolled so the second page sits at the top of the viewport, cursor on it.
+    el.scrollTop = 1_000;
+    const wrapH0 = before.h + GAP;
+    const cursorY = 100;
+    const wrap1Top0 = PAD + wrapH0 - 1_000;
+    const fy = (cursorY - wrap1Top0) / wrapH0;
+    expect(fy).toBeGreaterThan(0);
+    expect(fy).toBeLessThan(1);
+    act(() => {
+      el.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, clientX: 20, clientY: cursorY, bubbles: true, cancelable: true }),
+      );
+    });
+    await waitFor(() => expect(io.renders).toBe(4), { timeout: PDF_ZOOM_COMMIT_MS * 10 });
+    // The stack has relaid out at the committed scale; the observer applies the target.
+    const after = canvasBox(wraps()[0]);
+    expect(after.w / 600).toBeCloseTo(s0 * 1.2, 6);
+    act(() => relaidOut());
+    // That fraction of the (taller) second page is back under the cursor. A
+    // target scaled against the whole stack would miss by the padding's and
+    // the first page's gap's share of the growth.
+    const wrapH1 = after.h + GAP;
+    expect(el.scrollTop).toBeCloseTo(PAD + wrapH1 + fy * wrapH1 - cursorY, 3);
+    expect(el.scrollTop).not.toBeCloseTo((1_000 + cursorY) * 1.2 - cursorY, 0);
+  });
+
+  it("commits nothing, and leaves no scroll target, when the gesture wheels back to where it began", async () => {
+    await mounted();
+    mockLayout();
+    const el = scroller();
+    const label = zoomLabel();
+    act(() => {
+      tick(-100);
+      tick(100);
+    });
+    expect(zoomLabel()).toBe(label);
+    await act(() => sleep(PDF_ZOOM_COMMIT_MS * 3));
+    expect(io.renders).toBe(2);
+    expect(scaleWrites).toEqual([]);
+    expect(stack().style.transform).toBe("");
+    // A later relayout (a window resize, a page painting) must not drag the
+    // scroller back to where it was during the gesture.
+    el.scrollTop = 777;
+    act(() => relaidOut());
+    expect(el.scrollTop).toBe(777);
   });
 
   it("zooms out the same way, and the +/− buttons still zoom at once", async () => {

@@ -269,11 +269,77 @@ export const PDF_PAGE_RELEASE_MS = 30_000;
 
 /** A zoom in progress: the scale the reader has wheeled to, previewed by scaling
  *  the page stack with CSS around the point under the cursor (in the stack's own
- *  untransformed coordinates), until it is committed (`PDF_ZOOM_COMMIT_MS`). */
+ *  untransformed coordinates), until it is committed (`PDF_ZOOM_COMMIT_MS`).
+ *  Everything but `scale` is measured on the gesture's first tick and kept: it
+ *  is what the commit anchors the scroll offset to (`commitZoomPreview`). */
 interface ZoomPreview {
   scale: number;
   originX: number;
   originY: number;
+  /** The cursor at the first tick, relative to the scroller's padding box. */
+  cursorX: number;
+  cursorY: number;
+  /** The scroll offset at the first tick: a plain scroll while the preview is
+   *  up moves the origin point on screen by the difference. */
+  scrollLeft: number;
+  scrollTop: number;
+  /** The stack's offset inside the scroll content (the scroller's padding) —
+   *  the fallback anchor when no page wrap could be found under the cursor. */
+  stackLeft: number;
+  stackTop: number;
+  /** The origin point as a fraction of the page wrap it lies on (or the nearest
+   *  wrap's edge, when it lies in a gap). The inter-page gaps do not scale with
+   *  the zoom, so a target expressed against the whole stack drifts by a gap
+   *  per page above the cursor; one expressed against the page itself does not. */
+  anchor: { wrap: HTMLElement; fx: number; fy: number } | null;
+}
+
+/** The scroll offset the page stack is moved to once it has relaid out after a
+ *  zoom commit: either absolute, or "put this point of this page wrap under the
+ *  cursor", resolved against the wrap's box at apply time (`anchoredScrollTarget`). */
+type PendingScroll =
+  | { top: number; left: number }
+  | { wrap: HTMLElement; fx: number; fy: number; cursorX: number; cursorY: number };
+
+/** The page wrap under (`clientX`, `clientY`) in the stack, with the point as
+ *  fractions of its box — or, for a point in a gap or beside the pages, the
+ *  nearest wrap with the fraction clamped to its edge. `null` with no wraps. */
+function pageAnchorAt(
+  stack: HTMLElement,
+  clientX: number,
+  clientY: number,
+): { wrap: HTMLElement; fx: number; fy: number } | null {
+  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+  let below: HTMLElement | null = null;
+  let last: HTMLElement | null = null;
+  for (const wrap of stack.querySelectorAll<HTMLElement>(":scope > .file-viewer-pdf-page-wrap")) {
+    const r = wrap.getBoundingClientRect();
+    if (r.height <= 0 || r.width <= 0) continue;
+    if (clientY >= r.top && clientY < r.bottom) {
+      return { wrap, fx: clamp01((clientX - r.left) / r.width), fy: (clientY - r.top) / r.height };
+    }
+    if (clientY < r.top && !below) below = wrap;
+    last = wrap;
+  }
+  const wrap = below ?? last;
+  if (!wrap) return null;
+  const r = wrap.getBoundingClientRect();
+  return { wrap, fx: clamp01((clientX - r.left) / r.width), fy: below ? 0 : 1 };
+}
+
+/** Resolve an anchored scroll target against the wrap's live, relaid-out box.
+ *  `null` when the wrap is gone (a reload replaced the pages meanwhile). */
+function anchoredScrollTarget(
+  el: HTMLElement,
+  a: Extract<PendingScroll, { wrap: HTMLElement }>,
+): { top: number; left: number } | null {
+  if (!a.wrap.isConnected) return null;
+  const er = el.getBoundingClientRect();
+  const wr = a.wrap.getBoundingClientRect();
+  return {
+    top: wr.top - er.top - el.clientTop + el.scrollTop + a.fy * wr.height - a.cursorY,
+    left: wr.left - er.left - el.clientLeft + el.scrollLeft + a.fx * wr.width - a.cursorX,
+  };
 }
 
 /** Is the key going to somewhere that types? The host div wraps the find bar, the
@@ -2518,7 +2584,7 @@ function PdfCanvas({
   // After a Ctrl+wheel zoom changes `scale`, the page canvases re-render to the
   // new size asynchronously. We stash the scroll target that keeps the cursor's
   // document point fixed and apply it once the content has actually resized.
-  const pendingScroll = useRef<{ top: number; left: number } | null>(null);
+  const pendingScroll = useRef<PendingScroll | null>(null);
   // A Ctrl+wheel zoom between its first tick and its commit (`ZoomPreview`).
   // `scale` — what the canvases are rasterised at, what the layers are laid out
   // by, what is persisted — does not move until the gesture has paused for
@@ -2536,13 +2602,28 @@ function PdfCanvas({
     setZoomPreview(null);
   }, []);
   /** Commit the previewed zoom: one raster render per near page, one persist. The
-   *  cursor-anchored scroll target was computed against the committed scale at
-   *  the last tick, so the ResizeObserver applies it once the stack has relaid
-   *  out at the new size — and the CSS preview comes off in the same commit. */
+   *  scroll target that keeps the previewed picture in place — the origin point
+   *  of the preview, where it shows NOW (a plain scroll meanwhile moved it) — is
+   *  stashed for the ResizeObserver to apply once the stack has relaid out at the
+   *  new size; the CSS preview comes off in the same React commit. A gesture that
+   *  wheeled back to the committed scale commits nothing and leaves no target. */
   const commitZoomPreview = useCallback(() => {
     const preview = zoomPreviewRef.current;
     dropZoomPreview();
-    if (preview) setScale(preview.scale);
+    if (!preview || preview.scale === scaleRef.current) return;
+    const el = scrollRef.current;
+    if (el) {
+      const cursorX = preview.cursorX - (el.scrollLeft - preview.scrollLeft);
+      const cursorY = preview.cursorY - (el.scrollTop - preview.scrollTop);
+      const eff = preview.scale / scaleRef.current;
+      pendingScroll.current = preview.anchor
+        ? { ...preview.anchor, cursorX, cursorY }
+        : {
+            top: preview.stackTop + preview.originY * eff - cursorY,
+            left: preview.stackLeft + preview.originX * eff - cursorX,
+          };
+    }
+    setScale(preview.scale);
   }, [dropZoomPreview]);
   useEffect(
     () => () => {
@@ -4374,11 +4455,10 @@ function PdfCanvas({
   // Ctrl/Cmd+wheel zooms the page stack toward the cursor (a plain wheel keeps
   // native scrolling). A tick does not rasterise: it moves the PREVIEW (the
   // stack CSS-scaled around the cursor) and re-arms the commit timer, so a
-  // gesture of many ticks lands as one render at its final scale. The
-  // cursor-anchored scroll target is computed against the committed scale —
-  // the scroll offset does not move while the preview is up — and overwritten
-  // on every tick, so whichever tick is last has the one the ResizeObserver
-  // below applies once the stack has relaid out at the committed size.
+  // gesture of many ticks lands as one render at its final scale. The scroll
+  // target that keeps the picture where the preview showed it is derived at the
+  // commit from what the first tick measured (`ZoomPreview`), and applied by the
+  // ResizeObserver below once the stack has relaid out at the committed size.
   const onWheel = useCallback((e: WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
@@ -4386,34 +4466,42 @@ function PdfCanvas({
     if (!el) return;
     // A user zoom takes over; abandon any in-flight recompile scroll restore.
     restoreScroll.current = null;
-    const rect = el.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
     const committed = scaleRef.current;
     const held = zoomPreviewRef.current;
+    const base = held?.scale ?? committed;
     const factor = e.deltaY < 0 ? PDF_ZOOM_STEP : 1 / PDF_ZOOM_STEP;
-    const next = clampPdfScale((held?.scale ?? committed) * factor);
-    if (next === (held?.scale ?? committed)) return;
+    let next = clampPdfScale(base * factor);
+    // Wheeled back to where it started (1.2 × 1.2 / 1.2 is not always 1.2 in
+    // floating point): nothing to commit, rather than a re-render of every near
+    // page at a scale a rounding error away from the one they are at.
+    if (Math.abs(next - committed) < 1e-9) next = committed;
+    if (next === base) return;
     fittedRef.current = false; // manual zoom opts out of resize re-fit
-    const eff = next / committed;
-    pendingScroll.current = {
-      top: (el.scrollTop + cursorY) * eff - cursorY,
-      left: (el.scrollLeft + cursorX) * eff - cursorX,
-    };
-    // The preview scales the stack around the point under the cursor, measured
-    // on the gesture's first tick while the stack is still untransformed; later
-    // ticks keep that origin, or the picture would jump as the origin moved
-    // under its own transform.
-    let originX = held?.originX ?? 0;
-    let originY = held?.originY ?? 0;
-    if (!held) {
-      const content = contentRef.current?.getBoundingClientRect();
-      if (content) {
-        originX = e.clientX - content.left;
-        originY = e.clientY - content.top;
-      }
+    let preview: ZoomPreview;
+    if (held) {
+      // Later ticks keep the first tick's origin and anchor — the stack is
+      // already transformed, so measuring again would move the origin under
+      // its own transform and the picture would jump.
+      preview = { ...held, scale: next };
+    } else {
+      const rect = el.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left - el.clientLeft;
+      const cursorY = e.clientY - rect.top - el.clientTop;
+      const content = contentRef.current;
+      const cr = content?.getBoundingClientRect();
+      preview = {
+        scale: next,
+        originX: cr ? e.clientX - cr.left : 0,
+        originY: cr ? e.clientY - cr.top : 0,
+        cursorX,
+        cursorY,
+        scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
+        stackLeft: cr ? cr.left - rect.left - el.clientLeft + el.scrollLeft : 0,
+        stackTop: cr ? cr.top - rect.top - el.clientTop + el.scrollTop : 0,
+        anchor: content ? pageAnchorAt(content, e.clientX, e.clientY) : null,
+      };
     }
-    const preview = { scale: next, originX, originY };
     zoomPreviewRef.current = preview;
     setZoomPreview(preview);
     if (zoomCommitTimer.current != null) window.clearTimeout(zoomCommitTimer.current);
@@ -4459,11 +4547,14 @@ function PdfCanvas({
     if (!content || !el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       // Cursor-anchored zoom target: apply once, the moment the canvases resize.
-      const target = pendingScroll.current;
-      if (target) {
+      const pending = pendingScroll.current;
+      if (pending) {
         pendingScroll.current = null;
-        el.scrollTop = target.top;
-        el.scrollLeft = target.left;
+        const target = "wrap" in pending ? anchoredScrollTarget(el, pending) : pending;
+        if (target) {
+          el.scrollTop = target.top;
+          el.scrollLeft = target.left;
+        }
       }
       // Recompile reload: the page stack grows over several frames as canvases
       // render, so keep re-applying the saved position until it's reached, then
