@@ -71,13 +71,14 @@ export function steeringActiveTab(): { scope: string; tab: TabEntry } | null {
 export async function clearAgentTab(scope: string, tab: TabEntry): Promise<boolean> {
   if (!steeringAgentOffer(tab).clear || !tab.scheduleTargetId) return false;
   const ptyId = `${scope}:${tab.key}`;
-  if (agentFamily(agentTabLabel(tab)) === "codex" && useActivityStore.getState().busyByTab[ptyId]) return false;
+  const busy = !!useActivityStore.getState().busyByTab[ptyId];
+  if (agentFamily(agentTabLabel(tab)) === "codex" && busy) return false;
   try {
     await submitScheduledAgentCommand(tab.scheduleTargetId, NEW_CONVERSATION_COMMAND);
   } catch {
     return false;
   }
-  noteTypedClear(ptyId);
+  noteTypedClear(ptyId, busy);
   return true;
 }
 

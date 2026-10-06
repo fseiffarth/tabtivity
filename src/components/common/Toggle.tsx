@@ -13,6 +13,7 @@ export function Toggle({
   disabled,
   size,
   title,
+  id,
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedBy,
 }: {
@@ -21,6 +22,8 @@ export function Toggle({
   disabled?: boolean;
   size?: "sm";
   title?: string;
+  /** For a `<label htmlFor>` that does not wrap the switch. */
+  id?: string;
   "aria-label"?: string;
   "aria-describedby"?: string;
 }) {
@@ -28,6 +31,7 @@ export function Toggle({
     <span className={`eld-switch${size === "sm" ? " eld-switch-sm" : ""}`}>
       <input
         type="checkbox"
+        id={id}
         checked={checked}
         disabled={disabled}
         onChange={onChange}

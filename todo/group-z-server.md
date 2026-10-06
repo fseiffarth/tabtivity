@@ -145,10 +145,25 @@ the desktop groundwork the hosted plan's P1 builds on.*
     lane (`ollama_mcp_models`, read from user-writable settings) must call
     `model_allowlist::check_model` before a request reaches the shared
     Ollama on a server (the `TODO(#2339)` in `model_allowlist.rs`).
-    - [ ] 🤖 Automated test — a headless `Create` of a Claude tab records
+    - Phase 1 done (2026-10-02, never live; `docs/headless_mcp_plan.md`,
+      handoff `docs/headless_mcp_handoff.md`): each process serves the tabs it
+      spawns — the Mobile host runs its own schedule/git/help listener and
+      token store (no root lane), the window keeps its own. A headless tab's
+      `git_push` / `git_release` answer `window_required` (the host never
+      reads the keychain); queuing them for the window's card is phase 2.
+    - [x] 🤖 Automated test — a headless `Create` of a Claude tab records
       `PtyOptions` carrying the schedule/help MCP config and a token the
       sidecar's listener accepts; a token minted by one process is refused by
       the other's listener after a restart.
+      (`host.rs` `a_headless_claude_tab_is_handed_the_hosts_mcp_servers`: the
+      host's `start_headless` publishes its runtime; a headless create runs
+      `root_mcp::grant_lanes` — the call `launch_prep::prepare` makes, not
+      `prepare` itself, whose fence and tmux steps need a live host —
+      against the fixture's state dir through the real gates and gets the
+      schedule, git and help servers; the bound listener admits the tokens
+      over HTTP and a fresh store refuses them; root and reader lanes are
+      withheld; the phone's close revokes them. `commands::root_mcp`
+      `a_token_is_admitted_only_by_the_listener_whose_process_minted_it`.)
     - [ ] 🖐️ Manual test — with no window open, create a Claude tab from the
       phone; in it, `/mcp` lists `tabtivity-schedule` and `tabtivity-help`;
       a schedule proposal waits for approval and the card appears once a
@@ -895,6 +910,11 @@ the desktop groundwork the hosted plan's P1 builds on.*
     (AGENTS.md); renumber TODOs if `develop` reused 2350+. Run every gate
     incl. the Windows/macOS all-targets checks before `hosted` → `develop`.
     (Open points, 2026-10-05.)
+    *2026-10-07: `develop` → `hosted` done* (`a6ed2c7a` in; 39 conflicts, not
+    11; no TODO collision — `develop` stopped at 2349). Resolutions in
+    `docs/hosted_handoff.md` § "Merge `develop` → `hosted`". The
+    `TODO(#2339)` allowlist call is still pending: the daemon does not serve
+    the root lane yet. Owed: `hosted` → `develop`.
 
 2387. **Decide `open_external_url` in the Connect window.** The final fix
     round narrowed the Connect window to its socket bridge, clipboard,

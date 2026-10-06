@@ -297,7 +297,9 @@ const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode"];
 /// session yet, `unsupported` for the rest), then the CLI's own transcript.
 /// An OpenCode tab reads its folder's newest session — begun since the
 /// launch a headless create stamped (`ResolvedTab::since`), so a new tab is
-/// a new chat rather than the folder's last conversation.
+/// a new chat rather than the folder's last conversation — and needs no
+/// session id, which a local-model OpenCode tab never has; that one is read
+/// from the scope's local-model home.
 pub fn transcript(
     project_id: &str,
     tab: &ResolvedTab,
@@ -305,7 +307,18 @@ pub fn transcript(
     version: Option<&str>,
     limit: Option<usize>,
 ) -> AgentTranscript {
-    let Some(session_id) = tab.session_id.as_deref().filter(|id| !id.is_empty()) else {
+    if tab.local_model && tab.cmd == "opencode" {
+        return agent_transcript::local_opencode_transcript(
+            Some(project_id),
+            Some(&tab.cwd),
+            tab.since,
+            subagent,
+            version,
+            limit.unwrap_or(DEFAULT_LIMIT),
+        );
+    }
+    let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
+    let Some(session_id) = session_id.or((tab.cmd == "opencode").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -357,12 +370,24 @@ fn disabled_agents(state_dir: &Path) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// `default_agent_cmd` of `settings.json` — a registry id or a binary, as
+/// the desktop's readers take it — "claude" when unset.
+fn default_agent(state_dir: &Path) -> String {
+    std::fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|settings| settings.get("default_agent_cmd")?.as_str().map(|cmd| cmd.trim().to_string()))
+        .filter(|cmd| !cmd.is_empty())
+        .unwrap_or_else(|| "claude".to_string())
+}
+
 /// `agentChoices` with no window: the resumable built-ins that are installed
 /// (`installed`, the registry probe in production) and not switched off in
 /// the settings. Custom agents need the desktop's own probe and are not
 /// offered here; `modes` is empty, as the desktop sends it.
 pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> bool) -> Vec<AgentChoice> {
     let disabled = disabled_agents(state_dir);
+    let default = default_agent(state_dir);
     super::discovery::RESUMABLE_BUILTINS
         .iter()
         .filter_map(|bin| {
@@ -376,6 +401,7 @@ pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> boo
                     id: key_id(host_key, "agent", &[bin]),
                     label: label.to_string(),
                     modes: Vec::new(),
+                    default: default == *bin || default == id,
                 },
                 bin,
             })
@@ -416,7 +442,8 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
 /// `Catalog`'s per-tab agent readings for `tabs` with no window: a turn in
 /// flight is `working` (a decision pending, `question`), a finished one
 /// `done`; an idle or unrecorded tab gets a timing row when its transcript
-/// names a model; every agent tab with a transcript gets its newest prompts.
+/// names a model or has subagents at work; every agent tab with a transcript
+/// gets its newest prompts.
 pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -> TurnReadings {
     let mut readings = TurnReadings::default();
     for tab in tabs.iter().filter(|t| t.public.kind == "agent") {
@@ -424,6 +451,7 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
             continue;
         };
         let model = agent_session::agent_session_model(&tab.cmd, Some(project_id), uid);
+        let subagents = agent_transcript::running_subagents(&tab.cmd, Some(project_id), uid);
         let record = turn_record(state_dir, project_id, uid);
         let ms = |at: Option<u64>| at.map(|secs| secs.saturating_mul(1000));
         match record {
@@ -437,6 +465,8 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                     goal: false,
                     working_at: ms(at),
                     done_at: None,
+                    turn_started_at: None,
+                    subagents,
                 });
             }
             // A finished turn the phone already watched (`mark_seen`, H3) is a
@@ -449,6 +479,8 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                     goal: false,
                     working_at: None,
                     done_at: ms(at),
+                    turn_started_at: None,
+                    subagents,
                 });
             }
             Some((TurnState::Done, at)) => readings.statuses.push(AgentTabStatus {
@@ -459,9 +491,11 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                 goal: false,
                 working_at: None,
                 done_at: ms(at),
+                turn_started_at: None,
+                subagents,
             }),
             _ => {
-                if model.is_some() {
+                if model.is_some() || subagents > 0 {
                     readings.timings.push(AgentTabTiming {
                         tmux_session: tab.tmux_name.clone(),
                         model: model.clone(),
@@ -469,6 +503,8 @@ pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -
                         goal: false,
                         working_at: None,
                         done_at: None,
+                        turn_started_at: None,
+                        subagents,
                     });
                 }
             }
@@ -692,6 +728,11 @@ fn epoch_ms_now() -> i64 {
 const HEADLESS_COLS: u16 = 200;
 const HEADLESS_ROWS: u16 = 50;
 
+/// What a headless launch's PTY id starts with: the tab is `headless:<tmux>`,
+/// the identity its MCP tokens are registered under in the Mobile host
+/// (`docs/headless_mcp_plan.md`), so they can be revoked by tmux name.
+pub(super) const LAUNCH_ID_PREFIX: &str = "headless:";
+
 /// The launch of a stored tab record, for the detached spawn: what the
 /// window's `TerminalView` hands `pty_spawn`, at a fixed
 /// [`HEADLESS_COLS`]×[`HEADLESS_ROWS`]. `project_id` is the raw scope id (a
@@ -715,8 +756,9 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         })
         .unwrap_or_default();
     let tmux = crate::services::workspace::tmux_of(tab).unwrap_or_default().to_string();
+    let kind = tab.extra.get("kind").and_then(serde_json::Value::as_str);
     PtyOptions {
-        id: format!("headless:{tmux}"),
+        id: format!("{LAUNCH_ID_PREFIX}{tmux}"),
         cmd: tab.cmd.clone(),
         args: strings("args"),
         env,
@@ -725,13 +767,14 @@ pub(super) fn launch_options(project_id: &str, tab: &TabEntry) -> PtyOptions {
         rows: HEADLESS_ROWS,
         local_only: false,
         sandbox: false,
-        agent: tab.extra.get("kind").and_then(serde_json::Value::as_str) == Some("agent"),
+        agent: kind == Some("agent"),
         project_id: Some(project_id.to_string()),
         schedule_target_id: tab.extra.get("scheduleTargetId").and_then(serde_json::Value::as_str).map(str::to_string),
         remote_host_id: None,
         tmux_session: Some(tmux),
         tmux_attach: None,
         host_bound_uid: None,
+        local_model: kind == Some("local_agent"),
         host_session: false,
     }
 }
@@ -1052,12 +1095,15 @@ pub fn attach_desktop_image(state_dir: &Path, root: &Path, image_id: &str) -> Re
 /// writes it — a create gets a fresh id, an update keeps the stored prefix
 /// commands the phone never sees, a delete is plain. Answers the tab's rows
 /// as `schedules` does. `Err("schedule_not_found")` for an update of a rule
-/// that is gone.
+/// that is gone. `phone` is the paired device asking: a rule it creates or
+/// edits carries it (`phone_origin`) — an edit takes a desktop or agent rule
+/// over, so revoking that phone cancels it (#2348).
 pub fn schedule_mutate(
     state_dir: &Path,
     project_id: &str,
     schedule_target_id: &str,
     action: ScheduleMutation,
+    phone: Option<&str>,
     now: DateTime<Local>,
 ) -> Result<TabSchedules, String> {
     let path = agent_tasks::file_path(state_dir);
@@ -1074,6 +1120,7 @@ pub fn schedule_mutate(
                 preface: Vec::new(),
                 last: None,
                 origin: None,
+                phone_device: phone.map(str::to_string),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1090,6 +1137,7 @@ pub fn schedule_mutate(
                 preface: existing.preface,
                 last: None,
                 origin: None,
+                phone_device: phone.map(str::to_string),
             };
             agent_tasks::upsert_in(&path, project_id, schedule_target_id, prompt, None)?;
         }
@@ -1112,12 +1160,16 @@ pub struct SendTarget {
 /// prompt's id (finished one-time rules pruned first at the tab's cap, the
 /// id re-minted when a recurring rule holds it), then the prompt retired to
 /// the history — and the sidecar's own scheduler delivers it at the next
-/// idle point. Answers the project's remaining prompts.
+/// idle point. Answers the project's remaining prompts. `phone` is the
+/// paired device asking: a prompt it creates or edits carries it, and a
+/// send's rule carries the sending phone, else the phone that wrote the
+/// prompt (`phone_origin`, #2348).
 pub fn prompt_mutate(
     state_dir: &Path,
     project_id: &str,
     action: PromptMutation,
     target: Option<SendTarget>,
+    phone: Option<&str>,
     now: DateTime<Local>,
 ) -> Result<Vec<ProjectAgentPrompt>, String> {
     match action {
@@ -1125,12 +1177,18 @@ pub fn prompt_mutate(
         PromptMutation::Create { prompt } => agent_prompts::upsert_at(
             state_dir,
             project_id,
-            ProjectAgentPromptInput { id: crate::commands::projects::uuid_v4(), message: prompt.message, tags: None, target: None },
+            ProjectAgentPromptInput {
+                id: crate::commands::projects::uuid_v4(),
+                message: prompt.message,
+                tags: None,
+                target: None,
+                phone_device: phone.map(str::to_string),
+            },
         ),
         PromptMutation::Update { prompt_id, prompt } => agent_prompts::upsert_at(
             state_dir,
             project_id,
-            ProjectAgentPromptInput { id: prompt_id, message: prompt.message, tags: None, target: None },
+            ProjectAgentPromptInput { id: prompt_id, message: prompt.message, tags: None, target: None, phone_device: phone.map(str::to_string) },
         ),
         PromptMutation::Send { prompt_id, .. } => {
             let target = target.ok_or_else(|| "tab_not_found".to_string())?;
@@ -1138,7 +1196,8 @@ pub fn prompt_mutate(
                 .into_iter()
                 .find(|row| row.id == prompt_id)
                 .ok_or_else(|| "prompt_not_found".to_string())?;
-            queue_prompt(state_dir, project_id, &target.schedule_target_id, &prompt.message, Some(&prompt.id), now)?;
+            let phone = phone.or(prompt.phone_device.as_deref());
+            queue_prompt(state_dir, project_id, &target.schedule_target_id, &prompt.message, Some(&prompt.id), phone, now)?;
             agent_prompts::archive_at(
                 state_dir,
                 project_id,
@@ -1162,12 +1221,14 @@ pub fn prompt_mutate(
 /// `queuePromptForTab`: a one-time rule at this machine's current minute —
 /// finished one-time rules pruned first at the tab's cap, `id` re-minted
 /// when a recurring rule holds it (or none was given). Returns the rule's id.
+/// `phone`: the paired device the prompt came from.
 fn queue_prompt(
     state_dir: &Path,
     project_id: &str,
     target_id: &str,
     message: &str,
     id: Option<&str>,
+    phone: Option<&str>,
     now: DateTime<Local>,
 ) -> Result<String, String> {
     let path = agent_tasks::file_path(state_dir);
@@ -1190,6 +1251,7 @@ fn queue_prompt(
         preface: Vec::new(),
         last: None,
         origin: None,
+        phone_device: phone.map(str::to_string),
     };
     agent_tasks::upsert_in(&path, project_id, target_id, rule, None)?;
     Ok(id)
@@ -1219,18 +1281,28 @@ fn held_words(message: &str) -> Result<&str, String> {
 /// `HoldPrompt` with no window (`holdTabPrompt`): the phone sent `message`
 /// while the agent worked; it is queued as a send-now rule on the tab's
 /// binding, which the caller marks as a phone hold so the scheduler types it
-/// at once. Returns the rule's id, which the phone edits it by.
-pub fn hold_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str, now: DateTime<Local>) -> Result<String, String> {
+/// at once. Returns the rule's id, which the phone edits it by. The rule
+/// carries `phone`, the paired device that held it (`phone_origin`).
+pub fn hold_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, message: &str, phone: Option<&str>, now: DateTime<Local>) -> Result<String, String> {
     let target = tab.schedule_target_id.as_deref().filter(|id| !id.is_empty()).ok_or_else(|| "tab_not_found".to_string())?;
     let text = held_words(message)?;
-    queue_prompt(state_dir, project_id, target, text, None, now)
+    queue_prompt(state_dir, project_id, target, text, None, phone, now)
 }
 
 /// `EditHeldPrompt` with no window (`editHeldTabPrompt`): new words for a
 /// held prompt, kept only while its rule still waits. `held_gone` once it is
 /// delivered (or is not a waiting one-time rule of this tab), `held_busy`
 /// while it is being typed — never re-created, which would send it twice.
-pub fn edit_held_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, held_id: &str, message: &str) -> Result<(), String> {
+/// `phone`, the paired device editing, takes the rule over (#2348): a held
+/// prompt the desktop queued then carries that phone, as one it held does.
+pub fn edit_held_prompt(
+    state_dir: &Path,
+    project_id: &str,
+    tab: &ResolvedTab,
+    held_id: &str,
+    message: &str,
+    phone: Option<&str>,
+) -> Result<(), String> {
     let target = tab.schedule_target_id.as_deref().filter(|id| !id.is_empty()).ok_or_else(|| "tab_not_found".to_string())?;
     let text = held_words(message)?;
     let held = agent_tasks::list_at(state_dir, project_id, target)?
@@ -1238,7 +1310,8 @@ pub fn edit_held_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, h
         .find(|rule| rule.id == held_id)
         .filter(|rule| matches!(rule.rule, AgentScheduleRule::Once { .. }) && rule.last.is_none())
         .ok_or_else(|| "held_gone".to_string())?;
-    let rule = ScheduledAgentPrompt { message: text.to_string(), ..held };
+    let phone_device = phone.map(str::to_string).or(held.phone_device.clone());
+    let rule = ScheduledAgentPrompt { message: text.to_string(), phone_device, ..held };
     match agent_tasks::upsert_in(&agent_tasks::file_path(state_dir), project_id, target, rule, Some(target)) {
         Ok(_) => Ok(()),
         Err(code) if code == agent_tasks::SCHEDULE_BUSY_ERROR => Err("held_busy".into()),
@@ -1350,6 +1423,7 @@ fn zone_name(value: &str) -> Option<String> {
 }
 
 /// `…/zoneinfo/Europe/Berlin` → `Europe/Berlin`.
+#[cfg(any(unix, test))]
 fn zone_from_localtime_target(target: &Path) -> Option<String> {
     let text = target.to_string_lossy();
     let (_, zone) = text.rsplit_once("zoneinfo/")?;
@@ -1518,12 +1592,12 @@ mod tests {
     fn a_held_phone_prompt_is_a_send_now_rule_edited_only_while_it_waits() {
         let dir = tempfile::tempdir().unwrap();
         let mut gemini = tab("gemini", None);
-        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "go on", Local::now()).unwrap_err(), "tab_not_found", "an unbound tab");
+        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "go on", None, Local::now()).unwrap_err(), "tab_not_found", "an unbound tab");
         gemini.schedule_target_id = Some("target-gemini".into());
-        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "/clear", Local::now()).unwrap_err(), "invalid_prompt");
-        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "   ", Local::now()).unwrap_err(), "invalid_prompt");
+        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "/clear", None, Local::now()).unwrap_err(), "invalid_prompt");
+        assert_eq!(hold_prompt(dir.path(), "p1", &gemini, "   ", None, Local::now()).unwrap_err(), "invalid_prompt");
 
-        let id = hold_prompt(dir.path(), "p1", &gemini, " then the docs ", Local::now()).unwrap();
+        let id = hold_prompt(dir.path(), "p1", &gemini, " then the docs ", None, Local::now()).unwrap();
         assert_eq!(id.len(), 36, "a UUID the phone can name back: {id}");
         let rules = agent_tasks::list_at(dir.path(), "p1", "target-gemini").unwrap();
         assert_eq!(rules.len(), 1);
@@ -1531,9 +1605,9 @@ mod tests {
         assert_eq!(rules[0].message, "then the docs");
         assert!(matches!(rules[0].rule, AgentScheduleRule::Once { .. }));
 
-        edit_held_prompt(dir.path(), "p1", &gemini, &id, "then the tests").unwrap();
+        edit_held_prompt(dir.path(), "p1", &gemini, &id, "then the tests", None).unwrap();
         assert_eq!(agent_tasks::list_at(dir.path(), "p1", "target-gemini").unwrap()[0].message, "then the tests");
-        assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, "nope", "x").unwrap_err(), "held_gone");
+        assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, "nope", "x", None).unwrap_err(), "held_gone");
 
         // Being typed: busy; delivered: gone — never re-created.
         let path = agent_tasks::file_path(dir.path());
@@ -1542,10 +1616,81 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(agent_tasks::claim_in(&path, "p1", "target-gemini", &id, &key, Local::now()), Ok(true));
-        assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, &id, "x").unwrap_err(), "held_busy");
+        assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, &id, "x", None).unwrap_err(), "held_busy");
         agent_tasks::complete_in(&path, "p1", "target-gemini", &id, &key, crate::schema::agent_tasks::AgentScheduleResult::Delivered).unwrap();
-        assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, &id, "x").unwrap_err(), "held_gone");
+        assert_eq!(edit_held_prompt(dir.path(), "p1", &gemini, &id, "x", None).unwrap_err(), "held_gone");
         assert_eq!(agent_tasks::list_at(dir.path(), "p1", "target-gemini").unwrap()[0].message, "then the tests");
+    }
+
+    /// Every rule a phone makes with no window names that phone — a held
+    /// prompt, a created schedule, a sent collected prompt — and a phone's
+    /// edit or update takes a rule over (#2348: what a revoke or narrowing
+    /// cancels). An edit that names no phone keeps the stored one.
+    #[test]
+    fn a_rule_a_phone_makes_with_no_window_names_the_phone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut gemini = tab("gemini", None);
+        gemini.schedule_target_id = Some("target-gemini".into());
+        let phone = Some("phone-1");
+        let device = |id: &str| {
+            agent_tasks::list_at(dir.path(), "p1", "target-gemini")
+                .unwrap()
+                .into_iter()
+                .find(|rule| rule.id == id)
+                .and_then(|rule| rule.phone_device)
+        };
+
+        let held = hold_prompt(dir.path(), "p1", &gemini, "then the docs", phone, Local::now()).unwrap();
+        assert_eq!(device(&held).as_deref(), phone);
+        edit_held_prompt(dir.path(), "p1", &gemini, &held, "then the tests", phone).unwrap();
+        assert_eq!(device(&held).as_deref(), phone);
+        edit_held_prompt(dir.path(), "p1", &gemini, &held, "then the docs", None).unwrap();
+        assert_eq!(device(&held).as_deref(), phone, "an edit naming no phone keeps it");
+        // A held prompt the desktop queued, which a phone then rewrites.
+        let desk_held = hold_prompt(dir.path(), "p1", &gemini, "desk words", None, Local::now()).unwrap();
+        assert_eq!(device(&desk_held), None);
+        edit_held_prompt(dir.path(), "p1", &gemini, &desk_held, "phone words", Some("phone-2")).unwrap();
+        assert_eq!(device(&desk_held).as_deref(), Some("phone-2"));
+
+        let input = |message: &str| super::super::protocol::MobileScheduleInput {
+            enabled: true,
+            message: message.into(),
+            rule: AgentScheduleRule::Daily { time: "09:00".into() },
+        };
+        let listed = schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Create { schedule: input("daily") }, phone, Local::now()).unwrap();
+        let daily = listed.schedules.iter().find(|rule| rule.message == "daily").unwrap().id.clone();
+        assert_eq!(device(&daily).as_deref(), phone);
+        schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Update { schedule_id: daily.clone(), schedule: input("daily, later") }, Some("phone-2"), Local::now()).unwrap();
+        assert_eq!(device(&daily).as_deref(), Some("phone-2"), "the editing phone takes it over");
+        // A desktop rule a phone updates names that phone too.
+        let desk = ScheduledAgentPrompt {
+            id: "desk-rule".into(),
+            enabled: true,
+            message: "nightly".into(),
+            rule: AgentScheduleRule::Daily { time: "23:00".into() },
+            preface: vec!["/clear".into()],
+            last: None,
+            origin: None,
+            phone_device: None,
+        };
+        agent_tasks::upsert_in(&agent_tasks::file_path(dir.path()), "p1", "target-gemini", desk, None).unwrap();
+        schedule_mutate(dir.path(), "p1", "target-gemini", ScheduleMutation::Update { schedule_id: "desk-rule".into(), schedule: input("nightly, phone words") }, phone, Local::now()).unwrap();
+        assert_eq!(device("desk-rule").as_deref(), phone);
+
+        agent_prompts::upsert_at(dir.path(), "p1", ProjectAgentPromptInput { id: "collected".into(), message: "sweep the logs".into(), tags: None, target: None, phone_device: None }).unwrap();
+        let target = || SendTarget { schedule_target_id: "target-gemini".into(), label: "Gemini".into(), session_id: None, agent: "gemini".into() };
+        prompt_mutate(dir.path(), "p1", PromptMutation::Send { prompt_id: "collected".into(), tmux_session: "s".into() }, Some(target()), phone, Local::now()).unwrap();
+        assert_eq!(device("collected").as_deref(), phone);
+
+        // A desktop prompt a phone edits, then sent with no phone asking (the
+        // sidecar's own send path stands in for the desktop's): the rule
+        // names the phone that wrote the words.
+        agent_prompts::upsert_at(dir.path(), "p1", ProjectAgentPromptInput { id: "desk-prompt".into(), message: "desk".into(), tags: None, target: None, phone_device: None }).unwrap();
+        let edit = super::super::protocol::MobilePromptInput { message: "phone words".into() };
+        let listed = prompt_mutate(dir.path(), "p1", PromptMutation::Update { prompt_id: "desk-prompt".into(), prompt: edit }, None, phone, Local::now()).unwrap();
+        assert_eq!(listed.iter().find(|row| row.id == "desk-prompt").unwrap().phone_device.as_deref(), phone);
+        prompt_mutate(dir.path(), "p1", PromptMutation::Send { prompt_id: "desk-prompt".into(), tmux_session: "s".into() }, Some(target()), None, Local::now()).unwrap();
+        assert_eq!(device("desk-prompt").as_deref(), phone);
     }
 
     use chrono::TimeZone;
@@ -1561,8 +1706,10 @@ mod tests {
                 agent_model: None,
                 agent_plan: false,
                 agent_goal: false,
+                agent_subagents: 0,
                 working_at: None,
                 done_at: None,
+                turn_started_at: None,
                 schedules: None,
                 prompts: Vec::new(),
                 available: false,
@@ -1570,14 +1717,39 @@ mod tests {
                 last_activity: None,
                 color: None,
                 sign_in: false,
+                worktree: None,
+                subagent_worktrees: Vec::new(),
             },
             tmux_name: concat!(crate::app_slug!(), "-x").into(),
             session_id: session_id.map(str::to_string),
             schedule_target_id: None,
             cmd: cmd.into(),
-            cwd: "/nowhere".into(),
+            // Absolute on each OS: OpenCode's reader takes no relative folder.
+            cwd: if cfg!(windows) { r"C:\nowhere" } else { "/nowhere" }.into(),
             since: None,
+            local_model: false,
         }
+    }
+
+    /// The phone's Mark up starts the agent `default_agent_cmd` names — an id
+    /// or a binary, Claude when unset — so exactly that one row is flagged.
+    #[test]
+    fn the_default_agent_is_flagged() {
+        let dir = state_dir();
+        let flagged = |dir: &Path| {
+            agents(dir, b"k", &|_| true)
+                .into_iter()
+                .filter(|choice| choice.public.default)
+                .map(|choice| choice.bin)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(flagged(dir.path()), vec!["claude"]);
+        std::fs::write(dir.path().join("settings.json"), r#"{"default_agent_cmd":"antigravity"}"#).unwrap();
+        assert_eq!(flagged(dir.path()), vec!["agy"]);
+        std::fs::write(dir.path().join("settings.json"), r#"{"default_agent_cmd":"codex"}"#).unwrap();
+        assert_eq!(flagged(dir.path()), vec!["codex"]);
+        std::fs::write(dir.path().join("settings.json"), r#"{"default_agent_cmd":"codex","disabled_agents":["codex"]}"#).unwrap();
+        assert!(flagged(dir.path()).is_empty());
     }
 
     /// A created agent tab carries its launch moment, so its OpenCode reads
@@ -1585,7 +1757,7 @@ mod tests {
     #[test]
     fn a_created_agent_tab_is_stamped_with_its_launch() {
         let agent = AgentChoice {
-            public: AgentCatalogEntry { id: "a".into(), label: "OpenCode".into(), modes: Vec::new() },
+            public: AgentCatalogEntry { id: "a".into(), label: "OpenCode".into(), modes: Vec::new(), default: false },
             bin: "opencode",
         };
         let before = epoch_ms_now();
@@ -1596,10 +1768,28 @@ mod tests {
         assert!(!shell.extra.contains_key("launchedAt"));
     }
 
+    /// A local-model tab started with no window gets the scope's local-model
+    /// home, as the window's spawn does; any other tab the scope's own.
+    #[test]
+    fn a_local_model_record_launches_into_the_local_model_home() {
+        let mut record = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
+        assert!(!launch_options("p1", &record).local_model);
+        record.extra.insert("kind".into(), serde_json::json!("local_agent"));
+        let opts = launch_options("p1", &record);
+        assert!(opts.local_model);
+        assert!(!opts.agent, "the fence knows a local-model driver by its command");
+    }
+
     #[test]
     fn a_transcript_answers_the_same_not_yet_reasons_as_the_window() {
         assert_eq!(transcript("p1", &tab("claude", None), None, None, None).reason.as_deref(), Some("no_session"));
         assert_eq!(transcript("p1", &tab("bash", None), None, None, None).reason.as_deref(), Some("unsupported"));
+        // OpenCode is read by folder, so a tab without a session id (a
+        // local-model one) still reaches the reader instead of waiting on one.
+        assert_ne!(transcript("p1", &tab("opencode", None), None, None, None).reason.as_deref(), Some("no_session"));
+        let mut local = tab("opencode", None);
+        local.local_model = true;
+        assert_ne!(transcript("p1", &local, None, None, None).reason.as_deref(), Some("no_session"));
         let unread = transcript("p1", &tab("claude", Some("no-such-session")), None, None, Some(5));
         assert!(!unread.available);
         assert!(unread.reason.is_some());

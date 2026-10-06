@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
+import { observeStripResize } from "../../lib/observeStripResize";
 
 /**
  * The horizontally-scrolling tab strip + flanking chevrons — the SAME overflow
@@ -54,11 +55,11 @@ export function ScrollingTabStrip({
     updateScrollState();
     const onScroll = () => updateScrollState();
     el.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(() => updateScrollState());
-    ro.observe(el);
+    // Children too: a tab growing inside a capped strip changes no strip box.
+    const stopResize = observeStripResize(el, updateScrollState);
     return () => {
       el.removeEventListener("scroll", onScroll);
-      ro.disconnect();
+      stopResize();
     };
   }, [updateScrollState]);
   useEffect(() => {

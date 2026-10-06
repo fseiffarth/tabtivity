@@ -448,7 +448,9 @@ mod tests {
 
         let vibe = std::fs::read_to_string(home.join(".vibe").join("hooks.toml")).expect("read");
         assert_eq!(vibe.matches("name = \"newname-session\"").count(), 1);
-        assert!(vibe.contains("name = \"mine\"") && vibe.contains(&new_hook) && !vibe.contains(&old_hook));
+        // A TOML string: Windows' `\` in the path is written escaped.
+        let in_toml = |hook: &str| serde_json::to_string(hook).expect("json");
+        assert!(vibe.contains("name = \"mine\"") && vibe.contains(&in_toml(&new_hook)) && !vibe.contains(&in_toml(&old_hook)));
         let notes = std::fs::read_to_string(home.join(".vibe").join("AGENTS.md")).expect("read");
         assert!(notes.starts_with("my notes\n"));
         assert!(notes.contains(&RENAMED.cur(Name::AGENT_HINT_START)) && notes.contains(&RENAMED.cur(Name::AGENT_HINT_END)));

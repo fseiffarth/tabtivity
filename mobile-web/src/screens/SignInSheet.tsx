@@ -157,7 +157,7 @@ export function SignInSheet({ tabId, agent, signIn, done = false, ended = false,
     <section className="option-sheet sign-in-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.signIn.title", { agent })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label="Close">✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
         <h2>{t("mobile.signIn.title", { agent })}{isUntested("mobile.signIn") && <small>{t("mobile.focus.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

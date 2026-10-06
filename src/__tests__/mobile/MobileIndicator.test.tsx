@@ -158,4 +158,39 @@ describe("MobileIndicator reconnect", () => {
     await waitFor(() => expect(screen.queryByText("Pixel")).toBeNull());
     expect(screen.getByText("iPad")).toBeTruthy();
   });
+  it("opens a paired phone's own access dialog from its Access button", async () => {
+    const devices = [
+      { id: "dev-a", name: "Pixel", created_at: 1, last_seen_at: null, online: true, hidden_sections: ["mail"] },
+    ];
+    invokeMock.mockImplementation((command: string, args?: unknown) => {
+      if (command === "mobile_host_status") return Promise.resolve(connected);
+      if (command === "mobile_paired_devices") return Promise.resolve(devices);
+      if (command === "mobile_admin") {
+        const request = (args as { request: { type: string } }).request;
+        if (request.type === "devices") return Promise.resolve({ status: "devices", devices });
+        if (request.type === "set_hidden_sections") return Promise.resolve({ status: "ok" });
+      }
+      return Promise.resolve(null);
+    });
+    const user = userEvent.setup();
+    render(<MobileIndicator />);
+
+    await screen.findByLabelText(`${BRAND.display} Mobile connected`);
+    await user.click(screen.getByLabelText(`${BRAND.display} Mobile connected`));
+    await user.click(await screen.findByRole("button", { name: "Access Pixel" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Pixel" });
+    expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
+    expect(dialog.querySelector("[aria-pressed='false']")?.textContent).toBe("Mail");
+
+    await user.click(screen.getByRole("button", { name: "Mail" }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("mobile_admin", {
+        request: { type: "set_hidden_sections", device_id: "dev-a", sections: [] },
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 });

@@ -83,7 +83,9 @@ import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
-import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
+import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 
 /** How long the pointer must rest on a session row before its stats card opens
@@ -504,12 +506,27 @@ export function ProjectFilesView({
 
   const mobileAccessOn = project?.[MOBILE_ACCESS_KEY] ?? false;
 
-  const toggleMobileAccess = (enabled: boolean) => {
-    if (!projectId) return;
+  // The phone button opens the per-phone picker rather than toggling: which
+  // paired phones reach the project is part of the same decision. The picker
+  // writes each choice itself (All → every phone, ticks → that list, Turn off).
+  const [mobilePicker, setMobilePicker] = useState<{ x: number; y: number } | null>(null);
+  const mobileDevices = project?.[MOBILE_DEVICES_KEY];
+  // Paired phones only matter here for a list's count in the button's title:
+  // read them while that button shows one, and again when the picker closes.
+  const { phones: pairedPhones } = usePairedPhones(
+    `${mobilePicker !== null}:${JSON.stringify(mobileDevices ?? null)}`,
+    active && mobileHostConnected && mobileEligible && mobileAccessOn && mobileDevices !== undefined,
+  );
+  const mobileReach = phoneReach(mobileAccessOn, mobileDevices, pairedPhones);
+  const applyMobileAccess = (enabled: boolean, devices: string[] | null) => {
+    if (!projectId) return Promise.resolve();
     setMobileAccessBusy(true);
     setMobileAccessError(null);
-    void setProjectMobileAccess(projectId, enabled)
-      .catch((reason) => setMobileAccessError(String(reason)))
+    return setProjectMobileAccess(projectId, enabled, devices)
+      .catch((reason) => {
+        setMobileAccessError(String(reason));
+        throw reason;
+      })
       .finally(() => setMobileAccessBusy(false));
   };
 
@@ -562,12 +579,15 @@ export function ProjectFilesView({
     const worktreeArgs = gitWorktreeArgs(selectedGitWorktree);
     void Promise.all([
       invoke<GitStatus>("git_status", { projectDir: dir, ...worktreeArgs }).catch(() => null),
-      invoke<string[]>("git_unpushed_commits", { projectDir: dir, ...worktreeArgs }).catch(() => [] as string[]),
+      // A failed read (git refused or timed out, #2349) is no reading, not
+      // "nothing to push": `null`, so neither this bar nor the pill draws clean.
+      invoke<string[]>("git_unpushed_commits", { projectDir: dir, ...worktreeArgs }).catch(() => null),
     ]).then(([status, unpushed]) => {
       if (context !== gitContextKeyRef.current) return;
       setGitStatus(status);
-      setUnpushedCommits(unpushed);
-      if (!selectedGitWorktree) writeGitBarSnapshot(dir, { status, unpushed });
+      // Unknown keeps the last list shown rather than emptying it.
+      if (unpushed) setUnpushedCommits(unpushed);
+      if (!selectedGitWorktree && unpushed) writeGitBarSnapshot(dir, { status, unpushed });
       // Keep the project's pill dot in sync from the data we just fetched (no
       // extra git subprocesses), so edits/commits/pushes reflect immediately
       // instead of waiting for the switcher's periodic poll.
@@ -575,7 +595,10 @@ export function ProjectFilesView({
       // that dot tracks the project repo (the switcher's poll recomputes it).
       // Gate on `active` so a background tab never churns the shared store.
       if (active && projectId && status && !onNestedRepo && !selectedGitWorktree) {
-        useGitDirtyStore.getState().set(projectId, gitDirtyState(status, unpushed.length));
+        const level = gitDirtyState(status, unpushed?.length ?? 0);
+        // Without the unpushed count a clean tree may still be "unpushed":
+        // leave the dot to the switcher's probe instead of writing "clean".
+        if (unpushed || level !== "clean") useGitDirtyStore.getState().set(projectId, level);
       }
     });
   };
@@ -1512,16 +1535,35 @@ export function ProjectFilesView({
             className={`side-panel-mobile-btn${mobileAccessOn ? " on" : ""}`}
             disabled={mobileAccessBusy}
             aria-pressed={mobileAccessOn}
+            aria-haspopup="menu"
             aria-label={t("projectFilesView.mobileAccessAria", { name: project?.name ?? "" })}
             title={
-              mobileAccessOn
-                ? t("projectFilesView.mobileAccessOnTitle")
-                : t("projectFilesView.mobileAccessOffTitle")
+              mobileReach.kind === "all"
+                ? t("projectFilesView.mobileAccessAllTitle")
+                : mobileReach.kind === "some"
+                  ? t("projectFilesView.mobileAccessSomeTitle", { phones: phoneReachLabel(mobileReach, t) })
+                  : mobileReach.kind === "none"
+                    ? t("projectFilesView.mobileAccessNoneTitle")
+                    : t("projectFilesView.mobileAccessOffTitle")
             }
-            onClick={() => toggleMobileAccess(!mobileAccessOn)}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMobilePicker({ x: r.left, y: r.bottom + 2 });
+            }}
           >
             <MobileAccessIcon on={mobileAccessOn} />
           </button>
+        )}
+        {mobilePicker && mobileHostConnected && mobileEligible && (
+          <MobileAccessPicker
+            x={mobilePicker.x}
+            y={mobilePicker.y}
+            kind="project"
+            enabled={mobileAccessOn}
+            devices={mobileDevices}
+            onApply={applyMobileAccess}
+            onClose={() => setMobilePicker(null)}
+          />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
         {sshTagMenu && projectId && (

@@ -224,8 +224,9 @@ export interface DetachedOpenDialogEnvelope {
  * teardowns drop the store record BEFORE the window goes, so the host finds no
  * record and does nothing; a record still standing means the popout died
  * behind the store's back (a display change, `xkill`, a renderer crash, a seed
- * timeout). The popout is reopened from that record; only one that keeps
- * giving up on its own (DETACHED_GAVE_UP) is docked back rather than stranded.
+ * timeout). The popout is reopened from that record; only one that has kept
+ * giving up on its own (DETACHED_GAVE_UP) for minutes is docked back rather
+ * than stranded.
  */
 export const DETACHED_WINDOW_DESTROYED = "detached-window-destroyed";
 export interface DetachedWindowDestroyedEnvelope {
@@ -967,6 +968,26 @@ let shuttingDown = false;
 const unexpectedWindowDeaths = new Map<string, number[]>();
 /** Labels whose popout announced DETACHED_GAVE_UP and has not died yet. */
 const gaveUpWindows = new Set<string>();
+/** Per label: the first and the latest death of its current give-up streak. */
+const gaveUpStreaks = new Map<string, { since: number; last: number }>();
+
+/** How long a popout must keep giving up on its seed, every respawn, before it
+ *  is docked. A display switch stalls the main window and kills popouts for
+ *  seconds, not minutes — docking on the third give-up within a minute put
+ *  popouts back into the main window whenever a screen was disconnected. */
+export const DETACHED_GIVE_UP_DOCK_MS = 180_000;
+/** A give-up this long after the previous one starts a new streak (a streak's
+ *  give-ups are at most the 8 s seed wait plus the 30 s backoff apart). */
+const GIVE_UP_STREAK_GAP_MS = 90_000;
+
+/** Record one give-up death of `label` at `now`; whether its streak has lasted
+ *  long enough that the popout cannot render and its tabs must dock back. */
+export function noteGiveUpStreak(label: string, now: number): boolean {
+  const prev = gaveUpStreaks.get(label);
+  const since = prev && now - prev.last < GIVE_UP_STREAK_GAP_MS ? prev.since : now;
+  gaveUpStreaks.set(label, { since, last: now });
+  return now - since >= DETACHED_GIVE_UP_DOCK_MS;
+}
 
 /** How long to wait before reopening a popout that died `deaths` times in the
  *  last minute. The first two come back at once; after that a window something
@@ -1176,12 +1197,14 @@ export async function listenDetachedHost(): Promise<() => void> {
   });
 
   // A compositor can discard a popout during a monitor change — once per step
-  // of it, and switching to one screen takes several. Reopen it from its
-  // existing detached record instead of docking it into the main window and
-  // persisting that as the new layout. Only a popout that keeps giving up on
-  // its own (no seed, so it cannot render) is docked, after bounded retries, so
-  // its tabs stay reachable. Quit teardown destroys popouts with their records
-  // intact, hence the flag.
+  // of it, and switching to one screen takes several — and the main window can
+  // stall long enough meanwhile that a respawned popout gives up on its seed.
+  // Reopen it from its existing detached record (the backend puts it on the
+  // main window's screen when its own is gone) instead of docking it into the
+  // main window and persisting that as the new layout. Only a popout that has
+  // kept giving up on its own (no seed, so it cannot render) for minutes is
+  // docked, so its tabs stay reachable. Quit teardown destroys popouts with
+  // their records intact, hence the flag.
   const unDestroyed = await listen<DetachedWindowDestroyedEnvelope>(
     DETACHED_WINDOW_DESTROYED,
     (ev) => {
@@ -1199,8 +1222,11 @@ export async function listenDetachedHost(): Promise<() => void> {
         const recent = (unexpectedWindowDeaths.get(label) ?? [])
           .filter((time) => now - time < 60_000);
         recent.push(now);
-        if (gaveUp && recent.length > 2) {
+        // A death that was not a give-up ends whatever give-up streak there was.
+        if (!gaveUp) gaveUpStreaks.delete(label);
+        else if (noteGiveUpStreak(label, now)) {
           unexpectedWindowDeaths.delete(label);
+          gaveUpStreaks.delete(label);
           store.recoverDetachedGroup(scope, entry.id);
           void persistScopeNow(scope);
           return;

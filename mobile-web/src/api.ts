@@ -1,12 +1,13 @@
 import { translate, useI18nStore } from "../../src/lib/i18n";
-import type { Mark } from "./markup/layer";
+import type { Mark, MarkTick } from "./markup/layer";
 
 /** One row of the phone's list. `kind` says whether it is a project or a box
  * (#31aa) — a box is a scope of its own on the desktop, always "active" here,
  * and a host older than the field sends none, which reads as a project. */
 /** A project's pending git state, the desktop pill's dot: changes not yet added ▸ staged, not committed ▸ committed, not pushed ▸ `.git` missing. Absent when clean. */
 export type GitDot = "dirty" | "staged" | "unpushed" | "broken";
-export interface ProjectRow { id: string; label: string; status: string; kind?: "project" | "box" | "root"; live_sessions: number; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+export interface AgentCounts { working: number; question: number; done: number }
+export interface ProjectRow { id: string; label: string; status: string; kind?: "project" | "box" | "root"; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -28,16 +29,23 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; working_at?: number; done_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean }
-export interface AgentRow { id: string; label: string; modes: ("plan" | "auto")[] }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[] }
+export interface TabWorktree { label: string; branch?: string }
+export interface SubagentWorktree extends TabWorktree { count: number }
+/** `default`: the desktop's default agent (`default_agent_cmd`), the one
+ * Mark up starts where no agent tab is open; an older desktop flags none. */
+export interface AgentRow { id: string; label: string; modes: ("plan" | "auto")[]; default?: boolean }
 /** A place the ＋ can start an agent: a linked worktree by opaque id. The
  * main one has an empty label — it is the project folder. */
 export interface WorktreeRow { id: string; label: string; branch?: string; main: boolean }
 /** One cloud launch an agent offers; `task` → it needs the task up front. */
 export interface CloudLaunchRow { agent_id: string; action: "new" | "open"; task: boolean }
 /** One agent the ＋ can open a sign-in tab for. `signed_in` is absent where
- * the desktop cannot tell; `alternate` names the CLI's other way in. */
-export interface SignInRow { agent_id: string; signed_in?: boolean; account?: string; alternate?: "console" | "browser" }
+ * the desktop cannot tell; `alternate` names the CLI's other way in;
+ * `api_key` says it starts on an API key the desktop keeps (then
+ * `signed_in` is true — it needs no login); `api_budget_reached` says that
+ * key's monthly budget is spent or unset, so a new tab would be refused. */
+export interface SignInRow { agent_id: string; signed_in?: boolean; account?: string; alternate?: "console" | "browser"; api_key?: boolean; api_budget_reached?: boolean }
 /** The ＋ sheet's local-model group: the model the desktop's "+" drives and
  * the agents it offers for it. `ready` is false until the model is on the GPU
  * (a start then loads it first); `caution` marks an agent built for hosted
@@ -55,6 +63,38 @@ export async function getLaunchOptions(projectId: string, signal?: AbortSignal):
     return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
+    throw reason;
+  }
+}
+/** The project folder's checkout: its branch, or the short sha it is detached
+ * at, and that branch's upstream as of the last fetch. */
+export interface GitHead { branch?: string; short?: string; upstream?: string; ahead: number; behind: number }
+/** One worktree of the project's repo. `id` is the ＋ sheet's id for the same
+ * worktree ("" when none can be minted); `label` is its folder's leaf name, ""
+ * for the current one (the project folder), which the phone names by the
+ * project. `git` means something only when `checked`. */
+export interface GitWorktreeView { id: string; label: string; branch?: string; short?: string; main: boolean; current: boolean; locked: boolean; missing: boolean; git?: GitDot; checked: boolean; tabs: number }
+/** A local branch; `worktree` labels the other worktree that has it checked out. */
+export interface GitBranchView { name: string; current: boolean; upstream?: string; ahead: number; behind: number; worktree?: string }
+/** `GET /api/v1/projects/{id}/git`. Capped lists; each `*_total` is the full count. */
+export interface GitOverview {
+  repo: boolean;
+  head?: GitHead;
+  worktrees: GitWorktreeView[];
+  worktrees_total: number;
+  branches: GitBranchView[];
+  branches_total: number;
+  remote_branches: string[];
+  remote_total: number;
+}
+
+/** The project's git overview, read by the phone host itself (window open or
+ * not). A host older than the route answers a bodiless 404 — `{ outdated: true }`. */
+export async function getGitOverview(projectId: string, signal?: AbortSignal): Promise<GitOverview | { outdated: true }> {
+  try {
+    return await api<GitOverview>(`/api/v1/projects/${encodeURIComponent(projectId)}/git`, { signal });
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404 && reason.code === "request_failed") return { outdated: true };
     throw reason;
   }
 }
@@ -258,8 +298,10 @@ export interface MobileMailHeader { id: string; subject: string; sender: { name?
 export interface MobileMailAttachment { filename: string; mime: string; size: number }
 
 /** The host reads these display preferences from desktop settings on each
- * probe: the untested pills, and the desktop's theme for a phone that follows it. */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string }> {
+ * probe: the untested pills, the desktop's theme for a phone that follows it,
+ * and the sections the desktop keeps this phone out of (absent from an older
+ * host: none). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[] }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */
@@ -274,7 +316,9 @@ export type MobileMailView =
   | { view: "message"; message: MobileMailHeader; body: string; truncated: boolean; attachments: MobileMailAttachment[] };
 
 export class ApiError extends Error {
-  constructor(public status: number, public code: string) { super(code); }
+  /** `detail`: the refusal's whole body, for a route whose refusal carries
+   * more than its code (Mark up's `undo_conflict` names the files). */
+  constructor(public status: number, public code: string, public detail?: unknown) { super(code); }
 }
 
 /** Set by the app root. A session slides out after a quiet quarter hour and
@@ -436,7 +480,7 @@ export async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUE
     // Once: a 401 on the retry means the renewed session is refused too.
     if (!retried && await onUnauthorized?.()) return api<T>(path, init, timeoutMs, true);
   }
-  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed");
+  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   // A truncated body on a 200 used to become `{}` and reach callers as `T`,
   // which then read `undefined.map` and white-screened the whole app.
   if (body === undefined) throw new ApiError(response.status, "malformed_response");
@@ -671,6 +715,10 @@ export interface TranscriptEntry {
   /** On an `agent`: it runs in the background (Claude's async launch), at
    * work while the session's own turn may be over. */
   background?: boolean;
+  /** On an `agent`: the linked worktree it works in (Claude's
+   * `isolation: "worktree"`, or the one the session was in when it spawned
+   * it); absent in the project folder's own checkout. */
+  worktree?: TabWorktree;
   /** Phone-only, never on the wire: a prompt sent from here that the session
    * has not recorded yet (`terminal/pendingPrompts`), by its id — and whether
    * the link failed to deliver it, or is trying again. */
@@ -698,11 +746,21 @@ export interface SessionTranscript {
   entries: TranscriptEntry[];
   /** Earlier turns exist that this answer does not carry. */
   truncated: boolean;
+  /** Those earlier turns hold a subagent the answer does not list — what
+   * the Subagents index's "+" stands for. */
+  agentsEarlier?: boolean;
+  /** How many of the session's subagents are at work right now, the ones
+   * the answer leaves out included; absent at zero and on a CLI whose record
+   * does not say (only Claude's does). */
+  runningAgents?: number;
   /** The session's own usage figures, where its transcript records them
    *  (Codex's rollout does; Claude's does not). */
   usage?: SessionUsage;
   /** The model its newest record names, as an API id — a subagent's own. */
   model?: string;
+  /** The reasoning effort its newest record names (`high`) — Claude's
+   * answers and `/effort`, Codex's turn context. */
+  effort?: string;
   /** The tokens its newest request carried (context plus answer), the count
    * Claude Code's own subagent row shows — read off a subagent's own file. */
   tokens?: number;
@@ -873,6 +931,11 @@ export interface OutboxFile {
   /** What the file is fetched by when that is not its name: a project file's
    * sealed token (`ProjectFileEntry.token`). Outbox files have none. */
   ref?: string;
+  /** An outbox copy's project file — the one `tabtivity-send` copied — sealed
+   * as the files drawer rows it. Only while the drawer is switched on, and
+   * only for a file it would list: the viewer then reads and marks up that
+   * file itself, so its marks are the drawer's (`OutboxViewer`). */
+  file_row?: PhoneMarkupFile;
 }
 
 /** The name a file is shown, saved and shared as: an outbox leaf without the
@@ -909,12 +972,30 @@ export function outboxFileUrl(scope: OutboxScope, name: string, download = false
 }
 
 /** Where the full-screen viewer reads a file from: one project's outbox (by
- * its tab or the project), or — `files` — the project's own tree through the
- * read-only file browser, where a file is fetched by its sealed `ref`. */
-export type ViewerScope = OutboxScope | { files: string };
+ * its tab or the project), `files` — the project's own tree through the
+ * read-only file browser, where a file is fetched by its sealed `ref` — or
+ * `inbox`, what the phone sent into a tab's project inbox (by the tab). */
+export type ViewerScope = OutboxScope | { files: string } | { inbox: string };
+
+/** The URL a file the phone sent into a tab's project inbox loads from (its
+ * leaf, out of the phone's own `@` reference) — same origin, so an `<img>`
+ * rides the session cookie as an outbox picture does. */
+export function inboxFileUrl(tabId: string, name: string, download = false): string {
+  return `/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
+}
+
+/** `GET …/inbox?names=` — the files among `names` (inbox leaves) the tab's
+ * project inbox holds, typed by their bytes on the desktop, in the order
+ * asked; a leaf that is gone is simply missing from the answer. */
+export async function describeInbox(tabId: string, names: readonly string[], signal?: AbortSignal): Promise<OutboxFile[]> {
+  const query = new URLSearchParams({ names: names.join(",") });
+  const { files } = await api<{ files?: OutboxFile[] }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/inbox?${query}`, { signal });
+  return Array.isArray(files) ? files : [];
+}
 
 /** The URL one file loads from, for whichever door `scope` names. */
 export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = false): string {
+  if ("inbox" in scope) return inboxFileUrl(scope.inbox, file.name, download);
   if ("files" in scope) {
     return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}`;
   }
@@ -950,7 +1031,7 @@ export async function openOutside(url: string): Promise<void> {
  * phone can only hand back, `kind` is `"dir"` or the media type the file's
  * first bytes announce, `modified` and `created` are unix seconds — `created`
  * missing where the desktop's filesystem keeps no birth time. */
-export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number }
+export interface ProjectFileEntry { token: string; name: string; kind: string; size: number; modified: number; created?: number; ignored?: boolean }
 export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>]` — one folder of the
@@ -959,6 +1040,32 @@ export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: bo
 export async function listProjectFiles(projectId: string, dir: string | undefined, signal?: AbortSignal): Promise<ProjectFileListing> {
   const query = dir ? `?dir=${encodeURIComponent(dir)}` : "";
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query}`, { signal });
+}
+
+/** A file or folder whose name matched a search: its row, and the sealed
+ * folders from the project root down to its own (empty at the root) — the
+ * drawer's trail to stand in when it is opened. */
+export interface ProjectFileHit extends ProjectFileEntry { trail: { token: string; name: string }[] }
+export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean }
+
+/** `GET /api/v1/projects/{id}/files/search?q=<words>` — the project's files
+ * and folders whose names hold every word, any case, the closest first. In a
+ * git repo what git ignores is not searched. Behind the same switch as the
+ * listing. */
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal): Promise<ProjectFileSearch> {
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}`, { signal });
+}
+
+/** Mark up's Reload for a project file opened by its sealed row rather than
+ * from the drawer (the Focus banner's question, an outbox copy's origin):
+ * its folder (`folder`, the row's token; none at the root) listed again, for
+ * the file's fresh token, size and time — `null` when it is gone. */
+export function refreshProjectFile(projectId: string, folder: string | undefined): (file: OutboxFile) => Promise<OutboxFile | null> {
+  return async (file) => {
+    const fresh = await listProjectFiles(projectId, folder);
+    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
+  };
 }
 
 /** `DELETE …/outbox/{name}` — drop one of those files. The sidecar deletes
@@ -994,7 +1101,7 @@ async function postFile<T>(url: string, file: Blob, retried = false): Promise<[n
     body = undefined;
   }
   if (response.status === 401 && !retried && await onUnauthorized?.()) return postFile<T>(url, file, true);
-  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed");
+  if (!response.ok) throw new ApiError(response.status, body?.error ?? "request_failed", body);
   return [response.status, body];
 }
 
@@ -1026,11 +1133,21 @@ export type MarkupSource = { files: string } | { outbox: string };
  * its layer PNG's inbox reference (`markup.rs`). */
 export interface MarkupPageBody { n: number; size: [number, number]; marks: Mark[]; layer: string }
 /** `instruction` is the phone's own wording of what to do with the marks
- * (`markupInstruction.ts`), absent while the desktop's default stands. */
-export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string }
+ * (`markupInstruction.ts`), absent while the desktop's default stands; `ask`
+ * its asking dial (0–4), absent at the default stop; `mode` what **Apply
+ * marks directly** asks for (absent = `list`); `round` this Submit's id
+ * (`mintRound`), which the prompt names its marks under for the agent's
+ * ticks (`markup_done`, `docs/markup_tick_approve_plan.md`). */
+export interface MarkupBody { source: MarkupSource; pages: MarkupPageBody[]; picture?: string; instruction?: string; ask?: number; mode?: MarkupMode; round?: string }
+/** `apply`: the agent makes the changes and an undo snapshot backs them;
+ * `list`: it lists them first (**Make these changes**). */
+export type MarkupMode = "apply" | "list";
 /** The prompt to send into the chat, and the marked copy's reference when the
- * desktop could bake one. */
-export interface MarkupAnswer { prompt: string; marked?: string | null }
+ * desktop could bake one. `mode` is the one the round got — `apply` only with
+ * an `undo` snapshot id — and `noUndo` why an asked-for `apply` runs as
+ * `list` (`not_git`, `no_git`, `too_big`, `filtered`, `git_failed`, `remote`,
+ * `not_pdf`). An older desktop answers neither: a `list` round. */
+export interface MarkupAnswer { prompt: string; marked?: string | null; mode?: MarkupMode; undo?: string | null; noUndo?: string | null }
 /** A bake of a long PDF takes a while on the desktop (its own deadline is 20 s). */
 const MARKUP_TIMEOUT = 60_000;
 
@@ -1046,6 +1163,136 @@ export async function submitMarkup(tabId: string, body: MarkupBody): Promise<Mar
   return answer;
 }
 
+/** One file an undo puts (or put) back, project-relative. */
+export interface MarkupUndoFile { path: string; change: "added" | "modified" | "deleted" | "changed" }
+/** What an undo would do (preview) or did: the files, how many more it did
+ * not name, and the PDF's fate — back to before, kept as it is (changed
+ * since), or not part of it. `outsideMore`: how many files changed
+ * elsewhere in the repo, which the undo leaves alone — counted, never named
+ * to a phone (a sibling project's names). */
+export interface MarkupUndoChanges { files: MarkupUndoFile[]; more: number; pdf: "restored" | "kept" | "none"; outsideMore: number }
+
+function markupUndoPath(tabId: string, undoId: string): string {
+  return `/api/v1/tabs/${encodeURIComponent(tabId)}/markup/undo/${encodeURIComponent(undoId)}`;
+}
+
+/** The desktop's snapshot calls share one 30 s budget each
+ * (`markup_rounds::OPERATION_BUDGET`); the phone waits past it. */
+const MARKUP_UNDO_TIMEOUT = 40_000;
+
+function undoChanges(answer: Partial<MarkupUndoChanges> | null | undefined): MarkupUndoChanges {
+  const files = Array.isArray(answer?.files)
+    ? answer.files.filter((file): file is MarkupUndoFile => !!file && typeof file.path === "string")
+    : [];
+  const pdf = answer?.pdf === "restored" || answer?.pdf === "kept" ? answer.pdf : "none";
+  // An older desktop sends no `outsideMore`; names outside the project, were
+  // any sent, are only counted.
+  const named = (answer as { outside?: unknown } | null | undefined)?.outside;
+  const outsideMore = (Array.isArray(named) ? named.length : 0)
+    + (typeof answer?.outsideMore === "number" && answer.outsideMore > 0 ? answer.outsideMore : 0);
+  return { files, more: typeof answer?.more === "number" ? answer.more : 0, pdf, outsideMore };
+}
+
+/** `POST …/markup/undo/{id}/settle` — the round's after-snapshot, each time
+ * the round finishes (the last one wins). */
+export async function settleMarkupUndo(tabId: string, undoId: string): Promise<void> {
+  await api(`${markupUndoPath(tabId, undoId)}/settle`, { method: "POST" }, MARKUP_UNDO_TIMEOUT);
+}
+
+/** `GET …/markup/undo/{id}` — what an undo would put back. */
+export async function previewMarkupUndo(tabId: string, undoId: string): Promise<MarkupUndoChanges> {
+  return undoChanges(await api<Partial<MarkupUndoChanges>>(markupUndoPath(tabId, undoId), undefined, MARKUP_UNDO_TIMEOUT));
+}
+
+/** `POST …/markup/undo/{id}` — puts the round's changes back. Refused with
+ * `409 undo_conflict` (`markupUndoConflict` reads its files) and nothing
+ * changed, `410 undo_gone`, `404 round_not_found`, `500 undo_failed`. */
+export async function runMarkupUndo(tabId: string, undoId: string): Promise<MarkupUndoChanges> {
+  return undoChanges(await api<Partial<MarkupUndoChanges>>(markupUndoPath(tabId, undoId), { method: "POST" }, MARKUP_UNDO_TIMEOUT));
+}
+
+/** An `undo_conflict` refusal's files changed since the round, and how many
+ * more; `null` for any other failure. */
+export function markupUndoConflict(error: unknown): { files: string[]; more: number } | null {
+  if (!(error instanceof ApiError) || error.code !== "undo_conflict") return null;
+  const detail = error.detail as { files?: unknown; more?: unknown } | undefined;
+  const files = Array.isArray(detail?.files) ? detail.files.filter((file): file is string => typeof file === "string") : [];
+  return { files, more: typeof detail?.more === "number" ? detail.more : 0 };
+}
+
+/** One question of an agent's markup ask (`markup_ask`,
+ * `docs/markup_questions_mcp_plan.md`): 2–6 options, a 1-based `page` and a
+ * `quote` of that page's words it is about. */
+export interface PhoneMarkupQuestion {
+  question: string;
+  header?: string;
+  options: { label: string; description?: string }[];
+  multi_select: boolean;
+  page?: number;
+  quote?: string;
+}
+/** An agent's open markup ask: its random id, its questions, and the leaf
+ * name of the file it is about (absent: any file). Never a path. */
+/** The project file an ask is about, as the files drawer rows it — sealed by
+ * the sidecar for the Focus banner (`protocol::MobileMarkupFile`). `place` is
+ * its folder trail, `folder` its folder's token (none at the root). */
+export interface PhoneMarkupFile { token: string; name: string; kind: string; size: number; modified: number; folder?: string; place: string }
+export interface PhoneMarkupAsk { id: string; file_name?: string; file_row?: PhoneMarkupFile; questions: PhoneMarkupQuestion[] }
+/** One question's answer: option indices and/or a typed **Other…**. */
+export interface PhoneMarkupAnswer { options: number[]; other?: string }
+
+function markupBase(tabId: string): string {
+  return `/api/v1/tabs/${encodeURIComponent(tabId)}/markup`;
+}
+
+/** `GET /api/v1/tabs/{id}/markup/questions[?source=…]` — the agent tab's
+ * open markup question for the file a markup view shows (`source`), or every
+ * open one (the Focus banner). `503 desktop_unavailable` with the window
+ * closed: there is then no ask to show. A malformed answer reads as none. */
+export async function listMarkupQuestions(tabId: string, source?: MarkupSource, signal?: AbortSignal): Promise<PhoneMarkupAsk[]> {
+  return (await readMarkupQuestions(tabId, source, signal)).asks;
+}
+
+/** A positive whole number, as a tick's page and mark are. */
+const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value > 0;
+
+/** The same route read whole: the open asks and — for the file a markup view
+ * shows (`source`) — the agent's ticks (`markup_done`): which marks of which
+ * Submit's round it says it handled, `{ round, page, mark }` with `mark`
+ * 1-based into that round's page as sent. The view maps them to its own sent
+ * marks (`tickedMarks`). Without a source (the Focus banner) the ticks are
+ * every file's and mean nothing there: none are kept. An older sidecar sends
+ * no `ticks`: none. A malformed tick is dropped, extra keys too. */
+export async function readMarkupQuestions(tabId: string, source?: MarkupSource, signal?: AbortSignal): Promise<{ asks: PhoneMarkupAsk[]; ticks: MarkTick[] }> {
+  const query = !source ? "" : `?source=${encodeURIComponent("files" in source ? `files:${source.files}` : `outbox:${source.outbox}`)}`;
+  const { asks, ticks } = await api<{ asks?: unknown; ticks?: unknown }>(`${markupBase(tabId)}/questions${query}`, { signal });
+  const shown = !Array.isArray(asks) ? [] : asks.filter((ask): ask is PhoneMarkupAsk => !!ask && typeof ask === "object"
+    && typeof (ask as PhoneMarkupAsk).id === "string" && Array.isArray((ask as PhoneMarkupAsk).questions));
+  const ticked: MarkTick[] = [];
+  if (source && Array.isArray(ticks)) {
+    for (const tick of ticks) {
+      if (!tick || typeof tick !== "object") continue;
+      const { round, page, mark } = tick as Record<string, unknown>;
+      if (typeof round === "string" && round && positiveInteger(page) && positiveInteger(mark)) ticked.push({ round, page, mark });
+    }
+  }
+  return { asks: shown, ticks: ticked };
+}
+
+/** `POST /api/v1/tabs/{id}/markup/answer` — one answer per question, in
+ * order. The desktop builds the prompt and queues it into the tab; `409` with
+ * `superseded` / `answered` / `gone` when the ask no longer takes it,
+ * `delivery_failed` when it could not be queued (the ask is open again),
+ * `not_delivered` when it could not and has closed. */
+export function answerMarkupQuestions(tabId: string, askId: string, answers: PhoneMarkupAnswer[]): Promise<unknown> {
+  return api(`${markupBase(tabId)}/answer`, { method: "POST", body: JSON.stringify({ ask_id: askId, answers }) });
+}
+
+/** `POST /api/v1/tabs/{id}/markup/dismiss` — **Answer in chat instead**. */
+export function dismissMarkupQuestions(tabId: string, askId: string): Promise<unknown> {
+  return api(`${markupBase(tabId)}/dismiss`, { method: "POST", body: JSON.stringify({ ask_id: askId }) });
+}
+
 /** A file the phone sent to the desktop's global inbox: its stored name and
  * size only — it belongs to no project, so there is nothing to reference. */
 export interface DesktopInboxFile { name: string; size: number }
@@ -1057,4 +1304,108 @@ export async function uploadToDesktop(file: Blob, name: string): Promise<Desktop
   const [status, body] = await postFile<{ file?: DesktopInboxFile }>(`/api/v1/inbox?name=${encodeURIComponent(name)}`, file);
   if (!body?.file?.name) throw new ApiError(status, "malformed_response");
   return body.file;
+}
+
+/** The desktop's Ollama server as `GET /api/v1/local-models` reports it. */
+export type LocalModelServer = "running" | "starting" | "stopped" | "unreachable" | "not_installed";
+export type LocalModelState = "idle" | "loading" | "loaded" | "failed";
+
+/** One installed Ollama model on the desktop. The residency fields
+ * (`loaded_size`, `vram`, `pinned`, `expires_in`) come only while `loaded`;
+ * an absent one is unknown, never zero. */
+export interface LocalModelRow {
+  name: string;
+  size: number;
+  parameter_size: string | null;
+  quantization: string | null;
+  state: LocalModelState;
+  loaded_size?: number;
+  vram?: number;
+  pinned?: boolean;
+  expires_in?: number | null;
+  /** The model the phone's ＋ "Local model" group drives. */
+  for_tabs: boolean;
+  /** An Ollama cloud model: listed, never loaded or unloaded. */
+  remote: boolean;
+}
+export interface LocalModelList {
+  server: LocalModelServer;
+  can_start: boolean;
+  start_failed: boolean;
+  models: LocalModelRow[];
+}
+export type LocalModelAction = "load" | "unload" | "start";
+
+const LOCAL_MODEL_SERVERS: readonly string[] = ["running", "starting", "stopped", "unreachable", "not_installed"];
+const LOCAL_MODEL_STATES: readonly string[] = ["idle", "loading", "loaded", "failed"];
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+const shortText = (value: unknown): string | null =>
+  typeof value === "string" && value.trim() ? value.trim() : null;
+
+/** The list as the phone draws it, or null for a body that is not one — an
+ * older sidecar's catch-all answer must hide the feature, not draw an empty
+ * list. Unknown states read as `idle` / `unreachable`, as the sidecar forces. */
+export function normalizeLocalModels(body: unknown): LocalModelList | null {
+  if (!body || typeof body !== "object") return null;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.server !== "string" || !Array.isArray(raw.models)) return null;
+  const models: LocalModelRow[] = [];
+  for (const entry of raw.models) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.name !== "string" || !row.name) continue;
+    const state = (LOCAL_MODEL_STATES.includes(row.state as string) ? row.state : "idle") as LocalModelState;
+    const model: LocalModelRow = {
+      name: row.name,
+      size: finiteNumber(row.size) ?? 0,
+      parameter_size: shortText(row.parameter_size),
+      quantization: shortText(row.quantization),
+      state,
+      for_tabs: row.for_tabs === true,
+      remote: row.remote === true,
+    };
+    if (state === "loaded") {
+      model.loaded_size = finiteNumber(row.loaded_size);
+      model.vram = finiteNumber(row.vram);
+      model.pinned = row.pinned === true;
+      model.expires_in = finiteNumber(row.expires_in) ?? null;
+    }
+    models.push(model);
+  }
+  const server = (LOCAL_MODEL_SERVERS.includes(raw.server) ? raw.server : "unreachable") as LocalModelServer;
+  return { server, can_start: raw.can_start === true && server === "stopped", start_failed: raw.start_failed === true, models };
+}
+
+/** The local-models routes wait on the window, which may first ask Ollama
+ * about every model (`/api/show`): 2 s connect + the default 10 s
+ * `response_timeout`, so the phone holds out past the sidecar's own answer
+ * (`MobileApiDeadlines.test.ts`) and reads its `503` rather than guessing. */
+export const LOCAL_MODELS_TIMEOUT = 15_000;
+
+async function localModelsBody(write: Promise<unknown>): Promise<LocalModelList> {
+  const list = normalizeLocalModels(await write);
+  if (!list) throw new ApiError(200, "malformed_response");
+  return list;
+}
+
+/** `GET /api/v1/local-models` — the Ollama models installed on the desktop.
+ * `403 local_models_disabled` with the desktop's switch off, `404` from a
+ * sidecar older than the feature, `503 desktop_unavailable` with no window. */
+export function getLocalModels(signal?: AbortSignal): Promise<LocalModelList> {
+  return localModelsBody(api("/api/v1/local-models", { signal }, LOCAL_MODELS_TIMEOUT));
+}
+
+/** `POST /api/v1/local-models` — load or unload one model, or start Ollama.
+ * There is no download, update or delete: the sidecar refuses any other
+ * action. Answers the fresh list; a load or start then runs on in the
+ * desktop window, followed by polling. A write the window made whose list
+ * could not be relayed reads the list again (`reloadIfApplied`). */
+export function localModelAction(action: LocalModelAction, model?: string): Promise<LocalModelList> {
+  const body = action === "start" ? { action } : { action, model };
+  return reloadIfApplied(
+    localModelsBody(api("/api/v1/local-models", { method: "POST", body: JSON.stringify(body) }, LOCAL_MODELS_TIMEOUT)),
+    () => getLocalModels(),
+  );
 }

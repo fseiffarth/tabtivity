@@ -3212,10 +3212,11 @@ function CodeEditor({
   // the textarea's own final empty line so scrolling stays aligned.
   const lang = useMemo(() => languageForPath(path), [path]);
   // #45a: Copilot serves this editor only for a consented local project's code
-  // file; everything else stays on Ollama. The backend enforces the same gates.
+  // file, or its text file under the second opt-in; everything else stays on
+  // Ollama. The backend enforces the same gates.
   const copilotEnabled = useExperimental("copilot_completion");
   const acRemote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang));
+  const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang, path));
   // Per mount, so a remount never inherits the previous mount's document versions.
   const [acEditorId] = useState(() => crypto.randomUUID());
   const acFeedback = useMemo(
@@ -5852,7 +5853,7 @@ function ValidationBanner({
 
 /** Reusable Preview/Edit (Source) segmented toggle, styled like the existing
  *  markdown mode buttons. */
-function ModeToggle<T extends string>({
+export function ModeToggle<T extends string>({
   value,
   onChange,
   options,
@@ -6378,7 +6379,7 @@ function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
   const remote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path)));
+  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path), path));
   return (
     <div className="file-viewer-ai-controls" role="group" aria-label={t("fileViewer.aiAssistGroup")}>
       {/* Dictionary spelling needs no model, so it is offered regardless —
@@ -9600,6 +9601,21 @@ function TexView({
   // Directory the build runs in — error paths in the log are relative to it.
   const rootDir = dirname(root) || "/";
 
+  // The engine "Auto" builds with: the backend reads it off the document (a
+  // `% !TEX program` comment, fontspec / luacode / xeCJK, …). Re-read whenever a
+  // compile ends, since the save before it is what puts a new `\usepackage` on disk.
+  const [autoEngine, setAutoEngine] = useState<string | null>(null);
+  const showEngineMenu = (cap?.engines?.length ?? 0) > 1;
+  useEffect(() => {
+    if (!showEngineMenu || compiling) return;
+    let cancelled = false;
+    invoke<string | null>("tex_auto_engine", { path: root }).then(
+      (e) => { if (!cancelled) setAutoEngine(e ?? null); },
+      () => {},
+    );
+    return () => { cancelled = true; };
+  }, [showEngineMenu, root, compiling]);
+
   // The output-folder picker browses the project this document belongs to,
   // opening at the main file's folder. A relative out-dir resolves against that
   // folder in `compile_tex`, so the pick is stored relative to it (`..` included)
@@ -10060,7 +10076,7 @@ function TexView({
               ? t("fileViewer.compileNamed", { name: rootName })
               : t("fileViewer.compileBtn")}
         </button>
-        {cap.engines.length > 1 && (
+        {showEngineMenu && (
           <Dropdown
             className="file-viewer-tex-engine"
             title={t(
@@ -10073,13 +10089,14 @@ function TexView({
             onChange={(v) => patchOpts({ engine: v })}
             disabled={compiling}
             options={[
-              // "" lets the backend pick; label it with the engine it would use
-              // (the first installed one, matching the backend's default order).
-              { value: "", label: t("fileViewer.engineDefault", { engine: cap.engines[0] }) },
+              // "" lets the backend pick from the document; label it with the
+              // engine it would use (the first installed one until that answers).
+              { value: "", label: t("fileViewer.engineAuto", { engine: autoEngine ?? cap.engines[0] }) },
               ...cap.engines.map((eng) => ({ value: eng, label: eng })),
             ]}
           />
         )}
+        {showEngineMenu && !engine && <UntestedTag id="fileViewer.engineAuto" />}
         {compiling && <span className="file-viewer-tex-spinner" aria-hidden="true" />}
         <button
           className={`file-viewer-tex-options-toggle${showOptions ? " active" : ""}`}

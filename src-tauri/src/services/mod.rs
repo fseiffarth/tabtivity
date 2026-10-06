@@ -21,6 +21,11 @@ pub mod git_ci;
 pub mod help_mcp;
 pub use app_core::services::schedule_usage;
 pub use app_core::services::agent_usage;
+pub mod markup_mcp;
+// The Undo of a PDF markup round that applied the marks directly: git-tree
+// snapshots of the work tree in the round's own object store under the state
+// dir, reverse-applied only when nothing changed since.
+pub mod markup_rounds;
 // Which release of each agent CLI is installed vs. the one Tabtivity's parsers
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
@@ -33,11 +38,21 @@ pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub use app_core::services::fence_scope;
+// `--agent-exec`: an agent's secrets mapped from their app-named carriers to
+// the CLI's own variable names, just before the agent runs (no common name on
+// the user's tmux server).
+pub mod agent_exec;
 // The Claude credential mirror: one Tabtivity-owned inode mounted into every
 // fenced/contained tab in place of `~/.claude/.credentials.json`, kept in step
 // with the host file by in-place writes — a file bind mount pins an inode, and
 // Claude rotates that file by rename.
 pub mod agent_auth;
+// Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
+pub mod agent_api_keys;
+pub mod api_proxy;
+pub mod api_meter;
+pub mod api_prices;
+pub mod api_usage;
 pub mod agent_global;
 pub mod agent_hint;
 pub mod agent_home;
@@ -82,7 +97,11 @@ pub mod codex_bind;
 pub mod codex_store;
 pub mod copilot;
 pub mod git_credentials;
-pub use app_core::services::git_guard;
+// The `.git` control files a sandbox keeps its occupant from writing (#158);
+// back in this crate since #2347 gave it `home_io`.
+pub mod git_guard;
+// Bounded local git runs: FIFO pre-check + timeout that reaps the subtree (#2349).
+pub mod git_bounded;
 // The default branch (`main`) for repositories Tabtivity creates, and the
 // unpublished-`master` rename that runs just before a publish.
 pub mod git_init;

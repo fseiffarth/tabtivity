@@ -29,8 +29,10 @@ const SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"].concat(ASSETS);
  * close. A phone PWA is rarely "closed", so waiting is what kept a superseded
  * worker — and the stale cache it answers from — alive for days. Dropping the
  * old cache out from under a running page is safe here because the build emits
- * one non-split bundle under immutable hashed URLs: a page already open holds
- * its JS in memory and asks the cache for nothing more. */
+ * one bundle under immutable hashed URLs: a page already open holds its JS in
+ * memory. The one lazy chunk is a non-English dictionary (the Language picker),
+ * fetched and cached like any asset; a stale page whose chunk is gone stays in
+ * English until it reloads. */
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));

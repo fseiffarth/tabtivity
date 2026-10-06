@@ -1301,6 +1301,9 @@ pub fn run() {
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(core.clone());
+            // The provider API proxy (`services::api_proxy`): loopback, holds
+            // the stored API keys so a keyed agent tab gets only a token.
+            services::api_proxy::start();
             // A SIGTERM/SIGINT (the dev launcher's Ctrl+C, a `kill`, a session
             // logout) used to end the process with none of the teardown the
             // window's × runs: PTY subtrees, local tmux sessions, the Mobile
@@ -1552,6 +1555,7 @@ pub fn run() {
             commands::mobile_control::mobile_opaque_id,
             commands::mobile_control::mobile_prepare_phone_install_script,
             commands::mobile_control::mobile_admin,
+            commands::mobile_control::mobile_paired_devices,
             commands::mobile_control::mobile_host_status,
             commands::mobile_control::mobile_host_apply,
             commands::mobile_control::mobile_browser_client_link,
@@ -1595,6 +1599,11 @@ pub fn run() {
             commands::root_mcp::git_push_mcp_proposals,
             commands::root_mcp::git_push_mcp_decide,
             commands::root_mcp::git_push_mcp_clear,
+            commands::markup_mcp::markup_mcp_list,
+            commands::markup_mcp::markup_mcp_ticks,
+            commands::markup_mcp::markup_mcp_answer,
+            commands::markup_mcp::markup_mcp_dismiss,
+            commands::markup_mcp::markup_mcp_reopen,
             commands::projects::set_project_mobile_access,
             commands::projects::sandbox_preflight,
             commands::python::python_interpreters,
@@ -1971,6 +1980,7 @@ pub fn run() {
             commands::timer::get_time_activity_all,
             // File tree + file I/O (commands::fs)
             commands::fs::list_dir,
+            commands::fs::resolve_text_paths,
             commands::fs::list_recent_downloads,
             commands::fs::dir_size,
             commands::fs::dir_size_breakdown,
@@ -2017,6 +2027,9 @@ pub fn run() {
             commands::pdf_clip::pdf_clip_set,
             commands::pdf_clip::pdf_clip_get,
             commands::pdf_markup::pdf_markup_submit,
+            commands::pdf_markup::pdf_markup_undo_settle,
+            commands::pdf_markup::pdf_markup_undo_preview,
+            commands::pdf_markup::pdf_markup_undo,
             commands::fs::file_mtime,
             commands::format::format_source,
             commands::format::formatter_available,
@@ -2045,6 +2058,7 @@ pub fn run() {
             commands::tex::synctex_page_lines,
             commands::tex::list_fonts,
             commands::tex::resolve_tex_root,
+            commands::tex::tex_auto_engine,
             // Terminal
             commands::terminal::pty_spawn,
             commands::terminal::agent_fence_status,
@@ -2220,6 +2234,8 @@ pub fn run() {
             commands::ollama::list_local_drivers,
             commands::ollama::prepare_local_launch,
             commands::ollama::ensure_ollama_running,
+            commands::ollama::ensure_ollama_running_unattended,
+            commands::ollama::ollama_server_kind,
             // Ollama model management
             commands::ollama::ollama_is_installed,
             commands::ollama::install_ollama,
@@ -2262,6 +2278,9 @@ pub fn run() {
             commands::shared_calendar::shared_calendar_revoke,
             commands::shared_calendar::shared_calendar_unshare,
             commands::shared_calendar::shared_calendar_wait,
+            commands::agents::agent_api_keys_status,
+            commands::agents::agent_api_key_set,
+            commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,
             commands::agents::agent_global_import,
             commands::agents::agent_global_set_codex_auto_review,
@@ -2287,6 +2306,7 @@ pub fn run() {
             commands::ollama::list_ollama_models_detailed,
             commands::ollama::stop_ollama_model,
             commands::ollama::load_ollama_model,
+            commands::ollama::load_installed_ollama_model,
             commands::ollama::list_pending_ollama_pulls,
             commands::ollama::clear_pending_ollama_pull,
             commands::ollama::list_orphan_partial_blobs,
@@ -2431,6 +2451,10 @@ pub fn run() {
                 // workers briefly, and drop every per-tab calendar copy so
                 // nothing of the endpoint outlives the quit.
                 commands::root_mcp::stop_for_exit();
+                // The API proxy: revoke every token, stop accepting, drain the
+                // streams in flight briefly. Before the PTY teardown below, so
+                // its tab-gone hooks find nothing left to sweep.
+                services::api_proxy::stop_for_exit();
                 // Abort every terminal's process subtree so no inner process (a
                 // dev server, a build, a training run) outlives Tabtivity. Runs
                 // before the container teardown below, since a containerized

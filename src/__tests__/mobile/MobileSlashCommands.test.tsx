@@ -8,6 +8,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  completedSlashCommand,
   draftPrefix,
   draftPrefixes,
   forgetSlashCommand,
@@ -168,6 +169,29 @@ describe(`${BRAND.display} Mobile slash commands — the suggestions`, () => {
     const rows = slashSuggestions("/mod", "claude", []);
     expect(rows[0]).toMatchObject({ line: "/model", args: true, used: false });
     expect(slashSuggestions("/usa", "claude", [])[0]).toMatchObject({ line: "/usage", args: false });
+  });
+});
+
+describe(`${BRAND.display} Mobile slash commands — a prefix the CLI completes`, () => {
+  it("names the one known command a bare prefix continues", () => {
+    expect(completedSlashCommand("/clea", "claude", [])).toBe("/clear");
+    expect(completedSlashCommand(" /cle ", "codex", [])).toBe("/clear");
+  });
+
+  it("keeps a whole command, and anything that is not a bare /word, as typed", () => {
+    expect(completedSlashCommand("/clear", "claude", [])).toBe("/clear");
+    expect(completedSlashCommand("/model opus", "claude", [])).toBe("/model opus");
+    expect(completedSlashCommand("hello", "claude", [])).toBe("hello");
+  });
+
+  it("knows no pick when more than one command, or none, continues it", () => {
+    expect(completedSlashCommand("/c", "claude", [])).toBeNull();
+    expect(completedSlashCommand("/zzz", "claude", [])).toBeNull();
+  });
+
+  it("counts the commands sent to this CLI before", () => {
+    expect(completedSlashCommand("/cle", "claude", ["/cleanup now"])).toBeNull();
+    expect(completedSlashCommand("/my-sk", "claude", ["/my-skill arg"])).toBe("/my-skill");
   });
 });
 

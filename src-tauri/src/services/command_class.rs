@@ -210,6 +210,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_logins", Core),
     ("agent_login_sign_out", Core),
     ("agent_login_use_admin_key", Core),
+    ("agent_api_key_clear", Off(OffReason::OsKeychain)),
+    ("agent_api_key_set", Off(OffReason::OsKeychain)),
+    ("agent_api_keys_status", Off(OffReason::OsKeychain)),
     ("share_list", Core),
     ("share_create", Core),
     ("share_grant", Core),
@@ -432,6 +435,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("read_file_bytes", Core),
     ("read_file_text", Core),
     ("rename_path", Core),
+    ("resolve_text_paths", Core),
     ("update_gitignore_rule", Core),
     ("write_file_bytes", Core),
     ("write_file_text", Core),
@@ -614,6 +618,12 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mail_sync_cancel", Core),
     // commands/markdown.rs
     ("markdown_remote_image", Core),
+    // commands/markup_mcp.rs
+    ("markup_mcp_answer", Core),
+    ("markup_mcp_dismiss", Core),
+    ("markup_mcp_list", Core),
+    ("markup_mcp_reopen", Core),
+    ("markup_mcp_ticks", Core),
     // commands/mobile_control.rs
     ("global_inbox_delete", Core),
     ("global_inbox_list", Core),
@@ -628,6 +638,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_browser_client_rotate", Admin),
     ("mobile_host_status", Admin),
     ("mobile_opaque_id", Core),
+    ("mobile_paired_devices", Core),
     ("mobile_prepare_phone_install_script", Core),
     ("mobile_tailscale_serve_status", Admin),
     ("mobile_verify_tailscale_serve", Admin),
@@ -649,6 +660,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("delete_ollama_pull", Admin),
     ("delete_partial_blob", Admin),
     ("ensure_ollama_running", Admin),
+    ("ensure_ollama_running_unattended", Admin),
     ("ensure_vibe_ollama_model", Core),
     ("install_ollama", Admin),
     ("install_vibe", Admin),
@@ -659,6 +671,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_orphan_partial_blobs", Core),
     ("list_pending_ollama_pulls", Core),
     ("load_ollama_model", Admin),
+    ("load_installed_ollama_model", Admin),
     ("ollama_check_updates", Core),
     ("ollama_gpu_status", Core),
     ("ollama_install_strategy", Core),
@@ -667,6 +680,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ollama_models_dir_plan", Core),
     ("ollama_registry_details", Core),
     ("ollama_registry_size", Core),
+    ("ollama_server_kind", Core),
     ("ollama_status", Core),
     ("ollama_version_status", Core),
     ("pause_ollama_pull", Admin),
@@ -700,6 +714,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pdf_clip_set", Core),
     // commands/pdf_markup.rs
     ("pdf_markup_submit", Core),
+    ("pdf_markup_undo", Core),
+    ("pdf_markup_undo_preview", Core),
+    ("pdf_markup_undo_settle", Core),
     // commands/power.rs
     ("get_power_state", Client),
     // commands/presenter.rs
@@ -944,6 +961,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("synctex_status", Core),
     ("synctex_view", Core),
     ("tex_capability", Core),
+    ("tex_auto_engine", Core),
     ("tex_preview_snippet", Core),
     // commands/timer.rs
     ("get_project_activity", Core),

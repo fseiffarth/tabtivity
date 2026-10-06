@@ -15,10 +15,18 @@
 import { describe, it, expect } from "vitest";
 import {
   PDF_PRESENT_READY,
+  TALK_TARGETS,
   clampPage,
+  clockElapsed,
+  clockTone,
+  formatClock,
   isPdfPresentLabel,
+  nextTarget,
   pdfPresentLabel,
   pdfPresentSeedEvent,
+  resetClock,
+  startClock,
+  toggleClock,
 } from "../../components/embed/pdf/present";
 import { parsePresentParam, presenterLabel } from "../../lib/viewers/deck/present";
 
@@ -69,5 +77,56 @@ describe("clampPage", () => {
     // document with no pages is the failure this avoids.
     expect(clampPage(7, 0)).toBe(1);
     expect(clampPage(Number.NaN, 5)).toBe(1);
+  });
+});
+
+describe("talk clock", () => {
+  it("runs from its start and banks across a pause", () => {
+    let c = startClock(1_000);
+    expect(clockElapsed(c, 61_000)).toBe(60_000);
+    c = toggleClock(c, 61_000); // pause at 1:00
+    expect(c.since).toBeNull();
+    // A paused clock does not move, however long the pause.
+    expect(clockElapsed(c, 500_000)).toBe(60_000);
+    c = toggleClock(c, 500_000); // resume
+    expect(clockElapsed(c, 530_000)).toBe(90_000);
+  });
+
+  it("resets to zero and keeps whether it runs", () => {
+    const running = resetClock(startClock(0), 50_000);
+    expect(clockElapsed(running, 55_000)).toBe(5_000);
+    // A paused reset arms the clock for a talk that has not started yet.
+    const paused = resetClock(toggleClock(startClock(0), 50_000), 60_000);
+    expect(paused.since).toBeNull();
+    expect(clockElapsed(paused, 999_000)).toBe(0);
+  });
+
+  it("formats minutes under an hour and hours past it", () => {
+    expect(formatClock(0)).toBe("0:00");
+    expect(formatClock(59_999)).toBe("0:59");
+    expect(formatClock(605_000)).toBe("10:05");
+    expect(formatClock(3_725_000)).toBe("1:02:05");
+    expect(formatClock(-5_000)).toBe("0:00");
+  });
+
+  it("cycles targets back to none", () => {
+    let t = 0;
+    const seen = new Set<number>();
+    for (let i = 0; i < TALK_TARGETS.length; i++) {
+      t = nextTarget(t);
+      seen.add(t);
+    }
+    expect(t).toBe(0);
+    expect(seen.size).toBe(TALK_TARGETS.length);
+    // An unknown value (none of the steps) starts over at the first target.
+    expect(nextTarget(7)).toBe(0);
+  });
+
+  it("warns in the last tenth of the target and past it", () => {
+    expect(clockTone(9 * 60_000, 0, false)).toBe("ok");
+    expect(clockTone(8 * 60_000, 10, false)).toBe("ok");
+    expect(clockTone(9 * 60_000, 10, false)).toBe("near");
+    expect(clockTone(10 * 60_000, 10, false)).toBe("over");
+    expect(clockTone(10 * 60_000, 10, true)).toBe("paused");
   });
 });

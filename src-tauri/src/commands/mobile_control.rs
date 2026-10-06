@@ -13,6 +13,7 @@ use crate::{
     services::desktop_images::{self, DesktopImage, ImageFolder},
     services::mobile_control::{
         admin::{self, read_frame, write_frame},
+        auth,
         config::{
             detect_serve_settings_json, serve_status_json, verify_tailscale_serve,
             DetectedServeSettings, HostConfig,
@@ -20,7 +21,8 @@ use crate::{
         discovery::opaque_control_id,
         inbox,
         protocol::{
-            AdminRequest, AdminResponse, DesktopRequest, DesktopResponse, MobileInboxAttachment,
+            AdminDevice, AdminRequest, AdminResponse, DesktopRequest, DesktopResponse,
+            MobileInboxAttachment,
         },
     },
     storage,
@@ -253,11 +255,36 @@ pub fn mobile_prepare_phone_install_script() -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// The paired phones, read off `mobile-control/devices.json` whether or not
+/// the host runs — what the per-phone Mobile access picker lists. Read-only;
+/// `online` is always false here (`mobile_admin` `devices` adds it while the
+/// host runs).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn mobile_admin(request: AdminRequest) -> Result<AdminResponse, String> {
+pub async fn mobile_paired_devices() -> Result<Vec<AdminDevice>, String> {
+    app_core::rt::spawn_blocking(|| auth::read_paired_devices(&storage::state_dir().join("mobile-control")))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mobile_admin(ctx: Ctx, request: AdminRequest) -> Result<AdminResponse, String> {
+    let revokes = matches!(request, AdminRequest::Revoke { .. } | AdminRequest::ForgetAll);
+    let response = admin_call_here(&request).await?;
+    if revokes && matches!(response, AdminResponse::Ok) {
+        // The sidecar has already cancelled what the phone left behind (its
+        // admin plane); this reloads the window's lists, and catches what a
+        // sidecar older than #2348 left.
+        crate::commands::agent_tasks::cancel_lost_phone_rules(&ctx, "after a revoke or Lock down");
+        ctx.emit("agent-schedules-changed", ());
+    }
+    Ok(response)
+}
+
+/// The admin plane of this state dir's sidecar.
+async fn admin_call_here(request: &AdminRequest) -> Result<AdminResponse, String> {
     admin::admin_call(
         &storage::state_dir().join("mobile-control/admin.sock"),
-        &request,
+        request,
     )
     .await
 }
@@ -332,7 +359,7 @@ fn sidecar_behind_window(control_dir: &Path) -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_host_status() -> MobileHostRuntimeStatus {
     let config = HostConfig::load(&storage::state_dir()).ok();
-    match mobile_admin(AdminRequest::Status).await {
+    match admin_call_here(&AdminRequest::Status).await {
         Ok(AdminResponse::Host {
             running,
             port,
@@ -653,11 +680,11 @@ fn run_command_line(binary: &Path) -> Result<String, String> {
 /// executable cannot be renamed over while the old process still backs it.
 #[cfg(windows)]
 async fn stop_running_host() {
-    if mobile_admin(AdminRequest::Shutdown).await.is_err() {
+    if admin_call_here(&AdminRequest::Shutdown).await.is_err() {
         return;
     }
     for _ in 0..12 {
-        if mobile_admin(AdminRequest::Status).await.is_err() {
+        if admin_call_here(&AdminRequest::Status).await.is_err() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -669,7 +696,7 @@ async fn disable_host_service() -> Result<(), String> {
     // Stop the live listener through its authenticated same-user socket
     // first. This remains effective even if systemd is temporarily
     // unavailable; the unit command then prevents it returning at login.
-    let shutdown = mobile_admin(AdminRequest::Shutdown).await;
+    let shutdown = admin_call_here(&AdminRequest::Shutdown).await;
     let stop = crate::paths::command_no_window("systemctl")
         .args(["--user", "disable", "--now", crate::brand::MOBILE_HOST_UNIT])
         .status()
@@ -716,7 +743,7 @@ async fn enable_host_service(target: &Path, _config: &HostConfig) -> Result<(), 
 
 #[cfg(target_os = "macos")]
 async fn disable_host_service() -> Result<(), String> {
-    let shutdown = mobile_admin(AdminRequest::Shutdown).await;
+    let shutdown = admin_call_here(&AdminRequest::Shutdown).await;
     let uid = unsafe { libc::getuid() };
     let service_target = format!("gui/{uid}/{LAUNCHD_LABEL}");
     // `bootout` fails when the agent is not loaded, which is not a problem —
@@ -777,13 +804,13 @@ async fn enable_host_service(target: &Path, _config: &HostConfig) -> Result<(), 
 
 #[cfg(windows)]
 async fn disable_host_service() -> Result<(), String> {
-    let shutdown = mobile_admin(AdminRequest::Shutdown).await;
+    let shutdown = admin_call_here(&AdminRequest::Shutdown).await;
     // A missing value makes `reg delete` fail, which is the state we want
     // anyway; HKCU needs no elevation, so other failures are not expected.
     let _ = crate::paths::command_no_window("reg")
         .args(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"])
         .status();
-    if shutdown.is_err() && mobile_admin(AdminRequest::Status).await.is_ok() {
+    if shutdown.is_err() && admin_call_here(&AdminRequest::Status).await.is_ok() {
         return Err(concat!("Could not stop the ", crate::app_name!(), " Mobile host").into());
     }
     Ok(())
@@ -809,7 +836,7 @@ async fn enable_host_service(target: &Path, _config: &HostConfig) -> Result<(), 
     // surface an immediate exit (bad config, port taken) instead of silence.
     for _ in 0..12 {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        if mobile_admin(AdminRequest::Status).await.is_ok() {
+        if admin_call_here(&AdminRequest::Status).await.is_ok() {
             return Ok(());
         }
         if matches!(child.try_wait(), Ok(Some(_))) {
@@ -847,7 +874,7 @@ pub async fn stop_host_for_exit() {
     }
     // A missing socket answers immediately (ENOENT / connection refused);
     // only a live-but-wedged host costs the admin timeouts.
-    let shutdown = mobile_admin(AdminRequest::Shutdown).await;
+    let shutdown = admin_call_here(&AdminRequest::Shutdown).await;
     if config.is_err() {
         return;
     }
@@ -908,7 +935,7 @@ pub fn start_host_on_launch() {
         let Ok(config) = HostConfig::load(&storage::state_dir()) else {
             return;
         };
-        let status = mobile_admin(AdminRequest::Status).await;
+        let status = admin_call_here(&AdminRequest::Status).await;
         let answering = match &status {
             Ok(AdminResponse::Host { version, .. }) => Some(version.as_deref()),
             Ok(_) => Some(None),
@@ -929,7 +956,7 @@ pub fn start_host_on_launch() {
             },
             LaunchHost::Start => {}
         }
-        if mobile_admin(AdminRequest::Status).await.is_ok() {
+        if admin_call_here(&AdminRequest::Status).await.is_ok() {
             return;
         }
         if let Err(error) = start_installed_host(&config).await {

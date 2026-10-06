@@ -118,6 +118,79 @@ With no project open, `CenterPanel` still shows the root scope. While the
 overlay is up, the panel's copies of the root panes stand down: two visible
 views of one PTY would take turns resizing it.
 
+## Docked in the app overlays
+
+The root agents are the only ones holding the calendar, board and mail tools,
+and the console that holds them floats over the very calendar they write to.
+Typing "a meeting on Friday at 14:00" and watching it land needs the agent and
+the app in one view. Ctrl+1–9 inside the mail, calendar or to-do overlay (or
+the ✦ in its title bar) therefore dock a root agent in a column on the overlay's
+right (`OverlayAgentColumn`, `useOverlayAgent`, `stores/overlayAgent`). A
+column, not the console beside the overlay: one frame moves, fills and closes as
+one, where two floating windows would each need their own placement, and the
+◫ file column already set the pattern (the resize edge is its handle).
+
+The tab still lives in root. It is added through `addTabToRoot`, the
+hydrate-first door `openTabInRootConsole` now wraps, minus the `show`. Its PTY
+is owned by `CenterPanel`'s keep-alive layer like every root tab's, and the
+column's pane is attach-only. Closing the overlay or hiding the column ends
+nothing, the tab sits in the console's strip, and `pty_spawn` hands it the MCP
+token as it would any root agent: no backend change. The numbers are the
+console's own `+` menu's (`useAddTabMenuData(ROOT_SCOPE)` →
+`agentShortcutSlots`), so only Root-chip agents are offered. A Ctrl+1 with no
+Root-chip agent behind it (the default lacks the chip, no custom order) becomes
+a hint naming the switch rather than a key silently passed on.
+
+**One visible view per PTY**, as with the console over `CenterPanel`:
+
+- Console open → the column shows "Shown in the root console" instead of the
+  pane. A chord answered by an overlay closes the console, so it shows.
+- The tab in a popped-out root subwindow → "Shown in a popout window". That
+  webview's stores are out of reach, so any tab in a detached root group
+  counts, and ↗ is dropped: the console draws only the in-window layout.
+- While the column does draw the pane, its key is in `shownKeys` and
+  `CenterPanel`'s root copy steps aside, beside the existing
+  `!(rootConsoleOpen && scopeKey === ROOT_SCOPE)` rule. With no project open,
+  that copy would otherwise be on screen too.
+
+**Escape belongs to the agent.** Each overlay closes on a window-level Escape;
+that handler ignores events from inside `.overlay-agent-column`, the console's
+`regionRef` rule. Without it Claude's cancel key would close the app.
+
+**Reuse.** One docked agent per overlay, session-only. Ctrl+N on a closed column
+re-shows the docked tab when it came from the same `+` menu row and its program
+still runs; anything else mints a new root tab, and the one it replaces keeps
+running in the console. The row, not the command, is the identity: a custom
+agent may run the built-in's binary with its own arguments. An exited agent's
+tab stays in root (it prints `[process exited]`), so the dock store keeps it;
+an exit watcher on the terminal bus, armed per docked key at dock time, keeps
+the reuse rule from putting that corpse back. A `terminal-ready` revives it.
+
+**Chord routing.** `frontAppOverlay` picks the overlay: one counts while its
+store has it open and its settings gate is on; the one holding focus wins, else
+the topmost by `AppShell` mount order (board, calendar, mail). `useKeyboard`
+then dispatches a cancelable `OVERLAY_AGENT_EVENT` (`requestOverlayAgent`), the
+`requestNewTab` pattern. An unanswered request passes the key on, never into a
+workspace tab hidden under the overlay. Shell and monitor chords are unchanged.
+
+**Arrivals.** A row an agent's write adds flies into the calendar views and the
+board (`stores/calendar/arrivals`: a 450 ms `cal-arrive` keyframe, the mark held
+1.8 s; opacity and transform only, off under `prefers-reduced-motion`). `RootOverlayHost`'s `root-mcp-changed` listener marks
+it, reading the store before the merge:
+
+- Only ids the store never held: an update must not replay an entrance.
+- Not `local` changes: those are board-only rank moves.
+- Not before the calendar store has loaded: an empty store makes every update
+  look new.
+- Not a delete followed by an upsert of the same id: that is a move to
+  another calendar.
+
+Under the default review level the write lands on the user's ✓ in the overlay's
+own Approvals pill, so the entrance plays on approval, in the same window. Mail
+drafts get no entrance: an agent draft always lands unfiled in the approvals
+list and reaches "Drafted by agents" only through that ✓, so the user's own
+click is the arrival.
+
 ## The extra rights
 
 A root agent is asked for things that are not any project's business: "add a
@@ -171,7 +244,19 @@ and one reply out).
   global `update-environment` (fixed slots from 8630), so tmux copies them
   from the client's *environment* (0400) into the new session — and marks
   them removed for a tab that has none, so no tab inherits the token of the
-  tab that happened to start the tmux server.
+  tab that happened to start the tmux server. The same slots carry the other
+  per-tab secrets (`tmux_local::SECRET_ENV`): the schedule, git, help and
+  markup MCP tokens, `COPILOT_GITHUB_TOKEN`, and from 8636 the API proxy
+  tokens (`services::api_proxy`) under app-named carriers
+  (`<APP>_AGENT_SECRET_ANTHROPIC_AUTH_TOKEN`, …, `agent_api_keys::CARRIERS`),
+  never the CLIs' own names. Those slots stay set on the user's default tmux
+  server, so a later session there takes the variables from its client or
+  drops them — harmless for app-named ones, which is why a token is not
+  listed as `ANTHROPIC_AUTH_TOKEN`. `services::agent_exec` (`--agent-exec`)
+  turns a carrier into the CLI's variable just before the agent runs. A
+  proxy token is never sent through a tmux < 3.2 at all (`launch_prep`
+  drops it, and the proxy base URL beside it). After a fenced command the pane's trailing
+  login shell — unfenced — starts with `env -u` over every one of them.
 - **Hidden from fenced project agents.** Bubblewrap gives each fenced agent its
   own pid namespace and `/proc`, so it cannot read the root agent's environment
   or argv.
@@ -223,7 +308,9 @@ so one call may emit several rows. Rows whose only change is `column`/`rank`
 carry `local: true` and are merged without a CalDAV push, which is what a drag
 on the board does too — no server stores those fields. A delete is permanent
 and its tool description says so; the row rides along so the CalDAV copy can
-still be addressed.
+still be addressed. `todo_add`/`todo_update` take every field the card dialog
+edits (calendar, progress below 100, checklist included); a `calendar` change
+of a synced card is the event move — old copy deleted, address-free upsert.
 
 **The sweeps answer for every project at once.** `projects_git_status`,
 `sync_status`, `time_summary`, `usage_recap` and `boxes_list` are the questions
@@ -675,6 +762,9 @@ So root is a phone scope, behind a line drawn where the rights actually are:
   through the same `pty_spawn` with no project id, so `apply_to_spawn` decides
   its tools by the same Root / MCP chips as a tab made at the desk. "Activate"
   raises the console (`useRootOverlayStore.show`); root is never switched to.
+- **Never with no window.** `headless::create_tab` refuses the root scope, and
+  the Mobile host's own MCP listener (`docs/headless_mcp_plan.md`) has no root
+  lane: `/mcp` is not routed there and `Runtime::serves_root` is false.
 - Root Claude tabs still spawn without `--remote-control`, so they never appear
   in Claude's own phone app — a different decision from Tabtivity's paired phone.
 - **The phone's raw terminal input is trusted as the user's, and reaches the

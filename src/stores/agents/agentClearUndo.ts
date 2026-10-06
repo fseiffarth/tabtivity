@@ -4,6 +4,7 @@ import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInpu
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
 import {
   RESUMABLE_AGENTS,
@@ -105,8 +106,16 @@ export function canUndoClear(tab: TabEntry): boolean {
 }
 
 /** A new-conversation command was typed into this pane: offer the undo when
- * the tab is one whose conversation can come back. */
-export function noteTypedClear(ptyId: string): void {
+ * the tab is one whose conversation can come back.
+ *
+ * Not while the agent is at work (`busy`, read before the command went in):
+ * Claude queues the command behind the turn and Codex refuses it, so the
+ * conversation on screen is not cleared yet. Hiding it and offering the undo
+ * then took back the clear before — resuming the conversation that one ended
+ * and leaving the prompt sent since behind. A queued `/clear` is reported by
+ * the hook when it runs (`agent-session-roll`). */
+export function noteTypedClear(ptyId: string, busy = !!useActivityStore.getState().busyByTab[ptyId]): void {
+  if (busy) return;
   const parts = splitPtyId(ptyId);
   const tab = parts && useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
   if (tab && canUndoClear(tab)) useAgentClearUndoStore.getState().noteRoll(ptyId, "clear");

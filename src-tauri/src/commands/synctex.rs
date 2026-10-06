@@ -82,7 +82,7 @@
 //! SyncTeX records no column, so the column is always 0 (as with the CLI, which
 //! reports `Column:-1` for every record pdfTeX writes).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -260,7 +260,7 @@ fn parse_record(body: &str, p: &Preamble, elastic: bool) -> Option<Rec> {
 /// otherwise a click in the leading margin of such a line would see no leaf at
 /// all. `[` (vbox) is tracked for nesting but never becomes a target: vboxes
 /// span whole paragraphs and answering with one would defeat the point.
-fn walk_hboxes(text: &str, p: &Preamble, only_page: Option<u32>) -> Vec<(u32, HBox)> {
+fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u32, HBox)> {
     let mut out: Vec<(u32, HBox)> = Vec::new();
     // (record, is_hbox, own children)
     let mut stack: Vec<(Rec, bool, Vec<Rec>)> = Vec::new();
@@ -276,15 +276,15 @@ fn walk_hboxes(text: &str, p: &Preamble, only_page: Option<u32>) -> Vec<(u32, HB
             }
             '}' => {
                 stack.clear();
-                // Reverse search wants only its page; once it closes there is
-                // nothing left to find, so stop rather than scan the whole file.
-                if only_page == Some(page) {
+                // Reverse search wants only its pages; once the last closes there
+                // is nothing left to find, so stop rather than scan the whole file.
+                if only.is_some_and(|pages| pages.last() == Some(&page)) {
                     return out;
                 }
             }
             // Skip record parsing entirely for a page reverse search doesn't want,
             // and for anything before the first `{` (the preamble/postamble).
-            _ if only_page.is_some_and(|pg| pg != page) || page == 0 => {}
+            _ if only.is_some_and(|pages| !pages.contains(&page)) || page == 0 => {}
             '[' | '(' => {
                 let is_h = c == '(';
                 match parse_record(&l[1..], p, false) {
@@ -343,7 +343,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only_page: Option<u32>) -> Vec<(u32, HB
 
 /// Every hbox on `page` with its direct children — reverse search's per-page view.
 fn page_hboxes(text: &str, page: u32, p: &Preamble) -> Vec<HBox> {
-    walk_hboxes(text, p, Some(page))
+    walk_hboxes(text, p, Some(&BTreeSet::from([page])))
         .into_iter()
         .filter(|(pg, _)| *pg == page)
         .map(|(_, b)| b)
@@ -492,6 +492,10 @@ fn absolutise(input: &str, base: &Path) -> String {
         .into_owned()
 }
 
+/// The largest map read, compressed or inflated. A 600-page thesis writes
+/// well under a tenth of this.
+const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Decompressed SyncTeX text, cached against the file's path and mtime so a
 /// burst of clicks on one PDF re-reads (and re-inflates) nothing. Single-entry:
 /// reverse search is driven by one focused PDF at a time, and a stale megabyte
@@ -631,17 +635,21 @@ fn load_map(pdf: &Path) -> Option<std::sync::Arc<Map>> {
         }
     }
 
-    let text = if path.extension().is_some_and(|e| e == "gz") {
-        use std::io::Read;
-        let bytes = std::fs::read(&path).ok()?;
-        let mut out = String::new();
-        flate2::read::GzDecoder::new(&bytes[..])
-            .read_to_string(&mut out)
-            .ok()?;
-        out
+    // Bounded both ways: the map sits in a project folder, so a small `.gz`
+    // could inflate to gigabytes. A map past the cap has no reverse search.
+    use std::io::Read;
+    let mut text = String::new();
+    let read = if path.extension().is_some_and(|e| e == "gz") {
+        let file = std::fs::File::open(&path).ok()?;
+        flate2::read::GzDecoder::new(file.take(MAX_MAP_BYTES))
+            .take(MAX_MAP_BYTES + 1)
+            .read_to_string(&mut text)
     } else {
-        std::fs::read_to_string(&path).ok()?
+        std::fs::File::open(&path).ok()?.take(MAX_MAP_BYTES + 1).read_to_string(&mut text)
     };
+    if read.is_err() || text.len() as u64 > MAX_MAP_BYTES {
+        return None;
+    }
 
     let pre = parse_preamble(&text);
     let map = std::sync::Arc::new(Map { text, pre });
@@ -668,6 +676,40 @@ pub fn resolve(pdf: &Path, page: u32, x: f64, y: f64) -> Option<(String, u32)> {
     let input = map.pre.inputs.get(&tag)?;
     let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
     Some((absolutise(input, dir), line))
+}
+
+/// {@link resolve} for many points on many pages, walking the map once: what a
+/// markup Submit asks for every mark it sends
+/// (`services::mobile_control::markup`). One answer per point, in order.
+pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTreeMap<u32, Vec<Option<(String, u32)>>> {
+    let unanswered = || points.iter().map(|(page, list)| (*page, vec![None; list.len()])).collect();
+    let Some(map) = load_map(pdf) else {
+        return unanswered();
+    };
+    let wanted: BTreeSet<u32> = points.keys().copied().collect();
+    let mut by_page: BTreeMap<u32, Vec<HBox>> = BTreeMap::new();
+    for (page, bx) in walk_hboxes(&map.text, &map.pre, Some(&wanted)) {
+        by_page.entry(page).or_default().push(bx);
+    }
+    let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
+    points
+        .iter()
+        .map(|(page, list)| {
+            let boxes = by_page.get(page).map(Vec::as_slice).unwrap_or_default();
+            let answers = list
+                .iter()
+                .map(|&(x, y)| {
+                    let bx = pick_hbox(boxes, x, y)?;
+                    let (tag, line) = resolve_in_hbox(bx, x);
+                    if line == 0 {
+                        return None;
+                    }
+                    Some((absolutise(map.pre.inputs.get(&tag)?, dir), line))
+                })
+                .collect();
+            (*page, answers)
+        })
+        .collect()
 }
 
 /// The `Input:` tag for source file `input`, matched by **canonicalised path**

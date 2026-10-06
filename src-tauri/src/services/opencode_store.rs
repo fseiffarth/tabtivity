@@ -42,7 +42,7 @@ use serde_json::Value;
 
 use crate::services::agent_changes::{opencode_part_changes, AgentChanges};
 use crate::services::agent_transcript::{
-    agent_entry, insert_by_time, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
+    agent_entry, agents_unlisted, insert_by_time, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
 };
 use crate::services::prompt_blame::epoch_ms_to_iso;
 
@@ -56,11 +56,17 @@ const CHANGE_TAIL: i64 = 2000;
 /// Tabtivity-owned agent home — where OpenCode's `xdg-basedir` puts it under the
 /// `$HOME` the tab runs with.
 pub fn db_path_for(scope_id: Option<&str>) -> PathBuf {
-    crate::services::agent_home::scope_home(scope_id)
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db")
+    db_in_home(&crate::services::agent_home::scope_home(scope_id))
+}
+
+/// The OpenCode database of the scope's local-model tabs (`ollama launch
+/// opencode`), in the scope's local-model home.
+pub fn local_model_db_path_for(scope_id: Option<&str>) -> PathBuf {
+    db_in_home(&crate::services::agent_home::local_model_home(scope_id))
+}
+
+fn db_in_home(home: &Path) -> PathBuf {
+    home.join(".local").join("share").join("opencode").join("opencode.db")
 }
 
 /// The conversation of the newest top-level, unarchived session OpenCode ran
@@ -100,11 +106,15 @@ pub fn session_transcript(
         });
     }
     let (mut entries, mut truncated) = read_entries(&conn, &session)?;
-    insert_by_time(&mut entries, children(&conn, &session), truncated);
+    let children = children(&conn, &session);
+    let spawned: Vec<String> = children.iter().filter_map(|entry| entry.subagent.clone()).collect();
+    insert_by_time(&mut entries, children, truncated);
+    let running_agents = running_agents(&entries);
     if entries.len() > limit {
         entries.drain(..entries.len() - limit);
         truncated = true;
     }
+    let agents_earlier = truncated && agents_unlisted(&entries, &spawned);
     Some(AgentTranscript {
         available: true,
         reason: None,
@@ -112,10 +122,15 @@ pub fn session_transcript(
         unchanged: false,
         entries,
         truncated,
+        agents_earlier,
+        running_agents,
         usage: None,
         model: None,
+        effort: None,
         tokens: None,
         shells: Vec::new(),
+        cwd: None,
+        running_cwds: Vec::new(),
     })
 }
 

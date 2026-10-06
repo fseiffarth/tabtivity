@@ -45,6 +45,7 @@ vi.mock("../../stores/settings", () => {
 import { useProjectsStore } from "../../stores/projects";
 import * as settingsModule from "../../stores/settings";
 import { SidePanel } from "../../components/layout/SidePanel";
+import { useGitDirtyStore } from "../../stores/gitDirty";
 
 const settingsState = (settingsModule as unknown as { __state: { settings: Settings | null } }).__state;
 
@@ -112,6 +113,32 @@ describe("git bar refresh", () => {
     });
     await settle();
     expect(screen.queryByText("Add (163)")).toBeNull();
+  });
+
+  // #2349: a failed unpushed read is no reading. It used to become `[]`, so a
+  // clean tree with commits to push painted the pill "clean".
+  it("never turns a failed unpushed read into a clean dot", async () => {
+    useGitDirtyStore.setState({ byId: {} });
+    unstaged = 0;
+    let unpushedFails = false;
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "git_unpushed_commits") {
+        return unpushedFails ? Promise.reject("git log timed out after 120 s and was stopped.") : Promise.resolve(["abc123 one"]);
+      }
+      return base(cmd, args);
+    });
+    render(<SidePanel open={true} />);
+    await settle();
+    expect(useGitDirtyStore.getState().byId["proj-1"]).toBe("unpushed");
+
+    unpushedFails = true;
+    await act(async () => {
+      fsChange.forEach((fire) => fire());
+    });
+    await settle();
+    expect(useGitDirtyStore.getState().byId["proj-1"]).toBe("unpushed");
+    expect(gitButton().className).toContain("toolbar-btn--flagged");
   });
 
   it("keeps re-reading while the Git view is on screen", async () => {

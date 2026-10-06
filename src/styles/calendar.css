@@ -1114,6 +1114,35 @@
   background: var(--control-hover-bg);
 }
 
+/* "Flying in": an event or task a root agent just wrote (stores/calendar/
+   arrivals) drops into place. Opacity and transform only — never an animated
+   blurred box-shadow (WebKitGTK software path). The chips are positioned by
+   top/left, not transform, so the transform here moves nothing else. The board
+   card (mail-todo.css) reuses this keyframe. Only `from` is given, so the
+   animation ends on the row's own opacity (a dragged block's 0.85). */
+@keyframes cal-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
+.cal-block.arrived,
+.cal-month-bar.arrived,
+.cal-agenda-row.arrived,
+.cal-task-row.arrived {
+  animation: cal-arrive 450ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cal-block.arrived,
+  .cal-month-bar.arrived,
+  .cal-agenda-row.arrived,
+  .cal-task-row.arrived {
+    animation: none;
+  }
+}
+
 .cal-task-check {
   flex: 0 0 auto;
   cursor: var(--cur-pointer, pointer);

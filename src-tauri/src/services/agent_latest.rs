@@ -99,19 +99,66 @@ pub fn parse_latest(source: Source, body: &str) -> Option<String> {
     parse_version(raw)
 }
 
+/// A GitHub repository's latest-release *web* page, which redirects to
+/// `…/releases/tag/<tag>`. Read before the REST API: unauthenticated, the API
+/// allows 60 requests an hour per IP — shared by everything behind that address
+/// — and once spent it answered 403 to every check (2026-10-02). The redirect
+/// is not counted against that quota.
+pub fn github_latest_page(repo: &str) -> String {
+    format!("https://github.com/{repo}/releases/latest")
+}
+
+/// The tag a [`github_latest_page`] redirect points at, from its `Location`.
+/// A monorepo tag (`cli/v2.2.1`, possibly `%2F`-escaped) yields its last part,
+/// as [`parse_latest`] does for the API's `tag_name`.
+pub fn tag_from_release_redirect(location: &str) -> Option<String> {
+    let tag = location.split_once("/releases/tag/")?.1;
+    let tag = tag.split(['?', '#']).next()?.replace("%2F", "/").replace("%2f", "/");
+    let tag = tag.rsplit('/').next()?.trim();
+    (!tag.is_empty()).then(|| tag.to_string())
+}
+
 fn client() -> Result<reqwest::Client, String> {
+    client_with(reqwest::redirect::Policy::default())
+}
+
+fn client_with(redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, String> {
     // `reqwest` is built with `rustls-no-provider`; see `app_update::client`.
     crate::services::mail_engine::install_crypto_provider();
     reqwest::Client::builder()
         .user_agent(crate::app_name!())
         .timeout(FETCH_TIMEOUT)
         .referer(false)
+        .redirect(redirect)
         .build()
         .map_err(|e| format!("update-client: {e}"))
 }
 
+/// The newest release of a GitHub repository, from the release page's redirect
+/// (no API quota). `Err` when GitHub answered anything but a redirect to a tag.
+async fn github_latest_from_redirect(repo: &str) -> Result<String, String> {
+    let response = client_with(reqwest::redirect::Policy::none())?
+        .head(github_latest_page(repo))
+        .send()
+        .await
+        .map_err(|e| format!("couldn't reach the registry: {}", e.without_url()))?;
+    response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(tag_from_release_redirect)
+        .and_then(|tag| parse_version(&tag))
+        .ok_or_else(|| format!("the release page answered {}", response.status()))
+}
+
 /// Ask `source`'s registry for its newest release.
 pub async fn fetch_latest(source: Source) -> Result<String, String> {
+    if let Source::GitHub(repo) = source {
+        if let Ok(version) = github_latest_from_redirect(repo).await {
+            return Ok(version);
+        }
+        // Fall through to the API, which still answers while its quota lasts.
+    }
     let mut response = client()?
         .get(url_for(source))
         .header("Accept", "application/json")
@@ -239,6 +286,27 @@ mod tests {
         );
         assert_eq!(parse_latest(Source::Npm("x"), r#"{"error":"Not found"}"#), None);
         assert_eq!(parse_latest(Source::Npm("x"), "<html>"), None);
+    }
+
+    #[test]
+    fn reads_the_tag_a_release_redirect_points_at() {
+        assert_eq!(github_latest_page("o/r"), "https://github.com/o/r/releases/latest");
+        assert_eq!(
+            tag_from_release_redirect("https://github.com/ollama/ollama/releases/tag/v0.35.1")
+                .as_deref(),
+            Some("v0.35.1")
+        );
+        assert_eq!(
+            tag_from_release_redirect("https://github.com/o/r/releases/tag/cli%2Fv2.2.1").as_deref(),
+            Some("v2.2.1")
+        );
+        assert_eq!(
+            tag_from_release_redirect("https://github.com/o/r/releases/tag/cli/v2.2.1").as_deref(),
+            Some("v2.2.1")
+        );
+        // No release yet: GitHub sends the releases list, not a tag.
+        assert_eq!(tag_from_release_redirect("https://github.com/o/r/releases"), None);
+        assert_eq!(tag_from_release_redirect("https://github.com/o/r/releases/tag/"), None);
     }
 
     #[test]

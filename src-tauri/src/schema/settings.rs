@@ -77,6 +77,13 @@ pub struct AppMobileHostSettings {
     /// bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_tabs: Option<bool>,
+    /// May a paired phone list the desktop's Ollama models and load/unload them
+    /// (never download or delete)? Unset is **on**; `false` closes the routes.
+    /// Read by the sidecar per request
+    /// (`mobile_control::local_models::local_models_open`) and repeated by the
+    /// desktop bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_models: Option<bool>,
 }
 
 /// Cloud completion authority lives in Tabtivity's settings, never project.json.
@@ -89,6 +96,11 @@ pub struct CompletionProjectPolicy {
     pub copilot: bool,
     #[serde(default)]
     pub local_only: bool,
+    /// Copilot also serves the project's text files (Markdown, LaTeX, plain
+    /// text). A second opt-in on top of `copilot`: notes and papers are what a
+    /// code consent should not quietly cover.
+    #[serde(default)]
+    pub copilot_text: bool,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -204,6 +216,11 @@ pub struct Settings {
     /// it and makes `/mcp/help` refuse the tabs that already hold a token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_mcp: Option<bool>,
+    /// The markup questions server (`services::markup_mcp`) handed to every
+    /// local project-agent tab. **Absent means on**; a stored `false` stops
+    /// new tabs getting it and makes `markup_ask` answer `off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markup_mcp: Option<bool>,
     /// Root-agent write review: absent/unknown = all, or destructive / off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_mcp_review: Option<String>,
@@ -419,6 +436,29 @@ pub struct Settings {
     pub pdf_markup_instruction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_markup_apply: Option<String>,
+    /// How often a Submit lets the agent stop to ask about the marks, a stop
+    /// of `markup::ASK_LINES` (0 = about every mark … 4 = never); `None` =
+    /// `markup::DEFAULT_ASK`. The phone keeps its own (`markupInstruction.ts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_ask: Option<u8>,
+    /// Whether a marked PDF that changes on disk loads under the marks on its
+    /// own (`None` = on), rather than waiting for **Reload PDF**.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_auto_reload: Option<bool>,
+    /// Subagent mode: each Submit's prompt asks the tab's agent to hand the
+    /// round to a new subagent of its own (`MARKUP_SUBAGENT_LINE`,
+    /// `mobile-web/src/markupInstruction.ts`), so it is free for the next
+    /// round at once. `None` = off. The phone keeps its own (⋯ switch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_subagents: Option<bool>,
+    /// **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`):
+    /// a Submit asks `pdf_markup_submit` for `mode: "apply"` — the agent makes
+    /// the changes in one turn and the strip offers **Undo** — rather than
+    /// `list` (**Make these changes**). `None` = on, so a settings file from
+    /// before the switch gets it; the backend still falls back to `list` where
+    /// no undo snapshot can be taken. The phone keeps its own (`markupDirect`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_markup_direct: Option<bool>,
     /// Built-in agent registry ids shown before a search in the compact Agents
     /// group of the + tab menu. Chosen through the 🧠 menu's "+ tab" chips.
     /// Unset is interpreted by the frontend as Claude/Codex/Gemini; an empty
@@ -437,6 +477,17 @@ pub struct Settings {
     /// `services::root_mcp`, which sees only the binary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_mcp_agents: Option<Vec<String>>,
+    /// Agent CLI registry ids that get their provider's stored API key at
+    /// spawn (`services::agent_api_keys`), set by Manage CLIs → API keys.
+    /// Opt-in: unset or empty hands no key to any CLI. Never a key itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_api_key_clis: Option<Vec<String>>,
+    /// Monthly spending limit in US dollars per provider id (`anthropic`,
+    /// `gemini`) for the stored API keys (`services::api_usage`), enforced by
+    /// the API proxy. Saving a key requires one; a provider with a key and no
+    /// limit is refused until one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_api_limits: Option<std::collections::BTreeMap<String, f64>>,
     /// Local model names switched off for the root console by the 🧠 menu's
     /// "Root" chips. Opt-out: unset means every local model is offered there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1039,6 +1090,12 @@ impl Settings {
         self.help_mcp.unwrap_or(true)
     }
 
+    /// Whether the markup questions MCP is handed to agent tabs. On unless
+    /// switched off.
+    pub fn markup_mcp(&self) -> bool {
+        self.markup_mcp.unwrap_or(true)
+    }
+
     /// The agent CLIs [`Self::root_mcp_agents`] names, with its `root_agents`
     /// fallback applied.
     pub fn root_mcp_agent_list(&self) -> Vec<String> {
@@ -1110,6 +1167,17 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    /// A settings file from before **Apply marks directly** parses with the
+    /// switch unset (= on) and writes nothing new back; a set one round-trips.
+    #[test]
+    fn the_markup_direct_switch_round_trips_old_files() {
+        let old: super::Settings = serde_json::from_str(r#"{"pdf_markup_ask":2}"#).unwrap();
+        assert_eq!(old.pdf_markup_direct, None);
+        assert!(serde_json::to_value(&old).unwrap().get("pdf_markup_direct").is_none());
+        let off: super::Settings = serde_json::from_str(r#"{"pdf_markup_direct":false}"#).unwrap();
+        assert_eq!(serde_json::to_value(&off).unwrap()["pdf_markup_direct"], serde_json::json!(false));
+    }
+
     /// The serde key is a literal in the attribute; this ties it to the brand
     /// module so the two cannot drift.
     #[test]
@@ -1456,6 +1524,30 @@ mod default_rule_tests {
         assert!(host.mail_actions.is_none(), "reply and actions are independent");
     }
 
+    /// The phone's local-model switch: unset stays unset (which means on), and
+    /// an explicit `false` survives a read → write.
+    #[test]
+    fn mobile_host_local_models_switch_round_trips() {
+        let key = crate::brand::MOBILE_HOST_KEY;
+        let s: Settings = serde_json::from_str(&format!(r#"{{"{key}":{{"enabled":true}}}}"#)).unwrap();
+        assert!(s.app_mobile_host.as_ref().unwrap().local_models.is_none());
+        let back = serde_json::to_value(&s).unwrap();
+        // Pin the object first: on a wrong key `back[key]` is `Null`, whose
+        // `.get` is `None` too, and the absence check would pass vacuously.
+        assert_eq!(back[key]["enabled"], serde_json::json!(true));
+        assert!(back[key].get("local_models").is_none(), "absent stays absent");
+
+        let s: Settings = serde_json::from_str(&format!(
+            r#"{{"{key}":{{"enabled":true,"local_models":false}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(s.app_mobile_host.as_ref().unwrap().local_models, Some(false));
+        let written = serde_json::to_value(&s).unwrap();
+        assert_eq!(written[key]["local_models"], serde_json::json!(false), "written as false");
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.app_mobile_host.unwrap().local_models, Some(false));
+    }
+
     /// `global_apps` entries keep foreign keys through `extra`, and a settings
     /// file with keys this build does not know round-trips them untouched.
     #[test]
@@ -1468,6 +1560,35 @@ mod default_rule_tests {
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.extra["some_future_setting"]["a"][1], 2);
         assert_eq!(back.global_apps.unwrap()["code"].extra["icon"], "vscode");
+    }
+
+    /// `agent_api_key_clis` is optional on the way in and absent on the way
+    /// out when unset, so a settings file from before it existed is untouched.
+    #[test]
+    fn agent_api_key_clis_round_trip_and_stay_absent_when_unset() {
+        let raw = r#"{"root_mcp_agents":["claude"],"disabled_agents":["codex"]}"#;
+        let s: Settings = serde_json::from_str(raw).unwrap();
+        assert!(s.agent_api_key_clis.is_none());
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(!out.contains("agent_api_key_clis"), "{out}");
+        assert!(out.contains("disabled_agents"), "{out}");
+
+        let s: Settings = serde_json::from_str(r#"{"agent_api_key_clis":["claude","gemini"]}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.agent_api_key_clis.unwrap(), ["claude", "gemini"]);
+    }
+
+    /// `agent_api_limits` likewise: absent when unset, numbers kept as they are.
+    #[test]
+    fn agent_api_limits_round_trip_and_stay_absent_when_unset() {
+        let s: Settings = serde_json::from_str(r#"{"agent_api_key_clis":["claude"]}"#).unwrap();
+        assert!(s.agent_api_limits.is_none());
+        assert!(!serde_json::to_string(&s).unwrap().contains("agent_api_limits"));
+        let s: Settings = serde_json::from_str(r#"{"agent_api_limits":{"anthropic":20,"gemini":7.5}}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let limits = back.agent_api_limits.unwrap();
+        assert_eq!(limits["anthropic"], 20.0);
+        assert_eq!(limits["gemini"], 7.5);
     }
 
     /// `ide_launchers` is optional on the way in and absent on the way out

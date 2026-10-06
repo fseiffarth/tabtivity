@@ -12,6 +12,7 @@ import type { TabEntry } from "../../stores/tabs";
 import { DiffLineRow } from "../embed/DiffView";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { openFileEntry } from "../files/openFileEntry";
+import { openTabInScope } from "../tabs/tabScopeContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 
@@ -98,13 +99,14 @@ function changeKeys(list: FileChange[]): string[] {
 /** One change: its file, what kind, when, and its diff — folded until
  * clicked, so a change arriving mid-read never unfolds and shoves the list.
  * One that arrived while the panel was shown is marked new until unfolded. */
-const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use24h, onOpenFile, onUnfold }: {
+const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use24h, onOpenFile, onOpenDiff, onUnfold }: {
   change: FileChange;
   cardKey: string;
   fresh: boolean;
   base: string | undefined;
   use24h: boolean;
   onOpenFile: (path: string) => void;
+  onOpenDiff: (path: string) => void;
   onUnfold: (cardKey: string) => void;
 }) {
   const t = useT();
@@ -139,6 +141,17 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
         </button>
         <Counts added={change.added} removed={change.removed} />
         {moment && <small className="terminal-changes-time">{chatTime(moment, use24h)}</small>}
+        {openable && (
+          <button
+            type="button"
+            className="terminal-changes-open"
+            title={t("terminal.changes.openDiff")}
+            aria-label={t("terminal.changes.openDiff")}
+            onClick={() => onOpenDiff(change.path)}
+          >
+            ±
+          </button>
+        )}
         {openable && (
           <button
             type="button"
@@ -291,6 +304,18 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     });
   };
 
+  /** The file in the diff viewer (whole file unless the user narrowed it), as
+   * the file tree's Show diff opens it: a re-open re-reads. */
+  const openDiff = (path: string) => {
+    const sameDiff = (t: TabEntry) => t.kind === "embed" && t.viewer === "diff" && t.embedPath === path;
+    openTabInScope(
+      scope,
+      { label: basename(path), cmd: "", cwd: base ?? "", kind: "embed", embedPath: path, viewer: "diff" },
+      sameDiff,
+      { replace: true },
+    );
+  };
+
   /** Drag the panel's left edge: it widens leftwards, the chat gives way. */
   const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
     const host = e.currentTarget.parentElement?.parentElement;
@@ -374,6 +399,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
               base={base}
               use24h={use24h}
               onOpenFile={openFile}
+              onOpenDiff={openDiff}
               onUnfold={unfold}
             />
           ))

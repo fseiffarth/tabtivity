@@ -69,6 +69,20 @@ function finalResult(transcript: string): MobileSpeechRecognitionResultEvent {
   } as unknown as MobileSpeechRecognitionResultEvent;
 }
 
+/** Chromium's `userAgentData`, the mark of a browser whose on-device
+ * recognizer is asked at all (`onDeviceSpeechAsked`). */
+function asChromium() {
+  Object.defineProperty(window.navigator, "userAgentData", { configurable: true, value: {} });
+}
+
+/** The composer's status line — not the Focus chat's "starting" row, which a
+ * blank agent tab shows over the empty screen. */
+function composerStatus(): HTMLElement {
+  const rows = screen.getAllByRole("status").filter((row) => row.dataset.testid !== "session-starting");
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
 describe(`${BRAND.display} Mobile terminal dictation`, () => {
   beforeEach(() => {
     // The composer's draft is kept on the phone now (`drafts.ts`), and the
@@ -90,6 +104,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     terminalModes.bracketedPasteMode = false;
     vi.useRealTimers();
     delete (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    delete (window.navigator as Navigator & { userAgentData?: unknown }).userAgentData;
     vi.unstubAllGlobals();
   });
 
@@ -107,7 +122,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     const binary = FakeWebSocket.instances[0].sent.filter((value): value is ArrayBufferView => ArrayBuffer.isView(value));
     expect(binary).toHaveLength(0);
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("fix the mobile voice input");
-    expect(screen.getByRole("status").textContent).toContain("Heard: fix the mobile voice input");
+    expect(composerStatus().textContent).toContain("Heard: fix the mobile voice input");
   });
 
   it("listens in the phone's language, or in the one the Reader's picker chose", async () => {
@@ -190,7 +205,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
     act(() => speech.onresult?.(finalResult("and add a test")));
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("and add a test");
-    expect(screen.getByRole("status").textContent).toBe("Heard: and add a test");
+    expect(composerStatus().textContent).toBe("Heard: and add a test");
   });
 
   it("keeps listening through the pause that ends the phone's recognizer", async () => {
@@ -220,6 +235,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
       processLocally?: boolean;
     }
     Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: LocalRecognition });
+    asChromium();
     render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
@@ -238,6 +254,41 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect((FakeRecognition.instances[1] as LocalRecognition).processLocally).toBe(false);
   });
 
+  it("dictates with Safari's speech service without asking its on-device check, which hung on an iPad", async () => {
+    const available = vi.fn(() => new Promise<"available">(() => {}));
+    class SafariRecognition extends FakeRecognition {
+      static available = available;
+      processLocally?: boolean;
+    }
+    Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: SafariRecognition });
+    render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await act(async () => {});
+    expect(available).not.toHaveBeenCalled();
+    expect((FakeRecognition.instances[0] as SafariRecognition).processLocally).toBe(false);
+  });
+
+  it("takes back an on-device check that does not finish when Dictate is tapped again", async () => {
+    class DownloadingRecognition extends FakeRecognition {
+      static available = vi.fn(() => Promise.resolve("downloadable" as const));
+      static install = vi.fn(() => new Promise<boolean>(() => {}));
+    }
+    Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: DownloadingRecognition });
+    asChromium();
+    render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await act(async () => {});
+    const preparing = screen.getByRole("button", { name: "Preparing dictation" });
+    expect(preparing.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("Checking for on-device dictation…")).toBeTruthy();
+    fireEvent.click(preparing);
+    expect(screen.getByRole("button", { name: "Dictate" })).toBeTruthy();
+    expect(screen.queryByText("Checking for on-device dictation…")).toBeNull();
+    expect(FakeRecognition.instances).toHaveLength(0);
+  });
+
   it("offers no on-device choice where the phone has no on-device model", async () => {
     // Android's Chrome: the API is there, the model is not.
     class RemoteOnlyRecognition extends FakeRecognition {
@@ -245,6 +296,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
       processLocally?: boolean;
     }
     Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: RemoteOnlyRecognition });
+    asChromium();
     render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "Chat" }));
@@ -274,7 +326,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     act(() => speech.onresult?.(reading(["fix the login", true])));
     fireEvent.click(screen.getByRole("button", { name: "Clear the message" }));
     act(() => speech.onresult?.(reading(["fix the login", true], ["and add a test", false])));
-    expect(screen.getByRole("status").textContent).toBe("Heard: and add a test");
+    expect(composerStatus().textContent).toBe("Heard: and add a test");
     act(() => speech.onresult?.(reading(["fix the login", true], ["and add a test", true])));
     expect(composer.value).toBe("and add a test");
 

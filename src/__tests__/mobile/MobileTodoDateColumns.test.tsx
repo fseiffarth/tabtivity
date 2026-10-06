@@ -6,6 +6,7 @@ import { Todo } from "../../../mobile-web/src/screens/Todo";
 import { COLUMN_FOLLOWS_DATE, localDate, moveAccepted } from "../../../mobile-web/src/todoDates";
 import type { TodoCard, TodoColumn } from "../../../mobile-web/src/api";
 import { storageKey } from "../../lib/brand";
+import { translate } from "../../lib/i18n";
 
 vi.mock("../../../mobile-web/src/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../mobile-web/src/api")>();
@@ -126,6 +127,6 @@ describe("mobile board refusals", () => {
     // deadline that moved under the reader would produce it.
     fireEvent.change(screen.getByLabelText("Move Later"), { target: { value: "doing" } });
 
-    await waitFor(() => expect(screen.getByText(COLUMN_FOLLOWS_DATE)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(translate("en", COLUMN_FOLLOWS_DATE))).toBeTruthy());
   });
 });

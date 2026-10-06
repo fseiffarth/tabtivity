@@ -414,6 +414,7 @@ fn is_secret_exec_env(key: &str) -> bool {
             crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
             crate::services::root_mcp::GIT_TOKEN_ENV,
             crate::services::root_mcp::HELP_TOKEN_ENV,
+            crate::services::root_mcp::MARKUP_TOKEN_ENV,
         ]
         .contains(&key)
 }
@@ -2443,6 +2444,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         };
@@ -2471,6 +2473,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         };

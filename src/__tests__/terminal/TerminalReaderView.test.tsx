@@ -87,6 +87,15 @@ describe("the agent pane's Reader", () => {
     expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({
       agent: "claude", projectId: "p", sessionId: "launch-1", tabDir: "/p", since: 1000, version: null,
     }));
+    // A long session that never spawned a subagent has no "Subagents (0+)".
+    expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
+  });
+
+  it("offers the subagents of earlier turns only when those turns hold one", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: true } : []));
+    reader(host);
+    await screen.findByRole("button", { name: /^Subagents \(0\+\)/ });
   });
 
   it("sends a prompt through the prompt box's path and shows it as sending", async () => {
@@ -133,12 +142,39 @@ describe("the agent pane's Reader", () => {
     expect(clearAgentTab).toHaveBeenCalledWith("p", expect.objectContaining({ key: "agent-1" }));
     expect(sendSteeringPrompt).not.toHaveBeenCalled();
     expect((box as HTMLTextAreaElement).value).toBe("");
+    // A prefix the CLI's popup completes to `/clear` is that clear too.
+    clearAgentTab.mockClear();
+    fireEvent.change(box, { target: { value: "/clea" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(clearAgentTab).toHaveBeenCalledTimes(1);
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
     // Refused (Codex mid-turn, a pane not ready): the text stays, with why.
     clearAgentTab.mockResolvedValue(false);
     fireEvent.change(box, { target: { value: "/new" } });
     await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
     expect(screen.getByRole("alert").textContent).toMatch(/Not sent/);
     expect((box as HTMLTextAreaElement).value).toBe("/new");
+  });
+
+  it("lets a sent command prefix go once the command it completed to is recorded", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    sendSteeringPrompt.mockImplementation((_tab: TabEntry, text: string) => { noteSentPrompt("st-1", text); return Promise.resolve(); });
+    reader(host);
+    await screen.findByText("fix the parser");
+    // `/com` continues `/compact` and `/context`: it goes as typed.
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: "/com" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.anything(), "/com");
+    expect(host.querySelector(".terminal-reader-turn.pending")?.textContent).toContain("/com");
+    const compacted = {
+      ...transcript,
+      version: "v2",
+      entries: [...transcript.entries, { kind: "prompt", text: "/compact", at: new Date(Date.now() + 1000).toISOString() }],
+    };
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? compacted : []));
+    await waitFor(() => expect(host.querySelector(".terminal-reader-turn.pending")).toBeNull(), { timeout: 5000 });
   });
 
   it("keeps the text and says why when the prompt did not go in", async () => {
@@ -455,6 +491,30 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("answers Claude's \"Type something.\" row with typed words, never with Enter on the empty row", async () => {
+    term = fakeTerminal([
+      "> ask me", "", "☐ Fruit", "", "Which fruit?", "",
+      "❯ 1. Apple", "     A red fruit.",
+      "  2. Banana", "     A yellow fruit.",
+      "  3. Type something.",
+      "──────────────────────────────────────────────────────────────────────",
+      "  4. Chat about this", "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    // The click opens a field: the empty row's Enter would decline the question.
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(written).toEqual([]);
+    const field = screen.getByRole("textbox", { name: "Your answer…" });
+    fireEvent.change(field, { target: { value: "a pear" } });
+    fireEvent.submit(field.closest("form")!);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(written).toEqual(["\u001b[B", "\u001b[B", "a pear", "\r"]);
+  });
+
   it("shows an agent's own question as its header, its question and tagged rows — not the screen", async () => {
     term = fakeTerminal([
       "> push it", "",
@@ -476,6 +536,27 @@ describe("the Reader's live rows", () => {
     expect(group.querySelector(".terminal-reader-question-context")).toBeNull();
     expect(group.textContent).not.toMatch(/☐|My fix is ready|\(Recommended\)/);
     expect(group.querySelector(".terminal-reader-recommended")?.textContent).toBe("Recommended");
+  });
+
+  it("walks a several-question dialog's tabs with ←/→, so an answer can be changed before Submit", async () => {
+    term = fakeTerminal([
+      "> tag it", "",
+      "←  ☒ Scope  ☒ Release tag  ✔ Submit  →", "",
+      "Review your answers", "",
+      "❯ 1. Submit answers", "  2. Cancel",
+      "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const steps = await screen.findByRole("toolbar", { name: "Questions" });
+    expect(steps.textContent).toMatch(/✓ Scope.*✓ Release tag.*Submit/);
+    // The row does not say which step is on screen here: the arrows still
+    // walk, the headers wait until it does.
+    expect((screen.getByRole("button", { name: /Scope/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(written).toEqual(["\u001b[D"]);
+    expect(screen.queryByText("Answering…")).toBeNull();
   });
 
   it("shows the agent at work and stops it with Esc", async () => {
@@ -572,6 +653,33 @@ describe("the Reader's live rows", () => {
     expect(facts.textContent).toContain("high effort");
   });
 
+  it("shows the effort the transcript records and changes it with /effort, or Codex's /model", async () => {
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, effort: "medium" } : []));
+    term = fakeTerminal([">", "⏵⏵ accept edits on (shift+tab to cycle)"]);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    // No busy row has named it: the transcript does.
+    await act(async () => { fireEvent.click(await screen.findByRole("button", { name: /medium effort/ })); });
+    const list = screen.getByRole("dialog", { name: "Reasoning effort" });
+    await act(async () => { fireEvent.click(within(list).getByRole("button", { name: /xhigh effort/ })); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/effort xhigh");
+    expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.getByRole("button", { name: /xhigh effort/ })).toBeTruthy();
+    view.unmount();
+
+    // Codex sets it on its /model picker's next step.
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    reader(host);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    await act(async () => { fireEvent.click(await screen.findByRole("button", { name: /medium effort/ })); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/model");
+  });
+
   it("switches the mode from its list by walking Shift+Tab until the session shows it", async () => {
     const rows = [">", "⏵⏵ accept edits on (shift+tab to cycle)"];
     term = fakeTerminal(rows);
@@ -586,6 +694,67 @@ describe("the Reader's live rows", () => {
     expect(written).toEqual(["\u001b[Z"]);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+  });
+
+  it("chooses Codex permissions from its native picker and follows the Full Access confirmation", async () => {
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const rows = ["›", "gpt-6 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const chip = screen.getByTitle("Choose permissions — opens the session's own /permissions picker");
+    await act(async () => { fireEvent.click(chip); });
+    expect(submitCommand).toHaveBeenCalledWith("st-1", "/permissions");
+    expect(written).toEqual([]);
+    expect(screen.getByRole("dialog", { name: "Permission mode" }).textContent).toContain("Waiting for the session's permission picker");
+    rows.splice(0, rows.length, "Update Model Permissions", "",
+      "› 1. Ask for approval (current)   Ask before running commands outside the workspace.",
+      "  2. Approve for me   Review risky actions automatically.",
+      "  3. Full Access   Allow unrestricted access.",
+      "  4. Read Only   Only read files.", "", "Press enter to confirm or esc to go back");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+    const list = screen.getByRole("dialog", { name: "Update Model Permissions" });
+    expect(within(list).getByRole("button", { name: /Approve for me/ })).toBeTruthy();
+    expect(within(list).queryByRole("button", { name: /Plan/ })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(list).getByRole("button", { name: /Full Access/ }));
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(written).toEqual(["\u001b[B", "\u001b[B", "\r"]);
+    rows.splice(0, rows.length, "Enable full access?", "",
+      "› 1. Yes, enable full access", "  2. No, go back", "", "Press enter to confirm or esc to go back");
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    const confirmation = screen.getByRole("dialog", { name: "Enable full access?" });
+    await act(async () => { fireEvent.click(within(confirmation).getByRole("button", { name: /Yes, enable/ })); });
+    expect(written[written.length - 1]).toBe("\r");
+    rows.splice(0, rows.length, "• Permissions updated to Full Access", "›", "gpt-6 · 85% context left");
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(chip.textContent).toContain("Full access");
+  });
+
+  it("closes Codex's permission picker with Esc and does not open it during a turn", async () => {
+    submitCommand.mockClear();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const rows = ["›", "gpt-6 · 85% context left"];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    const chip = screen.getByTitle("Choose permissions — opens the session's own /permissions picker");
+    await act(async () => { fireEvent.click(chip); });
+    rows.splice(0, rows.length, "Update Model Permissions", "", "› 1. Ask for approval", "  2. Read Only", "", "Press enter to confirm or esc to go back");
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await act(async () => { fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" }); });
+    expect(written).toEqual(["\u001b"]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    rows.splice(0, rows.length, "› fix it", "Working (9s · esc to interrupt)", "›", "gpt-6 · 85% context left");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect((chip as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(chip);
+    expect(submitCommand).toHaveBeenCalledTimes(1);
   });
 
   it("opens the session's own /model picker as a list and answers it there", async () => {

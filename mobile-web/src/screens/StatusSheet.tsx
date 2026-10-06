@@ -1,24 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { useT } from "../../../src/lib/i18n";
+import { useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { getAgentStatus, type AgentStatusReport, type TabRow } from "../api";
 import { describeFailure } from "../connection";
 import { limitMeters, noteParts, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
 import { resetCountdown, resetText } from "../terminal/limitResets";
 import type { SessionStatus } from "../terminal/statusLine";
-import { BRAND } from "../../../src/lib/brand";
 
 export { resetCountdown, resetText };
 
 /** Wording for the tab's own state, which the desktop classified from the
  * session's output. `idle` is the honest fifth: the catalog only publishes the
  * other four, and a tab nobody is waiting on is not "done". */
-const STATE_TEXT: Record<AgentStatusReport["state"], string> = {
-  working: "Working",
-  question: "Waiting on you",
-  interrupted: "Interrupted",
-  done: "Finished its turn",
-  idle: "Idle",
+const STATE_TEXT: Record<AgentStatusReport["state"], TranslationKey> = {
+  working: "agentPrompts.state.working",
+  question: "mobile.status.waiting",
+  interrupted: "tabBar.statusInterrupted",
+  done: "mobile.status.finishedTurn",
+  idle: "agentPrompts.state.idle",
 };
 
 /** `4880` → `1h 21m`. Seconds are dropped above a minute: this is a day's
@@ -30,9 +29,6 @@ function duration(seconds: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function plural(count: number, one: string, many = `${one}s`): string {
-  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
-}
 
 /**
  * The composer's status chip: what this agent tab is doing, and what its CLI
@@ -61,6 +57,10 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
   signIn?: { hint: string; start: () => void } | null;
 }) {
   const t = useT();
+  const lang = useI18nStore((state) => state.lang);
+  /** A count in the phone's language, under the key its number calls for. */
+  const counted = (count: number, one: TranslationKey, many: TranslationKey, vars: Record<string, string> = {}) =>
+    t(count === 1 ? one : many, { ...vars, count: count.toLocaleString(lang) });
   const [view, setView] = useState<"formatted" | "terminal">("formatted");
   const [report, setReport] = useState<AgentStatusReport | null>(null);
   const [busy, setBusy] = useState(true);
@@ -86,27 +86,27 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
   const panel = usage?.raw ? parseUsageReport(usage.raw) : null;
 
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
-    <section className="option-sheet status-sheet" role="dialog" aria-modal="true" aria-label={`Status of ${tab.label}`} onClick={(event) => event.stopPropagation()}>
+    <section className="option-sheet status-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.status.of", { name: tab.label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label="Close">✕</button>
-        <h2>Status {isUntested("mobile.sheet.status") && <small>{t("mobile.newTab.untested")}</small>}</h2>
-        <div className="terminal-view-switch" aria-label="Status view">
-          <button className={view === "formatted" ? "selected" : ""} aria-pressed={view === "formatted"} onClick={() => setView("formatted")}>Formatted</button>
-          <button className={view === "terminal" ? "selected" : ""} aria-pressed={view === "terminal"} onClick={() => setView("terminal")}>Terminal</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
+        <h2>{t("terminal.reader.status.button")} {isUntested("mobile.sheet.status") && <small>{t("mobile.newTab.untested")}</small>}</h2>
+        <div className="terminal-view-switch" aria-label={t("mobile.status.view")}>
+          <button className={view === "formatted" ? "selected" : ""} aria-pressed={view === "formatted"} onClick={() => setView("formatted")}>{t("mobile.status.formatted")}</button>
+          <button className={view === "terminal" ? "selected" : ""} aria-pressed={view === "terminal"} onClick={() => setView("terminal")}>{t("mobile.focus.terminal")}</button>
         </div>
       </header>
 
       {report && <p className={`status-headline ${report.state}`}>
-        <strong>{STATE_TEXT[report.state]}{report.state === "interrupted" && isUntested("mobile.tabs.statusMotion") && <> · {t("mobile.focus.untested")}</>}</strong>
+        <strong>{t(STATE_TEXT[report.state])}{report.state === "interrupted" && isUntested("mobile.tabs.statusMotion") && <> · {t("mobile.focus.untested")}</>}</strong>
         {report.agent && <span>{report.agent}</span>}
         {live?.model && <span>{live.model}</span>}
         {live?.mode && <span>{live.mode}</span>}
-        {live?.context && <span>{live.context} context left</span>}
+        {live?.context && <span>{t("mobile.status.contextLeft", { context: live.context })}</span>}
       </p>}
 
       {error && <p className="sheet-note error" role="alert">{error}</p>}
-      {busy && !report && <p className="sheet-note">Reading…</p>}
+      {busy && !report && <p className="sheet-note">{t("pdfMeta.reading")}</p>}
 
       {view === "formatted" && report && <>
         {/* `usage.error` is a code (`connection.ts`): the CLI's own stderr
@@ -114,7 +114,7 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
         {usage?.supported === false && <p className="sheet-note">
           {usage.error && usage.error !== "no_usage_readout" && usage.error !== "unknown_agent"
             ? describeFailure(usage.error)
-            : `${usage.label} has no usage readout ${BRAND.display} can ask for without opening a tab.`}
+            : t("mobile.status.noReadout", { agent: usage.label })}
         </p>}
         {usage?.supported && usage.error && <p className="sheet-note error">{describeFailure(usage.error)}</p>}
         {panel && panel.meters.map((meter) => <div className="usage-meter" key={meter.label}>
@@ -122,13 +122,13 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
             <strong>{meter.label}</strong>
             <span>{meter.percent}%</span>
           </div>
-          <div className="usage-bar" role="img" aria-label={`${meter.label}: ${meter.percent}% used`}>
+          <div className="usage-bar" role="img" aria-label={t("mobile.status.meterUsed", { label: meter.label, percent: meter.percent })}>
             <span style={{ width: `${meter.percent}%` }} />
           </div>
-          {meter.resets && <small title={`resets ${meter.resets}`}>{resetText(meter.resets, new Date())}</small>}
+          {meter.resets && <small title={t("mobile.status.resets", { when: meter.resets })}>{resetText(meter.resets, new Date())}</small>}
         </div>)}
         {panel?.unparsed && <p className="sheet-note">
-          {usage?.label} answered in a shape {BRAND.display} does not recognize. The Terminal view has all of it.
+          {t("mobile.status.unparsed", { agent: usage?.label ?? "" })}
         </p>}
         {panel && panel.notes.length > 0 && <ul className="usage-notes">
           {panel.notes.map((note, index) => <li key={`${note.label ?? ""}-${index}`}>
@@ -138,25 +138,25 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
         </ul>}
 
         <div className="usage-today">
-          <strong>Today in {report.project}</strong>
-          <span>{plural(report.today.prompts, "prompt")} to {report.agent ?? "this agent"}</span>
+          <strong>{t("mobile.status.todayIn", { project: report.project })}</strong>
+          <span>{counted(report.today.prompts, "mobile.status.promptsToOne", "mobile.status.promptsTo", { agent: report.agent ?? t("mobile.status.thisAgent") })}</span>
           <small>
-            Across every agent tab in this project: {duration(report.today.worked_s)} working
-            {" · "}{plural(report.today.decisions, "decision")}
-            {" · "}{plural(report.today.done, "turn")} finished
+            {t("mobile.status.acrossProject", { duration: duration(report.today.worked_s) })}
+            {" · "}{counted(report.today.decisions, "mobile.status.decisionsOne", "mobile.status.decisions")}
+            {" · "}{counted(report.today.done, "mobile.status.turnsFinishedOne", "mobile.status.turnsFinished")}
           </small>
         </div>
       </>}
 
-      {view === "terminal" && <pre className="usage-raw" aria-label="Usage panel as the CLI printed it">
-        {usage?.raw ?? (usage?.error ? describeFailure(usage.error) : busy ? "Reading…" : "Nothing was printed.")}
+      {view === "terminal" && <pre className="usage-raw" aria-label={t("mobile.status.rawPanel")}>
+        {usage?.raw ?? (usage?.error ? describeFailure(usage.error) : busy ? t("pdfMeta.reading") : t("mobile.status.nothingPrinted"))}
       </pre>}
 
       <div className="mobile-schedule-actions">
-        {usage?.cached && <span className="sheet-pending">Cached</span>}
+        {usage?.cached && <span className="sheet-pending">{t("mobile.status.cached")}</span>}
         {signIn && <button onClick={signIn.start} title={signIn.hint}>{t("mobile.signIn.start")}</button>}
-        <button disabled={busy} onClick={() => void load(true)}>{busy ? "Reading…" : "Refresh"}</button>
-        <button className="primary" onClick={onClose}>Done</button>
+        <button disabled={busy} onClick={() => void load(true)}>{t(busy ? "pdfMeta.reading" : "common.refresh")}</button>
+        <button className="primary" onClick={onClose}>{t("mobile.gitSheet.done")}</button>
       </div>
     </section>
   </div>;

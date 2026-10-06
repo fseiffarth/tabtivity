@@ -476,6 +476,9 @@ names! {
     MOBILE_HOST_KEY / LEGACY_MOBILE_HOST_KEY = [slug, "_mobile_host"];
     /// Project / box key that opens it to the phone.
     MOBILE_ACCESS_KEY / LEGACY_MOBILE_ACCESS_KEY = [slug, "_mobile_access"];
+    /// Project / box key listing the paired phones that may open it (absent:
+    /// every phone). New with this name; nothing older wrote it.
+    MOBILE_DEVICES_KEY / LEGACY_MOBILE_DEVICES_KEY = [slug, "_mobile_devices"];
     /// What every built-in view's saved tab command starts with.
     TAB_COMMAND_PREFIX / LEGACY_TAB_COMMAND_PREFIX = ["__", slug, "_"];
     /// Id of the app's own row in the time log.

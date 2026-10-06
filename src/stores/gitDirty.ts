@@ -10,8 +10,12 @@ import { useProjectsStore } from "./projects";
  *  from a *contradiction* — a project whose recorded `git_type` still names a repo
  *  while its working tree reports `is_repo:false` (an empty or missing `.git`).
  *  That decision needs the project's `git_type`, which `gitDirtyState` does not
- *  have, so it is made in `refresh` (see `expectsGitRepo`), not here. */
-export type GitDirtyState = "clean" | "unpushed" | "staged" | "dirty" | "broken";
+ *  have, so it is made in `refresh` (see `expectsGitRepo`), not here.
+ *
+ *  `"unknown"` is no reading at all: the probe errored (git refused a FIFO or
+ *  timed out, the host is down). Drawn as its own muted, hollow mark — never as
+ *  "clean", which would claim a tree nobody could read has nothing pending. */
+export type GitDirtyState = "clean" | "unpushed" | "staged" | "dirty" | "broken" | "unknown";
 
 interface GitStatus {
   staged: number;
@@ -110,7 +114,8 @@ export function gitDotsDue(
 }
 
 interface GitDirtyStore {
-  /** Per-project dot level. Absent until first probed (rendered as no dot). */
+  /** Per-project dot level. Absent until first probed (rendered as no dot);
+   *  "unknown" once a probe errored. */
   byId: Record<string, GitDirtyState>;
   /** Apply an already-computed level (used by callers that have the data). */
   set: (projectId: string, state: GitDirtyState) => void;
@@ -142,16 +147,25 @@ export const useGitDirtyStore = create<GitDirtyStore>((set) => ({
   },
 }));
 
-/** One `git_dirty_probe` round trip, written into the store. */
+/** Tauri's answer for a command the running backend does not have. */
+function isMissingCommand(error: unknown): boolean {
+  return /\bcommand [\w:.-]+ not found\b/i.test(String(error));
+}
+
+/** One `git_dirty_probe` round trip, written into the store. An errored probe
+ *  (git refused or timed out, host down) is no reading: the project is marked
+ *  "unknown", never written as "clean". */
 async function probeDirty(projectId: string, dir: string): Promise<void> {
   let next: GitDirtyState = "clean";
   try {
     const { status, unpushed } = await invoke<GitDirtyProbe>("git_dirty_probe", {
       projectDir: dir,
-    }).catch(async () => {
+    }).catch(async (error: unknown) => {
       // A running window whose backend predates the combined command (backend
       // edits don't reach a live window until a restart) still answers the
-      // old two-command spelling.
+      // old two-command spelling. Only then: a probe that failed (a FIFO git
+      // blocked on until its ceiling, #2349) is not re-run the old way.
+      if (!isMissingCommand(error)) throw error;
       const [status, unpushedCommits] = await Promise.all([
         invoke<GitStatus>("git_status", { projectDir: dir }),
         invoke<string[]>("git_unpushed_commits", { projectDir: dir }).catch(
@@ -182,7 +196,7 @@ async function probeDirty(projectId: string, dir: string): Promise<void> {
       GIT_GONE_STREAK.delete(projectId);
     }
   } catch {
-    next = "clean";
+    next = "unknown";
     // An errored probe (host down, git spawn failure) proves nothing about the
     // repo's existence, so it must not count toward disabling git.
     GIT_GONE_STREAK.delete(projectId);

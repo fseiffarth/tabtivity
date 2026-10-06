@@ -84,7 +84,7 @@ fn an_upgrade_moves_the_state_dir_and_leaves_a_link() {
     // old path leads there.
     assert!(new_state.is_dir());
     assert!(std::fs::symlink_metadata(&old_state).expect("old path").file_type().is_symlink());
-    assert_eq!(old_state.canonicalize().expect("link"), new_state);
+    assert_eq!(canonical(&old_state), new_state);
     let moved = snapshot(&new_state);
     // (Entries that carry the old name themselves are renamed by their own
     // steps, and checked there.)
@@ -167,7 +167,8 @@ fn stored_paths_into_the_state_dir_follow_it() {
     let old_prefix = old_state.to_string_lossy().into_owned();
     for (path, content) in snapshot(&new_state) {
         if path != RECORD_FILE {
-            assert!(!content.contains(&old_prefix), "{path} still names the old state dir");
+            // As written, and as a JSON string spells it on Windows.
+            assert_eq!(replace_path(&content, &old_prefix, "<old>"), content, "{path} still names the old state dir");
         }
     }
 }
@@ -208,7 +209,7 @@ fn after_an_upgrade_the_state_dir_does_not_spell_the_old_name() {
     // the user's projects is a step of its own), so paths into it still do.
     let home_tree = machine.home_tree(&LEGACY).to_string_lossy().into_owned();
     for content in tree.values_mut() {
-        *content = content.replace(&home_tree, "<home tree>");
+        *content = replace_path(content, &home_tree, "<home tree>");
     }
     assert_eq!(spellings(&tree, LEGACY.slug), Vec::<String>::new());
 }
@@ -274,7 +275,7 @@ fn a_crash_at_any_checkpoint_is_finished_by_the_next_launch() {
         assert_eq!(got.len(), expected.len(), "{checkpoint}");
         for (path, content) in &expected {
             assert_eq!(
-                got.get(path).map(|got| got.replace(&home, &reference_home)).as_ref(),
+                got.get(path).map(|got| replace_path(got, &home, &reference_home)).as_ref(),
                 Some(content),
                 "{checkpoint}: {path}"
             );
@@ -315,7 +316,8 @@ fn assert_stored_paths_follow(machine: &Machine) {
     let old_prefix = old_state.to_string_lossy().into_owned();
     for (path, content) in snapshot(&new_state) {
         if path != RECORD_FILE {
-            assert!(!content.contains(&old_prefix), "{path} still names the old state dir");
+            // As written, and as a JSON string spells it on Windows.
+            assert_eq!(replace_path(&content, &old_prefix, "<old>"), content, "{path} still names the old state dir");
         }
     }
 }
@@ -367,7 +369,7 @@ fn a_users_own_link_at_the_old_path_waits_for_the_move_too() {
     env.fail_at = None;
     let report = run_startup(&env);
     assert!(report.pending.is_empty(), "{report:?}");
-    assert_eq!(machine.state_dir(&RENAMED.cur).canonicalize().expect("new"), elsewhere);
+    assert_eq!(canonical(&machine.state_dir(&RENAMED.cur)), elsewhere);
     assert_stored_paths_follow(&machine);
 }
 
@@ -398,7 +400,7 @@ fn a_failed_link_keeps_the_move_pending_and_a_later_launch_links() {
     let report = run_startup(&env);
     assert!(report.pending.is_empty(), "{report:?}");
     assert!(std::fs::symlink_metadata(&old_state).expect("link").file_type().is_symlink());
-    assert_eq!(old_state.canonicalize().expect("link"), new_state);
+    assert_eq!(canonical(&old_state), new_state);
     assert_eq!(env.record().state_of("state-dir"), Some(StepState::Done));
 }
 

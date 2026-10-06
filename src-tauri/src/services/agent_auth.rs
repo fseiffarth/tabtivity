@@ -321,6 +321,7 @@ fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &
         }
         #[cfg(not(unix))]
         {
+            let _ = ino;
             false
         }
     });
@@ -580,6 +581,14 @@ pub struct LoginStatus {
     pub uses_admin_key: bool,
     /// Through the server's key broker (P5): this month's use and budget.
     pub admin_key_broker: Option<crate::services::server::keys_wire::MonthUsage>,
+    /// The CLI is switched on for a stored provider API key and one of its
+    /// providers has one (`services::agent_api_keys`). Filled by the
+    /// `agent_logins` command, never here: this module stays keyring-free.
+    pub api_key: bool,
+    /// Of an `api_key` CLI: its provider's monthly budget is spent, or no
+    /// limit is set, so its keyed tabs are refused (`services::api_usage`).
+    /// Filled by the `agent_logins` command too.
+    pub api_budget_reached: bool,
 }
 
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
@@ -617,6 +626,8 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
                 admin_key_offered: offered.contains(cli),
                 uses_admin_key: on_admin_key.contains(cli),
                 admin_key_broker: None,
+                api_key: false,
+                api_budget_reached: false,
             }
         })
         .collect()

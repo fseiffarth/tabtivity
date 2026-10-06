@@ -1,7 +1,7 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, files, browse, project files, read-only, mark up, markup, annotate, pdf, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, files, browse, project files, read-only, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, connecting, not connecting, stuck, force stop, version]
 ---
 
 Tabtivity Mobile is a small companion web app for your phone. It shows the
@@ -48,7 +48,10 @@ Tailscale command.
    the Serve mapping before it starts the host.
 5. **Choose what the phone may open.** Under **Project access**, switch on the
    projects and boxes the phone may reach. All start off. Only local,
-   non-container projects are eligible.
+   non-container projects are eligible. A switch turned on reaches **all
+   phones**, including ones you pair later; to limit it, press the
+   **All phones ▾** button beside it and pick **Only these phones**, then tick
+   the phones. The side panel's phone button opens the same choice.
 6. **Open it on the phone.** Press **Show install QR**: a root terminal checks
    the Serve mapping again and shows the `https://…ts.net` address as a QR
    code. Scan it with the phone (Tailscale must be connected there).
@@ -65,6 +68,21 @@ they attach through tmux, which Windows does not have.
 An agent tab that was already running becomes reachable after its next normal
 reopen, because the phone attaches to its terminal session.
 
+### Which phones see a project
+
+With two or more phones paired, a project or box can be limited to some of
+them. A phone left off the list does not see the project at all: not in its
+list, not by an old link or notice (it reads "no longer shared"), and it gets
+no notifications for its agents. Taking a phone off while it has one of the
+project's terminals open closes that terminal within a few seconds. Prompts
+it already queued and schedules it made are not cancelled.
+
+A box's own list decides which phones see the tabs opened in the box, in
+member folders too; a member's list is about the member's own tabs.
+
+At least one phone stays ticked; to reach no phone, turn the project's access
+off.
+
 ## Using it
 
 - Attaching to a running tab keeps working while the desktop Tabtivity is closed
@@ -80,20 +98,116 @@ reopen, because the phone attaches to its terminal session.
   real terminal. A shell tab has no conversation, so its switch reads
   **Reader** (the screen as text) and **Terminal**. The desktop offers the
   same chat on its agent tabs (help topic `agent-clis`).
+- Over the chat, **Files (n)** lists every file the conversation carried —
+  what the agent sent from this tab and what you sent with your prompts —
+  newest first, with who sent it; tap one to open it. It sits beside
+  **Subagents (n)**; one list opens at a time.
 - A PDF or picture in an agent tab's viewer has **Mark up**: draw on it and
   **Submit** sends the marks to that tab. The view stays open — the sent marks
   dim, a pill says what the agent is doing, you can keep marking (the next
-  Submit sends only the new marks), and once the agent is done **Reload PDF**
-  shows the rebuilt file under your marks. The sent marks stay until you erase
-  them, so you can check each change. The agent first only lists the changes;
-  tap **Make these changes** to let it go ahead (both prompts: Home → This
-  phone → **Mark up prompt**). The desktop's PDF viewer has the same **Mark up**
-  for local projects, with its own prompts in Settings → Agents → **PDF markup**.
+  Submit sends only the new marks), and once the agent is done and the PDF
+  changed, the rebuilt file loads under your marks on its own (turn that off
+  in the palette's ⋯ → **Reload when the agent finishes**; then **Reload PDF**
+  does it). Each marked page goes to the agent as a picture with your marks
+  drawn on, together with the words each mark is on and — for a project PDF
+  built with SyncTeX — the source line they come from, so a plain correction
+  needs no hunting. The sent marks stay until you erase
+  them, so you can check each change. By default the agent makes the changes
+  at once, rebuilds and sends the PDF back; once it is done the pill offers
+  **Undo**, which lists the files it would put back and, on **Undo**, puts
+  them (and the PDF) back as they were before the round, reloads the PDF and
+  tells the agent — it refuses, changing nothing, when one of those files was
+  edited since. Only files inside the project folder go back; files changed
+  elsewhere in the same repository are left as they are, and the phone says
+  only how many (their names can belong to another project). Where no undo can be kept (not a git repository, a remote
+  project, a picture, too many untracked files) the pill says so and the
+  agent first only lists the changes; tap **Make these changes** to let it go
+  ahead. Home → ⚙ This device → **Mark up prompt** has the **Apply marks
+  directly** switch (off: always list first), both prompts, and a slider for
+  how often it asks you about a mark, from **Ask always** to **Never ask**. A pen (Apple Pencil, a stylus) needs no
+  **Mark up** tap: touch a page with it and it starts marking, as in the
+  phone's own Markup and Notes; fingers still scroll. A PDF the agent sent
+  from inside the project opens as that project file while **Project files
+  on the phone** is on, so it shows the same marks wherever you open it —
+  the chat, the 🖼 gallery or the 📁 drawer. The palette's ⋯ has **Clear
+  page** and **Clear all marks** (Undo brings them back), and ↑ ↓ at the
+  right edge jump to the previous or next mark of a PDF. ⋯ → **Each Submit
+  to a new subagent** (off by default) has the agent pass every round to a
+  new subagent of its own and be free again at once, so rounds run side by
+  side instead of one after the other — for agents that can start subagents,
+  such as Claude Code; others do the round themselves. Home → ⚙ This device →
+  **PDFs open in** picks how a PDF opens: **Automatic** (marking once you draw
+  with a pen only, or while marks wait to be submitted; reading otherwise),
+  **Reading** or **Mark up**. The desktop's PDF viewer has the same **Mark up**
+  for local projects, with its own prompts in Settings → Agents → **PDF markup**
+  (and the switches for loading a rebuilt PDF under your marks by itself and
+  for handing each Submit to a new subagent).
+  When a mark leaves the agent a choice it can ask you right there (see
+  "The agent's questions about your marks" below).
 - **No shells on the phone** (under **Project access**, on by default) keeps
   the phone to agent tabs: shell tabs are left off its lists, an open one
   disconnects within seconds, and **＋** offers no shell. Switch it off to
   see and open shells from the phone — they run as you, with no agent's
   permission prompts in between.
+
+## The agent's questions about your marks
+
+When a mark is ambiguous ("does this arrow move the paragraph or the
+figure?"), a local Claude or Codex tab (or a Local Model tab with the
+**MCP** chip on) can ask you with its `markup_ask` tool instead of in its
+chat. The questions show in the markup view of that tab's PDF:
+
+- On the desktop, as a card under the **Mark up** bar while marking is on.
+  With marking off, the **Mark up** button is underlined while a tab asks
+  about the PDF, and opens the bar on that tab. While you mark for one tab
+  and another asks about the same PDF, the bar names it: **Show its
+  questions** switches to that tab.
+- On the phone, as a card at the top of the markup view ("The agent asks ·
+  2"), which also shows while you only read the PDF. While a question is
+  open, the tab's Chat shows a line "The agent asks about …" naming the
+  file; **Open** opens it when the agent sent that file to the phone, or —
+  with **Project files on the phone** on — when it is a file of the project.
+- Each question gets a numbered pin (`?1`, `?2`…) on the page, at the words
+  it is about. Tap the pin to find the question, or **Show on page N** to
+  find the place.
+- Several questions show one at a time: **‹** and **›** turn between them
+  (`2 / 4` says where you are), and a pin turns to its question.
+
+Tap an option to pick it, then tap **Send answers** — a tap alone never
+answers, so a pen stroke that lands on the card can't. **Send answers** waits
+until every question has a pick. **Other…** lets you type
+your own answer (tap it again to clear it). **Answer in chat instead** closes the questions so you can
+reply in the tab. Your answer is typed into the tab as your next message (it
+waits in the queue if the agent is still busy), and the card goes away on
+the desktop and the phone. If it could not be sent, the questions stay open
+so you can try again.
+
+A newer question from the same tab replaces the open one. The desktop must be
+running: with it closed, the phone shows no questions. Remote, VM and
+container tabs don't have the tool. It is on by default; turn it off in
+Settings → Agents → Manage CLIs, under Advanced: **Let project agents ask
+about your PDF marks** (new tabs no longer get the tool; tabs already open
+are told it is off when they ask).
+
+## Marks the agent has done
+
+The same tabs can tick off the marks they have handled (their `markup_done`
+tool), after making the change a mark asks for. Each ticked mark you sent gets
+a green **✓** at its top-right corner, on the desktop (while **Mark up** is on)
+and on the phone, and a line under the round's status says **n done ·
+Approve all**. Tap (or click) a **✓** to approve that mark: it leaves your
+marks. **Approve all** approves every ticked one. Nothing is removed without
+that tap — a tick only offers it — and **Undo** brings an approved mark back.
+
+- The badges show only while **Show sent marks** is on.
+- On the phone a **✓** that just appeared ignores taps for a moment, so a pen
+  stroke on its way can't approve it; a double tap approves one mark.
+- Ticks last as long as the agent's session, at most a day: when they go,
+  the **✓** goes, never the mark. Undoing a round's changes clears its ticks.
+- Each device shows the **✓**s for the marks it sent itself. On the phone
+  they show in the markup view of the agent's own chat (or while the view
+  still follows the tab its Submit opened); a PDF opened again from the
+  file browser shows none — open it from that agent's chat.
 
 ## Project files on the phone
 
@@ -108,6 +222,17 @@ open a file —
 pictures and text full screen, PDFs in the browser, with Save and Share. It is
 read-only: nothing can be changed, moved or deleted from there.
 
+The box under the drawer's head finds a file or folder anywhere in the
+project by name: type part of it (several words must all be in the name, in
+any case). Each result names its folder; tap a file to open it — the drawer
+then stands in that file's folder — or a folder to walk into it. In a git
+project, what git ignores (`target/`, `node_modules/`, …) is not searched.
+
+As in the desktop's file tree, the project root's standard files (README,
+AGENTS.md, .gitignore, …) fold into a **scaffold** row and what git ignores
+folds into a **gitignored** row below the rest of each folder; both start
+collapsed — tap one to open it.
+
 - It covers the projects switched on for Mobile, not boxes or the root
   console.
 - `.git`, `.tabtivity` and `.env…` are left out, symbolic links are not shown or
@@ -115,9 +240,60 @@ read-only: nothing can be changed, moved or deleted from there.
 - Files up to 24 MiB open; a longer text file shows its first 24 MiB.
 - Switching it off closes the drawer within seconds, without restarting the host.
 
+## Git on the phone
+
+Tap a project's name on the phone and choose **⎇ Git** to see its git state —
+or, on the start page, tap the coloured git mark in a project's row ("not
+pushed", "not committed", …). It is read-only — nothing is checked out,
+switched or created from there:
+
+- The branch the project folder has checked out (or the commit it is
+  detached at), its upstream, and how far it is ahead (↑) or behind (↓) as of
+  the last fetch, with the same coloured dot as the project list.
+- **Worktrees**, when the repo has more than the project folder: the project
+  folder first, then each linked worktree with its branch, whether it has
+  uncommitted or unpushed work, and how many of the project's tabs run in it.
+- **Branches**: the local ones (● marks the checked-out one; "in …" names the
+  worktree that has a branch checked out), and, folded away, the remote
+  branches no local branch already tracks.
+
+It works with the desktop closed, refreshes when you come back to the app or
+tap **↻ Refresh**, and covers projects only, not boxes or the root console.
+The ＋ sheet's **Agents start in** row lists the same worktrees.
+
+## Local models from the phone
+
+Home → **Local models** opens the Ollama models installed on the desktop
+(help topic `local-models`). Each row shows the model's size, its parameters
+and quantization, and whether it is in memory: where (**On the GPU**, **N %
+on the GPU**, **On the CPU**) and for how long (**Stays loaded until
+unloaded**, or **Unloads in N min**). The model new Local Model tabs use is
+marked.
+
+- **Load** puts a model into memory and keeps it there; Ollama decides GPU or
+  CPU. The desktop's Models & agents menu shows the load while it runs.
+- **Unload** frees the memory at once, without asking.
+- With Ollama stopped, **Start Ollama** starts it — only in ways that need no
+  password on the desktop. If it was started as Tabtivity's own server,
+  quitting Tabtivity stops it again.
+- The list refreshes on its own: every few seconds while something loads or
+  starts, otherwise every 10 seconds.
+- Downloading, updating and deleting models stay on the desktop; the phone
+  offers none of them, and the desktop refuses them.
+- Loading a single model when none is in memory makes it the model for every
+  role (Tabs included), as it does on the desktop.
+
+The desktop window must be open: with Tabtivity closed, the sheet says to open
+the app. A Load that takes longer than the phone waits is not reported as
+failed — the list is read again and shows whether it started. If it says to
+open the app while Tabtivity is open on the desktop, or says to update
+Tabtivity there, the desktop's Tabtivity is older than this feature: update and
+restart it. It is on by default; switch it off in Settings → Mobile → **Local
+models from the phone** (under **Project access**), and the row disappears.
+
 ## Notifications on the phone
 
-On the phone, open **This phone → Notifications** (or **Calendar → Reminders**)
+On the phone, open **⚙ This device → Notifications** (or **Calendar → Reminders**)
 and choose what reaches you, even with Tabtivity Mobile closed:
 
 - **Calendar reminders** — each reminder of the desktop calendar. A tap opens
@@ -191,9 +367,37 @@ computer other people use. A project's container or VM, and a remote
 project's background sync, are shared sensibly between the window and the
 browser: a container stays up while either uses it, and a VM opened in one
 is refused in the other until it is shut down there.
+## One phone at a time
+
+Under **Settings → Mobile → Paired devices** each phone has its own controls
+(the Mobile host must be running):
+
+- **To-do / Calendar / Mail** — press one off to keep that phone out of the
+  section. Its tab disappears from the phone, the computer refuses the
+  section's requests from that phone, its alert rows leave the phone's Home
+  strip, and a phone without Calendar gets no reminder notifications. The
+  other phones are not affected.
+- **Projects on this phone** — the projects and boxes that phone can open.
+  **Disconnect** takes the phone off one. A project open to *all phones*
+  then stays open to the other phones paired now (a phone paired later is
+  not added); disconnecting the last phone turns the project's Mobile access
+  off. **Add project** opens one more for that phone; a project that was off
+  opens for that phone alone.
+
+A phone that is paired again counts as a new phone and starts with every
+section shown.
 
 ## If a phone goes missing
 
 The header's Mobile button shows the host status. **Revoke** drops one device;
-**Lock down** forgets every paired device and stops the host. Also remove the
-device from your Tailscale machines.
+**Lock down** forgets every paired device and stops the host. Both also cancel
+the prompts that phone was holding for an agent, the schedules it made or
+last edited, and the collected prompts it wrote once they are sent, so
+nothing it left behind is typed later; so does taking a project or box away
+from a phone. Also remove the device from your Tailscale machines.
+
+A phone paired again counts as a new phone: projects limited to **Only these
+phones** do not include it until you tick it again. After **Lock down** (or
+**Forget all devices**) every such project reaches no phone and shows
+**No phones ▾** in Mobile settings until you pick its phones again; projects
+set to **All phones** reach the newly paired phones as before.

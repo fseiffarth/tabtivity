@@ -383,6 +383,14 @@
   animation: hint-bubble-in 0.24s ease-out;
 }
 
+/* The version-drift and undo-clear cards sit over a running agent, whose input
+   box and footer fill the pane's last rows: lift them clear of it. The % caps
+   the lift in a short pane, where 120px would push the card off the top. */
+.hint-bubble.terminal-version-drift,
+.hint-bubble.terminal-undo-clear {
+  bottom: min(120px, 30%);
+}
+
 .terminal-sign-in .hint-bubble-actions .hint-bubble-got-it {
   margin-left: 0;
 }

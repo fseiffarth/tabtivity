@@ -12,7 +12,7 @@
  * here resolves rather than throws.
  */
 
-import { isLayer, LIMITS, markCount, type Layer, type PageLayer } from "./layer";
+import { isLayer, LIMITS, markCount, SENT_LIMITS, type Layer, type PageLayer } from "./layer";
 import { LEGACY_NAMES, NAMES } from "../../../src/lib/brand";
 import { adoptLegacyDatabase, databaseHost, databasePort } from "../../../src/lib/brandMigration";
 
@@ -92,11 +92,15 @@ export function layerKey(projectId: string, source: { files: string } | { outbox
   return "files" in source ? `${projectId}:files:${source.files}` : `${projectId}:outbox:${source.outbox}`;
 }
 
+export { SENT_LIMITS };
+
 /** Whether a layer is one the desktop would accept — never store one it
  * would refuse at Submit. The sent marks never go out again and are never
  * trimmed (only the reader erases them), so they get a looser bound of their
- * own that only keeps the record finite. */
-export const SENT_LIMITS = { marks: LIMITS.marks * 4, points: LIMITS.points * 4 } as const;
+ * own (`SENT_LIMITS`) that only keeps the record finite. The sent side's
+ * round log (`SentLayer.log`) is not counted: `markSent` already trims it to
+ * `SENT_LIMITS`, and its marks are mostly the sent side's own objects, which
+ * IndexedDB's structured clone stores once — so it can never fail a save. */
 export function withinLimits(layer: Layer): boolean {
   const bounded = (pages: Record<number, PageLayer>, limits: { marks: number; points: number }) => {
     const { marks, points } = markCount({ pages });
@@ -105,10 +109,16 @@ export function withinLimits(layer: Layer): boolean {
   return bounded(layer.pages, LIMITS) && bounded(layer.sent?.pages ?? {}, SENT_LIMITS);
 }
 
-/** A stored value as a layer: whole, or — when only its `sent` side is
+/** A stored value as a layer: whole; without its round log when only that
+ * is unreadable (its ticks then show no badge); or — when its `sent` side is
  * unreadable — its unsent marks alone, which matter more. */
 function readLayer(value: unknown): Layer | null {
   if (isLayer(value)) return value;
+  const sent = value && typeof value === "object" ? (value as { sent?: unknown }).sent : undefined;
+  if (sent && typeof sent === "object" && "log" in sent) {
+    const unlogged = { ...(value as object), sent: { pages: (sent as { pages?: unknown }).pages, rounds: (sent as { rounds?: unknown }).rounds } };
+    if (isLayer(unlogged)) return unlogged;
+  }
   const pages = value && typeof value === "object" ? (value as { pages?: unknown }).pages : undefined;
   const unsent = { pages };
   return isLayer(unsent) ? unsent : null;

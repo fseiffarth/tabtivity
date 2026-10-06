@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, readQuestionTabs, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
+import { freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { BRAND } from "../../lib/brand";
@@ -794,5 +794,72 @@ describe(`${BRAND.display} Mobile question tabs`, () => {
     expect(readQuestionTabs("✔ Done")).toBeNull();
     expect(readQuestionTabs("Push scope")).toBeNull();
     expect(readQuestionTabs("● ☐ is how the box looks")).toBeNull();
+  });
+
+  it("tells which step the dialog is on from the chip painted on a background", () => {
+    const tabs = readQuestionTabs("←  ☒ Scope  ☐ Release tag  ✔ Submit  →")!;
+    const row = (painted: string) => ["←  ", "☒ Scope", "  ", "☐ Release tag", "  ", "✔ Submit", "  →"].map((text) =>
+      text === painted ? { text: ` ${text} `, background: "#b1b9f9" } : { text });
+    expect(questionTabFocus(row("☒ Scope"), tabs)).toBe(0);
+    expect(questionTabFocus(row("☐ Release tag"), tabs)).toBe(1);
+    expect(questionTabFocus(row("✔ Submit"), tabs)).toBe(2);
+    // Nothing painted, or a chip that is not one of the steps: unknown.
+    expect(questionTabFocus(row(""), tabs)).toBeNull();
+    expect(questionTabFocus([{ text: "← " }, { text: "☐ Other", background: "#fff" }], tabs)).toBeNull();
+    // Painted by its colour alone, the dimmed arrow at an end aside.
+    expect(questionTabFocus([{ text: "← ", color: "#888" }, { text: "☒ Scope  " }, { text: "☐ Release tag", color: "#b1b9f9" }, { text: "  ✔ Submit  →" }], tabs)).toBe(1);
+    expect(questionTabsSubmit("←  ☒ Scope  ☐ Release tag  ✔ Submit  →")).toBe(true);
+    expect(questionTabsSubmit("☐ Push scope")).toBe(false);
+  });
+
+  it("reads Gemini CLI's tab row, its current step underlined, walked with Tab", () => {
+    const text = "← □ Scope │ ✓ Release tag │ ≡ Review →";
+    const tabs = readQuestionTabs(text)!;
+    expect(tabs).toEqual([{ label: "Scope", answered: false }, { label: "Release tag", answered: true }]);
+    expect(questionTabsSubmit(text)).toBe(true);
+    expect(questionTabRowKeys(text)).toBe("tabs");
+    expect(questionTabRowKeys("←  ☒ Scope  ☐ Release tag  ✔ Submit  →")).toBe("arrows");
+    // TabHeader: every icon and header in a colour, the current header bold
+    // and underlined.
+    const row = [
+      { text: "← ", color: "#888" }, { text: "□ ", color: "#888" }, { text: "Scope", color: "#888" },
+      { text: " │ ", color: "#888" }, { text: "✓ ", color: "#888" }, { text: "Release tag", color: "#6c6", className: "b u" },
+      { text: " │ ", color: "#888" }, { text: "≡ ", color: "#888" }, { text: "Review", color: "#888" }, { text: " →", color: "#888" },
+    ];
+    expect(questionTabFocus(row, tabs)).toBe(1);
+    expect(questionTabFocus(row.map((span) => (span.text === "Review" ? { ...span, className: "b u" } : { ...span, className: undefined })), tabs)).toBe(2);
+    expect(questionTabKeys(0, 2, "tabs")).toEqual(["\t", "\t"]);
+    expect(questionTabKeys(2, 1, "tabs")).toEqual([`${ESC}[Z`]);
+    // Without its Review step it is a sentence with boxes in it.
+    expect(readQuestionTabs("□ Scope │ ✓ Tag")).toBeNull();
+  });
+
+  it("reads Gemini CLI's Review page as one Submit row under its tab row", () => {
+    const screen = lines(
+      "> plan the release",
+      "",
+      "← ✓ Scope │ ✓ Release tag │ ≡ Review →",
+      "",
+      "Review your answers:",
+      "",
+      "Scope → Fix only",
+      "Release tag → v0.2.0",
+      "Enter to submit · Tab/Shift+Tab to edit answers · Esc to cancel",
+    );
+    for (const agent of ["Gemini", "Qwen Code"]) {
+      const review = readReviewStep(screen, agent);
+      expect(review?.options).toEqual([{ index: 0, number: 1, label: "Submit" }]);
+      expect(review?.current).toBe(0);
+      expect(screen[review!.question].text).toMatch(/≡ Review/);
+      expect(review?.start).toBe(8);
+    }
+    expect(readReviewStep(screen, "Claude")).toBeNull();
+    expect(readReviewStep(lines("Review your answers:", "Scope → Fix only"), "Gemini")).toBeNull();
+  });
+
+  it("walks the tabs with the arrows Claude Code switches them with", () => {
+    expect(questionTabKeys(2, 0)).toEqual([`${ESC}[D`, `${ESC}[D`]);
+    expect(questionTabKeys(0, 1)).toEqual([`${ESC}[C`]);
+    expect(questionTabKeys(1, 1)).toEqual([]);
   });
 });

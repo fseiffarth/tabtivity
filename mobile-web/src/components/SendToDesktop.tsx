@@ -60,7 +60,7 @@ export function SendToDesktop() {
     <h2 id="send-to-desktop-heading">{t("mobile.sendToDesktop.heading")}</h2>
     <ul className="option-list">
       <li><button onClick={() => pickPhoneFiles(input.current, send)}>
-        <span><strong>{t("mobile.home.sendToDesktop")}{isUntested("mobile.home.sendToDesktop") && <span className="untested">Untested</span>}</strong><small>{t("mobile.sendToDesktop.hint")}</small></span>
+        <span><strong>{t("mobile.home.sendToDesktop")}{isUntested("mobile.home.sendToDesktop") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{t("mobile.sendToDesktop.hint")}</small></span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
       </button></li>
     </ul>

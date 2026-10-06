@@ -1,5 +1,12 @@
 import { openAuthDatabase } from "./auth";
 import { BRAND } from "../../src/lib/brand";
+import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
+
+/** The lock's own sentences, in the phone's language: they are thrown as
+ * `Error` messages and shown as written (`localFailureText`). */
+function tr(key: TranslationKey, vars?: Record<string, string | number>): string {
+  return translate(useI18nStore.getState().lang, key, vars);
+}
 
 const STORE = "keys";
 const KEY = "local-unlock-v1";
@@ -167,7 +174,7 @@ async function enrollBiometric(): Promise<string | null> {
     timeout: 60_000,
   };
   const credential = await navigator.credentials.create({ publicKey }) as PublicKeyCredential | null;
-  if (!credential) throw new Error("Device biometric enrollment was cancelled.");
+  if (!credential) throw new Error(tr("mobile.lock.enrollCancelled"));
   return b64url(credential.rawId);
 }
 
@@ -181,7 +188,7 @@ async function verifyBiometric(credentialId: string, signal?: AbortSignal): Prom
     timeout: 60_000,
   };
   const assertion = await navigator.credentials.get({ publicKey, signal });
-  if (!assertion) throw new Error("Device biometric verification was cancelled.");
+  if (!assertion) throw new Error(tr("mobile.lock.verifyCancelled"));
 }
 
 export interface LocalUnlockSetup {
@@ -194,7 +201,7 @@ export interface LocalUnlockSetup {
  * platform authenticator, the enrolled WebAuthn credential becomes the
  * default unlock and the PIN is the fallback. */
 export async function configureLocalUnlock(pin: string): Promise<LocalUnlockSetup> {
-  if (!validPin(pin) || pin.length < MIN_NEW_PIN) throw new Error(`Choose a ${MIN_NEW_PIN}–12 digit PIN.`);
+  if (!validPin(pin) || pin.length < MIN_NEW_PIN) throw new Error(tr("mobile.lock.choosePin", { min: MIN_NEW_PIN }));
   const salt = randomBytes(16);
   const verifier = await pinDigest(pin, salt);
   const biometricCredentialId = await enrollBiometric();
@@ -211,9 +218,9 @@ export function nextLockout(failedAttempts: number, now: number): number | undef
 
 function describeWait(milliseconds: number): string {
   const seconds = Math.ceil(milliseconds / 1_000);
-  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  if (seconds < 60) return seconds === 1 ? tr("mobile.lock.waitSecondOne") : tr("mobile.lock.waitSeconds", { count: seconds });
   const minutes = Math.ceil(seconds / 60);
-  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return minutes === 1 ? tr("mobile.lock.waitMinuteOne") : tr("mobile.lock.waitMinutes", { count: minutes });
 }
 
 /** Enroll the platform biometric onto an existing record — the path for a
@@ -249,8 +256,8 @@ export async function maybeEnrollBiometric(): Promise<boolean> {
  * factor and the way back in for a locked-out legitimate user. */
 export async function unlockLocalBiometric(signal?: AbortSignal): Promise<void> {
   const record = await readRecord();
-  if (!record) throw new Error(`Set up the app lock before unlocking ${BRAND.display} Mobile.`);
-  if (!record.biometricCredentialId) throw new Error("Device biometric unlock is not set up on this phone.");
+  if (!record) throw new Error(tr("mobile.lock.setUpFirst"));
+  if (!record.biometricCredentialId) throw new Error(tr("mobile.lock.biometricNotSetUp"));
   await verifyBiometric(record.biometricCredentialId, signal);
   if (record.failedAttempts || record.lockedUntil) {
     await saveRecord({ ...record, failedAttempts: 0, lockedUntil: undefined });
@@ -264,11 +271,11 @@ export async function unlockLocalBiometric(signal?: AbortSignal): Promise<void> 
  * fingerprint sensor with no way in at all. */
 export async function unlockLocal(pin: string, now = Date.now()): Promise<void> {
   const record = await readRecord();
-  if (!record) throw new Error(`Set up the app lock before unlocking ${BRAND.display} Mobile.`);
+  if (!record) throw new Error(tr("mobile.lock.setUpFirst"));
   if (typeof record.lockedUntil === "number" && record.lockedUntil > now) {
-    throw new Error(`Too many attempts. Try again in ${describeWait(record.lockedUntil - now)}.`);
+    throw new Error(tr("mobile.lock.tooManyAttempts", { wait: describeWait(record.lockedUntil - now) }));
   }
-  if (!validPin(pin)) throw new Error("Enter your 4–12 digit PIN.");
+  if (!validPin(pin)) throw new Error(tr("mobile.lock.enterPin"));
   const expected = fromB64url(record.verifier);
   const actual = await pinDigest(pin, fromB64url(record.salt));
   if (!sameBytes(expected, actual)) {
@@ -276,8 +283,8 @@ export async function unlockLocal(pin: string, now = Date.now()): Promise<void> 
     const lockedUntil = nextLockout(failedAttempts, now);
     await saveRecord({ ...record, failedAttempts, lockedUntil });
     throw new Error(lockedUntil
-      ? `Incorrect PIN. Try again in ${describeWait(lockedUntil - now)}.`
-      : "Incorrect PIN.");
+      ? tr("mobile.lock.incorrectPinWait", { wait: describeWait(lockedUntil - now) })
+      : tr("mobile.lock.incorrectPin"));
   }
   if (record.failedAttempts || record.lockedUntil) {
     await saveRecord({ ...record, failedAttempts: 0, lockedUntil: undefined });

@@ -7,6 +7,7 @@
  *   "Checkout" checks the commit out (detached).
  * - Lazy history: the list asks for one page and pages the rest in from the
  *   bottom row, instead of stopping at the first 100 commits.
+ * - Graph view: hovering a lane's line names the branch(es) it carries.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
@@ -16,6 +17,7 @@ const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 
 import { GitHistory } from "../../components/files/GitHistory";
+import { storageKey } from "../../lib/brand";
 
 const COMMITS = [
   { hash: "aaa111", short: "aaa111", subject: "feat: add widget", author: "me", date: "2d ago", refs: "HEAD -> main", is_head: true, parents: ["bbb222"] },
@@ -168,5 +170,44 @@ describe("lazy commit history", () => {
     });
     await screen.findByText("feat: add widget");
     expect(screen.queryByRole("button", { name: /Load older commits/ })).toBeNull();
+  });
+});
+
+describe("graph view branch names on hover", () => {
+  // feature and main fork from base; main also merged an unnamed side line.
+  const GRAPH = [
+    { hash: "f2", short: "f2", subject: "feature work", author: "me", date: "1d", refs: "feature", is_head: false, parents: ["base"] },
+    { hash: "m2", short: "m2", subject: "merge side", author: "me", date: "2d", refs: "HEAD -> main, origin/main, tag: v1", is_head: true, parents: ["m1", "s1"] },
+    { hash: "s1", short: "s1", subject: "side work", author: "me", date: "3d", refs: "", is_head: false, parents: ["m1"] },
+    { hash: "m1", short: "m1", subject: "main work", author: "me", date: "4d", refs: "", is_head: false, parents: ["base"] },
+    { hash: "base", short: "base", subject: "root", author: "me", date: "5d", refs: "", is_head: false, parents: [] },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    localStorage.setItem(storageKey("gitHistoryGraph"), "1");
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "git_log") return Promise.resolve(GRAPH);
+      if (cmd === "git_branches") return Promise.resolve(BRANCHES);
+      return Promise.resolve(null);
+    });
+  });
+
+  const titlesOf = (subject: string) =>
+    Array.from(screen.getByText(subject).closest("button")!.querySelectorAll("svg title")).map((n) => n.textContent);
+
+  it("names each line by the branch refs flowing down it", async () => {
+    await renderHistory();
+    await screen.findByText("feature work");
+    // A tip's dot and trunk carry its branch names, tags excluded.
+    expect(titlesOf("feature work")).toContain("feature");
+    expect(titlesOf("merge side")).toContain("main, origin/main");
+    expect(titlesOf("merge side").join("|")).not.toContain("v1");
+    // The side line merged into main has no ref naming it: only main and the
+    // feature lane passing by are named on its row.
+    expect(new Set(titlesOf("side work"))).toEqual(new Set(["feature", "main, origin/main"]));
+    // Where main's line runs into the feature lane, that lane carries both.
+    expect(titlesOf("root")).toContain("feature, main, origin/main");
   });
 });

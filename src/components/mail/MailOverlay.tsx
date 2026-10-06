@@ -16,6 +16,8 @@ import { useDialogs } from "../common/PromptDialogs";
 import { MailGlyph } from "../header/HeaderGlyphs";
 import { BookIcon } from "../common/icons/Icon";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
+import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
+import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { MailAccountMenu } from "./MailAccountMenu";
 import { MailPane } from "./MailPane";
@@ -87,6 +89,12 @@ function MailOverlay({ open }: { open: boolean }) {
   // `barProps.title` is the move hint; on the whole bar it would hover over
   // every tab, so it goes on the mark alone (the root console's placement).
   const { title: moveHint, ...barRest } = barProps;
+  // The docked root agent beside the mailbox (Ctrl+1–9 here, or the bar's
+  // button). Live only while the window SHOWS: hidden-but-mounted (composers
+  // waiting) it answers no chord and draws no column, so no key of the
+  // column's is marked shown while nobody can see it.
+  const agent = useOverlayAgent("mail", open);
+  const agentMaxWidth = useOverlayAgentMaxWidth(bodyRef, open);
 
   // Hidden, focus must not stay behind in the window: keys typed next would
   // land in a composer nobody can see.
@@ -110,6 +118,9 @@ function MailOverlay({ open }: { open: boolean }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
+      // Escape typed into the docked agent is its cancel key, not "close" —
+      // the root console's `regionRef` rule.
+      if ((e.target as Element | null)?.closest?.(".overlay-agent-column")) return;
       // An Escape the approvals panel (or anything else) already took is not ours.
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.stopPropagation();
@@ -289,6 +300,7 @@ function MailOverlay({ open }: { open: boolean }) {
             </button>
           </div>
           <div className="tab-controls root-overlay-controls">
+            <OverlayAgentToggle handle={agent} />
             <OverlayApprovals domain="mail" />
             <UntestedTag id="mail.overlayTabs" />
             {fillButton}
@@ -303,49 +315,63 @@ function MailOverlay({ open }: { open: boolean }) {
             </button>
           </div>
         </div>
-        <div className="subwindow-body mail-overlay-body" ref={bodyRef}>
-          {/* Every tab stays mounted and is hidden by style: the Inbox keeps its
-              scroll and selection, a composer its text. */}
-          {/* `visible` is the window's, not the tab's: the pane's first show
-              opens the store (the unlock prompt), and a window opened straight
-              onto a composer needs that as much as one opened on the Inbox. */}
-          <div className="mail-tab-pane" style={inboxActive ? undefined : { display: "none" }}>
-            <MailPane visible={open} />
-          </div>
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className="mail-tab-pane"
-              role="tabpanel"
-              data-mail-tab={tab.id}
-              style={tab.id === active ? undefined : { display: "none" }}
-            >
-              {tab.kind === "contacts" ? (
-                <MailAddressBook tab={tab} />
-              ) : tab.kind === "message" ? (
-                <MailMessageTabBody tab={tab} />
-              ) : (
-                <MailComposeDialog
-                  embedded
-                  accounts={accounts}
-                  accountId={tab.accountId}
-                  mode={tab.mode}
-                  source={tab.source}
-                  toAddress={tab.toAddress}
-                  draft={tab.draft}
-                  onDirty={(subject) => useMailStore.getState().markComposeDirty(tab.id, subject)}
-                  onSaved={(subject) => useMailStore.getState().markComposeClean(tab.id, subject)}
-                  // Cancel is the tab × by another name: same question.
-                  onCancel={() => void closeTab(tab)}
-                  onClose={() => {
-                    // Sent or discarded: nothing left to lose, so no question.
-                    useMailStore.getState().closeMailTab(tab.id);
-                    if (tab.draft) void useMailStore.getState().loadAgentDrafts();
-                  }}
-                />
-              )}
+        <div className="subwindow-body mail-overlay-body app-overlay-body-row" ref={bodyRef}>
+          {/* The tab panes stack in their own box, so the docked agent column
+              can sit beside them rather than under their `inset: 0`. */}
+          <div className="mail-overlay-panes">
+            {/* Every tab stays mounted and is hidden by style: the Inbox keeps its
+                scroll and selection, a composer its text. */}
+            {/* `visible` is the window's, not the tab's: the pane's first show
+                opens the store (the unlock prompt), and a window opened straight
+                onto a composer needs that as much as one opened on the Inbox. */}
+            <div className="mail-tab-pane" style={inboxActive ? undefined : { display: "none" }}>
+              <MailPane visible={open} />
             </div>
-          ))}
+            {tabs.map((tab) => (
+              <div
+                key={tab.id}
+                className="mail-tab-pane"
+                role="tabpanel"
+                data-mail-tab={tab.id}
+                style={tab.id === active ? undefined : { display: "none" }}
+              >
+                {tab.kind === "contacts" ? (
+                  <MailAddressBook tab={tab} />
+                ) : tab.kind === "message" ? (
+                  <MailMessageTabBody tab={tab} />
+                ) : (
+                  <MailComposeDialog
+                    embedded
+                    accounts={accounts}
+                    accountId={tab.accountId}
+                    mode={tab.mode}
+                    source={tab.source}
+                    toAddress={tab.toAddress}
+                    draft={tab.draft}
+                    onDirty={(subject) => useMailStore.getState().markComposeDirty(tab.id, subject)}
+                    onSaved={(subject) => useMailStore.getState().markComposeClean(tab.id, subject)}
+                    // Cancel is the tab × by another name: same question.
+                    onCancel={() => void closeTab(tab)}
+                    onClose={() => {
+                      // Sent or discarded: nothing left to lose, so no question.
+                      useMailStore.getState().closeMailTab(tab.id);
+                      if (tab.draft) void useMailStore.getState().loadAgentDrafts();
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+          {open && agent.showColumn && (
+            <OverlayAgentColumn
+              app="mail"
+              tab={agent.tab}
+              hint={agent.hint}
+              maxWidth={agentMaxWidth}
+              focusRequest={agent.focusRequest}
+              onDismissHint={agent.dismissHint}
+            />
+          )}
         </div>
       </div>
       {dialogs}

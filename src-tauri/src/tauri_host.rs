@@ -122,6 +122,7 @@ pub const CONVERTED_COMMAND_FILES: &[&str] = &[
     "hpc_ws.rs",
     "local_loss.rs",
     "markdown.rs",
+    "markup_mcp.rs",
     "mobile_control.rs",
     "monitor.rs",
     "net_usage.rs",

@@ -15,8 +15,6 @@ pub mod agent_usage;
 #[cfg(target_os = "linux")]
 pub mod fence_scope;
 pub mod big_folders;
-// The `.git` control files a sandbox keeps its occupant from writing (#158).
-pub mod git_guard;
 pub mod remote_agents;
 pub mod vm_proxy;
 // Shared web-safety primitives (URL policy, host display, filename sanitizing)

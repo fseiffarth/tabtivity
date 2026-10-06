@@ -3,6 +3,11 @@
 //! opening the reparse point itself; handle metadata then rejects every
 //! reparse type, including junctions. A renamed parent cannot redirect the
 //! rest of a read or listing. Unsupported native operations fail closed.
+//!
+//! The phone's drop boxes also create folders and files and delete files
+//! through the same handles: `FILE_CREATE` never opens an existing name (nor a
+//! reparse point standing there), and a delete marks the one handle-relative
+//! name it opened, reparse point included, never a link's target.
 
 use std::{
     fs,
@@ -19,32 +24,50 @@ use ::windows::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            NtCreateFile, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
+            NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, NTCREATEFILE_CREATE_DISPOSITION,
+            NTCREATEFILE_CREATE_OPTIONS,
         },
     },
     Win32::{
-        Foundation::{ERROR_NO_MORE_FILES, HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING},
+        Foundation::{
+            ERROR_NO_MORE_FILES, HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, STATUS_OBJECT_NAME_COLLISION,
+            STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, UNICODE_STRING,
+        },
         Storage::FileSystem::{
-            FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo, GetFileInformationByHandleEx,
-            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FILE_READ_ATTRIBUTES,
-            FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, SYNCHRONIZE,
+            FileDispositionInfo, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
+            GetFileInformationByHandleEx, SetFileInformationByHandle, DELETE, FILE_ACCESS_RIGHTS,
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_DISPOSITION_INFO, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
+            FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, SYNCHRONIZE,
         },
         System::IO::IO_STATUS_BLOCK,
     },
 };
 
-use super::{canonical_root, valid_rel, valid_segment, FilesError};
+use super::{canonical_root, plain_segment, valid_rel, FilesError};
 
-pub(super) struct ProjectDir(fs::File);
+pub(in crate::services::mobile_control) struct ProjectDir(fs::File);
 
 impl ProjectDir {
     pub(super) fn open(root: &Path, rel: &str) -> Result<Self, FilesError> {
-        let root = canonical_root(root)?;
+        let mut dir = Self::open_root(root)?;
         if !valid_rel(rel) {
             return Err(FilesError::NotFound);
         }
+        if !rel.is_empty() {
+            for name in rel.split('/') {
+                dir = dir.child_dir(name).ok_or(FilesError::NotFound)?;
+            }
+        }
+        Ok(dir)
+    }
+
+    /// The project root itself, held open — the one folder opened by path.
+    pub(in crate::services::mobile_control) fn open_root(root: &Path) -> Result<Self, FilesError> {
+        let root = canonical_root(root)?;
         // Only the configured root is opened by path. Reparse points in its
         // project-controlled leaf are refused, including a replacement after
         // canonicalization. Every operation below it starts from this handle.
@@ -56,13 +79,7 @@ impl ProjectDir {
         plain_metadata(&file)
             .filter(fs::Metadata::is_dir)
             .ok_or(FilesError::Unavailable)?;
-        let mut dir = Self(file);
-        if !rel.is_empty() {
-            for name in rel.split('/') {
-                dir = dir.child_dir(name).ok_or(FilesError::NotFound)?;
-            }
-        }
-        Ok(dir)
+        Ok(Self(file))
     }
 
     fn handle(&self) -> HANDLE {
@@ -70,19 +87,57 @@ impl ProjectDir {
     }
 
     fn open_at(&self, name: &str, directory: bool) -> Option<fs::File> {
+        let kind = if directory {
+            FILE_DIRECTORY_FILE
+        } else {
+            FILE_NON_DIRECTORY_FILE
+        };
+        let file = self
+            .nt_create(
+                name,
+                FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                FILE_OPEN,
+                kind | FILE_OPEN_REPARSE_POINT,
+                Default::default(),
+            )
+            .ok()?;
+        let meta = plain_metadata(&file)?;
+        (if directory {
+            meta.is_dir()
+        } else {
+            meta.is_file()
+        })
+        .then_some(file)
+    }
+
+    /// `NtCreateFile` of exactly one name relative to this folder, always
+    /// synchronous; the NTSTATUS a caller tells apart becomes an `io` kind.
+    fn nt_create(
+        &self,
+        name: &str,
+        access: FILE_ACCESS_RIGHTS,
+        disposition: NTCREATEFILE_CREATE_DISPOSITION,
+        options: NTCREATEFILE_CREATE_OPTIONS,
+        attributes: FILE_FLAGS_AND_ATTRIBUTES,
+    ) -> std::io::Result<fs::File> {
+        let invalid = || std::io::Error::from(std::io::ErrorKind::InvalidInput);
         // Do not let a caller turn the single native name into a multi-step
         // path, an absolute/device path, or an alternate data stream.
-        if !valid_segment(name) {
-            return None;
+        if !plain_segment(name) {
+            return Err(invalid());
         }
         let mut name: Vec<u16> = name.encode_utf16().collect();
-        let length = u16::try_from(name.len().checked_mul(2)?).ok()?;
+        let length = name
+            .len()
+            .checked_mul(2)
+            .and_then(|bytes| u16::try_from(bytes).ok())
+            .ok_or_else(invalid)?;
         let unicode = UNICODE_STRING {
             Length: length,
             MaximumLength: length,
             Buffer: PWSTR(name.as_mut_ptr()),
         };
-        let attributes = OBJECT_ATTRIBUTES {
+        let object = OBJECT_ATTRIBUTES {
             Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
             RootDirectory: self.handle(),
             ObjectName: &unicode,
@@ -91,42 +146,95 @@ impl ProjectDir {
         };
         let mut handle = HANDLE::default();
         let mut status = IO_STATUS_BLOCK::default();
-        let kind = if directory {
-            FILE_DIRECTORY_FILE
-        } else {
-            FILE_NON_DIRECTORY_FILE
-        };
         // SAFETY: all structures and the UTF-16 buffer remain live during the
-        // synchronous call; RootDirectory is our live directory handle. FILE_OPEN
-        // never creates anything. A single component plus OPEN_REPARSE_POINT
-        // ensures the kernel cannot traverse a substituted junction or link.
+        // synchronous call; RootDirectory is our live directory handle. A
+        // single component plus OPEN_REPARSE_POINT (or FILE_CREATE, which
+        // never opens an existing name) ensures the kernel cannot traverse a
+        // substituted junction or link.
         let result = unsafe {
             NtCreateFile(
                 &mut handle,
-                FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                &attributes,
+                access,
+                &object,
                 &mut status,
                 None,
-                Default::default(),
+                attributes,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                FILE_OPEN,
-                kind | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+                disposition,
+                options | FILE_SYNCHRONOUS_IO_NONALERT,
                 None,
                 0,
             )
         };
         if result.0 < 0 {
-            return None;
+            return Err(nt_error(result));
         }
         // SAFETY: the successful open returned a fresh handle owned only here.
-        let file = unsafe { fs::File::from_raw_handle(handle.0) };
-        let meta = plain_metadata(&file)?;
-        (if directory {
-            meta.is_dir()
-        } else {
-            meta.is_file()
-        })
-        .then_some(file)
+        Ok(unsafe { fs::File::from_raw_handle(handle.0) })
+    }
+
+    /// The folder `name` in this one: `Ok(None)` when nothing has that name,
+    /// `Err(())` when something does but is not a plain folder (a reparse
+    /// point, a file) — never traversed either way.
+    pub(in crate::services::mobile_control) fn lookup_dir(&self, name: &str) -> Result<Option<Self>, ()> {
+        match self.nt_create(
+            name,
+            FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+            Default::default(),
+        ) {
+            Ok(file) if plain_metadata(&file).is_some_and(|meta| meta.is_dir()) => Ok(Some(Self(file))),
+            Ok(_) => Err(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Creates the folder `name` here unless something already has that name.
+    /// Open it with [`Self::lookup_dir`], which refuses a reparse point there.
+    pub(in crate::services::mobile_control) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+        match self.nt_create(
+            name,
+            FILE_LIST_DIRECTORY | SYNCHRONIZE,
+            FILE_CREATE,
+            FILE_DIRECTORY_FILE,
+            FILE_ATTRIBUTE_NORMAL,
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// A new regular file `name` here, for writing: never an existing name
+    /// (`AlreadyExists`), never through a reparse point.
+    pub(in crate::services::mobile_control) fn create_file(&self, name: &str) -> std::io::Result<fs::File> {
+        self.nt_create(name, FILE_GENERIC_WRITE, FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_ATTRIBUTE_NORMAL)
+    }
+
+    /// Deletes the non-folder `name` here — a reparse point itself, never
+    /// its target — through the handle it opened.
+    pub(in crate::services::mobile_control) fn remove_file(&self, name: &str) -> std::io::Result<()> {
+        let file = self.nt_create(
+            name,
+            DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
+            Default::default(),
+        )?;
+        let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: a live handle opened with DELETE access and a properly sized,
+        // live disposition record.
+        unsafe {
+            SetFileInformationByHandle(
+                HANDLE(file.as_raw_handle()),
+                FileDispositionInfo,
+                (&info as *const FILE_DISPOSITION_INFO).cast(),
+                size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        }
+        .map_err(|error| std::io::Error::other(error.to_string()))
     }
 
     pub(super) fn child_dir(&self, name: &str) -> Option<Self> {
@@ -137,13 +245,13 @@ impl ProjectDir {
         plain_metadata(&self.child_dir(name)?.0)
     }
 
-    pub(super) fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
+    pub(in crate::services::mobile_control) fn open_file(&self, name: &str) -> Option<(fs::File, fs::Metadata)> {
         let file = self.open_at(name, false)?;
         let meta = plain_metadata(&file)?;
         meta.is_file().then_some((file, meta))
     }
 
-    pub(super) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
+    pub(in crate::services::mobile_control) fn entries(&self) -> Result<Vec<(String, bool)>, FilesError> {
         // u64 storage aligns the native records; 64 KiB fits even the longest
         // filesystem name. Enumeration uses this directory handle, never its
         // former path, and a fresh enumeration starts at the first entry.
@@ -214,7 +322,9 @@ impl ProjectDir {
                         )
                     };
                     if let Ok(name) = String::from_utf16(name) {
-                        if valid_segment(&name) {
+                        // Hidden names are the caller's to drop (the file
+                        // browser does); a drop box lists under `.tabtivity`.
+                        if plain_segment(&name) {
                             entries.push((
                                 name,
                                 record.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
@@ -234,6 +344,17 @@ impl ProjectDir {
                 offset = next;
             }
         }
+    }
+}
+
+/// The NTSTATUS values a caller tells apart, as `io` kinds.
+fn nt_error(status: NTSTATUS) -> std::io::Error {
+    if status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND {
+        std::io::ErrorKind::NotFound.into()
+    } else if status == STATUS_OBJECT_NAME_COLLISION {
+        std::io::ErrorKind::AlreadyExists.into()
+    } else {
+        std::io::Error::other(format!("NTSTATUS {:#010x}", status.0))
     }
 }
 

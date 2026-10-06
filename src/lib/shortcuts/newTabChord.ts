@@ -6,8 +6,13 @@
  * tab through its own + menu handlers, so a chord and a click build the same
  * tab (worktree question, session ids and all). The two meet over a window
  * event rather than a store because the launch needs that bar's live state.
+ *
+ * While a mail / calendar / to-do overlay is in front, Ctrl+1–9 go to it
+ * instead (`requestOverlayAgent`): it docks the agent beside the app, where a
+ * workspace tab would open hidden under the overlay.
  */
 import { allGroups, useTabsStore } from "../../stores/tabs";
+import type { SteeringApp } from "./steeringRegion";
 import {
   AGENT_TAB_ACTIONS,
   chordMatches,
@@ -73,6 +78,31 @@ export function requestNewTab(
   if (!groupId) return false;
   const event = new CustomEvent<NewTabShortcutDetail>(NEW_TAB_SHORTCUT_EVENT, {
     detail: { request, groupId, besideActive: opts?.besideActive },
+    cancelable: true,
+  });
+  return !window.dispatchEvent(event);
+}
+
+/** Detail: {@link OverlayAgentDetail}. Cancelled (`preventDefault`) by the
+ *  addressed overlay when it docked (or re-showed) that slot's agent. */
+export const OVERLAY_AGENT_EVENT = "app:overlay-agent";
+
+export interface OverlayAgentDetail {
+  /** The overlay the agent docks in (`frontAppOverlay`). */
+  app: SteeringApp;
+  /** 0-based, as {@link NewTabRequest}'s: 0 = Ctrl+1. */
+  slot: number;
+}
+
+/**
+ * Ask the mail / calendar / to-do overlay `app` to dock agent `slot` beside
+ * itself — Ctrl+1–9 while that overlay is in front, where a workspace tab
+ * would open hidden under it. True when the overlay answered; false leaves the
+ * key to go on, like an agent number with no agent behind it.
+ */
+export function requestOverlayAgent(app: SteeringApp, slot: number): boolean {
+  const event = new CustomEvent<OverlayAgentDetail>(OVERLAY_AGENT_EVENT, {
+    detail: { app, slot },
     cancelable: true,
   });
   return !window.dispatchEvent(event);

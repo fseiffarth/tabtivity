@@ -4,7 +4,7 @@
  * "Desktop unavailable" notice that vanished a moment later — and on a phone
  * that flash reads as the desktop having just dropped.
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
 
@@ -97,5 +97,49 @@ describe("Mobile project screen — the header line", () => {
     render(<Project id="p" back={() => {}} terminal={() => {}} />);
     await screen.findByText("claude 1");
     expect(screen.queryByLabelText("Sort tabs")).toBeNull();
+  });
+});
+
+describe("Mobile project screen — the git overview", () => {
+  const host = (kind?: "project" | "box") => (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/outbox")) return Promise.resolve(new Response(JSON.stringify({ files: [] }), { status: 200 }));
+    if (url.endsWith("/git")) {
+      return Promise.resolve(new Response(JSON.stringify({
+        repo: true,
+        head: { branch: "main", ahead: 0, behind: 0 },
+        worktrees: [{ id: "w", label: "", branch: "main", main: true, current: true, locked: false, missing: false, checked: true, tabs: 0 }],
+        worktrees_total: 1,
+        branches: [{ name: "main", current: true, ahead: 0, behind: 0 }],
+        branches_total: 1,
+        remote_branches: [],
+        remote_total: 0,
+      }), { status: 200 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify({
+      project: { id: "p", label: "Alpha", status: "active", live_sessions: 0, ...(kind ? { kind } : {}) },
+      desktop_available: true,
+      tabs: [],
+      agents: [],
+    }), { status: 200 }));
+  };
+
+  it("offers ⎇ Git in the name menu of a project and opens the sheet", async () => {
+    fetchMock.mockImplementation(host());
+    render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Project menu" })).getByRole("menuitem", { name: /^Git/ }));
+    const sheet = await screen.findByRole("dialog", { name: "Git · Alpha" });
+    expect(await within(sheet).findByText("Branches (1)")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/projects/p/git", expect.anything());
+    expect(screen.queryByRole("menu", { name: "Project menu" })).toBeNull();
+  });
+
+  it("offers no git for a box, which has no repo of its own", async () => {
+    fetchMock.mockImplementation(host("box"));
+    const { container } = render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    await waitFor(() => expect(container.querySelector("header h1")?.textContent).toBe("Alpha"));
+    expect(screen.queryByRole("button", { name: "Alpha" })).toBeNull();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/git"))).toBe(false);
   });
 });

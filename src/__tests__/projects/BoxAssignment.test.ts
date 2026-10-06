@@ -241,3 +241,128 @@ describe("boxes store — an edit that is not saved is not shown (final review B
     expect(useBoxesStore.getState().boxes[0]).toMatchObject({ color: "#112233", rev: 4 });
   });
 });
+
+/**
+ * The store keeps each box's revision in step with the file. Every write
+ * stamps a new revision on the box it changed, and a store that never took
+ * the stamped numbers back had its SECOND box edit of a window session
+ * refused as stale. One edit at a time goes through `patch_box`, applied to
+ * the box as the FILE holds it and answered as written; a fake backend here
+ * does what the real one does.
+ */
+describe("boxes store — revisions follow the backend's writes", () => {
+  interface Patch {
+    addMember?: string;
+    removeMember?: string;
+    color?: string;
+    hidePill?: boolean;
+  }
+  function fakeBackend(initial: ProjectBox[]) {
+    const disk = new Map(initial.map((b) => [b.id, { ...b }]));
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "patch_box") {
+        const held = disk.get(args?.boxId as string);
+        if (!held) return Promise.reject("box not found");
+        const patch = (args?.patch ?? {}) as Patch;
+        const next: ProjectBox = { ...held, member_ids: [...held.member_ids], rev: (held.rev ?? 0) + 1 };
+        if (patch.addMember && !next.member_ids.includes(patch.addMember)) next.member_ids.push(patch.addMember);
+        if (patch.removeMember) next.member_ids = next.member_ids.filter((id) => id !== patch.removeMember);
+        if (patch.color !== undefined) {
+          if (patch.color) next.color = patch.color;
+          else delete next.color;
+        }
+        if (patch.hidePill !== undefined) {
+          if (patch.hidePill) next.hide_pill = true;
+          else delete next.hide_pill;
+        }
+        disk.set(next.id, next);
+        return Promise.resolve({ ...next });
+      }
+      if (cmd === "ensure_box_folder") {
+        const id = args?.boxId as string;
+        const held = disk.get(id)!;
+        if (!held.folder) disk.set(id, { ...held, folder: `/boxes/${id}`, rev: (held.rev ?? 0) + 1 });
+        return Promise.resolve(disk.get(id));
+      }
+      return Promise.resolve(undefined);
+    });
+    return disk;
+  }
+
+  it("lands a second edit after the first one's save", async () => {
+    const disk = fakeBackend([{ ...box("boxA", []), rev: 1 }]);
+    useBoxesStore.setState({ boxes: [{ ...box("boxA", []), rev: 1 }] });
+
+    await useBoxesStore.getState().addToBox("p1", "boxA");
+    expect(useBoxesStore.getState().boxes[0].rev).toBe(2);
+    // Before the fix this one was refused as stale.
+    await useBoxesStore.getState().setBoxColor("boxA", "#336699");
+    await useBoxesStore.getState().removeFromBox("p1", "boxA");
+
+    expect(disk.get("boxA")).toMatchObject({ member_ids: [], color: "#336699", rev: 4 });
+    expect(useBoxesStore.getState().boxes[0].rev).toBe(4);
+  });
+
+  it("adopts the revision a first open stamps when it resolves the box folder", async () => {
+    const disk = fakeBackend([{ ...box("boxA", []), rev: 1 }]);
+    useBoxesStore.setState({ boxes: [{ ...box("boxA", []), rev: 1 }] });
+
+    await useBoxesStore.getState().openBox("boxA");
+    expect(useBoxesStore.getState().boxes[0]).toMatchObject({ folder: "/boxes/boxA", rev: 2 });
+    await useBoxesStore.getState().setBoxPillHidden("boxA", true);
+
+    expect(disk.get("boxA")).toMatchObject({ hide_pill: true, folder: "/boxes/boxA", rev: 3 });
+  });
+
+  it("never adopts a revision that carries another writer's edit, and a patch cannot erase it", async () => {
+    // Another writer (a project import joining the box) moved both boxes on
+    // in the file; this store never reloaded. boxA was opened before (has its
+    // folder), boxB is opened for the first time now.
+    const disk = fakeBackend([
+      { ...box("boxA", ["imported"]), folder: "/boxes/boxA", rev: 2 },
+      { ...box("boxB", ["imported"]), rev: 2 },
+    ]);
+    useBoxesStore.setState({
+      boxes: [
+        { ...box("boxA", []), folder: "/boxes/boxA", rev: 1 },
+        { ...box("boxB", []), rev: 1 },
+      ],
+    });
+
+    await useBoxesStore.getState().openBox("boxA");
+    await useBoxesStore.getState().openBox("boxB");
+    const [a, b] = useBoxesStore.getState().boxes;
+    expect(a.rev).toBe(1);
+    expect(b).toMatchObject({ folder: "/boxes/boxB", rev: 1 });
+
+    // The next edit patches the box as the file holds it, so the imported
+    // membership survives and the store takes the file's box back.
+    await useBoxesStore.getState().setBoxColor("boxA", "#336699");
+    expect(disk.get("boxA")).toMatchObject({ member_ids: ["imported"], color: "#336699", rev: 3 });
+    expect(disk.get("boxB")?.member_ids).toEqual(["imported"]);
+    expect(useBoxesStore.getState().boxes[0]).toMatchObject({ member_ids: ["imported"], color: "#336699", rev: 3 });
+  });
+
+  it("replaces only the patched box, so an edit made while a save was in flight survives", async () => {
+    fakeBackend([{ ...box("boxA", []), rev: 1 }, { ...box("boxB", []), rev: 1 }]);
+    useBoxesStore.setState({
+      boxes: [{ ...box("boxA", []), rev: 1 }, { ...box("boxB", []), rev: 1 }],
+    });
+
+    const saving = useBoxesStore.getState().addToBox("p1", "boxA");
+    useBoxesStore.setState((s) => ({
+      boxes: s.boxes.map((b) => (b.id === "boxB" ? { ...b, name: "renamed meanwhile" } : b)),
+    }));
+    await saving;
+
+    const [a, b] = useBoxesStore.getState().boxes;
+    expect(a).toMatchObject({ member_ids: ["p1"], rev: 2 });
+    expect(b).toMatchObject({ name: "renamed meanwhile", rev: 1 });
+  });
+
+  it("keeps the edit shown against a backend that answers nothing", async () => {
+    useBoxesStore.setState({ boxes: [{ ...box("boxA", []), rev: 1 }] });
+    await useBoxesStore.getState().addToBox("p1", "boxA");
+    expect(useBoxesStore.getState().boxes[0]).toMatchObject({ member_ids: ["p1"], rev: 1 });
+  });
+});

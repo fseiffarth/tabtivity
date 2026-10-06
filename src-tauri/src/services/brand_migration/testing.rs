@@ -43,6 +43,26 @@ impl World for RecordingWorld {
     }
 }
 
+/// `path` with every link resolved, in the form the OS hands back for the
+/// folder: on Windows `canonicalize` answers `\\?\C:\…`, which git refuses
+/// to create a worktree under and which a link's target never spells, so the
+/// plain drive form is kept (it names the same folder).
+pub fn canonical(path: &Path) -> PathBuf {
+    let path = path.canonicalize().expect("canonicalize");
+    #[cfg(windows)]
+    if let Some(plain) = path.to_str().and_then(|s| s.strip_prefix(r"\\?\")).filter(|s| !s.starts_with(r"UNC\")) {
+        return PathBuf::from(plain);
+    }
+    path
+}
+
+/// `content` with the path `from` replaced by `to`, as written and as a JSON
+/// or TOML string spells it (Windows' `\` escaped as `\\`).
+pub fn replace_path(content: &str, from: &str, to: &str) -> String {
+    let escaped = |p: &str| p.replace('\\', "\\\\");
+    content.replace(&escaped(from), &escaped(to)).replace(from, to)
+}
+
 /// A machine in a temp dir: a home with the Linux layout on every OS (the
 /// steps only ever see the paths they are given).
 pub struct Machine {
@@ -60,7 +80,7 @@ impl Machine {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Canonical, so a path read back through a link compares equal (the
         // temp dir is itself behind a link on macOS).
-        let home = tmp.path().canonicalize().expect("canonicalize").join("home");
+        let home = canonical(tmp.path()).join("home");
         fs::create_dir_all(&home).expect("home");
         Self { _tmp: Some(tmp), home, world: RecordingWorld::default() }
     }

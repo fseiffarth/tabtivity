@@ -339,6 +339,12 @@ export function installCustomScrollbars(): () => void {
   let geometryQueued = false;
   let scrollQueued = false;
   const dirtyScroll = new Set<HTMLElement>();
+  /**
+   * Parents whose children changed since the last geometry pass. Their
+   * ancestors are checked there for a container that has only now started to
+   * overflow (see `scanAncestors`).
+   */
+  const grownParents = new Set<Node>();
   let rafHandle = 0;
   /**
    * Elements whose box is in motion right now — a `transform`/inset/size
@@ -411,6 +417,34 @@ export function installCustomScrollbars(): () => void {
     resizeObserver.unobserve(el);
     el.removeAttribute(TAKEOVER_ATTR);
     entries.delete(el);
+  }
+
+  /**
+   * Find scroll containers ABOVE the nodes whose children changed.
+   *
+   * `scan` looks only at what was added and below it, which misses the commonest
+   * way a container starts to overflow: it mounts short — the Git view's
+   * history still loading — and the rows then arrive inside it. Nothing new is
+   * the container, nothing new contains it, and it is never scrolled until the
+   * user does so, so the side panel's Git view showed no bar at all until the
+   * wheel touched it. Run once per geometry pass, not per mutation record, and
+   * a shared ancestor chain is walked once however many rows landed under it.
+   */
+  function scanAncestors(): void {
+    const seen = new Set<Element>();
+    for (const node of grownParents) {
+      let el: Element | null = node instanceof Element ? node : node.parentElement;
+      while (el && el !== document.documentElement && !seen.has(el)) {
+        seen.add(el);
+        if (el instanceof HTMLElement && el.isConnected && !entries.has(el)) {
+          if (el.scrollHeight - el.clientHeight > 1 || el.scrollWidth - el.clientWidth > 1) {
+            register(el);
+          }
+        }
+        el = el.parentElement;
+      }
+    }
+    grownParents.clear();
   }
 
   /**
@@ -687,12 +721,15 @@ export function installCustomScrollbars(): () => void {
       geometryQueued = false;
       scrollQueued = false;
       dirtyScroll.clear();
+      // `visibilitychange` rescans the whole document on the way back.
+      grownParents.clear();
       return;
     }
     if (geometryQueued) {
       geometryQueued = false;
       scrollQueued = false;
       dirtyScroll.clear();
+      scanAncestors();
       runGeometry();
       return;
     }
@@ -807,6 +844,7 @@ export function installCustomScrollbars(): () => void {
       for (const node of record.addedNodes) {
         if (node instanceof HTMLElement) scan(node);
       }
+      if (record.addedNodes.length > 0) grownParents.add(record.target);
     }
     queueGeometry();
   });

@@ -8,6 +8,7 @@ import { _clearScheduledAgentInputsForTest, registerScheduledAgentInput } from "
 import { noteTypedLine, screenAtCursor, type TypedScreen } from "../../lib/agents/typedClear";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
+import { useActivityStore } from "../../stores/activity";
 import { BRAND } from "../../lib/brand";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
@@ -65,6 +66,18 @@ describe("Undo clear", () => {
     noteTypedClear("p1:agent-gemini");
     noteTypedClear("p1:agent-aider");
     expect(useAgentClearUndoStore.getState().cleared).toEqual({ "p1:agent-gemini": true });
+  });
+
+  it("leaves a clear typed mid-turn to the hook: the CLI queues it, the chat is not cleared yet", () => {
+    seed([agentTab("claude")]);
+    useActivityStore.setState({ busyByTab: { "p1:agent-claude": true } });
+    noteTypedClear("p1:agent-claude");
+    expect(useAgentClearUndoStore.getState().cleared).toEqual({});
+    useActivityStore.setState({ busyByTab: {} });
+    noteTypedClear("p1:agent-claude", true);
+    expect(useAgentClearUndoStore.getState().cleared).toEqual({});
+    noteTypedClear("p1:agent-claude");
+    expect(useAgentClearUndoStore.getState().cleared).toEqual({ "p1:agent-claude": true });
   });
 
   it("types Claude's resume into the running session as a command, not a prompt", async () => {

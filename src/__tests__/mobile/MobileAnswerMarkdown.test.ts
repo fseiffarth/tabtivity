@@ -50,6 +50,9 @@ describe(`${BRAND.display} Mobile Focus formats an answer's Markdown`, () => {
     expect(host.querySelector("a, img, input")).toBeNull();
     expect(host.querySelector("[href], [src], [data-md-src], [data-md-remote]")).toBeNull();
     expect(host.textContent).toContain("See the docs and https://example.com/y and a file.");
+    // A web link keeps its address for the chat's confirmation; a file does not.
+    expect([...host.querySelectorAll<HTMLElement>(".md-link")].map((link) => link.dataset.href ?? null))
+      .toEqual(["https://example.com/x", "https://example.com/y", null]);
     expect(host.textContent).toContain("diagram");
     expect(host.textContent).toContain("local");
     expect([...host.querySelectorAll(".md-task")].map((box) => box.textContent)).toEqual(["☑", "☐"]);

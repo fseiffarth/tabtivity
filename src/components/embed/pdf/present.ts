@@ -92,3 +92,64 @@ export function clampPage(page: number, count: number): number {
   if (!Number.isFinite(page) || count <= 0) return 1;
   return Math.min(Math.max(Math.trunc(page), 1), count);
 }
+
+// --- the talk clock (the present window's bottom bar) -----------------------
+//
+// A stopwatch as plain data, so pause, resume and reset are each one pure step
+// and a laptop suspend mid-talk is the only thing that can move it unasked.
+// `since` is when the running stretch began; null = paused. The shown time is
+// whatever was banked before the last pause plus the running stretch.
+
+export interface TalkClock {
+  /** Milliseconds banked by earlier running stretches. */
+  banked: number;
+  /** Start of the running stretch (epoch ms), or null while paused. */
+  since: number | null;
+}
+
+export const startClock = (now: number): TalkClock => ({ banked: 0, since: now });
+
+export function clockElapsed(c: TalkClock, now: number): number {
+  return c.banked + (c.since === null ? 0 : Math.max(0, now - c.since));
+}
+
+/** Pause a running clock, resume a paused one. */
+export function toggleClock(c: TalkClock, now: number): TalkClock {
+  return c.since === null
+    ? { banked: c.banked, since: now }
+    : { banked: clockElapsed(c, now), since: null };
+}
+
+/** Back to zero, keeping whether it runs: a paused reset arms the clock for a
+ *  talk that has not started yet. */
+export function resetClock(c: TalkClock, now: number): TalkClock {
+  return { banked: 0, since: c.since === null ? null : now };
+}
+
+/** `m:ss` under an hour, `h:mm:ss` from there on; whole seconds, never negative. */
+export function formatClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+/** The target durations the target button cycles through, in minutes; 0 = none. */
+export const TALK_TARGETS = [0, 5, 10, 15, 20, 25, 30, 45, 60, 90] as const;
+
+export function nextTarget(current: number): number {
+  const i = TALK_TARGETS.indexOf(current as (typeof TALK_TARGETS)[number]);
+  return TALK_TARGETS[(i + 1) % TALK_TARGETS.length];
+}
+
+/** Amber in the last tenth of the target, red past it — the deck presenter's
+ *  thresholds, so both clocks warn at the same moment. */
+export function clockTone(elapsedMs: number, targetMin: number, paused: boolean): "ok" | "near" | "over" | "paused" {
+  if (paused) return "paused";
+  if (targetMin <= 0) return "ok";
+  const target = targetMin * 60_000;
+  if (elapsedMs >= target) return "over";
+  if (elapsedMs >= target * 0.9) return "near";
+  return "ok";
+}

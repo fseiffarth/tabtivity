@@ -50,18 +50,22 @@ fn git(dir: &Path) -> Command {
     cmd
 }
 
-/// Run `git` in `dir` and report only whether it succeeded.
+/// Run `git` in `dir` and report only whether it succeeded. Bounded
+/// (`services::git_bounded`, #2349): Publish runs these on an existing repo,
+/// whose `HEAD` or `config` may be a FIFO git would block on.
 fn ok(dir: &Path, args: &[&str]) -> bool {
+    use crate::services::git_bounded::BoundedOutput;
     git(dir)
         .args(args)
-        .output()
+        .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
 /// Trimmed stdout of a `git` command, or `None` when it failed.
 fn out(dir: &Path, args: &[&str]) -> Option<String> {
-    let o = git(dir).args(args).output().ok()?;
+    use crate::services::git_bounded::BoundedOutput;
+    let o = git(dir).args(args).bounded_output().ok()?;
     if !o.status.success() {
         return None;
     }

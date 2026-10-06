@@ -54,7 +54,7 @@ terminal while Tabtivity handles switching the desktop between projects.
 
 ## What's inside
 
-![Tabtivity functionality map](assets/eldrun-functionality.svg)
+![Tabtivity functionality map](assets/tabtivity-functionality.svg)
 
 - **Agent terminals:** 27 built-in agent CLIs plus your own, with resume where
   the CLI supports it, each fenced into its own sandboxed home.

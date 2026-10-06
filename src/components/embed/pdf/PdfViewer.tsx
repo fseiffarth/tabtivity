@@ -115,7 +115,10 @@ import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
 import { PdfMarkupBar } from "./PdfMarkupBar";
-import { usePdfMarkup, type MarkupEdit } from "./usePdfMarkup";
+import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
+import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
+import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
+import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
 import {
   claimMarkup,
   diskChangeAction,
@@ -472,6 +475,8 @@ function PdfPageCanvas({
   onNoteDelete,
   onCopySelection,
   markup,
+  questionPins,
+  tickBadges,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -586,6 +591,20 @@ function PdfPageCanvas({
    *  everything else, and its remarks take no pointer meanwhile. Only ever set on
    *  a pristine arrangement, where this sheet is the file's page `pageNumber`. */
   markup?: MarkupEdit | null;
+  /** The agent's markup questions pinned to this sheet (`PdfMarkupQuestions`),
+   *  over the markup layer: a click shows the question in the card. */
+  questionPins?: {
+    pins: readonly QuestionPin[];
+    focus: QuestionFocus | null;
+    onPick: (pin: QuestionPin) => void;
+  } | null;
+  /** The agent's ticks on this sheet's sent marks (`PdfMarkupTicks`), over the
+   *  markup layer: a click approves and removes that mark. */
+  tickBadges?: {
+    badges: readonly TickBadge[];
+    disabled: boolean;
+    onApprove: (index: number, mark: TickBadge["mark"]) => void;
+  } | null;
 }) {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1334,6 +1353,23 @@ function PdfPageCanvas({
           remarks included, which it leaves visible but out of reach. */}
       {markup && cssSize && (
         <PdfMarkupLayer n={pageNumber} size={[cssSize.w, cssSize.h]} scale={scale} edit={markup} />
+      )}
+      {tickBadges && tickBadges.badges.length > 0 && cssSize && (
+        <PdfTickBadges
+          badges={tickBadges.badges}
+          size={[cssSize.w, cssSize.h]}
+          scale={scale}
+          disabled={tickBadges.disabled}
+          onApprove={tickBadges.onApprove}
+        />
+      )}
+      {questionPins && questionPins.pins.length > 0 && (
+        <PdfQuestionPins
+          pins={questionPins.pins}
+          scale={scale}
+          focus={questionPins.focus}
+          onPick={questionPins.onPick}
+        />
       )}
       {selBar && !marking && (
         <PdfSelectionBar
@@ -2386,9 +2422,24 @@ function PdfCanvas({
     pageCount: doc?.numPages ?? 0,
     docSize: docBytes,
     docVersion: loadedDiskVersion,
+    doc,
   });
   const markupRef = useRef(markup);
   markupRef.current = markup;
+  // The agent's questions (`markup_ask`), pinned at the words they quote.
+  const questionPins = useQuestionPins(marking ? doc ?? null : null, markup.questions.asks);
+  const pinnedQuestions = useMemo(
+    () => new Set([...questionPins.values()].flat().map((pin) => pinKey(pin.askId, pin.index))),
+    [questionPins],
+  );
+  const showQuestion = markup.questions.show;
+  // The agent's ticks (`markup_done`): a ✓ on each ticked sent mark.
+  const tickBadges = useMemo(
+    () => tickBadgesByPage(markup.edit.base, markup.ticks.marks),
+    [markup.edit.base, markup.ticks.marks],
+  );
+  const approveTick = markup.ticks.approve;
+  const pickQuestionPin = useCallback((pin: QuestionPin) => showQuestion(pin.askId, pin.index, "card"), [showQuestion]);
   const holder = markup.key ? markupHolder(markup.key) : undefined;
   const gate = markupGate({ ...gateInput, claimedElsewhere: holder !== undefined && holder !== markupOwner });
   const markupAllowed = gate.show && gate.blocked === null;
@@ -2419,6 +2470,9 @@ function PdfCanvas({
     }
   }, []);
   const enterMarkup = useCallback(() => {
+    // An agent tab asks about this file: the strip opens on that tab.
+    const asking = markupRef.current.askWaiting;
+    if (asking) markupRef.current.chooseTarget(asking);
     setRedacting(false);
     setCopySelecting(false);
     setRailOpen(false);
@@ -2434,15 +2488,24 @@ function PdfCanvas({
     setDiskVersion((v) => v + 1);
   }, [path, scope]);
   /** The one door for "the file changed on disk" — the mtime poll, a compile's
-   *  re-read request and a SyncTeX reveal after a compile (`diskChangeAction`). */
+   *  re-read request and a SyncTeX reveal after a compile (`diskChangeAction`).
+   *  While marking, the new pages load under the marks on their own unless
+   *  Settings → PDF markup turned that off, or a note or a Submit is under way. */
   const diskChanged = useCallback((reload: () => void) => {
     const action = diskChangeAction({
       dirty: dirtyRef.current,
       markupHolds: markupRef.current.holdsReload,
+      autoReload: useSettingsStore.getState().settings?.pdf_markup_auto_reload ?? true,
+      noteOpen: markupRef.current.edit.note !== null || markupRef.current.sending,
     });
     if (action === "stale") setStaleOnDisk(true);
     else if (action === "markup") markupRef.current.markStale();
-    else reload();
+    else if (action === "underMarks") {
+      // The caller's own reload, with the marks told first — as Reload PDF,
+      // but the strip says it happened by itself.
+      markupRef.current.beforeReload(true);
+      reload();
+    } else reload();
   }, []);
 
   // The path the currently-loaded document came from. A reload that keeps the
@@ -4312,7 +4375,7 @@ function PdfCanvas({
           <>
             <button
               className={`file-viewer-zoom-btn file-viewer-zoom-text${marking ? " active" : ""}${
-                !marking && markup.hasUnsent ? " is-armed" : ""
+                !marking && (markup.hasUnsent || markup.askWaiting) ? " is-armed" : ""
               }`}
               onClick={() => (marking ? leaveMarkup() : enterMarkup())}
               disabled={!doc || (!marking && gate.blocked !== null)}
@@ -4321,7 +4384,9 @@ function PdfCanvas({
                   ? "pdfMarkup.toggleArranged"
                   : gate.blocked === "claimed"
                     ? "pdfMarkup.toggleClaimed"
-                    : "pdfMarkup.toggleTitle",
+                    : !marking && markup.askWaiting
+                      ? "pdfMarkup.toggleAsks"
+                      : "pdfMarkup.toggleTitle",
               )}
               aria-pressed={marking}
             >
@@ -4534,6 +4599,7 @@ function PdfCanvas({
       {marking && (
         <PdfMarkupBar markup={markup} page={visiblePage} onReload={reloadUnderMarks} onDone={leaveMarkup} />
       )}
+      {marking && <PdfMarkupQuestions questions={markup.questions} pinned={pinnedQuestions} />}
       {/* A successful shot disarms the mode, so the bar outlives it just long
           enough to carry the busy/"copied" feedback the disarm would otherwise
           swallow. */}
@@ -4870,6 +4936,16 @@ function PdfCanvas({
                     onRedactRemove={(markId) => removeRedactMark(ref.id, markId)}
                     onCopySelection={copySelection}
                     markup={marking ? markup.edit : null}
+                    questionPins={
+                      marking && ref.src === SELF && questionPins.has(i + 1)
+                        ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
+                        : null
+                    }
+                    tickBadges={
+                      marking && ref.src === SELF && tickBadges.has(i + 1)
+                        ? { badges: tickBadges.get(i + 1)!, disabled: markup.sending, onApprove: (index, mark) => approveTick(i + 1, index, mark) }
+                        : null
+                    }
                   />
                 );
               })}

@@ -1,11 +1,16 @@
 import { agentWork, type WorkFacts } from "../../../mobile-web/src/terminal/agentBusy";
-import { isPromptEcho } from "../../../mobile-web/src/terminal/chatTurns";
+import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import {
+  freeTextRow,
+  freeTextWrites,
+  questionTabKeys,
+  readReviewStep,
   readSelectPrompt,
   selectKeys,
   selectSignature,
+  type QuestionStepKeys,
   type QuestionTab,
   type SelectOption,
   type SelectPrompt,
@@ -34,6 +39,13 @@ export interface ReaderLive {
   context: string[];
   /** An agent's own question's headers (Claude Code's tab row), as chips. */
   tabs: QuestionTab[];
+  /** The step of `tabs` on screen: an index into it, `tabs.length` for the
+   * Submit step, null when the row does not say (`questionTabFocus`). */
+  tabFocus: number | null;
+  /** Whether the tab row ends in a Submit step. */
+  tabSubmit: boolean;
+  /** Which keys walk the steps: Claude Code's ←/→, Codex's PageUp/PageDown. */
+  tabKeys: QuestionStepKeys;
   /** Identifies the dialog step, so one answer is not sent twice. */
   signature: string;
   /** The busy row's facts while the agent works; null when idle or asking. */
@@ -44,7 +56,9 @@ export interface ReaderLive {
   status: SessionStatus | null;
 }
 
-export const NO_LIVE: ReaderLive = { question: null, ask: [], context: [], tabs: [], signature: "", working: null, status: null };
+export const NO_LIVE: ReaderLive = {
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null,
+};
 
 /** Reads `buffer` (the pane's active xterm buffer, `columns` wide) for
  * `agentLabel`'s TUI. */
@@ -55,17 +69,27 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // tail after the last echoed prompt is what the session draws now.
   const screen = lines.slice(0, inputFrameStart(lines, agentLabel));
   let start = 0;
-  screen.forEach((line, index) => { if (isPromptEcho(line, agentLabel)) start = index + 1; });
+  screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
   const tail = screen.slice(start);
-  const question = tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) : null;
+  const question = tail.length > 0 ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel) : null;
   if (question) {
     const parts = questionParts(tail, question);
+    const ask = parts.ask.map((line) => line.text.trimEnd());
     return {
       question,
-      ask: parts.ask.map((line) => line.text.trimEnd()),
-      context: parts.tabs.length > 0 ? [] : parts.context.map((line) => line.text.trimEnd()),
+      ask,
+      // Under a tab row the context is the agent's message, the
+      // conversation's last turn already; Codex's (no row) says why it asks.
+      context: parts.tabs.length > 0 && parts.tabKeys !== "pages" ? [] : parts.context.map((line) => line.text.trimEnd()),
       tabs: parts.tabs,
-      signature: selectSignature(question),
+      tabFocus: parts.tabFocus,
+      tabSubmit: parts.tabSubmit,
+      tabKeys: parts.tabKeys,
+      // Two questions of one dialog can offer the same rows (two yes/no
+      // questions): the step they are on tells them apart.
+      signature: parts.tabs.length > 0
+        ? [selectSignature(question), tabsKey(parts.tabs), `@${parts.tabFocus ?? ""}`, ...ask].join("\n")
+        : selectSignature(question),
       working: null,
       status,
     };
@@ -83,6 +107,9 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.ask.join("\n") === b.ask.join("\n")
     && a.context.join("\n") === b.context.join("\n")
     && tabsKey(a.tabs) === tabsKey(b.tabs)
+    && a.tabFocus === b.tabFocus
+    && a.tabSubmit === b.tabSubmit
+    && a.tabKeys === b.tabKeys
     && (a.working === null) === (b.working === null)
     && a.working?.elapsed === b.working?.elapsed
     && a.working?.tokens === b.working?.tokens
@@ -114,9 +141,30 @@ export function modelPickKeys(picker: SelectPrompt, option: SelectOption, agentL
 }
 
 /** The keystrokes that answer `question` with `option`: arrows from the
- * highlighted row, then Enter — what the phone sends for a tapped row. */
+ * highlighted row, then Enter — what the phone sends for a tapped row.
+ *
+ * None for Claude Code's free-text row (`freeTextRow`): Enter on its empty
+ * field does not pick it, it turns the whole question down ("User declined to
+ * answer questions", 2.1.288). That row is answered with words
+ * (`answerTextKeys`). */
 export function answerKeys(question: SelectPrompt, option: SelectOption): string[] {
+  if (freeTextRow(option)) return [];
   return selectKeys(question.current, option.index);
+}
+
+/** The keystrokes that answer `question`'s free-text row with `text` — the
+ * phone's (`freeTextWrites`). None for blank words. */
+export function answerTextKeys(question: SelectPrompt, option: SelectOption, text: string): string[] {
+  return freeTextRow(option) ? freeTextWrites(question.current, option, text) : [];
+}
+
+export { freeTextRow };
+
+/** The keys that move `live`'s several-question dialog from step `from` to
+ * step `to` — Claude Code's ←/→, Codex's PageUp/PageDown; the answers given
+ * so far stay, so one can be changed before it is sent. */
+export function tabStepKeys(live: Pick<ReaderLive, "tabKeys">, from: number, to: number): string[] {
+  return questionTabKeys(from, to, live.tabKeys);
 }
 
 /** Esc: the key Claude Code, Codex and OpenCode stop a running turn with. */

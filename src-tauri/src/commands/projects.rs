@@ -1207,10 +1207,11 @@ pub struct UnsyncedReport {
 
 /// Run `git <args>` in `dir`, returning trimmed stdout (empty string on failure).
 fn git_in(dir: &Path, args: &[&str]) -> String {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .args(args)
         .current_dir(dir)
-        .output()
+        .bounded_output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -1674,10 +1675,10 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
 /// Runs through the hardened git command like every local git spawn.
 fn repair_moved_worktrees(repo: &Path, old: &str, new: &str) -> Result<(), String> {
     let moved = moved_linked_worktrees(repo, old, new);
+    use crate::services::git_bounded::BoundedOutput;
     let out = crate::commands::git::hardened_git_command_in(repo, &["worktree", "repair"])
         .args(&moved)
-        .output()
-        .map_err(|e| e.to_string())?;
+        .bounded_output()?;
     if out.status.success() {
         Ok(())
     } else {
@@ -1691,18 +1692,29 @@ fn moved_linked_worktrees(repo: &Path, old: &str, new: &str) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(repo.join(".git").join("worktrees")) else {
         return Vec::new();
     };
+    let (old, new) = (git_path_form(old), git_path_form(new));
     entries
         .flatten()
         .filter_map(|e| fs::read_to_string(e.path().join("gitdir")).ok())
         .filter_map(|gitdir| {
             let mut v = Value::String(gitdir.trim().to_string());
-            if !storage::rewrite_path_prefix(&mut v, old, new) {
+            if !storage::rewrite_path_prefix(&mut v, &old, &new) {
                 return None;
             }
             let moved = PathBuf::from(v.as_str()?);
             moved.parent().map(Path::to_path_buf)
         })
         .collect()
+}
+
+/// A path as git writes it into a `gitdir` file: `/`-separated on every OS,
+/// while a Windows folder path from `projects.json` uses `\`.
+fn git_path_form(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
 }
 
 /// Whether a currently-detected repo source still needs a user decision:
@@ -2053,10 +2065,62 @@ pub fn set_project_persist_sessions(project_id: String, enabled: bool) -> Result
     Ok(enabled)
 }
 
+/// A scope's Mobile access as `set_project_mobile_access` stored it: the
+/// switch, and which paired phones it reaches (`None` = every phone, also
+/// those paired later).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MobileAccessState {
+    pub enabled: bool,
+    pub devices: Option<Vec<String>>,
+}
+
+/// The per-phone list a `set_*_mobile_access` call stores: `None` (every
+/// phone) as asked, or the asked list validated and cut to the phones paired
+/// right now (`auth::scope_device_list`) — refused when nothing is left.
+pub(crate) fn mobile_scope_devices(requested: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+    let Some(requested) = requested else {
+        return Ok(None);
+    };
+    use crate::services::mobile_control::auth;
+    let paired = auth::read_paired_devices(&storage::state_dir().join("mobile-control"))?;
+    auth::scope_device_list(&requested, &paired).map(Some)
+}
+
+/// Write a project entry's Mobile keys: on with its per-phone list (absent =
+/// every phone), or off with both keys gone — a list never outlives the
+/// switch. Every other key of the entry is left alone.
+fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Option<&[String]>) {
+    if !enabled {
+        project.extra.remove(crate::brand::MOBILE_ACCESS_KEY);
+        project.extra.remove(crate::brand::MOBILE_DEVICES_KEY);
+        return;
+    }
+    project
+        .extra
+        .insert(crate::brand::MOBILE_ACCESS_KEY.into(), Value::Bool(true));
+    match devices {
+        Some(devices) => {
+            project
+                .extra
+                .insert(crate::brand::MOBILE_DEVICES_KEY.into(), serde_json::json!(devices));
+        }
+        None => {
+            project.extra.remove(crate::brand::MOBILE_DEVICES_KEY);
+        }
+    }
+}
+
 /// Authoritative per-project opt-in for Tabtivity Mobile. This flag lives in the
 /// state-dir `projects.json`, never only in project-writable `project.json`.
+/// `devices` narrows it to some paired phones (see [`mobile_scope_devices`]);
+/// omitted, every phone.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bool, String> {
+pub fn set_project_mobile_access(
+    ctx: Ctx,
+    project_id: String,
+    enabled: bool,
+    devices: Option<Vec<String>>,
+) -> Result<MobileAccessState, String> {
     let projects = get_projects()?;
     let project = projects
         .iter()
@@ -2086,6 +2150,7 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
             return Err("Mobile access requires tmux on this machine".into());
         }
     }
+    let devices = if enabled { mobile_scope_devices(devices)? } else { None };
     patch_project_entry(&project_id, |project| {
         if enabled {
             if project.extra.get("remote").is_some_and(|v| !v.is_null()) {
@@ -2102,15 +2167,13 @@ pub fn set_project_mobile_access(project_id: String, enabled: bool) -> Result<bo
             if runtime_enabled("sandbox") || runtime_enabled("vm") {
                 return Err("Mobile access is unavailable for container and VM projects".into());
             }
-            project
-                .extra
-                .insert(crate::brand::MOBILE_ACCESS_KEY.into(), Value::Bool(true));
-        } else {
-            project.extra.remove(crate::brand::MOBILE_ACCESS_KEY);
         }
+        apply_mobile_access(project, enabled, devices.as_deref());
         Ok(())
     })?;
-    Ok(enabled)
+    // A phone this leaves out loses what it scheduled or held here.
+    crate::commands::agent_tasks::cancel_lost_phone_rules(&ctx, "after a project's Mobile access changed");
+    Ok(MobileAccessState { enabled, devices })
 }
 
 /// Set (or clear) the display name for a **remote** project's primary machine —
@@ -3135,10 +3198,11 @@ fn git_scaffold_commit(dir: &Path) {
     // Hardened, hooks off: "extend to remote" seeds this commit in an existing
     // local repo, whose `.git/config` and hooks a fenced agent may have written.
     use crate::commands::git::hookless_git_command_in;
-    let _ = hookless_git_command_in(dir, &["add", "-A"]).output();
+    use crate::services::git_bounded::BoundedOutput;
+    let _ = hookless_git_command_in(dir, &["add", "-A"]).bounded_output();
     const MSG: &str = concat!("Initial ", crate::app_name!(), " scaffold");
     let committed = hookless_git_command_in(dir, &["commit", "-m", MSG])
-        .output()
+        .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !committed {
@@ -3154,7 +3218,7 @@ fn git_scaffold_commit(dir: &Path) {
                 MSG,
             ],
         )
-        .output();
+        .bounded_output();
     }
 }
 
@@ -3163,10 +3227,11 @@ fn git_scaffold_commit(dir: &Path) {
 /// initial commit before lockstep pairing. A missing/erroring git returns `false`
 /// (don't force a commit when we can't tell), never a wipe.
 fn git_head_unborn(dir: &Path) -> bool {
+    use crate::services::git_bounded::BoundedOutput;
     crate::paths::command_no_window("git")
         .args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .current_dir(dir)
-        .output()
+        .bounded_output()
         .map(|o| !o.status.success())
         .unwrap_or(false)
 }
@@ -4946,6 +5011,43 @@ fn chrono_now() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The Mobile keys follow the switch: a list is written only with access
+    /// on, "every phone" removes it, off removes both — and every other key
+    /// of the entry, Python-era ones included, rides through untouched.
+    #[test]
+    fn mobile_access_writes_and_removes_both_keys_and_keeps_the_rest() {
+        let access = crate::brand::MOBILE_ACCESS_KEY;
+        let devices = crate::brand::MOBILE_DEVICES_KEY;
+        let raw = serde_json::json!({
+            "id": "p", "name": "P", "status": "active", "position": 3, "local_file": "/p/project.json",
+            "directory": "/p", "python_era_field": { "kept": [1, 2] },
+        });
+        let mut entry: super::ProjectEntry = serde_json::from_value(raw.clone()).unwrap();
+        let ids = vec!["a".repeat(27)];
+
+        super::apply_mobile_access(&mut entry, true, Some(&ids));
+        let on = serde_json::to_value(&entry).unwrap();
+        assert_eq!(on[access], true);
+        assert_eq!(on[devices], serde_json::json!(ids));
+        assert_eq!(on["python_era_field"], raw["python_era_field"]);
+
+        super::apply_mobile_access(&mut entry, true, None);
+        let all = serde_json::to_value(&entry).unwrap();
+        assert_eq!(all[access], true);
+        assert!(all.get(devices).is_none(), "every phone is the key's absence");
+
+        super::apply_mobile_access(&mut entry, true, Some(&ids));
+        super::apply_mobile_access(&mut entry, false, None);
+        assert_eq!(serde_json::to_value(&entry).unwrap(), raw, "off leaves the entry as it was");
+    }
+
+    /// An omitted list is every phone, and asks nothing of `devices.json`
+    /// (the asked-list checks are `auth::scope_device_list`'s tests).
+    #[test]
+    fn an_omitted_device_list_is_every_phone() {
+        assert_eq!(super::mobile_scope_devices(None), Ok(None));
+    }
+
     use super::*;
 
     /// A minted id is a real v4 UUID: `claude --session-id` rejects anything else.
@@ -4959,11 +5061,27 @@ mod tests {
         assert_ne!(a, uuid_v4());
     }
 
+    /// git writes a worktree's `gitdir` with `/` on every OS; the folder paths
+    /// come from `projects.json` in the OS's own form (`\` on Windows). The
+    /// worktree under the renamed folder is still found.
+    #[test]
+    fn moved_linked_worktrees_matches_gits_slashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("before");
+        let new = tmp.path().join("after");
+        let (old_s, new_s) = (old.to_string_lossy().to_string(), new.to_string_lossy().to_string());
+        let meta = new.join(".git").join("worktrees").join("feature");
+        std::fs::create_dir_all(&meta).unwrap();
+        let gitdir = format!("{}/wt/feature/.git\n", old_s.replace('\\', "/"));
+        std::fs::write(meta.join("gitdir"), gitdir).unwrap();
+
+        let moved = moved_linked_worktrees(&new, &old_s, &new_s);
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        assert_eq!(moved[0], new.join("wt").join("feature"));
+    }
+
     /// A folder rename re-points the linked worktree that moved inside it, so
-    /// it still works from both ends. Unix only: on Windows git writes the
-    /// worktree's `gitdir` with `/` while the renamed path is matched with `\`,
-    /// so `moved_linked_worktrees` finds nothing there (a known gap).
-    #[cfg(unix)]
+    /// it still works from both ends.
     #[test]
     fn a_renamed_folder_repairs_the_worktree_inside_it() {
         fn git(dir: &Path, args: &[&str]) -> String {
@@ -4978,7 +5096,8 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).trim().to_string()
         }
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        // Resolved (macOS' /var symlink), without Windows' `\\?\` prefix.
+        let root = PathBuf::from(crate::commands::fs::display_path(&tmp.path().canonicalize().unwrap()));
         let old = root.join("before");
         std::fs::create_dir_all(&old).unwrap();
         git(&old, &["init", "-q", "-b", "main"]);

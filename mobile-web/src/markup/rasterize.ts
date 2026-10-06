@@ -1,7 +1,8 @@
 /**
  * Draws a page's marks onto a 2D canvas context — the one drawing routine
- * behind the layer on screen, the transparent layer PNG Submit sends, and a
- * picture with its marks drawn on. Strokes are quadratic curves through the
+ * behind the layer on screen, the page pictures Submit sends (or the
+ * transparent layer where a page could not be drawn), and a picture with its
+ * marks drawn on. Strokes are quadratic curves through the
  * midpoints of their samples, one piece per sample at that sample's width:
  * the same curves the desktop writes into the marked PDF (`markup_pdf.rs`).
  */
@@ -104,6 +105,23 @@ export function layerPng(page: PageLayer, width = LAYER_WIDTH): Promise<Blob> {
   if (!ctx) return Promise.reject(new Error("no_canvas"));
   drawPage(ctx, page, width / page.size[0]);
   return toPng(canvas);
+}
+
+/** A PDF page's picture with its marks drawn on, `width` wide — what Submit
+ * sends for a page the viewer could draw, so the agent sees each mark on the
+ * words it is about in one picture. `picture` is the page drawn at any
+ * width; it is stretched to this one. */
+export function pagePng(picture: CanvasImageSource, page: PageLayer, width = LAYER_WIDTH): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = Math.max(1, Math.round(width * page.size[1] / page.size[0]));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.reject(new Error("no_canvas"));
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(picture, 0, 0, canvas.width, canvas.height);
+  drawPage(ctx, page, width / page.size[0]);
+  return toPng(canvas).finally(() => { canvas.width = 0; canvas.height = 0; });
 }
 
 /** A picture with its marks drawn on, at the picture's own size (bounded) —

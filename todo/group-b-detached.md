@@ -1,5 +1,25 @@
 ## Group B — Detached Windows: Parity & Cross-Window Correctness
 
+- [ ] 🖐️ **A popout whose screen is gone stays detached, on the main window's
+  screen (2026-10-05).** Still after the 2026-09-29 fix (Wayland): unplugging
+  docked DS_GNN_GED's and DS_ShareGNN's popouts. Disconnecting stalls the main
+  window, a respawned popout gave up on its seed three times in a minute, and
+  that docked it; a failed rebuild docked after ~30 s. Now only ≥3 min of
+  nothing but give-ups docks (a rebuild retries ~3.5 min). A Wayland respawn
+  whose screen is gone goes fullscreen-hop onto the main window's screen (size
+  capped to it), not the pointer's; X11/Windows/macOS centre it on the main
+  window's screen. Check: popouts on the external screen (also of a project
+  you are not in), unplug, keep working, switch projects. Expect every popout
+  its own window on the laptop panel. Not run live (`subwindow.rs`,
+  `detached.ts`).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] 🖐️ **Switching to one screen keeps popouts separate (2026-09-29).**
   Still after the 2026-09-24 retry fix: going from several screens to one
   docked popouts into the main window's subwindow. A compositor may drop a

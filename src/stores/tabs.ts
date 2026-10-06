@@ -19,6 +19,7 @@ import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
 import { getDetachedWindowContext } from "./detachedContext";
+import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { envName, tabCommand } from "../lib/brand";
 import { currentTabCommand } from "../lib/brandMigration";
 
@@ -2466,6 +2467,9 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         .then(() => {
           if (get().scope === scope) get().respawnDetachedForScope(scope);
         });
+      // A PDF presented fullscreen belongs to a tab of the scope just left;
+      // unlike a popout it is closed, not parked (see `closePdfPresent`).
+      void closePdfPresentWindows();
     }
     set((s) => {
       const tabs = s.tabsByScope[scope] ?? [];
@@ -5127,10 +5131,11 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
 // while Wayland is still retiring its previous window under the same label.
 // Keep its layout detached through those failures. Only an exhausted retry may
 // dock it back, so a transient OS event cannot rewrite the saved window layout;
-// the retries span ~30 s because switching to one screen reconfigures the
-// outputs in several steps, seconds apart.
+// the retries span ~3.5 min because switching to one screen reconfigures the
+// outputs in several steps, seconds apart, and a 30 s span still docked popouts
+// when a screen was disconnected.
 const openingDetachedWindows = new Map<string, Promise<void>>();
-const detachedOpenDelays = [0, 300, 900, 1800, 3600, 7200, 15000];
+const detachedOpenDelays = [0, 300, 900, 1800, 3600, 7200, 15000, ...Array<number>(6).fill(30_000)];
 
 function openDetachedWindow(scope: string, groupId: string): Promise<void> {
   const label = `detached-${scope}-${groupId}`;

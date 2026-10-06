@@ -162,3 +162,54 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
 
   return files;
 }
+
+/** `text` as lines: `\r\n` tolerated, a final newline ends the last line
+ *  rather than starting an empty one. */
+function textLines(text: string): string[] {
+  if (text === "") return [];
+  const lines = text.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  if (text.endsWith("\n")) lines.pop();
+  return lines;
+}
+
+/**
+ * `file`'s diff spread over the whole of `text` — the new side as it is on
+ * disk now: every line between and around the hunks joins as context, so the
+ * changes read in place inside the full file. No `file` (an empty diff) is the
+ * whole file unchanged. Null when the hunks don't fit `text` (the file moved on
+ * since the diff was taken, or this is a deletion): the caller shows the bare
+ * hunks instead of a misaligned file.
+ */
+export function wholeFileHunk(file: DiffFile | undefined, text: string): DiffHunk | null {
+  if (file?.newPath === "/dev/null") return null;
+  const source = textLines(text);
+  const lines: DiffLine[] = [];
+  let oldNo = 1;
+  let newNo = 1;
+  const fill = (count: number): boolean => {
+    if (count < 0 || newNo - 1 + count > source.length) return false;
+    for (let i = 0; i < count; i++) {
+      lines.push({ type: "context", text: source[newNo - 1], oldNo, newNo });
+      oldNo++;
+      newNo++;
+    }
+    return true;
+  };
+  for (const hunk of file?.hunks ?? []) {
+    for (const line of hunk.lines) {
+      if (line.type === "hunk" || line.type === "meta") continue;
+      if (line.type === "nonewline") {
+        lines.push(line);
+        continue;
+      }
+      const gap = line.oldNo != null ? line.oldNo - oldNo : (line.newNo ?? newNo) - newNo;
+      if (!fill(gap)) return null;
+      if (line.newNo != null && source[line.newNo - 1] !== line.text) return null;
+      lines.push(line);
+      if (line.oldNo != null) oldNo = line.oldNo + 1;
+      if (line.newNo != null) newNo = line.newNo + 1;
+    }
+  }
+  if (!fill(source.length - (newNo - 1))) return null;
+  return { header: "", lines };
+}

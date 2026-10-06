@@ -3463,3 +3463,113 @@ Moved to [`server.md`](server.md) (2026-10-06), the server version's front
 door: status, every user decision in one list, open problems (incl. #2389,
 the desktop vs server agent-API-key overlap) and open decisions, and the
 order of the live runs. Keep them there, not here.
+
+## Merge `develop` → `hosted` (2026-10-07)
+
+The first half of #2386: `develop` at `a6ed2c7a` (214 commits past the
+branch base `f3efd50b`) merged into `hosted` at `0b4fedf4`. 39 files
+conflicted (the final review had previewed ~11; `develop` had moved on since,
+notably #2339, the desktop agent API keys, per-phone Mobile access, markup
+rounds/undo and the markup questions MCP). Resolved by hand, one Fable
+session, no subagents; the merge commit carries every fix below so the branch
+never has a red commit.
+
+### How each conflict class was resolved
+
+- **Command files.** Develop's new or re-signed commands take the hosted
+  form: `#[cfg_attr(feature = "desktop", tauri::command)]`, `Ctx` instead of
+  `AppHandle`, `app_core::rt::spawn_blocking` instead of Tauri's. Touched:
+  `copilot.rs`, `pdf_markup.rs`, `projects.rs`, `boxes.rs`,
+  `mobile_control.rs`, `ollama.rs` (`run_load(&CoreCtx, …)`), `agents.rs`,
+  `agent_tasks.rs` (`cancel_lost_phone_rules(&CoreCtx, …)`), `fs.rs`,
+  `tex.rs`, `terminal.rs`, `api_proxy.rs`. Develop's new
+  `commands/markup_mcp.rs` was converted the same way (change hook takes a
+  `&CoreCtx`) and joined `tauri_host::CONVERTED_COMMAND_FILES`.
+- **`commands/root_mcp.rs`.** Develop's `Notice`/`NoticeSink`, `bind`/`serve`
+  split and `start_headless` kept; `ServerState.app: Option<AppHandle>` became
+  `ctx: Option<CoreCtx>` — `Some` in the window's `start(CoreCtx)` (root and
+  markup lanes routed, `serves_root`), `None` in the Mobile host's
+  `start_headless`. The markup lane stays window-only, as develop built it.
+  `root_mcp::grant_root` reads the Ollama host through hosted's
+  `host_setting` (the server pin), develop's other three locals dropped.
+- **`services/mod.rs`.** Hosted's `pub use app_core::services::…` re-exports
+  plus develop's new modules (`markup_mcp`, `markup_rounds`, `agent_exec`,
+  `git_bounded`, `agent_api_keys`, `api_proxy`, `api_prices`, `api_usage`).
+  `git_guard` moved **back** to `src-tauri` (#2347 gave it `home_io`, which
+  lives there); `src-core::fence_scope::run` takes a `prepare` hook instead
+  of reaching for `agent_exec` (the desktop passes `agent_exec::apply`, in
+  `main.rs` and the daemon's `main`). The daemon's `main` also answers
+  `--agent-exec`, as the desktop binary does, since `agent_fence::launcher_step`
+  puts that step in front of bwrap for any spawn carrying a secret.
+- **`build.rs`.** Hosted's `core` dispatcher generator plus develop's
+  Windows manifest `build_tauri()`, gated on `desktop`.
+- **Secrets on tmux (#2389's first collision).** Develop's rule stands: a
+  CLI's common variable (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) is never in
+  `tmux_local::SECRET_ENV`; secrets ride app-named carriers which the
+  `--agent-exec` step maps. Hosted's administrator's key for Gemini and Vibe
+  (`server::agent_keys::prepare_spawn`) now rides the carrier of the
+  registry's `api_key_env` too; `agent_exec::targets()` is `ENV_VARS` plus
+  the registry's `api_key_env`s; `SECRET_ENV` lists the two extra carriers
+  (`…AGENT_SECRET_ANTHROPIC_API_KEY`, `…_MISTRAL_API_KEY`, ten slots). Hosted's
+  conditional vendor-slot claiming (`is_vendor_key`/`claims_update_slot`, P3b
+  review) and its test went: with no vendor name listed there is nothing to
+  condition. A project container still gets the raw variable in its
+  `docker exec` environment (no `agent_exec` step inside; `key_envs` doc says
+  so). Claude's helper delivery is untouched.
+- **Boxes.** Hosted's `patch_box` per-edit store path kept (develop's
+  `saveBoxes`/`adoptRevisions` wrapper dropped: no `save_boxes` caller is
+  left in the store); develop's `save_boxes`/`ensure_box_folder` answer what
+  they wrote, `set_box_mobile_access` takes `devices`. Develop's revision
+  tests were rewritten against a `patch_box` fake backend
+  (`BoxAssignment.test.ts`).
+- **Mobile host.** Develop's `Phone` request identity: hosted's secrets and
+  vault handlers take `phone.device_id()`. `HostState` holds both hosted's
+  `web` client state and develop's git-overview caches. `auth.rs`: hosted's
+  invites, ECDH keys and signed actions beside develop's hidden sections and
+  `read_paired_devices`. Phone failure codes `feature_off` and
+  `callback_not_yours` got i18n keys (`mobile.failure.featureOff`,
+  `.callbackNotYours`) in all five dictionaries, as develop had moved the
+  table to keys.
+- **Settings.** Manage CLIs rows show develop's "uses API key"/budget state
+  and hosted's administrator-key state side by side (`own` → `state`).
+- **Classes.** Rows for develop's new commands: `agent_api_key_*` →
+  `Off(OsKeychain)` (#2389: the server's keys are the keeper's);
+  `ensure_ollama_running_unattended`, `load_installed_ollama_model` → `Admin`
+  (user decision: only the admin loads/starts models; admin commands are not
+  in `MODEL_ARG`); the rest `Core`. `commandClasses.ts` regenerated.
+- **Docs.** Filemaps three-way merged row by row (four rows hand-merged);
+  AGENTS.md context list is the union; TODO #2339's two notes kept.
+
+### Still open after this merge
+
+- The `TODO(#2339)` in `model_allowlist.rs` stays: the root (local-model)
+  lane is still served only by the window's `start(CoreCtx)`; the daemon's
+  host runs `start_headless` without it, so no local-model MCP request reaches
+  the shared Ollama from the daemon yet.
+- #2389 proper: develop's `api_proxy` (per-tab tokens, keychain source, USD
+  ledger) and hosted's keeper/broker both exist on the branch; `api_proxy::start`
+  runs in the window's setup only, and its three commands are `off` on a
+  server. One path is still owed — see `server.md`.
+- The second half of #2386: `hosted` → `develop`.
+
+### Gates (worktree, 2026-10-07, on the staged merge before its commit)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + desktop, mobile, web bundles) |
+| `npm test -- --reporter=dot` | **742 files, 7579 tests**, all pass |
+| `cargo test --workspace -q` | **all green**: src-tauri lib 3627 passed, 4 ignored; src-gateway 133; src-core 95; integration binaries green |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | **3528 + 1 passed**, 4 ignored |
+| `npm run lint` | 0 errors, **28 warnings** (develop's 31 minus three; #2385) |
+| clippy `--workspace --all-targets -D warnings`, `-p tabtivity --no-default-features --lib`, `-p app-serverd --all-targets` | clean |
+| `scripts/brand-check.sh` | green (50 entries) |
+| `git diff --check` | clean |
+| `cargo check --workspace --all-targets --target x86_64-pc-windows-msvc` / `aarch64-apple-darwin` | **not run** in this merge session — owed before `hosted` → `develop` |
+| `cargo build -p app-serverd` + `ldd` | **not run** — owed before `hosted` → `develop` |
+| `npm run backend:stale` | not run against the window: branch `hosted` is not what it runs |
+
+Red commits: none — the merge lands as one commit with every fix in it.
+Flaky on the first full run under load, green when rerun alone and in the
+second full run: `api_usage::the_book_writes_on_flush_and_reads_its_file_back`
+(a scheduled flush's sleep) and `git_bounded::a_fifo_nested_ignore_times_out…`
+(a 700 ms timeout).

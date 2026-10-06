@@ -1,21 +1,30 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import { ApiError, MAX_INBOX_FILE, sentName, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type OutboxFile, type ViewerScope } from "../api";
-import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure } from "../markup/frameProtocol";
+import { ApiError, holdPrompt, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
+import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure, type FromFrame, type ToFrame } from "../markup/frameProtocol";
+import { anchorsFor, type Anchor } from "../markup/anchors";
+import type { TextRun } from "../markup/findText";
+import { readFlag, writeFlag } from "../prefs";
 import {
-  addMark, canAdd, canReplace, clampToPage, clearPage, clearSent, commit, eraseAt, finishStroke, hasSent, inkWidth, isEmpty, MARK_COLORS, markedPages,
-  markSent, moveNote, noteAt, redo, replaceMark, round, startHistory, undo,
+  addMark, approveMark, approveMarks, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, MARK_COLORS, markAnchors, markBox, markedPages,
+  markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickedMarks, undo,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type TextMark,
 } from "../markup/layer";
-import { composedPng, drawMark, drawPage, INK, layerPng, type Paint } from "../markup/rasterize";
+import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
+import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
-import { canApply, followRound, nextCheck, startRound, stepRound, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
-import { DEFAULT_MARKUP_APPLY, readMarkupApply, readMarkupInstruction } from "../markupInstruction";
+import { canApply, canUndo, followRound, holdsUndo, nextCheck, startRound, stepRound, undoneRound, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
+import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
+import { readMarkupOpen } from "../markupOpen";
 import { sizeLabel } from "../terminal/fileLabels";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
-import type { MarkupSend } from "./OutboxViewer";
+import type { MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
+import { useMarkupAsks } from "../markup/questions";
+import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
+import { EraserIcon } from "../markup/EraserIcon";
+import { OptionSheet } from "./OptionSheet";
 
 type Tool = "ink" | "box" | "text" | "eraser";
 type Size = [number, number];
@@ -41,8 +50,33 @@ const RENDER_TIMEOUT = 20_000;
 const PEN_KEY = storageDashKey("markup-pen");
 /** How far a finger or pen travels on a note before it is a drag, not a tap. */
 const DRAG_SLOP = 8;
+/** The eraser's reach, CSS pixels. */
+const ERASE_PX = 12;
 /** How strongly the marks of earlier rounds show — sent, never sent again. */
 const SENT_ALPHA = 0.35;
+/** How far, CSS pixels, a mark must lie past where the view is for Previous /
+ * Next mark to go to it — so a repeated tap moves on rather than landing on
+ * the mark it just showed. */
+const JUMP_SLACK = 4;
+/** A ✓ badge's size, CSS pixels. */
+const TICK_BADGE = 26;
+/** How soon after one approve a second tap is taken: a double tap must not
+ * take whichever badge lies under the finger next. */
+const TICK_REPEAT_MS = 350;
+
+/** A ✓ badge's React key: its mark's identity, not its index — an approved
+ * mark's badge goes with it, so a second tap never lands on the next mark
+ * that slides into its index (as the desktop's `PdfMarkupTicks`). */
+const tickIds = new WeakMap<Mark, number>();
+let nextTickId = 0;
+function tickKey(mark: Mark): number {
+  let id = tickIds.get(mark);
+  if (id === undefined) {
+    id = ++nextTickId;
+    tickIds.set(mark, id);
+  }
+  return id;
+}
 
 /** The round pill's words, by phase; `finished` takes the PDF check's. */
 const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
@@ -76,6 +110,19 @@ const REASON_KEYS: Record<string, TranslationKey> = {
   file_not_found: "mobile.markup.reason.gone",
   tab_not_found: "mobile.markup.reason.gone",
   project_unavailable: "mobile.markup.reason.project",
+  no_agent: "mobile.markup.reason.noAgent",
+  desktop_unavailable: "mobile.markup.reason.desktop",
+};
+
+/** Why an asked-for `apply` round runs as `list` (the desktop's `noUndo`). */
+const NO_UNDO_KEYS: Record<string, TranslationKey> = {
+  not_git: "mobile.markup.noUndo.notGit",
+  no_git: "mobile.markup.noUndo.noGit",
+  too_big: "mobile.markup.noUndo.tooBig",
+  filtered: "mobile.markup.noUndo.filtered",
+  git_failed: "mobile.markup.noUndo.gitFailed",
+  remote: "mobile.markup.noUndo.remote",
+  not_pdf: "mobile.markup.noUndo.notPdf",
 };
 
 /** `none`: no pen has drawn here, so a finger draws. `pen`: only the pen
@@ -202,7 +249,7 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
 type Gesture =
   | { kind: "ink"; n: number; pointerId: number; mark: InkMark; last: [number, number] }
   | { kind: "box"; n: number; pointerId: number; start: [number, number]; end: [number, number] }
-  | { kind: "erase"; n: number; pointerId: number }
+  | { kind: "erase"; n: number; pointerId: number; last: [number, number] }
   /** A tap places or edits a note; a drag from a note (`index`) moves it,
    * held where it was grabbed (`grab`, page units from its corner). */
   | { kind: "text"; n: number; pointerId: number; start: [number, number]; clientX: number; clientY: number; index: number; grab: [number, number]; moved: boolean };
@@ -235,7 +282,9 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * back to. Where marks can be sent (`onSend`), its Mark up switches the
  * markup on in place — same page, same zoom — and Done switches it off,
  * leaving the marks on show. Without `reader` the view opens marking, and
- * Done leaves it (`onClose`).
+ * Done leaves it (`onClose`). The pen needs no Mark up tap: touching a page
+ * switches the markup on and draws, as in the phone's own Markup and Notes.
+ * Which mode the reader opens in is this phone's choice (`markupOpen.ts`).
  *
  * Submit keeps the view open (`docs/pdf_markup_rounds_plan.md`): the round's
  * marks move to the layer's sent side, drawn dimmed and never sent again, and
@@ -244,7 +293,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile, place, onSend, agent = "idle", refresh, onClose, reader }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, onSend, newTab, agent: givenAgent = "idle", refresh, onClose, reader, adoptFrom }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -255,8 +304,12 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   place?: string;
   /** Sends the desktop's prompt into the chat: `"queued"` behind the
    * agent's current step, `"sent"` straight in, `false` when it could not.
-   * Absent, nothing can be marked. */
+   * Absent, nothing can be marked — unless `newTab` is given. */
   onSend?: (text: string) => MarkupSend;
+  /** No agent tab to send to: Submit opens one of the default agent and
+   * hands it the prompt; the view stays, following that tab, and offers to
+   * show it (`markup/newTab.ts`). */
+  newTab?: MarkupNewTab;
   /** What the agent is doing now, for the round's pill. */
   agent?: AgentSignal;
   /** The file as it is now, for Reload — its fresh row or a newer copy; the
@@ -266,13 +319,17 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   /** Opens reading: the head's actions (Save, Share), and what went wrong
    * with one of them. */
   reader?: { actions: ReactNode; alert?: string };
+  /** The layer key of the outbox copy this project file is shown in place of
+   * (`OutboxViewer`): marks drawn on the copy before the swap move over once,
+   * while the project file has none of its own — never merged into some. */
+  adoptFrom?: string;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
   const [file, setFile] = useState(givenFile);
   const isPdf = file.kind === "application/pdf";
   const reading = reader !== undefined;
-  const canMark = onSend !== undefined;
+  const canMark = onSend !== undefined || newTab !== undefined;
   const url = viewerFileUrl(scope, file);
   const source = useMemo<MarkupSource>(() => ("files" in scope ? { files: file.ref ?? "" } : { outbox: file.name }), [scope, file.ref, file.name]);
   const keyOf = useCallback(
@@ -297,7 +354,17 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   const [changed, setChanged] = useState(false);
   const [tool, setTool] = useState<Tool>("ink");
   const [color, setColor] = useState<MarkColor>("red");
-  const [marking, setMarking] = useState(!reading && canMark);
+  /** The reader opens marking where this phone asks for it: always, or —
+   * Automatic — once only the pen draws, where fingers scroll all the same. */
+  const [marking, setMarking] = useState(() => {
+    if (!canMark) return false;
+    if (!reading) return true;
+    const open = readMarkupOpen();
+    return open === "markup" || (open === "auto" && readPenMode() === "pen");
+  });
+  /** Automatic also opens marking when the saved layer has marks not yet
+   * submitted — a round under way. Looked at once, as the layer loads. */
+  const opensOnMarks = useRef(reading && canMark && readMarkupOpen() === "auto");
   const [penMode, setPenMode] = useState(readPenMode);
   const [popover, setPopover] = useState<"colors" | "more" | null>(null);
   const [note, setNote] = useState<NoteDraft | null>(null);
@@ -313,6 +380,15 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   /** The last Submit's round, as the agent has taken it; `null` until one
    * went out from this view, or the agent is seen at work over sent marks. */
   const [submitted, setSubmitted] = useState<Round | null>(null);
+  /** The tab a `newTab` Submit opened, and the key its create went out with:
+   * a retry after a later step failed, and every later round, sends to that
+   * tab, not a second one. The ref is read mid-Submit; the state renders. */
+  const markupTab = useRef<TabRow | null>(null);
+  const markupTabKey = useRef(crypto.randomUUID());
+  const [openedTab, setOpenedTab] = useState<TabRow | null>(null);
+  const openedAgent = useOpenedTabAgent(newTab?.projectId ?? projectId, onSend ? undefined : openedTab?.id);
+  /** What the agent the marks go to is doing: the host's, or the opened tab's. */
+  const agent: AgentSignal = onSend || !openedTab ? givenAgent : openedAgent;
   const [roundTick, setRoundTick] = useState(0);
   /** What the look at the file found when the agent finished. */
   const [check, setCheck] = useState<"changed" | "unchanged" | null>(null);
@@ -326,6 +402,74 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   const [reloadNote, setReloadNote] = useState<TranslationKey | null>(null);
   /** Reloaded since the agent last finished: Reload steps back to secondary. */
   const [reloaded, setReloaded] = useState(false);
+  /** A PDF the agent changed loads under the marks once it finishes, without
+   * a tap on Reload — this phone's choice, on unless turned off in ⋯. */
+  const [autoReload, setAutoReload] = useState(() => readFlag("markupAutoReload", true));
+  // Subagent mode: each Submit's prompt asks the agent to hand the round to a
+  // new subagent of its own (`markupForSubagent`), off unless switched on.
+  const [subagents, setSubagents] = useState(() => readFlag("markupSubagents"));
+  /** The agent's markup questions (`markup_ask`) for this file: an agent
+   * tab's view, or the tab a new-tab Submit opened — the card answers into
+   * that tab. Polled while the view
+   * is up and the page visible, and on each agent edge. */
+  const askTab = onSend !== undefined ? givenTabId : openedTab?.id ?? "";
+  const asksOn = askTab !== "";
+  const [questionBusy, setQuestionBusy] = useState(false);
+  const { asks, ticks, refresh: refreshAsks, drop: dropAsk } = useMarkupAsks(asksOn ? askTab : undefined, source, asksOn, agent, questionBusy);
+  const ticksRef = useRef(ticks);
+  ticksRef.current = ticks;
+  /** Which Submit's round id an `apply` round's undo id belongs to: an undone
+   * round leaves the log, so its ticks badge nothing. Only the newest
+   * round's undo can run (`holdsUndo`), so each Submit starts it afresh. */
+  const undoRounds = useRef(new Map<string, string>());
+  /** When each shown ✓ badge first appeared (`ARRIVAL_GUARD_MS`), and the
+   * newest of them; when the last approve was taken. */
+  const tickSeen = useRef(new Map<Mark, number>());
+  const tickArrived = useRef(0);
+  const lastApprove = useRef(0);
+  /** Where each question's quote was found on its page (`findText`), by
+   * `page\nquote`; absent while the frame has not answered. */
+  const [found, setFound] = useState<Record<string, { x: number; y: number; w: number; h: number }[]>>({});
+  const findAsked = useRef(new Map<string, number>());
+  const findKeys = useRef(new Map<number, string>());
+  const findId = useRef(0);
+  /** Submit's own questions to the frame (`snapshot`, `text`), by id. */
+  const frameCalls = useRef(new Map<number, (answer: FromFrame | null) => void>());
+  const frameCallId = useRef(0);
+  /** A pin tapped: the card opens at its question. */
+  const [questionFocus, setQuestionFocus] = useState<QuestionFocus | null>(null);
+  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): the
+   * tab the last Submit went to — its undo snapshot is that tab's — why an
+   * asked-for `apply` round runs as `list`, the confirm sheet with what an
+   * undo would put back, and how the last undo went. */
+  const undoTab = useRef("");
+  const [noUndo, setNoUndo] = useState<string | null>(null);
+  /** The sheet carries the undo id it was read for: a new Submit meanwhile
+   * replaces the round, never what the sheet's Undo runs. */
+  const [undoSheet, setUndoSheet] = useState<{ id: string; changes: MarkupUndoChanges } | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
+  /** Set at once on a tap, before the render that disables the button — a
+   * double tap sends one request. */
+  const undoBusyRef = useRef(false);
+  const [undoNote, setUndoNote] = useState<{ text: string; alert: boolean } | null>(null);
+  const submittedRef = useRef(submitted);
+  submittedRef.current = submitted;
+  /** An outbox view: the copy the last Submit's marks were drawn on — what an
+   * undo puts the PDF back to — and, once an undo went through, the newest
+   * copy the agent had sent by then. Copies up to that one show the undone
+   * edits, so Reload (and the look after a finish) passes over them. A
+   * project file needs neither: it is the file the undo restored. */
+  const roundFile = useRef<OutboxFile | null>(null);
+  const undoneUpTo = useRef<OutboxFile | null>(null);
+  /** The view is up: an undo that answers after it closed tells the agent
+   * still, but reloads (and moves the layer) no more. */
+  const viewUp = useRef(true);
+  useEffect(() => {
+    viewUp.current = true;
+    return () => { viewUp.current = false; };
+  }, []);
+  /** A question's chip tapped: its words on the page light up a moment. */
+  const [pinFlash, setPinFlash] = useState<string | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -362,6 +506,9 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   markingRef.current = marking;
   const fingerDrawsRef = useRef(false);
   fingerDrawsRef.current = marking && penMode !== "pen";
+  /** Reading, the pen on a page would switch the markup on and draw. */
+  const penSwitchesRef = useRef(false);
+  penSwitchesRef.current = canMark && !marking && loaded && sending === null;
 
   const layer = scratch ?? history.present;
   const baseWidth = Math.max(160, Math.min(FIT_WIDTH, viewWidth - 2 * GAP));
@@ -403,7 +550,19 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     if (!canMark) return;
     if (movedTo.current === key) { movedTo.current = null; return; }
     let live = true;
-    void loadLayer(key).then((stored) => {
+    void loadLayer(key).then(async (stored) => {
+      if (stored === null && adoptFrom && adoptFrom !== key) {
+        // The copy's marks, once: moved under this file's key (`moveLayer`
+        // takes the record off the copy). Stamped with this file when the
+        // copy was the same size, else with the copy's — so a file that has
+        // changed since says so.
+        const copy = await loadLayer(adoptFrom);
+        if (copy && copy !== "unavailable" && (!isEmpty(copy.layer) || hasSent(copy.layer))) {
+          const now = fingerprintRef.current;
+          const fingerprint = copy.fingerprint.size === now.size ? now : copy.fingerprint;
+          if (await moveLayer(adoptFrom, key, fingerprint)) stored = { ...copy, fingerprint };
+        }
+      }
       if (!live) return;
       if (stored === "unavailable") setStorage("unsaved");
       else if (stored) {
@@ -412,11 +571,13 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
         skipSave.current = true;
         setHistory(startHistory(stored.layer));
         setChanged(stale(stored, fingerprintRef.current));
+        if (opensOnMarks.current && !isEmpty(stored.layer)) setMarking(true);
       }
+      opensOnMarks.current = false;
       setLoaded(true);
     });
     return () => { live = false; };
-  }, [canMark, key]);
+  }, [canMark, key, adoptFrom]);
 
   // Saved as each change lands — never before the saved one was read.
   useEffect(() => {
@@ -480,6 +641,23 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     post({ type: "open", bytes: data }, [data]);
   }, [post]);
 
+  /** One question to the frame for Submit; `null` when it does not answer in
+   * time or the frame is remounted meanwhile. */
+  const askFrame = useCallback((message: ToFrame & { id: number }): Promise<FromFrame | null> => new Promise((resolve) => {
+    const timer = window.setTimeout(() => settle(null), RENDER_TIMEOUT);
+    const settle = (answer: FromFrame | null) => {
+      window.clearTimeout(timer);
+      frameCalls.current.delete(message.id);
+      resolve(answer);
+    };
+    frameCalls.current.set(message.id, settle);
+    post(message);
+  }), [post]);
+  // A remounted frame answers nothing it was asked before.
+  useEffect(() => () => {
+    for (const settle of [...frameCalls.current.values()]) settle(null);
+  }, [generation]);
+
   useEffect(() => {
     if (!isPdf) return;
     if (file.size > MAX_INBOX_FILE) { setFailure("tooLarge"); return; }
@@ -526,6 +704,13 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
           return { ...known, [message.n]: { bitmap: message.bitmap, width: message.width } };
         });
         setRenderTick((tick) => tick + 1);
+      } else if (message.type === "snapshot" || message.type === "text") {
+        const answer = frameCalls.current.get(message.id);
+        if (answer) answer(message);
+        else if (message.type === "snapshot") message.bitmap?.close();
+      } else if (message.type === "found") {
+        const key = findKeys.current.get(message.id);
+        if (key !== undefined) setFound((known) => ({ ...known, [key]: message.rects }));
       } else if (message.n !== undefined) {
         renderFailed(message.n);
       } else {
@@ -559,6 +744,23 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     renderTimer.current = window.setTimeout(() => renderFailed(wanted), RENDER_TIMEOUT);
   }, [isPdf, sizes, failure, reopening, alive, pictures, pageFailures, pixelWidth, post, renderTick, renderFailed]);
 
+  // Each question's quote is looked for once per document: the sealed frame
+  // reads the page's text and answers boxes (`findText`), never the text.
+  useEffect(() => {
+    if (!isPdf || !sizes || failure || reopening) return;
+    for (const ask of asks) {
+      for (const question of ask.questions) {
+        if (!question.quote || question.page === undefined || question.page > sizes.length) continue;
+        const key = `${question.page}\n${question.quote}`;
+        if (findAsked.current.has(key)) continue;
+        const id = ++findId.current;
+        findAsked.current.set(key, id);
+        findKeys.current.set(id, key);
+        post({ type: "findText", id, page: question.page, quote: question.quote });
+      }
+    }
+  }, [isPdf, sizes, failure, reopening, asks, post]);
+
   useEffect(() => () => {
     // Bitmaps are GPU memory; hand them back as the view goes.
     for (const picture of Object.values(picturesRef.current)) picture.bitmap.close?.();
@@ -574,9 +776,11 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     // first) must not scroll the page instead.
     const holdsNote = () => { const g = gesture.current; return g?.kind === "text" && g.index >= 0; };
     const onTouchStart = (event: TouchEvent) => {
-      // The Pencil would scroll the page and start a text selection — unless
-      // the markup is off, where it scrolls like a finger.
-      if (markingRef.current && (penDown.current || isStylus(event))) { event.preventDefault(); return; }
+      // The Pencil would scroll the page and start a text selection. With the
+      // markup off it scrolls like a finger — except on a page it can mark,
+      // where it switches the markup on and draws (`onPointerDown`).
+      const penSwitches = penSwitchesRef.current && (event.target as Element).closest?.(".markup-page-layer");
+      if ((markingRef.current || penSwitches) && (penDown.current || isStylus(event))) { event.preventDefault(); return; }
       if (event.touches.length === 2) {
         const [a, b] = [event.touches[0], event.touches[1]];
         const rect = element.getBoundingClientRect();
@@ -658,7 +862,14 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
 
   const onPointerDown = (n: number, event: ReactPointerEvent<HTMLCanvasElement>) => {
     const size = pageSize(n);
-    if (!size || sending || !loaded || !marking) return;
+    if (!size || sending || !loaded) return;
+    if (!marking) {
+      // The pen marks without a Mark up tap first, as in the phone's own
+      // Markup and Notes; the stroke it began is kept.
+      if (event.pointerType !== "pen" || !canMark) return;
+      markingRef.current = true;
+      setMarking(true);
+    }
     setPopover(null);
     if (event.pointerType === "pen") {
       penDown.current = true;
@@ -684,16 +895,16 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     const canvas = event.currentTarget;
     canvas.setPointerCapture?.(event.pointerId);
     const at = toPage(n, canvas, event.clientX, event.clientY);
-    if (tool === "ink") {
+    if (tool === "eraser" || stylusErases(event)) {
+      gesture.current = { kind: "erase", n, pointerId: event.pointerId, last: at };
+      scratchRef.current = eraseAt(history.present, n, at[0], at[1], ERASE_PX * unitsPerPixel(n, canvas), showSent);
+      setScratch(scratchRef.current);
+    } else if (tool === "ink") {
       const pressure = event.pointerType === "pen" && event.pressure > 0 ? event.pressure : 0.5;
       gesture.current = { kind: "ink", n, pointerId: event.pointerId, last: at, mark: { kind: "ink", color, width: round(Math.min(100, Math.max(0.1, size[0] / 350))), points: [[at[0], at[1], pressure]] } };
       paintPiece(n, at, at, pressure);
     } else if (tool === "box") {
       gesture.current = { kind: "box", n, pointerId: event.pointerId, start: at, end: at };
-    } else if (tool === "eraser") {
-      gesture.current = { kind: "erase", n, pointerId: event.pointerId };
-      scratchRef.current = eraseAt(history.present, n, at[0], at[1], 12 * unitsPerPixel(n, canvas), showSent);
-      setScratch(scratchRef.current);
     } else {
       const index = noteAt(history.present.pages[n], at[0], at[1]);
       const grabbed = index >= 0 ? (history.present.pages[n].marks[index] as TextMark) : null;
@@ -752,7 +963,8 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
       setPreview({ n: g.n, mark: boxOf(g.start, g.end, color) });
     } else if (g.kind === "erase") {
       const at = toPage(g.n, canvas, event.clientX, event.clientY);
-      scratchRef.current = eraseAt(scratchRef.current ?? history.present, g.n, at[0], at[1], 12 * unitsPerPixel(g.n, canvas), showSent);
+      scratchRef.current = eraseAlong(scratchRef.current ?? history.present, g.n, g.last, at, ERASE_PX * unitsPerPixel(g.n, canvas), showSent);
+      g.last = at;
       setScratch(scratchRef.current);
     } else if (g.kind === "text" && g.index >= 0) {
       if (!g.moved && Math.hypot(event.clientX - g.clientX, event.clientY - g.clientY) < DRAG_SLOP) return;
@@ -856,12 +1068,47 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     const marked = sendable;
     if (!marked.length || sending) return;
     setSendFailure(null);
+    let tabId = givenTabId;
+    if (!onSend) {
+      if (!newTab) return;
+      if (!markupTab.current) {
+        setSending(t("mobile.markup.openingTab"));
+        try {
+          markupTab.current = await openMarkupTab(newTab.projectId, markupTabKey.current);
+          setOpenedTab(markupTab.current);
+        } catch (error) {
+          setSending(null);
+          setSendFailure(t("mobile.markup.sendFailed.tab", { reason: reason(error) }));
+          return;
+        }
+      }
+      tabId = markupTab.current.id;
+    }
     const refs = new Map<number, string>();
+    const composed = new Set<number>();
+    const anchors = new Map<number, Anchor[]>();
+    // The frame draws each page and reads its words while it holds the
+    // document; past a failure, the marks go alone.
+    let frameUp = isPdf && frameReady.current && opened.current && sizes !== null && !failure && !reopening;
     for (const n of marked) {
       setSending(t("mobile.markup.sendingPage", { n }));
+      const page = history.present.pages[n];
       try {
-        const png = await layerPng(history.present.pages[n]);
-        refs.set(n, (await uploadToInbox(tabId, png, `${stem}-p${n}-layer.png`)).reference);
+        let png: Blob | null = null;
+        if (frameUp) {
+          const shot = await askFrame({ type: "snapshot", id: ++frameCallId.current, n, width: LAYER_WIDTH });
+          if (shot?.type === "snapshot" && shot.bitmap) {
+            try { png = await pagePng(shot.bitmap, page); } catch { png = null; } finally { shot.bitmap.close(); }
+          }
+          const text = shot ? await askFrame({ type: "text", id: ++frameCallId.current, page: n }) : null;
+          const runs: TextRun[] = text?.type === "text" ? text.runs : [];
+          const found = anchorsFor(page, runs);
+          if (found.length) anchors.set(n, found);
+          // A frame that stopped answering is not waited on page after page.
+          if (!shot || !text) frameUp = false;
+        }
+        if (png) composed.add(n);
+        refs.set(n, (await uploadToInbox(tabId, png ?? await layerPng(page), `${stem}-p${n}-${png ? "marked" : "layer"}.png`)).reference);
       } catch (error) {
         setSending(null);
         setSendFailure(t("mobile.markup.sendFailed.layer", { n, reason: reason(error) }));
@@ -884,48 +1131,224 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     setSending(t("mobile.markup.sendingMarks"));
     let prompt: string;
     const instruction = readMarkupInstruction();
+    const ask = readMarkupAsk();
+    const direct = readMarkupDirect();
+    let answer: Awaited<ReturnType<typeof submitMarkup>>;
+    // This Submit's id: the prompt names its marks under it, and the agent's
+    // ticks (`markup_done`) come back with it.
+    const roundId = mintRound();
+    const present = history.present;
     try {
-      prompt = (await submitMarkup(tabId, {
+      answer = await submitMarkup(tabId, {
         source,
-        pages: marked.map((n) => ({ n, size: history.present.pages[n].size, marks: history.present.pages[n].marks, layer: refs.get(n)! })),
+        pages: marked.map((n) => ({
+          n, size: history.present.pages[n].size, marks: history.present.pages[n].marks, layer: refs.get(n)!,
+          ...(composed.has(n) ? { composed: true } : {}),
+          ...(anchors.has(n) ? { anchors: anchors.get(n) } : {}),
+        })),
         ...(picture ? { picture } : {}),
         ...(instruction ? { instruction } : {}),
-      })).prompt;
+        ...(ask !== DEFAULT_MARKUP_ASK ? { ask } : {}),
+        mode: direct ? "apply" : "list",
+        round: roundId,
+      });
+      prompt = answer.prompt;
+      if (subagents) prompt = markupForSubagent(prompt);
     } catch (error) {
       setSending(null);
       setSendFailure(t("mobile.markup.sendFailed.marks", { reason: reason(error) }));
       return;
     }
-    const sent = onSend?.(prompt) ?? false;
-    if (!sent) {
-      setSending(null);
-      setSendFailure(t("mobile.markup.sendFailed.chat"));
-      return;
+    let sent: MarkupSend;
+    if (!onSend && markupTab.current) {
+      // Held, not typed: the new CLI may still be starting, and the desktop
+      // types a held prompt once the tab has started.
+      try {
+        await holdPrompt(markupTab.current.id, prompt);
+      } catch (error) {
+        setSending(null);
+        setSendFailure(t("mobile.markup.sendFailed.newTab", { reason: reason(error) }));
+        return;
+      }
+      sent = agent !== "idle" ? "queued" : "sent";
+    } else {
+      sent = onSend?.(prompt) ?? false;
+      if (!sent) {
+        setSending(null);
+        setSendFailure(t("mobile.markup.sendFailed.chat"));
+        return;
+      }
     }
     // The round's marks go to the sent side — dimmed, never sent again, past
     // undo — and the view stays open for the next round; the save effect
-    // keeps the record.
-    setHistory((now) => startHistory(markSent(now.present, marked)));
+    // keeps the record. The round is logged with the marks as the request
+    // listed them, which the agent's ticks index — unless a page changed
+    // meanwhile (then its ticks would point at the wrong marks: none kept).
+    setHistory((now) => {
+      const asSent = marked.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
+      return startHistory(markSent(now.present, marked, asSent ? roundId : undefined));
+    });
     setShowSent(true);
     setCheck(null);
     setReloadNote(null);
-    setSubmitted(startRound(sent === "queued", Date.now()));
+    // The mode the desktop gave the round decides its follow-up — Undo or
+    // Make these changes — never this phone's switch.
+    const undo = answer.mode === "apply" && typeof answer.undo === "string" && answer.undo ? answer.undo : null;
+    undoRounds.current.clear();
+    if (undo) undoRounds.current.set(undo, roundId);
+    undoTab.current = tabId;
+    roundFile.current = fileRef.current;
+    setNoUndo(direct && !undo ? answer.noUndo ?? null : null);
+    setUndoNote(null);
+    setUndoSheet(null);
+    setSubmitted(startRound(sent === "queued", Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
     setSending(null);
   };
+
+  /** A line into the agent's chat that is not a round — the note after an
+   * Undo: sent as **Make these changes** sends its prompt. */
+  const sendNote = async (text: string): Promise<boolean> => {
+    if (onSend) return onSend(text) !== false;
+    if (!markupTab.current) return false;
+    try {
+      await holdPrompt(markupTab.current.id, text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /** Why an undo call failed, as the pill's line: the files changed since
+   * (nothing was changed), an undo the desktop no longer holds (offered no
+   * more), or a plain failure — which may have put some files back. */
+  const undoFailed = (error: unknown, step: "preview" | "undo", id: string) => {
+    const conflict = markupUndoConflict(error);
+    if (conflict) {
+      const named = conflict.files.map((path) => `\`${path}\``).join(", ");
+      const files = conflict.more > 0 ? t("mobile.markup.undo.andMore", { files: named || "…", count: conflict.more }) : named || "…";
+      setUndoNote({ text: t("mobile.markup.undo.conflict", { files }), alert: true });
+      return;
+    }
+    const code = error instanceof ApiError ? error.code : "";
+    if (code === "undo_gone" || code === "round_not_found") {
+      setSubmitted((was) => was && undoneRound(was, id));
+      setUndoNote({ text: t("mobile.markup.undo.gone"), alert: true });
+      return;
+    }
+    setUndoNote({ text: t(step === "preview" ? "mobile.markup.undo.previewFailed" : "mobile.markup.undo.failed", { reason: reason(error) }), alert: true });
+  };
+
+  /** **Undo**: first what it would put back, in the confirm sheet — not when
+   * a new Submit replaced the round meanwhile. */
+  const askUndo = async () => {
+    const id = submitted?.undo?.id;
+    const tab = undoTab.current;
+    if (!id || undoBusyRef.current || !tab) return;
+    undoBusyRef.current = true;
+    setUndoNote(null);
+    setUndoBusy(true);
+    try {
+      const changes = await previewMarkupUndo(tab, id);
+      if (holdsUndo(submittedRef.current, id)) setUndoSheet({ id, changes });
+    } catch (error) {
+      if (holdsUndo(submittedRef.current, id)) undoFailed(error, "preview", id);
+    }
+    undoBusyRef.current = false;
+    setUndoBusy(false);
+  };
+
+  /** The sheet's **Undo**: the files go back, the PDF is drawn again (the
+   * Reload path), and the agent is told — a note, not a new round. The sent
+   * marks stay: only the reader removes marks. */
+  const runUndo = async () => {
+    const id = undoSheet?.id;
+    const tab = undoTab.current;
+    setUndoSheet(null);
+    if (!id || undoBusyRef.current || !tab) return;
+    undoBusyRef.current = true;
+    setUndoBusy(true);
+    let done: MarkupUndoChanges;
+    try {
+      done = await runMarkupUndo(tab, id);
+    } catch (error) {
+      undoFailed(error, "undo", id);
+      undoBusyRef.current = false;
+      setUndoBusy(false);
+      return;
+    }
+    setSubmitted((was) => was && undoneRound(was, id));
+    // Its ticks mean nothing now: the round leaves the log (the marks stay).
+    const undoneId = undoRounds.current.get(id);
+    if (undoneId) {
+      undoRounds.current.delete(id);
+      const forget = (entry: Layer) => forgetRound(entry, undoneId);
+      setHistory((now) => ({ past: now.past.map(forget), present: forget(now.present), future: now.future.map(forget) }));
+    }
+    // The files went back, whatever else happened since: the agent is told.
+    const told = await sendNote(markupUndoNote(done.files.map((file) => file.path), done.more));
+    setUndoNote(told ? { text: t("mobile.markup.undo.done"), alert: false } : { text: t("mobile.markup.undo.noteFailed"), alert: true });
+    undoBusyRef.current = false;
+    setUndoBusy(false);
+    if (!isPdf || !viewUp.current) return;
+    if ("files" in scope) {
+      // The project file itself: the undo put it back (or says it kept it).
+      void reloadRef.current();
+      return;
+    }
+    // An outbox copy: the agent's copies so far show the undone edits — the
+    // copy the round's marks were drawn on is the PDF as it is again.
+    const shown = fileRef.current;
+    let newest: OutboxFile = shown;
+    try {
+      const latest = await refreshRef.current?.(roundFile.current ?? shown);
+      if (latest && latest.modified >= newest.modified) newest = latest;
+    } catch {
+      // The listing failed: the copy shown stands for the agent's newest.
+    }
+    const floor = undoneUpTo.current;
+    undoneUpTo.current = floor && floor.modified > newest.modified ? floor : newest;
+    const before = roundFile.current;
+    if (before && viewUp.current && otherFile(fileRef.current, before)) void reloadRef.current(false, before);
+  };
+
+  /** The file as it is now (`refresh`), minus the copies an undo made out of
+   * date (`undoneUpTo`): one of those answers as the file shown. */
+  const freshFile = async (shown: OutboxFile): Promise<OutboxFile | null> => {
+    const next = (await refreshRef.current?.(shown)) ?? null;
+    const floor = undoneUpTo.current;
+    if (next && floor && (next.name === floor.name || next.modified < floor.modified)) return shown;
+    return next;
+  };
+  const freshFileRef = useRef(freshFile);
+  freshFileRef.current = freshFile;
 
   /** **Make these changes**: the agent listed what the marks ask for (the
    * default instruction edits nothing until told) — one tap tells it to go
    * ahead, worded in the phone's settings (`markupInstruction.ts`). */
-  const apply = () => {
-    if (!onSend || sending !== null) return;
+  const apply = async () => {
+    if (sending !== null) return;
+    const text = readMarkupApply() ?? DEFAULT_MARKUP_APPLY;
     setSendFailure(null);
-    const sent = onSend(readMarkupApply() ?? DEFAULT_MARKUP_APPLY);
+    let sent: MarkupSend = false;
+    if (onSend) sent = onSend(text);
+    else if (markupTab.current) {
+      // The tab a new-tab Submit opened: held, as that Submit's prompt was.
+      try {
+        await holdPrompt(markupTab.current.id, text);
+        sent = agent !== "idle" ? "queued" : "sent";
+      } catch (error) {
+        setSendFailure(t("mobile.markup.sendFailed.newTab", { reason: reason(error) }));
+        return;
+      }
+    }
     if (!sent) {
       setSendFailure(t("mobile.markup.sendFailed.chat"));
       return;
     }
     setCheck(null);
     setReloadNote(null);
+    // Why the Submit got no undo is past: this round makes the changes.
+    setNoUndo(null);
     setSubmitted(startRound(sent === "queued", Date.now(), true));
   };
 
@@ -949,14 +1372,22 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   // Finished: one look at the file — changed under the marks, or not — so
   // Reload can say whether it is worth it. No polling.
   const finishedAt = submitted?.phase === "finished" ? submitted.since : null;
+  // An `apply` round's snapshot is settled each time the round finishes —
+  // a later turn (an answered question) moves it on, and the last one wins.
+  // A failure is quiet: the undo's preview settles again.
+  const settleId = submitted?.undo?.state === "ready" ? submitted.undo.id : null;
+  useEffect(() => {
+    const tab = undoTab.current;
+    if (finishedAt === null || !settleId || !tab) return;
+    void settleMarkupUndo(tab, settleId).catch(() => {});
+  }, [finishedAt, settleId]);
   useEffect(() => {
     setCheck(null);
     setReloaded(false);
-    const look = refreshRef.current;
-    if (finishedAt === null || !isPdf || !look) return;
+    if (finishedAt === null || !isPdf || !refreshRef.current) return;
     let live = true;
     const shown = fileRef.current;
-    void look(shown).then(
+    void freshFileRef.current(shown).then(
       (now) => { if (live && now) setCheck(otherFile(shown, now) ? "changed" : "unchanged"); },
       () => {},
     );
@@ -967,14 +1398,15 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
    * sent — under the same layer. The sealed frame opens one document, so it
    * is remounted; the old page sizes stand in until the new ones arrive, so
    * the scroll holds. Unsent marks stay where they are; the sent ones point
-   * at the old text, so they hide (⋯ shows them again). */
-  const reload = async () => {
+   * at the old text, so they hide (⋯ shows them again). `target`: this
+   * file, not a look for the newest — the copy an undo put the PDF back to. */
+  const reload = async (auto = false, target?: OutboxFile) => {
     if (!isPdf || reloading || sending) return;
     setReloading(true);
     setReloadNote(null);
-    let next = file;
+    let next = target ?? file;
     try {
-      next = (await refreshRef.current?.(file)) ?? file;
+      if (!target) next = (await freshFile(file)) ?? file;
     } catch {
       // The listing failed: the same file, fetched again, is still a reload.
     }
@@ -987,6 +1419,8 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     }
     if (!otherFile(file, next)) {
       setReloadNote(refreshRef.current && !("files" in scope) ? "mobile.markup.noNewer" : "mobile.markup.unchanged");
+    } else if (auto) {
+      setReloadNote("mobile.markup.autoReloaded");
     }
     window.clearTimeout(renderTimer.current);
     frameReady.current = false;
@@ -1000,6 +1434,10 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
       return {};
     });
     setPageFailures(new Set());
+    // The new document's text is looked through afresh.
+    findAsked.current.clear();
+    findKeys.current.clear();
+    setFound({});
     setFailure(null);
     setChanged(false);
     setCheck(null);
@@ -1010,21 +1448,218 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
     setReloading(false);
   };
 
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
+  // The agent finished and the PDF changed: its new pages load under the
+  // marks now — not while a note is open or a Submit is going out (they
+  // wait for it), and once per finish.
+  useEffect(() => {
+    if (!autoReload || check !== "changed" || reloaded || reloading || sending || note) return;
+    void reloadRef.current(true);
+  }, [autoReload, check, reloaded, reloading, sending, note]);
+  const toggleAutoReload = () => {
+    setAutoReload((was) => {
+      writeFlag("markupAutoReload", !was);
+      return !was;
+    });
+  };
+  const toggleSubagents = () => {
+    setSubagents((was) => {
+      writeFlag("markupSubagents", !was);
+      return !was;
+    });
+  };
+
+  /** Previous / Next mark (a PDF's): every mark on show as the scroll top
+   * that puts it on the reading line a third of the way down — the line
+   * `showPin` scrolls a question's words to — clamped to the pages' extent,
+   * so a mark the scroll cannot bring that far up still lands exactly. */
+  const markStops = useMemo(() => {
+    if (!isPdf || !sizes) return [];
+    const last = Math.max(0, contentHeight - viewHeight);
+    return markAnchors(layer, showSent).flatMap(({ page, y }) => {
+      const spot = places[page - 1];
+      const size = sizes[page - 1];
+      return spot && size ? [Math.min(last, Math.max(0, spot.top + y * cssWidth / size[0] - viewHeight / 3))] : [];
+    });
+  }, [isPdf, sizes, layer, showSent, places, cssWidth, contentHeight, viewHeight]);
+  const previousStop = [...markStops].reverse().find((top) => top < scrollTop - JUMP_SLACK);
+  const nextStop = markStops.find((top) => top > scrollTop + JUMP_SLACK);
+  const jumpShown = canMark && loaded && markStops.length > 0;
+  /** Scrolls exactly as `showPin` does. */
+  const jumpTo = (top: number | undefined) => {
+    const element = scroller.current;
+    if (top === undefined || !element) return;
+    if (typeof element.scrollTo === "function") element.scrollTo({ top });
+    else element.scrollTop = top;
+  };
   const empty = isEmpty(history.present);
   const untested = (reading && isUntested("mobile.outbox.pdf")) || (isPdf && isUntested("mobile.markup.frame"))
-    || (canMark && (isUntested("mobile.markup") || isUntested("mobile.markup.send") || isUntested("mobile.markup.native")));
+    || (canMark && (isUntested("mobile.markup") || isUntested("mobile.markup.send") || isUntested("mobile.markup.native") || isUntested("mobile.markup.anchors")
+      || (reading && (isUntested("mobile.markup.penSwitch") || isUntested("mobile.markup.opensIn")))))
+    || (adoptFrom !== undefined && isUntested("mobile.markup.sharedLayer")) || (jumpShown && isUntested("mobile.markup.jump"));
   const roundUntested = isUntested("mobile.markup.rounds");
-  /** Reload is offered once anything went out from here, or was before. */
-  const canReload = isPdf && canMark && (submitted !== null || sentShown);
+  /** Nothing to reload: the look after the agent finished found the file as
+   * shown, or it was reloaded since and nothing finished again. */
+  const nothingNew = check === "unchanged" || (reloaded && check === null);
+  /** Reload is offered once anything went out from here, or was before —
+   * never when there is known to be nothing new. */
+  const canReload = isPdf && canMark && (submitted !== null || sentShown) && !nothingNew;
   const roundWords = submitted && (submitted.phase === "finished"
     ? t(check === "changed" ? "mobile.markup.round.finishedChanged" : check === "unchanged" ? "mobile.markup.round.finishedUnchanged" : "mobile.markup.round.finished")
     : t(ROUND_KEYS[submitted.phase]));
   /** Reload as the pill's own button: the agent is done, or nothing says
    * what it does — primary unless the file is known to be unchanged. */
   const pillReload = canReload && submitted && (submitted.phase === "finished" || submitted.phase === "unconfirmed");
-  const applyNow = canMark && canApply(submitted);
+  // Not while the agent waits on its own questions: those are answered first.
+  const applyNow = canMark && canApply(submitted) && asks.length === 0;
+  const undoNow = canMark && canUndo(submitted) && asks.length === 0;
   const reloadPrimary = submitted?.phase === "finished" && check !== "unchanged" && !reloaded && (!applyNow || check === "changed");
   const glyph = submitted ? ROUND_GLYPH[submitted.phase] : undefined;
+  /** The questions' pins, by page: at the quote's first box once the frame
+   * found it, else in the page's top margin, one slot each. A picture has
+   * no text to find, so its questions stay in the card. */
+  const pinsByPage = useMemo(() => {
+    const byPage = new Map<number, { askId: string; index: number; rects: { x: number; y: number; w: number; h: number }[]; slot: number }[]>();
+    if (!isPdf) return byPage;
+    for (const ask of asks) {
+      ask.questions.forEach((question, index) => {
+        if (question.page === undefined) return;
+        const rects = question.quote ? found[`${question.page}\n${question.quote}`] ?? [] : [];
+        const list = byPage.get(question.page) ?? [];
+        const slot = rects.length ? 0 : list.filter((pin) => !pin.rects.length).length;
+        list.push({ askId: ask.id, index, rects, slot });
+        byPage.set(question.page, list);
+      });
+    }
+    return byPage;
+  }, [isPdf, asks, found]);
+  const cardShown = asksOn && asks.some((ask) => ask.questions.length > 0);
+  /** A question's chip: the page scrolls to its pin, whose words light up. */
+  const showPin = (askId: string, index: number) => {
+    const question = asks.find((ask) => ask.id === askId)?.questions[index];
+    const element = scroller.current;
+    if (question?.page === undefined || !element || !sizes) return;
+    const place = places[question.page - 1];
+    const size = sizes[question.page - 1];
+    if (!place || !size) return;
+    const hit = question.quote ? found[`${question.page}\n${question.quote}`]?.[0] : undefined;
+    const top = Math.max(0, place.top + (hit ? hit.y * cssWidth / size[0] : 0) - viewHeight / 3);
+    if (typeof element.scrollTo === "function") element.scrollTo({ top });
+    else element.scrollTop = top;
+    setPinFlash(`${askId}/${index}`);
+  };
+  useEffect(() => {
+    if (!pinFlash) return;
+    const timer = window.setTimeout(() => setPinFlash(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [pinFlash]);
+  /** Taken by the desktop and queued: the pill follows the agent's turn, as
+   * after a Submit, keeping the round's applied mark. */
+  const questionsAnswered = (askId: string) => {
+    dropAsk(askId);
+    setCheck(null);
+    setReloadNote(null);
+    setSubmitted((was) => startRound(agent !== "idle", Date.now(), was?.applied ?? false, was?.undo));
+  };
+  const pinLayer = (n: number, size: Size) => {
+    const pins = pinsByPage.get(n);
+    if (!pins?.length) return null;
+    const scale = cssWidth / size[0];
+    return pins.map((pin) => {
+      const key = `${pin.askId}/${pin.index}`;
+      const at = pin.rects[0];
+      const left = at ? Math.max(0, at.x * scale - 12) : 6 + pin.slot * 32;
+      const top = at ? Math.max(0, at.y * scale - 26) : 6;
+      return <Fragment key={key}>
+        {pinFlash === key && pin.rects.map((rect, i) => <span key={i} className="markup-pin-hit" aria-hidden="true"
+          style={{ left: rect.x * scale, top: rect.y * scale, width: rect.w * scale, height: rect.h * scale }} />)}
+        <button className="markup-pin" style={{ left, top }} aria-label={t("mobile.markup.questions.pinTitle", { n: pin.index + 1 })}
+          onClick={() => setQuestionFocus({ askId: pin.askId, index: pin.index, nonce: Date.now() })}>?{pin.index + 1}</button>
+      </Fragment>;
+    });
+  };
+  // --- The agent's ticks: a ✓ on each sent mark it says it handled ----------
+  /** The ticked sent marks (`markup_done`, `docs/markup_tick_approve_plan.md`
+   * §4), while the sent marks show. A tap on a badge approves its mark — it
+   * leaves the layer, undoably — and nothing else ever removes one: ticks
+   * that vanish (the agent's session ended, a day passed) take the badge
+   * only. */
+  const ticked = useMemo(
+    () => (canMark && showSent ? tickedMarks(history.present, ticks) : []),
+    [canMark, showSent, history.present, ticks],
+  );
+  const tickBadges = useMemo(() => {
+    const byPage = new Map<number, { index: number; mark: Mark; box: [number, number, number, number] }[]>();
+    for (const { page, index } of ticked) {
+      const mark = history.present.sent?.pages[page]?.marks[index];
+      if (!mark) continue;
+      const list = byPage.get(page) ?? [];
+      list.push({ index, mark, box: markBox(mark) });
+      byPage.set(page, list);
+    }
+    return byPage;
+  }, [ticked, history.present]);
+  // Each badge's arrival, before paint: a pen or finger already on its way
+  // down where one appears must not approve it. A badge that went and comes
+  // back arrives anew.
+  useLayoutEffect(() => {
+    const now = Date.now();
+    const next = new Map<Mark, number>();
+    for (const badges of tickBadges.values()) {
+      for (const { mark } of badges) {
+        const seen = tickSeen.current.get(mark);
+        next.set(mark, seen ?? now);
+        if (seen === undefined) tickArrived.current = now;
+      }
+    }
+    tickSeen.current = next;
+  }, [tickBadges]);
+  /** Whether a tap may approve now: not while a Submit goes out or a stroke
+   * is under way, not in the moment after `mark` (or, for Approve all, any
+   * badge) appeared, and not as the second tap of a double one. */
+  const approvable = (mark: Mark | null): boolean => {
+    if (sending !== null || gesture.current) return false;
+    const now = Date.now();
+    const arrived = mark ? tickSeen.current.get(mark) : tickArrived.current;
+    if (arrived === undefined || now - arrived < ARRIVAL_GUARD_MS || now - lastApprove.current < TICK_REPEAT_MS) return false;
+    lastApprove.current = now;
+    return true;
+  };
+  /** Approves the mark the badge was drawn for — only while it is still that
+   * mark and still ticked in the layer the change lands on. */
+  const approveTicked = (page: number, index: number, mark: Mark) => {
+    if (!approvable(mark)) return;
+    setHistory((now) => {
+      if (now.present.sent?.pages[page]?.marks[index] !== mark) return now;
+      const still = tickedMarks(now.present, ticksRef.current).some((entry) => entry.page === page && entry.index === index);
+      return still ? commit(now, approveMark(now.present, page, index)) : now;
+    });
+  };
+  const approveAllTicked = () => {
+    if (!approvable(null)) return;
+    setHistory((now) => {
+      const marks = tickedMarks(now.present, ticksRef.current);
+      return marks.length ? commit(now, approveMarks(now.present, marks)) : now;
+    });
+  };
+  /** One page's ✓ badges, centred on each ticked mark's top-right corner and
+   * kept on the page — placed as the question pins are. */
+  const tickLayer = (n: number, size: Size) => {
+    const badges = tickBadges.get(n);
+    if (!badges?.length) return null;
+    const scale = cssWidth / size[0];
+    const maxLeft = Math.max(0, cssWidth - TICK_BADGE);
+    const maxTop = Math.max(0, size[1] * scale - TICK_BADGE);
+    return badges.map(({ index, mark, box }) => {
+      const [x, y, w] = box;
+      const left = Math.min(maxLeft, Math.max(0, (x + w) * scale - TICK_BADGE / 2));
+      const top = Math.min(maxTop, Math.max(0, y * scale - TICK_BADGE / 2));
+      return <button key={`${tickKey(mark)}:${index}`} className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
+        aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
+        onClick={(event) => { if (event.detail <= 1) approveTicked(n, index, mark); }}>✓</button>;
+    });
+  };
   const register = useCallback((n: number, canvas: HTMLCanvasElement | null) => {
     if (canvas) overlays.current.set(n, canvas);
     else overlays.current.delete(n);
@@ -1047,7 +1682,7 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
   const noteEditor = (n: number, size: Size) => note?.n === n
     && <NoteEditor note={note} size={size} width={cssWidth} onChange={editNote} onSave={saveNote} onCancel={() => setNote(null)} />;
 
-  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}`} role="dialog" aria-modal="true"
+  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}`} role="dialog" aria-modal="true"
     aria-label={marking ? t("mobile.markup.title", { name: sentName(file) }) : sentName(file)}>
     <div className="outbox-viewer-head">
       {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}>✕</button>}
@@ -1077,13 +1712,30 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
         <span className="markup-round-words">{roundWords}</span>
         {roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         {applyNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={reloading || sending !== null || !online}
-          onClick={apply} title={t("mobile.markup.applyTitle")}>{t("mobile.markup.apply")}{isUntested("mobile.markup.apply") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
+          onClick={() => void apply()} title={t("mobile.markup.applyTitle")}>{t("mobile.markup.apply")}{isUntested("mobile.markup.apply") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
+        {undoNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={undoBusy || reloading || sending !== null || !online}
+          onClick={() => void askUndo()} title={t("mobile.markup.undoRoundTitle")} aria-label={t("mobile.markup.undoRoundTitle")}>{t("mobile.markup.undoRound")}{isUntested("mobile.markup.undo") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
         {pillReload && <button className={reloadPrimary ? "markup-submit markup-reload" : "outbox-action markup-reload"} disabled={reloading || sending !== null}
           onClick={() => void reload()}>{t("mobile.markup.reload")}</button>}
       </div>}
+      {ticked.length > 0 && <div className="markup-round markup-ticks" role="status">
+        <span className="agent-status done" aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH.done}</span></span>
+        <span className="markup-round-words">{t("mobile.markup.ticks.done", { count: ticked.length })}</span>
+        {isUntested("mobile.markup.ticks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        <button className="outbox-action markup-approve-all" disabled={sending !== null} onClick={approveAllTicked}
+          title={t("mobile.markup.ticks.approveAllTitle")}>{t("mobile.markup.ticks.approveAll")}</button>
+      </div>}
+      {noUndo && submitted && <p role="status">{t("mobile.markup.noUndo", { reason: t(NO_UNDO_KEYS[noUndo] ?? "mobile.markup.noUndo.other") })}</p>}
+      {undoNote && <p role={undoNote.alert ? "alert" : "status"}>{undoNote.text}</p>}
       {reloadNote && <p role="status">{t(reloadNote)}</p>}
       {storage === "unsaved" && <p role="status">{t("mobile.markup.unsaved")}</p>}
       {changed && <p role="status">{t("mobile.markup.changed")}</p>}
+      {marking && !onSend && newTab && !openedTab && <p role="status">{t("mobile.markup.newTabNote")}{isUntested("mobile.markup.newTab") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
+      {!onSend && newTab && openedTab && <p role="status" className="markup-opened-tab">
+        {t("mobile.markup.newTabOpened", { label: openedTab.label })}
+        <button className="outbox-action" onClick={() => newTab.show(openedTab)}>{t("mobile.markup.openNewTab")}</button>
+        {isUntested("mobile.markup.newTab") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      </p>}
       {marking && leftOut > 0 && <p role="status">{t(leftOut === 1 ? "mobile.markup.leftOutOne" : "mobile.markup.leftOut", { count: leftOut })}</p>}
       {limitHit && <p role="alert">{t("mobile.markup.limit")}</p>}
       {sending && <p role="status">{sending}</p>}
@@ -1106,6 +1758,8 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
                 {!pictures[n] && <span className="markup-page-note">{t(pageFailures.has(n) ? "mobile.markup.pageFailed" : "mobile.markup.pageLoading", { n })}</span>}
                 {layerCanvas(n, size)}
               </>}
+              {tickLayer(n, size)}
+              {pinLayer(n, size)}
               {noteEditor(n, size)}
             </div>;
           })}
@@ -1121,11 +1775,23 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
             }}
             onError={() => setFailure("picture")} />
           {sizes && layerCanvas(1, sizes[0])}
+          {sizes && tickLayer(1, sizes[0])}
           {sizes && noteEditor(1, sizes[0])}
         </div>
       </div>}
     </div>
-    {marking && <div className="markup-palette">
+    {(marking || cardShown || jumpShown) && <div className="markup-palette">
+      {/* Previous / Next mark: a pair at the right edge, above the card and
+          the tools — the toolbar's own look, stood on end. */}
+      {jumpShown && <div className="markup-toolbar markup-jump" role="group" aria-label={t("mobile.markup.jump")}>
+        <button onClick={() => jumpTo(previousStop)} disabled={previousStop === undefined}
+          aria-label={t("mobile.markup.prevMark")} title={t("mobile.markup.prevMark")}><span aria-hidden="true">↑</span></button>
+        <button onClick={() => jumpTo(nextStop)} disabled={nextStop === undefined}
+          aria-label={t("mobile.markup.nextMark")} title={t("mobile.markup.nextMark")}><span aria-hidden="true">↓</span></button>
+      </div>}
+      {cardShown && <MarkupQuestionsCard tabId={askTab} asks={asks} online={online} focus={questionFocus}
+        onShowPin={isPdf ? showPin : undefined} onAnswered={questionsAnswered} onClosed={dropAsk} onRefresh={refreshAsks} onBusy={setQuestionBusy} />}
+      {marking && <>
       {popover === "colors" && <div className="markup-popover markup-colors" role="group" aria-label={t("mobile.markup.color")}>
         {MARK_COLORS.map((name) => <button key={name} className={`markup-color${color === name ? " selected" : ""}`} aria-pressed={color === name}
           style={{ background: INK[name] }} onClick={() => { setColor(name); setPopover(null); }} aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
@@ -1135,12 +1801,26 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
           disabled={!history.present.pages[current] && !(showSent && history.present.sent?.pages[current])}>
           <span aria-hidden="true">⌧</span>{t("mobile.markup.clearPage", { n: current })}
         </button>
+        {/* Every page at once — one step, so Undo brings it all back. */}
+        <button onClick={() => { setHistory((now) => commit(now, clearAll(now.present, showSent))); setPopover(null); }}
+          disabled={isEmpty(history.present) && !(showSent && hasSent(history.present))}>
+          <span aria-hidden="true">⌧</span>{t("mobile.markup.clearAll")}
+          {isUntested("mobile.markup.clearAll") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>
         {penMode !== "none" && <button role="switch" aria-checked={penMode === "pen"} onClick={togglePenOnly}>
           <span aria-hidden="true">✎</span>{t("mobile.markup.penOnly")}<span className="markup-switch" aria-hidden="true" />
         </button>}
         {canReload && <button onClick={() => { setPopover(null); void reload(); }} disabled={reloading || sending !== null}>
           <span aria-hidden="true">⟳</span>{t("mobile.markup.reload")}{roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </button>}
+        {isPdf && <button role="switch" aria-checked={autoReload} onClick={toggleAutoReload}>
+          <span aria-hidden="true">⟳</span>{t("mobile.markup.autoReload")}<span className="markup-switch" aria-hidden="true" />
+          {isUntested("mobile.markup.autoReload") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>}
+        <button role="switch" aria-checked={subagents} onClick={toggleSubagents}>
+          <span aria-hidden="true">⑂</span>{t("mobile.markup.subagents")}<span className="markup-switch" aria-hidden="true" />
+          {isUntested("mobile.markup.subagents") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>
         {sentShown && <button role="switch" aria-checked={showSent} onClick={() => setShowSent((shown) => !shown)}>
           <span aria-hidden="true">◌</span>{t("mobile.markup.showSent")}<span className="markup-switch" aria-hidden="true" />
         </button>}
@@ -1149,10 +1829,11 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
         </button>}
       </div>}
       {!popover && tool === "text" && !note && <p className="markup-hint">{t("mobile.markup.textHint")}</p>}
+      {!popover && tool === "eraser" && <p className="markup-hint">{t("mobile.markup.eraserHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
       <div className="markup-toolbar" role="toolbar" aria-label={t("mobile.markup.tools")}>
         {(["ink", "box", "text", "eraser"] as Tool[]).map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
           onClick={() => pickTool(name)} aria-label={t(`mobile.markup.tool.${name}` as TranslationKey)} title={t(`mobile.markup.tool.${name}` as TranslationKey)}>
-          <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : name === "text" ? "T" : "⌫"}</span>
+          {name === "eraser" ? <EraserIcon /> : <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : "T"}</span>}
         </button>)}
         <button className="markup-color-well" aria-expanded={popover === "colors"} onClick={() => setPopover((open) => (open === "colors" ? null : "colors"))}
           aria-label={t("mobile.markup.colorOf", { color: t(`mobile.markup.color.${color}` as TranslationKey) })}>
@@ -1164,7 +1845,17 @@ export function MarkupView({ tabId = "", projectId = "", scope, file: givenFile,
         <button aria-expanded={popover === "more"} onClick={() => setPopover((open) => (open === "more" ? null : "more"))}
           aria-label={t("mobile.markup.more")} title={t("mobile.markup.more")}><span aria-hidden="true">⋯</span></button>
       </div>
+      </>}
     </div>}
+    {undoSheet && <OptionSheet
+      title={t("mobile.markup.undo.confirmTitle")}
+      note={{ text: undoSummary(undoSheet.changes, t) }}
+      options={[{ key: "undo", label: t("mobile.markup.undo.confirm"), current: false }]}
+      waiting=""
+      busy={undoBusy}
+      onPick={() => void runUndo()}
+      onClose={() => setUndoSheet(null)}
+    />}
   </div>;
 }
 

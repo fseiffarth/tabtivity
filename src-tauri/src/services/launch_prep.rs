@@ -32,6 +32,89 @@ fn settings_agent_remote_control() -> bool {
         .unwrap_or(true)
 }
 
+/// The API proxy's token and base URL (`agent_api_keys`, `api_proxy`) for an
+/// unfenced local agent (the Host session, a fence-less platform), where
+/// `opts.cmd` is still the CLI. A fenced spawn gets them inside
+/// `agent_fence`'s wrap. On Linux and macOS the token goes in under its
+/// carrier, and `agent_exec` in front of the CLI maps it (the Host session is
+/// tmux-wrapped like any agent tab); on Windows under the CLI's own name.
+fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
+    let subcommand = crate::services::agent_fence::runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&opts.cmd, subcommand, local_model, binding, &mut opts.env);
+    #[cfg(unix)]
+    crate::services::agent_exec::wrap(opts)?;
+    Ok(())
+}
+
+/// An API key never rides a tmux argv. tmux older than 3.2 has no
+/// `new-session -e`, so a tmux-wrapped tab's secrets would be on the
+/// world-readable client argv (#864); a long-lived provider key is not
+/// accepted there. Drop every key carrier — the CLI falls back to its own
+/// login. Every one: a carrier is only ever Tabtivity's injection (a CLI's
+/// own name is the user's, and is not touched here), so one the tab brought
+/// itself would have no business riding the argv either. The `agent_exec`
+/// step may still be in front of the command; with nothing to map it only
+/// execs. Names only in the log.
+#[cfg(unix)]
+fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) {
+    if opts.tmux_session.is_none()
+        || !crate::services::tmux_local::tmux_available()
+        || crate::services::tmux_local::tmux_supports_session_env()
+    {
+        return;
+    }
+    let dropped = drop_carriers(&mut opts.env);
+    if !dropped.is_empty() {
+        eprintln!(
+            "launch_prep: tmux < 3.2 cannot keep {} off its argv; tab '{}' starts without it",
+            dropped.join(", "),
+            opts.id
+        );
+    }
+}
+
+/// Remove every `agent_exec` carrier from `env`, and the proxy base URL that
+/// rode beside a proxy token's carrier (a CLI pointed at the proxy without
+/// its token would send its own login there and be refused); returns their
+/// names, sorted.
+#[cfg(any(unix, test))]
+fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<String> {
+    let carriers: Vec<String> = env
+        .keys()
+        .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
+        .cloned()
+        .collect();
+    let mut dropped = carriers.clone();
+    for carrier in &carriers {
+        env.remove(carrier);
+        if let Some((base, provider)) = crate::services::agent_api_keys::base_of_carrier(carrier) {
+            if env.get(base).is_some_and(|v| crate::services::api_proxy::is_proxy_base(v, provider)) {
+                env.remove(base);
+                dropped.push(base.to_string());
+            }
+        }
+    }
+    dropped.sort();
+    dropped
+}
+
+/// Whether this `claude` spawn runs here, as a session, on the user's stored
+/// Anthropic key through the API proxy (`agent_api_keys::keyed`): Claude
+/// switched on in Manage CLIs → API keys, the proxy running, a key saved, and
+/// a local, non-container, non-local-model tab. Reads the keychain (once, then
+/// the proxy's cache) only when Claude is switched on.
+fn local_claude_keyed(opts: &PtyOptions, remote_agent_run: bool) -> bool {
+    if remote_agent_run || opts.sandbox || crate::services::agent_api_keys::is_local_model(opts) {
+        return false;
+    }
+    let settings: crate::schema::Settings =
+        storage::read_json(&storage::state_dir().join("settings.json")).unwrap_or_default();
+    crate::services::agent_api_keys::keyed(&opts.cmd, &settings)
+}
+
 /// Whether Claude agent tabs of `project_id` should spawn with
 /// `--remote-control` (O#59): a project's own override, from the
 /// `projects.json` entry's flattened `extra["remote_control"]` — like
@@ -92,6 +175,21 @@ fn append_claude_name(args: &mut Vec<String>, name: Option<&str>) -> bool {
 /// mistaken for nesting. O#149's hard gate: mirrors `services::sandbox::cwd_is_within`
 /// in shape, kept as a separate function because that one only ever *classifies*
 /// a docker mount as rw/ro, while this one refuses the spawn outright.
+/// The home a local agent spawn of `scope_id` runs in: the scope's own, or
+/// for a local-model tab its local-model home (`PtyOptions::local_model`).
+fn prepare_agent_home(
+    scope_id: &str,
+    roots: &[std::path::PathBuf],
+    local_model: bool,
+) -> Result<crate::services::agent_home::PreparedHome, String> {
+    let home = if local_model {
+        crate::services::agent_home::prepare_local_model_home(scope_id, roots)
+    } else {
+        crate::services::agent_home::prepare_scope_home(scope_id, roots)
+    };
+    home.map_err(|e| format!("Agent home: {e}"))
+}
+
 fn cwd_within(cwd: &str, allowed: &std::path::Path) -> bool {
     std::path::Path::new(cwd).starts_with(allowed)
 }
@@ -375,41 +473,22 @@ pub async fn prepare(
     // per-run token. Decided here from the same `project_id` that picks the
     // fence roots above, while `cmd`/`args` still describe the agent itself, so
     // the config rides into the bubblewrap argv unchanged.
-    let root_agent = crate::services::root_mcp::is_root_agent(&opts, agent_spawn);
-    if root_agent {
-        crate::services::root_mcp::apply_to_spawn(&mut opts);
-    }
+    //
     // The contained reader (`services::mail_reader`): an agent spawn into a VM
     // project whose TRUSTED record carries `mail_reader` gets a per-tab token of
     // class `Reader` and the guest-side URL, riding the remote command's
-    // environment. Every other project agent spawn — VM or not — is handed
-    // nothing. Whether the box is actually narrow is checked per mail call, not
-    // here: the flag is a request, not a fact.
-    let reader_project = opts
-        .project_id
-        .clone()
-        .filter(|_| agent_spawn && !root_agent && !opts.local_only)
-        .filter(|id| crate::services::vm::vm_spec_for(id).is_some_and(|spec| spec.mail_reader));
-    if let Some(project) = reader_project.as_deref() {
-        let cmd = opts.cmd.clone();
-        if let Some(env) =
-            crate::services::root_mcp::apply_reader_to_spawn(&opts.id, project, &cmd, &mut opts.args)
-        {
-            opts.env.extend(env);
-        }
-    }
-    if agent_spawn && !root_agent && reader_project.is_none() {
-        crate::services::root_mcp::apply_schedule_to_spawn(&mut opts);
-        // Agent-requested pushes (`services::git_push_mcp`), beside the
-        // schedule lane: same qualifying spawns, its own token.
-        crate::services::root_mcp::apply_git_push_to_spawn(&mut opts);
-    }
-    // The read-only help server (`services::help_mcp`): every LOCAL agent tab,
-    // root or project, beside whatever the lines above handed out. Last, since
-    // it merges into the Vibe env the root/schedule wiring sets outright.
-    if agent_spawn {
-        crate::services::root_mcp::apply_help_to_spawn(&mut opts);
-    }
+    // environment. Every other local project agent gets the schedule and push
+    // lanes (and, in the window, the markup questions lane), every local agent
+    // the read-only help lane. All of it is decided in `grant_lanes` against
+    // this process's listener (`runtime()`: the window's, or the Mobile
+    // host's, which serves no root, reader or markup lane).
+    let root_agent = crate::services::root_mcp::grant_lanes(
+        &mut opts,
+        agent_spawn,
+        crate::services::root_mcp::runtime(),
+        crate::services::root_mcp::tokens(),
+        &storage::state_dir(),
+    );
     let mcp_spawn_guard = agent_spawn
         .then(|| crate::services::root_mcp::SpawnTokenGuard::new(&opts));
 
@@ -493,12 +572,17 @@ pub async fn prepare(
     // the Claude phone app, and the root scope's rights must not be reachable
     // from a phone by any route (it is absent from Tabtivity Mobile's catalog too).
     // Nor for a subcommand (`claude auth login`, a sign-in tab), which refuses
-    // the session's flags.
+    // the session's flags. Nor for a local tab that runs on the user's
+    // Anthropic key through the API proxy (`agent_api_keys`, `api_proxy`):
+    // Claude refuses Remote Control while `ANTHROPIC_AUTH_TOKEN` is set or
+    // `ANTHROPIC_BASE_URL` points at a non-Anthropic host, and shows a failure
+    // notice instead.
     if opts.cmd == "claude"
         && !root_agent
         && !crate::services::agent_fence::runs_subcommand(&opts.args)
         && resolve_agent_remote_control(opts.project_id.as_deref())
         && !opts.args.iter().any(|a| a == "--remote-control")
+        && !local_claude_keyed(&opts, remote_agent_run)
     {
         opts.args.push("--remote-control".to_string());
     }
@@ -643,9 +727,9 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => {
                 // The scope's Tabtivity-owned home (`services::agent_home`), the
                 // agent's `$HOME` from here on: bound by the Linux fence, set
-                // by environment where the fence cannot redirect a path.
-                let home = crate::services::agent_home::prepare_scope_home(&scope_id, roots)
-                    .map_err(|e| format!("Agent home: {e}"))?;
+                // by environment where the fence cannot redirect a path. A
+                // local-model tab gets the scope's local-model home instead.
+                let home = prepare_agent_home(&scope_id, roots, opts.local_model)?;
                 #[cfg(target_os = "linux")]
                 crate::services::agent_fence::wrap_pty_options_bwrap(
                     &mut opts, roots, &scope_id, &home.dir,
@@ -679,18 +763,20 @@ pub async fn prepare(
                 // at its own path, no directory to bind.
                 let _ = crate::services::server::agent_keys::prepare_spawn(&opts.cmd, &mut opts.env)?;
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
+                // Last: it may put `agent_exec` in front of the CLI.
+                inject_api_keys(&mut opts, &scope_id)?;
             }
             // No fence on this platform (Windows): the same Tabtivity-owned home
             // and shared logins, by environment; the rights are the user's.
             crate::services::agent_fence::FenceDecision::NotApplicable { reason: "platform" }
                 if local_agent =>
             {
-                let home = crate::services::agent_home::prepare_scope_home(&scope_id, roots)
-                    .map_err(|e| format!("Agent home: {e}"))?;
+                let home = prepare_agent_home(&scope_id, roots, opts.local_model)?;
                 for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                inject_api_keys(&mut opts, &scope_id)?;
             }
             // Fail closed on a fence-less platform too: the tab that asked
             // shows the acceptance prompt and retries once it is given.
@@ -728,6 +814,7 @@ pub async fn prepare(
                 opts.env.entry("PATH".into()).or_insert_with(|| path.to_string_lossy().into_owned());
             }
         }
+        drop_api_keys_for_old_tmux(&mut opts);
         crate::services::tmux_local::wrap_pty_options_local(&mut opts);
     }
 
@@ -759,6 +846,40 @@ mod tests {
     use std::path::Path;
 
     // ── vm_spawn_refusal: the VM tier's no-local-fallback guard ────────────
+
+    #[test]
+    fn old_tmux_drops_every_carrier_and_only_carriers() {
+        use crate::services::agent_api_keys::{
+            ANTHROPIC_BASE_ENV, ANTHROPIC_CARRIER, ANTHROPIC_TOKEN_ENV, GEMINI_BASE_ENV, GEMINI_CARRIER,
+        };
+        let odd = crate::services::agent_exec::carrier_name("SOMETHING_ELSE");
+        let mut env: HashMap<String, String> = HashMap::from([
+            (ANTHROPIC_CARRIER.to_string(), "test-token-added-fake".to_string()),
+            // The proxy URL beside it goes too: without the token it would
+            // only be refused.
+            (ANTHROPIC_BASE_ENV.to_string(), "http://127.0.0.1:4321/anthropic".to_string()),
+            // A carrier the tab brought itself goes too: it would ride the argv.
+            (GEMINI_CARRIER.to_string(), "test-token-brought-fake".to_string()),
+            // A base URL that is not the proxy's is the user's: kept.
+            (GEMINI_BASE_ENV.to_string(), "https://gateway.example".to_string()),
+            (odd.clone(), "sk-test-odd-fake".to_string()),
+            // The CLI's own name is the user's, never dropped here.
+            (ANTHROPIC_TOKEN_ENV.to_string(), "users-own-test-value".to_string()),
+            ("PATH".to_string(), "/bin".to_string()),
+        ]);
+        let dropped = drop_carriers(&mut env);
+        let mut want = vec![
+            ANTHROPIC_CARRIER.to_string(),
+            ANTHROPIC_BASE_ENV.to_string(),
+            GEMINI_CARRIER.to_string(),
+            odd,
+        ];
+        want.sort();
+        assert_eq!(dropped, want);
+        assert!(!crate::services::agent_exec::has_carriers(&env));
+        assert!(env.contains_key(ANTHROPIC_TOKEN_ENV) && env.contains_key("PATH"));
+        assert_eq!(env[GEMINI_BASE_ENV], "https://gateway.example");
+    }
 
     #[test]
     fn non_vm_projects_spawn_freely() {

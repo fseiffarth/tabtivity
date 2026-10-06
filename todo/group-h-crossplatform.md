@@ -3394,7 +3394,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   - Known: a finished turn on the tab in view on the desktop still notifies
     (the desktop cannot tell whether anyone is at it); a notice without
     details is English only (the service worker has no i18n).
-  - [ ] 🖐️ Manual phone QA — This phone → Notifications → Agents → When one
+  - [ ] 🖐️ Manual phone QA — ⚙ This device → Notifications → Agents → When one
     needs your answer. Leave the phone locked; in a phone-reachable project
     have Claude ask a permission question → notification "Aurora · Claude —
     Needs your answer" within seconds; tap → unlock → that tab. With the tab
@@ -3443,6 +3443,43 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     `authentication_required` before its open ticket, 2026-09-29). `.git`, `.env` and a symlink are not
     listed. Switch it off on the desktop → within ~5 s the swipe does nothing and
     an open drawer is gone; a folder opened meanwhile says it was switched off.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Sections + row look (2026-10-04, untested id `mobile.files.sections`;
+    needs the rebuilt backend — `ignored` comes from the sidecar's
+    `git check-ignore`). At the project root README/AGENTS.md/.gitignore sit
+    in a collapsed `scaffold (n)` row below the rest; in any folder of a git
+    project, ignored entries (`target/`, `node_modules/`, `*.log`) sit in a
+    collapsed `gitignored (n)` row, dimmed when opened; a tracked file matching
+    an ignore pattern stays in the main list; a README below the root is an
+    ordinary row. Each row has a tinted tile (folder blue, picture green, PDF
+    red, text grey) and short times (clock today, day this year).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Search by name (2026-10-04, untested id `mobile.files.search`;
+    needs the rebuilt backend — new sidecar route `files/search`, host test
+    `the_file_search_answers_sealed_rows_…`, `files.rs` `a_search_…` tests).
+    Type part of a name in the box under the drawer's head: matching files
+    and folders from anywhere in the project list with their folder above
+    the times (`Project folder` at the root); several words must all be in
+    the name; nothing git ignores (`target/`, `node_modules/`) and no `.env`
+    shows. Tap a file → it opens; close it → the results are still there, and
+    clearing the box shows the drawer standing in that file's folder. Tap a
+    folder → the drawer walks into it and the box empties. Escape (keyboard)
+    clears the box before it closes the drawer. A big project answers in
+    about a second.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3589,7 +3626,7 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA — the Submit prompt is worded only in the phone's settings (2026-10-02; untested id `mobile.markup.instruction`; ⚠️ never run on a phone; PWA rebuild + `backend:stale` first): Home → This phone → **Mark up prompt** reads "Default: list the changes, edit nothing until asked"; mark up a PDF built from a `.tex` beside it and Submit → the agent lists the changes and touches no file (not the `.tex`, not the PDF) until told. Edit the prompt (e.g. "Apply them to the .tex and rebuild"), Save → the row says "Your own" and the next Submit ends with that text instead; **Use the default** brings the default back. The Mark up view itself has no place to edit it.
+  - [ ] 🖐️ Manual QA — the Submit prompt is worded only in the phone's settings (2026-10-02; untested id `mobile.markup.instruction`; ⚠️ never run on a phone; PWA rebuild + `backend:stale` first): Home → ⚙ This device → **Mark up prompt** reads "Default: list the changes, edit nothing until asked"; mark up a PDF built from a `.tex` beside it and Submit → the agent lists the changes and touches no file (not the `.tex`, not the PDF) until told. Edit the prompt (e.g. "Apply them to the .tex and rebuild"), Save → the row says "Your own" and the next Submit ends with that text instead; **Use the default** brings the default back. The Mark up view itself has no place to edit it.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3616,7 +3653,106 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual QA — **Make these changes** + the desktop's own markup prompts (2026-10-02; plan §2.8; untested ids `mobile.markup.apply`, `desktop.markup.apply`; ✅ automated: `MobileMarkupRounds.test.tsx`, `MobileMarkupRoundsCore.test.ts`, `PdfMarkupSubmit.test.tsx`, `DesktopSettings.test.tsx`, `pdf_markup.rs` tests; ⚠️ never live). Phone: Submit marks → the agent lists the changes → the pill says Agent finished and offers **Make these changes** → tap: the go-ahead appears in the chat as your prompt, the pill follows that turn and offers no second Make these changes; when it finishes, **Reload PDF** leads. Home → This phone → Mark up prompt: the second field changes what the button sends; Use the default resets both. Desktop: Settings → Agents → **PDF markup** shows both prompts starting from the defaults; a changed Mark up prompt ends the next Submit's prompt in the agent tab; **Make these changes** in the markup strip queues the go-ahead into the target tab.
+  - [ ] 🖐️ Manual QA — **Make these changes** + the desktop's own markup prompts (2026-10-02; plan §2.8; untested ids `mobile.markup.apply`, `desktop.markup.apply`; ✅ automated: `MobileMarkupRounds.test.tsx`, `MobileMarkupRoundsCore.test.ts`, `PdfMarkupSubmit.test.tsx`, `DesktopSettings.test.tsx`, `pdf_markup.rs` tests; ⚠️ never live). Phone: Submit marks → the agent lists the changes → the pill says Agent finished and offers **Make these changes** → tap: the go-ahead appears in the chat as your prompt, the pill follows that turn and offers no second Make these changes; when it finishes, **Reload PDF** leads. Home → ⚙ This device → Mark up prompt: the second field changes what the button sends; Use the default resets both. Desktop: Settings → Agents → **PDF markup** shows both prompts starting from the defaults; a changed Mark up prompt ends the next Submit's prompt in the agent tab; **Make these changes** in the markup strip queues the go-ahead into the target tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop — the agent's markup questions beside the PDF (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `desktop.markup.questions`; ✅ automated: `PdfMarkupQuestions.test.tsx`, Rust `services::markup_mcp`, `commands::markup_mcp`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): a local project with a fresh Claude tab → its PDF → **✎ Mark up** → draw an ambiguous arrow (or circle two words and write "which?") → **Submit**. The agent calls `markup_ask` (Claude asks to approve the tool the first time) and ends its turn; a card "The agent asks" appears under the markup strip, the pill reads "The agent asks about your marks — answer below" and **Make these changes** is off. Each question has a `?n` pin at the quoted words (in the page's top margin when the quote is not found). Click a pin → the card scrolls to its question and flashes it; **Show on page N** → the page scrolls to the pin and lights the quoted words. Click an option of a single question → the answer appears in the agent tab as your prompt ("My answers to your markup questions on `…`: 1. … → …"), the card goes, the pill follows the turn. Several questions or a "Pick any that apply." one: rows tick, **Send answers** sends them all. **Other…** → type → it goes out as `Other: …`. **Answer in chat instead** → the card goes, nothing is typed. Ask the agent to ask again before answering → the first card is replaced. Same flow in a Codex tab. Turn markup off → the card goes; back on → it is back.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, phone — the agent's markup questions in the markup view (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx`, `MobileMarkupQuestions.test.tsx`, Rust host `markup_questions_cross_as_leaf_names_and_answers_as_indices`, `protocol::markup_questions_cross_by_tab_pair_and_answers_stay_strict`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): as above, but Submit from the phone's **Mark up** on a PDF the agent sent (chat bubble → viewer). A card "The agent asks · n" docks at the top of the palette within ~3 s; it also shows while just reading the PDF. Pins come from the sealed frame at the quoted words (check at high zoom and on a two-column page); tap a pin → the card opens and flashes that question; **Show on page N** → the page scrolls there and the words light up briefly. Tap an option → the answer appears in the chat as your prompt and the card goes on the phone **and** the desktop. Fold the card with its head; a new ask opens it again. **Other…** with the keyboard up on a small phone: the card stays usable. Answer the same ask on the desktop first, then on the phone → "they were already answered", nothing typed. Close the desktop window (sidecar keeps running) → no card, no error.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, phone — the Focus banner for an open markup question (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `mobile.markup.questions`; ✅ automated: `MobileMarkupQuestionsCard.test.tsx` (banner cases); ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` and `npm run mobile:bundle`): while an ask is open, the tab's Chat shows a one-line banner over the session facts. The agent sent the PDF to the phone: "The agent asks about <file>" with **Open** → the PDF opens in the markup view with the card. The PDF lives only in the project: "… about <file> in its markup view", no Open. An ask without a file: "… about your marks in the markup view". Answer it → the banner goes. The banner never shows while a viewer, the gallery or the file browser covers the chat.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — an answer that could not be delivered reopens its questions (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested ids `desktop.markup.questions`, `mobile.markup.questions`; ✅ automated: `reopen_undoes_only_the_answer_whose_prompt_was_not_delivered`, the delivery-failure cases in `PdfMarkupQuestions.test.tsx` and `MobileMarkupQuestionsCard.test.tsx`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): make queueing into the tab fail (e.g. fill the tab's scheduled prompts up to its cap) and answer: the desktop card stays and says the questions are still open — try again; the phone says it could not be sent and the questions are still open. Free the queue and answer again → delivered once. If the agent asked anew meanwhile, the old answer is not reopened: the desktop shows the prompt text to paste, the phone says the questions have closed.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, the Manage CLIs switch for markup questions (2026-10-03; plan `docs/markup_questions_mcp_plan.md`, handoff `docs/markup_questions_mcp_handoff.md`, rationale `docs/context/markup_mcp.md`; untested id `markupMcp`; ✅ automated: Rust `services::root_mcp` wiring tests, `services::markup_mcp` `off` case; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale`): Settings → Agents → Manage CLIs → Advanced → **Let project agents ask about your PDF marks (MCP)** is on in fresh settings. Turn it off → a newly opened Claude tab lists no `markup_ask` (`/mcp`); a tab opened before still has the tool, and a call answers `off` naming the setting, no card appears. Turn it on → a new tab has the tool again. A remote project's tab, a VM project and a container tab never have it.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — the eraser takes part of a stroke (2026-10-04; untested ids `desktop.markup.eraser`, `mobile.markup.eraser`; ✅ automated: `MobileMarkup.test.ts` (cutStroke, eraseAlong, ceiling fallback, stylusErases), `MobileMarkupRoundsCore.test.ts`, `PdfMarkupLayer.test.tsx` (pen eraser end); ⚠️ never run live; phone needs `npm run mobile:bundle`): Mark up → the eraser button shows an eraser icon (no longer ⌫) and a hint while armed; on the desktop the cursor is a ring. Draw a long stroke, rub across its middle → only the rubbed part goes and two strokes are left; rub its end → it gets shorter. A fast swipe across several strokes cuts every one it crosses. A box or a note it touches goes whole. Undo puts the whole rub back in one step. Shown sent marks (Show sent marks on) are cut the same way; hidden ones are untouched. Submit after erasing → the baked `-marked.pdf` shows the cut strokes. Pen tablet with an eraser end (Wacom, Surface pen): with the pen tool armed, flip the pen → its eraser end erases; the tip still draws.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — a quick text correction: page pictures, the words under each mark, SyncTeX lines (2026-10-04; untested ids `desktop.markup.anchors`, `mobile.markup.anchors`; ✅ automated: `MobileMarkupAnchors.test.ts`, `MobileMarkupRounds.test.tsx` (frame `snapshot`/`text`), `PdfMarkupSubmit.test.tsx`, Rust `anchors_and_synctex_name_each_mark`, `anchors_are_bounded_one_line_and_one_per_mark`; ⚠️ never run live; needs a rebuilt Tabtivity — `npm run backend:stale` — and `npm run mobile:bundle`): a LaTeX project built with SyncTeX (`latexmk -synctex=1`) and an agent tab → its PDF → **Mark up** → strike a word, underline one, circle one, a caret between two words, a highlighter box, a note in the margin → **Submit**. The prompt lists "Each marked page, with my marks drawn on it" (open one `-p<n>-marked.png`: the page with the marks on it), then one line per mark — "line through "…" in "…" — `chapters/intro.tex:42`", "line under", "circled", "mark at "the lazy"", "highlight on", "note "…" beside "…"" — with lines that point at the right `.tex` and line; the marked copy is only named (no `@`). The agent's list comes back noticeably quicker than before. A two-column page: a line's context holds no words of the other column. A PDF the agent sent to the phone (outbox copy): the words, no `.tex` lines. A scanned PDF with no text: pictures only, no mark lines.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — a rebuilt PDF loads under the marks on its own (2026-10-04; untested ids `desktop.markup.autoReload`, `mobile.markup.autoReload`; ✅ automated: `PdfMarkupCore.test.ts`, `PdfMarkupViewer.test.tsx` (three reload paths, on and off), `MobileMarkupRounds.test.tsx`; ⚠️ never run live; phone needs `npm run mobile:bundle`): desktop — Mark up, Submit, let the agent rebuild: the new pages appear under the marks by themselves at the same zoom and scroll, sent marks dimmed; while typing a note it waits and the strip offers **Reload PDF** instead. Settings → Agents → **PDF markup** → "Reload the PDF under your marks when it changes" off → back to the Reload offer. Phone — Submit, let the agent rebuild and finish: the view reloads by itself with "The agent's new PDF is loaded under your marks."; nothing happens when the PDF is unchanged; ⋯ → **Reload when the agent finishes** off → the pill offers **Reload PDF** as before, and the choice survives closing the view.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — subagent mode: each Submit goes to a new subagent (2026-10-04; untested ids `desktop.markup.subagents`, `mobile.markup.subagents`; ✅ automated: `PdfMarkupSubmit.test.tsx`, `MobileMarkupRounds.test.tsx`; ⚠️ never live; phone needs `npm run mobile:bundle`). Turn on Settings → Agents → PDF markup → **Hand each Submit to a new subagent** (phone: ⋯ → **Each Submit to a new subagent**), mark a PDF in a Claude tab and Submit: the agent starts a background subagent and ends its turn within seconds (pill goes done); mark more and Submit again at once — a second subagent starts while the first still works; both rounds' changes land without one undoing the other; answer a `markup_ask` card and press **Make these changes** — each reaches the round's subagent; with the switch off a Submit is handled by the tab's agent itself as before.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, iPad (Pencil), an Android pen phone and a pen-less phone — the pen switches Mark up on; PDFs open in (2026-10-04; untested ids `mobile.markup.penSwitch`, `mobile.markup.opensIn`; ⚠️ never run on a phone; `npm run mobile:bundle` first): open a PDF from an agent tab's chat or files drawer (reading, the ✕ and Save/Share in the head). On the iPad touch a page with the Pencil and write → the palette appears and the stroke you began is on the page (a Pencil tap leaves a dot); the page did not scroll under it; fingers still scroll and pinch; **Done** → reading again, the stroke on show. The Pencil on the grey gap between pages still scrolls. A PDF from the project screen's 🖼 / 📁 (no agent tab) behaves the same. A PDF that cannot be marked (no Mark up button): the Pencil scrolls as before. Android with an S Pen: the same (unknown whether Chrome lets the pen scroll the page first — note it). Pen-less phone: a finger only scrolls; Mark up still needs the tap. Home → ⚙ This device → **PDFs open in** reads Automatic. Automatic: on the iPad (after a Pencil stroke, pen-only) a PDF opens straight in Mark up; on the pen-less phone it opens reading, unless the PDF has marks not yet submitted → it opens in Mark up; after Submit it opens reading again. **Reading**: always reading, the pen still switches. **Mark up**: always marking, the ✕ still closes. The choice survives a reload of the PWA.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, desktop and phone — **Apply marks directly** and **Undo** (2026-10-04; plan `docs/pdf_markup_direct_apply_plan.md`, handoff `docs/pdf_markup_direct_apply_handoff.md`; untested ids `mobile.markup.undo`, `desktop.markup.undo`; ✅ automated: `MobileMarkupRounds.test.tsx`, `MobileMarkupRoundsCore.test.ts`, `PdfMarkupSubmit.test.tsx`, `DesktopSettings.test.tsx`, Rust `services::markup_rounds` + host route test; ⚠️ never live; needs the rebuilt backend and phone bundle — `npm run backend:stale`). A LaTeX project in git: mark a typo and Submit → in one turn the agent edits the `.tex`, rebuilds (phone: and sends the PDF back); the pill says Agent finished and offers **Undo**, never Make these changes. **Undo** → a sheet (desktop: a dialog) lists the files and says the PDF goes back → **Undo** → the `.tex` and the PDF are back as before, the PDF reloads under the marks (which stay), a note "I undid your edits …" appears in the chat and no new round starts. Edit the `.tex` by hand after a round → **Undo** says "Can't undo — `….tex` changed since. Nothing was changed." and leaves the file alone. A folder that is not a git repository (phone: also a remote project or a picture) → the line "No undo here (…) — the agent lists the changes first." and **Make these changes** as before. Switch off (phone: Home → ⚙ This device → Mark up prompt → **Apply marks directly**; desktop: Settings → Agents → PDF markup) → list first as before; the Mark up prompt field starts from the list default while off and the apply default while on.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3654,6 +3790,238 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+- [~] **31bv — A typed Other… answer in a multi-pick markup question can be
+  unticked** (✅ fixed 2026-10-03 in review 1: a ticked Other… row's tap
+  unticks it, a further tap opens the field — `QuestionRows` sends a picked
+  free-text row to `onPick`; ⚠️ never run on a phone; from the markup questions MCP,
+  `docs/context/markup_mcp.md`). In the phone's markup questions card
+  (`MarkupQuestionsCard.tsx`), once Other… holds typed words on a
+  "Pick any that apply." question, tapping its row again does not untick
+  it; the reader can only retype it or use **Answer in chat instead**. The
+  pick model already supports it (`toggleOther` clears a set Other…); the
+  row's tap goes to the text field instead. Make a second tap on a ticked
+  Other… row untick it, as the desktop card's row does.
+  - [x] 🤖 Automated test (`MobileMarkupQuestionsCard.test.tsx` "unticks a typed Other…")
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31bw — The Focus banner can open a markup question's project file**
+  (built 2026-10-03, never live: with the file browser switched on the
+  sidecar hands the banner a sealed files row — `files::entry`, its folder
+  token and trail — and **Open** shows it in the files viewer with Mark up;
+  the picture part below stays open. From the markup questions MCP,
+  `docs/context/markup_mcp.md`). The banner "The agent asks about <file>"
+  has **Open** only when the tab's outbox holds the file: the phone gets the
+  ask's leaf name, never a path, and the project file browser walks sealed
+  folder tokens, so a leaf cannot find a project file. Let the sidecar mint
+  a files token for the ask's file (it knows the project-relative path when
+  it asks the window) behind the file browser's own gates, so Open works for
+  a project PDF too. Also: a picture opened from the banner opens read-only
+  and needs a tap on **Mark up** before the card shows.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31bx — Files sent from the phone show as pictures, in the composer
+  and in the chat** (2026-10-04; untested ids `mobile.composer.thumbnails`,
+  `mobile.chat.inboxPreviews`). Attach a photo, a PDF and a desktop
+  screenshot in a Focus agent tab: each shows as a thumbnail above the
+  composer (dimmed with a spinner while it travels, ✕ once landed), never as
+  `@…` text in the input; leave the screen and come back — the draft returns
+  with the thumbnails. Send: the prompt's bubble shows the photo(s) as a
+  picture/album with your words as the caption and the PDF as a card, no
+  `@.tabtivity/inbox/…` text; tap opens them full screen. An older prompt with
+  `@.eldrun/inbox/…` shows its picture too; a file deleted from the inbox
+  shows "No longer in the project inbox". Agent → phone files keep showing
+  as picture bubbles on the left (31bj).
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31bz — The phone's ⎇ Git overview, and the ＋ sheet's worktree row**
+  (2026-10-04; untested id `mobile.project.gitOverview`;
+  `docs/mobile_git_overview_plan.md`). Needs the frozen dev build (the
+  sidecar serves the new route). In a git project with one linked worktree
+  (desktop Git panel → Worktrees → add) and an agent tab running in it: on the
+  phone tap the project's name → **⎇ Git**. The head line shows the project
+  folder's branch, `↑n ↓n` against its upstream (or "no upstream") and its
+  dot; **Worktrees (2)** lists the project folder first (tinted, "Project
+  folder · Main"), then the linked one with its branch, dot and "1 tab";
+  make the linked one dirty, tap **↻ Refresh** after 5 s — its dot turns red.
+  **Branches** puts ● on the checked-out one and "in <worktree>" on the
+  linked one's branch; **Remote branches** (folded) leaves out `origin/x`
+  where a local `x` exists. Detach the project folder (`git checkout
+  --detach`) → "Detached at <sha>". A folder outside git → "Not a git
+  repository"; a box's name menu has no Git entry. Close the desktop window:
+  the sheet still answers. Then tap **＋** in the same project with the window
+  open: **Agents start in** now lists the project folder and the linked
+  worktree (it never listed any before), and starting an agent there opens it
+  in that worktree. Also check the alert strip on the phone shows the
+  desktop's alerts again (its row ids were refused the same way).
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31cb — Mobile access per phone: a project or box reaches only the
+  phones picked for it** (2026-10-04; ✅ code-complete and automated tests
+  passing, ⚠️ live QA pending — and a rebuild + restart first: the sidecar,
+  two commands and a new one changed; untested id `mobile.phonePicker`;
+  design `docs/context/mobile_access.md`, plan
+  `docs/mobile_device_scoped_access_plan.md`). The side panel's phone button
+  opens a picker — All phones / Only these phones (checklist of the paired
+  phones) / Turn off — and Settings → Mobile shows "All phones ▾" / "N phones
+  ▾" / "No phones ▾" beside each enabled project and box, opening the same
+  picker. The sidecar filters every phone route, the terminal re-check and
+  agent pushes by the list. Locked by `MobileProjectAccess.test.tsx`,
+  `MobileBoxAccess.test.tsx` and the `discovery.rs` / `host.rs` / `push.rs` /
+  `commands::projects` tests.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test — pair two phones (A, B). Limit a project to A: B's
+    Projects list drops it within a poll, an old link or notice on B says it
+    is no longer shared, and an agent turn in it notifies A only. Open one
+    of its terminals on A, then switch the list to B only (tick B, untick
+    A): A's terminal closes within ~5 s ("access … withdrawn"). Same for a box
+    from Settings → Mobile. Revoke B while a project lists only B: the row
+    reads "No phones ▾" (amber) and no phone sees it; All phones in the
+    picker brings it back to both.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31cd — Per paired phone: hide To-do / Calendar / Mail, and its own
+  project list** (2026-10-04; untested ids `mobile.deviceSections`,
+  `mobile.deviceProjects`). Settings → Mobile → Paired devices, under a phone:
+  press **Mail** off — that phone's tab bar loses Mail within 30 s (or on
+  return to the app), a mail alert row leaves its Home strip, and an old
+  bookmark/notification into Mail answers "The desktop has turned this section
+  off for this phone."; another paired phone still has Mail. Turn **Calendar**
+  off: that phone gets no reminder push, the other does. Under **Projects on
+  this phone**: **Disconnect** an All-phones project — it leaves this phone's
+  list and the other phone keeps it (the project's ▾ button now reads
+  "1 phone"); Disconnect the only phone of a project — its access turns off.
+  **Add project ▾** — an off project opens for this phone alone; a project
+  limited to the other phone gains this one.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31ca — The Focus chat lists every file it carried** (2026-10-04;
+  untested id `mobile.chat.sentIndex`). Needs the frozen dev build (the PWA is
+  baked in). In a Focus agent tab (Chat → Session) send a photo from the
+  phone, then ask the agent to `tabtivity-send` a file back: a **Files (2)**
+  chip appears in the strip over the chat (beside **Subagents (n)** when the
+  session has any). Tap it: one row per file, newest first — picture or
+  PDF/≡/↓ badge, the sent name (no stamps), **From the agent** / **From you**,
+  age and size; tap a row → it opens full screen; a binary saves instead.
+  Opening **Subagents** closes the file list and back. A file another tab
+  sent stays out of the list (gallery only); a chat with no files shows no
+  chip.
+  - [x] 🤖 Automated test
+  - [ ] 🖐️ Manual test
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31by — Local models from the phone** (2026-10-04;
+  ✅ code-complete, automated tests passing — `ollama` / `local_models` /
+  `protocol` / `host` Rust tests, `MobileLocalModels.test.tsx`,
+  `MobileLocalModelsGate.test.tsx`, `MobileLocalModelsSheet.test.tsx`,
+  `MobileMutationList.test.ts`, `MobileApiDeadlines.test.ts`; ⚠️ not
+  verified on a phone). Plan
+  `docs/mobile_local_model_control_plan.md`. Home → **Local models** lists
+  the desktop's installed Ollama models (size, parameters/quantization,
+  idle / loading / loaded / failed, GPU · N % GPU · CPU, stays loaded /
+  unloads in N min, the model new local-model tabs use) with **Load**
+  (Ollama picks the device, `keep_alive -1`), **Unload** (no confirmation)
+  and **Start Ollama** (`systemctl --no-ask-password`, else an owned
+  `ollama serve` that quit stops). Everything goes through the desktop
+  window (`lib/mobileLocalModels.ts`); no window → 503 and "open the app",
+  no headless fallback. Pull/delete/anything else → 400
+  `unsupported_action` before the desktop is asked. Desktop switch Settings
+  → Mobile → **Local models from the phone** (under Project access, unset =
+  on) → 403 and the Home row is left out. Untested ids
+  `mobile.localModelsGate`, `mobile.localModels`, `mobile.localModels.start`.
+  Needs the backend restarted and the Mobile host updated (both Rust
+  halves: `commands::ollama` + the bridge in the window, the routes in the
+  sidecar); the PWA is rebuilt (`npm run mobile:bundle`).
+  - [ ] 🖐️ Manual phone QA — Home → Local models lists every installed
+    model with its size; Load one → "Loading into memory…" then "On the
+    GPU · Stays loaded until unloaded", and the desktop's Models & agents
+    menu shows the load while it runs; a load that outlasts the phone's
+    15 s wait is not shown as failed — the list is read again and keeps
+    refreshing fast; Unload → idle on both; with Ollama stopped, Start
+    Ollama starts it without a password dialog on the desktop, and quitting
+    the app stops a server it had to start itself; Settings → Mobile →
+    Local models from the phone off → the row disappears (and comes back
+    when switched on); with the desktop window closed the row and the sheet
+    say to open the app (against a desktop build older than this they say
+    the same, since it drops the request unread); nothing on the phone offers download,
+    update or delete; loading a single model with none resident re-points
+    the desktop's roles (expected).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31cc — To-do board project names per phone** (2026-10-04; follow-up
+  of 31cb, out of its scope). The phone's to-do board lists every registry
+  project's name in its project picker and on card tags, Mobile switch or
+  not (`MobileBridgeHost` `todoBoard` → `publicProjects`, headless
+  `headless::project_names`), and cards carry their project's opaque id. A
+  phone limited away from a project still reads its name there. Decide
+  whether the board should hide projects the phone cannot reach (switch off
+  or not on its list), then filter both the desktop answer and the headless
+  one per device (`Catalog::for_device` already knows the set).
 
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,

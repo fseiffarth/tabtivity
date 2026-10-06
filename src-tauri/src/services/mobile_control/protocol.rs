@@ -222,6 +222,51 @@ pub struct MobileLocalLaunch {
     pub agents: Vec<MobileLocalAgent>,
 }
 
+/// Everything a phone may ask of the desktop's Ollama
+/// (`docs/mobile_local_model_control_plan.md`): load an installed model,
+/// unload one, start the server. There is deliberately no pull, delete, copy
+/// or update variant — downloading and deleting stay desktop-only, so such a
+/// request cannot even be deserialized on either side of the bridge. Strict
+/// like every input type; serde ignores extra fields on the unit `Start`,
+/// which `local_models::parse_action` refuses itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LocalModelAction {
+    Load { model: String },
+    Unload { model: String },
+    Start,
+}
+
+/// One installed Ollama model as the desktop window reports it (a
+/// `DesktopResponse::LocalModels` row). `state` is `idle`, `loading`,
+/// `loaded` or `failed`; the four residency fields are meaningful only while
+/// `loaded`. The sidecar re-checks all of it (`local_models::sanitize`) before
+/// a row reaches the phone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLocalModel {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub parameter_size: Option<String>,
+    #[serde(default)]
+    pub quantization: Option<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub for_tabs: bool,
+    #[serde(default)]
+    pub remote: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MobileLocalAgent {
     pub id: String,
@@ -234,7 +279,11 @@ pub struct MobileLocalAgent {
 /// opaque agent id). `signed_in` is `None` where Tabtivity cannot tell (a CLI
 /// whose login it does not keep); `account` is the account the shared login
 /// names, when it names one; `alternate` names the CLI's other way in
-/// (`"console"`, `"browser"`) when it has one.
+/// (`"console"`, `"browser"`) when it has one. `api_key` says the CLI starts
+/// on a provider API key the desktop keeps (`agent_api_keys`) — a flag only:
+/// no key and no provider name ever crosses. `api_budget_reached` says that
+/// key's monthly budget is spent (or unset), so a new tab would be refused —
+/// a flag only, no amount.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MobileSignInOption {
     pub agent_id: String,
@@ -244,6 +293,10 @@ pub struct MobileSignInOption {
     pub account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_budget_reached: Option<bool>,
 }
 
 /// Phone-editable schedule fields. Receipts and prefix commands are desktop-owned
@@ -758,6 +811,91 @@ pub enum TodoAction {
     },
 }
 
+/// One option of an agent's markup question (`services::markup_mcp::Choice`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupChoice {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// One question of an agent's markup ask, as the phone's markup card shows it
+/// (`services::markup_mcp::Question`). `page` is 1-based; `quote` is words on
+/// that page the phone's sealed frame looks for to pin the question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupQuestion {
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    pub options: Vec<MobileMarkupChoice>,
+    #[serde(default)]
+    pub multi_select: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+}
+
+/// An open ask of the markup questions MCP (`services::markup_mcp`). The
+/// phone is told the file's leaf name, which the sidecar strips to a bare
+/// leaf once more before it crosses, and — for the Focus banner — a sealed
+/// listing row of a project file (`file_row`). `path` goes from the window to the
+/// sidecar only: the sidecar always takes it out before the ask crosses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupAsk {
+    /// The ask's random id (`ask-<hex>`), what an answer names.
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    /// Window → sidecar only: the project-relative path the ask is bound to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Sidecar → phone: the asked-about project file as the files drawer
+    /// would row it, so the Focus banner can open it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_row: Option<MobileMarkupFile>,
+    pub questions: Vec<MobileMarkupQuestion>,
+}
+
+/// A mark the agent ticked off with `markup_done` (`services::markup_mcp`):
+/// the round id the phone minted for that Submit and the mark's 1-based page
+/// and number in it. The phone maps it onto the mark it sent; no id or path
+/// of the window's crosses. The sidecar re-checks the bounds
+/// (`host.rs` `valid_tick`); fields it does not know are dropped in decoding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupTick {
+    pub round: String,
+    pub page: u32,
+    pub mark: u32,
+}
+
+/// A project file an ask is about, sealed as the files drawer seals its rows
+/// (`files::entry`): its token, its folder's token (none at the root) and
+/// the folder trail of names the phone keys its markup layer by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileMarkupFile {
+    pub token: String,
+    pub name: String,
+    pub kind: String,
+    pub size: u64,
+    pub modified: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub place: String,
+}
+
+/// One question's answer from the phone: option indices (0-based) and/or a
+/// typed **Other…** text. The desktop checks it against the ask and builds the
+/// prompt; the phone never does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobileMarkupAnswer {
+    #[serde(default)]
+    pub options: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DesktopRequest {
@@ -877,6 +1015,11 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
         action: ScheduleMutation,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// Rename one agent tab. The label is the only thing the phone supplies;
     /// the tab is named by the same `project_id` + `tmux_session` pair the
@@ -939,6 +1082,11 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
         action: PromptMutation,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// The phone put this agent tab on screen (or took it off again). Nothing
     /// is read back: it stamps the desktop's "this output has been seen" mark
@@ -983,6 +1131,11 @@ pub enum DesktopRequest {
         project_id: String,
         tmux_session: String,
         message: String,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// Rewrite a prompt `HoldPrompt` holds. Refused with `held_gone` once the
     /// scheduler delivered it (or it is no longer this tab's), `held_busy`
@@ -994,6 +1147,12 @@ pub enum DesktopRequest {
         tmux_session: String,
         held_id: String,
         message: String,
+        /// The paired phone editing, which takes the rule over
+        /// (`ScheduledAgentPrompt::phone_device`, #2348): a prompt the desktop
+        /// held then names it, so a revoke or a narrowed access cancels it.
+        /// Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
     },
     /// Take back the last `/clear` of this agent tab: the desktop types the
     /// CLI's resume of the conversation that clear ended into the tab
@@ -1052,6 +1211,58 @@ pub enum DesktopRequest {
         project_id: String,
         image_id: String,
     },
+    /// The agent tab's open markup question (`services::markup_mcp`), for the
+    /// phone's markup card and Focus banner. `path` is the project-relative
+    /// path of the file the phone's markup view shows — the sidecar resolved
+    /// it from the view's files token or outbox leaf — and absent asks for
+    /// every open ask of the tab. Answered `MarkupQuestions`; asks carry the
+    /// file's leaf name, never its path.
+    MarkupQuestions {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// Answer that ask: the desktop checks the answers, closes the ask, builds
+    /// the prompt and queues it into the tab as a phone hold does. Answered
+    /// `Seen`; `superseded`, `answered`, `gone` or `invalid_answer` when the
+    /// ask does not take it, `delivery_failed` when the prompt could not be
+    /// queued and the ask is open again, `not_delivered` when it could not be
+    /// reopened either.
+    MarkupAnswer {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        ask_id: String,
+        answers: Vec<MobileMarkupAnswer>,
+        /// The paired phone asking, which the rule it makes names
+        /// (`ScheduledAgentPrompt::phone_device`, #2348) so a revoke or a
+        /// narrowed access cancels it. Absent from an older sidecar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
+    },
+    /// **Answer in chat instead**: close the ask without an answer. Answered
+    /// `Seen`; idempotent.
+    MarkupDismiss {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        ask_id: String,
+    },
+    /// The desktop's installed Ollama models, their residency and the
+    /// server's state (`lib/mobileLocalModels.ts`). Host-wide: no project or
+    /// path is involved. Answered `LocalModels`; there is no headless answer.
+    LocalModels {
+        request_id: String,
+    },
+    /// Load, unload or start (`LocalModelAction`). Load and start answer as
+    /// soon as the request checks out and run on in the window, so the
+    /// default deadlines hold; the answer is a fresh `LocalModels`.
+    LocalModelMutate {
+        request_id: String,
+        action: LocalModelAction,
+    },
     /// The owner wrote a slice with no window answering (headless owner
     /// plan, H3) and a window is open after all: re-read it. `slices` names
     /// what moved — `workspace` (the scope's tab set; `project_id` is the raw
@@ -1106,6 +1317,11 @@ impl DesktopRequest {
             | Self::AgentTranscript { request_id, .. }
             | Self::DesktopImages { request_id, .. }
             | Self::AttachDesktopImage { request_id, .. }
+            | Self::MarkupQuestions { request_id, .. }
+            | Self::MarkupAnswer { request_id, .. }
+            | Self::MarkupDismiss { request_id, .. }
+            | Self::LocalModels { request_id }
+            | Self::LocalModelMutate { request_id, .. }
             | Self::Refresh { request_id, .. } => request_id,
         }
     }
@@ -1126,6 +1342,9 @@ impl DesktopRequest {
             // Rides on the project list, which answers without the desktop:
             // a wedged window must not hold that list up for long.
             Self::GitStates { .. } => 3,
+            // Polled every few seconds while a markup view or the Focus chat
+            // is on screen; a wedged window just shows no card.
+            Self::MarkupQuestions { .. } => 3,
             _ => 10,
         })
     }
@@ -1138,7 +1357,7 @@ impl DesktopRequest {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } => 20,
-            Self::GitStates { .. } => 2,
+            Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
         })
     }
@@ -1167,7 +1386,10 @@ impl DesktopRequest {
             | Self::ReopenTab { .. }
             | Self::PromptMutate { .. }
             | Self::HoldPrompt { .. }
-            | Self::EditHeldPrompt { .. } => true,
+            | Self::EditHeldPrompt { .. }
+            | Self::MarkupAnswer { .. }
+            | Self::MarkupDismiss { .. }
+            | Self::LocalModelMutate { .. } => true,
             Self::Catalog { .. }
             | Self::Activity { .. }
             | Self::GitStates { .. }
@@ -1188,6 +1410,8 @@ impl DesktopRequest {
             | Self::AgentTranscript { .. }
             | Self::DesktopImages { .. }
             | Self::AttachDesktopImage { .. }
+            | Self::MarkupQuestions { .. }
+            | Self::LocalModels { .. }
             | Self::Refresh { .. } => false,
         }
     }
@@ -1198,6 +1422,12 @@ pub struct AgentCatalogEntry {
     pub id: String,
     pub label: String,
     pub modes: Vec<String>,
+    /// The agent `default_agent_cmd` names ("claude" when unset): what the
+    /// phone starts when it needs one agent on its own, as Mark up's Submit
+    /// does from a screen with no agent tab. Sent only when true; an older
+    /// desktop flags none and the phone takes the first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
 }
 
 /// A status already classified by the desktop activity store. This is an
@@ -1230,6 +1460,20 @@ pub struct AgentTabStatus {
     pub working_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    /// Desktop wall clock (ms) of when the tab's current — or, once over, its
+    /// last — turn began: the prompt that started it, not a tool call within
+    /// it. Session-only; absent until the desktop has seen a turn begin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<u64>,
+    /// How many subagents the tab's session has at work right now, as its
+    /// transcript says (`AgentTranscript::running_agents`); zero when none
+    /// or when its CLI does not record it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subagents: u32,
+}
+
+pub(crate) fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// The same two readings for an agent tab with no status to report — one whose
@@ -1253,6 +1497,12 @@ pub struct AgentTabTiming {
     pub working_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at: Option<u64>,
+    /// The quiet tab's subagents still at work, as `AgentTabStatus::subagents`:
+    /// a background one runs on after the turn is over.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subagents: u32,
 }
 
 /// An agent tab closed in the project, as the desktop remembers it for a
@@ -1534,7 +1784,8 @@ pub enum DesktopResponse {
         transcript: crate::services::agent_transcript::AgentTranscript,
     },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
-    /// or [`DesktopRequest::TabPrompt`].
+    /// or [`DesktopRequest::TabPrompt`] — and a delivered
+    /// [`DesktopRequest::MarkupAnswer`] or a [`DesktopRequest::MarkupDismiss`].
     /// Carries nothing: the phone never waits on either, and the sidecar only
     /// needs to know the desktop took the report.
     Seen,
@@ -1551,6 +1802,30 @@ pub enum DesktopResponse {
     Attached {
         attachment: MobileInboxAttachment,
     },
+    /// Answers [`DesktopRequest::MarkupQuestions`]: the tab's open asks for
+    /// the file shown (at most one today) and the marks its agent ticked off
+    /// (`markup_done`; absent from an older window). A markup answer or
+    /// dismissal is acknowledged with `Seen`.
+    MarkupQuestions {
+        #[serde(default)]
+        asks: Vec<MobileMarkupAsk>,
+        #[serde(default)]
+        ticks: Vec<MobileMarkupTick>,
+    },
+    /// Answers [`DesktopRequest::LocalModels`] and a successful
+    /// [`DesktopRequest::LocalModelMutate`]. `server` is `running`,
+    /// `starting`, `stopped`, `unreachable` or `not_installed`; the sidecar
+    /// forces it, and every row, into shape before the phone sees them.
+    LocalModels {
+        #[serde(default)]
+        server: String,
+        #[serde(default)]
+        can_start: bool,
+        #[serde(default)]
+        start_failed: bool,
+        #[serde(default)]
+        models: Vec<MobileLocalModel>,
+    },
     Error {
         code: String,
         message: String,
@@ -1564,6 +1839,9 @@ pub enum AdminRequest {
     PairingCode,
     Devices,
     Revoke { device_id: String },
+    /// Keep one phone out of exactly these sections (`auth::HIDEABLE_SECTIONS`);
+    /// an empty list lets it into all of them again.
+    SetHiddenSections { device_id: String, sections: Vec<String> },
     ForgetAll,
     Shutdown,
     /// A calendar reminder for every subscribed phone (`push.rs`). Answered
@@ -1623,6 +1901,9 @@ pub struct AdminDevice {
     /// Defaulted, so a sidecar from before the field still answers.
     #[serde(default)]
     pub online: bool,
+    /// Phone sections (`auth::HIDEABLE_SECTIONS`) this device is kept out of.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1682,7 +1963,7 @@ mod tests {
     use super::{
         AgentTabPrompt, AgentTabPrompts, AgentTabSchedules, AgentTabStatus, AgentTabTiming, ClosedAgentTab, DesktopRequest,
         DesktopResponse, git_dot, MobileAlertItem,
-        MobileAlertsSnapshot,
+        MobileAlertsSnapshot, MobileMarkupAnswer,
         MobileMailView, MobilePromptInput, MobileScheduleInput, PromptMutation, ScheduleMutation,
     };
     use crate::schema::AgentScheduleRule;
@@ -1707,6 +1988,8 @@ mod tests {
                 goal: false,
                 working_at: Some(1_700_000_000_000),
                 done_at: None,
+                turn_started_at: None,
+                subagents: 2,
             }],
             schedules: vec![AgentTabSchedules {
                 tmux_session: concat!(crate::app_slug!(), "-project-0--agent-123456789").into(),
@@ -1732,6 +2015,8 @@ mod tests {
                 goal: true,
                 working_at: None,
                 done_at: Some(1_700_000_100_000),
+                turn_started_at: None,
+                subagents: 0,
             }],
             closed: vec![ClosedAgentTab {
                 id: "0b8f6c1e-closed".into(),
@@ -1770,6 +2055,9 @@ mod tests {
         assert!(response_json["statuses"][0].get("goal").is_none());
         assert_eq!(response_json["timings"][0]["goal"], true);
         assert!(response_json["timings"][0].get("plan").is_none());
+        // So does the count of subagents at work.
+        assert_eq!(response_json["statuses"][0]["subagents"], 2);
+        assert!(response_json["timings"][0].get("subagents").is_none());
     }
 
     /// A desktop one build ahead of this sidecar must cost the phone the field
@@ -1926,11 +2214,20 @@ mod tests {
             tmux_session: concat!(crate::app_slug!(), "-project-0--agent-123456789").into(),
             held_id: "held-1".into(),
             message: "fix the tests, then the docs".into(),
+            device_id: Some("device-1".into()),
         };
         assert_eq!(request.request_id(), "request-held");
         let json = serde_json::to_value(&request).expect("serialize held edit");
         assert_eq!(json["type"], "edit_held_prompt");
         assert_eq!(json["held_id"], "held-1");
+        assert_eq!(json["device_id"], "device-1");
+        // An older sidecar's edit names no phone and still parses (#2348).
+        let mut older_edit = json.clone();
+        older_edit.as_object_mut().unwrap().remove("device_id");
+        assert!(matches!(
+            serde_json::from_value::<DesktopRequest>(older_edit),
+            Ok(DesktopRequest::EditHeldPrompt { device_id: None, .. })
+        ));
         let mut hostile = json.clone();
         hostile["schedule_target_id"] = "must-not-cross".into();
         assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
@@ -1939,13 +2236,227 @@ mod tests {
             project_id: "raw-project".into(),
             tmux_session: "raw-tmux".into(),
             message: "and the lint".into(),
+            device_id: Some("device-1".into()),
         })
         .expect("serialize hold");
         assert_eq!(hold["type"], "hold_prompt");
+        assert_eq!(hold["device_id"], "device-1");
+        // An older sidecar names no phone; the request still parses.
+        let mut older = hold.clone();
+        older.as_object_mut().unwrap().remove("device_id");
+        assert!(matches!(serde_json::from_value::<DesktopRequest>(older), Ok(DesktopRequest::HoldPrompt { device_id: None, .. })));
         let answer = serde_json::to_value(DesktopResponse::Held { held_id: "held-1".into() })
             .expect("serialize held answer");
         assert_eq!(answer["status"], "held");
         assert_eq!(answer["held_id"], "held-1");
+    }
+
+    /// Local models from the phone: list and mutate round-trip, a pull (or
+    /// any action the enum does not name) cannot even be deserialized, and
+    /// the mutate is the one write — on the default deadlines, since nothing
+    /// waits on a load or a start.
+    #[test]
+    fn local_model_requests_round_trip_and_a_pull_cannot_cross() {
+        use super::{LocalModelAction, MobileLocalModel};
+        let list = DesktopRequest::LocalModels { request_id: "r-list".into() };
+        let json = serde_json::to_value(&list).expect("serialize list");
+        assert_eq!(json, serde_json::json!({ "type": "local_models", "request_id": "r-list" }));
+        let restored: DesktopRequest = serde_json::from_value(json).expect("round-trip list");
+        assert_eq!(restored.request_id(), "r-list");
+        assert!(!restored.is_mutation());
+
+        for (action, wire) in [
+            (LocalModelAction::Load { model: "qwen3.5:9b".into() }, serde_json::json!({ "type": "load", "model": "qwen3.5:9b" })),
+            (LocalModelAction::Unload { model: "llama3".into() }, serde_json::json!({ "type": "unload", "model": "llama3" })),
+            (LocalModelAction::Start, serde_json::json!({ "type": "start" })),
+        ] {
+            let request = DesktopRequest::LocalModelMutate { request_id: "r-mut".into(), action: action.clone() };
+            let json = serde_json::to_value(&request).expect("serialize mutate");
+            assert_eq!(json["type"], "local_model_mutate");
+            assert_eq!(json["action"], wire);
+            let restored: DesktopRequest = serde_json::from_value(json).expect("round-trip mutate");
+            assert_eq!(restored.request_id(), "r-mut");
+            assert!(restored.is_mutation());
+            assert!(matches!(restored, DesktopRequest::LocalModelMutate { action: ref back, .. } if *back == action));
+        }
+
+        for request in [
+            list,
+            DesktopRequest::LocalModelMutate { request_id: "r".into(), action: LocalModelAction::Start },
+        ] {
+            assert_eq!(request.response_timeout(), std::time::Duration::from_secs(10));
+            assert!(request.desktop_timeout() < request.response_timeout());
+        }
+
+        for hostile in [
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "pull", "model": "x" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "delete", "model": "x" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "load", "model": "x", "insecure": true } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "unload", "model": "x", "device": "gpu" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "load" } }),
+            serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "start" }, "model": "x" }),
+            serde_json::json!({ "type": "local_models", "request_id": "r", "project_id": "p" }),
+        ] {
+            assert!(serde_json::from_value::<DesktopRequest>(hostile.clone()).is_err(), "accepted {hostile}");
+        }
+        // The serde gap documented in
+        // `terminal_frames_match_the_phones_wire_shapes_exactly`: the unit
+        // `start` ignores an extra field. `local_models::parse_action` refuses
+        // it before a request is ever built.
+        let gap = serde_json::json!({ "type": "local_model_mutate", "request_id": "r", "action": { "type": "start", "model": "x" } });
+        assert!(matches!(
+            serde_json::from_value::<DesktopRequest>(gap),
+            Ok(DesktopRequest::LocalModelMutate { action: LocalModelAction::Start, .. })
+        ));
+
+        // The answer: lenient like every response, defaulted field by field.
+        let response: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "local_models",
+            "server": "running",
+            "can_start": false,
+            "start_failed": false,
+            "models": [
+                { "name": "qwen3.5:9b", "size": 6594474711u64, "parameter_size": "9B", "quantization": "Q4_K_M",
+                  "state": "loaded", "loaded_size": 7100000000u64, "vram": 7100000000u64, "pinned": true,
+                  "expires_in": null, "for_tabs": true, "remote": false, "added_later": 1 },
+                { "name": "llama3:latest" },
+            ],
+            "added_later": "ignored",
+        }))
+        .expect("local models answer");
+        let DesktopResponse::LocalModels { server, models, .. } = &response else { panic!("{response:?}") };
+        assert_eq!(server, "running");
+        assert_eq!(models[0].vram, Some(7_100_000_000));
+        assert_eq!(models[0].pinned, Some(true));
+        assert_eq!(models[0].expires_in, None);
+        assert_eq!(
+            models[1],
+            MobileLocalModel {
+                name: "llama3:latest".into(),
+                size: 0,
+                parameter_size: None,
+                quantization: None,
+                state: String::new(),
+                loaded_size: None,
+                vram: None,
+                pinned: None,
+                expires_in: None,
+                for_tabs: false,
+                remote: false,
+            }
+        );
+        let back = serde_json::to_value(&response).expect("serialize answer");
+        assert_eq!(back["status"], "local_models");
+        let restored: DesktopResponse = serde_json::from_value(back).expect("round-trip answer");
+        assert!(matches!(restored, DesktopResponse::LocalModels { ref models, .. } if models.len() == 2));
+    }
+
+    #[test]
+    fn markup_questions_cross_by_tab_pair_and_answers_stay_strict() {
+        let list = DesktopRequest::MarkupQuestions {
+            request_id: "request-markup".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            path: None,
+        };
+        assert_eq!(list.request_id(), "request-markup");
+        let json = serde_json::to_value(&list).expect("serialize markup list");
+        assert_eq!(json["type"], "markup_questions");
+        // No path: the key is left out, not sent as null.
+        assert_eq!(json.as_object().expect("object").len(), 4, "{json}");
+        let shown = serde_json::to_value(DesktopRequest::MarkupQuestions {
+            request_id: "r".into(),
+            project_id: "p".into(),
+            tmux_session: "t".into(),
+            path: Some("docs/draft.pdf".into()),
+        })
+        .expect("serialize shown");
+        assert_eq!(shown["path"], "docs/draft.pdf");
+        // A read, polled: the short deadlines the project list's git dots use.
+        assert!(!list.is_mutation());
+        assert_eq!(list.response_timeout(), std::time::Duration::from_secs(3));
+        assert_eq!(list.desktop_timeout(), std::time::Duration::from_secs(2));
+
+        let answer = DesktopRequest::MarkupAnswer {
+            request_id: "request-answer".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            ask_id: "ask-0123456789abcdef".into(),
+            answers: vec![
+                MobileMarkupAnswer { options: vec![1], other: None },
+                MobileMarkupAnswer { options: vec![], other: Some("colour".into()) },
+            ],
+            device_id: None,
+        };
+        assert!(answer.is_mutation());
+        assert_eq!(answer.response_timeout(), std::time::Duration::from_secs(10));
+        let json = serde_json::to_value(&answer).expect("serialize answer");
+        assert_eq!(json["type"], "markup_answer");
+        assert_eq!(json["answers"], serde_json::json!([{ "options": [1] }, { "options": [], "other": "colour" }]));
+        let restored: DesktopRequest = serde_json::from_value(json.clone()).expect("round-trip answer");
+        assert!(matches!(restored, DesktopRequest::MarkupAnswer { ref answers, .. } if answers.len() == 2));
+        // Anything but the two fields is refused, as is a negative index.
+        for bad in [
+            serde_json::json!([{ "options": [1], "prompt": "typed by the phone" }]),
+            serde_json::json!([{ "options": [-1] }]),
+        ] {
+            let mut hostile = json.clone();
+            hostile["answers"] = bad;
+            assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+        }
+        let mut hostile = json;
+        hostile["schedule_target_id"] = "must-not-cross".into();
+        assert!(serde_json::from_value::<DesktopRequest>(hostile).is_err());
+
+        let dismiss = DesktopRequest::MarkupDismiss {
+            request_id: "request-dismiss".into(),
+            project_id: "raw-project".into(),
+            tmux_session: "raw-tmux".into(),
+            ask_id: "ask-0123456789abcdef".into(),
+        };
+        assert!(dismiss.is_mutation());
+        assert_eq!(serde_json::to_value(&dismiss).expect("dismiss")["type"], "markup_dismiss");
+
+        // The answer: a desktop that sent the view's `file` loses it here;
+        // `path` reaches the sidecar only, which takes it out (host.rs).
+        let response: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "markup_questions",
+            "asks": [{
+                "id": "ask-0123456789abcdef",
+                "file": "docs/paper/draft.pdf",
+                "file_name": "draft.pdf",
+                "questions": [{
+                    "question": "Move the paragraph or the figure?",
+                    "options": [{ "label": "The figure" }, { "label": "The paragraph", "description": "Above it" }],
+                    "multi_select": true,
+                    "page": 3,
+                    "quote": "as shown in Figure 2",
+                }],
+            }],
+        }))
+        .expect("decode markup questions");
+        let reencoded = serde_json::to_value(&response).expect("re-encode");
+        assert_eq!(reencoded["asks"][0]["file_name"], "draft.pdf");
+        assert!(reencoded["asks"][0].get("file").is_none(), "{reencoded}");
+        assert_eq!(reencoded["asks"][0]["questions"][0]["multi_select"], true);
+        assert_eq!(reencoded["asks"][0]["questions"][0]["page"], 3);
+        assert_eq!(reencoded["ticks"], serde_json::json!([]), "a window without ticks answers none");
+        let empty: DesktopResponse = serde_json::from_value(serde_json::json!({ "status": "markup_questions" })).expect("no asks");
+        assert!(matches!(empty, DesktopResponse::MarkupQuestions { ref asks, ref ticks } if asks.is_empty() && ticks.is_empty()));
+        // Ticks cross as round, page and mark only.
+        let ticked: DesktopResponse = serde_json::from_value(serde_json::json!({
+            "status": "markup_questions",
+            "ticks": [{ "round": "k3x9a0b1", "page": 2, "mark": 4, "file": "docs/paper/draft.pdf" }],
+        }))
+        .expect("decode ticks");
+        assert_eq!(
+            serde_json::to_value(&ticked).expect("re-encode ticks")["ticks"],
+            serde_json::json!([{ "round": "k3x9a0b1", "page": 2, "mark": 4 }])
+        );
+        for bad in [serde_json::json!({ "round": "r", "page": -1, "mark": 1 }), serde_json::json!({ "round": "r", "page": 1 })] {
+            let hostile = serde_json::json!({ "status": "markup_questions", "ticks": [bad] });
+            assert!(serde_json::from_value::<DesktopResponse>(hostile).is_err());
+        }
     }
 
     #[test]
@@ -1985,6 +2496,7 @@ mod tests {
                     },
                 },
             },
+            device_id: Some("device-1".into()),
         };
         let value = serde_json::to_value(&request).expect("serialize schedule mutation");
         assert_eq!(value["type"], "schedule_mutate");
@@ -2015,6 +2527,7 @@ mod tests {
                 prompt_id: "prompt-1".into(),
                 tmux_session: "raw-tmux".into(),
             },
+            device_id: Some("device-1".into()),
         };
         let value = serde_json::to_value(&request).expect("serialize prompt mutation");
         assert_eq!(value["type"], "prompt_mutate");
@@ -2033,6 +2546,7 @@ mod tests {
                     message: "Review the build".into(),
                 },
             },
+            device_id: None,
         })
         .expect("serialize create");
         create["action"]["prompt"]["id"] = "phone-picked".into();
@@ -2337,5 +2851,33 @@ mod tests {
         let value = serde_json::to_value(&request).expect("serialize");
         assert_eq!(value, json!({"type": "launch_options", "request_id": "r", "project_id": "p"}));
         assert_eq!(request.request_id(), "r");
+    }
+
+    #[test]
+    fn a_sign_in_row_carries_the_api_key_flag_and_nothing_more() {
+        let response: DesktopResponse = serde_json::from_value(json!({
+            "status": "launch_options",
+            "sign_in": [
+                {"agent_id": "a1", "signed_in": true, "api_key": true},
+                {"agent_id": "a2", "signed_in": false},
+                {"agent_id": "a3", "signed_in": true, "api_key": true, "api_budget_reached": true}
+            ]
+        }))
+        .expect("launch options");
+        let DesktopResponse::LaunchOptions { sign_in, .. } = response else {
+            panic!("launch options");
+        };
+        assert_eq!(sign_in[0].api_key, Some(true));
+        assert_eq!(sign_in[1].api_key, None);
+        assert_eq!(sign_in[0].api_budget_reached, None);
+        assert_eq!(sign_in[2].api_budget_reached, Some(true));
+        assert_eq!(
+            serde_json::to_value(&sign_in).expect("serialize"),
+            json!([
+                {"agent_id": "a1", "signed_in": true, "api_key": true},
+                {"agent_id": "a2", "signed_in": false},
+                {"agent_id": "a3", "signed_in": true, "api_key": true, "api_budget_reached": true}
+            ])
+        );
     }
 }

@@ -4,7 +4,7 @@ The front door for everything about the server version: where it stands,
 what the user decided, what is open, and which document holds the detail.
 Read this first; keep it current when a decision or an open point changes.
 
-## Status (2026-10-06)
+## Status (2026-10-07)
 
 - **Built, reviewed, unmerged, never run live.** Branch `hosted`
   (`.claude/worktrees/hosted`), `f3efd50b..` — every phase of the plan
@@ -12,8 +12,11 @@ Read this first; keep it current when a decision or an open point changes.
   reviewers and a final fix round. All gates green, including the Windows
   and macOS all-targets checks and a GTK-free server daemon (`ldd`: libc
   only).
-- **Not on `develop`.** `develop` has moved on (~145 commits, incl. #2339
-  and its own agent API keys); see [Open problems](#open-problems).
+- **`develop` merged in (2026-10-07).** `develop` `a6ed2c7a` (214 commits
+  past the branch base, incl. #2339 and the desktop's own agent API keys) is
+  merged into `hosted`; 39 conflicted files, how each was resolved is in
+  `hosted_handoff.md` § "Merge `develop` → `hosted`". The other direction,
+  `hosted` → `develop`, is still owed (#2386).
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 
@@ -129,13 +132,18 @@ All answered 2026-09-29 … 2026-10-04; the plan's §12 holds Q1–Q14.
    knows nothing of a user's own keychain key; the server daemon has no OS
    keychain at all (the `desktop` feature is off), so the desktop path
    cannot work there as built; and the two budgets count differently.
-   Must be settled before or during the merge: one credential path per CLI
+   Must be settled before `hosted` → `develop`: one credential path per CLI
    on a server, one budget model, and the user rule "no redundant
-   variants" says extend one, don't keep two.
-2. **The merge (#2386).** `develop` → `hosted` (~11 conflicts), then
-   `hosted` → `develop`; wire #2339's root-MCP local-model lane into the
-   model allowlist; class rows + desktop-feature attributes for develop's
-   new commands; renumber TODOs if they collided.
+   variants" says extend one, don't keep two. The 2026-10-07 merge settled
+   the one collision that broke tests: the administrator's key for Gemini
+   and Vibe now rides develop's app-named secret carriers on tmux (never a
+   CLI's common variable), and develop's three `agent_api_key_*` commands are
+   `off` on a server. Everything else of #2389 stays open.
+2. **The merge (#2386).** `develop` → `hosted` done 2026-10-07 (39
+   conflicts, class rows and desktop-feature attributes for develop's new
+   commands included; TODO numbers did not collide). Owed: `hosted` →
+   `develop`, and #2339's root-MCP local-model lane through the model
+   allowlist once the daemon serves that lane (today only the window does).
 3. **Still deferred:** phone push for turn edges with no window (#2384); a
    second page re-typing a shared-PTY tab's launch input (#2358); the rest
    of the gateway/helper security review and a gateway body cap (#2353);

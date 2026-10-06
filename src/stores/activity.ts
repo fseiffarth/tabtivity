@@ -103,7 +103,7 @@ const tailByPty: Record<string, string> = {};
 /// Absent for a tab whose agent fires no hooks, or once a verdict was retired.
 const turnByPty: Record<string, { state: AgentTurnState; at: number; job: boolean }> = {};
 // Automation must not inherit the UI's silence fallback or unread state.
-const deliveryTurns: Record<string, { state: AgentTurnState; at: number; startedAt?: number; job: boolean }> = {};
+const deliveryTurns: Record<string, { state: AgentTurnState; at: number; startedAt?: number; stoppedAt?: number; job: boolean }> = {};
 const seenAtByPty: Record<string, number> = {};
 const bellByPty: Record<string, number> = {};
 const proposalByPty: Record<string, number> = {};
@@ -139,6 +139,39 @@ const busySinceMarkByPty: Record<string, boolean> = {};
 /// "after the user looked". Counting them brought a turn the user had already
 /// read back as unread a few seconds after every look away.
 const workAtByPty: Record<string, number> = {};
+/// When the tab's current — or, once it is over, its last — turn began (ms
+/// epoch): a hooked agent's prompt (`noteAgentTurn`), or for one with no hooks
+/// the onset of the burst that first read as work after its last finished turn.
+/// A tool call inside a turn, or an approval it waited on, does not restart it.
+/// Read by the phone bridge (`agentTurnStartedAt`), which shows how long a tab
+/// has been — or was — at work on it.
+const turnStartByPty: Record<string, number> = {};
+/// When work the agent left running past its Stop — a background shell (the
+/// hook's `job`) or a subagent (`noteBackgroundWork`) — was last seen alive.
+/// Claude wakes itself when that work finishes; a `working` with this stamp
+/// after the Stop and no input since carries on the turn instead of opening one
+/// from zero (`wokenByBackground`).
+const backgroundAtByPty: Record<string, number> = {};
+
+/** When the tab's current or last turn began, if this session saw one begin. */
+export function agentTurnStartedAt(ptyId: string): number | undefined {
+  return turnStartByPty[ptyId];
+}
+
+/** Record that the tab's session had work of its own at `at` — a subagent still
+ *  running, as the phone bridge counts them (`mobileSubagentCount`). */
+export function noteBackgroundWork(ptyId: string, at = Date.now()): void {
+  if ((backgroundAtByPty[ptyId] ?? 0) < at) backgroundAtByPty[ptyId] = at;
+}
+
+/** Whether a `working` after a Stop is the agent woken by the work it left
+ *  running (a subagent or background shell finished) rather than a new prompt:
+ *  that work was seen alive after the Stop, and nobody typed since. */
+function wokenByBackground(ptyId: string, prev: (typeof deliveryTurns)[string] | undefined): boolean {
+  if (prev?.state !== "done" || interruptedByPty[ptyId] !== undefined) return false;
+  const stoppedAt = prev.stoppedAt ?? prev.at;
+  return (backgroundAtByPty[ptyId] ?? 0) >= stoppedAt && (inputByPty[ptyId] ?? 0) <= stoppedAt;
+}
 
 /// Memo for the decision-prompt test, keyed by PTY id and validated against the
 /// tail it was computed from. `attentionFor` asks the question of every agent tab
@@ -176,6 +209,8 @@ const PTY_MAPS: Record<string, unknown>[] = [
   readAtByPty,
   busySinceMarkByPty,
   workAtByPty,
+  turnStartByPty,
+  backgroundAtByPty,
 ];
 
 /// Braille pattern cells (U+2800–U+28FF), which an agent TUI paints as
@@ -264,7 +299,25 @@ export function noteAgentTurn(ptyId: string, state: AgentTurnState, job = false)
   if (isDetachedWindow()) return;
   if (!splitPtyId(ptyId)) return;
   const at = Date.now();
-  deliveryTurns[ptyId] = { state, at, job, startedAt: state === "working" ? at : deliveryTurns[ptyId]?.startedAt };
+  // `working` also comes after every tool call and ends an approval wait; only
+  // one that follows a finished, interrupted or never-started turn opens a new
+  // one. The previous verdict is the raw hook history (`deliveryTurns`, which
+  // answering a prompt does not retire), read before it is overwritten and
+  // before the interrupted mark is cleared below.
+  // So does one that wakes the agent on the work it left running past its Stop:
+  // the turn was waiting on that work, not over (`wokenByBackground`).
+  const prevTurn = deliveryTurns[ptyId];
+  if (state === "working") {
+    const prev = prevTurn?.state;
+    const resumes =
+      ((prev === "working" || prev === "decision") && interruptedByPty[ptyId] === undefined) ||
+      wokenByBackground(ptyId, prevTurn);
+    if (!resumes || turnStartByPty[ptyId] === undefined) turnStartByPty[ptyId] = at;
+  }
+  if (state === "done" && job) noteBackgroundWork(ptyId, at);
+  // A job's end re-reports `done`; the Stop is the first of the run.
+  const stoppedAt = state === "done" ? (prevTurn?.state === "done" ? prevTurn.stoppedAt ?? prevTurn.at : at) : undefined;
+  deliveryTurns[ptyId] = { state, at, job, stoppedAt, startedAt: state === "working" ? at : prevTurn?.startedAt };
   // A new turn (or prompt) ends the interrupted mark, and so does the session
   // ending. A `done` does not: after an interrupt Claude's only hook is the
   // idle notice a minute later, which says nothing about the turn that was cut.
@@ -767,8 +820,8 @@ function sameCountMaps(
  *  a tally of what the PROJECT is doing, not of what still needs a glance, and a
  *  project whose bars emptied out the moment it was selected could not answer the
  *  one question the strip exists for — "is anything still running in there?" —
- *  for the project you are actually in. (The tab bar still hides the viewed tab's
- *  own glow: there, the tab IS the thing you're looking at.) A looked-at tab that
+ *  for the project you are actually in. (The tab bar shows the viewed tab's
+ *  working ring too, but not its `done`.) A looked-at tab that
  *  went quiet can still hold no `done` flag, so what a selected project shows is
  *  its working tabs and its unanswered prompts — see `attentionFor`.
  *  Scopes whose counts are unchanged keep their previous object identity, so a
@@ -1079,6 +1132,9 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
             nextDone[ptyId] = turn.at;
           }
         } else if (tabBusy) {
+          // The first busy tick since the last finished turn starts a new one,
+          // dated from the burst that made it read as work.
+          if (!busySinceMarkByPty[ptyId]) turnStartByPty[ptyId] = onset ?? now;
           busySinceMarkByPty[ptyId] = true;
         } else if (ts !== undefined && inputByPty[ptyId] !== undefined) {
           // Was the burst that just ended work? Either a tick saw it busy, or

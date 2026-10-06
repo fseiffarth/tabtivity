@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
@@ -6,6 +6,8 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { CalendarGlyph } from "../header/HeaderGlyphs";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
+import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
+import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { CalendarPane } from "./CalendarPane";
 import { storageKey } from "../../lib/brand";
 
@@ -39,10 +41,18 @@ export function CalendarOverlayHost() {
   // `barProps.title` is the move hint; on the whole bar it would hover over the
   // tab too, so it goes on the mark alone (the root console's placement).
   const { title: moveHint, ...barRest } = barProps;
+  // The docked root agent beside the calendar (Ctrl+1–9 here, or the bar's
+  // button), capped to leave the calendar room (`overlayAgentMaxWidth`).
+  const agent = useOverlayAgent("calendar", live);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const agentMaxWidth = useOverlayAgentMaxWidth(bodyRef, live);
 
   useEffect(() => {
     if (!live) return;
     const onKey = (e: KeyboardEvent) => {
+      // Escape typed into the docked agent is its cancel key, not "close" —
+      // the root console's `regionRef` rule.
+      if ((e.target as Element | null)?.closest?.(".overlay-agent-column")) return;
       // An Escape the approvals panel (or anything else) already took is not ours.
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.stopPropagation();
@@ -93,6 +103,7 @@ export function CalendarOverlayHost() {
             </div>
           </div>
           <div className="tab-controls root-overlay-controls">
+            <OverlayAgentToggle handle={agent} />
             <OverlayApprovals domain="calendar" />
             {fillButton}
             <button
@@ -106,8 +117,18 @@ export function CalendarOverlayHost() {
             </button>
           </div>
         </div>
-        <div className="subwindow-body calendar-overlay-body" role="tabpanel">
+        <div ref={bodyRef} className="subwindow-body calendar-overlay-body app-overlay-body-row" role="tabpanel">
           <CalendarPane visible />
+          {agent.showColumn && (
+            <OverlayAgentColumn
+              app="calendar"
+              tab={agent.tab}
+              hint={agent.hint}
+              maxWidth={agentMaxWidth}
+              focusRequest={agent.focusRequest}
+              onDismissHint={agent.dismissHint}
+            />
+          )}
         </div>
       </div>
     </div>

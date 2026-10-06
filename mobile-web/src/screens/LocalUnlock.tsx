@@ -4,7 +4,7 @@ import { localFailureText } from "../connection";
 import { isUntested } from "../../../src/lib/untested";
 import { BrandHead } from "../components/BrandHead";
 import { BUNDLE_VERSION } from "../buildInfo";
-import { BRAND } from "../../../src/lib/brand";
+import { useT } from "../../../src/lib/i18n";
 
 /** A ridge-arch fingerprint, drawn for this screen: open loops over a centre
  * stem, with the broken ridges on the right that make it read as a print
@@ -31,6 +31,7 @@ function unlockFlourishMs(): number {
 }
 
 export function LocalUnlock({ setup, onUnlocked }: { setup: boolean; onUnlocked: () => void }) {
+  const t = useT();
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -119,7 +120,7 @@ export function LocalUnlock({ setup, onUnlocked }: { setup: boolean; onUnlocked:
     setError("");
     const action = setup
       ? pin !== confirm
-        ? Promise.reject(new Error("The PIN entries do not match."))
+        ? Promise.reject(new Error(t("mobile.lock.pinMismatch")))
         : configureLocalUnlock(pin)
       : unlockLocal(pin).then(maybeEnrollBiometric);
     void action.then(finish).catch((reason) => setError(localFailureText(reason))).finally(() => setBusy(false));
@@ -154,41 +155,36 @@ export function LocalUnlock({ setup, onUnlocked }: { setup: boolean; onUnlocked:
   const verifying = biometricBusy && !unlocked;
   const phase = unlocked ? " unlocked" : verifying ? " verifying" : "";
   const content = <>
-    <BrandHead>{setup ? `Secure ${BRAND.display} Mobile` : `${BRAND.display} Mobile locked`}{!setup && isUntested("mobile.link.silentResume") && <small className="untested"> Untested</small>}{!setup && isUntested("mobile.lock.homeSheet") && <small className="untested"> Untested</small>}{!setup && isUntested("mobile.lock.reloadGrace") && <small className="untested"> Untested</small>}</BrandHead>
+    <BrandHead>{setup ? t("mobile.lock.secureTitle") : t("mobile.lock.lockedTitle")}{!setup && isUntested("mobile.link.silentResume") && <small className="untested"> {t("mobile.newTab.untested")}</small>}{!setup && isUntested("mobile.lock.homeSheet") && <small className="untested"> {t("mobile.newTab.untested")}</small>}{!setup && isUntested("mobile.lock.reloadGrace") && <small className="untested"> {t("mobile.newTab.untested")}</small>}</BrandHead>
     <p className="local-unlock-status" aria-live="polite">
-      {unlocked ? "Unlocked" : verifying ? "Touch the fingerprint sensor" : ""}
-      {verifying && isUntested("mobile.lock.brandedSheet") && <small className="untested"> Untested</small>}
+      {unlocked ? t("mobile.lock.unlocked") : verifying ? t("mobile.lock.touchSensor") : ""}
+      {verifying && isUntested("mobile.lock.brandedSheet") && <small className="untested"> {t("mobile.newTab.untested")}</small>}
     </p>
     {verifying && !setup && <button className="local-unlock-use-pin" onClick={usePinInstead}>
-      Use PIN instead{isUntested("mobile.lock.pinInstead") && <small className="untested"> Untested</small>}
+      {t("mobile.lock.usePin")}{isUntested("mobile.lock.pinInstead") && <small className="untested"> {t("mobile.newTab.untested")}</small>}
     </button>}
     {setup ? <>
       <p>{biometricAvailable === false
-        ? "This browser offers no fingerprint or Face ID unlock — browsers built on the system WebView (DuckDuckGo among them) do not support it. The app PIN will be your only unlock here; keep the phone’s own screen lock enabled, or pair again in Chrome or Safari to use a fingerprint."
-        : "Create a fallback app PIN. Your fingerprint, Face ID, or secure screen lock becomes the default unlock; the PIN steps in when it fails."}</p>
-      <label>New PIN ({MIN_NEW_PIN}–12 digits)<input className="code" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))} /></label>
-      <label>Confirm PIN<input className="code" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={confirm} onChange={(event) => setConfirm(event.target.value.replace(/\D/g, ""))} /></label>
+        ? t("mobile.lock.noBiometricSetup")
+        : t("mobile.lock.setupHint")}</p>
+      <label>{t("mobile.lock.newPin", { min: MIN_NEW_PIN })}<input className="code" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, ""))} /></label>
+      <label>{t("mobile.lock.confirmPin")}<input className="code" type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={confirm} onChange={(event) => setConfirm(event.target.value.replace(/\D/g, ""))} /></label>
     </> : biometricEnrolled === null ? null : <>
       <p>{biometricEnrolled
-        ? "Unlock with your fingerprint or device screen lock — or enter your app PIN below."
+        ? t("mobile.lock.unlockEnrolled")
         : biometricAvailable
-          ? "Enter your app PIN. Unlocking also registers your fingerprint or screen lock as the default unlock for next time."
-          : `Enter your app PIN before ${BRAND.display} reconnects.`}</p>
+          ? t("mobile.lock.unlockWillEnroll")
+          : t("mobile.lock.unlockPinOnly")}</p>
       {/* A missing fingerprint option must not read as a broken one. Some
         * phone browsers are built on the system WebView and expose no platform
         * authenticator at all, so the lock can only ever be the PIN there —
         * say which browsers do offer it rather than leaving it unexplained. */}
-      {!biometricEnrolled && biometricAvailable === false && <p className="local-unlock-note">
-        This browser offers no fingerprint or Face ID unlock — browsers built on the
-        system WebView (DuckDuckGo among them) do not support it. Open {BRAND.display} Mobile in
-        Chrome or Safari to unlock with a fingerprint; that means pairing the phone once more,
-        since a pairing belongs to the browser it was made in.
-      </p>}
+      {!biometricEnrolled && biometricAvailable === false && <p className="local-unlock-note">{t("mobile.lock.noBiometricNote")}</p>}
       {biometricEnrolled && <button className={`local-unlock-biometric${biometricBusy ? " waiting" : ""}`} disabled={biometricBusy} onClick={unlockWithBiometric}>
         <span className="local-unlock-print"><FingerprintIcon /></span>
-        <span>{biometricBusy ? "Waiting for the device…" : "Unlock with fingerprint"}</span>
+        <span>{biometricBusy ? t("mobile.lock.waitingDevice") : t("mobile.lock.unlockFingerprint")}</span>
       </button>}
-      <label>PIN<input ref={pinInput} className="code" type="password" inputMode="numeric" autoComplete="current-password" autoFocus={!biometricEnrolled} maxLength={pinLength ?? 12} value={pin} onChange={(event) => {
+      <label>{t("mobile.lock.pin")}<input ref={pinInput} className="code" type="password" inputMode="numeric" autoComplete="current-password" autoFocus={!biometricEnrolled} maxLength={pinLength ?? 12} value={pin} onChange={(event) => {
         const next = event.target.value.replace(/\D/g, "");
         setPin(pinLength === null ? next : next.slice(0, pinLength));
       }} /></label>
@@ -196,13 +192,13 @@ export function LocalUnlock({ setup, onUnlocked }: { setup: boolean; onUnlocked:
     {error && <p className="error">{error}</p>}
     {setup
       ? <button className="primary" disabled={busy || !validPin(pin) || pin.length < MIN_NEW_PIN || pin !== confirm} onClick={submit}>
-          {busy ? "Securing…" : biometricAvailable === false ? "Set app PIN" : "Set PIN and verify device"}
+          {busy ? t("mobile.pair.securing") : biometricAvailable === false ? t("mobile.lock.setPin") : t("mobile.lock.setPinVerify")}
         </button>
       : biometricEnrolled !== null && pinLength === null && <button className="primary" disabled={busy || !validPin(pin)} onClick={submit}>
-          {busy ? "Checking…" : "Unlock"}
+          {busy ? t("mobile.lock.checking") : t("mobile.lock.unlock")}
         </button>}
-    <p className="local-unlock-note">This local lock protects against casual access to an unlocked phone. It does not replace the phone’s own device lock or {BRAND.display}’s paired-device authentication.</p>
-    <p className="splash-version">{BRAND.display} Mobile {BUNDLE_VERSION}{isUntested("mobile.lock.version") && <small className="untested"> Untested</small>}</p>
+    <p className="local-unlock-note">{t("mobile.lock.note")}</p>
+    <p className="splash-version">{t("mobile.title")} {BUNDLE_VERSION}{isUntested("mobile.lock.version") && <small className="untested"> {t("mobile.newTab.untested")}</small>}</p>
   </>;
   // Setup runs once, right after pairing, with no project data to stand
   // behind it yet — its own full screen. The lock met on every later cold
@@ -211,7 +207,7 @@ export function LocalUnlock({ setup, onUnlocked }: { setup: boolean; onUnlocked:
   // are going rather than a screen unto itself.
   if (setup) return <main className={`pair screen brand-screen local-unlock${phase}`}>{content}</main>;
   return <div className={`sheet-backdrop lock-sheet-backdrop${phase}`} role="presentation">
-    <section className={`option-sheet brand-screen local-unlock-sheet local-unlock${phase}`} role="dialog" aria-modal="true" aria-label={`${BRAND.display} Mobile locked`}>
+    <section className={`option-sheet brand-screen local-unlock-sheet local-unlock${phase}`} role="dialog" aria-modal="true" aria-label={t("mobile.lock.lockedTitle")}>
       <span className="sheet-grip" aria-hidden="true" />
       {content}
     </section>

@@ -44,7 +44,15 @@ pub fn main() -> ! {
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(FENCE_SCOPE_ARG)) {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
-        std::process::exit(crate::services::fence_scope::run(&args));
+        std::process::exit(crate::services::fence_scope::run(&args, crate::services::agent_exec::apply));
+    }
+    // `--agent-exec <program> [args…]`: the step in front of bwrap where no
+    // Landlock scope is taken but the spawn carries a secret
+    // (`agent_fence::launcher_step`) — carriers become the CLI's own
+    // variables, then exec; as the desktop binary's `main` answers it.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(crate::services::agent_exec::MODE_FLAG)) {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        std::process::exit(crate::services::agent_exec::run(&args));
     }
     // Before anything reads a path, and while this is the only thread.
     separate_from_the_desktop();
@@ -391,7 +399,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn main_answers_the_fence_scope_verb_the_fence_execs() {
-        let (_, args) = crate::services::agent_fence::seccomp_launcher("/usr/bin/bwrap", Some("/usr/lib/x/serverd"), std::path::Path::new("/f"), vec!["--".into()]);
+        let (_, args) = crate::services::agent_fence::seccomp_launcher("/usr/bin/bwrap", Some(("/usr/lib/x/serverd", super::FENCE_SCOPE_ARG)), std::path::Path::new("/f"), vec!["--".into()]);
         let helper = args.iter().position(|a| a == "/usr/lib/x/serverd").unwrap();
         assert_eq!(args[helper + 2], super::FENCE_SCOPE_ARG, "{args:?}");
     }

@@ -817,6 +817,12 @@ pub struct PtyOptions {
     /// `TABTIVITY_LOCAL_MODEL` env var, which is a usage-recap label.
     #[serde(default)]
     pub host_bound_uid: Option<String>,
+    /// A local-model tab (`kind: "local_agent"`): its agent gets the scope's
+    /// local-model home (`services::agent_home::local_model_home`) instead of
+    /// the scope's own, so an Ollama launch's config and sessions stay apart.
+    /// Chooses a home only; it grants nothing — both homes are fenced alike.
+    #[serde(default)]
+    pub local_model: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1449,6 +1455,7 @@ pub fn join_tab(
     let attach = PtyOptions {
         id: attach_id.clone(),
         cmd: "tmux".to_string(),
+        local_model: false,
         args: attach_argv(&session),
         env: HashMap::new(),
         cwd: opts.cwd.clone(),
@@ -1601,6 +1608,7 @@ fn launch(
     });
     let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
     let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
+    let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
     tokio::spawn(async move {
         let emitter = ctx.clone();
         let activity = |text: String| {
@@ -1685,6 +1693,12 @@ fn launch(
             if let Some(token) = push_token {
                 crate::services::root_mcp::revoke_token(&token);
                 ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+            }
+            if let Some(token) = markup_token {
+                // The tab's open markup question goes with its session; the
+                // sweep rings `markup-mcp-changed` through the change hook.
+                crate::services::root_mcp::revoke_token(&token);
+                crate::services::markup_mcp::sweep();
             }
             if let Some(token) = mcp_token {
                 let state = crate::storage::state_dir();
@@ -2810,6 +2824,7 @@ mod client_tests {
         PtyOptions {
             id: String::new(),
             cmd: "sh".to_string(),
+            local_model: false,
             args: Vec::new(),
             env: HashMap::new(),
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
@@ -2906,6 +2921,7 @@ mod client_tests {
         let opts = |cols: u16, rows: u16| PtyOptions {
             id: tab.to_string(),
             cmd: "tmux".to_string(),
+            local_model: false,
             args: [
                 "-L", &socket, "-f", "/dev/null", "new-session", "-A", "-s", session, "cat", ";",
                 "set-option", "-t", session, "status", "off", ";",

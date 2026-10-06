@@ -32,11 +32,17 @@ import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseD
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
+import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { openPathLink } from "../../lib/terminal/pathLinks";
+import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
+import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
+import { relativePathWithin } from "../../lib/paths";
+import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
@@ -354,6 +360,16 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
   // Keyboard select (Ctrl+Shift+X) is on: shows its key legend over the pane.
   const [keySelecting, setKeySelecting] = useState(false);
 
+  // Path links (`lib/terminal/pathLinks`), read by the link provider through
+  // a ref: it lives in the spawn effect, which must not respawn on a settings
+  // or project change.
+  const pathLinkContext = usePathLinkContext(projectId, cwd);
+  const pathLinkContextRef = useRef(pathLinkContext);
+  pathLinkContextRef.current = pathLinkContext;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+
   const focusedRef = useRef(focused);
   visibleRef.current = visible;
   focusedRef.current = focused;
@@ -457,6 +473,33 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
             leave: linkHover.leave,
           })),
         );
+      },
+    });
+    // A file path the program printed opens the file's tab, on the same click
+    // (after the double-click window) — no question first, since it only ever
+    // opens an in-app viewer of a file inside the tab's folder or project; a
+    // double-click copies it, like a URL.
+    const pathLinks = registerPathLinkProvider(term, () => pathLinkContextRef.current, {
+      activate: (event, entry, at) => {
+        if (event.detail > 1) return;
+        cancelLinkOpen();
+        setPathHover(null);
+        linkOpenTimer = setTimeout(() => {
+          linkOpenTimer = null;
+          const ctx = pathLinkContextRef.current;
+          const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
+          openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current });
+        }, LINK_OPEN_DELAY_MS);
+      },
+      hover: (event, entry, at, text) => {
+        hoveredLink = text;
+        const ctx = pathLinkContextRef.current;
+        const name = relativePathWithin(ctx.projectDir || cwd, entry.path) || entry.path;
+        setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir });
+      },
+      leave: () => {
+        hoveredLink = null;
+        setPathHover(null);
       },
     });
     // OSC 8 hyperlinks (a link whose text is not its URL) take the same path;
@@ -741,6 +784,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     // A detached view attaches to the same PTY but must never become a second
     // delivery owner. Readiness waits for terminal-ready plus real TUI output and
     // a short settle cushion, matching the initial-input gate below.
+    let settledOnce = false;
     const armScheduledReady = () => {
       if (!scheduleTargetId || attachOnly || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
@@ -749,7 +793,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       // before the activity store's sustained-output debounce calls an agent
       // "working": scheduling must still wait until the TUI itself is quiet.
       scheduledSettleTimer.current = setTimeout(() => {
-        if (!cancelled) scheduledReady.current = true;
+        if (cancelled) return;
+        scheduledReady.current = true;
+        if (!settledOnce) {
+          settledOnce = true;
+          wakePhoneHolds();
+        }
       }, SCHEDULED_SETTLE_MS);
     };
     /**
@@ -777,11 +826,23 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       const last = lastPtyOutputAt(id);
       return last !== undefined && Date.now() - last >= SCHEDULED_SETTLE_MS;
     };
+    /**
+     * Whether a phone prompt may be typed while the agent works
+     * (`queueableWhileBusy`): the CLI has drawn and gone quiet once. Not the
+     * bare terminal-ready event — a brand-new tab is ready before its CLI has
+     * started, and what is typed into a CLI still starting is lost (the phone
+     * markup's new-tab Submit held its prompt into exactly that window). Once
+     * settled it stays so: a working agent redraws without pause.
+     */
+    const scheduledInputStarted = () => {
+      if (!settledOnce && scheduledInputReady()) settledOnce = true;
+      return settledOnce;
+    };
     const unregisterScheduled = scheduleTargetId && !attachOnly
       ? registerScheduledAgentInput(scheduleTargetId, {
           ptyId: id,
           ready: scheduledInputReady,
-          started: () => scheduledReady.current || terminalReadySeen.current,
+          started: scheduledInputStarted,
           bracketedPaste: () => term.modes.bracketedPasteMode === true,
           // The family decides whether the markers are used at all: a prompt
           // pasted into Claude Code arrives as `<pasted_content>` rather than
@@ -1382,7 +1443,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       notePtySpawn(id);
       const spawn = async () => {
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean } | null>("pty_spawn", {
-          opts: { id, cmd, args, env, cwd, cols: term.cols, rows: term.rows, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, host_session: hostSession },
+          opts: { id, cmd, args, env, cwd, cols: term.cols, rows: term.rows, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession },
           sessionName: launchName,
         });
         // An older backend answers nothing: `named` absent types the line as before.
@@ -1691,6 +1752,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       oscHandler.dispose();
       mouseModeGuard.dispose();
       wrappedLinks.dispose();
+      pathLinks.dispose();
+      setPathHover(null);
       cancelLinkOpen();
       signInWatch.dispose();
       if (signInScanTimer) clearTimeout(signInScanTimer);
@@ -1975,6 +2038,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       </div>,
       host,
     )}
+    <PathLinkHint hover={visible ? pathHover : null} />
     {dialogs}
     </>
   );

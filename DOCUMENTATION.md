@@ -181,7 +181,10 @@ Some surfaces are **overlays over the whole window** rather than tabs — mail
 (`PresentationOverlay`) — opened from their header indicator or the `+` menu.
 Mail is the settled example: it was built as a tab *and* an overlay, and the tab
 was retired (`RETIRED_TAB_CMDS`) because the mail store is global, so a
-project-scoped tab could only ever show the same mailbox.
+project-scoped tab could only ever show the same mailbox. The mail, calendar
+and board overlays can dock a root-console agent in a right-hand column
+(`OverlayAgentColumn`, Ctrl+1–9 or the title bar's ✦): an attach-only view of a
+root tab, so its MCP writes land beside the prompt (`docs/context/root_console.md`).
 
 ### Header Bar
 
@@ -405,6 +408,28 @@ lamp for one signed in now, otherwise when it last connected — with
 **Disconnect** (click again to confirm): the device is unpaired, signed out
 within seconds, and needs a new pairing code to come back.
 
+A project's or box's Mobile access reaches **all phones** (phones paired later
+included) or **only these phones**, a checklist of the paired devices chosen
+from the side panel's phone button or the **All phones ▾** button beside its
+switch in Mobile settings (`tabtivity_mobile_devices`, beside
+`tabtivity_mobile_access`). The sidecar filters every phone request through
+it: a phone off the list neither lists nor opens the scope (it answers as an
+unknown id), an open terminal of it detaches within seconds of a narrowing,
+and its agent pushes go only to the listed phones. A re-paired phone is a new
+device and is on no old list; after Lock down a limited scope reaches no phone
+until re-picked ("No phones"). Design: `docs/context/mobile_access.md`.
+
+**Per-phone sections and projects.** In **Settings → Mobile → Paired
+devices**, each phone has **To-do / Calendar / Mail** buttons and its own list
+of the projects and boxes that reach it. A section pressed off is gone from
+that phone's tab bar and refused by the sidecar for that device (`403
+section_hidden`); its alert rows are dropped, and without Calendar the phone
+gets no reminder push. The choice lives on the device record in
+`mobile-control/devices.json`, so revoking or re-pairing starts fresh.
+**Disconnect** takes the phone off a project or box (one open to every phone
+becomes the other paired phones; the last phone turns access off); **Add
+project ▾** opens one for it (an off project opens for that phone alone).
+
 Only persistent local shells and resumable configured agents are discoverable.
 The sidecar derives opaque browser ids from trusted Tabtivity state and revalidates
 the project, tab, tmux session, device session, and canonical project directory
@@ -412,6 +437,16 @@ throughout an attachment. Mobile creation goes through the running desktop and
 accepts only a typed shell or cataloged resumable-agent request; it does not
 accept paths, commands, argv, or tmux names. The protocol lives in
 `src-tauri/src/services/mobile_control/`.
+
+**Git on the phone.** A project's name menu on the phone has **⎇ Git**, a
+read-only sheet the sidecar answers itself, window open or not
+(`GET /api/v1/projects/{id}/git`, `mobile_control/git_overview.rs`): the project
+folder's branch or detached sha with upstream and ahead/behind, the repo's
+worktrees (only when a linked one exists; project folder first, each with its
+change dot and how many of the project's tabs run in it), local branches and the
+remote ones no local branch tracks — capped, with `+N more`. Worktrees cross as
+the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
+reason or full sha is sent. Boxes and the root console have no Git entry.
 
 **Mark up a PDF or picture for the agent.** In an agent tab's viewer (the
 files drawer, the 🖼 gallery or a picture/PDF bubble in the chat) a PDF or a
@@ -440,10 +475,81 @@ redraws the file as it is now, or the newer copy the agent sent, under the same
 layer: unsent marks stay, and the sent ones stay too, dimmed, so each change can
 be checked and its mark then erased by hand (the eraser and Clear page reach
 shown sent marks; ⋯ **Show sent marks** hides them). Nothing removes a mark
-automatically. The default prompt has the agent only list the changes; once it
-has, the pill offers **Make these changes**, which sends the go-ahead (edit the
-sources, rebuild, send the PDF back) — its wording is the second field of Home →
-This phone → **Mark up prompt**.
+automatically.
+
+**Apply marks directly, with an Undo** (`docs/pdf_markup_direct_apply_plan.md`;
+on by default — the phone's switch in Home → ⚙ This device → **Mark up prompt**,
+the desktop's in Settings → Agents → PDF markup). A Submit asks for an `apply`
+round: the desktop first takes a snapshot of the project's git work tree in its
+own state folder (never in the project or its `.git`), and the default prompt
+has the agent make the changes, rebuild and (phone) send the PDF back in one
+turn. Each time the round finishes the snapshot is settled; the pill then
+offers **Undo**, which lists the files the round changed and whether the PDF
+goes back, and on **Undo** puts them back as they were before the round (only
+files inside the project folder; files changed elsewhere in the same repository
+are left as they are — named in the desktop's dialog, only counted on the phone,
+which may be scoped to this one project — and so is a file the round moved into
+the project from there) — refusing, with nothing changed, when one of them was edited since ("Can't undo
+— `a.tex` changed since") — reloads the PDF under the marks and puts a short
+note into the agent's chat, without starting a new round. (A phone view of a
+copy the agent sent goes back to the copy the marks were drawn on, and Reload
+then passes over the copies the agent sent before the undo.) Where no snapshot can
+be taken — not a git repository, git missing or older than 2.40, too many
+changed or untracked files, a remote project, a picture — the pill says why in
+one line and the round runs list-first: the default prompt has the agent only
+list the changes, and the pill offers **Make these changes**, which sends the
+go-ahead (edit the sources, rebuild, send the PDF back) — its wording is the
+second field of Home → ⚙ This device → **Mark up prompt**. With the switch off
+every round is list-first. A custom Mark up prompt is sent as written in either
+mode; the field starts from the default of the current mode.
+
+How often the agent stops to ask about a mark is a five-stop slider beside the
+prompt — **Ask always**, **Ask often**, **Ask when unsure** (default: only
+unreadable marks and real choices), **Ask rarely**, **Never ask** — the
+phone's in Home → ⚙ This device → **Mark up prompt**, the desktop's in Settings →
+PDF markup. When a mark leaves the agent a choice it may ask about, a local
+Claude, Codex or MCP-enabled Vibe tab can ask with its `markup_ask` tool (`docs/context/markup_mcp.md`;
+on by default, Manage CLIs → Advanced). The questions show as a card in that
+tab's markup view, phone and desktop alike, each with a `?n` pin at the words
+it quotes. Several questions show one at a time, paged with ‹ ›. A tap only
+picks (or **Other…** takes typed words); **Send answers** sends them into the
+tab as the next prompt and closes the card everywhere, and **Answer in chat
+instead** closes it unanswered. The phone's chat shows a one-line banner while
+a question is open; on the desktop, with marking off, the **Mark up** button is
+underlined and opens on the asking tab. The same tabs tick off the marks they handled
+with `markup_done` (each Submit carries a round id the prompt names its marks
+under): every ticked sent mark gets a green ✓ at its top-right corner, phone
+and desktop alike, while sent marks show, and the status line says **n done ·
+Approve all**. A tap or click on a ✓ approves that mark — it leaves the layer,
+undoably; nothing removes a mark without it. On the phone a fresh ✓ ignores
+taps for a moment, so a pen mid-stroke cannot approve. Ticks die with the
+agent's session (at most a day) and with an undone apply round; the marks stay.
+
+**Local models from the phone** (`docs/mobile_local_model_control_plan.md`).
+Home → **Local models** lists the Ollama models installed on the desktop —
+size, parameters and quantization, idle / loading / loaded / last load failed,
+where a loaded one sits (GPU, N % on the GPU, CPU) and whether it stays loaded
+or unloads in N minutes — with **Load** (Ollama picks the device, kept loaded)
+and **Unload** (no confirmation), and **Start Ollama** when the desktop can
+start it without a password (`systemctl --no-ask-password`, else an owned
+`ollama serve` that quitting stops). The sheet polls every 2.5 s while
+something loads or starts and every 10 s otherwise. Every request goes
+`GET`/`POST /api/v1/local-models` → sidecar (`mobile_control/local_models.rs`)
+→ desktop bridge (`src/lib/mobileLocalModels.ts`) → the window's Ollama
+commands, so the desktop's 🧠 menu shows a load the phone started; with no
+window open the routes answer 503 `desktop_unavailable` and the phone says to
+open the app (there is no headless fallback). Load and Start answer at once and
+the work runs on the desktop; a write whose answer misses the deadline is read
+again rather than shown as failed. Downloading, updating and deleting stay
+desktop-only: the sidecar refuses any other action with 400
+`unsupported_action` before the desktop is asked, and the load command loads
+only a name `/api/tags` lists. **Settings → Mobile → Local models from the
+phone** (under Project access; unset = on) switches it off — both routes then
+answer 403 `local_models_disabled` and the Home row disappears. A desktop build
+older than the feature cannot parse the request and drops the connection, which
+the sidecar cannot tell from no window: 503 `desktop_unavailable`, "open the
+app". Only a window whose backend knows the request but whose page does not
+answers `unknown_request`; the phone then says to update the desktop app.
 
 **Browser access (the whole desktop app in a browser on this computer).**
 **Settings → Mobile → Browser access** has the Mobile host also serve the
@@ -767,10 +873,22 @@ Four that carry design decisions worth recording here:
   works. The strip stays open with the same rounds and pill as the phone; a
   recompile while marks are on the pages waits for **Reload PDF** rather than
   sliding new pages under them. Local projects in the main window only, on the
-  PDF as saved (no page edits pending), one pane per file. **Make these
-  changes** appears once the agent has listed them; both prompts — the one a
-  Submit ends with and that go-ahead — are the desktop's own, in Settings →
-  Agents → **PDF markup** (`pdf_markup_instruction`, `pdf_markup_apply`).
+  PDF as saved (no page edits pending), one pane per file. **Apply marks
+  directly** (`pdf_markup_direct`, on unset) works as on the phone: an `apply`
+  round backed by an undo snapshot, settled as it finishes
+  (`pdf_markup_undo_settle`), and the strip's **Undo** → a confirm dialog with
+  the files (`pdf_markup_undo_preview`) → `pdf_markup_undo`, a reload under the
+  marks and a note queued into the agent tab; without a snapshot the round is
+  list-first and **Make these changes** appears once the agent has listed them.
+  Both prompts — the one a Submit ends with and that go-ahead — are the
+  desktop's own, in Settings → Agents → **PDF markup** (`pdf_markup_instruction`,
+  `pdf_markup_apply`).
+  Its **Hand each Submit to a new subagent** switch (`pdf_markup_subagents`,
+  off; the phone's ⋯ **Each Submit to a new subagent**) starts every Submit's
+  prompt with `MARKUP_SUBAGENT_LINE` (`mobile-web/src/markupInstruction.ts`):
+  the tab's agent hands the round to a new background subagent and ends its
+  turn, so the next round goes in at once and rounds run side by side; answers
+  to that round's questions and **Make these changes** are passed on to it.
 - **Markdown** renders fenced `mermaid` code blocks and `$…$`/`$$…$$` math; KaTeX runs
   with `trust: false` and mermaid script-free.
 
@@ -845,10 +963,14 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 |---------|----------|
 | `ollama_is_installed` | Checks whether the `ollama` binary exists in `$PATH`. |
 | `ensure_ollama_running` | Starts the system `ollama` service when possible, otherwise falls back to `ollama serve`. |
+| `ensure_ollama_running_unattended` | `ensure_ollama_running` for the phone: `systemctl --no-ask-password start ollama` (fails instead of a polkit dialog), then the owned `ollama serve` fallback that quit stops. Runs off the async runtime. |
+| `ollama_server_kind` | Whether the configured Ollama server is on this machine (`"local"`) or another (`"remote"`); a bad `ollama_host` is an error. |
 | `list_ollama_models` | Lists installed model names for the Local Agents tab menu. |
 | `list_ollama_models_detailed` | Returns installed model names, disk sizes, family, parameter size, quantization, running state, and VRAM use. |
 | `list_installable_models` | Returns Tabtivity's built-in catalog of common model families and tags. |
 | `pull_ollama_model` | Pulls or updates a model through `/api/pull`. |
+| `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
+| `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
 | `stop_ollama_model` | Unloads a model from memory with `keep_alive = 0`. |
 | `delete_ollama_model` | Deletes a local model through `/api/delete`. |
 | `prepare_local_agent` | Writes an isolated per-model Vibe config and returns `VIBE_HOME` plus alias. |
@@ -1068,6 +1190,55 @@ record that could override, on restart, whatever the user had set in-session.
 What survives a relaunch is the agent's own answer: the backend re-applies the
 mode Claude's Stop hook recorded onto the `--resume` line. Args are never
 persisted as the source of truth — they are rebuilt from layout state.
+
+**API keys** (`services/agent_api_keys.rs`, `services/api_proxy.rs`,
+`docs/api_chat_plan.md` Parts A and C). Next to the shared logins, Manage CLIs
+keeps one provider API key per provider (Anthropic, Gemini) in the OS keychain
+— never in a file — and the key never enters an agent process: a loopback proxy
+inside Tabtivity (`api_proxy`, its own listener, started with the app and
+stopped at quit) holds it. A keyed spawn of a CLI the user switched on
+(`agent_api_key_clis`) gets a random per-tab token, bound to provider, scope and
+tab and revoked when the tab ends, as the CLI's credential variable
+(`ANTHROPIC_AUTH_TOKEN`, `GEMINI_API_KEY`), plus the CLI's base-URL variable
+(`ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`) pointing at the proxy. The
+proxy forwards only to the provider's fixed HTTPS host, only the API paths the
+CLI needs, with a bounded body, never following a redirect, the response
+streamed through as it arrives, swapping the token for the real key; it logs
+nothing. Only CLIs an environment variable can point at the proxy keep a row:
+Claude and Gemini (Codex, Mistral Vibe and OpenCode are left out). Local session
+tabs only (no remote, container, local-model or sign-in tab, and not a CLI typed
+into a shell tab — the shim process runs no proxy); a variable the user set
+wins. On Linux and macOS the token travels under an app-named carrier variable —
+a tmux secret (no argv, no launcher script) that names nothing of the user's on
+their own tmux server — and Tabtivity's binary (`--agent-exec`,
+`services/agent_exec.rs`) turns it into the CLI's variable just before the
+agent runs (Part C, C1). Claude takes the bearer token without its custom-key
+dialog; Gemini needs "Use Gemini API key" in its `/auth`. A keyed Claude tab
+runs without Remote Control. A project's CLI config can still point the CLI at
+another host, which then receives only the token — worthless off this machine.
+
+**Spending limit** (`services/api_usage.rs`, `services/api_meter.rs`,
+`services/api_prices.rs`, Part C, C3). Saving a key requires a monthly limit in
+US dollars per provider (`Settings::agent_api_limits`). The proxy reads each
+billed answer's usage as it relays it — Anthropic's `message_start` /
+`message_delta` usage (cache writes and reads, web searches, fast mode and
+US-only inference included) or a plain message's; Gemini's cumulative
+`usageMetadata` from SSE, JSON-array or plain answers — with a bounded streaming
+scanner that keeps nothing else, prices it from a dated per-model table (an
+unknown model at the provider's highest rate, flagged), and adds it to
+`<state_dir>/agent-api-usage.json` (UTC month, spend per provider, tokens per
+model; written atomically every few seconds and at quit; a corrupt file is set
+aside and the restart shown). An answer that ends before its final count — the
+client hangs up mid-stream or before the answer begins, the stream breaks, a
+usage object cannot be read — is charged an estimate on top of what it
+reported (output by elapsed time at a rate above the provider's fastest
+model, up to the request's `max_tokens`; unreported input as body bytes / 3),
+so hanging up early is never free. Once spent ≥ limit, or for a key without a limit,
+billed requests are refused before they reach the provider (HTTP 429 in the
+provider's error shape, `x-should-retry: false`); answers already streaming
+finish. Manage CLIs shows spent/limit, the reset date, unknown models and
+"budget reached"; the shared-logins row and the phone's sign-in list say
+"API budget reached". The help recommends a provider-side limit as well.
 
 ### Remote, Sync, and Multi-Host
 

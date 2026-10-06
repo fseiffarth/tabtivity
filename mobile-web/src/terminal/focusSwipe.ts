@@ -157,10 +157,11 @@ export function installFocusSwipe(
   const removers: (() => void)[] = [];
 
   if ("PointerEvent" in window) {
-    // Mouse and pen stay out of it: a desktop drag over the reading view is a
-    // text selection, and the strip has its own control there.
+    // A mouse stays out of it: a desktop drag over the reading view is a text
+    // selection, and the strip has its own control there. A pen (the iPad's
+    // Pencil) swipes like a finger.
     const pointerDown = (event: PointerEvent) => {
-      if (event.pointerType !== "touch") return;
+      if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
       begin(event.pointerId, event.clientX, event.clientY, event.target);
     };
     const pointerUp = (event: PointerEvent) => {

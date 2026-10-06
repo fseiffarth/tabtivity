@@ -3,7 +3,7 @@ import type { PyMainVerdict } from "../lib/terminal/pythonMainCache";
 import type { AgentCron } from "../lib/agents/agentCron";
 import type { CursorPack } from "../lib/theme/cursorPacks";
 import type { TranslationKey } from "../lib/i18n";
-import { MOBILE_ACCESS_KEY, MOBILE_HOST_KEY } from "../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../lib/brand";
 
 export interface GlobalAppEntry {
   exec: string;
@@ -170,6 +170,11 @@ export interface Settings {
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
     shell_tabs?: boolean;
+    /** A paired phone may list the Ollama models installed here and load or
+     * unload them (never download or delete). Unset is on; an explicit false
+     * closes the routes. Read by the sidecar per request and repeated by the
+     * desktop bridge (`lib/mobileLocalModels`). */
+    local_models?: boolean;
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -278,6 +283,9 @@ export interface Settings {
   /** The read-only "Ask Tabtivity" help MCP (`tabtivity-help`) in local agent tabs.
    *  **Default true** — absent means on. Switched in the intro wizard. */
   help_mcp?: boolean;
+  /** The markup questions MCP (`services::markup_mcp`, `markup_ask`) in local
+   *  project-agent tabs. **Default true** — absent means on. */
+  markup_mcp?: boolean;
   root_mcp_review?: "all" | "destructive" | "off";
   /** Root console: serve the MCP tools to local-model tabs only. Absent means
    *  off. On, cloud agent CLIs get no endpoint and running ones are refused. */
@@ -401,6 +409,19 @@ export interface Settings {
    *  unset/blank = the defaults. */
   pdf_markup_instruction?: string;
   pdf_markup_apply?: string;
+  /** How often a Submit lets the agent stop to ask about the marks, 0 (about
+   *  every mark) … 4 (never); unset = the default stop (`DEFAULT_PDF_MARKUP_ASK`). */
+  pdf_markup_ask?: number;
+  /** A marked PDF that changes on disk loads under the marks on its own;
+   *  unset = on, `false` waits for **Reload PDF**. */
+  pdf_markup_auto_reload?: boolean;
+  /** Subagent mode: each Submit asks the tab's agent to hand the round to a
+   *  new subagent (`markupForSubagent`); unset = off. */
+  pdf_markup_subagents?: boolean;
+  /** **Apply marks directly** (`docs/pdf_markup_direct_apply_plan.md`): a
+   *  Submit asks for an `apply` round backed by an undo snapshot; unset = on,
+   *  `false` = the agent lists the changes first (**Make these changes**). */
+  pdf_markup_direct?: boolean;
   /** Built-in agent registry ids shown without searching in the compact Agents
    *  group of the + tab menu. Set by the 🧠 menu's “+ tab” chips. Unset keeps
    *  the familiar Claude/Codex/Gemini quick picks; an empty array is a deliberate
@@ -443,6 +464,14 @@ export interface Settings {
    *  uninstalling the CLI. Round-trips through the backend settings `extra`
    *  catch-all — no Rust field needed. Unset/empty = nothing hidden. */
   disabled_agents?: string[];
+  /** Agent CLI registry ids that get their provider's stored API key at spawn
+   *  (backend `services::agent_api_keys`), set by Manage CLIs → API keys.
+   *  Opt-in: unset or empty hands no key to any CLI. Never a key itself. */
+  agent_api_key_clis?: string[];
+  /** Monthly spending limit in US dollars per provider id (`anthropic`,
+   *  `gemini`) for the stored API keys (backend `services::api_usage`),
+   *  enforced by the API proxy. Saving a key requires one. */
+  agent_api_limits?: Record<string, number>;
   /** The order of the Agents group's rows, which is the order Ctrl+1–9 number
    *  them: row keys (a built-in's command, `"claude"`; a custom agent's
    *  `"custom:<id>"`). Set by Manage CLIs' ↑/↓. Unset = the default agent
@@ -505,6 +534,8 @@ export interface Settings {
     directory: string;
     copilot: boolean;
     local_only: boolean;
+    /** Copilot also serves the project's text files (Markdown, LaTeX, plain text). */
+    copilot_text?: boolean;
     [key: string]: unknown;
   }>;
   /** Hunspell dictionary code (e.g. `en_US`) for the editors' dictionary spell
@@ -1212,6 +1243,8 @@ export interface ProjectEntry {
   categories?: string[];
   /** Explicit trusted-state opt-in for phone/tablet terminal access. */
   [MOBILE_ACCESS_KEY]?: boolean;
+  /** The paired phones that access reaches (device ids); absent = every phone. */
+  [MOBILE_DEVICES_KEY]?: string[];
   [key: string]: unknown;
 }
 
@@ -1400,6 +1433,8 @@ export interface ProjectBox {
   /** Tabtivity Mobile reach (#31aa): the box's `box:<id>` scope is listed on a
    *  paired phone. Off/absent by default, like a project's switch. */
   [MOBILE_ACCESS_KEY]?: boolean;
+  /** The paired phones the box reaches (device ids); absent = every phone. */
+  [MOBILE_DEVICES_KEY]?: string[];
   /** User-picked colour (`#rrggbb`); absent = hashed from the id
    *  (`lib/theme/boxColor`). Rides the Rust struct's flattened `extra`. */
   color?: string;

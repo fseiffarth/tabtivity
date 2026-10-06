@@ -90,8 +90,9 @@ export function SettingsGlyph({ className }: { className: string }) {
   );
 }
 
-/** Two stacked server units — the global machines — for the Machines overlay's
- *  bar (`header/MachinesOverlay`). On the shared 16-unit grid, y=2..14. */
+/** Two stacked server units — the global machines — for the header Machines
+ *  button (`header/MachinesIndicator`) and its overlay's bar
+ *  (`header/MachinesOverlay`). On the shared 16-unit grid, y=2..14. */
 export function MachinesGlyph({ className }: { className: string }) {
   return (
     <Glyph className={className}>
@@ -100,6 +101,18 @@ export function MachinesGlyph({ className }: { className: string }) {
         <rect x="2" y="9" width="12" height="5" rx="1.2" />
         <path d="M4.5 4.5h.01M4.5 11.5h.01M8 4.5h3.5M8 11.5h3.5" />
       </g>
+    </Glyph>
+  );
+}
+
+/** A shield with a keyhole — the machine-wide OpenVPN tunnel — in place of
+ *  the "VPN" word on the header button (`header/VpnIndicator`). */
+export function VpnGlyph({ className }: { className: string }) {
+  return (
+    <Glyph className={className}>
+      <path d="M8 2 13 3.8v3.8c0 3-2.1 5.3-5 6.4-2.9-1.1-5-3.4-5-6.4V3.8Z" {...STROKE} />
+      <circle cx="8" cy="7.1" r="1.2" {...STROKE} />
+      <path d="M8 8.3v2.2" {...STROKE} />
     </Glyph>
   );
 }

@@ -1914,7 +1914,10 @@ fn container_hook_script_path() -> PathBuf {
 /// `Stop` (2.1.287, 2026-10-02). Claude's env can't tell them apart — every
 /// hook, the tab's own too, gets `CLAUDECODE` and `CLAUDE_CODE_CHILD_SESSION`
 /// — and its self-relaunch execs in place (it spawns a child only when that
-/// exec fails), so it adds no Claude above itself.
+/// exec fails), so it adds no Claude above itself. "The tab's processes" are
+/// those carrying its id under any `*_TAB_UID` name: a probe that unset only
+/// the current name still reached the hook through the legacy one, and a walk
+/// matching the current name alone counted nothing and let it through (2.1.288).
 /// The PowerShell twin has no such check yet.
 #[cfg(not(windows))]
 fn hook_script_body(live_dir: &str) -> String {
@@ -1976,10 +1979,12 @@ fn posix_hook_script_body(live_dir: &str) -> String {
          \x20        # A /clear or /resume typed in the tab comes from the tab's own CLI;\n\
          \x20        # a `claude --resume` nested under it (the agent's Bash tool) sends\n\
          \x20        # the same start. Among the tab's processes — those carrying its\n\
-         \x20        # {UPPER}_TAB_UID — the tab's CLI has no claude above it, a nested\n\
-         \x20        # one has. Without /proc nothing is counted and the start is taken.\n\
+         \x20        # id under either tab-id name, so unsetting one (the other fills it\n\
+         \x20        # in above) can't hide a nested run — the tab's CLI has no claude\n\
+         \x20        # above it, a nested one has. Without /proc nothing is counted and\n\
+         \x20        # the start is taken.\n\
          \x20        clear|resume) n=0; p=$PPID\n\
-         \x20          while [ -r \"/proc/$p/environ\" ] && tr '\\0' '\\n' < \"/proc/$p/environ\" | grep -qx \"{UPPER}_TAB_UID=${UPPER}_TAB_UID\"; do\n\
+         \x20          while [ -r \"/proc/$p/environ\" ] && tr '\\0' '\\n' < \"/proc/$p/environ\" | grep -qx \"[A-Z]*_TAB_UID=${UPPER}_TAB_UID\"; do\n\
          \x20            [ \"$(cat \"/proc/$p/comm\" 2>/dev/null)\" = claude ] && n=$((n + 1))\n\
          \x20            p=$(sed 's/.*) [^ ]* \\([0-9]*\\).*/\\1/' \"/proc/$p/stat\" 2>/dev/null)\n\
          \x20          done\n\
@@ -2013,6 +2018,12 @@ fn posix_hook_script_body(live_dir: &str) -> String {
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
          [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
+         # A prompt in the conversation a /clear started ends that clear's undo:\n\
+         # resuming the one it ended would leave the prompt behind. Not a session\n\
+         # command, which a CLI may report as a prompt too.\n\
+         if [ \"$event\" = UserPromptSubmit ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20 rm -f \"$dir/${UPPER}_TAB_UID.prev\"\n\
+         fi\n\
          # A /clear keeps the id of the conversation it ended, so the clear can be\n\
          # undone by resuming it; written before the source that says clear.\n\
          if [ \"$event\" = SessionStart ] && [ \"$src\" = clear ] && [ \"$sid\" != \"${{cur:-${UPPER}_TAB_UID}}\" ]; then\n\
@@ -2118,6 +2129,9 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
          }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
+         # A prompt in the conversation a /clear started ends that clear's undo\r\n\
+         # (see the POSIX twin).\r\n\
+         if (($event -eq 'UserPromptSubmit') -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{ Remove-Item -LiteralPath ($rec + '.prev') -Force -ErrorAction SilentlyContinue }}\r\n\
          # A /clear keeps the id of the conversation it ended (see the POSIX twin).\r\n\
          if (($event -eq 'SessionStart') -and $ms.Success -and ($ms.Groups[1].Value -eq 'clear')) {{\r\n\
          \x20 $was = $cur\r\n\
@@ -2408,6 +2422,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         }
@@ -3051,6 +3066,18 @@ mod tests {
         let (rec, mode) = run_hook(&script, &live, uid, claude, true, &stop(cleared, "plan"));
         assert_eq!(rec.as_deref(), Some(cleared));
         assert_eq!(mode.as_deref(), Some("plan"));
+        // A session command reported as a prompt leaves the undo standing; a
+        // prompt in the new chat ends it — resuming the cleared conversation
+        // would leave that prompt behind (a second `/clear` queued behind its
+        // turn was undone onto the first clear's conversation).
+        let prompt = |text: &str| {
+            format!(r#"{{"session_id":"{cleared}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#)
+        };
+        run_hook(&script, &live, uid, claude, true, &prompt("/clear"));
+        assert_eq!(cleared_session_in(&live, uid, |_| true).as_deref(), Some(uid));
+        run_hook(&script, &live, uid, claude, true, &prompt("fix the build"));
+        assert_eq!(prev(), None);
+        assert_eq!(cleared_session_in(&live, uid, |_| true), None);
         // …and the launch id itself is always the tab's (a relaunch on `--resume
         // <launch>` after a lost record) — that resume is also the undo, after
         // which there is no clear left to take back.
@@ -3126,26 +3153,36 @@ mod tests {
         let payload = tmp.join("payload.json");
         // `; true` keeps each shell alive under its command (no exec tail call).
         let hook = r#"sh "$SCRIPT" < "$PAYLOAD"; true"#;
-        let run = |src: &str, chain: &str| {
+        // An install upgraded across the rename: the hook takes the tab id from
+        // the legacy name when the current one is unset, and the tab carries both.
+        let legacy_script = tmp.join("hook-legacy.sh");
+        let legacy_preamble =
+            crate::services::brand_migration::compat::legacy_env_preamble_sh(&crate::brand::PAIR, HOOK_ENV);
+        assert!(!legacy_preamble.is_empty());
+        std::fs::write(&legacy_script, legacy_preamble + &hook_script_body(&live.to_string_lossy())).unwrap();
+        let legacy_tab_uid = crate::brand::PAIR.legacy_env_name("TAB_UID").unwrap();
+        let run_with = |script: &std::path::Path, legacy: bool, src: &str, chain: &str| {
             std::fs::create_dir_all(&live).unwrap();
             std::fs::write(live.join(uid), uid).unwrap();
             std::fs::write(&payload, format!(r#"{{"session_id":"{other}","hook_event_name":"SessionStart","source":"{src}"}}"#)).unwrap();
-            let status = std::process::Command::new(&claude_bin)
-                .arg("-c")
+            let mut cmd = std::process::Command::new(&claude_bin);
+            cmd.arg("-c")
                 .arg(chain)
                 .env_clear()
                 .env("PATH", std::env::var("PATH").unwrap_or_default())
                 .env(crate::app_env!("TAB_UID"), uid)
                 .env(TAB_AGENT_ENV, "claude")
-                .env("SCRIPT", &script)
+                .env("SCRIPT", script)
                 .env("PAYLOAD", &payload)
                 .env("CLAUDE_BIN", &claude_bin)
-                .env("HOOK", hook)
-                .status()
-                .unwrap();
-            assert!(status.success());
+                .env("HOOK", hook);
+            if legacy {
+                cmd.env(&legacy_tab_uid, uid);
+            }
+            assert!(cmd.status().unwrap().success());
             std::fs::read_to_string(live.join(uid)).unwrap()
         };
+        let run = |src: &str, chain: &str| run_with(&script, false, src, chain);
         let alone = format!("{hook}; true");
         let nested = r#""$CLAUDE_BIN" -c "$HOOK"; true"#.to_string();
         // A `claude` above the tab's own (the app launched from a Claude session).
@@ -3155,6 +3192,11 @@ mod tests {
             assert_eq!(run(src, &alone), other, "{src} from the tab's own claude");
             assert_eq!(run(src, &nested), uid, "{src} from a claude nested under it");
             assert_eq!(run(src, &outside), other, "{src} under a claude outside the tab");
+            // A probe that unsets only the current name still reaches the hook
+            // through the legacy one — and must still be seen as nested.
+            let half_unset = format!(r#"env -u {tab_uid} "$CLAUDE_BIN" -c "$HOOK"; true"#);
+            assert_eq!(run_with(&legacy_script, true, src, &half_unset), uid, "{src} nested, current name unset");
+            assert_eq!(run_with(&legacy_script, true, src, &alone), other, "{src} from the tab's own claude, legacy install");
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -8,10 +8,15 @@
  * opened it is not a remote control — a PDF on a projector is *one* display, and
  * the reader is standing at whichever keyboard is in front of them.
  *
- * Everything here is deliberately small: no toolbar, no thumbnails, no text
- * layer, no remarks. The heavy viewer already exists in `PdfViewer` and is what
- * this window is an escape *from*; reusing it would have put a toolbar on the
- * projector.
+ * Everything here is deliberately small: no thumbnails, no text layer, no
+ * remarks. The heavy viewer already exists in `PdfViewer` and is what this window
+ * is an escape *from*; reusing it would have put its toolbar on the projector.
+ * The one strip it does carry is `PdfPresentBar` — talk clock, sheet controls,
+ * blanking — which `H` takes off the screen and brings back.
+ *
+ * It follows the file on disk the way the viewer does: a recompile while the
+ * window is up repaints the same sheet from the new bytes, with the old sheet
+ * left on screen until the new one is ready.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,23 +25,61 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
-import { readFileBytes } from "../fileAccess";
+import { fileMtime, readFileBytes } from "../fileAccess";
 import { applyTheme, THEME_CHANGED_EVENT, useSettingsStore } from "../../../stores/settings";
 import { useT } from "../../../lib/i18n";
 import { osFullscreenChord } from "../../../lib/shortcuts/shortcutHint";
+import { storageKey } from "../../../lib/brand";
 import {
   type PdfPresentSeed,
+  type TalkClock,
   PDF_PRESENT_READY,
   clampPage,
+  nextTarget,
   pdfPresentSeedEvent,
+  resetClock,
+  startClock,
+  toggleClock,
 } from "./present";
+import { type PresentBlank, PdfPresentBar } from "./PdfPresentBar";
+import { PdfPresentLaser } from "./PdfPresentLaser";
 
 /** How often to re-announce readiness until a seed lands (the editor may still
  *  be mounting its listener when this window first asks). */
 const READY_RETRY_MS = 400;
 
+/** How often the file's mtime is re-checked for a recompile — the viewer's
+ *  `RELOAD_POLL_MS`, so both follow a rebuild at the same pace. */
+const RELOAD_POLL_MS = 1500;
+
+/** A recompile rewrites the PDF in place, so a read can catch it mid-write and
+ *  pdf.js throws on the truncated bytes. Retried at this spacing, as the viewer
+ *  does, while the last good sheet stays up. */
+const RELOAD_RETRY_MS = 250;
+const RELOAD_MAX_RETRIES = 12;
+
 /** How long the key hint stays up after the first sheet appears. */
 const HINT_MS = 4000;
+
+/** Whether the bottom bar is up — remembered per machine, so a reader who
+ *  presents bare does not have to press `H` at the start of every talk. */
+const BAR_KEY = storageKey("pdfPresent.bar");
+
+function readBarShown(): boolean {
+  try {
+    return localStorage.getItem(BAR_KEY) !== "hidden";
+  } catch {
+    return true;
+  }
+}
+
+function writeBarShown(shown: boolean) {
+  try {
+    localStorage.setItem(BAR_KEY, shown ? "shown" : "hidden");
+  } catch {
+    // A blocked store only costs the memory of the choice.
+  }
+}
 
 export interface PdfPresentAppProps {
   /** This window's Tauri label, from `?present=` — the seed channel's namespace. */
@@ -55,6 +98,16 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
   const [painted, setPainted] = useState(false);
   const [fullscreen, setFullscreen] = useState(true);
   const [hint, setHint] = useState(true);
+  const [barShown, setBarShown] = useState(readBarShown);
+  const [blank, setBlank] = useState<PresentBlank>(null);
+  const [laser, setLaser] = useState(false);
+  // The talk clock starts with the first painted sheet (below), not with the
+  // window: a slow file open is not part of the talk.
+  const [clock, setClock] = useState<TalkClock>(() => ({ banked: 0, since: null }));
+  /** Target talk length in minutes; 0 = none. */
+  const [target, setTarget] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const [sheetSince, setSheetSince] = useState(() => Date.now());
 
   // The live sheet for the key handler, which must step off the sheet on screen
   // without re-subscribing on every turn of the page.
@@ -173,39 +226,113 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
   const scope = seed?.scope ?? null;
   const startPage = seed?.page ?? 1;
 
+  /** Bumped when the file's mtime advances: the load below re-reads it. */
+  const [diskVersion, setDiskVersion] = useState(0);
+  /** The mtime the shown bytes were read at; null until the first read. */
+  const lastMtime = useRef<number | null>(null);
+  /** The file the shown document came from, so a re-read of the same file keeps
+   *  the reader's sheet instead of jumping back to the seed's. */
+  const loadedKeyRef = useRef("");
+
+  // A new file starts from nothing: the old document goes (the effect owning
+  // `doc` destroys it), and so does the mtime baseline.
+  useEffect(() => {
+    return () => {
+      lastMtime.current = null;
+      loadedKeyRef.current = "";
+      setDoc(null);
+      setPainted(false);
+    };
+  }, [path, scope]);
+
+  // Whatever document is set is destroyed once it is replaced or the window
+  // goes — after the swap, so a recompile's old sheet stays painted until the
+  // new one is blitted over it.
+  useEffect(() => {
+    return () => {
+      doc?.loadingTask.destroy();
+    };
+  }, [doc]);
+
   useEffect(() => {
     if (!path) return;
     let cancelled = false;
-    let opened: PDFDocumentProxy | null = null;
-    void (async () => {
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const key = `${scope ?? ""}\0${path}`;
+    const attempt = async (tries: number) => {
       try {
+        // The mtime is read BEFORE the bytes: a write landing between the two
+        // leaves the baseline behind, and the poll reloads once more, rather
+        // than recording the newer mtime against the older bytes.
+        const mtime = await fileMtime(path, scope).catch(() => null);
         const bytes = await readFileBytes(path, scope);
         // pdf.js DETACHES the buffer it is handed; nothing here needs the bytes
         // afterwards (this window never writes), so it is given them outright.
         const loaded = await loadPdf(bytes);
-        opened = loaded;
         if (cancelled) {
           loaded.loadingTask.destroy();
           return;
         }
+        const reload = loadedKeyRef.current === key;
+        loadedKeyRef.current = key;
+        if (mtime != null) lastMtime.current = mtime;
         setDoc(loaded);
         setCount(loaded.numPages);
-        setPage(clampPage(startPage, loaded.numPages));
+        // A recompile keeps the sheet the reader is on (a shorter document
+        // clamps it); a first open starts where the seed asked.
+        setPage((p) => clampPage(reload ? p : startPage, loaded.numPages));
         setError(null);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        if (tries < RELOAD_MAX_RETRIES) {
+          retry = setTimeout(() => void attempt(tries + 1), RELOAD_RETRY_MS);
+          return;
+        }
+        // With a sheet already up, a recompile that never parsed stays silent:
+        // the room keeps the last good sheet and the next write tries again.
+        if (loadedKeyRef.current !== key) setError(e instanceof Error ? e.message : String(e));
       }
-    })();
+    };
+    void attempt(0);
     return () => {
       cancelled = true;
-      opened?.loadingTask.destroy();
-      setDoc(null);
-      setPainted(false);
+      clearTimeout(retry);
     };
     // Keyed on the FILE, not on the seed: a re-seed for the same path (Present
     // pressed again) moves the sheet without tearing down the document and
     // re-parsing it in front of the room.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, scope, diskVersion]);
+
+  // Watch the file for a recompile. Polls only once the first read has set a
+  // baseline, so the opening read is never doubled; one stat at a time, so a
+  // slow or dead remote session never gets a queue of them; and not while the
+  // window is hidden — showing it again checks at once.
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    let inFlight = false;
+    const check = () => {
+      if (inFlight || document.hidden || lastMtime.current == null) return;
+      inFlight = true;
+      fileMtime(path, scope)
+        .then((m) => {
+          if (cancelled || lastMtime.current == null || m <= lastMtime.current) return;
+          lastMtime.current = m;
+          setDiskVersion((v) => v + 1);
+        })
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    const id = setInterval(check, RELOAD_POLL_MS);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", check);
+    };
   }, [path, scope]);
 
   // --- painting ------------------------------------------------------------
@@ -227,8 +354,10 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     let cancelled = false;
     let task: { cancel: () => void; promise: Promise<void> } | null = null;
     void (async () => {
-      const sheet = await doc.getPage(clampPage(page, doc.numPages));
-      if (cancelled) return;
+      // A recompile's swap destroys the old document under a page fetch still
+      // in flight; that fetch's sheet is no longer wanted.
+      const sheet = await doc.getPage(clampPage(page, doc.numPages)).catch(() => null);
+      if (cancelled || !sheet) return;
       // The page's own `/Rotate` is what `getViewport` applies by default, and
       // this window offers no turning of its own — a projected sheet is shown the
       // way the document says it should be.
@@ -312,10 +441,72 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     return () => clearTimeout(timer);
   }, [painted]);
 
+  // --- the bar's state ---------------------------------------------------
+
+  // The clock starts once, with the first sheet on screen.
+  const clockStartedRef = useRef(false);
+  useEffect(() => {
+    if (!painted || clockStartedRef.current) return;
+    clockStartedRef.current = true;
+    setClock(startClock(Date.now()));
+  }, [painted]);
+
+  // Time on the current sheet restarts with every turn.
+  useEffect(() => {
+    setSheetSince(Date.now());
+  }, [page]);
+
+  // A one-second tick, only while the bar is up to show it: a bare projector
+  // has nothing to re-render. The clock itself is timestamps, so it keeps
+  // counting while hidden.
+  useEffect(() => {
+    if (!barShown) return;
+    setNow(Date.now());
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [barShown]);
+
+  const toggleBar = useCallback(() => setBarShown((v) => !v), []);
+  useEffect(() => writeBarShown(barShown), [barShown]);
+
+  const toggleTimer = useCallback(() => setClock((c) => toggleClock(c, Date.now())), []);
+  const resetTimer = useCallback(() => {
+    setClock((c) => resetClock(c, Date.now()));
+    setNow(Date.now());
+  }, []);
+  const toggleBlank = useCallback((mode: "black" | "white") => {
+    setBlank((v) => (v === mode ? null : mode));
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    void (async () => {
+      const win = getCurrentWindow();
+      const fs = await win.isFullscreen().catch(() => false);
+      await win.setFullscreen(!fs).catch(() => {});
+      setFullscreen(!fs);
+    })();
+  }, []);
+
   // --- keys ----------------------------------------------------------------
 
+  const blankRef = useRef<PresentBlank>(null);
+  blankRef.current = blank;
+
+  // On a blanked screen a turn only lifts the blank, back onto the sheet that
+  // was up — what a clicker's next button does in every slide program, so the
+  // room never misses a sheet that changed behind the black.
   const step = useCallback((delta: number) => {
+    if (blankRef.current) {
+      setBlank(null);
+      return;
+    }
     setPage((p) => clampPage(p + delta, countRef.current));
+  }, []);
+
+  // A jump names its sheet, so it lifts the blank AND goes there.
+  const goTo = useCallback((n: number) => {
+    setBlank(null);
+    setPage(clampPage(n, countRef.current));
   }, []);
 
   /** Digits typed toward a "go to sheet N", completed by Enter — the same
@@ -328,26 +519,57 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
       // guard below so a rebind to a chord still reaches it.
       if (osFullscreenChord(e)) {
         e.preventDefault();
-        void (async () => {
-          const win = getCurrentWindow();
-          const fs = await win.isFullscreen().catch(() => false);
-          await win.setFullscreen(!fs).catch(() => {});
-          setFullscreen(!fs);
-        })();
+        toggleFullscreen();
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       switch (e.key) {
         case "Escape":
           e.preventDefault();
-          closeSelf();
+          // A blanked screen comes back first; only a second Esc closes.
+          if (blankRef.current) setBlank(null);
+          else closeSelf();
+          return;
+        case "h":
+        case "H":
+          e.preventDefault();
+          toggleBar();
+          return;
+        // `b`/`.` and `w`/`,` are what presentation clickers send for their
+        // blank-screen button, in every slide program.
+        case "b":
+        case "B":
+        case ".":
+          e.preventDefault();
+          toggleBlank("black");
+          return;
+        case "w":
+        case "W":
+        case ",":
+          e.preventDefault();
+          toggleBlank("white");
+          return;
+        case "l":
+        case "L":
+          e.preventDefault();
+          setLaser((v) => !v);
+          return;
+        case "t":
+        case "T":
+          e.preventDefault();
+          toggleTimer();
+          return;
+        case "r":
+        case "R":
+          e.preventDefault();
+          resetTimer();
           return;
         case "Enter":
           e.preventDefault();
           if (gotoRef.current) {
             const n = Number(gotoRef.current);
             gotoRef.current = "";
-            setPage(clampPage(n, countRef.current));
+            goTo(n);
           } else {
             step(1);
           }
@@ -370,11 +592,11 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
           return;
         case "Home":
           e.preventDefault();
-          setPage(1);
+          goTo(1);
           return;
         case "End":
           e.preventDefault();
-          setPage(clampPage(countRef.current, countRef.current));
+          goTo(countRef.current);
           return;
         default:
           break;
@@ -388,7 +610,7 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [closeSelf, step]);
+  }, [closeSelf, step, goTo, toggleBar, toggleBlank, toggleTimer, resetTimer, toggleFullscreen]);
 
   // A wheel is the other way a sheet gets turned — one notch, one sheet, because
   // there is nothing here to scroll *within*.
@@ -402,7 +624,10 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
 
   // --- render --------------------------------------------------------------
 
-  const shellClass = `pdf-present${fullscreen ? " is-fullscreen" : ""}`;
+  const shellClass =
+    `pdf-present${fullscreen ? " is-fullscreen" : ""}${barShown ? " has-bar" : ""}` +
+    `${laser ? " is-laser" : ""}`;
+  const fileName = path.split(/[\\/]/).pop() ?? "";
 
   return (
     <div
@@ -426,12 +651,39 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
               : t("pdfPresent.waiting")}
         </div>
       )}
-      {painted && count > 0 && (
+      {blank && <div className={`pdf-present-blank is-${blank}`} />}
+      {laser && painted && <PdfPresentLaser />}
+      {painted && count > 0 && !barShown && (
         <div className="pdf-present-count" aria-live="off">
           {page} / {count}
         </div>
       )}
       {painted && hint && <div className="pdf-present-hint">{t("pdfPresent.keyHint")}</div>}
+      {painted && count > 0 && barShown && (
+        <PdfPresentBar
+          fileName={fileName}
+          page={page}
+          count={count}
+          now={now}
+          clock={clock}
+          target={target}
+          sheetSince={sheetSince}
+          blank={blank}
+          fullscreen={fullscreen}
+          onStep={step}
+          onFirst={() => goTo(1)}
+          onLast={() => goTo(countRef.current)}
+          onToggleClock={toggleTimer}
+          onResetClock={resetTimer}
+          onCycleTarget={() => setTarget(nextTarget)}
+          onBlank={toggleBlank}
+          laser={laser}
+          onToggleLaser={() => setLaser((v) => !v)}
+          onToggleFullscreen={toggleFullscreen}
+          onHide={toggleBar}
+          onClose={closeSelf}
+        />
+      )}
     </div>
   );
 }

@@ -6,16 +6,31 @@ import {
   type CompletionCandidate, type CompletionDocument, type CompletionProvider, type CompletionRange,
 } from "./completionProvider";
 
+/** Credential files no consent covers, mirroring `services::copilot::policy`
+ * so they stay on Ollama instead of failing against the backend's refusal. */
+export function copilotSecretFile(path: string): boolean {
+  const name = (path.split(/[/\\]/).pop() ?? "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1) : "";
+  return name === ".env" || name.startsWith(".env.") || ext === "env"
+    || [".npmrc", ".netrc", ".pgpass", ".pypirc", ".git-credentials", "credentials"].includes(name)
+    || ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"].some((key) => name.startsWith(key))
+    || ["pem", "key", "p12", "pfx", "jks", "keystore"].includes(ext);
+}
+
 /** Copilot serves a file only when every gate agrees: the experimental flag,
- * the chosen provider, a local project that opted in, and a code language.
- * Anything else keeps Ollama, which never leaves the machine. The backend
- * re-checks all of it (`services::copilot::policy`); this only picks the path. */
+ * the chosen provider, a local project that opted in, and a code language —
+ * or a text file (Markdown, LaTeX, plain text) when the project also opted
+ * its text files in. Credential files never qualify. Anything else keeps
+ * Ollama, which never leaves the machine. The backend re-checks all of it
+ * (`services::copilot::policy`); this only picks the path. */
 export function copilotServes(settings: Settings | null | undefined, enabled: boolean,
-  projectId: string | null | undefined, remote: boolean, language: string): projectId is string {
+  projectId: string | null | undefined, remote: boolean, language: string, path: string): projectId is string {
   if (!enabled || !projectId || remote || settings?.code_completion_provider !== "copilot") return false;
-  if (!language || language === "plain" || isProseLang(language)) return false;
+  if (!language || copilotSecretFile(path)) return false;
   const policy = settings.completion_project_policies?.[projectId];
-  return policy?.copilot === true && policy.local_only !== true;
+  if (policy?.copilot !== true || policy.local_only === true) return false;
+  return !isProseLang(language) || policy.copilot_text === true;
 }
 
 type ServerCandidate = { id: string; insertText: string; range?: CompletionRange | null };

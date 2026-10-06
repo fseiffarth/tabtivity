@@ -62,6 +62,9 @@ export interface SelectPrompt {
   /** Index of the first line worth showing above the question (`readContext`).
    * A dialog answers what is right above it, not the whole session. */
   context: number;
+  /** A review page read as a dialog (`readReviewStep`): its one row is not the
+   * CLI's own text, so a reader names it in its own words. */
+  review?: true;
 }
 
 /** One step of a dialog as far as it is known: every row seen of it, in the
@@ -594,7 +597,7 @@ const TAB = /^([☐☒☑✔✓])\s+(\S.*)$/u;
  * sentence, not this row. */
 export function readQuestionTabs(text: string): QuestionTab[] | null {
   const row = TAB_ROW.exec(text);
-  if (!row || !/[☐☒]/u.test(row[1])) return null;
+  if (!row || !/[☐☒]/u.test(row[1])) return readGeminiTabs(text);
   const tabs: QuestionTab[] = [];
   for (const part of row[1].split(/\s{2,}/u)) {
     const tab = TAB.exec(part);
@@ -603,4 +606,154 @@ export function readQuestionTabs(text: string): QuestionTab[] | null {
     tabs.push({ label: tab[2], answered: tab[1] !== "☐" });
   }
   return tabs.length > 0 ? tabs : null;
+}
+
+const GEMINI_TAB_ROW = /^\s*(?:←\s+)?([□✓≡]\s+\S.*?(?:\s+│\s+[□✓≡]\s+\S.*?)+)(?:\s+→)?\s*$/u;
+const GEMINI_TAB = /^([□✓≡])\s+(\S.*)$/u;
+
+/** Gemini CLI's tab row over an `ask_user` dialog that asks several — and
+ * Qwen Code's, forked from it (`TabHeader`, gemini-cli main):
+ * `← □ Scope │ ✓ Tag │ ≡ Review →`, each header behind its status, the
+ * current one underlined. It asks one question with no row at all, so the
+ * `≡ Review` step is always there and is what tells the row from a sentence;
+ * like Claude Code's Submit it is navigation and is left out. */
+function readGeminiTabs(text: string): QuestionTab[] | null {
+  const row = GEMINI_TAB_ROW.exec(text);
+  if (!row) return null;
+  const tabs: QuestionTab[] = [];
+  let review = false;
+  for (const part of row[1].split(/\s+│\s+/u)) {
+    const tab = GEMINI_TAB.exec(part);
+    if (!tab) return null;
+    if (tab[1] === "≡") {
+      review = true;
+      continue;
+    }
+    tabs.push({ label: tab[2], answered: tab[1] === "✓" });
+  }
+  return review && tabs.length > 0 ? tabs : null;
+}
+
+/** Whether the tab row ends in a step that sends the answers — Claude Code's
+ * `✔ Submit`, Gemini CLI's `≡ Review` — the page a several-question dialog
+ * is submitted from. */
+export function questionTabsSubmit(text: string): boolean {
+  return /(?:^|\s)[✔✓]\s+Submit(?:\s|$)/u.test(text) || (GEMINI_TAB_ROW.test(text) && /(?:^|\s)≡\s+\S/u.test(text));
+}
+
+/** How the dialog whose tab row is `text` is walked: Gemini CLI's with Tab
+ * and Shift+Tab — its ←/→ do it only while the options have the focus, not
+ * on its Review page — Claude Code's with ←/→. */
+export function questionTabRowKeys(text: string): QuestionStepKeys {
+  return GEMINI_TAB_ROW.test(text) ? "tabs" : "arrows";
+}
+
+const TAB_GLYPH = /^(?:[☐☒☑✔✓□≡]\s+)?(?:answered\s+)?/u;
+
+/**
+ * Which step of the tab row the dialog is on, read off `spans` (the row as
+ * drawn): Claude Code paints the current step's chip — on a background, or in
+ * its own colour where every other chip keeps the plain one — and Gemini CLI
+ * underlines it. An index into `tabs`, or `tabs.length` for the Submit/Review
+ * step; null when no single chip is marked so — then only ←/→ can move.
+ */
+export function questionTabFocus(spans: readonly ReadableSpanLike[], tabs: readonly QuestionTab[]): number | null {
+  const paintedBy = (painted: (span: ReadableSpanLike) => boolean): number[] => {
+    const runs: string[] = [];
+    let run: string | null = null;
+    for (const span of spans) {
+      if (painted(span)) {
+        run = (run ?? "") + span.text;
+      } else if (run !== null) {
+        runs.push(run);
+        run = null;
+      }
+    }
+    if (run !== null) runs.push(run);
+    // A run that names no step (the dimmed ← or → at an end) says nothing.
+    return runs
+      .map((text) => text.trim().replace(TAB_GLYPH, ""))
+      .map((text) => {
+        const step = tabs.findIndex((tab) => tab.label === text);
+        return step < 0 && (text === "Submit" || text === "Review") ? tabs.length : step;
+      })
+      .filter((step) => step >= 0);
+  };
+  const byBackground = paintedBy((span) => !!span.background);
+  if (byBackground.length > 0) return byBackground.length === 1 ? byBackground[0] : null;
+  const byUnderline = paintedBy((span) => /(?:^|\s)u(?:\s|$)/u.test(span.className ?? ""));
+  if (byUnderline.length > 0) return byUnderline.length === 1 ? byUnderline[0] : null;
+  const byColor = paintedBy((span) => !!span.color);
+  return byColor.length === 1 ? byColor[0] : null;
+}
+
+/** A span of a read row (`ReadableSpan`), as far as the tab row needs it. */
+interface ReadableSpanLike { text: string; className?: string; color?: string; background?: string }
+
+/** How a several-question dialog is walked: Claude Code's tab row with ←/→
+ * (`tabs:next`/`tabs:previous`); Codex's `request_user_input` with
+ * PageDown/PageUp, which — unlike its ←/→ — also work while a question's
+ * notes field has the focus; Gemini CLI's with Tab/Shift+Tab, the keys it
+ * switches questions with on every page, its Review page too. */
+export type QuestionStepKeys = "arrows" | "pages" | "tabs";
+
+/** The keys that walk a several-question dialog from step `from` to step
+ * `to`. Either CLI keeps the answers already given; the step walked onto
+ * shows its own highlighted. */
+export function questionTabKeys(from: number, to: number, keys: QuestionStepKeys = "arrows"): string[] {
+  const key = keys === "pages" ? (to > from ? "\u001b[6~" : "\u001b[5~")
+    : keys === "tabs" ? (to > from ? "\t" : "\u001b[Z")
+    : (to > from ? "\u001b[C" : "\u001b[D");
+  return Array.from({ length: Math.abs(to - from) }, () => key);
+}
+
+const CODEX_PROGRESS = /^Question (\d+)\/(\d+)(?:\s|$)/u;
+
+/** Codex's `request_user_input` heading — `Question 2/3 (1 unanswered)` —
+ * as the step on screen (0-based) and how many questions it asks. It draws
+ * no tab row: this is all it says about the others. */
+export function codexQuestionProgress(title: string | undefined): { focus: number; count: number } | null {
+  const match = title ? CODEX_PROGRESS.exec(title.trim()) : null;
+  if (!match) return null;
+  const focus = Number(match[1]) - 1;
+  const count = Number(match[2]);
+  return focus >= 0 && focus < count ? { focus, count } : null;
+}
+
+const GEMINI_REVIEW = /^\s*Review your answers:\s*$/u;
+
+/**
+ * Gemini CLI's Review page (`ReviewView`): the last step of an `ask_user`
+ * dialog that asks several, under its tab row — `Review your answers:`, a
+ * warning when some are open, one `Header → answer` row per question — and no
+ * rows to pick, Enter sends them all. `readSelectPrompt` finds nothing to
+ * answer there, so a reader's card would vanish just when an answer may still
+ * want changing. This reads it as a dialog of one row, `Submit` (Enter), with
+ * the tab row above it, so the card stays and can walk back. Gemini and Qwen
+ * tabs only, like the radio dot.
+ */
+export function readReviewStep(lines: readonly SelectLineLike[], agentLabel?: string): SelectPrompt | null {
+  if (!RADIO_AGENT.test(agentLabel ?? "")) return null;
+  let heading = -1;
+  for (let index = lines.length - 1; index >= 0 && lines.length - index <= DIALOG_LINES; index -= 1) {
+    if (GEMINI_REVIEW.test(lines[index].text)) {
+      heading = index;
+      break;
+    }
+  }
+  if (heading < 0) return null;
+  let row = heading - 1;
+  while (row >= 0 && lines[row].text.trim() === "") row -= 1;
+  if (row < 0 || !readGeminiTabs(lines[row].text)) return null;
+  let end = heading + 1;
+  while (end < lines.length && !/^\s*Enter to submit\b/u.test(lines[end].text)) end += 1;
+  return {
+    options: [{ index: 0, number: 1, label: "Submit" }],
+    current: 0,
+    title: lines[heading].text.trim(),
+    start: end,
+    question: row,
+    context: row,
+    review: true,
+  };
 }

@@ -168,8 +168,10 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
             .output()
             .map_err(|e| format!("could not run tmux: {e}"))?;
         // Killed or already gone either way: its launcher (if the command line
-        // needed one) has nothing left to launch.
+        // needed one) has nothing left to launch, and its agent's API proxy
+        // tokens nothing left to serve.
         crate::services::tmux_local::remove_launcher(&session);
+        crate::services::api_proxy::on_tmux_session_gone(&session);
         if !output.status.success() {
             let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
             // Explicit close is idempotent: a session that already exited is
@@ -243,11 +245,17 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
         return Ok(());
     }
     app_core::rt::spawn_blocking(move || {
-        let _ = crate::services::tmux_local::tmux_command()
+        let renamed = crate::services::tmux_local::tmux_command()
             .args(crate::services::tmux_local::local_tmux_rename_args(
                 &session, &new_name,
             ))
-            .output();
+            .output()
+            .is_ok_and(|o| o.status.success());
+        // The agent inside keeps running: its API proxy tokens follow the
+        // session's new name instead of being swept as gone.
+        if renamed {
+            crate::services::api_proxy::on_tmux_renamed(&session, &new_name);
+        }
     })
     .await
     .map_err(|e| e.to_string())

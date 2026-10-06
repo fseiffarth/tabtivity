@@ -79,6 +79,8 @@ calling; the Models & agents menu tags models without it "no tools".
    **Mail**.
 5. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
    load automatically at launch (not in Energy Saver mode unless you allow it).
+6. From a paired phone, Home → **Local models** loads and unloads installed
+   models too (help topic `mobile`, "Local models from the phone").
 
 ## 5. Open a Local Model tab
 

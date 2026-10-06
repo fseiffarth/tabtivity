@@ -1,6 +1,6 @@
-// The phone's theme as a list to tap, from the start page's "This phone"
-// section: the desktop's own themes under their desktop names, plus following
-// the desktop, which is where an untouched phone starts.
+// The phone's theme as a list to tap, from the start page's "This device"
+// sheet (the header's gear): the desktop's own themes under their desktop
+// names, plus following the desktop, which is where an untouched phone starts.
 
 import type { TranslationKey } from "../../../src/lib/i18n";
 import { useT } from "../../../src/lib/i18n";
@@ -31,7 +31,7 @@ export function themeSummary(choice: PhoneTheme, t: Translate): string {
 export function ThemeRow({ choice, open, expanded }: { choice: PhoneTheme; open: () => void; expanded: boolean }) {
   const t = useT();
   return <li><button aria-haspopup="dialog" aria-expanded={expanded} onClick={open}>
-    <span><strong>{t("mobile.theme.title")}{isUntested("mobile.theme") && <span className="untested">Untested</span>}</strong><small>{themeSummary(choice, t)}</small></span>
+    <span><strong>{t("mobile.theme.title")}{isUntested("mobile.theme") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{themeSummary(choice, t)}</small></span>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
   </button></li>;
 }

@@ -1052,14 +1052,14 @@ const MANAGEMENT_EXIT_POLL: Duration = Duration::from_millis(100);
 const MANAGEMENT_EXIT_POLLS: usize = 50; // ≤5s
 
 /// Where the management port for `config` is recorded.
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn management_portfile(config: &str) -> PathBuf {
     runtime_dir().join(format!("{}.mgmt", safe_stem(config)))
 }
 
 /// The password file OpenVPN reads to guard its management socket — and that
 /// Tabtivity reads back to authenticate against it.
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn management_pwfile(config: &str) -> PathBuf {
     runtime_dir().join(format!("{}.mgmt.pw", safe_stem(config)))
 }
@@ -2821,11 +2821,11 @@ mod tests {
     /// Also clears the management endpoint `arm_interactive` now writes, so the suite
     /// leaves nothing behind in the user's real runtime dir (these tests run against
     /// it, not a temp dir).
+    #[cfg(unix)]
     fn forget_interactive(config: &str) {
         if let Some(pidfile) = interactive_registry().lock().unwrap().remove(config) {
             let _ = std::fs::remove_file(pidfile);
         }
-        #[cfg(unix)]
         clear_management(config);
     }
 

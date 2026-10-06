@@ -98,6 +98,7 @@ fn write_script(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use crate::brand::SLUG;
     use super::*;
     #[test]

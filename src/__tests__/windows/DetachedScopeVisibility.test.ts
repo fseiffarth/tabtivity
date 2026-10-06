@@ -162,9 +162,12 @@ describe("popouts come back with their scope", () => {
       useTabsStore.getState().setScope("B");
       await flush();
       expect(useTabsStore.getState().detachedGroupsByScope.B).toHaveLength(1);
+      // A display switch takes seconds: still detached after half a minute.
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(useTabsStore.getState().detachedGroupsByScope.B).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(180_000);
       const s = useTabsStore.getState();
-      expect(detachCalls()).toHaveLength(7);
+      expect(detachCalls()).toHaveLength(13);
       expect(s.detachedGroupsByScope.B).toEqual([]);
       expect(JSON.stringify(s.layoutByScope.B)).toContain("b1");
       // The scope that was left keeps its record untouched.

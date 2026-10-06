@@ -24,7 +24,8 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Gates
 
-Run before calling work done; all are CI gates and all sit at zero warnings:
+Run before calling work done; all are CI gates and all sit at zero warnings
+except `npm run lint` (see below):
 
 ```
 npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
@@ -45,6 +46,10 @@ macOS jobs build the tests, which a lib-only check misses. Touched the
 daemon? `cargo build -p app-serverd` and `ldd` it: no GTK/WebKit/X11/dbus.
 
 CI clippy is latest stable; a stale local toolchain can pass what CI fails.
+`npm run lint` fails only on errors. Its `react-hooks/exhaustive-deps`
+warnings are advisory and mostly deliberate omissions (mount-only effects,
+timer `tick`s): don't add a dependency just to silence one, since that can
+restart a terminal or refetch on every render. Add no new warnings; no new `any`.
 `cargo fmt` is not enforced. Without the RTK hook, keep output short:
 `cargo test -q`, `npm test -- --reporter=dot`, `npm run build 2>&1 | tail -40`. `git diff --check` for whitespace. If a gate's
 tool is unavailable, say so — never skip silently.
@@ -73,9 +78,9 @@ tool is unavailable, say so — never skip silently.
 - Design rationale, one file per subsystem in `docs/context/` — open only the
   one you're touching: agent_authority, agent_schedule_mcp, agent_sessions,
   brand_migration, caldav, dev_builds, docker_containers, git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
-  multi_host_remote, openvpn, project_boxes, project_transfer,
-  release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console, server_gateway, sharing,
-  tmux_sessions, usage_stats, vm_projects, web_client.
+  markup_mcp, mobile_access, multi_host_remote, openvpn, project_boxes, project_transfer,
+  release_signing, remote_autoconnect, remote_credentials, remote_projects, root_console,
+  server_gateway, sharing, tmux_sessions, usage_stats, vm_projects, web_client.
 - Server version (hosted plan, gateway, daemon, sharing): start at
   `docs/server.md` — status, the user's decisions, open problems, doc map.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.

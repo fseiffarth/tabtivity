@@ -1491,7 +1491,7 @@ export function DetachedCenterPanel({
             const stateOf = (tab: TabEntry) => {
               const ptyId = `${scope}:${tab.key}`;
               const isActive = tab.key === group.activeKey;
-              const working = isPtyTabKind(tab.kind) && !isActive && !!busyByTab[ptyId];
+              const working = isPtyTabKind(tab.kind) && !!busyByTab[ptyId];
               const rawAttn =
                 tab.kind === "agent" || tab.kind === "local_agent"
                   ? attentionByTab[ptyId] ?? null

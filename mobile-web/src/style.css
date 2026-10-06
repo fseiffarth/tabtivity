@@ -162,6 +162,9 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .git-mark.git-unpushed { color:#3fb950; }
 .git-mark.git-broken { color:#8b949e; }
 .git-mark.git-broken > i { background:none; border:1px dashed currentColor; box-sizing:border-box; }
+/* On a start-page row the mark opens the ⎇ Git sheet: a taller touch target
+   that leaves the caption's line height alone. */
+.home-project-card .git-mark { padding:8px 0; margin:-8px 0; }
 .tab-card-foot { display:flex; align-items:center; gap:8px; min-height:56px; padding:8px 14px 9px 10px; border-top:1px solid #303549; }
 .tab-card-when { min-width:0; flex:1 1 auto; color:#a9b0c6; font-size:.78rem; line-height:1.3; }
 .tab-card .agent-status { padding:5px 9px; border-radius:999px; font-size:.72rem; line-height:1; white-space:nowrap; }
@@ -208,6 +211,25 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .agent-mode-mark { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 16%, transparent); font-size:.66rem; font-weight:800; letter-spacing:.05em; line-height:1; }
 .agent-mode-mark.plan { color:#b3a8ff; }
 .agent-mode-mark.goal { color:#6fd6e0; }
+/* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
+   lower-case words rather than a tag — it is a count, not a mode. */
+.agent-subagent-count { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 7px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 14%, transparent); color:#a99cff; font-size:.7rem; font-weight:700; line-height:1; white-space:nowrap; }
+/* On a project card the pill lists the subagents (`SubagentsSheet`): above
+   the card's stretched opener, like the model chip. */
+button.agent-subagent-count { position:relative; z-index:1; margin:0; font-family:inherit; }
+button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 30%, transparent); }
+.agent-turn-time { flex:0 0 auto; color:#a9b0c6; font-size:.72rem; font-weight:600; font-variant-numeric:tabular-nums; line-height:1; white-space:nowrap; }
+.agent-turn-time.running { color:#8fd3a8; }
+.agent-worktree { display:inline-block; flex:0 1 auto; min-width:0; max-width:100%; padding:3px 7px; border:1px solid #3e5a4f; border-radius:6px; background:#22332d; color:#9fd8bf; font-size:.7rem; font-weight:600; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.agent-worktree-branch { color:#7fae99; font-weight:500; }
+/* A subagent's worktree: dashed, so it reads as the session's helpers' and not the tab's own. */
+.agent-worktree.subagent { border-style:dashed; }
+.agent-worktree-count { font-weight:500; }
+.transcript-agent-worktree { display:flex; align-items:center; gap:4px; min-width:0; }
+.transcript-agent-body small.agent-worktree, .subagent-index-list small.agent-worktree { justify-self:start; color:#9fd8bf; font-size:.68rem; text-transform:none; letter-spacing:0; }
+.subagent-index-list .agent-worktree span { font-size:inherit; line-height:inherit; }
+.subagents-sheet .subagent-index-list { max-height:none; padding-top:0; }
+.subagents-sheet .subagent-index-list small em { color:#a99cff; font-style:normal; }
 .card.in-plan,.project-screen .tab-card.in-plan { border-color:#7b6ee0; }
 .card.in-goal,.project-screen .tab-card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.tab-card.in-plan.has-tab-color,.card.in-goal.has-tab-color,.tab-card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
@@ -269,10 +291,11 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .tab-card > .tab-card-status.question { --status-face:#493b1d; }
 .tab-card > .tab-card-status.done { --status-face:#193a29; }
 .tab-card > .tab-card-status.interrupted { --status-face:#46202a; }
-/* The Activity pill breathes; the working hexagon is hollow — only its
-   dimmed edge ring is drawn, and a bright line runs around it: a conic sweep
-   whose start angle turns (registered `--hex-run`, so the ring itself stays
-   still), clipped to the same ring. The asking hexagon pulses — it
+/* The Activity pill breathes; the working hexagon is drawn only as a
+   solid bright line, four of its six edges long (each edge spans 60° seen
+   from the centre, so 240°), running around its edge: a conic sweep whose start angle turns
+   (registered `--hex-run`, so the shape itself stays still), clipped to the
+   hexagon's edge ring. The asking hexagon pulses — it
    swells and a faint fill glows inside it; the pill's ? tips its head. ✓ and
    ■ land once. The mark's own transform places it on the border, so the pulse
    repeats it. */
@@ -283,8 +306,8 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .agent-status.interrupted .agent-status-glyph { animation:agent-status-stop .45s cubic-bezier(.3,1.5,.5,1) both; }
 @property --hex-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
 .tab-card > .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
-.tab-card > .tab-card-status.working::before { inset:0; background:color-mix(in srgb, currentColor 30%, var(--status-face)); clip-path:var(--hex-ring); }
-.tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 60%, currentColor 100%); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
+.tab-card > .tab-card-status.working::before { display:none; }
+.tab-card > .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 120deg, currentColor 0); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
 .tab-card > .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
 .tab-card > .tab-card-status.question .agent-status-glyph { animation:none; }
@@ -324,7 +347,9 @@ small { color:#9498aa; }
 .new-tab-sheet .create > .primary { min-height:48px; }
 .new-tab-agents { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
 .new-tab-agents .agent-create { flex-wrap:wrap; align-content:start; gap:6px; min-width:0; padding:6px; border:1px solid #383c4d; border-radius:12px; background:#1b1e29; }
-.new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 8px; border:0; background:transparent; overflow-wrap:anywhere; }
+/* The agent's name is the tile's headline: the accent face the agent tab
+   icons wear (`.tab-card-icon.accent`), so it reads apart from its modes. */
+.new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 10px; border:0; border-radius:9px; background:#2e2b48; color:#bcb0ff; font-weight:700; overflow-wrap:anywhere; }
 .new-tab-sheet .new-tab-file { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:8px 12px; text-align:left; }
 .new-tab-sheet .new-tab-file > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .new-tab-sheet .new-tab-file small { color:#aeb4c8; font-size:.76rem; }
@@ -342,6 +367,11 @@ small { color:#9498aa; }
 .new-tab-held ul { display:grid; gap:6px; margin:0; padding:0 0 6px; list-style:none; }
 .new-tab-held li { display:flex; flex-wrap:wrap; gap:2px 8px; min-width:0; overflow-wrap:anywhere; }
 .new-tab-held li strong { color:#aeb4c8; font-weight:600; }
+.new-tab-cloud summary { padding:12px 0; }
+.new-tab-cloud > .sheet-note { margin:0 0 8px; }
+.new-tab-cloud-agent { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 0 8px; }
+.new-tab-cloud-agent > strong { flex:1 1 auto; min-width:0; color:#aeb4c8; font-size:.9rem; font-weight:600; overflow-wrap:anywhere; }
+.new-tab-cloud-agent > button { min-height:36px; padding:6px 10px; font-size:.8rem; }
 /* The ＋ at the end of the project header. Square against the back chevron
    opposite it, and it never shrinks: the project's name is what gives way. */
 .new-tab { flex:0 0 auto; min-width:44px; padding:8px 12px; font-size:1.25rem; line-height:1.1; }
@@ -354,9 +384,17 @@ small { color:#9498aa; }
 .home-logo-frame { position:relative; display:grid; place-items:center; width:50px; height:47px; flex:0 0 auto; }
 .home-logo { position:relative; width:35px; height:35px; color:#f0efff; }
 .home-header > .lamp { flex:0 0 auto; }
+/* The gear that opens the phone's own settings (This device). Square, like
+   the project header's ＋, and never shrinking: the brand gives way. */
+.home-settings { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; padding:0; border-color:#45476a; border-radius:11px; background:rgba(27,30,44,.7); color:#d7d3f5; }
+.home-settings svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .tab-card.home-project-card { --oct-edge:#3b4055; --oct-face:linear-gradient(115deg,rgba(54,49,85,.42),rgba(54,49,85,0) 38%),#1c1f2b; }
 .tab-card.home-project-card:focus-within { --oct-edge:#8d80ee; }
 .home-project-card .card { min-height:62px; }
+/* A row's agent tabs by state: the tab cards' status pills, a size down so
+   three of them and the tab count fit one phone-width row. */
+.home-project-card .card-trailing { gap:6px; }
+.home-project-card .agent-status.home-agent-count { padding:4px 7px; font-variant-numeric:tabular-nums; }
 .home-project-card .count { border-radius:8px; background:#38305f; color:#ebe6ff; font-variant-numeric:tabular-nums; }
 @media (max-width:380px) {
   .home-brand strong { font-size:.9rem; }
@@ -805,7 +843,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-plan-head em { font-style:normal; opacity:.75; text-transform:none; letter-spacing:0; }
 .transcript-text { margin:0; min-width:0; white-space:pre-wrap; overflow-wrap:break-word; }
 /* An answer's Markdown (`answerHtml`): formatting only, in the chat's own
-   palette — nothing in it is a link or loads anything. */
+   palette — nothing in it loads anything; a web link asks before opening. */
 .transcript-md { min-width:0; overflow-wrap:break-word; }
 .transcript-md > :first-child { margin-top:0; }
 .transcript-md > :last-child { margin-bottom:0; }
@@ -829,6 +867,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md blockquote { margin:0 0 .6em; padding:2px 0 2px 10px; border-left:3px solid #4a4f68; color:#b9bdcc; }
 .transcript-md hr { margin:.8em 0; border:0; border-top:1px solid #34384a; }
 .transcript-md .md-link { color:#b7c9ff; }
+.transcript-md .md-link[data-href] { text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .transcript-md .md-math { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85em; }
 .transcript-md .md-table { display:block; max-width:100%; margin:0 0 .6em; overflow-x:auto; border-collapse:collapse; font-size:.82rem; -webkit-overflow-scrolling:touch; }
 .transcript-md .md-table th,.transcript-md .md-table td { padding:4px 8px; border:1px solid #34384a; text-align:left; vertical-align:top; }
@@ -885,18 +924,51 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-steps { display:flex; flex:0 0 auto; align-items:center; gap:6px; color:#9da3b6; font-size:.72rem; font-variant-numeric:tabular-nums; }
 .subagent-bar + .readable-empty { min-height:calc(100% - 56px); }
 /* Keep the session's subagents within reach even after their cards scroll away. */
-.subagent-index { position:sticky; top:-12px; z-index:2; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
+/* The strip over the chat: the subagent index and the sent-files index side by
+   side, one list open at a time; the open one takes the room, the shut one
+   keeps to its chip. */
+.chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
+.chat-index > nav { flex:1 1 0; min-width:0; }
+.chat-index:has(> nav.open) > nav:not(.open) { flex:0 1 auto; }
+.chat-index .subagent-index-toggle span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subagent-index-toggle { display:flex; align-items:center; gap:8px; width:100%; padding:5px 7px; border:1px solid #343f58; border-radius:9px; background:#171e2d; color:#dbe4f6; font:600 .78rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
 .subagent-index-toggle span { flex:1; }
 .subagent-index-toggle em { color:#8fb8ff; font-size:.62rem; font-style:normal; text-transform:uppercase; }
 .subagent-index-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .subagent-index-toggle svg.expanded { transform:rotate(180deg); }
 .subagent-index-list { display:grid; gap:4px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
-.subagent-index-list button { display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
+.subagent-index-list button, .git-rows > li { display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
 .subagent-index-list button:disabled { opacity:.6; }
-.subagent-index-list small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
-.subagent-index-list span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
+.subagent-index-list small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
+.subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
+.chat-index > nav.sent-index.open { flex:1 0 100%; }
+.chat-index:has(> nav.sent-index.open) { flex-wrap:wrap; }
+.chat-index:has(> nav.sent-index.open) > nav:not(.open) { flex:1 1 0; }
+.sent-index-groups { display:grid; gap:10px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
+.sent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.sent-index-head.phone { color:#a99cf0; }
+.sent-index-head.agent { color:#8fb8ff; }
+.sent-index-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:6px; margin:0; padding:0; list-style:none; }
+.sent-index-list li { min-width:0; }
+.sent-index-list button, .sent-index-list a { display:grid; gap:3px; width:100%; padding:4px 4px 6px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; text-decoration:none; }
+.sent-index-thumb { display:grid; place-items:center; width:100%; aspect-ratio:1; overflow:hidden; border-radius:6px; background:#2b2f45; color:#b9c4e0; font-size:1.15rem; font-weight:700; }
+.sent-index-thumb img { width:100%; height:100%; object-fit:cover; }
+.sent-index-name, .sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
+.sent-index-name { font-size:.74rem; font-weight:600; }
+.sent-index-list small { color:#95a6c8; font-size:.64rem; }
+.git-sheet { max-height:92dvh; }
+.git-body { display:grid; gap:6px; overflow:auto; }
+.git-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
+.git-head strong { padding:3px 9px; border-radius:999px; background:#1c2336; color:#8fb6ff; font-size:.8rem; overflow-wrap:anywhere; }
+.git-section { margin:6px 0 0; padding:0 6px; color:#9da3b6; font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.git-rows { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
+.git-rows > li.current { border-color:#8fb6ff; background:#1c2336; }
+.git-rows > li.git-more > span { color:#9da3b6; text-align:center; }
+.git-rows .git-quiet { color:#9da3b6; font-style:normal; }
+.git-rows .git-mark { margin-left:6px; }
+.git-remote > summary { cursor:pointer; }
+.git-remote > .git-rows { padding-top:6px; }
 .readable-empty button { margin-top:6px; }
 /* What the screen is drawing right now, under the stored session: shown only
    while it holds a choice the session is waiting on. */
@@ -1092,6 +1164,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .mobile-schedule-form textarea,
 .mobile-schedule-form select,
 .mobile-schedule-form input { box-sizing:border-box; width:100%; padding:9px 10px; border:1px solid #42485c; border-radius:9px; background:#11141c; color:#f2f4fa; font:inherit; }
+.mobile-schedule-form input.markup-ask-dial { padding:0; border:0; background:none; accent-color:#8c7df4; min-height:32px; }
 .mobile-schedule-weekdays { display:flex; flex-wrap:wrap; gap:7px; }
 .mobile-schedule-weekdays label { display:flex; gap:4px; align-items:center; padding:6px 8px; border:1px solid #383c4d; border-radius:999px; }
 .mobile-schedule-weekdays input { width:auto; }
@@ -1125,6 +1198,9 @@ span.files-close { background:transparent; }
 .files-close svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 @keyframes files-drawer-in { from { opacity:0; transform:translateX(-24px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion:reduce) { .project-files { animation:none; } }
+/* The search box under the head, and a hit's folder above its times. */
+.files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
+.files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
 .files-trail { display:flex; flex-wrap:wrap; gap:5px; padding:0 4px; }
 .files-trail button { max-width:100%; padding:5px 10px; overflow:hidden; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
 .files-trail button:disabled { color:#d8e2f5; opacity:1; }
@@ -1133,10 +1209,44 @@ span.files-close { background:transparent; }
 .files-list li > button:first-child { flex:1; width:auto; min-width:0; }
 .option-list .files-share { flex:0 0 auto; width:auto; gap:4px; padding:0 14px; color:#8fb8ff; font-size:.85rem; }
 .files-share-error { flex-basis:100%; margin:0; padding:0 14px 4px; color:#f2b8b5; font-size:.75rem; }
+/* A row's kind tile, tinted per kind, and a tighter row than a menu's: the
+   drawer lists a whole folder. Only a folder carries the chevron. */
+.files-list li > button:first-child { gap:11px; padding:9px 12px 9px 9px; }
+.option-list button > span.files-icon { display:grid; flex:0 0 auto; place-items:center; width:34px; height:34px; border-radius:9px; background:#252a3a; color:#aab2c5; }
+.files-icon svg { width:19px; height:19px; stroke-width:1.8; }
+.option-list button > span.files-icon-dir { background:#1d2a44; color:#8fb8ff; }
+.option-list button > span.files-icon-image { background:#1d3329; color:#8ad1a6; }
+.option-list button > span.files-icon-pdf { background:#3a2226; color:#f28b82; }
+.option-list button > span.files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.files-list strong { font-size:.94rem; }
+/* A PDF opened from the drawer, as a card after the tabs: the row's kind tile
+   where a tab card has its colour dot, and the folder under the name. */
+.file-tab-card .tab-card-head > .files-icon { display:grid; flex:0 0 auto; place-items:center; align-self:center; width:34px; height:34px; margin:0 4px 0 12px; border-radius:9px; background:#3a2226; color:#f28b82; }
+.file-tab-card .files-icon svg { fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; }
+.file-tab-card .tab-card-main > span { display:grid; gap:2px; min-width:0; }
+.file-tab-card .tab-card-title strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-tab-place { overflow:hidden; color:#8b93aa; font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-list small { font-size:.76rem; }
+.option-list .files-chevron { width:17px; height:17px; color:#6f7790; }
+/* A folded section's head: the desktop tree's divider, not a card. */
+.option-list .files-section button { gap:6px; margin-top:6px; padding:8px 10px; border-top:1px solid #2b3040; border-radius:0; background:transparent; color:#98a0b4; font-size:.8rem; }
+.option-list .files-section svg { width:15px; height:15px; transition:transform .12s ease-out; }
+.option-list .files-section button[aria-expanded="true"] svg { transform:rotate(90deg); }
+.files-list li.files-folded > button:first-child strong { color:#aeb4c4; font-weight:500; }
+/* Local models sheet: the files-list row with its trailing button (Load /
+   Unload as the files' Share), the model's facts in the option-row surface. */
+.local-models-list .local-model-info { display:grid; flex:1; gap:3px; min-width:0; padding:13px 14px; border-radius:13px; background:#1e2230; }
+.local-models-list .local-model-tabs { color:#8fb8ff; }
+.local-models-list .transcript-working-dots { vertical-align:middle; }
+.local-models-start { min-height:48px; }
 /* Select text (`MessageMenu`): the message again, as plain text the phone's
    own selection handles and callout work on — the bubble's hold is the menu,
    so it cannot be selected in place. */
 .message-select-text { max-height:52dvh; overflow:auto; overscroll-behavior:contain; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; font:400 .92rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; -webkit-user-select:text; user-select:text; -webkit-touch-callout:default; }
+/* A tapped chat link's address (`LinkSheet`): the host alone, then all of it. */
+.link-sheet-target { display:grid; gap:4px; margin:0 0 10px; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; }
+.link-sheet-target strong { font:650 .98rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; overflow-wrap:anywhere; }
+.link-sheet-target code { max-height:30dvh; overflow:auto; color:#b9bdcc; font:400 .8rem/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-wrap:anywhere; -webkit-user-select:text; user-select:text; }
 .sheet-pending { flex:0 0 auto; color:#c8cdda; font-size:.78rem; }
 /* The same list, inline in the reading view: the choice an agent is waiting on
    (`QuestionList`). It is the model and mode sheets' list (`OptionSheet`) —
@@ -1155,10 +1265,21 @@ span.files-close { background:transparent; }
 .question-tabs span { color:#e7e9f2; font:600 1.02rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; }
 .question-tabs span.answered { color:#7d8499; font-size:.84rem; font-weight:500; }
 .question-list button:disabled { opacity:.6; }
+/* A question that asks several: its headers are steps of the dialog's tab
+   row, walked with ←/→ or a tap, the one on screen marked as the option
+   list's highlighted row is. */
+.question-tabs.stepped { align-items:center; gap:6px; }
+.question-tabs.stepped button { min-height:36px; padding:6px 12px; border:0; border-radius:13px; background:#1e2230; color:#e7e9f2; font:600 .92rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; }
+.question-tabs.stepped button.answered { color:#98a0b4; font-weight:500; }
+.question-tabs.stepped button.current { color:#8fb6ff; background:#1c2336; box-shadow:inset 0 0 0 1px #8fb6ff; }
+.question-tabs.stepped button.question-step { min-width:40px; font-size:1.05rem; }
+.question-tabs.stepped button:disabled:not(.current) { opacity:.5; }
+.question-tabs.stepped em { color:#98a0b4; font-size:.78rem; }
 /* The free-text row's field (`freeTextRow`), opened under it by a tap: the
    to-do editor's add row — a field and its button side by side. */
 .question-type { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px 0 4px; }
-.question-type input { min-width:0; border:1px solid #3a3e50; border-radius:12px; padding:11px 13px; background:#171a24; color:#fff; font-size:1rem; }
+.question-type textarea { grid-column:1 / -1; min-width:0; min-height:6.5em; resize:vertical; border:1px solid #3a3e50; border-radius:12px; padding:11px 13px; background:#171a24; color:#fff; font:inherit; font-size:1rem; line-height:1.4; }
+.question-type > button { grid-column:2; }
 .question-type em { grid-column:1 / -1; color:#98a0b4; font-size:.78rem; }
 /* A question kept in the chat once answered (`AskedCard`): the live card's
    rows, no longer buttons — the ones the answer took lit as the highlighted
@@ -1326,6 +1447,20 @@ span.files-close { background:transparent; }
 .inbox-upload strong { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
 .inbox-upload span { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
 .inbox-upload button { flex:0 0 auto; padding:4px 9px; border:0; border-radius:7px; background:rgba(255,255,255,.09); color:inherit; font-size:.8rem; }
+/* Files going with the next message, as thumbnails above the composer. */
+.composer-attachments { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 7px 0; }
+.composer-thumb { position:relative; flex:0 0 auto; width:56px; height:56px; overflow:hidden; border-radius:10px; background:#211d35; color:#dcd6ff; }
+.composer-thumb img { display:block; width:100%; height:100%; object-fit:cover; }
+.composer-thumb.sending img,.composer-thumb.sending .composer-thumb-file { opacity:.45; }
+.composer-thumb-file { display:grid; grid-template-rows:1fr auto; place-items:center; height:100%; padding:4px; }
+.composer-thumb-file b { font-size:.8rem; font-weight:700; }
+.composer-thumb-file small { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.6rem; }
+.composer-thumb-progress { position:absolute; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; animation:composer-thumb-spin .9s linear infinite; }
+@keyframes composer-thumb-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .composer-thumb-progress { animation:none; } }
+.composer-thumb button { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; background:rgba(8,10,16,.65); color:#fff; font-size:.65rem; line-height:1; }
+.composer-attachments-note { flex:1 1 120px; min-width:0; color:#a69fd4; font-size:.72rem; }
+.composer-attachments-note em { font-style:normal; opacity:.8; }
 /* What the agent sent this tab, as a sheet of its own: the button beside the
    tab name opens it, in both views — the files never sit in the chat. */
 .terminal-gallery { flex:0 0 auto; display:flex; align-items:center; gap:4px; padding:4px 8px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#d8e2f5; font-size:.82rem; line-height:1; }
@@ -1386,6 +1521,20 @@ span.files-close { background:transparent; }
 .outbox-post-meta { justify-self:end; padding:0 8px 2px; color:#95a6c8; font-size:.68rem; }
 .outbox-post-meta em { font-style:normal; opacity:.8; }
 .outbox-post.pictures-only .outbox-post-meta { position:absolute; right:10px; bottom:8px; padding:1px 7px; border-radius:9px; background:rgba(8,10,16,.55); color:#f1f3fa; pointer-events:none; }
+/* What the reader sent from the phone, inside the prompt's own bubble: the
+   picture is the bubble, its words a caption under it (InboxAlbum). */
+.readable-turn.user.with-files { width:min(78%,300px); padding:3px; }
+.readable-turn.user.with-files > .transcript-md { padding:5px 9px 0; }
+.readable-turn.user.with-files > .transcript-time,.readable-turn.user.with-files > .transcript-cut,.readable-turn.user.with-files > .transcript-send-state { padding:0 9px 3px; margin-right:0; }
+.inbox-album { display:grid; gap:3px; }
+.readable-turn.user .outbox-post-album { border-radius:13px 13px 2px 13px; background:#17142c; }
+.readable-turn.user .inbox-album:not(:last-child) .outbox-post-album { border-radius:13px; }
+.outbox-post-picture.pending { background:#241f44; }
+.readable-turn.user .outbox-post-file { background:#221d42; color:#e9e4ff; }
+.readable-turn.user .outbox-post-file > span { background:#352e66; color:#d6cffd; }
+.readable-turn.user .outbox-post-file small { color:#a69fd4; }
+.outbox-post-file.gone { opacity:.7; }
+.inbox-album-untested { justify-self:end; padding:0 6px; color:#a69fd4; font-size:.68rem; }
 .outbox-entry-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; min-width:0; }
 .outbox-details,.outbox-save { border:0; background:transparent; color:#8fb8ff; font-size:.7rem; padding:5px 0; text-decoration:none; }
 .outbox-save { display:inline-flex; align-items:center; gap:3px; }
@@ -1437,7 +1586,7 @@ span.files-close { background:transparent; }
 .markup-loading { margin:24px 12px; color:#95a6c8; font-size:.85rem; }
 .markup-pages { position:relative; margin:0 12px 12px; }
 .markup-view.marking .markup-pages { margin-bottom:calc(84px + env(safe-area-inset-bottom)); }
-.markup-view:not(.marking) .markup-page-layer { pointer-events:none; }
+/* The layer takes pointers while reading too: the pen there switches the markup on. */
 .markup-pages .markup-page { position:absolute; left:0; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.45); }
 .markup-picture .markup-page { position:relative; background:transparent; }
 .markup-picture img { display:block; width:100%; height:auto; -webkit-user-drag:none; }
@@ -1457,6 +1606,9 @@ span.files-close { background:transparent; }
 .markup-toolbar > button[aria-expanded="true"] { background:#2b3043; }
 .markup-color-well span { display:block; width:24px; height:24px; border-radius:50%; box-shadow:0 0 0 2px #e6e9f2; }
 .markup-toolbar-rule { flex:0 0 auto; width:1px; height:24px; margin:0 3px; background:#34384a; }
+/* Previous / Next mark: the toolbar's look stood on end, at the palette's
+   right edge (reading too, where it is the palette's only part). */
+.markup-toolbar.markup-jump { align-self:flex-end; flex-direction:column; border-radius:24px; }
 .markup-popover { border-radius:16px; padding:6px; }
 .markup-colors { display:flex; gap:10px; padding:6px 10px; border-radius:999px; }
 .markup-color { width:32px; height:32px; padding:0; border:2px solid transparent; border-radius:50%; }
@@ -1474,6 +1626,41 @@ span.files-close { background:transparent; }
 .markup-note-editor textarea { min-height:70px; resize:vertical; border:1px solid #34384a; border-radius:7px; background:#fff; font:400 .9rem/1.3 Helvetica,Arial,sans-serif; padding:6px; }
 .markup-note-editor div { display:flex; justify-content:flex-end; gap:6px; }
 .markup-note-editor button { border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font-size:.75rem; padding:5px 10px; }
+/* The agent's markup questions (`MarkupQuestionsCard`, `markup_ask`): a card
+   docked at the top of the palette, folded to its head by a tap, its rows the
+   Focus list's own (`QuestionRows`). `?n` pins sit on the page at the quoted
+   words; a chip's tap lights those words a moment (a static fill, no
+   animated shadow). */
+.markup-view.has-questions .markup-pages { margin-bottom:calc(140px + env(safe-area-inset-bottom)); }
+.markup-questions { width:100%; max-width:560px; border:1px solid #2b3043; border-radius:16px; background:rgba(20,26,38,.97); box-shadow:0 6px 20px rgba(0,0,0,.55); overflow:hidden; }
+.markup-questions-head { display:flex; align-items:center; gap:8px; width:100%; min-height:44px; padding:0 14px; border:0; background:transparent; color:#e6e9f2; font:600 .9rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
+.markup-questions-head .agent-status { padding:2px 5px; font-size:.72rem; line-height:1; }
+.markup-questions-title { flex:1; color:#ffd36b; }
+.markup-questions-fold { color:#98a0b4; }
+.markup-questions-body { display:grid; gap:12px; max-height:min(45vh, 420px); overflow:auto; overscroll-behavior:contain; padding:0 10px 12px; -webkit-user-select:text; user-select:text; }
+.markup-questions-ask { display:grid; gap:12px; }
+/* An ask of several questions: one on show, ‹ n / m › above it. */
+.markup-questions-pager { justify-content:space-between; padding:0; }
+.markup-questions-pager span { font-size:.9rem; font-variant-numeric:tabular-nums; color:#98a0b4; }
+.markup-question { display:grid; gap:8px; padding:4px 0; border-radius:12px; }
+.markup-question.flash { background:#1c2336; }
+.question-tabs .markup-question-n { color:#ffd36b; }
+.markup-question-page { margin-left:auto; padding:6px 10px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#8fb8ff; font:500 .76rem/1 Inter,ui-sans-serif,system-ui,sans-serif; }
+.markup-questions-hint { padding:0 4px; color:#98a0b4; font-size:.78rem; }
+.markup-questions-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.markup-questions-actions .outbox-action { display:inline-flex; align-items:center; min-height:36px; padding:0 12px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font:500 .8rem/1 Inter,ui-sans-serif,system-ui,sans-serif; }
+.markup-questions-actions button:disabled { opacity:.45; }
+.markup-questions p[role="alert"] { margin:0; color:#f2b8b5; font-size:.8rem; }
+.markup-pin { position:absolute; z-index:1; display:grid; place-items:center; min-width:26px; height:24px; padding:0 6px; border:0; border-radius:12px 12px 12px 3px; background:#ffd36b; color:#1b1f2b; font:700 .74rem/1 Inter,ui-sans-serif,system-ui,sans-serif; box-shadow:0 1px 3px rgba(0,0,0,.45); }
+.markup-pin-hit { position:absolute; z-index:1; border-radius:2px; background:rgba(255,211,107,.38); pointer-events:none; }
+/* The agent's ticks (`markup_done`): a ✓ pin in the finished colour at a
+   ticked sent mark's top-right corner — the question pin's static shadow, no
+   animation. A tap approves the mark; "n done · Approve all" sits under the
+   round's pill in its look. */
+.markup-pin.is-tick { width:26px; min-width:26px; height:26px; padding:0; border-radius:50%; background:#91e6a9; color:#0f2a18; font-size:.9rem; }
+.markup-pin.is-tick:disabled { opacity:.5; }
+.markup-ticks .markup-round-words { color:#91e6a9; font-weight:600; }
+.markup-ticks .markup-approve-all { margin-left:auto; min-height:32px; }
 .outbox-text-body { overflow:auto; padding:12px; }
 .outbox-text-body pre { margin:0 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.8rem; }
 .outbox-viewer:has(> [role=alert]) { grid-template-rows:auto auto minmax(0,1fr); }

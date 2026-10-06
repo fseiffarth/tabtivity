@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -10,7 +10,7 @@ import {
   readerRequest,
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
-import { NO_LIVE, STOP_KEY, answerKeys, readReaderLive, sameReaderLive, type ReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, type ReaderLive } from "../../lib/agents/readerLive";
 import { onSentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
@@ -31,14 +31,19 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { UntestedTag } from "../common/UntestedTag";
+import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
+import { PATH_LINK_ATTR, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
+import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
+import { relativePathWithin } from "../../lib/paths";
+import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
-import { commandArgsInline, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import type { AskedQuestion, RunningShell } from "../../../mobile-web/src/api";
 
@@ -113,47 +118,149 @@ const RECOMMENDED = /\s+\(Recommended\)$/u;
 /** The choice the session waits on, as buttons: what it was drawn onto (a
  * permission prompt's command or diff), an agent question's headers as chips,
  * its question, then one row per option. A click sends the arrow keys and
- * Enter a walked highlight would. */
-function LiveQuestion({ live, answered, onAnswer }: {
+ * Enter a walked highlight would. A question that asks several has its
+ * headers as steps: ←/→ and a click on one walk the dialog's tabs, so an
+ * answer can be changed before Submit. Claude Code's "Type something." row
+ * opens a field under it instead: its answer is words, sent as the phone's
+ * are (`answerTextKeys`). */
+function LiveQuestion({ live, answered, busy, onAnswer, onType, onStep }: {
   live: ReaderLive;
+  /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
+  /** Keys of any kind are on their way: nothing can be clicked. */
+  busy: boolean;
   onAnswer: (index: number) => void;
+  /** Answers the free-text row `index` with `text`. */
+  onType: (index: number, text: string) => void;
+  /** Walks the tab row from step `from` to step `to`. */
+  onStep: (from: number, to: number) => void;
 }) {
   const t = useT();
+  /** The free-text row whose field is open, and what is typed in it. A field
+   * belongs to the dialog step it was opened on. */
+  const [typing, setTyping] = useState<number | null>(null);
+  const [typed, setTyped] = useState("");
+  useEffect(() => {
+    setTyping(null);
+    setTyped("");
+  }, [live.signature]);
   const question = live.question;
   if (!question) return null;
+  const sendTyped = (index: number) => {
+    if (!typed.trim()) return;
+    onType(index, typed);
+  };
+  const last = live.tabs.length - (live.tabSubmit ? 0 : 1);
+  const stepped = last > 0;
+  const focus = live.tabFocus;
+  const tabClass = (answeredTab: boolean, index: number) =>
+    [answeredTab && "answered", index === focus && "current"].filter(Boolean).join(" ") || undefined;
   return (
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
       <small className="terminal-reader-question-head">{t("terminal.reader.question")}</small>
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
-      {live.tabs.length > 0 && (
+      {live.tabs.length > 0 && !stepped && (
         <div className="terminal-reader-question-tabs">
           {live.tabs.map((tab, index) => (
             <span key={index} className={tab.answered ? "answered" : undefined}>{tab.answered && "✓ "}{tab.label}</span>
           ))}
         </div>
       )}
+      {stepped && (
+        <div className="terminal-reader-question-tabs stepped" role="toolbar" aria-label={t("terminal.reader.questionSteps")}>
+          <button
+            type="button"
+            className="terminal-reader-question-step"
+            aria-label={t("terminal.reader.questionPrevious")}
+            title={t("terminal.reader.questionPrevious")}
+            disabled={busy || focus === 0}
+            onClick={() => (focus === null ? onStep(1, 0) : onStep(focus, focus - 1))}
+          >←</button>
+          {live.tabs.map((tab, index) => (
+            <button
+              key={index}
+              type="button"
+              className={tabClass(tab.answered, index)}
+              aria-current={index === focus ? "step" : undefined}
+              disabled={busy || focus === null || index === focus}
+              onClick={() => focus !== null && onStep(focus, index)}
+            >{tab.answered && "✓ "}{tab.label}</button>
+          ))}
+          {live.tabSubmit && (
+            <button
+              type="button"
+              className={tabClass(false, live.tabs.length)}
+              aria-current={focus === live.tabs.length ? "step" : undefined}
+              disabled={busy || focus === null || focus === live.tabs.length}
+              onClick={() => focus !== null && onStep(focus, live.tabs.length)}
+            >{t("terminal.reader.questionSubmitStep")}</button>
+          )}
+          <button
+            type="button"
+            className="terminal-reader-question-step"
+            aria-label={t("terminal.reader.questionNext")}
+            title={t("terminal.reader.questionNext")}
+            disabled={busy || focus === last}
+            onClick={() => (focus === null ? onStep(0, 1) : onStep(focus, focus + 1))}
+          >→</button>
+          <UntestedTag id="terminal.reader.questionSteps" />
+        </div>
+      )}
       {live.ask.length > 0 && <p className="terminal-reader-question-ask">{live.ask.join("\n")}</p>}
       <div className="terminal-reader-options">
         {question.options.map((option) => {
           const recommended = RECOMMENDED.exec(option.label);
+          const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
+          const freeText = !question.review && freeTextRow(option);
+          const open = freeText && typing === option.index;
           return (
-            <button
-              key={`${option.index}:${option.label}`}
-              type="button"
-              className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
-              disabled={answered}
-              onClick={() => onAnswer(option.index)}
-            >
-              <span className="terminal-reader-option-number">{option.number}</span>
-              <span className="terminal-reader-option-label">
-                <span>
-                  {recommended ? option.label.slice(0, recommended.index) : option.label}
-                  {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+            <Fragment key={`${option.index}:${option.label}`}>
+              <button
+                type="button"
+                className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
+                aria-expanded={freeText ? open : undefined}
+                disabled={busy}
+                onClick={() => (freeText ? setTyping(open ? null : option.index) : onAnswer(option.index))}
+              >
+                <span className="terminal-reader-option-number">{option.number}</span>
+                <span className="terminal-reader-option-label">
+                  <span>
+                    {recommended ? option.label.slice(0, recommended.index) : label}
+                    {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
+                  </span>
+                  {option.description && <small>{option.description}</small>}
                 </span>
-                {option.description && <small>{option.description}</small>}
-              </span>
-            </button>
+              </button>
+              {open && (
+                <form
+                  className="terminal-reader-question-type"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    sendTyped(option.index);
+                  }}
+                >
+                  <input
+                    autoFocus
+                    type="text"
+                    value={typed}
+                    disabled={busy}
+                    placeholder={t("mobile.question.typePlaceholder")}
+                    aria-label={t("mobile.question.typePlaceholder")}
+                    onChange={(event) => setTyped(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setTyping(null);
+                    }}
+                  />
+                  <button type="submit" className="file-viewer-zoom-btn file-viewer-zoom-text active" disabled={busy || !typed.trim()}>
+                    {t("mobile.question.typeSend")}
+                  </button>
+                  <UntestedTag id="terminal.reader.freeText" />
+                </form>
+              )}
+            </Fragment>
           );
         })}
       </div>
@@ -212,18 +319,30 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
 
 interface PendingPrompt { id: number; text: string; sentAt: number }
 
+/** The chat's path links (`lib/terminal/pathLinks`): every path-shaped word
+ * the shown conversation holds, looked up once — the file it opens, or null.
+ * A turn is drawn only once its words are in here (see the reads), and a word
+ * once looked up keeps its answer, so a shown bubble never gains or loses a
+ * link afterwards. */
+const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
+
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
- * nothing in it opens or loads). Memoized on the text, so a read that brings
- * a new turn does not re-render every answer above it. */
+ * nothing in it opens or loads), its file paths made links. Memoized on the
+ * text, so a read that brings a new turn does not re-render every answer
+ * above it. */
 const AnswerText = memo(function AnswerText({ text }: { text: string }) {
-  const html = useMemo(() => answerHtml(text), [text]);
+  const links = useContext(PathLinksContext);
+  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links), [text, links]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** A prompt, formatted the same way (`promptHtml`: an answer's formatting,
- * its single line breaks kept) — a subagent's brief reads as written. */
-const PromptText = memo(function PromptText({ text }: { text: string }) {
-  const html = useMemo(() => promptHtml(text), [text]);
+ * its single line breaks kept) — a subagent's brief reads as written. A
+ * prompt still sending is drawn `unlinked`: its paths are looked up only with
+ * the record, and its bubble must not restyle when that arrives. */
+const PromptText = memo(function PromptText({ text, unlinked = false }: { text: string; unlinked?: boolean }) {
+  const links = useContext(PathLinksContext);
+  const html = useMemo(() => (unlinked ? promptHtml(text) : linkPathsInHtml(promptHtml(text), links)), [text, links, unlinked]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
@@ -379,9 +498,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSending(true);
     setSendError("");
     try {
+      // A prefix the CLI's popup completes (`/clea`) runs that command.
+      const command = completedSlashCommand(text, cli, usedSlash) ?? text;
       // A new conversation goes in as the Clear key's does, so the window
       // knows of it at once: Codex's hook says so only with the next prompt.
-      if (isNewConversationCommand(text)) {
+      if (isNewConversationCommand(command)) {
         if (!(await clearAgentTab(scope, current))) {
           // Codex refuses one mid-turn, and says so only in its terminal.
           const busy = agentFamily(agentTabLabel(current)) === "codex" && !!useActivityStore.getState().busyByTab[ptyId];
@@ -414,7 +535,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         await sendSteeringPrompt(current, text);
       }
       // Offered again by the `/` menu, newest first.
-      rememberSlashCommand(cli, text);
+      rememberSlashCommand(cli, command);
       setUsedSlash(readSlashCommands(cli));
       setDraft("");
       historyAt.current = null;
@@ -570,6 +691,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   /** When a read last saw the agent at work: a sent prompt waits from then. */
   const workingSeenAt = useRef(0);
   const [answered, setAnswered] = useState("");
+  /** What `answered` waits on: a row's answer, or a walk along the tab row. */
+  const [answeredBy, setAnsweredBy] = useState<"row" | "step">("row");
   const [picking, setPicking] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusRequest, setStatusRequest] = useState(0);
@@ -596,11 +719,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   /** The Changes panel beside the chat (the prompt strip's Diffs switch). */
   const changesOpen = useReaderChangesOpen(tab?.cmd ?? "");
   const changesWidth = useAgentReaderStore((state) => state.changesWidth);
-  /** The reasoning effort the busy row last named: Claude Code prints it only
-   * there, so the facts row keeps it once the turn is over. */
+  /** The reasoning effort last seen: Claude Code prints it only on its busy
+   * row, so the facts row also takes the one its transcript records (every
+   * answer, and a `/effort`'s confirmation) and the one just picked there —
+   * whichever changed last. */
   const [seenEffort, setSeenEffort] = useState<string | undefined>();
   const workingEffort = live.working?.effort;
   useEffect(() => { if (workingEffort) setSeenEffort(workingEffort); }, [workingEffort]);
+  const recordedEffort = transcript?.available ? transcript.effort : undefined;
+  useEffect(() => { if (recordedEffort) setSeenEffort(recordedEffort); }, [recordedEffort]);
 
   // The live screen: read on the pane's output (settled), and on a slow
   // clock for the busy row's timer and a terminal not created yet.
@@ -642,9 +769,31 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
     if (!question || !option || answered) return;
+    const keys = answerKeys(question, option);
+    if (keys.length === 0) return;
     setAnswered(live.signature);
+    setAnsweredBy("row");
     stuck.current = true;
-    void typeKeys(ptyId, answerKeys(question, option)).catch(() => setAnswered(""));
+    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+  };
+  /** Answers the free-text row with the words typed under it. */
+  const answerText = (index: number, text: string) => {
+    const question = live.question;
+    const option = question?.options.find((entry) => entry.index === index);
+    if (!question || !option || answered) return;
+    const keys = answerTextKeys(question, option, text);
+    if (keys.length === 0) return;
+    setAnswered(live.signature);
+    setAnsweredBy("row");
+    stuck.current = true;
+    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
+  };
+  const step = (from: number, to: number) => {
+    const keys = tabStepKeys(live, from, to);
+    if (!live.question || keys.length === 0 || answered) return;
+    setAnswered(live.signature);
+    setAnsweredBy("step");
+    void typeKeys(ptyId, keys).catch(() => setAnswered(""));
   };
   const stop = () => void typeKeys(ptyId, [STOP_KEY]).catch(() => {});
   const shownLive = picking ? NO_LIVE : live;
@@ -652,6 +801,72 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const sessionId = tab?.sessionId;
+
+  // Path links: the paths a read brings are looked up before it is drawn
+  // (`learnPaths`), each once (`PathLinksContext`).
+  const projectId = scope === "root" ? null : scope;
+  const tabDir = tab?.cwd || cwd || "";
+  const pathContext = usePathLinkContext(projectId, tabDir);
+  const pathContextRef = useRef(pathContext);
+  pathContextRef.current = pathContext;
+  const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());
+  const pathLinksRef = useRef(pathLinks);
+  const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+  const learnPaths = useCallback(async (entries: readonly { text: string }[]) => {
+    const ask = unknownPaths(entries.map((entry) => entry.text), pathLinksRef.current);
+    if (!ask.length) return;
+    const ctx = pathContextRef.current;
+    const found = ctx.bases.length ? await resolvePathCandidates(ctx.bases, ask) : new Map<string, FileEntry>();
+    const next = new Map(pathLinksRef.current);
+    for (const path of ask) {
+      const entry = found.get(path);
+      next.set(path, entry && isLinkable(entry, ctx.projectDir, ctx.disabled) ? entry : null);
+    }
+    pathLinksRef.current = next;
+    setPathLinks(next);
+  }, []);
+  const pathLinkAt = (target: EventTarget | null) =>
+    target instanceof Element ? target.closest<HTMLElement>(`[${PATH_LINK_ATTR}]`) : null;
+  const openPathAt = (el: HTMLElement) => {
+    const entry = pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "");
+    if (!entry) return;
+    const ctx = pathContextRef.current;
+    setPathHover(null);
+    openPathLink(
+      entry,
+      { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
+      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t },
+    );
+  };
+  const onPathClick = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    if (!el) return;
+    event.preventDefault();
+    openPathAt(el);
+  };
+  const onPathKey = (event: KeyboardEvent) => {
+    const el = event.key === "Enter" ? pathLinkAt(event.target) : null;
+    if (!el) return;
+    event.preventDefault();
+    openPathAt(el);
+  };
+  const onPathOver = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
+    if (!el || !entry) return;
+    const rect = el.getBoundingClientRect();
+    setPathHover({
+      left: rect.left,
+      top: rect.top,
+      name: relativePathWithin(pathContextRef.current.projectDir || tabDir, entry.path) || entry.path,
+      line: Number(el.dataset.line) || undefined,
+      isDir: entry.is_dir,
+    });
+  };
+  const onPathOut = (event: ReactMouseEvent) => {
+    const el = pathLinkAt(event.target);
+    if (el && pathLinkAt(event.relatedTarget) !== el) setPathHover(null);
+  };
   // A new session (a restart, a `/clear` the hook followed) is a new chat,
   // with subagents of its own.
   useEffect(() => {
@@ -676,6 +891,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       busy = true;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
+      await learnPaths(next.entries);
       busy = false;
       if (cancelled) return;
       if (!next.unchanged) version.current = next.version;
@@ -687,7 +903,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       cancelled = true;
       clearInterval(timer);
     };
-  }, [visible, scope, cwd, limit, sessionId, readTick]);
+  }, [visible, scope, cwd, limit, sessionId, readTick, learnPaths]);
 
   // The open subagent's conversation, read as the session is: at once, then
   // every POLL_MS while shown — a subagent still at work keeps writing.
@@ -704,6 +920,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       busy = true;
       const next = await invoke<SessionTranscript>("agent_tab_transcript", args)
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
+      await learnPaths(next.entries);
       busy = false;
       if (cancelled) return;
       if (!next.unchanged) subVersion = next.version;
@@ -718,7 +935,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
       cancelled = true;
       clearInterval(timer);
     };
-  }, [visible, scope, cwd, subToken, subLimit, sessionId]);
+  }, [visible, scope, cwd, subToken, subLimit, sessionId, learnPaths]);
 
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card
@@ -776,9 +993,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
     if (pending.length === 0) return;
     const now = Date.now();
     const waitingSince = (item: PendingPrompt) => Math.max(item.sentAt, workingSeenAt.current);
-    const recorded = (item: PendingPrompt) => entries.some((entry) =>
-      entry.kind === "prompt" && entry.text.trim() === item.text.trim()
-      && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
+    // A bare `/prefix` is recorded as the command the CLI's popup completed
+    // it to (`/clea` → `/clear`).
+    const recorded = (item: PendingPrompt) => {
+      const sent = item.text.trim();
+      const prefix = /^\/[\w-]+$/u.test(sent) ? sent : null;
+      return entries.some((entry) =>
+        entry.kind === "prompt"
+        && (entry.text.trim() === sent || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix)))
+        && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
+    };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
     if (left.length !== pending.length) {
       setPending(left);
@@ -891,7 +1115,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const backLabel = t("mobile.subagent.back", {
     name: subagentPath.length > 1 ? subagentPath[subagentPath.length - 2].task : t("mobile.subagent.main"),
   });
-  const moreEarlier = !!transcript?.available && transcript.truncated && !sinceClear;
+  // Only when those earlier turns hold a subagent: a long session that never
+  // spawned one would otherwise show "Subagents (0+)".
+  const moreEarlier = !!transcript?.available && transcript.truncated && !!transcript.agentsEarlier && !sinceClear;
   /** The open subagent at work — it has not reported back, and the session
    * is at work or it runs in the background — and the model its own
    * conversation names. */
@@ -987,7 +1213,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         </nav>
       )}
       <div className="terminal-reader-stream">
-        <div ref={listRef} className="terminal-reader-list" onScroll={onScroll}>
+        <PathLinksContext.Provider value={pathLinks}>
+        <div
+          ref={listRef}
+          className="terminal-reader-list"
+          onScroll={() => { onScroll(); setPathHover(null); }}
+          onClick={onPathClick}
+          onKeyDown={onPathKey}
+          onMouseOver={onPathOver}
+          onMouseOut={onPathOut}
+        >
           {levelTruncated && (
             <button type="button" className="terminal-reader-earlier" onClick={showEarlier}>
               {t("terminal.reader.earlier")}
@@ -1024,7 +1259,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           })}
           {!openStep && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
-              <PromptText text={item.text} />
+              <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
                   queue at once. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
@@ -1036,7 +1271,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
               <small className="terminal-reader-time">{t("terminal.reader.sending")}</small>
             </div>
           ))}
-          <LiveQuestion live={shownLive} answered={!!answered && answered === live.signature} onAnswer={answer} />
+          <LiveQuestion
+            live={shownLive}
+            answered={!!answered && answered === live.signature && answeredBy === "row"}
+            busy={!!answered && answered === live.signature}
+            onAnswer={answer}
+            onType={answerText}
+            onStep={step}
+          />
           {openStep ? subagentWorking && (
             <div className="terminal-reader-working" role="status">
               <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
@@ -1076,6 +1318,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
         </div>
+        </PathLinksContext.Provider>
+        <PathLinkHint hover={visible ? pathHover : null} />
         {!openStep && pinnedPrompt && (
           <button
             type="button"
@@ -1100,6 +1344,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
           visible={visible}
           path={tab.cwd || cwd}
           effort={seenEffort}
+          onEffortPicked={setSeenEffort}
           typeKeys={typeIntoPane}
           onPicking={setPicking}
           statusOpen={statusOpen}

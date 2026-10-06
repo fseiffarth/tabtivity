@@ -1,3 +1,5 @@
+import { useT } from "../../../src/lib/i18n";
+
 export interface SheetOption {
   key: string;
   label: string;
@@ -28,11 +30,12 @@ export function OptionSheet({ title, note, options, waiting, busy, onPick, onClo
   onPick: (key: string) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label="Close">✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
         <h2>{title}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>
@@ -43,7 +46,7 @@ export function OptionSheet({ title, note, options, waiting, busy, onPick, onClo
             <button className={option.current ? "current" : ""} aria-current={option.current || undefined} disabled={busy} onClick={() => onPick(option.key)}>
               <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
               {option.pending
-                ? <span className="sheet-pending" role="status">Switching…</span>
+                ? <span className="sheet-pending" role="status">{t("mobile.optionSheet.switching")}</span>
                 : option.current && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
             </button>
           </li>)}</ul>}

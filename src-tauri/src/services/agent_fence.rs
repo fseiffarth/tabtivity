@@ -524,7 +524,7 @@ pub fn configured_read_only_paths() -> Vec<String> {
 /// Pure over the filesystem: it reads links but never mounts anything, and a
 /// command that cannot be found on the host yields nothing — bubblewrap then
 /// reports the same not-found error the shell would.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 pub(crate) fn command_bind_paths(
     cmd: &str,
     path_dirs: &[PathBuf],
@@ -539,7 +539,7 @@ pub(crate) fn command_bind_paths(
     out
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn collect_command_bind_paths(
     cmd: &str,
     path_dirs: &[PathBuf],
@@ -601,7 +601,7 @@ fn collect_command_bind_paths(
 }
 
 /// `<venv>` when `exe` sits in `<venv>/bin` next to a `pyvenv.cfg`.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn python_venv_root(exe: &Path) -> Option<PathBuf> {
     let bin = exe.parent()?;
     let venv = bin.parent()?;
@@ -611,7 +611,7 @@ fn python_venv_root(exe: &Path) -> Option<PathBuf> {
 /// The base interpreter's install prefix (`home = <prefix>/bin` in
 /// `pyvenv.cfg`): its stdlib sits in `<prefix>/lib`. Never the home itself or
 /// `~/.local`, which a venv made from a `pip --user` Python would name.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn venv_base_prefix(venv: &Path, home: &Path) -> Option<PathBuf> {
     let cfg = std::fs::read_to_string(venv.join("pyvenv.cfg")).ok()?;
     let bin = cfg.lines().find_map(|line| {
@@ -625,7 +625,7 @@ fn venv_base_prefix(venv: &Path, home: &Path) -> Option<PathBuf> {
 
 /// The interpreter a `#!` script names, as a path or (behind `env`) a bare
 /// command for `path_dirs`. Anything that is not a script yields nothing.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn shebang_interpreter(exe: &Path) -> Option<String> {
     use std::io::Read;
     let mut head = [0u8; 256];
@@ -644,7 +644,7 @@ fn shebang_interpreter(exe: &Path) -> Option<String> {
 
 /// Collapse `.` and `..` without touching the filesystem, so a relative link
 /// target like `../share/claude/versions/2.1.251` yields a clean mount path.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn normalize_lexically(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
@@ -787,7 +787,7 @@ pub(crate) fn probe_failure_note(stderr: &str, apparmor_label: Option<&str>) -> 
     note
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn mount_pair(pair: &str, read_only: bool) -> Option<BindMount> {
     let (src, dst) = pair.split_once(':')?;
     Some(BindMount {
@@ -912,7 +912,7 @@ pub(crate) fn local_model_home(
 /// Tabtivity's commands read-only and the spawn's own local-model home.
 /// Everything else an agent keeps — config, transcripts, session stores, its
 /// copy of the shared logins — is simply in the home.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", all(test, unix)))]
 fn agent_state_mounts(
     scope_id: &str,
     env: &std::collections::HashMap<String, String>,
@@ -1017,20 +1017,20 @@ fn guard_git_control(args: &mut Vec<String>, guard: crate::services::git_guard::
 /// architecture and the 32-bit one its kernel also runs: a 32-bit binary
 /// reaches the same keyring through the compat table. x32 is x86-64's `arch`
 /// with bit 30 set in `nr` and shares its numbers, hence the mask.
-#[cfg(all(any(target_os = "linux", test), target_arch = "x86_64"))]
+#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "x86_64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_003E, 0xBFFF_FFFF, [248, 249, 250]),
     (0x4000_0003, u32::MAX, [286, 287, 288]),
 ];
-#[cfg(all(any(target_os = "linux", test), target_arch = "aarch64"))]
+#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "aarch64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[
     (0xC000_00B7, u32::MAX, [217, 218, 219]),
     (0x4000_0028, u32::MAX, [309, 310, 311]),
 ];
-#[cfg(all(any(target_os = "linux", test), target_arch = "riscv64"))]
+#[cfg(all(any(target_os = "linux", all(test, unix)), target_arch = "riscv64"))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[(0xC000_00F3, u32::MAX, [217, 218, 219])];
 #[cfg(all(
-    any(target_os = "linux", test),
+    any(target_os = "linux", all(test, unix)),
     not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))
 ))]
 const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
@@ -1049,7 +1049,7 @@ const KEYRING_SYSCALLS: &[(u32, u32, [u32; 3])] = &[];
 ///
 /// Classic BPF over `seccomp_data` (`nr` at offset 0, `arch` at 4). An
 /// architecture outside the table gets `EPERM` for every syscall.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
     const LD_W_ABS: u16 = 0x20;
     const ALU_AND_K: u16 = 0x54;
@@ -1095,28 +1095,45 @@ pub(crate) fn keyring_seccomp_filter() -> Option<Vec<u8>> {
 /// closes inherited descriptors, tmux starts the command from its server), so
 /// the shell opens it at the last moment and `exec`s: the process is bwrap from
 /// then on. `$1` is the filter file, `$0` the program, the rest its argv.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 const SECCOMP_LAUNCHER: &str = "f=$1; shift; exec \"$0\" \"$@\" 9<\"$f\"";
 
 /// `(cmd, args)` that run bwrap with `argv` under [`keyring_seccomp_filter`],
-/// through `scope_helper` (`services::fence_scope`, `--fence-scope`) when
-/// there is one; the helper execs bwrap with descriptor 9 still open.
-#[cfg(any(target_os = "linux", test))]
+/// through `step` — Tabtivity's binary and its mode, [`launcher_step`] — when
+/// there is one; the step execs bwrap with descriptor 9 still open.
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn seccomp_launcher(
     bwrap: &str,
-    scope_helper: Option<&str>,
+    step: Option<(&str, &str)>,
     filter: &Path,
     argv: Vec<String>,
 ) -> (String, Vec<String>) {
     let filter = filter.to_string_lossy().into_owned();
     let mut args = vec!["-c".to_string(), SECCOMP_LAUNCHER.to_string()];
-    match scope_helper {
-        Some(helper) => args.extend([helper.to_string(), filter, "--fence-scope".into(), bwrap.to_string()]),
+    match step {
+        Some((helper, mode)) => args.extend([helper.to_string(), filter, mode.to_string(), bwrap.to_string()]),
         None => args.extend([bwrap.to_string(), filter]),
     }
     args.extend(["--seccomp".to_string(), "9".to_string()]);
     args.extend(argv);
     ("/bin/sh".to_string(), args)
+}
+
+/// The step in front of bwrap, as `(binary, mode)`: `--fence-scope` where this
+/// kernel and bwrap take the Landlock scope (it maps carriers too), else
+/// `--agent-exec` when the spawn carries a secret for `agent_exec` to map,
+/// else none. `scope_helper` is `fence_scope::helper_for`'s answer.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn launcher_step(
+    scope_helper: Option<String>,
+    carries: bool,
+    running_binary: impl FnOnce() -> String,
+) -> Option<(String, &'static str)> {
+    match scope_helper {
+        Some(helper) => Some((helper, "--fence-scope")),
+        None if carries => Some((running_binary(), crate::services::agent_exec::MODE_FLAG)),
+        None => None,
+    }
 }
 
 /// Write the filter where the launcher reads it: in the state dir, which the
@@ -1267,9 +1284,11 @@ pub fn wrap_pty_options_bwrap(
     // instructions from other members this user has not reviewed (plan
     // §6.5 gate 2); a no-op everywhere else.
     crate::services::server::share::spawn_gate(roots)?;
-    // Before `opts.cmd` becomes bwrap below.
+    // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let mounts = agent_state_mounts(scope_id, &opts.env);
     let support_mounts = mounts.clone();
     let mut extra_ro = configured_read_only_paths();
@@ -1320,8 +1339,6 @@ pub fn wrap_pty_options_bwrap(
         bind_read_only_last(&mut args, &dir);
     }
     let filter = write_keyring_filter()?;
-    let scope = crate::services::fence_scope::helper_for(&bwrap);
-    (opts.cmd, opts.args) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, args);
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Keep the CLI's login in its file: the keyring is not reachable here.
@@ -1332,6 +1349,26 @@ pub fn wrap_pty_options_bwrap(
     if copilot {
         crate::services::copilot_auth::inject_env(&mut opts.env);
     }
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier.
+    // The step in front of bwrap maps it to the CLI's variable (`agent_exec`);
+    // bwrap keeps the environment and the launcher `exec`s, so it reaches the
+    // CLI. Hence the launcher last: the step is needed whenever the
+    // environment carries something.
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    let step = launcher_step(
+        crate::services::fence_scope::helper_for(&bwrap),
+        crate::services::agent_exec::has_carriers(&opts.env),
+        crate::services::fence_scope::running_binary,
+    );
+    (opts.cmd, opts.args) = seccomp_launcher(
+        &bwrap.to_string_lossy(),
+        step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
+        &filter,
+        args,
+    );
     Ok(())
 }
 
@@ -1557,6 +1594,9 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
+    // Before `opts.args` becomes sandbox-exec's below.
+    let subcommand = runs_subcommand(&opts.args);
+    let local_model = crate::services::agent_api_keys::is_local_model(opts);
     let inputs = sandbox_exec_inputs(opts, roots, scope_id, scope_home);
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1589,6 +1629,15 @@ pub fn wrap_pty_options_sandbox_exec(
     // A hosted server's administrator's key (plan §5.4) — a server is Linux,
     // so the helper directory a Linux fence binds has no Seatbelt rule here.
     let _ = crate::services::server::agent_keys::prepare_spawn(&agent_cmd, &mut opts.env)?;
+    // A proxy token and base URL for a CLI the user switched on for a key
+    // (`agent_api_keys`, `api_proxy`), the token under its app-named carrier;
+    // `agent_exec` in front of sandbox-exec maps it to the CLI's variable, and
+    // sandbox-exec passes the environment through. The step runs outside the
+    // Seatbelt profile, which need not grant Tabtivity's binary.
+    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+    crate::services::agent_api_keys::inject_env(&agent_cmd, subcommand, local_model, binding, &mut opts.env);
+    crate::services::agent_exec::wrap(opts)?;
     Ok(())
 }
 
@@ -1657,6 +1706,7 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
         tmux_session: None,
         tmux_attach: None,
         host_bound_uid: None,
+        local_model: false,
         schedule_target_id: None,
         host_session: false,
     };
@@ -1768,7 +1818,8 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     crate::services::server::share::apply_fence(&mut argv, &roots);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
-    let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), scope.as_deref(), &filter, argv);
+    let step = scope.as_deref().map(|helper| (helper, "--fence-scope"));
+    let (cmd, argv) = seccomp_launcher(&bwrap.to_string_lossy(), step, &filter, argv);
     let mut command = crate::paths::command_no_window(cmd);
     command.args(argv);
     command.env(crate::app_env!("AGENT_FENCE"), "1");
@@ -1787,6 +1838,9 @@ pub fn on_tab_gone(tab_id: &str) {
         .remove(tab_id)
         .is_some();
     untrack_host_agent_tab(tab_id);
+    // Its API proxy tokens go with it (those of a tmux-held agent once the
+    // session is gone too).
+    crate::services::api_proxy::on_tab_gone(tab_id);
     // A tab's end is when a login it made lands in its home: carry it to the
     // other scopes now rather than at the keeper's next tick. Off-thread —
     // this runs on the PTY's teardown path.
@@ -2097,16 +2151,40 @@ mod tests {
             std::fs::read_to_string(dir.path().join("args")).unwrap(),
             "--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n"
         );
-        // With the scope helper, it runs first and is handed bwrap and fd 9.
-        std::fs::remove_file(dir.path().join("fd9")).unwrap();
-        let (cmd, args) = seccomp_launcher("/usr/bin/bwrap", Some(&fake.to_string_lossy()), &filter, argv);
-        let status = std::process::Command::new(cmd).args(args).env("OUT", dir.path()).status().unwrap();
-        assert!(status.success());
-        assert_eq!(std::fs::read(dir.path().join("fd9")).unwrap(), b"program bytes");
+        // With a step, it runs first and is handed its mode, bwrap and fd 9.
+        for mode in ["--fence-scope", crate::services::agent_exec::MODE_FLAG] {
+            std::fs::remove_file(dir.path().join("fd9")).unwrap();
+            let fake = fake.to_string_lossy();
+            let (cmd, args) = seccomp_launcher("/usr/bin/bwrap", Some((&fake, mode)), &filter, argv.clone());
+            let status = std::process::Command::new(cmd).args(args).env("OUT", dir.path()).status().unwrap();
+            assert!(status.success());
+            assert_eq!(std::fs::read(dir.path().join("fd9")).unwrap(), b"program bytes");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("args")).unwrap(),
+                format!("{mode}\n/usr/bin/bwrap\n--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n")
+            );
+        }
+    }
+
+    #[test]
+    fn a_carried_secret_gets_the_exec_step_even_without_the_scope() {
+        let bin = || "/opt/app/bin".to_string();
+        // The scope's helper maps carriers too, so it is the one step.
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("args")).unwrap(),
-            "--fence-scope\n/usr/bin/bwrap\n--seccomp\n9\n--ro-bind\n/a b\n--\nit's\n"
+            launcher_step(Some("/proc/1/exe".into()), true, bin),
+            Some(("/proc/1/exe".to_string(), "--fence-scope"))
         );
+        assert_eq!(
+            launcher_step(Some("/proc/1/exe".into()), false, bin),
+            Some(("/proc/1/exe".to_string(), "--fence-scope"))
+        );
+        // No Landlock scope here: a carried secret still gets mapped.
+        assert_eq!(
+            launcher_step(None, true, bin),
+            Some(("/opt/app/bin".to_string(), crate::services::agent_exec::MODE_FLAG))
+        );
+        // Nothing to map, nothing in front of bwrap (as before).
+        assert_eq!(launcher_step(None, false, || unreachable!()), None);
     }
 
     #[test]
@@ -2396,6 +2474,7 @@ mod tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            local_model: false,
             schedule_target_id: None,
             host_session: false,
         }

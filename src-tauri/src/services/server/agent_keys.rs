@@ -29,10 +29,14 @@
 //! * **Delivery, the others** (Gemini, Vibe): at each local agent spawn — an
 //!   agent tab, the root console's Host session, a CLI typed into a shell tab
 //!   through the `agent_bin` shim — the key is fetched from the keeper and
-//!   put into the CLI's own variable (the registry's `api_key_env` column).
-//!   It is never cached, written to a file, put on an argv or sent to a
-//!   client; `tmux_local` carries it like the root console's tokens (its
-//!   `SECRET_ENV`, through the client's environment).
+//!   put under the **carrier** of the CLI's own variable (the registry's
+//!   `api_key_env` column; `agent_exec::carrier_name`), which the
+//!   `--agent-exec` step in front of the CLI maps to the variable itself, as
+//!   it does the desktop's API proxy tokens. It is never cached, written to a
+//!   file, put on an argv or sent to a client; `tmux_local` carries it like
+//!   the root console's tokens (its `SECRET_ENV`, through the client's
+//!   environment) — and only ever under the app-named carrier, so no CLI's
+//!   common variable is ever listed on the user's own tmux server.
 //! * **Containers** ([`container_env`]): a project container's agent tab gets
 //!   the key in its `docker exec` environment, named on the argv only (the
 //!   docker client's own environment holds the value); Claude's helper there
@@ -319,7 +323,7 @@ pub fn prepare_spawn_in(state_dir: &Path, socket: &Path, cmd: &str, env: &mut Ha
         return Err(format!("{}: this CLI takes no API key by environment; switch back to your own login in Settings → Manage CLIs", label(cli)));
     };
     let key = fetch_for_spawn(socket, cli)?;
-    env.insert(var.to_string(), key.as_str().to_string());
+    env.insert(crate::services::agent_exec::carrier_name(var), key.as_str().to_string());
     Ok(None)
 }
 
@@ -386,8 +390,10 @@ pub fn broker_usage_at(socket: &Path, chosen: &BTreeSet<String>) -> HashMap<Stri
         .collect()
 }
 
-/// Every variable that may carry an administrator's key into a spawn: the
-/// registry's `api_key_env`s and [`CONTAINER_KEY_ENV`].
+/// Every variable that may carry an administrator's key into a project
+/// container's `docker exec` environment, where no `agent_exec` step maps a
+/// carrier: the registry's `api_key_env`s and [`CONTAINER_KEY_ENV`]. (A local
+/// spawn gets the key under the variable's carrier instead.)
 pub fn key_envs() -> Vec<&'static str> {
     let mut vars = crate::commands::agents::api_key_envs();
     vars.push(CONTAINER_KEY_ENV);
@@ -772,7 +778,9 @@ pub(crate) mod tests {
         assert!(alice_env.is_empty(), "Alice runs on her own login: {alice_env:?}");
         let mut bob_env = HashMap::new();
         assert_eq!(prepare_spawn_in(&bob, &socket, "/opt/agents/bin/gemini", &mut bob_env).unwrap(), None);
-        assert_eq!(bob_env.get("GEMINI_API_KEY").map(String::as_str), Some(KEY));
+        // Under the carrier `agent_exec` maps, never the CLI's own name.
+        assert_eq!(bob_env.get(&crate::services::agent_exec::carrier_name("GEMINI_API_KEY")).map(String::as_str), Some(KEY));
+        assert!(!bob_env.contains_key("GEMINI_API_KEY"));
         // Claude: never in the environment — the helper directory to bind.
         let mut claude_env = HashMap::new();
         let dir_to_bind = prepare_spawn_in(&bob, &socket, "/opt/agents/bin/claude", &mut claude_env).unwrap();

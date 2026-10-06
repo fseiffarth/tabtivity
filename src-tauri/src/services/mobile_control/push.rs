@@ -257,6 +257,10 @@ pub struct AgentTabRef {
     /// notice would only interrupt the reader. A phone that merely still
     /// holds the socket from a pocket is not that.
     pub attached: bool,
+    /// The phones the tab's scope is open to (`ResolvedProject::devices`):
+    /// `None` is every paired phone. Filters who is sent the notice; never
+    /// part of it.
+    pub devices: Option<Vec<String>>,
 }
 
 impl AgentTabRef {
@@ -466,6 +470,8 @@ impl PushStore {
 
     /// Encrypt `notice` once per subscription of a still-paired device.
     /// `tag` is the already-keyed, opaque tag. Nothing is sent from here.
+    /// `paired` is also who may get it: a notice for a scope open to some
+    /// phones arrives with only those.
     pub fn deliveries(
         &mut self,
         notice: &Notice,
@@ -479,7 +485,19 @@ impl PushStore {
                 return Ok(vec![]);
             }
         }
-        if !self.file.subscriptions.iter().any(|s| s.wants(notice)) {
+        // Who would get it, before anything is spent: a notice no eligible
+        // phone wants — every phone that wants it is outside the scope's list,
+        // or no longer paired — must neither use the minute's budget nor start
+        // the tab's cooldown.
+        let eligible: Vec<usize> = self
+            .file
+            .subscriptions
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.wants(notice) && paired.iter().any(|id| id == &s.device_id))
+            .map(|(index, _)| index)
+            .collect();
+        if eligible.is_empty() {
             return Ok(vec![]);
         }
         if !self.within_budget(t) {
@@ -501,12 +519,10 @@ impl PushStore {
         full["body"] = serde_json::json!(clip(&notice.body, MAX_BODY_CHARS));
         let mut out = vec![];
         // `wants` is false for a lapsed row: it has no keys and gets nothing.
-        for sub in self.file.subscriptions.iter().filter(|s| s.wants(notice)) {
-            // Revocation already dropped the row; this is the belt to that
-            // brace, for a push.json edited or restored behind our back.
-            if !paired.iter().any(|id| id == &sub.device_id) {
-                continue;
-            }
+        // The paired check is revocation's belt (it already dropped the row)
+        // for a push.json edited or restored behind our back, and the
+        // per-phone list's only gate.
+        for sub in eligible.into_iter().map(|index| &self.file.subscriptions[index]) {
             let Ok(origin) = endpoint_origin(&sub.endpoint) else {
                 continue;
             };
@@ -903,7 +919,33 @@ mod tests {
             tab_id: "t-opaque".into(),
             tab_label: "Claude".into(),
             attached: false,
+            devices: None,
         }
+    }
+
+    /// A scope open to some phones: its notice reaches only their
+    /// subscriptions, and one that no allowed phone wants costs nothing — no
+    /// budget, and no cooldown that would hold back the next turn.
+    #[test]
+    fn an_agent_notice_reaches_only_the_allowed_phones_and_spends_nothing_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut push = PushStore::open(dir.path()).unwrap();
+        let auth = Base64UrlUnpadded::encode_string(&[3u8; 16]);
+        let all = PushPrefs { details: true, calendar: true, agents: AgentNotices::All };
+        push.subscribe("d1", "https://fcm.googleapis.com/1", &phone_key(), &auth, all).unwrap();
+        push.subscribe("d2", "https://fcm.googleapis.com/2", &phone_key(), &auth, all).unwrap();
+        let question = agent_tab().notice(concat!(crate::app_slug!(), "-x"), AgentTurn::Question, None);
+
+        let out = push.deliveries(&question, "k", &["d2".into()]).unwrap();
+        assert_eq!(out.iter().map(|d| d.endpoint.as_str()).collect::<Vec<_>>(), ["https://fcm.googleapis.com/2"]);
+        assert_eq!(push.sent.len(), 1);
+
+        // Allowed only to a phone with no subscription: nothing is spent.
+        assert!(push.deliveries(&question, "k3", &["d3".into()]).unwrap().is_empty());
+        assert_eq!(push.sent.len(), 1, "no budget for a notice nobody may get");
+        assert!(!push.recent.contains_key("k3"), "no cooldown either");
+        // So the same tab's next notice, once a phone may get it, goes out.
+        assert_eq!(push.deliveries(&question, "k3", &["d1".into()]).unwrap().len(), 1);
     }
 
     #[test]

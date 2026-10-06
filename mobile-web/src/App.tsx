@@ -13,7 +13,7 @@ import { hasLocalUnlock } from "./localLock";
 import { clearConnectReload, isConnectReload, noteUnlockedLeave, takeConnectReload, takeReloadGrace } from "./reloadGrace";
 import { noteDesktopTheme } from "./theme";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
-import { useT } from "../../src/lib/i18n";
+import { useT, type TranslationKey } from "../../src/lib/i18n";
 import { Pair, noteOidcOutcome } from "./screens/Pair";
 import { LocalUnlock } from "./screens/LocalUnlock";
 import { LockedHomeShell } from "./screens/LockedHomeShell";
@@ -24,6 +24,7 @@ import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
 import { SECTION_GLYPH } from "./glyphs";
+import type { SubagentStep } from "./terminal/subagents";
 /** The bundle this phone is running, on every splash: a connect that hangs or
  * fails is exactly when the reader needs to know whether the phone picked up
  * the desktop's current bundle or is booting a stale one out of the cache. */
@@ -50,11 +51,11 @@ function currentPlace(tab: Tab, projectView: ProjectView, terminal: { project: s
   if (tab !== "projects") return { section: tab };
   return projectView.kind === "project" ? { section: "projects", projectId: projectView.id } : { section: "projects" };
 }
-const TABS: { id: Tab; icon: string; label: string }[] = [
-  { id: "projects", icon: SECTION_GLYPH.projects, label: "Projects" },
-  { id: "todo", icon: SECTION_GLYPH.todo, label: "To-do" },
-  { id: "calendar", icon: SECTION_GLYPH.calendar, label: "Calendar" },
-  { id: "mail", icon: SECTION_GLYPH.mail, label: "Mail" },
+const TABS: { id: Tab; icon: string; label: TranslationKey }[] = [
+  { id: "projects", icon: SECTION_GLYPH.projects, label: "mobile.tabs.projects" },
+  { id: "todo", icon: SECTION_GLYPH.todo, label: "mobile.tabs.todo" },
+  { id: "calendar", icon: SECTION_GLYPH.calendar, label: "mobile.tabs.calendar" },
+  { id: "mail", icon: SECTION_GLYPH.mail, label: "mobile.tabs.mail" },
 ];
 /**
  * How long Tabtivity Mobile may go untouched before the local lock closes the
@@ -95,6 +96,22 @@ function takeLaunchPlace(): LastPlace | null {
 }
 const launchPlace = takeLaunchPlace();
 
+/** The sections the desktop keeps this phone out of, as the status probe last
+ * said, so a cold open does not flash a tab the sidecar will refuse. The
+ * sidecar is what enforces it; this only keeps the bar honest. */
+const HIDDEN_SECTIONS_KEY = storageDashKey("hidden-sections");
+const HIDEABLE: readonly Tab[] = ["todo", "calendar", "mail"];
+function hideableSections(value: unknown): Tab[] {
+  return Array.isArray(value) ? HIDEABLE.filter((section) => value.includes(section)) : [];
+}
+function storedHiddenSections(): Tab[] {
+  try {
+    return hideableSections(JSON.parse(localStorage.getItem(HIDDEN_SECTIONS_KEY) ?? "[]"));
+  } catch {
+    return [];
+  }
+}
+
 // Keep the last known desktop preference through the lock and connection
 // screens, before the authenticated status probe can refresh it.
 try {
@@ -121,6 +138,7 @@ const ACTIVITY_EVENTS = ["pointerdown", "keydown", "input", "touchstart", "touch
  * should reach the user at once rather than be held behind a flourish.
  */
 function Splash({ message, progress, tone, children }: { message: string; progress?: boolean; tone?: "error"; children?: ReactNode }) {
+  const t = useT();
   return (
     <main className={`screen splash${tone === "error" ? " splash-failed" : ""}`} role="status" aria-live="polite">
       <div className="splash-mark" aria-hidden="true">
@@ -132,7 +150,7 @@ function Splash({ message, progress, tone, children }: { message: string; progre
       <p className="splash-message">{message}</p>
       {progress ? <div className="splash-progress" aria-hidden="true"><span /></div> : null}
       {children}
-      <p className="splash-version">{SPLASH_VERSION}{isUntested("mobile.link.splashVersion") && <> <span className="untested">Untested</span></>}</p>
+      <p className="splash-version">{SPLASH_VERSION}{isUntested("mobile.link.splashVersion") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</p>
     </main>
   );
 }
@@ -160,7 +178,7 @@ function SlowConnectHint() {
   return <>
     <p className="splash-hint">
       {t("mobile.tunnel.slow")}
-      {isUntested("mobile.link.slowConnectHint") && <> <span className="untested">Untested</span></>}
+      {isUntested("mobile.link.slowConnectHint") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}
     </p>
     <TunnelSteps />
     <ConnectTrace />
@@ -176,7 +194,7 @@ function TunnelSteps() {
   return <div className="splash-steps">
     <p className="splash-steps-title">
       {t("mobile.tunnel.try")}
-      {isUntested("mobile.link.tunnelSteps") && <> <span className="untested">Untested</span></>}
+      {isUntested("mobile.link.tunnelSteps") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}
     </p>
     <ol>
       {TUNNEL_STEPS.map((key, index) => <li key={key}>
@@ -190,32 +208,44 @@ function TunnelSteps() {
 
 /** The way in so far (`traceConnect`), for a slow or failed sign-in. */
 function ConnectTrace() {
+  const t = useT();
   const lines = connectTrace();
   if (lines.length === 0) return null;
-  return <pre className="splash-detail connect-trace" aria-label="Connection timeline">
+  // The lines themselves stay in English: they are a diagnostic log for a bug
+  // report, carrying status codes and timings rather than prose.
+  return <pre className="splash-detail connect-trace" aria-label={t("mobile.app.connectTrace")}>
     {lines.join("\n")}
-    {isUntested("mobile.link.connectTrace") && <>{"\n"}<span className="untested">Untested</span></>}
+    {isUntested("mobile.link.connectTrace") && <>{"\n"}<span className="untested">{t("mobile.newTab.untested")}</span></>}
   </pre>;
 }
 
-function TabBar({ active, open }: { active: Tab; open: (tab: Tab) => void }) {
-  return <nav className="mobile-tabbar" aria-label="Sections">
-    {TABS.map((tab) => <button
+function TabBar({ active, open, hidden }: { active: Tab; open: (tab: Tab) => void; hidden: readonly Tab[] }) {
+  const t = useT();
+  return <nav className="mobile-tabbar" aria-label={t("mobile.tabs.sections")}>
+    {TABS.filter((tab) => !hidden.includes(tab.id)).map((tab) => <button
       key={tab.id}
       className={`mobile-tab${active === tab.id ? " active" : ""}`}
       aria-current={active === tab.id ? "page" : undefined}
       onClick={() => open(tab.id)}
-    ><span aria-hidden="true">{tab.icon}</span>{tab.label}</button>)}
+    ><span aria-hidden="true">{tab.icon}</span>{t(tab.label)}</button>)}
   </nav>;
 }
 
 export function App() {
+  const t = useT();
   const [auth, setAuth] = useState<"loading" | "paired" | "unpaired" | "setup" | "locked" | "unavailable">("loading");
   const [pairNeedsLock, setPairNeedsLock] = useState(false);
   const [, refreshTags] = useState(0);
   const [tab, setTab] = useState<Tab>("projects");
+  const [hiddenSections, setHiddenSections] = useState<Tab[]>(storedHiddenSections);
+  // A section the desktop just turned off for this phone is left at once, for
+  // the project list: a restored place, a notification or the tab the reader
+  // was on would otherwise sit on a screen that only answers refusals.
+  useEffect(() => {
+    if (hiddenSections.includes(tab)) setTab("projects");
+  }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
-  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean } | null>(null);
+  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** The server's identity key is not the pinned one: ask for the recovery
    * code (`SecretsRepinSheet`). Once per sign-in; Later closes it. */
@@ -359,8 +389,11 @@ export function App() {
   useEffect(() => {
     if (auth !== "paired") return;
     const refresh = () => {
-      void getMobileStatus().then(({ show_untested_tags, color_scheme }) => {
+      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections }) => {
         noteDesktopTheme(color_scheme);
+        const hidden = hideableSections(hidden_sections);
+        setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
+        try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
         const visible = show_untested_tags === true;
         if (setUntestedTagsVisible(visible)) refreshTags((tick) => tick + 1);
         try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
@@ -502,7 +535,7 @@ export function App() {
     // (`onVisibility`) locked the app again seconds after it was unlocked.
   }, [reset, auth]);
 
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false) => setTerminal({ project, tab: next, pickModel, signIn });
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep) => setTerminal({ project, tab: next, pickModel, signIn, subagent });
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
@@ -528,20 +561,20 @@ export function App() {
     if (unavailable.reason !== "storage_blocked" && Date.now() - unlockedAt.current < LOCK_AFTER_IDLE_MS) resume();
     else begin();
   };
-  if (auth === "loading") return <Splash message="Connecting to your workspace…" progress><SlowConnectHint /></Splash>;
+  if (auth === "loading") return <Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>;
   if (auth === "unavailable") {
     const { title, hint } = describeUnavailable(unavailable.reason);
     return (
       <Splash message={title} tone="error">
         <p className="splash-hint">{hint}</p>
         {suspectsTunnel(unavailable.reason) && <TunnelSteps />}
-        {unavailable.reason === "host_down" && isUntested("mobile.link.offlineShell") && <p className="splash-hint muted"><span className="untested">Untested</span></p>}
-        <p className="splash-hint muted">No project or terminal data is loaded from cache.</p>
+        {unavailable.reason === "host_down" && isUntested("mobile.link.offlineShell") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+        <p className="splash-hint muted">{t("mobile.app.noCache")}</p>
         {unavailable.detail && <p className="splash-detail">{unavailable.detail}</p>}
         <ConnectTrace />
-        <button className="primary" onClick={retry}>Retry</button>
-        {isUntested("mobile.link.unlockRetry") && <p className="splash-hint muted"><span className="untested">Untested</span></p>}
-        {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">Untested</span></p>}
+        <button className="primary" onClick={retry}>{t("mobile.app.retry")}</button>
+        {isUntested("mobile.link.unlockRetry") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
+        {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </Splash>
     );
   }
@@ -558,6 +591,7 @@ export function App() {
     tab={terminal.tab}
     project={terminal.project}
     pickModel={terminal.pickModel}
+    subagent={terminal.subagent}
     signInTab={terminal.signIn}
     openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn)}
     back={() => setTerminal(null)}
@@ -567,7 +601,7 @@ export function App() {
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
           : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn)} />
+            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent)} />
             : <Home
               open={(id) => setProjectView({ kind: "project", id })}
               // Straight into the session, leaving the Projects tab on its
@@ -578,7 +612,7 @@ export function App() {
               todo={openTodo}
               mail={() => setTab("mail")}
             />}
-    <TabBar active={tab} open={openSection} />
+    <TabBar active={tab} open={openSection} hidden={hiddenSections} />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
     {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;

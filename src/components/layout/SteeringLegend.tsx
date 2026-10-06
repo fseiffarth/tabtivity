@@ -176,7 +176,7 @@ export function SteeringLegend() {
     // Steering is off while lent, so the hub is a plain badge, not the fold toggle.
     const hub = (
       <span className="steering-legend-hub">
-        <KeyboardIcon size={22} />
+        <KeyboardIcon size={16} />
       </span>
     );
     return createPortal(
@@ -200,7 +200,7 @@ export function SteeringLegend() {
           onClick={toggleLegend}
           title={t("steering.fab.title", { key: legendKey })}
         >
-          <KeyboardIcon size={22} />
+          <KeyboardIcon size={16} />
           <kbd>{legendKey}</kbd>
         </button>
       </div>,
@@ -268,7 +268,7 @@ export function SteeringLegend() {
       onClick={toggleLegend}
       title={t("steering.hub.title", { key: legendKey })}
     >
-      <KeyboardIcon size={22} />
+      <KeyboardIcon size={16} />
       <kbd>{legendKey}</kbd>
     </button>
   );

@@ -1,4 +1,5 @@
 import type { TodoBoard, TodoCard, TodoColumn } from "./api";
+import type { TranslationKey } from "../../src/lib/i18n";
 
 /**
  * The deadline's say in where a card can be filed — the phone's copy of the
@@ -92,7 +93,6 @@ export function acceptedColumns(task: TodoCard, board: Pick<TodoBoard, "columns"
  * The desktop's refusal, said in words. `column_follows_date` is the wire code
  * and it is the last thing a reader on a phone should be shown — the sentence
  * also has to say what to do instead, because the deadline *is* the control for
- * those three columns.
+ * those three columns. A key: the screen says it in the phone's language.
  */
-export const COLUMN_FOLLOWS_DATE =
-  "Overdue, Today and the backlog follow the card's own deadline — change the date instead of the column.";
+export const COLUMN_FOLLOWS_DATE: TranslationKey = "mobile.todo.columnFollowsDate";

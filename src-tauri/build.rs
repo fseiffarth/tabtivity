@@ -73,46 +73,12 @@ fn collect(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) {
     }
 }
 
-/// The non-English dictionary chunks vite emits for `src/lib/i18n.ts`'s
-/// `dictLoaders` (`/assets/de-<hash>.js` and siblings, ~0.5 MB each).
-///
-/// The phone can never request one, so they are not baked in. The only trigger
-/// for a dictionary load is `ensureDict(cachedLang())`, `cachedLang()` reads the
-/// `tabtivity-lang` localStorage key, and that key is written only by
-/// `applyLanguage` — desktop code the PWA never imports (it takes `useT` and
-/// `TranslationKey` from i18n, nothing else) — on the desktop webview's own
-/// origin, not the sidecar's. So on the phone the language is always `en`.
-/// Were one ever requested, the sidecar answers a missing `/assets/` path with a
-/// 404 and `ensureDict` falls back to English. **If the phone gains a language
-/// switcher, delete this filter.**
-///
-/// The match is exact — a two-letter language, a dash, an 8-character rollup
-/// hash, `.js`, directly under `/assets/` — so a vite hash-length change makes
-/// it match nothing and bake everything in, the harmless direction.
-fn is_unreachable_dict_chunk(name: &str) -> bool {
-    let Some(file) = name.strip_prefix("/assets/") else {
-        return false;
-    };
-    ["de", "es", "fr", "it"].iter().any(|lang| {
-        file.strip_prefix(lang)
-            .and_then(|rest| rest.strip_prefix('-'))
-            .and_then(|rest| rest.strip_suffix(".js"))
-            .is_some_and(|hash| {
-                hash.len() == 8
-                    && hash
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            })
-    })
-}
-
 fn generate_mobile_assets() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let dist = manifest.join("../mobile-dist");
     println!("cargo:rerun-if-changed={}", dist.display());
     let mut assets = Vec::new();
     collect(&dist, &dist, &mut assets);
-    assets.retain(|(name, _)| !is_unreachable_dict_chunk(name));
     if !assets.iter().any(|(name, _)| name == "/index.html") {
         assets.push(("/index.html".into(), concat!("<!doctype html><title>", crate::app_name!(), " Mobile</title><main>Mobile assets are not built. Run npm run mobile:build.</main>").as_bytes().to_vec()));
     }
@@ -528,6 +494,52 @@ fn generate_core_dispatch() {
     fs::write(out, generated).expect("write core dispatch");
 }
 
+/// tauri-build's default Windows app manifest: it binds Common Controls v6,
+/// the only comctl32 that exports `TaskDialogIndirect` (the dialog plugin's
+/// message boxes).
+#[cfg(feature = "desktop")]
+const WINDOWS_APP_MANIFEST: &str = concat!(
+    r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+"#,
+    "        version=\"6.0.0.0\"\n", // privacy-check: ok — an assembly version, not an address
+    r#"        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"#
+);
+
+/// tauri-build puts the manifest in a resource that reaches only the app
+/// binary, so the lib's test binary loaded System32's comctl32 5.82 and died
+/// before its first test (0xc0000139, STATUS_ENTRYPOINT_NOT_FOUND, CI
+/// 2026-10-05). On MSVC the manifest goes through the linker instead, which
+/// reaches every linked target; tauri-build's copy is switched off so the
+/// app binary does not get two.
+#[cfg(feature = "desktop")]
+fn build_tauri() {
+    let msvc = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !msvc {
+        tauri_build::build();
+        return;
+    }
+    let path = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("windows-app-manifest.xml");
+    fs::write(&path, WINDOWS_APP_MANIFEST).expect("write the Windows app manifest");
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", path.display());
+    let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
+    tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))
+        .expect("failed to run tauri-build");
+}
+
 fn main() {
     watch_frontend_dist();
     embed_build_commit();
@@ -537,5 +549,5 @@ fn main() {
     // Only the desktop build is a Tauri app; the server daemon builds this
     // library with `default-features = false` (hosted plan §3.2).
     #[cfg(feature = "desktop")]
-    tauri_build::build();
+    build_tauri();
 }

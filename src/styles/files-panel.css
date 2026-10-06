@@ -1094,6 +1094,16 @@
   border-top: 1px solid var(--border-color);
 }
 
+/* An agent's push request card sits in this footer, and the footer never
+   shrinks: a card listing a long run of commits (plus its output) grew it until
+   the history scroll above was squeezed to nothing — history and its
+   scrollbar both gone. Capped like the commit box, the cards scroll on their
+   own. Scoped here: the Agents view's copy lives in an ordinary scroll. */
+.git-action-bar .git-push-proposals {
+  max-height: 33vh;
+  overflow-y: auto;
+}
+
 .git-action-error {
   width: 100%;
   color: var(--danger);

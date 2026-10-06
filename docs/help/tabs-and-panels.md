@@ -86,7 +86,9 @@ whatever is open, with its own tabs in Tabtivity's root folder, independent of
 any project. Closing it ends nothing. One-click installs open their terminal
 tab here. Agents are opt-in in the root console: turn on an agent's **Root**
 chip in the Models & agents menu to offer it there; the **MCP** chip also
-gives it Tabtivity's root tools (calendar, board, project list).
+gives it Tabtivity's root tools (calendar, board, project list). An agent
+docked beside the mail, calendar or to-do window is a root-console tab too, and
+shows in the console's strip. See `mail-calendar`.
 
 ## The Models & agents menu
 
