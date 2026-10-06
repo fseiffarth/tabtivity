@@ -17,25 +17,25 @@ export interface Orbit {
 }
 
 /** The hub hexagon's circumradius: its box is HUB_R·√3 wide, 2·HUB_R tall. */
-export const HUB_R = 26;
+export const HUB_R = 20;
 /** A pointy-topped regular hexagon's width over its height. */
 export const HEX_ASPECT = Math.sqrt(3) / 2;
 /** The widest a key hexagon may be for its height. A regular hexagon round a
  *  short, wide key list is mostly empty above and below it; this much
- *  squashing saves ~12% of the area and a fifth of the height on the busiest
- *  levels, and still reads as a hexagon next to regular ones. */
-export const MAX_ASPECT = 1.1;
-export const HUB_BOTTOM = 18;
-const EDGE = 10;
-const GAP = 10;
-const MIN_H = 64;
-const PAD = 7;
+ *  squashing saves about a quarter of the area and of the height on the
+ *  busiest levels, and still reads as a hexagon next to regular ones. */
+export const MAX_ASPECT = 1.25;
+export const HUB_BOTTOM = 10;
+const EDGE = 8;
+const GAP = 6;
+const MIN_H = 48;
+const PAD = 4;
 /** How far above the hub centre a hexagon over it must start: the hub's top
- *  point (HUB_R) with the level pill on it (to 36px) and a gap. */
-const HUB_CLEAR = 46;
+ *  point (HUB_R) with the level pill on it (to 30px) and a gap. */
+const HUB_CLEAR = 36;
 /** Half the width a hexagon must keep off to sink below HUB_CLEAR: the level
  *  pill's, for a long level name. */
-const HUB_CLEAR_HALF = 70;
+const HUB_CLEAR_HALF = 60;
 
 /**
  * The smallest hexagon box holding a w×h rectangle (plus padding) at its
