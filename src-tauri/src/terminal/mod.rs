@@ -166,6 +166,8 @@ struct OutputRoute {
     output_offset: u64,
     /// Output since the last activity digest (tail-capped).
     digest: String,
+    /// When a tick last drained `digest`; `None` = the next chunk is due at once.
+    last_digest: Option<Instant>,
     /// UTF-8 decoder state shared by every output chunk for this spawn.
     decoder: Utf8StreamDecoder,
     /// Spawn generation, so a respawn under the same id survives the previous
@@ -176,6 +178,14 @@ struct OutputRoute {
 impl OutputRoute {
     fn subscribed(&self) -> bool {
         self.visible_viewers.values().any(|v| v.visible) || self.watchers > 0
+    }
+
+    /// When a hidden chunk arriving at `now` must be digested by: at once
+    /// after a quiet window (or ever), else by the end of the window its last
+    /// drain opened — the per-PTY cadence `DigestClock` keeps.
+    fn digest_due_by(&self, now: Instant) -> Instant {
+        self.last_digest
+            .map_or(now, |last| (last + ACTIVITY_INTERVAL).max(now))
     }
 
     /// Every window other than the main one with a view of this PTY registered,
@@ -323,44 +333,57 @@ fn routes() -> &'static Mutex<HashMap<String, OutputRoute>> {
 /// One `terminal-activity` event per hidden streaming PTY per window made
 /// thirty working agents sixty events a second into the main renderer. Now a
 /// tick drains EVERY hidden route's digest into one `terminal-activity-batch`.
-/// The cadence is the same `ACTIVITY_INTERVAL`: the first hidden chunk after
-/// quiet arms a tick at once (leading edge), a chunk inside the window arms
-/// one for the window's end (trailing: the decision prompt right before quiet
-/// still goes out), and while no hidden PTY streams nothing is armed. The one
-/// cost: a PTY silent at a tick that speaks right after waits for the next
-/// one, so two of its digests can be two windows apart where its own clock
-/// gave it one window plus the chunk gap — still inside the activity store's
-/// burst window for the streams that matter (a working TUI repaints every
-/// tick).
+/// Each route keeps the per-PTY cadence it had with its own timer: its chunk
+/// after a quiet window is digested at once (leading edge), a chunk inside the
+/// window by the window's end (trailing: the decision prompt right before
+/// quiet still goes out) — `OutputRoute::digest_due_by`. The clock holds the
+/// earliest such deadline over every hidden route: a chunk whose own deadline
+/// is earlier than the armed tick pulls the tick forward (the later task wakes
+/// superseded and does nothing), so no PTY's digests are ever further apart
+/// than `max(ACTIVITY_INTERVAL, its chunk gap)` — the gap `BUSY_WINDOW_MS`
+/// relies on. Routes streaming through the same windows share one tick, and
+/// while no hidden PTY streams nothing is armed.
 ///
 /// Lock order: this clock is taken BEFORE the routes lock, always.
 #[derive(Debug, Default)]
 struct DigestClock {
-    /// When the last tick drained the digests.
-    last: Option<Instant>,
-    /// A tick task is sleeping toward its deadline.
-    armed: bool,
+    /// The deadline the armed tick task sleeps toward, if one is armed.
+    deadline: Option<Instant>,
+    /// The armed tick's generation: a superseded task wakes to a newer one.
+    generation: u64,
 }
 
 impl DigestClock {
-    /// A hidden route has new digest bytes at `now`: the deadline to tick at,
-    /// unless a tick is already armed.
-    fn arm(&mut self, now: Instant) -> Option<Instant> {
-        if self.armed {
+    /// A hidden route wants its digest out by `by`: the tick to arm for it,
+    /// unless the armed tick already fires by then.
+    fn arm(&mut self, by: Instant) -> Option<DigestTick> {
+        if self.deadline.is_some_and(|d| d <= by) {
             return None;
         }
-        self.armed = true;
-        Some(match self.last {
-            Some(last) if now.duration_since(last) < ACTIVITY_INTERVAL => last + ACTIVITY_INTERVAL,
-            _ => now,
+        self.generation += 1;
+        self.deadline = Some(by);
+        Some(DigestTick {
+            deadline: by,
+            generation: self.generation,
         })
     }
 
-    /// The armed tick fired (and drained) at `now`.
-    fn tick(&mut self, now: Instant) {
-        self.armed = false;
-        self.last = Some(now);
+    /// A tick task woke: whether it is the armed one (then it drains), or
+    /// one a later, earlier arm superseded (then the newer task drains).
+    fn tick(&mut self, generation: u64) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.deadline = None;
+        true
     }
+}
+
+/// An armed digest tick, for the task that sleeps toward it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DigestTick {
+    deadline: Instant,
+    generation: u64,
 }
 
 fn digest_clock() -> &'static Mutex<DigestClock> {
@@ -414,28 +437,30 @@ struct OutputSlice {
 enum Routed {
     /// Subscribed: emit as ordinary `terminal-output`.
     Data(OutputSlice),
-    /// Hidden, and no digest tick is armed: spawn one for this deadline
-    /// (`arm_digest_tick`).
-    ArmDigest(Instant),
-    /// Hidden, a digest tick is already armed: nothing to do.
+    /// Hidden, and no digest tick fires soon enough for this route: spawn one
+    /// for this deadline (`arm_digest_tick`).
+    ArmDigest(DigestTick),
+    /// Hidden, a digest tick is already armed in time: nothing to do.
     Quiet,
 }
 
 fn route_chunk_at(id: &str, bytes: &[u8], now: Instant, seq: u64) -> Routed {
     let mut clock = digest_clock().lock().unwrap();
-    route_chunk_clocked(id, bytes, now, seq, &mut clock)
+    let mut map = routes().lock().unwrap();
+    route_chunk_in(&mut map, &mut clock, id, bytes, now, seq)
 }
 
-/// `route_chunk_at` against a given digest clock (the tests' own, so a tick
-/// armed by another route can't make a chunk read as quiet).
-fn route_chunk_clocked(
+/// `route_chunk_at` against a given route map and digest clock (the tests'
+/// own, so a tick armed by another test's route can't make a chunk read as
+/// quiet, and a test's drain never takes a sibling's digest).
+fn route_chunk_in(
+    map: &mut HashMap<String, OutputRoute>,
+    clock: &mut DigestClock,
     id: &str,
     bytes: &[u8],
     now: Instant,
     seq: u64,
-    clock: &mut DigestClock,
 ) -> Routed {
-    let mut map = routes().lock().unwrap();
     // Generation guard, the same one the task-end cleanup uses (`route_close`).
     // A superseded spawn keeps draining its PTY after the replacement opened the
     // route: `insert()` flips the dead flag and reaps the child, but the reader
@@ -463,8 +488,8 @@ fn route_chunk_clocked(
     route.push_pending(&slice);
     route.digest.push_str(&slice.text);
     trim_with_hysteresis(&mut route.digest, ACTIVITY_TAIL_CAP);
-    match clock.arm(now) {
-        Some(deadline) => Routed::ArmDigest(deadline),
+    match clock.arm(route.digest_due_by(now)) {
+        Some(tick) => Routed::ArmDigest(tick),
         None => Routed::Quiet,
     }
 }
@@ -499,45 +524,53 @@ fn route_finish(id: &str, seq: u64) -> Routed {
     route.push_pending(&slice);
     route.digest.push_str(&slice.text);
     trim_with_hysteresis(&mut route.digest, ACTIVITY_TAIL_CAP);
-    match clock.arm(Instant::now()) {
-        Some(deadline) => Routed::ArmDigest(deadline),
+    let now = Instant::now();
+    match clock.arm(route.digest_due_by(now)) {
+        Some(tick) => Routed::ArmDigest(tick),
         None => Routed::Quiet,
     }
 }
 
-/// The digest tick: drain every hidden route's digest for one
-/// `terminal-activity-batch`, in id order, and mark the clock so the next
-/// hidden chunk arms the next window. Empty when nothing is due (no event).
+/// The digest tick of `generation`: drain every hidden route's digest for one
+/// `terminal-activity-batch`, in id order, stamping each route's drain so its
+/// next chunk knows its window. Empty when nothing is due (no event) — and
+/// when a later, earlier arm superseded this tick (that one drains).
 fn digest_batch_take_in(
     map: &mut HashMap<String, OutputRoute>,
     now: Instant,
     clock: &mut DigestClock,
+    generation: u64,
 ) -> Vec<(String, String)> {
-    clock.tick(now);
+    if !clock.tick(generation) {
+        return Vec::new();
+    }
     let mut batch: Vec<(String, String)> = map
         .iter_mut()
         .filter(|(_, route)| !route.subscribed() && !route.digest.is_empty())
-        .map(|(id, route)| (id.clone(), std::mem::take(&mut route.digest)))
+        .map(|(id, route)| {
+            route.last_digest = Some(now);
+            (id.clone(), std::mem::take(&mut route.digest))
+        })
         .collect();
     batch.sort_by(|a, b| a.0.cmp(&b.0));
     batch
 }
 
-fn route_digest_batch_take() -> Vec<(String, String)> {
+fn route_digest_batch_take(generation: u64) -> Vec<(String, String)> {
     let mut clock = digest_clock().lock().unwrap();
     let mut map = routes().lock().unwrap();
-    digest_batch_take_in(&mut map, Instant::now(), &mut clock)
+    digest_batch_take_in(&mut map, Instant::now(), &mut clock, generation)
 }
 
 /// Sleep toward a digest tick's deadline, then emit what every hidden PTY
 /// accumulated as one `terminal-activity-batch`. A short-lived task, alive
 /// only while some hidden PTY is mid-burst: an idle or visible PTY arms
 /// nothing, keeping the zero-idle-wakeups discipline of `batch_output`.
-fn arm_digest_tick(app: &AppHandle, deadline: Instant) {
+fn arm_digest_tick(app: &AppHandle, tick: DigestTick) {
     let app = app.clone();
     tokio::spawn(async move {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-        let batch = route_digest_batch_take();
+        tokio::time::sleep_until(tokio::time::Instant::from_std(tick.deadline)).await;
+        let batch = route_digest_batch_take(tick.generation);
         if batch.is_empty() {
             return;
         }
@@ -565,6 +598,7 @@ fn route_open(id: &str) -> u64 {
     // new program's: replaying it would put xterm on the old program's screen.
     route.carried = ScreenState::default();
     route.digest.clear();
+    route.last_digest = None;
     // A respawn is a new program: its predecessor's screen is not this one's
     // catch-up. (Same reason the pending buffer is cleared.)
     route.retained.clear();
@@ -1310,13 +1344,13 @@ pub fn spawn_pty(
         let emitter = app.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
             Routed::Data(slice) => emit_output(&emitter, "terminal-output", &id, slice),
-            Routed::ArmDigest(deadline) => arm_digest_tick(&emitter, deadline),
+            Routed::ArmDigest(tick) => arm_digest_tick(&emitter, tick),
             Routed::Quiet => {}
         })
         .await;
         match route_finish(&id, route_seq) {
             Routed::Data(slice) => emit_output(&emitter, "terminal-output", &id, slice),
-            Routed::ArmDigest(deadline) => arm_digest_tick(&emitter, deadline),
+            Routed::ArmDigest(tick) => arm_digest_tick(&emitter, tick),
             Routed::Quiet => {}
         }
         // A tab can be respawned before the prior reader task observes EOF
@@ -1674,12 +1708,13 @@ mod route_tests {
 
     /// This route's digest alone (a tick's drain of only it), so a test never
     /// takes a sibling test's digest out of the shared map.
-    fn take_digest(id: &str) -> Option<String> {
+    fn take_digest(id: &str, at: Instant) -> Option<String> {
         let mut map = routes().lock().unwrap();
         let route = map.get_mut(id)?;
         if route.digest.is_empty() {
             return None;
         }
+        route.last_digest = Some(at);
         Some(std::mem::take(&mut route.digest))
     }
 
@@ -1690,34 +1725,126 @@ mod route_tests {
         assert_eq!(set_visible(id, false), None);
         let mut clock = DigestClock::default();
         let t0 = Instant::now();
+        let chunk = |bytes: &[u8], at: Instant, clock: &mut DigestClock| {
+            let mut map = routes().lock().unwrap();
+            route_chunk_in(&mut map, clock, id, bytes, at, seq)
+        };
         // First hidden chunk after quiet: a tick at once (leading edge).
-        assert!(matches!(
-            route_chunk_clocked(id, b"abc", t0, seq, &mut clock),
-            Routed::ArmDigest(d) if d == t0
-        ));
-        clock.tick(t0);
-        assert_eq!(take_digest(id).as_deref(), Some("abc"));
+        let Routed::ArmDigest(tick) = chunk(b"abc", t0, &mut clock) else {
+            panic!("the first hidden chunk arms a tick");
+        };
+        assert_eq!(tick.deadline, t0);
+        assert!(clock.tick(tick.generation));
+        assert_eq!(take_digest(id, t0).as_deref(), Some("abc"));
         // Inside the window: buffered, one tick armed for the window's end.
+        let Routed::ArmDigest(tick) = chunk(b"def", t0 + Duration::from_millis(10), &mut clock)
+        else {
+            panic!("a chunk inside the window arms the window's end");
+        };
+        assert_eq!(tick.deadline, t0 + ACTIVITY_INTERVAL);
         assert!(matches!(
-            route_chunk_clocked(id, b"def", t0 + Duration::from_millis(10), seq, &mut clock),
-            Routed::ArmDigest(d) if d == t0 + ACTIVITY_INTERVAL
-        ));
-        assert!(matches!(
-            route_chunk_clocked(id, b"ghi", t0 + Duration::from_millis(20), seq, &mut clock),
+            chunk(b"ghi", t0 + Duration::from_millis(20), &mut clock),
             Routed::Quiet
         ));
         // The tick drains what the window accumulated — the decision prompt
         // that arrived right before quiet is never stranded.
-        clock.tick(t0 + ACTIVITY_INTERVAL);
-        assert_eq!(take_digest(id).as_deref(), Some("defghi"));
-        assert_eq!(take_digest(id), None);
+        assert!(clock.tick(tick.generation));
+        assert_eq!(take_digest(id, t0 + ACTIVITY_INTERVAL).as_deref(), Some("defghi"));
+        assert_eq!(take_digest(id, t0 + ACTIVITY_INTERVAL), None);
         // Quiet for a window: the next chunk ticks at once again.
-        assert!(matches!(
-            route_chunk_clocked(id, b"jkl", t0 + ACTIVITY_INTERVAL * 2, seq, &mut clock),
-            Routed::ArmDigest(d) if d == t0 + ACTIVITY_INTERVAL * 2
-        ));
+        let Routed::ArmDigest(tick) = chunk(b"jkl", t0 + ACTIVITY_INTERVAL * 2, &mut clock) else {
+            panic!("a chunk after a quiet window ticks at once");
+        };
+        assert_eq!(tick.deadline, t0 + ACTIVITY_INTERVAL * 2);
         route_remove_view(id, "test-view", 2);
         route_close(id, seq);
+    }
+
+    /// A PTY's digests are never further apart than `max(ACTIVITY_INTERVAL,
+    /// its chunk gap)` — the cadence its own timer gave it — while other
+    /// hidden PTYs stream through the shared clock. Without this, a PTY
+    /// speaking every 700 ms beside a continuous one was drained only at the
+    /// other's window ends, up to 1 s apart: past `BUSY_WINDOW_MS`, so its
+    /// pill flickered between working and idle.
+    #[test]
+    fn a_pty_keeps_its_own_cadence_beside_a_continuous_one() {
+        let ms = Duration::from_millis;
+        let hidden = || {
+            let mut route = OutputRoute {
+                seq: 1,
+                ..Default::default()
+            };
+            route
+                .visible_viewers
+                .insert("v".to_string(), viewer(false, "main"));
+            route
+        };
+        let mut map: HashMap<String, OutputRoute> = HashMap::new();
+        for id in ["a", "b", "c"] {
+            map.insert(id.to_string(), hidden());
+        }
+        let mut clock = DigestClock::default();
+        let t0 = Instant::now();
+        let chunk = |map: &mut HashMap<String, OutputRoute>,
+                     clock: &mut DigestClock,
+                     id: &str,
+                     at: Duration| {
+            match route_chunk_in(map, clock, id, b"x", t0 + at, 1) {
+                Routed::ArmDigest(tick) => Some(tick),
+                _ => None,
+            }
+        };
+        let drain = |map: &mut HashMap<String, OutputRoute>,
+                     clock: &mut DigestClock,
+                     at: Duration,
+                     tick: DigestTick| {
+            digest_batch_take_in(map, t0 + at, clock, tick.generation)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>()
+        };
+        // Both speak at t0: one tick, at once, drains both.
+        let tick = chunk(&mut map, &mut clock, "b", ms(0)).expect("the first chunk arms");
+        assert_eq!(tick.deadline, t0);
+        assert_eq!(chunk(&mut map, &mut clock, "a", ms(0)), None, "same tick");
+        assert_eq!(drain(&mut map, &mut clock, ms(0), tick), ["a", "b"]);
+        // B streams on through its windows; A is silent at the 500 ms tick.
+        let tick = chunk(&mut map, &mut clock, "b", ms(10)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(500));
+        assert_eq!(drain(&mut map, &mut clock, ms(500), tick), ["b"]);
+        let b_tick = chunk(&mut map, &mut clock, "b", ms(510)).expect("window's end");
+        assert_eq!(b_tick.deadline, t0 + ms(1000));
+        // A, drained at 0, speaks at 700: due at once, so it pulls the tick
+        // forward instead of waiting for B's at 1000.
+        let pulled = chunk(&mut map, &mut clock, "a", ms(700)).expect("pulled forward");
+        assert_eq!(pulled.deadline, t0 + ms(700));
+        assert_eq!(drain(&mut map, &mut clock, ms(700), pulled), ["a", "b"]);
+        // B re-arms from the pulled tick's window; its superseded 1000 ms task
+        // wakes to a newer generation and drains nothing.
+        let tick = chunk(&mut map, &mut clock, "b", ms(710)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(1200));
+        assert!(drain(&mut map, &mut clock, ms(1000), b_tick).is_empty());
+        assert_eq!(map["b"].digest, "x", "kept for the live tick");
+        // A inside its own window (drained at 700, speaks at 1150) is due by
+        // 1200, which the armed tick already covers.
+        assert_eq!(chunk(&mut map, &mut clock, "a", ms(1150)), None);
+        assert_eq!(drain(&mut map, &mut clock, ms(1200), tick), ["a", "b"]);
+        // A's window end can be earlier than the armed tick too: C's leading
+        // edge at 1450 ticks early (A silent, B drained), B arms 1950 from
+        // it, and A speaking at 1600 — drained last at 1200 — is due by 1700,
+        // so the tick is pulled to 1700, not left at 1950.
+        let tick = chunk(&mut map, &mut clock, "b", ms(1210)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(1700));
+        let early = chunk(&mut map, &mut clock, "c", ms(1450)).expect("leading edge");
+        assert_eq!(early.deadline, t0 + ms(1450));
+        assert_eq!(drain(&mut map, &mut clock, ms(1450), early), ["b", "c"]);
+        let tick = chunk(&mut map, &mut clock, "b", ms(1460)).expect("window's end");
+        assert_eq!(tick.deadline, t0 + ms(1950));
+        let pulled = chunk(&mut map, &mut clock, "a", ms(1600)).expect("pulled to A's window end");
+        assert_eq!(pulled.deadline, t0 + ms(1700));
+        assert_eq!(drain(&mut map, &mut clock, ms(1700), pulled), ["a", "b"]);
+        assert!(drain(&mut map, &mut clock, ms(1950), tick).is_empty());
+        // A's drains: 0, 700, 1200, 1700 — never more than its 700 ms gap apart.
     }
 
     /// One tick, one event: every hidden route with a digest is in it (§7.6);
@@ -1743,29 +1870,34 @@ mod route_tests {
         map.insert("shown".to_string(), shown);
         let mut clock = DigestClock::default();
         let t0 = Instant::now();
+        let tick = clock.arm(t0).expect("nothing armed yet");
         assert_eq!(
-            digest_batch_take_in(&mut map, t0, &mut clock),
+            digest_batch_take_in(&mut map, t0, &mut clock, tick.generation),
             vec![
                 ("a".to_string(), "one".to_string()),
                 ("b".to_string(), "two".to_string()),
             ]
         );
+        // Each drained route knows its window now; the quiet one is still due
+        // at once.
+        assert_eq!(map["a"].last_digest, Some(t0));
+        assert_eq!(map["quiet"].last_digest, None);
+        assert_eq!(map["a"].digest_due_by(t0 + Duration::from_millis(100)), t0 + ACTIVITY_INTERVAL);
+        assert_eq!(map["quiet"].digest_due_by(t0 + Duration::from_millis(100)), t0 + Duration::from_millis(100));
         // Drained: nothing due, no event. A shown route is never digested.
-        assert!(digest_batch_take_in(&mut map, t0, &mut clock).is_empty());
+        let tick = clock.arm(t0).expect("the tick disarmed the clock");
+        assert!(digest_batch_take_in(&mut map, t0, &mut clock, tick.generation).is_empty());
         assert_eq!(map["shown"].digest, "streams live");
-        // The tick marked the clock: a chunk inside the window arms the
-        // window's end, only one tick is armed at a time, and a chunk past a
-        // quiet window ticks at once.
-        assert_eq!(
-            clock.arm(t0 + Duration::from_millis(100)),
-            Some(t0 + ACTIVITY_INTERVAL)
-        );
-        assert_eq!(clock.arm(t0 + Duration::from_millis(200)), None);
-        clock.tick(t0 + ACTIVITY_INTERVAL);
-        assert_eq!(
-            clock.arm(t0 + ACTIVITY_INTERVAL * 3),
-            Some(t0 + ACTIVITY_INTERVAL * 3)
-        );
+        // One tick covers every deadline at or past it; an earlier deadline
+        // supersedes it, and the superseded generation drains nothing.
+        let later = clock.arm(t0 + ACTIVITY_INTERVAL).expect("nothing armed");
+        assert_eq!(clock.arm(t0 + ACTIVITY_INTERVAL), None);
+        assert_eq!(clock.arm(t0 + ACTIVITY_INTERVAL * 2), None);
+        let earlier = clock.arm(t0 + Duration::from_millis(100)).expect("pulled forward");
+        assert_eq!(earlier.deadline, t0 + Duration::from_millis(100));
+        assert!(!clock.tick(later.generation));
+        assert!(clock.tick(earlier.generation));
+        assert!(clock.arm(t0 + ACTIVITY_INTERVAL * 3).is_some(), "disarmed by the tick");
     }
 
     #[test]
@@ -1785,7 +1917,7 @@ mod route_tests {
             Routed::Data(t) if t.text == "live"
         ));
         // No leftover digest fires after the drain.
-        assert_eq!(take_digest(id), None);
+        assert_eq!(take_digest(id, t0), None);
         route_remove_view(id, "test-view", 2);
         route_close(id, seq);
     }
@@ -1814,11 +1946,12 @@ mod route_tests {
         route_unwatch(id);
         // Released: back to buffering (a digest tick armed again).
         let t1 = t0 + ACTIVITY_INTERVAL * 2;
-        assert!(matches!(
-            route_chunk_clocked(id, b"after", t1, seq, &mut DigestClock::default()),
-            Routed::ArmDigest(d) if d == t1
-        ));
-        assert_eq!(take_digest(id).as_deref(), Some("after"));
+        let armed = {
+            let mut map = routes().lock().unwrap();
+            route_chunk_in(&mut map, &mut DigestClock::default(), id, b"after", t1, seq)
+        };
+        assert!(matches!(armed, Routed::ArmDigest(t) if t.deadline == t1));
+        assert_eq!(take_digest(id, t1).as_deref(), Some("after"));
         route_remove_view(id, "test-view", 2);
         route_close(id, seq);
     }
