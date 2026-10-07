@@ -617,3 +617,136 @@ Nothing run live.
   the detach (its pane stayed mounted); the popout's position reaches the
   payload, not the live element. Pre-existing (#231), unchanged by S3.
 - The unsaved-markup hold stays untested (implementer's note stands).
+
+## S4 — terminal frontend
+
+*Written 2026-10-07 by the S4 implementer. Base `3e1a8406`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `3c763604` | §3.2 activity store on demand: `startActivityTicks` (trailing recompute + one-shot window-expiry timer, no interval), bus tap feeds the classifier, lean non-agent path, looked-at set once per recompute |
+| `2447d23c` | §3.2 screen readers: Reader window 300 rows, `readableScreen` `plain` option for the words-only readers, Reader clock only while no terminal, `watchTerminal` in the registry |
+| `5b84f824` | §3.2 `pty_resize` 80 ms trailing debounce + §5.2 xterm built on first show (`buildTerm`/`onBuild`), spawn not deferred |
+| `f6ec9062` | §5.2 `launch_prep`: agent/host home preparation on `spawn_blocking` (`home_off_thread`), file-map rows |
+
+### What was built / choices made
+- **Recompute is armed, not ambient.** `scheduleRecompute` and the expiry
+  timer are no-ops until `startActivityTicks` (AppShell's effect, re-armed
+  with ×3 trail while quiesced) has run. A first cut subscribed the tabs
+  store at import and fired trailing recomputes in every test; tests that
+  hand-set derived state (`attentionByTab: "done"`) with real timers had it
+  wiped 300 ms later (MobileTabSeen). Armed by AppShell, tests and popouts
+  behave exactly as under the interval, which only AppShell ever ran.
+- **Expiry windows** (`nextWindowEnd`): raw+`BUSY_WINDOW_MS`,
+  out+`TEXT_GAP_MS`, onset+`WORK_ONSET_MS`, quiet+`DECISION_QUIET_MS`,
+  quiet+`DONE_QUIET_MS`, paint+`HOOK_WORK_SILENCE_MS` (working verdict, no
+  job); plus `BILL_TICK_MS` (2 s) while anything is busy so the usage
+  recap's per-tick billing never sees a gap past `MAX_WORK_TICK_MS`. Once
+  every window is past, no timer runs (`ActivityEventDriven` proves it).
+- **"Evaluate only dirty PTYs"** was not done: each tab's reading is
+  time-gated, so a quiet tab's answer can change with no event; the per-tab
+  work is a few map reads, and the expensive part — a layout walk per tab
+  for `isTabLookedAt` — became one `lookedAtPtyIds()` set per recompute.
+- **Lean non-agent path** keeps `lastRawByPty`, `lastOutputByPty`,
+  `onsetByPty`, `workAtByPty` and the echo gate (`bytesSayWorking`, the
+  last-working mark and the hover card read them) and drops `stripAnsi`,
+  the braille scrub and the tail. Every frame of a shell tab counts as text
+  (a shell paints nothing while idle). Unknown ids take the full path.
+- **Tab-kind lookup**: a `Set` of agent ids rebuilt when `tabsByScope`'s
+  identity changes (one `getState()` + identity check per chunk).
+- **Bus tap** (`onAnyTerminalOutput`) runs after the pane's handlers.
+  Tauri 2 evaluates one script per listener with the payload inlined
+  (`emit_js` per listener id), so the second `listen` really did parse every
+  chunk twice; `terminal-activity` stays a plain listener in AppShell (one).
+- **Readers that need style** (kept styled): `readReaderLive` (select
+  prompts read the highlighted row by background/underline/colour,
+  `isLiveEcho` by painted background), `lastPromptEcho` (`chatTurns`).
+  Words-only (`plain`): `sessionStatus` callers (`screenModelTag`,
+  `screenModeMarks` → `TabLocalityBadges`, `TerminalReaderFacts.readStatus`,
+  all 80–120 rows) and `readCodexStatus` (`TerminalReaderStatus`, 120 rows).
+- **Reader clock**: `TerminalReaderView` reads on `onWriteParsed` and on
+  `watchTerminal` (built / respawned / retired); the 1.5 s clock runs only
+  while `terminalFor` is empty. The test fake now fires the write event on a
+  `rows.splice` and repaints each second in the "keeps a sent prompt while
+  working" case — a real TUI repaints its busy row every second, which is
+  what refreshes `workingSeenAt`.
+- **Lazy xterm**: `let term: Terminal | null`; `buildTerm()` from `tryOpen`
+  constructs, loads fit, runs the `onBuild` registrations, then
+  `registerTerminal` (last, so a watcher reads a complete terminal).
+  Call-time closures (key select, paste, font size, mouse handlers,
+  renderer manager) guard on `term`; `pty_spawn` passes xterm's default
+  80×24 when no terminal exists yet, which is what an unfitted terminal
+  reported before. `applyFontSize` on an unbuilt pane is a no-op: the
+  build reads the persisted size. Teardown disposes `termDisposables`,
+  flushes a pending resize, then `term?.dispose()`.
+- **`create_dir_all` of the root workspace** stays inline: one stat on an
+  existing directory, cheaper than the thread hop. The home preparation is
+  the real cost and is on the blocking pool for all three homes.
+
+### Gotchas for later steps
+- **S5 (batched digests → activity feed):** `notePtyOutput` is the only
+  entry; it calls `scheduleRecompute()` per chunk (cheap no-op while a
+  trail is pending). A digest must still arrive inside `BUSY_WINDOW_MS`
+  (800 ms) of the last one for a hidden working tab to read busy — the
+  expiry timer fires at raw+800 and clears it otherwise. `terminal-activity`
+  is still a plain `listen` in AppShell; move it onto the bus only if the
+  backend starts emitting it under `streamEventName`.
+- **S5 (replay trim):** `terminal-replay` is still not fed to the
+  classifier; the pane buffers it into `pendingOutput` and flushes through
+  `stripTerminalQueries`. An unbuilt pane (never shown) holds replay in the
+  same string — the first show builds, opens, flushes.
+- **S10 (sleep/wake):** the attach path is unchanged; waking an asleep
+  terminal tab remounts `TerminalView`, which builds nothing until the pane
+  has a layout box and `visible` — exactly the first-show path, so
+  attach-on-wake needs no new seam. `unregisterTerminal` fires
+  `watchTerminal` callbacks: the Reader over a sleeping tab drops to its
+  clock and resubscribes on wake. `pty_remove_view` on sleep: the pane's
+  `pendingOutput` is lost with the unmount; the backend buffer
+  (`ROUTE_SCROLLBACK_CAP`) is what the wake reads.
+- **Anything hand-setting activity maps in tests** stays safe only because
+  ticks are armed by AppShell; a test that calls `startActivityTicks` must
+  stop it in `afterEach` (see `ActivityEventDriven.test.ts`).
+- **Tests of `TerminalView` that type or read the mocked buffer** need a
+  layout box (`clientWidth/Height`, `offsetParent`) or there is no terminal.
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | clean: tsc + desktop bundle + mobile bundle (tsc clean on every commit) |
+| `npm test` | 737 files / 7555 tests passed (base 734 / 7542; +`ActivityEventDriven` 6, `MobileReadableScreenPlain` 4, `TerminalLazyXterm` 3) |
+| `cargo test -q` | lib 3557 passed (3 new `home_off_thread` tests), every other target green |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing, unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | clean |
+| `git diff --check` | clean |
+
+### Flagged for user
+- `isTabLookedAt` had a subtle rule — a tab inside a popout group answered
+  for that group only, never falling through to the main layout. The set
+  version unions popout active keys with the current scope's; it answers
+  the same as long as a key sits in one group, which the store guarantees.
+- A shell tab's frames with no visible text (a cursor move, a title
+  update) now count as text, where before they only counted as paint; no
+  program known to run in a shell tab emits only those, and a redrawing TUI
+  (htop, vim) already counted since its frames carry text. No agent tab is
+  affected.
+- `TerminalReaderView`: a working agent whose busy row never repaints (none
+  known) would no longer refresh `workingSeenAt` and a sent prompt would be
+  let go after `PENDING_MS`.
+
+### Live click-through (user)
+1. Open a project with a shell tab and an agent tab; run a long `ls -R` in
+   the shell: its ring turns green and goes out within ~1 s of the output
+   stopping (expiry timer, no interval). `top` keeps it on while it redraws,
+   as before.
+2. Ask the agent something and switch to another tab: the pill shows
+   working, then finished (`done`) once it stops; switching back clears it.
+3. Open the Reader over a Codex tab, open Status: the card fills and its
+   timers tick; close it. Switch Reader on over a Claude tab while it works:
+   the busy row's seconds advance (write-driven, no clock).
+4. Restart into the dev build with many tabs: hidden tabs show nothing until
+   first shown, then their buffered output appears at once; a tab first
+   shown after its agent printed a sign-in link still shows the card.
+5. Drag a splitter across an agent pane: the TUI repaints once at the end
+   of the drag (one resize), not continuously.
