@@ -327,6 +327,11 @@ fn find_cut(text: &str) -> Option<Cut> {
                     keep_before: Vec::new(),
                     reset: true,
                 });
+                // A full reset wipes both screens and lands on the main one:
+                // nothing printed before it is live, whichever screen it was on.
+                main_phases.clear();
+                on_alt = Some(false);
+                phase_start = end;
             }
             _ => {}
         }
@@ -335,11 +340,26 @@ fn find_cut(text: &str) -> Option<Cut> {
     cut
 }
 
+/// The DEC private modes xterm's DECSTR (`ESC[!p`) puts back to their
+/// defaults (xterm.js `softReset` → `CoreService.reset`): cursor keys, origin,
+/// wraparound, cursor visibility, reverse wraparound, keypad, focus events,
+/// bracketed paste. The screen switch (`?47`/`?1047`/`?1049`) and mouse
+/// reporting are NOT among them — a TUI that soft-resets after entering the
+/// alternate screen is still on it, with the mouse still reporting.
+const SOFT_RESET_DEC_MODES: [u16; 8] = [1, 6, 7, 25, 45, 66, 1004, 2004];
+
 /// The terminal state a stretch of output leaves behind, as the sequences
 /// that re-create it. Everything is last-value-wins; what the stretch never
 /// touched is not mentioned, so xterm keeps whatever it had.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ScreenState {
+    /// The stretch held a full reset (`ESC c`): the terminal must be reset
+    /// before anything kept from after it is written (`reset_prefix`).
+    hard_reset: bool,
+    /// The stretch held a soft reset (`ESC[!p`) after its last full one: what
+    /// DECSTR resets and this state does not track (the saved cursor, origin
+    /// mode, …) is reset by replaying it, ahead of the state set after it.
+    soft_reset: bool,
     /// Charset designations (`ESC ( 0` line drawing, `ESC ( B`), by designator.
     charsets: Vec<(String, String)>,
     /// SGR sequences since the last full SGR reset, in order. Non-empty means
@@ -424,25 +444,35 @@ impl ScreenState {
                 final_byte: b'r',
                 ..
             } => self.scroll_region = Some(raw.to_string()),
-            // DECSTR soft reset: modes, attributes, cursor shape and margins go
-            // back to defaults; the title and colours stay.
+            // DECSTR soft reset: attributes, charsets, margins and the modes in
+            // `SOFT_RESET_DEC_MODES` go back to defaults; the screen switch,
+            // mouse reporting, cursor shape, title and colours stay (xterm.js
+            // `softReset`). Replayed itself, for what it resets beyond these.
             Token::Csi {
                 private: None,
                 intermediates: "!",
                 final_byte: b'p',
                 ..
             } => {
+                self.soft_reset = true;
                 self.charsets.clear();
                 self.sgr.clear();
-                self.cursor_style = None;
-                self.modes.clear();
+                self.modes.retain(|(private, mode, _)| match private {
+                    Some(b'?') => !SOFT_RESET_DEC_MODES.contains(mode),
+                    _ => false,
+                });
                 self.scroll_region = None;
             }
             Token::Esc {
                 intermediates: "",
                 final_byte: b'c',
                 ..
-            } => *self = Self::default(),
+            } => {
+                *self = Self {
+                    hard_reset: true,
+                    ..Self::default()
+                }
+            }
             Token::Esc {
                 intermediates: designator @ ("(" | ")" | "*" | "+"),
                 ..
@@ -479,7 +509,28 @@ impl ScreenState {
 
     /// The sequences that re-create this state in a terminal.
     pub(super) fn prefix(&self) -> String {
+        let mut out = self.reset_prefix().to_string();
+        out.push_str(&self.state_prefix());
+        out
+    }
+
+    /// The full reset the stretch held, if any. Written before anything kept
+    /// from the stretch: a reset wipes the screen, so what the program printed
+    /// after it must come after it in the replay too.
+    fn reset_prefix(&self) -> &'static str {
+        if self.hard_reset {
+            "\x1bc"
+        } else {
+            ""
+        }
+    }
+
+    /// Everything but the full reset: the soft reset, then what was set.
+    fn state_prefix(&self) -> String {
         let mut out = String::new();
+        if self.soft_reset {
+            out.push_str("\x1b[!p");
+        }
         for (_, raw) in &self.charsets {
             out.push_str(raw);
         }
@@ -529,13 +580,21 @@ pub(super) fn trim_replay(pending: String, carried: &ScreenState, floor: usize) 
         return out;
     };
     let mut out = String::with_capacity(pending.len() - cut.at + 256);
+    let state = (!cut.reset).then(|| {
+        let mut state = carried.clone();
+        state.observe(&pending[..cut.at]);
+        state
+    });
+    // A full reset before the kept phases (they were printed after it); the
+    // rest of the state after them (it is the last value over all of them).
+    if let Some(state) = &state {
+        out.push_str(state.reset_prefix());
+    }
     for (a, b) in &cut.keep_before {
         out.push_str(&pending[*a..*b]);
     }
-    if !cut.reset {
-        let mut state = carried.clone();
-        state.observe(&pending[..cut.at]);
-        out.push_str(&state.prefix());
+    if let Some(state) = &state {
+        out.push_str(&state.state_prefix());
     }
     out.push_str(&pending[cut.at..]);
     out
@@ -609,10 +668,119 @@ mod tests {
         );
     }
 
+    /// DECSTR is replayed and drops what it resets (bracketed paste, cursor
+    /// visibility, attributes, charsets, the region); the alternate screen,
+    /// mouse reporting and the title are not reset by it, so they stay — a
+    /// TUI that soft-resets after entering the alternate screen is still on
+    /// it, and dropping its `?1049h` put xterm on the wrong screen.
     #[test]
-    fn a_soft_reset_before_the_cut_clears_the_modes_but_keeps_the_title() {
-        let s = "\x1b[?1000h\x1b]0;t\x07\x1b[!pold\x1b[2J\x1b[Hnew";
-        assert_eq!(trim(s), "\x1b]0;t\x07\x1b[2J\x1b[Hnew");
+    fn a_soft_reset_before_the_cut_keeps_the_screen_mouse_and_title() {
+        let s = "\x1b[?1049h\x1b[?1000h\x1b[?2004h\x1b[?25l\x1b[31m\x1b(0\x1b[3;20r\
+                 \x1b]0;t\x07\x1b[!pold\x1b[2J\x1b[Hnew";
+        assert_eq!(
+            trim(s),
+            "\x1b[!p\x1b[?1049h\x1b[?1000h\x1b]0;t\x07\x1b[2J\x1b[Hnew"
+        );
+        // Modes set after it are re-applied after it.
+        let s = "\x1b[?2004h\x1b[!p\x1b[?2004h\x1b[?25lold\x1b[2J\x1b[Hnew";
+        assert_eq!(trim(s), "\x1b[!p\x1b[?2004h\x1b[?25l\x1b[2J\x1b[Hnew");
+    }
+
+    /// A full reset inside the kept prefix is replayed, in front of what the
+    /// program printed after it: a `reset` then an alt-screen TUI must leave
+    /// xterm reset (mouse off, main screen wiped), not with the pre-reset
+    /// modes and main-screen text still there.
+    #[test]
+    fn a_reset_inside_the_prefix_is_replayed_before_what_follows_it() {
+        let s = "\x1b[?1000hold main\x1bcbanner\r\n\x1b[?1049hframe";
+        assert_eq!(trim(s), "\x1bcbanner\r\n\x1b[?1049hframe");
+        // The same through a main-screen phase kept across an alt-screen cut.
+        let s = "old\x1bcbanner\x1b[?1049halt\x1b[2J\x1b[Hframe";
+        assert_eq!(trim(s), "\x1bcbanner\x1b[?1049h\x1b[2J\x1b[Hframe");
+        // From the capped-off front: the reset still comes first.
+        let mut carried = ScreenState::default();
+        carried.observe("\x1b[?1000h\x1bc\x1b[?2004h");
+        assert_eq!(
+            trim_replay("banner\x1b[?1049hframe".to_string(), &carried, 0),
+            "\x1bcbanner\x1b[?2004h\x1b[?1049hframe"
+        );
+    }
+
+    /// The trimmed replay leaves a terminal in the state the whole buffer
+    /// would have: over random streams built from what the TUIs emit, the cut
+    /// is at a sequence boundary, the tail is kept verbatim, and folding the
+    /// replay into a fresh `ScreenState` gives the whole buffer's.
+    #[test]
+    fn a_trimmed_replay_leaves_the_state_the_whole_buffer_would() {
+        const POOL: &[&str] = &[
+            "text", "é\u{1F600}", "\r\n", " \x1b[2K\x1b[1A", "\x1b[G",
+            "\x1b[?1049h", "\x1b[?1049l", "\x1b[?47h", "\x1b[?1047l",
+            "\x1b[?1000h", "\x1b[?1000l", "\x1b[?1002;1006h", "\x1b[?1003l",
+            "\x1b[?2004h", "\x1b[?2004l", "\x1b[?25l", "\x1b[?25h", "\x1b[?7l",
+            "\x1b[?1004h", "\x1b[?1h", "\x1b[?2026h", "\x1b[?2026l", "\x1b[4h", "\x1b[4l",
+            "\x1b[31m", "\x1b[1;44m", "\x1b[0m", "\x1b[m", "\x1b[0;32m",
+            "\x1b[2 q", "\x1b[0 q", "\x1b[3;20r", "\x1b[r", "\x1b(0", "\x1b(B", "\x1b)0",
+            "\x1b]0;one\x07", "\x1b]2;two\x1b\\", "\x1b]11;#000000\x07", "\x1b]10;?\x07",
+            "\x1b]4;1;rgb:ff/00/00\x07", "\x1b]104\x07", "\x1b7", "\x1b8",
+            "\x1b[2J\x1b[3J\x1b[H", "\x1b[H\x1b[2J", "\x1b[2J", "\x1b[H", "\x1b[1;1H\x1b[J",
+            "\x1b[3;7H", "\x1b[1J", "\x1bc", "\x1b[!p", "\x1b[6n",
+        ];
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let normalized = |s: &ScreenState| {
+            let mut charsets = s.charsets.clone();
+            charsets.sort();
+            let mut modes = s.modes.clone();
+            modes.sort();
+            let mut osc = s.osc.clone();
+            osc.sort();
+            // The prefix opens its attributes with a reset the buffer may not
+            // have had: equal up to leading resets.
+            let is_reset = |raw: &String| raw == "\x1b[0m" || raw == "\x1b[m";
+            let sgr: Vec<String> = s.sgr.iter().skip_while(|r| is_reset(r)).cloned().collect();
+            (
+                s.hard_reset,
+                s.soft_reset,
+                charsets,
+                sgr,
+                s.cursor_style.clone(),
+                modes,
+                s.scroll_region.clone(),
+                osc,
+            )
+        };
+        let mut cuts = 0;
+        for _ in 0..3000 {
+            let len = 3 + (next() % 60) as usize;
+            let s: String = (0..len).map(|_| POOL[(next() % POOL.len() as u64) as usize]).collect();
+            let out = trim(&s);
+            let mut whole = ScreenState::default();
+            whole.observe(&s);
+            let mut replayed = ScreenState::default();
+            replayed.observe(&out);
+            assert_eq!(normalized(&replayed), normalized(&whole), "stream {s:?} → {out:?}");
+            let Some(cut) = find_cut(&s) else {
+                assert_eq!(out, s);
+                continue;
+            };
+            cuts += 1;
+            assert!(out.ends_with(&s[cut.at..]), "the tail is verbatim: {s:?}");
+            assert_eq!(s.as_bytes()[cut.at], ESC, "a cut starts a sequence: {s:?}");
+            // Every sequence of the replay is whole (the pool has none that
+            // is not), so nothing was cut or spliced inside one.
+            let mut i = 0;
+            while i < out.len() {
+                let tok = token_at(&out, i);
+                assert!(!matches!(tok, Token::Other { .. }), "spliced sequence in {out:?}");
+                i = tok.end();
+            }
+        }
+        assert!(cuts > 1000, "the pool must exercise the cuts ({cuts})");
     }
 
     #[test]
