@@ -51,14 +51,20 @@ export function shellRunnerFor(
 /** The command line that runs `scriptRel` under `interp`. PowerShell and cmd take
  *  a flag before the path; the POSIX shells take it as a bare argument. The two
  *  Windows interpreters only ever run on Windows (`shellRunnerFor`), whose shells
- *  know no `'…'`, so they get `"…"` quoting; the POSIX shells keep `'…'`.
+ *  know no `'…'`, so they get `"…"` quoting and `\` separators; the POSIX shells
+ *  keep `'…'` and `/`.
  *
  *  `args` (set from the ▶ button's right-click popover) is appended **verbatim**,
  *  only trimmed — the Python Run's `buildRunCommand` rule: it is a raw string for
  *  the tab's own shell to parse, so quotes and `$VARS` work as typed. */
 export function shellRunCommand(interp: ScriptShell, scriptRel: string, args?: string): string {
   const windows = interp === "powershell" || interp === "cmd";
-  const quoted = quoteFor(scriptRel, windows ? "windows" : "unix");
+  // cmd's `/c` strips the outer quotes of a whitespace-free `"scripts/run.bat"`
+  // and then reads the `/` as a switch ("'scripts' is not recognized"), so the
+  // Windows interpreters get the relative path with `\`; the POSIX shells keep
+  // the backend's `/` form.
+  const script = windows ? scriptRel.replace(/\//g, "\\") : scriptRel;
+  const quoted = quoteFor(script, windows ? "windows" : "unix");
   const base =
     interp === "powershell"
       ? `powershell -File ${quoted}`

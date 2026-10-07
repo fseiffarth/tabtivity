@@ -133,19 +133,20 @@ Gates (worktree, after the fix):
 | `git diff --check` | clean |
 | `cargo test` / `cargo clippy` | not run: no `src-tauri/` change |
 
+Fixed (second commit, on the coordinator's call): `cmd /c "scripts/run.bat"`
+(forward slash, no space) — cmd's `/c` rule strips the outer quotes when the
+quoted string has no whitespace and then tokenises `scripts/run.bat` at the
+`/` ("'scripts' is not recognized …", the npm-on-cmd gotcha); a PowerShell
+tab drops the quotes the same way. `shellRunCommand` now converts the
+project-relative `scriptRel`'s `/` to `\` for the `cmd`/`powershell`
+interpreters only (`scriptRel` in the plan stays `/`, the POSIX branch is
+untouched). Regression test in `src/__tests__/run/ShellScriptRun.test.ts`
+(`scripts/run.bat` → `cmd /c "scripts\run.bat"`, `tools/a.ps1` →
+`powershell -File "tools\a.ps1"`, POSIX `/` kept). Still owed the 32p
+manual test on Windows.
+
 ### Flagged for user
 
-- `cmd /c "scripts/run.bat"` (forward slash, no space): cmd's `/c` rule strips
-  the outer quotes when the quoted string has no whitespace, and cmd then
-  tokenises an unquoted `scripts/run.bat` at the `/` ("'scripts' is not
-  recognized …" — the known npm-on-cmd gotcha); typed into a PowerShell tab
-  the quotes are dropped the same way. The plan fixes the project-relative
-  `scriptRel` (backend `/` convention), so the step is as specified, but the
-  `.bat` Run button may still fail on Windows until `scriptRel` is emitted
-  with `\` for the `cmd`/`powershell` interpreters. Not verifiable here —
-  needs the 32p manual test on Windows; a one-line
-  `scriptRel.replace(/\//g, "\\")` in `shellRunCommand`'s Windows branch
-  would be the fix if it fails.
 - `relativePathWithin`/`isPathWithin` (shared helpers, not this step) read any
   `\` as a Windows separator; FileTree and other callers inherit the same
   blind spot for POSIX names containing `\`. Only `retargetTabs` is fixed

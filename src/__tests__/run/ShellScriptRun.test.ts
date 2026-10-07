@@ -165,6 +165,16 @@ describe("shell script run planning", () => {
     expect(shellRunCommand("bash", "it's.sh")).toBe("bash 'it'\\''s.sh'");
   });
 
+  it("hands the Windows interpreters the relative path with backslashes", () => {
+    // cmd's `/c` strips the quotes around a whitespace-free path and then reads
+    // `scripts/run.bat` as `scripts` plus a `/run.bat` switch; PowerShell gets
+    // the same form for symmetry. The POSIX shells keep the backend's `/`.
+    expect(shellRunCommand("cmd", "scripts/run.bat")).toBe('cmd /c "scripts\\run.bat"');
+    expect(shellRunCommand("powershell", "tools/a.ps1", "-N 1")).toBe('powershell -File "tools\\a.ps1" -N 1');
+    expect(shellRunCommand("bash", "scripts/run.sh")).toBe("bash 'scripts/run.sh'");
+    expect(shellRunCommand("zsh", "tools/a.zsh")).toBe("zsh 'tools/a.zsh'");
+  });
+
   it("relativizes a native Windows script path against a Windows root", () => {
     const winProject: ProjectEntry = {
       id: "winproj",
@@ -181,11 +191,11 @@ describe("shell script run planning", () => {
       interp: "cmd",
     });
     // The script path stays project-relative (the backend's `/` convention) so
-    // the tab's cwd resolves it; only the quoting is Windows'.
+    // the tab's cwd resolves it; the command line gets cmd's `\` and `"…"`.
     expect(plan).toMatchObject({
       cwd: "C:\\state\\winproj",
       scriptRel: "scripts/run.bat",
-      initialInput: 'cmd /c "scripts/run.bat"',
+      initialInput: 'cmd /c "scripts\\run.bat"',
     });
     expect(plan?.location).toBeUndefined();
   });
