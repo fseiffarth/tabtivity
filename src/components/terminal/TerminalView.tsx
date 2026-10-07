@@ -834,9 +834,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
      *
      * The local arming above is driven by `terminal-output`, which a HIDDEN pane
      * never receives at all: the backend streams output only to visible views
-     * and condenses the rest into throttled `terminal-activity` digests. So a
-     * tab that has not been looked at since it was mounted — every agent tab but
-     * the active one after a relaunch — armed nothing, and the scheduler's
+     * and condenses the rest into throttled `terminal-activity-batch` digests.
+     * So a tab that has not been looked at since it was mounted — every agent
+     * tab but the active one after a relaunch — armed nothing, and the scheduler's
      * `ready()` gate stayed false forever: a prompt aimed at it from the Agents
      * view sat queued until it read "missed", while the agent sat idle. Delivery
      * is deliberately not gated on the tab being focused, so readiness must not
@@ -1936,7 +1936,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
   // Visible-only streaming: report pane visibility so the backend can stop
   // emitting a hidden pane's output over IPC entirely (it buffers in Rust and
-  // condenses throttled `terminal-activity` digests for the pill indicators;
+  // condenses throttled digests (`terminal-activity-batch`) for the pills;
   // the buffer comes back as one `terminal-replay` when the pane is shown).
   // Each mounted view owns a stable token. Cleanup removes only that view, so a
   // hidden main pane can never silence a visible detached pane (or vice versa).

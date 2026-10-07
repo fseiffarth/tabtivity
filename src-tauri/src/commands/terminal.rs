@@ -256,7 +256,7 @@ pub async fn pty_resize(
 
 /// A pane's visibility report (visible-only streaming): a hidden pane's PTY
 /// stops emitting `terminal-output` over IPC entirely — the backend buffers it
-/// and condenses throttled `terminal-activity` digests for the pill
+/// and condenses throttled digests (`terminal-activity-batch`) for the pill
 /// indicators — and re-showing drains the buffer as one `terminal-replay`.
 /// See the routing block in `terminal/mod.rs`.
 #[tauri::command]

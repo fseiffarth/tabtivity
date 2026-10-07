@@ -16,6 +16,7 @@ import { PLATFORM } from "../../lib/window/dragPlatform";
 import { nextWindowState } from "../../lib/window/windowState";
 import { noteAgentTurn, notePtyOutput, startActivityTicks } from "../../stores/activity";
 import { onAnyTerminalOutput } from "../../lib/terminal/terminalBus";
+import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/activityDigests";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import type { AgentTurnState } from "../../stores/activity";
 import {
@@ -880,14 +881,13 @@ export function AppShell() {
       }
     });
     // A HIDDEN pane's PTY emits no terminal-output at all (visible-only
-    // streaming): the backend condenses its output into these throttled
-    // digests, which carry the same tail the classifier needs — so background
-    // agent tabs keep their working/decision/done pills without their full
-    // streams ever crossing IPC. (`terminal-replay`, the show-again catch-up,
-    // is deliberately NOT fed in here: its bytes were already digested live,
-    // and re-noting them would flash a quiet tab "working" on every show.)
-    listen<{ id: string; data: string }>("terminal-activity", (ev) => {
-      notePtyOutput(ev.payload.id, ev.payload.data);
+    // streaming): the backend condenses its output into throttled digests,
+    // every hidden PTY's in one event per tick (`noteActivityDigests`).
+    // (`terminal-replay`, the show-again catch-up, is deliberately NOT fed in
+    // here: its bytes were already digested live, and re-noting them would
+    // flash a quiet tab "working" on every show.)
+    listen<ActivityDigest[]>("terminal-activity-batch", (ev) => {
+      noteActivityDigests(ev.payload);
     })
       .then((fn) => { unlistenDigest = fn; })
       .catch(() => {});
