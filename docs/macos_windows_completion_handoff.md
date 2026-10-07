@@ -89,6 +89,64 @@ Gates (worktree, 2026-10-07):
 | `git diff --check` | clean |
 | `cargo test` / `cargo clippy` | not run: no `src-tauri/` change in this step (read-only check of `fs.rs`) |
 
+### Reviewer
+
+Verified by feeding the brief's inputs through a throwaway vitest probe
+(deleted; nothing launched):
+- `retargetTabs`: `C:\p\a.txt` → `C:\p\b.txt` (path + label), `C:\p\dir`
+  → `C:\p\dir2` with a tab at `C:\p\dir\x.md` (and one already at
+  `C:\p\dir2\y.md`, untouched), `/p/a` → `/p/b`, `/p/dir` → `/p/dir2` with
+  `/p/dir2/x` **not** retargeted (segment boundary), `/p/Dir/y` untouched on
+  POSIX (case stays significant). All correct.
+- `pathLinks.ts`: the six existing POSIX fixture lines give byte-identical
+  candidate lists; `\section{x}`, `\textbf`, `\\server\share\x.md`, `a//b.md`,
+  `a\\b.md`, `C:\`, `D:` yield no candidate; `\includegraphics{fig/a.pdf}`
+  still yields `fig/a.pdf` as before. New on POSIX: a single-letter
+  `h:/x.txt` is now a candidate (drive root by design) — harmless, the backend
+  lookup decides what links.
+- `shellRunCommand`: `cmd /c "C:\p dir\run.bat" x "y"` (args verbatim, as
+  documented), `powershell -File "scripts/a b.ps1" -N 1`, POSIX unchanged
+  (`bash 'a b.sh' x`, `zsh 'it'\''s.sh'`).
+- `parentDir`: `C:\a` → `C:\`, `/a` → `/`, `/` → `/`, `C:\` → `/` (same as
+  before the step; unreachable — the only caller passes `node.is_dir ?
+  node.path : parentDir(node.path)`, so a root never reaches it).
+- Imports: no new cycle (`shellScriptRun` → `pythonRun` → `stores/tabs`;
+  `tabs.ts` imports neither); `FileTree.tsx` already imported
+  `dirname`/`resolvePath`.
+
+Fixed (one commit, this one): `retargetTabs` turned a POSIX tab path holding
+a `\` into `/`-joined segments — `/p/dir/we\ird.md` under a `/p/dir` →
+`/p/dir2` rename became `/p/dir2/we/ird.md` (the old prefix-swap kept it; a
+`\` is a legal byte in a Linux file name and `relativePathWithin` reads any
+`\` as a separator). An exact-prefix match (`oldAbs` + `/` or `\`) now keeps
+the tail byte-for-byte; only a case-folded or mixed-separator match goes
+through `resolvePath`. Regression test in
+`src/__tests__/files/FileTabSync.test.ts` (also pins `/p/sub2` ∉ `/p/sub`).
+
+Gates (worktree, after the fix):
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test` | 729 files / 7520 tests passed |
+| `npm run lint` | 0 errors, 28 warnings (same set) |
+| `scripts/brand-check.sh` | pass |
+| `git diff --check` | clean |
+| `cargo test` / `cargo clippy` | not run: no `src-tauri/` change |
+
 ### Flagged for user
 
-- None.
+- `cmd /c "scripts/run.bat"` (forward slash, no space): cmd's `/c` rule strips
+  the outer quotes when the quoted string has no whitespace, and cmd then
+  tokenises an unquoted `scripts/run.bat` at the `/` ("'scripts' is not
+  recognized …" — the known npm-on-cmd gotcha); typed into a PowerShell tab
+  the quotes are dropped the same way. The plan fixes the project-relative
+  `scriptRel` (backend `/` convention), so the step is as specified, but the
+  `.bat` Run button may still fail on Windows until `scriptRel` is emitted
+  with `\` for the `cmd`/`powershell` interpreters. Not verifiable here —
+  needs the 32p manual test on Windows; a one-line
+  `scriptRel.replace(/\//g, "\\")` in `shellRunCommand`'s Windows branch
+  would be the fix if it fails.
+- `relativePathWithin`/`isPathWithin` (shared helpers, not this step) read any
+  `\` as a Windows separator; FileTree and other callers inherit the same
+  blind spot for POSIX names containing `\`. Only `retargetTabs` is fixed
+  here (it had a byte-exact predecessor); the rest is pre-existing.

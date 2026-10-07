@@ -2946,9 +2946,14 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         }
         if (rel !== null) {
           // A tab under a renamed/moved directory: prefix-swap, keep the label.
-          // `resolvePath` joins in the new path's own separator style.
+          // An exact prefix keeps the tail byte-for-byte (a POSIX name may hold
+          // a `\`, which the normalising helpers read as a separator); only a
+          // case-folded or mixed-separator match is re-joined by `resolvePath`,
+          // in the new path's own separator style.
           changed = true;
-          return { ...t, embedPath: resolvePath(newAbs, rel) };
+          const exact = t.embedPath.startsWith(`${oldAbs}/`) || t.embedPath.startsWith(`${oldAbs}\\`);
+          const embedPath = exact ? `${newAbs}${t.embedPath.slice(oldAbs.length)}` : resolvePath(newAbs, rel);
+          return { ...t, embedPath };
         }
         return t;
       });
