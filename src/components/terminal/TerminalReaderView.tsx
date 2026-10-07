@@ -19,7 +19,7 @@ import { submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInpu
 import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
-import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry";
 import { isInterruptInput, noteUserInput, useActivityStore } from "../../stores/activity";
 import { useUse24h } from "../../lib/timeFormat";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
@@ -729,25 +729,43 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   const recordedEffort = transcript?.available ? transcript.effort : undefined;
   useEffect(() => { if (recordedEffort) setSeenEffort(recordedEffort); }, [recordedEffort]);
 
-  // The live screen: read on the pane's output (settled), and on a slow
-  // clock for the busy row's timer and a terminal not created yet.
+  // The live screen: read on the pane's output (settled). The slow clock runs
+  // only while the pane has no terminal yet (it builds its xterm on first
+  // show); once one exists its own write event drives every read — the busy
+  // row's timer is repainted — and the registry says when the terminal is
+  // built, swapped under the Reader (a respawn) or retired.
   useEffect(() => {
     if (!visible) return;
     let settle: ReturnType<typeof setTimeout> | undefined;
-    let subscribed: { dispose: () => void } | undefined;
+    let subscribed: { term: NonNullable<ReturnType<typeof terminalFor>>; dispose: () => void } | undefined;
+    let clock: ReturnType<typeof setInterval> | undefined;
     const read = () => {
       settle = undefined;
       const term = terminalFor(ptyId);
-      if (!term) return;
-      if (!subscribed) subscribed = term.onWriteParsed(() => { settle ??= setTimeout(read, LIVE_SETTLE_MS); });
+      if (!term) {
+        subscribed?.dispose();
+        subscribed = undefined;
+        clock ??= setInterval(read, LIVE_POLL_MS);
+        return;
+      }
+      if (clock) {
+        clearInterval(clock);
+        clock = undefined;
+      }
+      if (subscribed?.term !== term) {
+        subscribed?.dispose();
+        const writes = term.onWriteParsed(() => { settle ??= setTimeout(read, LIVE_SETTLE_MS); });
+        subscribed = { term, dispose: () => writes.dispose() };
+      }
       const next = readReaderLive(term.buffer.active, agentLabel, term.cols);
       if (next.working) workingSeenAt.current = Date.now();
       setLive((previous) => (sameReaderLive(previous, next) ? previous : next));
     };
     read();
-    const clock = setInterval(read, LIVE_POLL_MS);
+    const unwatch = watchTerminal(ptyId, read);
     return () => {
-      clearInterval(clock);
+      unwatch();
+      if (clock) clearInterval(clock);
       if (settle) clearTimeout(settle);
       subscribed?.dispose();
     };

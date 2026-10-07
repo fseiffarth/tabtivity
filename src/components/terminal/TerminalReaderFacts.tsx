@@ -215,7 +215,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
    * screen, since the Reader's own reading may lag a settling redraw. */
   const readStatus = () => {
     const term = terminalFor(ptyId);
-    return term ? sessionStatus(readableScreen(term.buffer.active).lines, agentLabel) : status;
+    // The footer is the bottom of the screen, and `sessionStatus` reads words
+    // only: a screenful or two, no per-cell style walk.
+    return term ? sessionStatus(readableScreen(term.buffer.active, 120, { plain: true }).lines, agentLabel) : status;
   };
   const modeWalk = useRef(0);
   const modes = modeChoices(status?.mode, agentLabel);

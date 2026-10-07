@@ -10,6 +10,10 @@ import type { SessionUsage } from "../../../mobile-web/src/api";
 import type { TabEntry } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
 
+/** Rows read for the `/status` card: a screenful or two above the input box. */
+const STATUS_ROWS = 120;
+const PLAIN = { plain: true } as const;
+
 const FIELD_KEYS: Record<string, TranslationKey> = {
   Directory: "terminal.reader.status.directory", Account: "terminal.reader.status.account",
   Session: "terminal.reader.status.session", Permissions: "terminal.reader.status.permissions",
@@ -46,7 +50,9 @@ export function TerminalReaderStatus({ tab, ptyId, visible, canRefresh, request,
     if (!visible) return;
     const read = () => {
       const term = terminalFor(ptyId);
-      const next = term && readCodexStatus(readableScreen(term.buffer.active).lines);
+      // Words only, off the bottom rows: the card is what the pane shows now,
+      // and this runs twice a second while the panel is open.
+      const next = term && readCodexStatus(readableScreen(term.buffer.active, STATUS_ROWS, PLAIN).lines);
       if (next) setSnapshot((previous) => previous?.card.raw === next.raw ? previous : { card: next, readAt: Date.now() });
       setNow(Date.now());
     };

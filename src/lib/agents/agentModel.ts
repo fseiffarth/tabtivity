@@ -43,7 +43,7 @@ export function claudeModelLabel(tag: string): string {
  * has never mounted — has no screen to read, and the transcript answers.
  */
 export function screenModelTag(buffer: ReadableBufferLike, agentLabel?: string): string | undefined {
-  const status = sessionStatus(readableScreen(buffer).lines, agentLabel);
+  const status = sessionStatus(readableScreen(buffer, MARK_ROWS, PLAIN).lines, agentLabel);
   if (!status?.model) return undefined;
   return status.effort ? `${status.model} · ${status.effort}` : status.model;
 }
@@ -67,9 +67,12 @@ function textBuffer(screen: string): ReadableBufferLike {
  * mode) and a running `/goal`. Either, both or neither. */
 export interface AgentModeMarks { plan: boolean; goal: boolean }
 
-/** Rows read for the marks: the footer is the bottom of the screen, so a tall
- * window's worth is plenty, and the read stays cheap enough for a timer. */
+/** Rows read for the marks and the model tag: the footer is the bottom of the
+ * screen, so a tall window's worth is plenty, and the read stays cheap enough
+ * for a timer. Words only (`plain`): `sessionStatus` reads no style, and the
+ * per-cell walk was the cost of that timer. */
 const MARK_ROWS = 80;
+const PLAIN = { plain: true } as const;
 
 /**
  * Which modes the session's own status line says it is in, read with the same
@@ -80,7 +83,7 @@ const MARK_ROWS = 80;
  * last read.
  */
 export function screenModeMarks(buffer: ReadableBufferLike, agentLabel?: string): AgentModeMarks | null {
-  const status = sessionStatus(readableScreen(buffer, MARK_ROWS).lines, agentLabel);
+  const status = sessionStatus(readableScreen(buffer, MARK_ROWS, PLAIN).lines, agentLabel);
   if (!status) return null;
   return { plan: status.mode === "plan", goal: status.goal === true };
 }
