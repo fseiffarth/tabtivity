@@ -8,7 +8,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { cmdToKind, isDetachedPtyId, type TabKind } from "../../stores/tabs";
 import { isInterruptInput, lastPtyOutputAt, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
@@ -30,6 +30,8 @@ import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
+import { deliverDrop, insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { isExternalFileDrag, parseDroppedFilePaths } from "../files/importDrop";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
@@ -1918,12 +1920,67 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
   // The spawn effect's own reading of the tab kind (see there).
   const paneKind: TabKind = declaredKind ?? (env[envName("LOCAL_MODEL")] || env.VIBE_ACTIVE_MODEL ? "local_agent" : cmdToKind(cmd));
+  const agentPane = paneKind === "agent" || paneKind === "local_agent";
+
+  // Files dragged in from the OS file manager (`lib/terminal/terminalDrop`):
+  // an agent gets them through its folder's inbox as `@` references, a shell
+  // their quoted paths — into the Reader's composer while it is up, else typed
+  // into the terminal. Native listeners on the pane, so a drop onto the
+  // composer (a portal into it) is caught too; a drag that carries no file path
+  // (text dragged into the composer) keeps its default.
+  const [dropActive, setDropActive] = useState(false);
+  const readerOnRef = useRef(readerOn);
+  readerOnRef.current = readerOn;
+  const dropTRef = useRef(t);
+  dropTRef.current = t;
+  useEffect(() => {
+    const pane = containerRef.current;
+    if (!pane) return;
+    const toast = (key: TranslationKey) => useProjectsStore.setState({ switchToast: dropTRef.current(key) });
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer || !isExternalFileDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setDropActive(true);
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!pane.contains(e.relatedTarget as Node | null)) setDropActive(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      setDropActive(false);
+      if (!e.dataTransfer) return;
+      const paths = parseDroppedFilePaths(e.dataTransfer);
+      if (paths.length === 0) {
+        if (Array.from(e.dataTransfer.types ?? []).includes("Files")) {
+          e.preventDefault();
+          toast("terminal.drop.noPath");
+        }
+        return;
+      }
+      e.preventDefault();
+      void deliverDrop(id, paths, agentPane).then(({ text, error }) => {
+        if (text && !(readerOnRef.current && insertIntoReader(id, text))) {
+          termRef.current?.paste(text);
+          termRef.current?.focus();
+        }
+        if (error) toast(error);
+      });
+    };
+    pane.addEventListener("dragover", onDragOver);
+    pane.addEventListener("dragleave", onDragLeave);
+    pane.addEventListener("drop", onDrop);
+    return () => {
+      pane.removeEventListener("dragover", onDragOver);
+      pane.removeEventListener("dragleave", onDragLeave);
+      pane.removeEventListener("drop", onDrop);
+    };
+  }, [id, agentPane]);
   const splitId = splitPtyId(id);
   return (
     <>
     <div
       ref={containerRef}
-      className={terminalChanges ? "terminal-pane-with-changes" : undefined}
+      className={[terminalChanges && "terminal-pane-with-changes", dropActive && "terminal-drop-active"].filter(Boolean).join(" ") || undefined}
       style={{
         ...(terminalChanges ? changesWidthStyle(changesWidth) : null),
         flex: 1,
@@ -1973,6 +2030,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
         subagentTitle={undefined}
         onClose={() => useAgentReaderStore.getState().setChanges(readerAgent, false)}
       />,
+      host,
+    )}
+    {dropActive && host && createPortal(
+      <div className="terminal-drop-banner">
+        {t(agentPane ? "terminal.drop.hintAgent" : "terminal.drop.hintShell")} <UntestedTag id="terminal.drop.hint" />
+      </div>,
       host,
     )}
     {readerOn && splitId && host && (

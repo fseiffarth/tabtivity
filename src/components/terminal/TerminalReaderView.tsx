@@ -43,6 +43,7 @@ import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { completedSlashCommand, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
+import { onReaderInsert } from "../../lib/terminal/terminalDrop";
 import { compactTokens, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
@@ -484,6 +485,20 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   useEffect(() => {
     if (focused && visible && !steering) composerRef.current?.focus();
   }, [focused, visible, steering]);
+
+  // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
+  // the Reader is up: at the cursor when the box has focus, else at the end.
+  useEffect(() => onReaderInsert(ptyId, (text) => {
+    const box = composerRef.current;
+    const focusedBox = box !== null && document.activeElement === box;
+    setDraft((current) => {
+      const at = focusedBox ? box.selectionEnd : current.length;
+      const before = current.slice(0, at);
+      return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+    });
+    setSendError("");
+    box?.focus();
+  }), [ptyId]);
 
   const send = async () => {
     const current = tabRef.current;

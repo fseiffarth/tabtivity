@@ -147,7 +147,8 @@
    rule); the dash-in's own opacity is overridden by the pulse, which starts
    low anyway. */
 .side-panel.drop-active::before,
-.project-files-tab.drop-active::before {
+.project-files-tab.drop-active::before,
+.terminal-drop-active::before {
   content: "";
   position: absolute;
   inset: 3px;
@@ -164,6 +165,24 @@
 .side-panel.drop-active::after,
 .project-files-tab.drop-active::after {
   content: "＋ Drop to copy into project";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 8px;
+  text-align: center;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--bg-panel);
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 21;
+  animation: side-panel-drop-banner 0.18s ease-out;
+}
+
+/* A terminal pane's banner is an element (its text is translated and wears
+   the untested pill), dressed as the panel's ::after. */
+.terminal-drop-banner {
   position: absolute;
   top: 0;
   left: 0;

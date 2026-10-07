@@ -1,7 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    fs,
+    io::Read,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use tauri::{AppHandle, State};
 
+use crate::services::mobile_control::inbox;
 use crate::terminal::{PtyOptions, PtyRegistry};
 
 pub type RegistryState = Arc<Mutex<PtyRegistry>>;
@@ -44,8 +50,10 @@ pub async fn pty_spawn(
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted) = (prepared.named, prepared.interrupted);
+    let drop_dir = prepared.drop_dir.clone();
     let result = crate::terminal::spawn_pty(app.clone(), registry.inner().clone(), prepared.opts.clone());
     if result.is_ok() {
+        registry.lock().unwrap().set_drop_dir(&prepared.opts.id, drop_dir);
         prepared.commit();
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
@@ -222,6 +230,82 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// What a drop of OS files onto a terminal tab gives the tab to type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PtyDropped {
+    /// One per file that made it, in drop order: for an agent tab the inbox
+    /// reference (`inbox::INBOX_DIR/<file>`, relative to the tab's folder),
+    /// for a shell tab the file's own path.
+    pub items: Vec<String>,
+    /// Why the first file that did not make it was refused — an inbox wire
+    /// code, `not_a_file` or `unreadable`. The files after it are not tried.
+    pub error: Option<String>,
+}
+
+/// Files dropped onto a local terminal tab from the OS file manager. An agent
+/// tab gets each file copied into the inbox of the folder it works in — the
+/// same git-ignored drop box a file sent from the phone lands in, and readable
+/// from inside the fence or container, which a path elsewhere on this disk is
+/// not. A shell runs on the host and gets the paths themselves, as a native
+/// terminal would. A remote tab is refused (`remote_tab`): its program cannot
+/// see this disk.
+#[tauri::command]
+pub async fn pty_drop_files(
+    registry: State<'_, RegistryState>,
+    id: String,
+    paths: Vec<String>,
+    agent: bool,
+) -> Result<PtyDropped, String> {
+    let dir = registry
+        .lock()
+        .unwrap()
+        .drop_dir(&id)
+        .ok_or("no_terminal")?
+        .ok_or("remote_tab")?;
+    tauri::async_runtime::spawn_blocking(move || drop_files(Path::new(&dir), &paths, agent))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn drop_files(dir: &Path, paths: &[String], agent: bool) -> PtyDropped {
+    let mut dropped = PtyDropped::default();
+    for path in paths {
+        match drop_file(dir, Path::new(path), agent) {
+            Ok(item) => dropped.items.push(item),
+            Err(code) => {
+                dropped.error = Some(code.to_string());
+                break;
+            }
+        }
+    }
+    dropped
+}
+
+fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static str> {
+    if !path.is_absolute() {
+        return Err("not_a_file");
+    }
+    if !agent {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+    let meta = fs::metadata(path).map_err(|_| "unreadable")?;
+    if !meta.is_file() {
+        return Err("not_a_file");
+    }
+    if meta.len() > inbox::MAX_INBOX_FILE as u64 {
+        return Err("file_too_large");
+    }
+    // Bounded even if the file grew since the check: `store` refuses the excess.
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(inbox::MAX_INBOX_FILE as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|_| "unreadable")?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    inbox::store(dir, &name, &bytes)
+        .map(|stored| stored.reference)
+        .map_err(|e| e.code())
 }
 
 #[tauri::command]
@@ -409,4 +493,48 @@ pub async fn project_cpu_percent(
 #[tauri::command]
 pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), String> {
     crate::services::sandbox::register_host_bound_tab(&project_id, &uid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_drop_copies_into_the_tab_folders_inbox() {
+        let tab = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let shot = outside.path().join("shot one.png");
+        fs::write(&shot, b"png bytes").unwrap();
+        let dropped = drop_files(tab.path(), &[shot.to_string_lossy().into_owned()], true);
+        assert_eq!(dropped.error, None);
+        let reference = &dropped.items[0];
+        assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+        assert_eq!(fs::read(tab.path().join(reference)).unwrap(), b"png bytes");
+    }
+
+    #[test]
+    fn shell_drop_hands_back_the_path_and_copies_nothing() {
+        let tab = tempfile::tempdir().unwrap();
+        let path = "/somewhere/a file.txt".to_string();
+        let dropped = drop_files(tab.path(), std::slice::from_ref(&path), false);
+        assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
+        assert!(!tab.path().join(inbox::INBOX_DIR).exists());
+    }
+
+    #[test]
+    fn agent_drop_stops_at_the_first_refusal() {
+        let tab = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let good = outside.path().join("a.txt");
+        fs::write(&good, b"a").unwrap();
+        let paths = [
+            good.to_string_lossy().into_owned(),
+            outside.path().to_string_lossy().into_owned(),
+            good.to_string_lossy().into_owned(),
+        ];
+        let dropped = drop_files(tab.path(), &paths, true);
+        assert_eq!(dropped.items.len(), 1);
+        assert_eq!(dropped.error.as_deref(), Some("not_a_file"));
+        assert_eq!(drop_files(tab.path(), &["rel.txt".into()], true).error.as_deref(), Some("not_a_file"));
+    }
 }

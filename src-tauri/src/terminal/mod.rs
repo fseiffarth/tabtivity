@@ -760,6 +760,9 @@ struct PtyEntry {
     child: Box<dyn Child + Send + Sync>,
     dead: Arc<AtomicBool>,
     crash_times: Vec<Instant>,
+    /// The local folder the process works in (`PreparedLaunch::drop_dir`),
+    /// where a file dropped onto the tab lands; `None` for a remote tab.
+    drop_dir: Option<String>,
 }
 
 /// Invalidate the cached process tree used for CPU sampling. Called whenever a
@@ -932,11 +935,24 @@ impl PtyRegistry {
                 child,
                 dead,
                 crash_times,
+                drop_dir: None,
             },
         );
         // A new child (and the old one it may have replaced) changes the process
         // tree, so drop the cached descendant-pid set.
         invalidate_proc_tree_cache();
+    }
+
+    /// Record where a file dropped onto the live tab `id` lands.
+    pub fn set_drop_dir(&mut self, id: &str, dir: Option<String>) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.drop_dir = dir;
+        }
+    }
+
+    /// `None` when no such tab is live; `Some(None)` for a remote one.
+    pub fn drop_dir(&self, id: &str) -> Option<Option<String>> {
+        self.entries.get(id).map(|e| e.drop_dir.clone())
     }
 
     pub fn input_sender(&self, id: &str) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {

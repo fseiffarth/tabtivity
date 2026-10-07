@@ -1217,6 +1217,21 @@ fn quote_join(args: &[String]) -> String {
         .join(" ")
 }
 
+/// The remote host a non-`local_only` spawn of `opts` runs on, or `None` when
+/// it runs here — the one decision [`wrap_pty_options`] acts on.
+pub fn remote_target_of(opts: &PtyOptions) -> Option<crate::services::remote::RemoteTarget> {
+    use crate::services::remote::{remote_target_for, remote_target_for_host, PRIMARY_HOST};
+    let host_id = opts.remote_host_id.as_deref().unwrap_or(PRIMARY_HOST);
+    // Untagged spawn (root/connection/local_only) → local.
+    let id = opts.project_id.as_deref()?;
+    // A worker id that no longer resolves (the machine was removed while a
+    // tab still pointed at it) falls back to the PRIMARY on a remote project
+    // rather than silently running local in the remote cwd (plan §8). A
+    // genuinely local project still resolves to nothing → left as-is.
+    remote_target_for_host(id, host_id)
+        .or_else(|| remote_target_for(id).filter(|_| host_id != PRIMARY_HOST))
+}
+
 /// If `opts` belongs to a remote project, rewrite it in place to run the
 /// requested command on the remote host via `ssh -tt`. No-op for local projects.
 ///
@@ -1230,24 +1245,8 @@ fn quote_join(args: &[String]) -> String {
 /// `opts.cwd` a stable local directory (the ssh client's local cwd is
 /// irrelevant). Validation/connection failures surface as `Err`.
 pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
-    let host_id = opts
-        .remote_host_id
-        .as_deref()
-        .unwrap_or(crate::services::remote::PRIMARY_HOST);
-    use crate::services::remote::{remote_target_for, remote_target_for_host, PRIMARY_HOST};
-    let target = match &opts.project_id {
-        Some(id) => match remote_target_for_host(id, host_id) {
-            Some(t) => t,
-            // A worker id that no longer resolves (the machine was removed while a
-            // tab still pointed at it) falls back to the PRIMARY on a remote project
-            // rather than silently running local in the remote cwd (plan §8). A
-            // genuinely local project still resolves to nothing → left as-is.
-            None => match remote_target_for(id).filter(|_| host_id != PRIMARY_HOST) {
-                Some(t) => t,
-                None => return Ok(()),
-            },
-        },
-        None => return Ok(()), // untagged spawn (root/connection/local_only) → local
+    let Some(target) = remote_target_of(opts) else {
+        return Ok(());
     };
 
     // Remote working dir is the project root on the host. There is no local

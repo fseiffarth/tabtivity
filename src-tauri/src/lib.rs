@@ -1890,6 +1890,7 @@ pub fn run() {
             commands::terminal::copilot_fence_sign_out,
             commands::terminal::agent_fence_marks,
             commands::terminal::register_host_bound_tab,
+            commands::terminal::pty_drop_files,
             commands::terminal::pty_write,
             commands::terminal::pty_resize,
             commands::terminal::pty_kill,
