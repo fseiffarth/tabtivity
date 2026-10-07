@@ -14,7 +14,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { PLATFORM } from "../../lib/window/dragPlatform";
 import { nextWindowState } from "../../lib/window/windowState";
-import { noteAgentTurn, notePtyOutput, useActivityStore } from "../../stores/activity";
+import { noteAgentTurn, notePtyOutput, startActivityTicks } from "../../stores/activity";
+import { onAnyTerminalOutput } from "../../lib/terminal/terminalBus";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import type { AgentTurnState } from "../../stores/activity";
 import {
@@ -862,22 +863,22 @@ export function AppShell() {
   // One global listener covers background projects too (their PTYs keep
   // emitting even while their tab views are unmounted).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
     let unlistenDigest: (() => void) | undefined;
-    listen<{ id: string; data: string }>("terminal-output", (ev) => {
+    // Off the terminal bus's one `terminal-output` listener rather than a
+    // second `listen()` of our own: Tauri evaluates a script per listener with
+    // the payload inlined, so a second one parsed every chunk twice.
+    const unlisten = onAnyTerminalOutput((id, data) => {
       // The chunk itself rides along: the store classifies a quiet agent tab —
       // finished vs blocked on a prompt — off its tail.
-      notePtyOutput(ev.payload.id, ev.payload.data);
+      notePtyOutput(id, data);
       // Development-only transport-rate readout in the side-panel footer.
-      // Count here because this is already the one app-wide listener: adding a
-      // second listener just for profiling would add dispatch work to the hot
+      // Count here because this is already the one app-wide tap: adding a
+      // second one just for profiling would add dispatch work to the hot
       // path being measured. Vite folds this branch away in production.
       if (import.meta.env.DEV) {
-        noteTerminalOutputChars(ev.payload.id, ev.payload.data.length);
+        noteTerminalOutputChars(id, data.length);
       }
-    })
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
+    });
     // A HIDDEN pane's PTY emits no terminal-output at all (visible-only
     // streaming): the backend condenses its output into these throttled
     // digests, which carry the same tail the classifier needs — so background
@@ -911,20 +912,15 @@ export function AppShell() {
     })
       .then((fn) => { unlistenRoll = fn; })
       .catch(() => {});
-    return () => { unlisten?.(); unlistenDigest?.(); unlistenTurn?.(); unlistenRoll?.(); };
+    return () => { unlisten(); unlistenDigest?.(); unlistenTurn?.(); unlistenRoll?.(); };
   }, []);
 
-  // Recompute the running-task indicators on a fixed cadence. Split from the
-  // listener above so re-arming it on a quiesce flip doesn't drop the
-  // terminal-output listener. On battery — or unfocused — the pill lags a
-  // little more but the 300ms churn stops.
-  useEffect(() => {
-    const id = setInterval(
-      () => useActivityStore.getState().recompute(),
-      saverInterval(300, quiesce),
-    );
-    return () => clearInterval(id);
-  }, [quiesce]);
+  // The running-task indicators recompute on demand — a chunk, a keystroke, a
+  // hook verdict, a tab-list change, a window expiring (`stores/activity`) —
+  // not on a clock. On battery — or unfocused — the trailing delay stretches,
+  // so the pill lags a little more while a streaming tab is classified a
+  // third as often.
+  useEffect(() => startActivityTicks(saverInterval(300, quiesce)), [quiesce]);
 
   // Poll AC/battery state so Energy Saver ("on battery") can react to plug/unplug.
   useEffect(() => usePowerStore.getState().start(), []);

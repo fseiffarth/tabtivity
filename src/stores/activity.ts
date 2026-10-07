@@ -80,8 +80,8 @@ const TAIL_CAP = 8000;
 // stripped tail of that burst; when the user last had eyes on the tab; when the
 // agent in it last rang the terminal bell; and when the user last sent input to
 // it. Kept outside the store: they churn on every output batch (~60/s) and
-// nothing renders off them directly — only the derived maps, recomputed on an
-// interval, drive the UI.
+// nothing renders off them directly — only the derived maps, recomputed on
+// demand (see "When `recompute` runs" below), drive the UI.
 /// When `recompute` last ran, so the usage recap can bill agent working time by
 /// the real gap between ticks rather than by an assumed interval.
 let lastTickAt: number | null = null;
@@ -91,6 +91,127 @@ let lastTickAt: number | null = null;
 /// slept, the tab was throttled — and whatever the agents were doing across it is
 /// not something we observed. Billing it would silently invent hours.
 const MAX_WORK_TICK_MS = 5_000;
+
+// ── When `recompute` runs ───────────────────────────────────────────────────
+//
+// Not on a clock. The derived maps can only move when something is noted (a
+// chunk, a keystroke, a hook verdict, a bell, a tab list change) or when one
+// of the time windows above runs out on a tab that has gone quiet. So a
+// `note*` call asks for one trailing recompute (coalesced, `RECOMPUTE_TRAIL_MS`
+// after the first ask), and each recompute arms one one-shot timer for the
+// earliest window still to expire — the "working" ring goes out when output
+// simply stops because that timer fires, not because a 300 ms interval was
+// ticking over every tab of every project for the whole session.
+
+/// The trailing delay between an ask and the recompute it gets: the same
+/// cadence the old interval had, so a streaming tab is classified at most this
+/// often. `AppShell` lengthens it while the window is quiesced.
+const RECOMPUTE_TRAIL_MS = 300;
+let recomputeTrailMs = RECOMPUTE_TRAIL_MS;
+
+/// While any tab is busy, a recompute at least this often: the usage recap
+/// bills agent working time by the gap between recomputes and refuses a gap
+/// past `MAX_WORK_TICK_MS`, so a silent busy tab (a working verdict over a
+/// background job paints nothing) must still be ticked under that clamp.
+const BILL_TICK_MS = 2_000;
+
+/// Whether the main window has armed the scheduling (`startActivityTicks`).
+/// Until it has, every ask is a no-op: a popout classifies nothing, and a
+/// test drives `recompute` by hand — exactly as both did under the interval,
+/// which only `AppShell` ever ran.
+let ticking = false;
+let trailTimer: ReturnType<typeof setTimeout> | null = null;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearTimers(): void {
+  if (trailTimer !== null) clearTimeout(trailTimer);
+  trailTimer = null;
+  if (expiryTimer !== null) clearTimeout(expiryTimer);
+  expiryTimer = null;
+}
+
+/** Arm the on-demand scheduling for this window (`AppShell`, once; again
+ *  with a longer `trailMs` while the window is quiesced). The tabs store is
+ *  the second input besides the `note*` calls: a closed tab must drop out of
+ *  the maps (and its history be forgotten), a tab switch moves what "looked
+ *  at" means, and a popout opening or closing moves it too — each asks for
+ *  the same trailing recompute a chunk does. Returns the stop. */
+export function startActivityTicks(trailMs = RECOMPUTE_TRAIL_MS): () => void {
+  ticking = true;
+  recomputeTrailMs = trailMs;
+  const unsubscribe = useTabsStore.subscribe((state, previous) => {
+    if (
+      state.tabsByScope !== previous.tabsByScope ||
+      state.layoutByScope !== previous.layoutByScope ||
+      state.detachedGroupsByScope !== previous.detachedGroupsByScope ||
+      state.scope !== previous.scope
+    ) {
+      scheduleRecompute();
+    }
+  });
+  scheduleRecompute();
+  return () => {
+    ticking = false;
+    unsubscribe();
+    clearTimers();
+  };
+}
+
+/** Ask for a recompute: one runs `recomputeTrailMs` after the first ask, and
+ *  asks in between are folded into it. Cheap; safe to call per chunk. */
+export function scheduleRecompute(): void {
+  if (!ticking || trailTimer !== null) return;
+  trailTimer = setTimeout(() => {
+    trailTimer = null;
+    useActivityStore.getState().recompute();
+  }, recomputeTrailMs);
+}
+
+/** Arm the one-shot expiry timer for `at` (ms epoch), replacing the previous
+ *  one — every recompute works the earliest expiry out afresh. `Infinity`
+ *  disarms it: nothing is pending anywhere, the store sleeps until noted. */
+function armExpiry(at: number, now: number): void {
+  if (expiryTimer !== null) {
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
+  }
+  if (!ticking || !Number.isFinite(at)) return;
+  expiryTimer = setTimeout(() => {
+    expiryTimer = null;
+    useActivityStore.getState().recompute();
+  }, Math.max(0, at - now) + 1);
+}
+
+/** The earliest moment past `now` at which one of `ptyId`'s time windows runs
+ *  out, folded into `earliest`. Every window a reading below is gated on is
+ *  listed, so a tab that goes quiet is re-read exactly when its answer can
+ *  change; a window already past contributes nothing. */
+function nextWindowEnd(
+  ptyId: string,
+  now: number,
+  turn: { state: AgentTurnState; at: number; job: boolean } | undefined,
+  earliest: number,
+): number {
+  let next = earliest;
+  const consider = (at: number | undefined) => {
+    if (at !== undefined && at > now && at < next) next = at;
+  };
+  const raw = lastRawByPty[ptyId];
+  const out = lastOutputByPty[ptyId];
+  const onset = onsetByPty[ptyId];
+  const quietFrom = Math.max(out ?? 0, bellByPty[ptyId] ?? 0) || undefined;
+  if (raw !== undefined) consider(raw + BUSY_WINDOW_MS);
+  if (out !== undefined) consider(out + TEXT_GAP_MS);
+  if (onset !== undefined) consider(onset + WORK_ONSET_MS);
+  if (quietFrom !== undefined) {
+    consider(quietFrom + DECISION_QUIET_MS);
+    consider(quietFrom + DONE_QUIET_MS);
+  }
+  if (turn?.state === "working" && !turn.job) {
+    consider(Math.max(raw ?? 0, turn.at) + HOOK_WORK_SILENCE_MS);
+  }
+  return next;
+}
 
 /// When a text-bearing frame (not an echo) last arrived — "saying".
 const lastOutputByPty: Record<string, number> = {};
@@ -162,6 +283,7 @@ export function agentTurnStartedAt(ptyId: string): number | undefined {
  *  running, as the phone bridge counts them (`mobileSubagentCount`). */
 export function noteBackgroundWork(ptyId: string, at = Date.now()): void {
   if ((backgroundAtByPty[ptyId] ?? 0) < at) backgroundAtByPty[ptyId] = at;
+  scheduleRecompute();
 }
 
 /** Whether a `working` after a Stop is the agent woken by the work it left
@@ -224,13 +346,57 @@ const PTY_MAPS: Record<string, unknown>[] = [
 /// repaints a status word or a timer beside its spinner.
 const BRAILLE_CELLS = /[\u2800-\u28ff]/g;
 
+/// Which PTY ids belong to agent tabs, rebuilt from the tabs store whenever
+/// its `tabsByScope` is replaced (an identity check per chunk, a walk per
+/// tab-list change). Only an agent tab's tail is ever read (`attentionFor`,
+/// `clearAttention` — both agent-only), so a shell tab's output skips the
+/// ANSI strip, the braille scrub and the tail concat below: a build streaming
+/// in a shell tab cost the same per chunk as an agent's answer, for a tail
+/// nothing would look at. An id with no tab in the store takes the full path:
+/// the store may not have the tab yet (tests feed ids ahead of seeding).
+let agentIdsFrom: Record<string, TabEntry[]> | null = null;
+const agentPtyIds = new Set<string>();
+const knownPtyIds = new Set<string>();
+
+function isAgentPty(ptyId: string): boolean {
+  const { tabsByScope } = useTabsStore.getState();
+  if (tabsByScope !== agentIdsFrom) {
+    agentIdsFrom = tabsByScope;
+    agentPtyIds.clear();
+    knownPtyIds.clear();
+    for (const [scope, tabs] of Object.entries(tabsByScope)) {
+      for (const t of tabs) {
+        const id = `${scope}:${t.key}`;
+        knownPtyIds.add(id);
+        if (t.kind === "agent" || t.kind === "local_agent") agentPtyIds.add(id);
+      }
+    }
+  }
+  return agentPtyIds.has(ptyId) || !knownPtyIds.has(ptyId);
+}
+
 /** Record that a PTY produced output just now, keeping the tail of the current
  *  burst so `recompute` can tell a finished turn from a decision prompt. Cheap;
- *  safe to call often. */
+ *  safe to call often. Asks for a recompute (trailing, coalesced) rather than
+ *  leaving it to a clock: see `scheduleRecompute`. */
 export function notePtyOutput(ptyId: string, data = "") {
   const now = Date.now();
   // Every frame is paint, whatever it says.
   lastRawByPty[ptyId] = now;
+  scheduleRecompute();
+  if (!isAgentPty(ptyId)) {
+    // A shell tab: every frame counts as text (a shell paints nothing while it
+    // idles, so there is no decoration to tell apart), the burst bookkeeping
+    // below is kept — `bytesSayWorking` and the last-working mark read it —
+    // and no tail is built. The echo gate is the same as the agent path's.
+    const input = inputByPty[ptyId];
+    if (data && input !== undefined && now - input < ECHO_MS) return;
+    const prev = lastOutputByPty[ptyId];
+    if (prev === undefined || now - prev >= TEXT_GAP_MS) onsetByPty[ptyId] = now;
+    lastOutputByPty[ptyId] = now;
+    if (now - onsetByPty[ptyId] >= WORK_ONSET_MS) workAtByPty[ptyId] = now;
+    return;
+  }
   const text = data ? stripAnsi(data).replace(BRAILLE_CELLS, "") : "";
   // A frame that paints no text — a terminal-title update, a cursor move, a
   // blanked cell — says nothing about what the agent is doing, and a BLOCKED
@@ -471,6 +637,9 @@ export function noteUserInput(ptyId: string, interrupt = false) {
   if (turn && (turn.state === "decision" || (interrupt && turn.state === "working"))) {
     delete turnByPty[ptyId];
   }
+  // A retired verdict, a dropped tail or a fresh interrupted mark all move the
+  // lamps; the trailing recompute picks them up.
+  scheduleRecompute();
 }
 
 /** Record that the tab's previous process died mid-turn — Tabtivity quit, crashed
@@ -547,6 +716,7 @@ export function applyDetachedStatus(
 export function notePtySpawn(ptyId: string) {
   for (const map of PTY_MAPS) delete map[ptyId];
   decisionMemo.delete(ptyId);
+  scheduleRecompute();
 }
 
 // The parser lives in `lib/terminal/ptyId` — one cut for every consumer, and one that
@@ -554,26 +724,31 @@ export function notePtySpawn(ptyId: string) {
 // that have always imported it from here keep working.
 export { splitPtyId };
 
-/** True when the tab is the one the user is currently looking at: it's the
- *  active (visible) tab of its group in the CURRENT scope. Background tabs and
- *  background projects are never "looked at". */
-function isTabLookedAt(scope: string, key: string): boolean {
+/** The composed ids of the tabs the user is currently looking at: the active
+ *  (visible) tab of every group in the CURRENT scope, and of every popout
+ *  group of any scope. Background tabs and background projects are never
+ *  "looked at". Walked once per recompute — a per-tab walk of the layout
+ *  made each recompute O(tabs × groups). A tab key sits in exactly one group,
+ *  so the union answers the same as a per-tab lookup would. */
+function lookedAtPtyIds(): Set<string> {
   const st = useTabsStore.getState();
+  const ids = new Set<string>();
   // A tab in a popout is looked at when it is the active tab of its pane there
   // (#234): the popout is its own window, on screen whichever scope the main
   // window shows. Its window focus is not visible from here; the active tab of
   // an unfocused popout is still the one on its screen, which is what "looked
   // at" means for retiring a `done` flag.
-  for (const d of st.detachedGroupsByScope[scope] ?? []) {
-    for (const g of allGroups(d.subtree)) {
-      if (g.tabKeys.includes(key)) return g.activeKey === key;
+  for (const [scope, detached] of Object.entries(st.detachedGroupsByScope)) {
+    for (const d of detached) {
+      for (const g of allGroups(d.subtree)) {
+        if (g.activeKey !== null) ids.add(`${scope}:${g.activeKey}`);
+      }
     }
   }
-  if (st.scope !== scope) return false;
-  for (const g of allGroups(st.layoutByScope[scope] ?? null)) {
-    if (g.tabKeys.includes(key)) return g.activeKey === key;
+  for (const g of allGroups(st.layoutByScope[st.scope] ?? null)) {
+    if (g.activeKey !== null) ids.add(`${st.scope}:${g.activeKey}`);
   }
-  return false;
+  return ids;
 }
 
 // (A `isTabDetached` suppression used to sit here: a popped-out agent raised no
@@ -589,6 +764,8 @@ export function _clearPtyActivityForTest() {
     for (const k of Object.keys(map)) delete map[k];
   }
   decisionMemo.clear();
+  clearTimers();
+  lastTickAt = null;
   useActivityStore.setState({
     busyByScope: {},
     busyByTab: {},
@@ -626,18 +803,17 @@ export type AttentionKind = "decision" | "done" | "interrupted";
  *    is retired only by input — `noteUserInput` drops the tail the match is made
  *    against. */
 function attentionFor(
-  scope: string,
   tab: TabEntry,
   ptyId: string,
   now: number,
   turn: { state: AgentTurnState; at: number; job: boolean } | undefined,
+  lookedAt: boolean,
 ): AttentionKind | null {
   // Only AI agent tabs raise attention; a shell finishing a build doesn't.
   if (tab.kind !== "agent" && tab.kind !== "local_agent") return null;
   // A popped-out agent is classified like any other (#234): its input reaches
-  // this window over DETACHED_ACTIVITY, `isTabLookedAt` reads its popout's
+  // this window over DETACHED_ACTIVITY, `lookedAtPtyIds` reads its popout's
   // active tab, and the verdict is mirrored back so the popout's strip shows it.
-  const lookedAt = isTabLookedAt(scope, tab.key);
   // What's on screen has been read, so it can't be what raises a "done" later.
   if (lookedAt) seenAtByPty[ptyId] = now;
   const seen = seenAtByPty[ptyId] ?? 0;
@@ -937,7 +1113,8 @@ interface ActivityStore {
    *  tab becomes the visible one, ahead of the next `recompute`). */
   clearAttention: (ptyId: string) => void;
   /** Recompute `busyByScope`/`busyByTab`/`attentionByTab` from recent PTY output.
-   *  Call on an interval. */
+   *  Runs on demand (`scheduleRecompute`) and on window expiry, never on a
+   *  standing clock; synchronous, so a test can call it after feeding output. */
   recompute: () => void;
   /** Absolute paths of `.sh` scripts currently running detached. The run_id
    *  used with the backend is the script's absolute path (see runScript). */
@@ -1059,6 +1236,10 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
     // Collected from live tabs only, so a closed/replaced run tab drops out.
     const nextRunFiles = new Set<string>();
     const live = new Set<string>();
+    const lookedAt = lookedAtPtyIds();
+    // The earliest moment any tab's reading can change on its own (a window
+    // running out): the one timer armed at the end of this tick.
+    let nextExpiry = Number.POSITIVE_INFINITY;
     let changed = false;
     // Copied lazily: both maps move rarely (an edge per turn), and an untouched
     // tick must hand the same object back so subscribers do not re-render.
@@ -1084,7 +1265,8 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
         // Attention before busy: a menu read off a quiet screen outranks a
         // "working" verdict a tool-use hook left standing (see `attentionFor`),
         // and `computeStatusScopes` lets working win otherwise.
-        const attn = attentionFor(scope, t, ptyId, now, turn);
+        const attn = attentionFor(t, ptyId, now, turn, lookedAt.has(ptyId));
+        nextExpiry = nextWindowEnd(ptyId, now, turn, nextExpiry);
         // Busy = what the tab's own hooks say where they speak; otherwise the
         // bytes — commanded at some point this session (see `noteUserInput`,
         // so restored tabs bursting resume banners on launch never read as
@@ -1183,6 +1365,11 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
       if (scopeBusy) nextScope[scope] = true;
       if ((prevScope[scope] ?? false) !== scopeBusy) changed = true;
     }
+    // While something is busy, tick under the billing clamp whatever the
+    // windows say (see `BILL_TICK_MS`); otherwise sleep until the earliest
+    // window runs out, or — none pending — until the next `note*` call.
+    if (Object.keys(nextScope).length > 0) nextExpiry = Math.min(nextExpiry, now + BILL_TICK_MS);
+    armExpiry(nextExpiry, now);
     // A scope/tab that was busy and is now gone or idle also counts as a change.
     for (const scope of Object.keys(prevScope)) {
       if (!(scope in nextScope) && prevScope[scope]) changed = true;

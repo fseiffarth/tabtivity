@@ -40,6 +40,14 @@ const replayHandlers = new Map<string, Set<OutputHandler>>();
 const readyHandlers = new Map<string, Set<ReadyHandler>>();
 const exitHandlers = new Map<string, Set<ExitHandler>>();
 
+/** A tap on EVERY `terminal-output` chunk, whichever PTY it came from: the
+ *  activity classifier (`stores/activity`, fed by `AppShell`). It used to be a
+ *  second `listen()` on the same event, and Tauri evaluates one script per
+ *  listener with the payload inlined — every chunk was parsed twice. Taps run
+ *  after the pane's own handlers, so they never delay the terminal write. */
+type OutputTap = (id: string, data: string) => void;
+const outputTaps = new Set<OutputTap>();
+
 let started = false;
 
 /**
@@ -64,12 +72,15 @@ function ensureStarted() {
 
   listen<TerminalOutput>(streamEventName("terminal-output"), (ev) => {
     const set = outputHandlers.get(ev.payload.id);
-    if (!set) return;
-    const range =
-      typeof ev.payload.startOffset === "number" && typeof ev.payload.endOffset === "number"
-        ? { startOffset: ev.payload.startOffset, endOffset: ev.payload.endOffset }
-        : undefined;
-    for (const h of set) h(ev.payload.data, range);
+    if (set) {
+      const range =
+        typeof ev.payload.startOffset === "number" && typeof ev.payload.endOffset === "number"
+          ? { startOffset: ev.payload.startOffset, endOffset: ev.payload.endOffset }
+          : undefined;
+      for (const h of set) h(ev.payload.data, range);
+    }
+    // Taps hear a chunk whether or not a pane is subscribed to its PTY.
+    for (const tap of outputTaps) tap(ev.payload.id, ev.payload.data);
   }).catch(() => {});
 
   // The backend's replay of output it buffered while the pane was hidden
@@ -116,6 +127,15 @@ function subscribe<H>(registry: Map<string, Set<H>>, id: string, handler: H): ()
 
 export function onTerminalOutput(id: string, handler: OutputHandler): () => void {
   return subscribe(outputHandlers, id, handler);
+}
+
+/** Hear every `terminal-output` chunk of this window (see `outputTaps`). */
+export function onAnyTerminalOutput(tap: OutputTap): () => void {
+  ensureStarted();
+  outputTaps.add(tap);
+  return () => {
+    outputTaps.delete(tap);
+  };
 }
 
 export function onTerminalReplay(id: string, handler: OutputHandler): () => void {
