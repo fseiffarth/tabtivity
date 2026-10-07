@@ -535,3 +535,85 @@ Nothing run live.
    another tab > 5 min: the popout keeps working (the main copy stayed awake),
    and scrolling in the popout no longer makes the main window's session file
    change on every pause.
+
+### Review (S3 reviewer, 2026-10-07)
+Range reviewed: `348e5ddd..2210d029` (ea5873f9, 550af44e, 2210d029).
+Nothing run live.
+
+**Bugs fixed**
+- `16fdf97e` — §3.1 `duplicateTab` copied the source's `viewerState` straight
+  off the store, which now lags the reader by up to the 5 s flush: a tab
+  duplicated after a scroll opened where the reader was before it. The copy
+  takes `savedViewerState(source)` (store + stage), the merge every save path
+  uses. Test: `TabDuplicate` "copies the reader's position as it is now …".
+  Same commit, tests the brief asked for: `ViewerStatePersist` "still yields a
+  new tree for every genuine layout change" (active tab, reorder, split added,
+  ratio, focused group, group collapsed) and `PdfSleepHidden` "answers a
+  forward search that arrived while asleep on the wake" (the implementer's
+  by-inspection claim, now asserted: the reveal stays by path, the wake's
+  canvas consumes it and the highlight lands on page 2's wrap).
+
+**Checked and found sound**
+- Every persist path reads the stage: `persistScope` (periodic, quit
+  `saveLayout`, scope switch at `tabs.ts:2601`) and the project-switch
+  snapshot (`projects.ts:1334`) go through `toSavedTabEntry`; both popout seed
+  builders (`reseedDetached`, `answerSeed`) flush first; the mobile catalog
+  reads session files; no other serialiser of `viewerState` exists.
+- Keys never change: `retargetTabs` rewrites paths only, `moveTab*`/detached
+  moves keep keys, there is no cross-scope move — no stale Map key. Closed
+  tabs: the unmount flush or the 5 s timer drops the entry; TeX sub-pane
+  keys (`<key>#<path>`, never in the store, pre-existing) are dropped the same
+  way. No growth. The one-shot timer re-arms only on a staged change.
+- `flushViewerState` is never reached from inside `writeScope`/a `set`
+  updater; `applyDetachedEdit` only calls `queueViewerState` there (reads
+  `getState()`, no nested `set`).
+- Identity: `pruneCollapseCollect` returns the *input* node, which every
+  mutating action already replaced (`mapGroup`, `applyResize`), so a real
+  change still yields a new tree (now tested). Un-normalised split sizes
+  (e.g. a fresh `[1, 1]` split no longer renormalised by the prune) are safe:
+  every consumer uses them as `flex` ratios or pairwise sums.
+- Seed precedence: no store write of a position field bypasses the stage
+  (`openTexWorkspace` sets `texActivePath` only; `retargetTabs` keeps the
+  object), so a stage entry is never older than the store's. The one live
+  `viewerState` selector (`FileViewerPane.tsx:8715`) reads `texActivePath`,
+  a write-through field.
+- §4.3 teardown: the canvas's mount effect cleanup destroys every source's
+  `loadingTask` and `slot.dispose(pending)`s the `PdfWorkerSlot` — `pdfLoad.ts`
+  stays the only path; the "no timer left" test proves the S2 hold timers,
+  `catchUp`, zoom and persist timers go with it. Wake reads `viewPos.initial`
+  (stage, then store), tested at scale 1.5 / scrollTop 640 and 900.
+- Holds: `endCompile` runs in `TexView.compile`'s `finally`
+  (`FileViewerPane.tsx:9897`) opposite its one `beginCompile`; `markup_done`
+  ticks are re-read on `visible` (and on the MCP-changed event) from the
+  store, rounds live in IndexedDB — nothing arriving for a sleeping PDF is
+  lost. `isTabInPopout` walks the detached subtrees only, so a sibling tab in
+  a scope with popouts is not held. Print/export live in the canvas toolbar of
+  a visible (awake) tab; steering reaches the pane, not the body. The mobile
+  `MarkupView` imports none of this.
+- `useSleepWhenHidden`: timer cleared on unmount, on show, on hold change;
+  show → hide within 5 min keeps the canvas (no reload storm).
+
+**Gates (worktree, after the fix)**
+| Gate | Result |
+|---|---|
+| `npm run build` | ok |
+| `npm test` | 734 files / 7542 tests (S3: 7539, +3); one `PdfZoomRaster` timing failure at load average 36 (three gates in parallel), 5/5 twice alone |
+| `cargo test -q` | 0 failed, exit 0 (Rust untouched; S3 count 3722 stands); one `api_usage` book-flush failure at load average 36, passed alone and in a full rerun |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing, unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+**Flagged for user**
+- A redundant `setActive` on the already-active tab still rebuilds the layout
+  tree (`mapGroup` allocates the path unconditionally) — pre-existing, outside
+  §3.1's scope; a §5.1 candidate.
+- The popout-mirror hold does not cover a TeX workspace's PDF *center* in a
+  popped-out TeX tab (its key is `<key>#<path>`, not a tab): the main
+  window's hidden copy sleeps after 5 min and reloads at the default position
+  on reattach. Those sub-pane positions were never persisted (pre-existing),
+  and the mirror's own document is the one §4.5 drops anyway.
+- After a reattach the main window's viewer keeps the scroll it had before
+  the detach (its pane stayed mounted); the popout's position reaches the
+  payload, not the live element. Pre-existing (#231), unchanged by S3.
+- The unsaved-markup hold stays untested (implementer's note stands).
