@@ -712,6 +712,27 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - [x] **32p — frontend reads native Windows paths** (2026-10-07, ⚠️ never
+      run on Windows). The rename retarget (`FileTree`, `tabs.retargetTabs`),
+      the Rename dialog's folder label, Disk Usage's parent/picked-folder
+      labels and the deck's file labels split on `/` only, so `C:\p\a.txt`
+      came out whole or empty; now `basename`/`dirname`/`resolvePath` from
+      `lib/paths`. `.ps1`/`.bat` Run quoted `'…'`, which cmd/PowerShell hand
+      through verbatim; now `"…"`. Terminal/Reader path links accept
+      `src\a.ts:120`, `C:\…\a.ts`, `.\src\a.ts`. `currentPlatform()` reads
+      `lib/platform` instead of the UA string.
+      - [x] 🤖 Automated test — `files/WindowsPaths.test.ts`,
+        `run/ShellScriptRun.test.ts`, `terminal/PathLinks.test.tsx`
+      - [ ] 🖐️ Manual test — Windows: rename a file open in a tab (tab follows),
+        ▶ on a `.bat` runs it, an agent's `src\a.ts:12` is a link
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **32z — deferred from the sweep** (each needs live hardware or a
       product call first):
       - X11 backend on any X11 session — mutates the WM workspace count and

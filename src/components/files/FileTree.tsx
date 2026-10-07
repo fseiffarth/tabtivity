@@ -2839,7 +2839,7 @@ export function FileTree({
     // path. Derive the new absolute path by swapping the basename on the entry's
     // own absolute path (== embedPath), so it holds for local and remote alike.
     const oldAbs = entry.path;
-    const newAbs = `${oldAbs.slice(0, oldAbs.lastIndexOf("/") + 1)}${nextName}`;
+    const newAbs = resolvePath(dirname(oldAbs), nextName);
     retargetTabsForRenamedPath(oldAbs, newAbs);
     setRenamePrompt(null);
     await load(relPath);

@@ -28,6 +28,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { basename, dirname, relativePathWithin } from "../paths";
+import { IS_WINDOWS } from "../platform";
 import { useTabsStore, isRemoteLocation, type TabEntry, type TabLocation } from "../../stores/tabs";
 import { guardLoginNodeRun } from "../remote/hpc/hpcGuard";
 import { translate, useI18nStore } from "../i18n";
@@ -156,8 +157,9 @@ export async function resolveInterpreter(
   }
 }
 
+/** The host's quoting family, from the one OS detector (`lib/platform`). */
 export function currentPlatform(): PyPlatform {
-  return navigator.userAgent.includes("Windows") ? "windows" : "unix";
+  return IS_WINDOWS ? "windows" : "unix";
 }
 
 /**

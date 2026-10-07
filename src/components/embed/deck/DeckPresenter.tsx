@@ -227,8 +227,9 @@ export function DeckPresenter({
   }, []);
 
   // Keep the projector awake: a long Q&A pause has no input at all, and the
-  // screensaver does not know a talk is a talk. Linux-only behind the command;
-  // everywhere else it resolves false and nothing happens (TODO V #121).
+  // screensaver does not know a talk is a talk. The command holds a
+  // `systemd-inhibit` child on Linux, `caffeinate` on macOS and a
+  // `SetThreadExecutionState` thread on Windows (`commands/presenter.rs`).
   useEffect(() => {
     void invoke("presenter_inhibit_sleep", { reason: "Presenting a deck" }).catch(() => {});
     return () => {

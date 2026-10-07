@@ -1,4 +1,5 @@
 import { relativePathWithin } from "../paths";
+import { shellQuote as quoteFor } from "./pythonRun";
 import { isRemoteLocation, type TabLocation } from "../../stores/tabs";
 import type { ProjectEntry } from "../../types";
 
@@ -11,8 +12,10 @@ export interface ShellScriptRunPlan {
   location?: TabLocation;
 }
 
+/** POSIX single-quoting; the Windows interpreters quote through
+ *  `pythonRun.shellQuote(…, "windows")` in {@link shellRunCommand}. */
 export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+  return quoteFor(value, "unix");
 }
 
 /** Which interpreter runs a script of this extension, keyed by lowercased ending.
@@ -46,13 +49,16 @@ export function shellRunnerFor(
 }
 
 /** The command line that runs `scriptRel` under `interp`. PowerShell and cmd take
- *  a flag before the path; the POSIX shells take it as a bare argument.
+ *  a flag before the path; the POSIX shells take it as a bare argument. The two
+ *  Windows interpreters only ever run on Windows (`shellRunnerFor`), whose shells
+ *  know no `'…'`, so they get `"…"` quoting; the POSIX shells keep `'…'`.
  *
  *  `args` (set from the ▶ button's right-click popover) is appended **verbatim**,
  *  only trimmed — the Python Run's `buildRunCommand` rule: it is a raw string for
  *  the tab's own shell to parse, so quotes and `$VARS` work as typed. */
 export function shellRunCommand(interp: ScriptShell, scriptRel: string, args?: string): string {
-  const quoted = shellQuote(scriptRel);
+  const windows = interp === "powershell" || interp === "cmd";
+  const quoted = quoteFor(scriptRel, windows ? "windows" : "unix");
   const base =
     interp === "powershell"
       ? `powershell -File ${quoted}`

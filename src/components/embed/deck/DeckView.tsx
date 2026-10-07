@@ -122,6 +122,7 @@ import { IconPicker } from "./IconPicker";
 import { slideStopIndex } from "../../../lib/viewers/deck/present";
 import { posterPng } from "./gifPlayback";
 import { useT } from "../../../lib/i18n";
+import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
 
@@ -949,7 +950,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       setNotice(
         t(out.pages === 1 ? "deckView.exportedOne" : "deckView.exportedMany", {
           n: out.pages,
-          file: exportTarget.split("/").pop() ?? exportTarget,
+          file: basename(exportTarget) || exportTarget,
         }) + (out.warnings.length ? ` ${out.warnings.join(" ")}` : ""),
       );
     } catch (e) {
@@ -1042,7 +1043,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
     });
     if (typeof chosen !== "string") return null;
     if (!withinProject(projectRoot, chosen)) {
-      setNotice(t("deckView.outsideProjectNotice", { name: chosen.split("/").pop() ?? chosen }));
+      setNotice(t("deckView.outsideProjectNotice", { name: basename(chosen) || chosen }));
       return null;
     }
     return toDeckRelative(chosen);
@@ -1182,7 +1183,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
       openLinkedFile(tabKey, dir, {
         path: resolveRel(dir, obj.texSrc),
         viewer: "tex",
-        label: obj.texSrc.split("/").pop() ?? obj.texSrc,
+        label: basename(obj.texSrc) || obj.texSrc,
       });
     },
     [path, tabKey],

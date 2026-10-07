@@ -18,6 +18,7 @@ import { newTmuxSessionName } from "../lib/terminal/tmuxSession";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
+import { basename, relativePathWithin, resolvePath } from "../lib/paths";
 import { getDetachedWindowContext } from "./detachedContext";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { envName, tabCommand } from "../lib/brand";
@@ -2928,22 +2929,26 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     set((s) => {
       const scope = s.scope;
       const tabs = s.tabsByScope[scope] ?? [];
-      const oldBase = oldAbs.slice(oldAbs.lastIndexOf("/") + 1);
-      const newBase = newAbs.slice(newAbs.lastIndexOf("/") + 1);
+      const oldBase = basename(oldAbs);
+      const newBase = basename(newAbs);
       let changed = false;
       const nextTabs = tabs.map((t) => {
         if (t.kind !== "embed" || !t.embedPath) return t;
-        if (t.embedPath === oldAbs) {
+        // Paths are native (`\` and a drive on Windows): compare on segment
+        // boundaries with either separator rather than by string prefix.
+        const rel = t.embedPath === oldAbs ? "" : relativePathWithin(oldAbs, t.embedPath);
+        if (rel === "") {
           changed = true;
           // Refresh the label to the new basename only when it still shows the
           // old one — don't clobber a tab the user renamed.
           const label = t.label === oldBase ? newBase : t.label;
           return { ...t, embedPath: newAbs, label };
         }
-        if (t.embedPath.startsWith(`${oldAbs}/`)) {
+        if (rel !== null) {
           // A tab under a renamed/moved directory: prefix-swap, keep the label.
+          // `resolvePath` joins in the new path's own separator style.
           changed = true;
-          return { ...t, embedPath: `${newAbs}${t.embedPath.slice(oldAbs.length)}` };
+          return { ...t, embedPath: resolvePath(newAbs, rel) };
         }
         return t;
       });
