@@ -247,6 +247,7 @@ export const dict: Dict = {
   "mobile.project.fallbackName": "Projet",
   "mobile.project.newTabTitle": "Nouvel agent ou shell",
   "mobile.project.reorderHint": "Faites glisser {grip} pour réorganiser — c’est l’ordre des onglets de l’ordinateur lui-même, la fenêtre {app} suit donc.",
+  "mobile.project.swipeCloseHint": "Balayez une carte de droite à gauche pour la fermer.",
   "mobile.project.colorTab": "Colorer {label}",
   "mobile.project.renameTab": "Renommer {label}",
   "mobile.project.changeModelOf": "Changer le modèle de {label}",

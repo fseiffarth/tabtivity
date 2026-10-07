@@ -132,6 +132,12 @@ function withoutClosed(detail: ProjectDetail, closed: Map<string, number>): Proj
     : { ...detail, tabs: detail.tabs.filter((row) => !closed.has(row.id)) };
 }
 
+/** A phone-side PDF card's key, for React and for the swipe that closes it;
+ * prefixed so it can never read as a session's id. */
+function fileTabKey(file: FileTab): string {
+  return `file:${file.place}/${file.name}`;
+}
+
 export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -195,12 +201,24 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const filesOffered = !!detail?.files;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
   const projectMenuOffered = outbox.length > 0 || filesOffered || gitOffered;
+  /** What a right→left swipe over a card (`data-swipe-close`) does, read at
+   * the swipe: the listener below outlives the render that installed it, and
+   * would otherwise close against that render's list. Set further down, once
+   * the list and `close` are in hand. */
+  const swipeClose = useRef<(card: Element) => void>(() => {});
   useEffect(() => {
     const host = screenRef.current;
-    if (!filesOffered || filesOpen || !host) return;
+    if (filesOpen || !host) return;
     // Not from a card's grip (its drag is its own, `touch-action:none`), and
-    // not through a sheet laid over the list.
-    return installFocusSwipe(host, { onSwipeRight: () => setFilesOpen(true), onSwipeLeft: () => {} }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: true });
+    // not through a sheet laid over the list. Left→right pulls the files
+    // drawer in, from the left edge too; right→left over a card closes it.
+    return installFocusSwipe(host, {
+      onSwipeRight: () => { if (filesOffered) setFilesOpen(true); },
+      onSwipeLeft: (_start, target) => {
+        const card = target?.closest("[data-swipe-close]");
+        if (card) swipeClose.current(card);
+      },
+    }, { ignore: ".tab-card-grip, .sheet-backdrop, [role='dialog']", leftEdge: filesOffered });
   }, [filesOffered, filesOpen]);
   const outboxScope = useMemo(() => ({ project: id }), [id]);
   const filesScope = useMemo(() => ({ files: id }), [id]);
@@ -212,11 +230,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const [colorTab, setColorTab] = useState<TabRow | null>(null);
   /** The tab whose subagent pill was tapped: its subagents are listed. */
   const [subagentsTab, setSubagentsTab] = useState<TabRow | null>(null);
-  /** The tab whose ✕ was pressed. The sheet asks before anything is closed: the
-   *  button sits a thumb-width from the one that opens the terminal, and the
-   *  answer is worth reading — closing leaves the session running. */
   /** The tab whose close is in flight — its ✕ is held until the desktop answers. */
   const [closingId, setClosingId] = useState<string | null>(null);
+  /** The card a swipe is closing: it slides out while the desktop answers,
+   *  and back in if the close is refused. */
+  const [swipedId, setSwipedId] = useState<string | null>(null);
   /** The tabs this phone has closed, each against the moment it was answered,
    *  held back from every load until the catalog agrees (`withoutClosed`). */
   const closed = useRef(new Map<string, number>());
@@ -378,6 +396,21 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       setClosingId(null);
     }
   };
+  /** A swipe closes the card it ran over, as its ✕ would: a session through
+   *  the desktop (held while another close is in flight, as the ✕ is), a
+   *  phone-side PDF card at once. */
+  swipeClose.current = (card) => {
+    const key = card.getAttribute("data-swipe-close");
+    const tab = tabs.find((row) => row.id === key);
+    if (tab) {
+      if (closingId !== null) return;
+      setSwipedId(tab.id);
+      void close(tab).finally(() => setSwipedId(null));
+      return;
+    }
+    const file = filesOffered ? fileTabs.find((row) => fileTabKey(row) === key) : undefined;
+    if (file) closeFileTab(id, file);
+  };
   /** The closed tab whose reopen is in flight. */
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   /** Reopen a closed agent tab on the desktop — back in its place there, on
@@ -513,9 +546,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {error && <p className="error">{error}</p>}
     {projectInbox.view}
     {canReorder && <p className="reorder-hint"><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {tabs.length > 0 && isUntested("mobile.project.swipeClose") && <p className="reorder-hint">{t("mobile.project.swipeCloseHint")} <span className="untested">{t("mobile.newTab.untested")}</span></p>}
     <section className="cards">{tabs.map((tab) => <div
-      className={`tab-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}`}
+      className={`tab-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}${drag.rowClass(tab.id)}${swipedId === tab.id ? " swiped-out" : ""}`}
       key={tab.id}
+      data-swipe-close={tab.id}
       ref={drag.rowRef(tab.id)}
       // The desktop marks a coloured tab with its bottom rule; a phone card has
       // no such edge to spend, so the colour becomes the card's left border —
@@ -595,7 +630,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* The PDFs opened from the file drawer, after the sessions: the phone's
         own cards, so the desktop opens nothing and ✕ only forgets one. The
         drawer's switch gates them, as it gates the files they read. */}
-    {filesOffered && fileTabs.map((file) => <div className="tab-card file-tab-card" key={`${file.place}/${file.name}`}>
+    {filesOffered && fileTabs.map((file) => <div className="tab-card file-tab-card" key={fileTabKey(file)} data-swipe-close={fileTabKey(file)}>
       <div className="tab-card-head">
         <FileGlyph kind={file.kind} />
         <div className="card tab-card-main">

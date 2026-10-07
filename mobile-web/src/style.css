@@ -147,6 +147,11 @@ nav button,.keys button { flex:1; }
    it is that corner it has to round rather than a rule running into nothing. */
 .tab-card.one-row .tab-card-grip { border-radius:0 11px 11px 0; }
 .tab-card.dragging { opacity:.65; }
+/* A card a right→left swipe is closing slides out the way the finger went
+   while the desktop answers; a refused close drops the class and it slides
+   back. Transform and opacity only — nothing blurred is animated. */
+.tab-card { transition:transform .18s ease-out, opacity .18s ease-out; }
+.tab-card.swiped-out { transform:translateX(-100%); opacity:0; pointer-events:none; }
 /* The slot the dropped card would land in, drawn on the card it lands beside.
    An outline rather than a moved card: the list itself does not rearrange until
    the finger lifts, so the line is the whole preview. */

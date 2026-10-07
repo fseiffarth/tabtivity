@@ -318,6 +318,7 @@ export const enSource = {
   "mobile.project.fallbackName": "Project",
   "mobile.project.newTabTitle": "New agent or shell",
   "mobile.project.reorderHint": "Drag {grip} to arrange — this is the desktop's own tab order, so the {app} window follows.",
+  "mobile.project.swipeCloseHint": "Swipe a card from right to left to close it.",
   "mobile.project.colorTab": "Colour {label}",
   "mobile.project.renameTab": "Rename {label}",
   "mobile.project.changeModelOf": "Change the model of {label}",
