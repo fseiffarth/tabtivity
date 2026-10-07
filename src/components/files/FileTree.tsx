@@ -339,6 +339,312 @@ function describeListError(
   return t("fileTree.errOpenFolder");
 }
 
+/** Identity stamped on every `data-move-rel` drop target (see `moveTargetAttrs`). */
+type MoveTargetAttrs = { "data-move-root": string; "data-move-remote": "1" | undefined };
+
+/** The tree's per-row handlers, behind ONE object per tree that never changes
+ *  identity (`useRowActions`): the tree rebuilds its closures every render, and
+ *  a fresh prop would void every row's memo. Each forwarder reads the latest. */
+interface RowActions {
+  click: (ev: React.MouseEvent, entry: FileEntry) => void;
+  open: (entry: FileEntry, ev: React.MouseEvent) => void;
+  contextMenu: (ev: React.MouseEvent<HTMLDivElement>, entry: FileEntry) => void;
+  dragStart: (ev: React.DragEvent<HTMLDivElement>, entry: FileEntry) => void;
+  pointerDown: (ev: React.PointerEvent, entry: FileEntry, dragTarget: InternalViewer | "embed" | null) => void;
+  mouseEnter: (ev: React.MouseEvent<HTMLDivElement>, entry: FileEntry) => void;
+  mouseLeave: () => void;
+  syncToLocal: (entry: FileEntry) => void;
+  pushToHost: (entry: FileEntry) => void;
+  openSyncMerge: (entry: FileEntry) => void;
+  runShell: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
+  runPython: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
+  /** Right-click on ▶: the run-arguments popover. */
+  openRunArgs: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
+}
+
+interface FileRowProps {
+  entry: FileEntry;
+  /** Scaffold / gitignored / hidden-ending section member (dimmed). */
+  scaffold: boolean;
+  /** Git letter (never for the gitignored / hidden-ending sections). */
+  status: string | undefined;
+  /** A folder's headline size (its non-ignored weight), once known. */
+  dirShown: number | undefined;
+  /** A folder excluded from the size scans (shows a note instead of a size). */
+  scanExcluded: boolean;
+  canPyRun: boolean;
+  canShRun: boolean;
+  isRunning: boolean;
+  runLocked: boolean;
+  isCompiling: boolean;
+  dragTarget: InternalViewer | "embed" | null;
+  isMoveTarget: boolean;
+  selected: boolean;
+  notOnRemote: boolean;
+  /** The tree is sync-tracked (remote listing, or the local mirror of one). */
+  syncTracked: boolean;
+  /** The row's path relative to the tree root. */
+  rel: string;
+  syncState: SyncFileState;
+  autoSync: boolean;
+  pathExcluded: boolean;
+  /** Some transfer is running in this project / it is this row's. */
+  syncAnyBusy: boolean;
+  syncThisBusy: boolean;
+  remoteListing: boolean;
+  /** Remark count for the slot, or null when the slot is not shown at all. */
+  remarkCount: number | null;
+  ctrlHeld: boolean;
+  moveTargetAttrs: MoveTargetAttrs;
+  rows: RowActions;
+}
+
+/**
+ * One listing row. Memoised (performance plan §5.1): the tree re-renders on
+ * every hover dwell, size arrival, git/sync status and selection change, and
+ * with a few hundred rows on screen ("show more") each of those used to
+ * rebuild every row's dozen elements. Everything that crosses this boundary
+ * is a primitive, the entry, or one of the tree's two stable objects, so only
+ * the rows whose own inputs changed render.
+ */
+const FileRow = React.memo(function FileRow({
+  entry: e,
+  scaffold,
+  status,
+  dirShown,
+  scanExcluded,
+  canPyRun,
+  canShRun,
+  isRunning,
+  runLocked,
+  isCompiling,
+  dragTarget,
+  isMoveTarget,
+  selected,
+  notOnRemote,
+  syncTracked,
+  rel,
+  syncState,
+  autoSync,
+  pathExcluded,
+  syncAnyBusy,
+  syncThisBusy,
+  remoteListing,
+  remarkCount,
+  ctrlHeld,
+  moveTargetAttrs,
+  rows,
+}: FileRowProps) {
+  const t = useT();
+  const canRun = canShRun || canPyRun;
+  const sizeClass = !e.is_dir ? sizeCategory(e.size) : "";
+  return (
+    <div
+      className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
+      // Row key for jump-to-path reveal scroll (search results).
+      data-entry-path={e.path}
+      // Folders are drag-to-move destinations: dropping a dragged file
+      // here relocates it (hit-tested by data-move-rel in the drag).
+      data-move-rel={e.is_dir ? rel : undefined}
+      {...(e.is_dir ? moveTargetAttrs : undefined)}
+      // Dirs: single-click navigates + native DnD (file export).
+      // Files, plain drag: pointer-based drag onto a tab bar for
+      // drag-to-tab files (built-in viewer OR embeddable handler); R6 —
+      // native DnD disabled then so it can't hijack the pointer. Opened
+      // by double-click.
+      // Files, CTRL held: arm native HTML5 DnD so any file can be dragged
+      // out into an embedded browser / external target like Signal (the
+      // pointer drag-to-tab bails on Ctrl, see onEntryPointerDown).
+      onClick={(ev) => rows.click(ev, e)}
+      onDoubleClick={e.is_dir ? undefined : (ev) => rows.open(e, ev)}
+      onContextMenu={(ev) => rows.contextMenu(ev, e)}
+      draggable={e.is_dir || ctrlHeld}
+      onDragStart={
+        e.is_dir || ctrlHeld
+          ? (ev) => rows.dragStart(ev, e)
+          : (ev) => ev.preventDefault()
+      }
+      // Every file arms the pointer drag — files with a tab/viewer target
+      // can drop onto a tab bar, and ALL files can be dragged into a
+      // folder to move them. Folders aren't dragged (they navigate).
+      onPointerDown={!e.is_dir ? (ev) => rows.pointerDown(ev, e, dragTarget) : undefined}
+      onMouseEnter={(ev) => rows.mouseEnter(ev, e)}
+      onMouseLeave={rows.mouseLeave}
+    >
+      <GitMarker status={status} />
+      {remarkCount !== null && (
+        <span className="file-remark-slot">
+          {remarkCount > 0 && <span className="file-remark-count">{remarkCount}</span>}
+        </span>
+      )}
+      {/* Fixed-width sync slot: always reserved on a sync-tracked tree so
+          file/folder names stay left-aligned whether or not the row has an
+          action button. `none` → red sync/push button; `amber` → orange
+          diff button; `green` → empty (in sync). */}
+      {syncTracked && (
+        <span className="file-sync-slot">
+          {pathExcluded ? (
+            <span
+              className="file-sync-excluded"
+              title={t("fileTree.excludedFromByteSync")}
+              aria-label={t("fileTree.excludedFromByteSync")}
+            >
+              ✕
+            </span>
+          ) : (
+            <>
+              {syncState === "none" && (
+                <button
+                  type="button"
+                  className={`orange-file-act orange-file-act--icon orange-file-act--slot ${remoteListing ? "orange-file-act--remote" : "orange-file-act--local"}${syncThisBusy ? " busy" : ""}`}
+                  title={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
+                  aria-label={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
+                  disabled={syncAnyBusy}
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (remoteListing) rows.syncToLocal(e);
+                    else rows.pushToHost(e);
+                  }}
+                >
+                  {syncThisBusy ? <span className="file-run-spinner" /> : remoteListing ? <ArrowDownIcon /> : <ArrowUpIcon />}
+                </button>
+              )}
+              {/* NEW local-only content: this file (or something inside
+                  this folder) exists in the mirror and was never synced,
+                  so the host has no copy. The only meaningful action is
+                  the upload, whichever tree is showing — hence always ⬆
+                  and always the push handler, unlike the "none" slot
+                  above whose direction follows the listing side. */}
+              {syncState === "localnew" && (() => {
+                const title = t(
+                  e.is_dir ? "fileTree.folderHasNewFiles" : "fileTree.pushNewFile",
+                );
+                return (
+                  <button
+                    type="button"
+                    className={`orange-file-act orange-file-act--icon orange-file-act--slot orange-file-act--local${syncThisBusy ? " busy" : ""}`}
+                    title={title}
+                    aria-label={title}
+                    disabled={syncAnyBusy}
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      rows.pushToHost(e);
+                    }}
+                  >
+                    {syncThisBusy ? <span className="file-run-spinner" /> : <ArrowUpIcon />}
+                  </button>
+                );
+              })()}
+              {syncState === "amber" && !e.is_dir && (
+                <button
+                  type="button"
+                  className="file-diff-btn"
+                  title={t("fileTree.diffTitle")}
+                  aria-label={t("fileTree.diffAria")}
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    rows.openSyncMerge(e);
+                  }}
+                >
+                  ±
+                </button>
+              )}
+              {syncState === "amber" && e.is_dir && (
+                <span
+                  className="file-sync-dir-diverged"
+                  title={t("fileTree.folderDiverged")}
+                  aria-label={t("fileTree.folderDiverged")}
+                >
+                  ±
+                </span>
+              )}
+              {/* Auto-sync indicator (non-interactive): only when the slot
+                  has no action button, so it never crowds out the
+                  red/orange controls. Amber auto paths still show ±
+                  (needs resolving). */}
+              {autoSync && syncState === "green" && (
+                <span
+                  className="file-autosync-icon"
+                  title={t("fileTree.autoSyncing")}
+                  aria-label={t("fileTree.autoSyncing")}
+                >
+                  ⟳
+                </span>
+              )}
+            </>
+          )}
+        </span>
+      )}
+      {canRun && (
+        <button
+          type="button"
+          className={`file-run-btn${isRunning ? " running" : ""}`}
+          // No native `title` here on purpose: hovering this button sits
+          // inside the row, which already has the row's own portaled
+          // tooltip open (below) — a browser title tooltip on top of it
+          // would be a second, uncontrolled hover. Everything it would
+          // have said (run/args/right-click hint) lives in that tooltip
+          // instead.
+          aria-label={t(isRunning ? "fileTree.runningName" : "fileTree.runName", { name: e.name })}
+          onClick={(ev) => (canPyRun ? rows.runPython(ev, e) : rows.runShell(ev, e))}
+          // Right-click the Run button → set arguments: `sys.argv` for a
+          // Python script, `$@` for a shell script. Swallowed either way so
+          // it doesn't fall through to the row's file context menu.
+          onContextMenu={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            rows.openRunArgs(ev, e);
+          }}
+          disabled={runLocked}
+        >
+          <PlayIcon />
+        </button>
+      )}
+      {isCompiling && (
+        <span
+          className="file-run-btn running"
+          title={t("fileTree.compilingNameEllipsis", { name: e.name })}
+          aria-label={t("fileTree.compilingName", { name: e.name })}
+        >
+          <span className="file-run-spinner" />
+        </span>
+      )}
+      <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
+      <span className="file-name">{e.name}</span>
+      {notOnRemote && (
+        <span
+          className="file-offhost-tag"
+          title={t("fileTree.localOnlyFolderTitle")}
+          aria-label={t("fileTree.localOnlyFolderAria")}
+        >
+          {t("fileTree.localOnlyTag")}
+        </span>
+      )}
+      {e.is_dir && scanExcluded ? (
+        // Stands in for the size rather than sitting beside it: there is no
+        // size to show, and saying why is more use than an empty column.
+        <span
+          className="file-size file-size-excluded"
+          title={t("fileTree.excludedFromScansTitle")}
+        >
+          {t("fileTree.notScanned")}
+        </span>
+      ) : e.is_dir ? (
+        dirShown !== undefined && (
+          <span className={`file-size ${sizeCategory(dirShown)}`}>
+            {fmtSize(dirShown)}
+          </span>
+        )
+      ) : (
+        <span className={`file-size ${sizeClass}`}>{fmtSize(e.size)}</span>
+      )}
+    </div>
+  );
+});
+
 export function FileTree({
   projectDir,
   projectId,
@@ -2409,10 +2715,59 @@ export function FileTree({
   // started in a DIFFERENT tree (box member roots, another project's Files tab)
   // knows which root — and which side, local or remote — a drop here lands in.
   // Every `data-move-rel` site must spread this; `FileMove.test.ts` enforces it.
-  const moveTargetAttrs = {
-    "data-move-root": projectDir,
-    "data-move-remote": remoteListing ? "1" : undefined,
-  };
+  const moveTargetAttrs = useMemo<MoveTargetAttrs>(
+    () => ({
+      "data-move-root": projectDir,
+      "data-move-remote": remoteListing ? "1" : undefined,
+    }),
+    [projectDir, remoteListing],
+  );
+
+  // The one stable handler object every row gets (see `RowActions`). The
+  // tree's closures are rebuilt each render; the forwarders read the latest
+  // set, refreshed after every commit, so the rows' memo holds.
+  const latestRows = useRef<RowActions | null>(null);
+  useLayoutEffect(() => {
+    latestRows.current = {
+      click: handleRowClick,
+      open: handleOpen,
+      contextMenu: showEntryContextMenu,
+      dragStart: handleEntryDragStart,
+      pointerDown: onEntryPointerDown,
+      mouseEnter: handleEntryMouseEnter,
+      mouseLeave: handleEntryMouseLeave,
+      syncToLocal: (entry) => void syncEntryToLocal(entry),
+      pushToHost: (entry) => void pushEntryToHost(entry),
+      openSyncMerge,
+      runShell: runShellScript,
+      runPython: runPythonScript,
+      openRunArgs: (ev, entry) =>
+        setArgsPopover({
+          entry,
+          x: ev.clientX,
+          y: ev.clientY,
+          draft: runArgsByPath[entry.path] ?? "",
+        }),
+    };
+  });
+  const rowActions = useMemo<RowActions>(
+    () => ({
+      click: (ev, entry) => latestRows.current?.click(ev, entry),
+      open: (entry, ev) => latestRows.current?.open(entry, ev),
+      contextMenu: (ev, entry) => latestRows.current?.contextMenu(ev, entry),
+      dragStart: (ev, entry) => latestRows.current?.dragStart(ev, entry),
+      pointerDown: (ev, entry, dragTarget) => latestRows.current?.pointerDown(ev, entry, dragTarget),
+      mouseEnter: (ev, entry) => latestRows.current?.mouseEnter(ev, entry),
+      mouseLeave: () => latestRows.current?.mouseLeave(),
+      syncToLocal: (entry) => latestRows.current?.syncToLocal(entry),
+      pushToHost: (entry) => latestRows.current?.pushToHost(entry),
+      openSyncMerge: (entry) => latestRows.current?.openSyncMerge(entry),
+      runShell: (ev, entry) => latestRows.current?.runShell(ev, entry),
+      runPython: (ev, entry) => latestRows.current?.runPython(ev, entry),
+      openRunArgs: (ev, entry) => latestRows.current?.openRunArgs(ev, entry),
+    }),
+    [],
+  );
 
   // Relocate a dragged file into a folder shown in a tree (drag-to-move). The
   // target may belong to THIS tree or — cross-root — to another project's tree
@@ -3877,7 +4232,6 @@ export function FileTree({
 
         function renderEntry(e: FileEntry, isScaffold = false, isGitignored = false, isHiddenExt = false) {
           const status = isGitignored || isHiddenExt ? undefined : displayStatuses[e.name];
-          const sizeClass = !e.is_dir ? sizeCategory(e.size) : "";
           // A folder's headline number is its non-ignored weight — the part
           // that's actually "yours" — with the full total + ignored split
           // available on hover; the gitignored section shows a folder's whole
@@ -3902,7 +4256,6 @@ export function FileTree({
           // .py, library modules included.
           const canPyRun = !e.is_dir && isPythonPath(e.path)
             && isMainScriptCached(pyMainCache, e.path);
-          const canRun = canShRun || canPyRun;
           // "Running" drives the green pulse + title/aria and unions both run
           // paths: a detached `.sh` tracked by real process liveness
           // (`runningScripts`), and a tab-backed run (Python / foreground shell)
@@ -3922,7 +4275,7 @@ export function FileTree({
           // view the diff. `green` (in sync) is the resting state and shows
           // nothing.
           const syncTracked = remoteListing || treatLocal;
-          const rel = syncTracked ? relForEntry(e) : "";
+          const rel = relForEntry(e);
           // A folder with no manifest entry of its own falls back to the rolled-up
           // state of its tracked descendants (`dirSyncAgg`): green when it contains
           // tracked files and they are all green (so no misleading red push button),
@@ -3968,220 +4321,35 @@ export function FileTree({
             hostChildNames !== null &&
             !hostChildNames.has(e.name);
           return (
-            <div
+            <FileRow
               key={e.path}
-              className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${isScaffold || isGitignored || isHiddenExt ? " scaffold" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected.has(e.path) ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
-              // Row key for jump-to-path reveal scroll (search results).
-              data-entry-path={e.path}
-              // Folders are drag-to-move destinations: dropping a dragged file
-              // here relocates it (hit-tested by data-move-rel in the drag).
-              data-move-rel={e.is_dir ? relForEntry(e) : undefined}
-              {...(e.is_dir ? moveTargetAttrs : undefined)}
-              // Dirs: single-click navigates + native DnD (file export).
-              // Files, plain drag: pointer-based drag onto a tab bar for
-              // drag-to-tab files (built-in viewer OR embeddable handler); R6 —
-              // native DnD disabled then so it can't hijack the pointer. Opened
-              // by double-click.
-              // Files, CTRL held: arm native HTML5 DnD so any file can be dragged
-              // out into an embedded browser / external target like Signal (the
-              // pointer drag-to-tab bails on Ctrl, see onEntryPointerDown).
-              onClick={(ev) => handleRowClick(ev, e)}
-              onDoubleClick={e.is_dir ? undefined : (ev) => handleOpen(e, ev)}
-              onContextMenu={(ev) => showEntryContextMenu(ev, e)}
-              draggable={e.is_dir || ctrlHeld}
-              onDragStart={
-                e.is_dir || ctrlHeld
-                  ? (ev) => handleEntryDragStart(ev, e)
-                  : (ev) => ev.preventDefault()
-              }
-              // Every file arms the pointer drag — files with a tab/viewer target
-              // can drop onto a tab bar, and ALL files can be dragged into a
-              // folder to move them. Folders aren't dragged (they navigate).
-              onPointerDown={!e.is_dir ? (ev) => onEntryPointerDown(ev, e, dragTarget) : undefined}
-              onMouseEnter={(ev) => handleEntryMouseEnter(ev, e)}
-              onMouseLeave={handleEntryMouseLeave}
-            >
-              <GitMarker status={status} />
-              {remarksEnabled && projectId && !e.is_dir && (
-                <span className="file-remark-slot">
-                  {(remarkCounts?.[relForEntry(e)] ?? 0) > 0 && <span className="file-remark-count">{remarkCounts?.[relForEntry(e)]}</span>}
-                </span>
-              )}
-              {/* Fixed-width sync slot: always reserved on a sync-tracked tree so
-                  file/folder names stay left-aligned whether or not the row has an
-                  action button. `none` → red sync/push button; `amber` → orange
-                  diff button; `green` → empty (in sync). */}
-              {syncTracked && (
-                <span className="file-sync-slot">
-                  {pathExcluded ? (
-                    <span
-                      className="file-sync-excluded"
-                      title={t("fileTree.excludedFromByteSync")}
-                      aria-label={t("fileTree.excludedFromByteSync")}
-                    >
-                      ✕
-                    </span>
-                  ) : (
-                    <>
-                      {syncState === "none" && (() => {
-                        const anyBusy = !!syncProgress;
-                        const thisBusy = syncProgress?.rel === rel;
-                        return (
-                          <button
-                            type="button"
-                            className={`orange-file-act orange-file-act--icon orange-file-act--slot ${remoteListing ? "orange-file-act--remote" : "orange-file-act--local"}${thisBusy ? " busy" : ""}`}
-                            title={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
-                            aria-label={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
-                            disabled={anyBusy}
-                            onClick={(ev) => {
-                              ev.preventDefault();
-                              ev.stopPropagation();
-                              void (remoteListing ? syncEntryToLocal(e) : pushEntryToHost(e));
-                            }}
-                          >
-                            {thisBusy ? <span className="file-run-spinner" /> : remoteListing ? <ArrowDownIcon /> : <ArrowUpIcon />}
-                          </button>
-                        );
-                      })()}
-                      {/* NEW local-only content: this file (or something inside
-                          this folder) exists in the mirror and was never synced,
-                          so the host has no copy. The only meaningful action is
-                          the upload, whichever tree is showing — hence always ⬆
-                          and always the push handler, unlike the "none" slot
-                          above whose direction follows the listing side. */}
-                      {syncState === "localnew" && (() => {
-                        const anyBusy = !!syncProgress;
-                        const thisBusy = syncProgress?.rel === rel;
-                        const title = t(
-                          e.is_dir ? "fileTree.folderHasNewFiles" : "fileTree.pushNewFile",
-                        );
-                        return (
-                          <button
-                            type="button"
-                            className={`orange-file-act orange-file-act--icon orange-file-act--slot orange-file-act--local${thisBusy ? " busy" : ""}`}
-                            title={title}
-                            aria-label={title}
-                            disabled={anyBusy}
-                            onClick={(ev) => {
-                              ev.preventDefault();
-                              ev.stopPropagation();
-                              void pushEntryToHost(e);
-                            }}
-                          >
-                            {thisBusy ? <span className="file-run-spinner" /> : <ArrowUpIcon />}
-                          </button>
-                        );
-                      })()}
-                      {syncState === "amber" && !e.is_dir && (
-                        <button
-                          type="button"
-                          className="file-diff-btn"
-                          title={t("fileTree.diffTitle")}
-                          aria-label={t("fileTree.diffAria")}
-                          onClick={(ev) => {
-                            ev.preventDefault();
-                            ev.stopPropagation();
-                            openSyncMerge(e);
-                          }}
-                        >
-                          ±
-                        </button>
-                      )}
-                      {syncState === "amber" && e.is_dir && (
-                        <span
-                          className="file-sync-dir-diverged"
-                          title={t("fileTree.folderDiverged")}
-                          aria-label={t("fileTree.folderDiverged")}
-                        >
-                          ±
-                        </span>
-                      )}
-                      {/* Auto-sync indicator (non-interactive): only when the slot
-                          has no action button, so it never crowds out the
-                          red/orange controls. Amber auto paths still show ±
-                          (needs resolving). */}
-                      {autoSync && syncState === "green" && (
-                        <span
-                          className="file-autosync-icon"
-                          title={t("fileTree.autoSyncing")}
-                          aria-label={t("fileTree.autoSyncing")}
-                        >
-                          ⟳
-                        </span>
-                      )}
-                    </>
-                  )}
-                </span>
-              )}
-              {canRun && (
-                <button
-                  type="button"
-                  className={`file-run-btn${isRunning ? " running" : ""}`}
-                  // No native `title` here on purpose: hovering this button sits
-                  // inside the row, which already has the row's own portaled
-                  // tooltip open (below) — a browser title tooltip on top of it
-                  // would be a second, uncontrolled hover. Everything it would
-                  // have said (run/args/right-click hint) lives in that tooltip
-                  // instead.
-                  aria-label={t(isRunning ? "fileTree.runningName" : "fileTree.runName", { name: e.name })}
-                  onClick={(ev) => (canPyRun ? runPythonScript(ev, e) : runShellScript(ev, e))}
-                  // Right-click the Run button → set arguments: `sys.argv` for a
-                  // Python script, `$@` for a shell script. Swallowed either way so
-                  // it doesn't fall through to the row's file context menu.
-                  onContextMenu={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    setArgsPopover({
-                      entry: e,
-                      x: ev.clientX,
-                      y: ev.clientY,
-                      draft: runArgsByPath[e.path] ?? "",
-                    });
-                  }}
-                  disabled={runLocked}
-                >
-                  <PlayIcon />
-                </button>
-              )}
-              {isCompiling && (
-                <span
-                  className="file-run-btn running"
-                  title={t("fileTree.compilingNameEllipsis", { name: e.name })}
-                  aria-label={t("fileTree.compilingName", { name: e.name })}
-                >
-                  <span className="file-run-spinner" />
-                </span>
-              )}
-              <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
-              <span className="file-name">{e.name}</span>
-              {notOnRemote && (
-                <span
-                  className="file-offhost-tag"
-                  title={t("fileTree.localOnlyFolderTitle")}
-                  aria-label={t("fileTree.localOnlyFolderAria")}
-                >
-                  {t("fileTree.localOnlyTag")}
-                </span>
-              )}
-              {e.is_dir && isScanExcluded(relForEntry(e)) ? (
-                // Stands in for the size rather than sitting beside it: there is no
-                // size to show, and saying why is more use than an empty column.
-                <span
-                  className="file-size file-size-excluded"
-                  title={t("fileTree.excludedFromScansTitle")}
-                >
-                  {t("fileTree.notScanned")}
-                </span>
-              ) : e.is_dir ? (
-                dirShown !== undefined && (
-                  <span className={`file-size ${sizeCategory(dirShown)}`}>
-                    {fmtSize(dirShown)}
-                  </span>
-                )
-              ) : (
-                <span className={`file-size ${sizeClass}`}>{fmtSize(e.size)}</span>
-              )}
-            </div>
+              entry={e}
+              scaffold={isScaffold || isGitignored || isHiddenExt}
+              status={status}
+              dirShown={dirShown}
+              scanExcluded={e.is_dir && isScanExcluded(rel)}
+              canPyRun={canPyRun}
+              canShRun={canShRun}
+              isRunning={isRunning}
+              runLocked={runLocked}
+              isCompiling={isCompiling}
+              dragTarget={dragTarget}
+              isMoveTarget={isMoveTarget}
+              selected={selected.has(e.path)}
+              notOnRemote={notOnRemote}
+              syncTracked={syncTracked}
+              rel={rel}
+              syncState={syncState}
+              autoSync={autoSync}
+              pathExcluded={pathExcluded}
+              syncAnyBusy={!!syncProgress}
+              syncThisBusy={syncProgress?.rel === rel}
+              remoteListing={remoteListing}
+              remarkCount={remarksEnabled && projectId && !e.is_dir ? (remarkCounts?.[rel] ?? 0) : null}
+              ctrlHeld={ctrlHeld}
+              moveTargetAttrs={moveTargetAttrs}
+              rows={rowActions}
+            />
           );
         }
 
