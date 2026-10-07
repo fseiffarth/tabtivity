@@ -18,7 +18,7 @@
 
 [![Tabtivity in 90 seconds: projects, any agent, local models, split tabs, Git, remote runs, PDF markup, the phone and iPad app, mail and calendar](screenshots/promo.gif)](screenshots/promo.mp4)
 
-▶ **[Watch the 90-second promo with sound](screenshots/promo.mp4)**
+▶ **[Watch the 90-second promo with sound](screenshots/promo.mp4)** · made with Tabtivity, by an AI agent working in a Tabtivity tab
 
 ## Introduction
 
