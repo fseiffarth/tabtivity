@@ -233,6 +233,7 @@ export function TerminalPromptStrip({
         >
           {t(reader.open ? "terminal.reader.showTerminal" : "terminal.reader.showReader")}
           <UntestedTag id="terminal.reader" />
+          {tab?.kind === "local_agent" && <UntestedTag id="terminal.reader.localOpenCode" />}
         </button>
       )}
       {open && current && (

@@ -47,7 +47,7 @@ import { SIGN_IN_CARD_CLASS, TerminalSignInCard } from "./TerminalSignInCard";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
-import { readerOffered } from "../../lib/agents/agentReader";
+import { readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
 import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
 import { useTabsStore } from "../../stores/tabs";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
@@ -1893,7 +1893,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
     ? state.tabsByScope[readerIds.scope]?.find((entry) => entry.key === readerIds.key)
     : undefined);
   const readerAvailable = readerOffered(readerTab) && !attachOnly;
-  const readerAgent = readerTab?.cmd ?? cmd;
+  const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerOn = useReaderOpen(readerAgent, readerAvailable);
   const changesOn = useReaderChangesOpen(readerAgent);
   /** The Changes panel over the terminal itself while the Reader is off —

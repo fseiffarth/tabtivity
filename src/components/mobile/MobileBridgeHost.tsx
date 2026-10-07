@@ -62,6 +62,7 @@ import { worktreeAgentSpec } from "../tabs/agentWorktrees";
 import { probeLocalModelPlacement } from "../tabs/localModelGroup";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
+import { readerAgent } from "../../lib/agents/agentReader";
 import { agentWorktreeChoices, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
 import { cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
 import { loginIdForCmd, signInLaunch } from "../../lib/agents/signInLaunch";
@@ -2398,11 +2399,9 @@ async function agentTranscriptFor(
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Agent tab is unavailable" };
-  // A local-model tab runs its driver through `ollama launch <driver>`, so its
-  // `cmd` names no agent. Only an OpenCode driver is readable: OpenCode is
-  // found by folder, while Claude's and Codex's transcripts need the launch id
-  // a local tab never mints.
-  const agent = tab.kind === "local_agent" ? (tab.localLaunch?.driver === "opencode" ? "opencode" : "") : tab.cmd;
+  // A local-model tab's `cmd` is its launcher; only an OpenCode driver has a
+  // transcript to read (`readerAgent`).
+  const agent = readerAgent(tab);
   if (!tab.sessionId && agent !== "opencode") {
     // Two different answers for the phone: a family whose transcript is
     // never read (the backend's `unsupported`, decided by the same list) hands

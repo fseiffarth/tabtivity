@@ -762,6 +762,11 @@ export interface TabEntry {
   // which is what lets the phone come back to it; the backend re-validates the
   // line on every load and drops one it would not have built.
   localLaunch?: LocalLaunch;
+  // A local-model tab's driver (`list_local_drivers` id), wherever it was
+  // started: its `cmd` is the launcher (`ollama`), so this is what tells the
+  // Reader an OpenCode one apart (`lib/agents/agentReader.localTabDriver`).
+  // Never saved; a restored tab has `localLaunch.driver` instead.
+  localDriver?: string;
 }
 
 /** See `TabEntry.localLaunch`. */

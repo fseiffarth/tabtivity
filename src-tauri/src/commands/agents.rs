@@ -1496,6 +1496,7 @@ pub async fn agent_tab_transcript(
 /// Changes panel. Takes `agent_tab_transcript`'s arguments; never reaches
 /// the phone.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_changes(
     agent: String,
     project_id: Option<String>,
@@ -1505,9 +1506,20 @@ pub async fn agent_tab_changes(
     subagent: Option<String>,
     version: Option<String>,
     limit: Option<usize>,
+    local_model: Option<bool>,
 ) -> crate::services::agent_changes::AgentChanges {
     use crate::services::agent_changes::{self, AgentChanges, DEFAULT_LIMIT};
     tauri::async_runtime::spawn_blocking(move || {
+        if local_model == Some(true) && agent == "opencode" {
+            return agent_changes::local_opencode_changes(
+                project_id.as_deref(),
+                tab_dir.as_deref(),
+                since,
+                subagent.as_deref(),
+                version.as_deref(),
+                limit.unwrap_or(DEFAULT_LIMIT),
+            );
+        }
         agent_changes::agent_session_changes(
             &agent,
             project_id.as_deref(),

@@ -6,6 +6,7 @@ import {
   READER_STEP,
   composerHistory,
   mergeTranscript,
+  readerAgent,
   readerReasonKey,
   readerRequest,
   type SessionTranscript,
@@ -717,7 +718,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
    * is the way back to the terminal). */
   const pressEscape = useCallback(() => { void typeIntoPane(["\u001b"]).catch(() => {}); }, [typeIntoPane]);
   /** The Changes panel beside the chat (the prompt strip's Diffs switch). */
-  const changesOpen = useReaderChangesOpen(tab?.cmd ?? "");
+  const changesOpen = useReaderChangesOpen(tab ? readerAgent(tab) : "");
   const changesWidth = useAgentReaderStore((state) => state.changesWidth);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
@@ -1376,7 +1377,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
         visible={visible}
         subagent={subToken}
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
-        onClose={() => useAgentReaderStore.getState().setChanges(tab.cmd, false)}
+        onClose={() => useAgentReaderStore.getState().setChanges(readerAgent(tab), false)}
       />
     )}
   </>, host);

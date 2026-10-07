@@ -86,6 +86,7 @@ export async function localLaunchTabSpec(
     env: { [envName("LOCAL_MODEL")]: model },
     cwd,
     kind: "local_agent",
+    localDriver: driver,
     hostBoundUid: await registerHostBoundTab(scope),
     ...(mobileScope(scope) ? { localLaunch: { driver, model, args: [...args] } } : {}),
   };

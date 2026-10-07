@@ -144,7 +144,8 @@ pub fn agent_session_changes(
         return AgentChanges::unavailable("no_subagent");
     }
     if cmd == "opencode" {
-        return opencode_changes(project_id, tab_dir, since, subagent, version, limit);
+        let db = crate::services::opencode_store::db_path_for(project_id);
+        return opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -159,8 +160,29 @@ pub fn agent_session_changes(
     }
 }
 
-/// An OpenCode tab's changes, from the session the Reader reads for it.
+/// A local-model OpenCode tab's changes (`ollama launch opencode`): what
+/// [`agent_session_changes`] answers for `opencode`, read from the scope's
+/// local-model home, where the Reader reads that tab's conversation
+/// (`agent_transcript::local_opencode_transcript`).
+pub fn local_opencode_changes(
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> AgentChanges {
+    if subagent.is_some_and(|token| !agent_transcript::is_subagent_token(token)) {
+        return AgentChanges::unavailable("no_subagent");
+    }
+    let db = crate::services::opencode_store::local_model_db_path_for(project_id);
+    opencode_changes(&db, project_id, tab_dir, since, subagent, version, limit)
+}
+
+/// An OpenCode tab's changes, from the session the Reader reads for it in
+/// the store `db`.
 fn opencode_changes(
+    db: &Path,
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
@@ -174,11 +196,10 @@ fn opencode_changes(
     if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
         return AgentChanges::unavailable("unsupported");
     }
-    let db = crate::services::opencode_store::db_path_for(project_id);
     if !db.is_file() {
         return AgentChanges::empty();
     }
-    crate::services::opencode_store::session_changes(&db, dir, since, subagent, version, limit)
+    crate::services::opencode_store::session_changes(db, dir, since, subagent, version, limit)
         .unwrap_or_else(|| AgentChanges::unavailable("read_failed"))
 }
 
