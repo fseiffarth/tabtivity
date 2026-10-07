@@ -202,7 +202,7 @@ describe("PaneSlot memo keys", () => {
     await mountProject();
     const before = new Map(renders);
     await act(async () => {
-      useRemoteStatusStore.getState().setSsh(P, "disconnected");
+      useRemoteStatusStore.getState().setSsh(P, "error");
     });
     for (const k of pKeys) {
       expect(delta(before, k), k).toBe(1);
