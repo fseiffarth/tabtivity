@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
+import type { IconProps } from "../../src/components/common/icons/Icon";
 import { AppMark } from "./AppMark";
 import { hasPairedDevice, logoutAuth, resumeAuth } from "./auth";
 import { connectTrace, getMobileStatus, primeConnection, setUnauthorizedHandler, traceConnect, type TabRow } from "./api";
@@ -20,7 +21,7 @@ import { Terminal } from "./screens/Terminal";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
-import { SECTION_GLYPH } from "./glyphs";
+import { SECTION_ICON } from "./glyphs";
 import type { SubagentStep } from "./terminal/subagents";
 /** The bundle this phone is running, on every splash: a connect that hangs or
  * fails is exactly when the reader needs to know whether the phone picked up
@@ -48,11 +49,11 @@ function currentPlace(tab: Tab, projectView: ProjectView, terminal: { project: s
   if (tab !== "projects") return { section: tab };
   return projectView.kind === "project" ? { section: "projects", projectId: projectView.id } : { section: "projects" };
 }
-const TABS: { id: Tab; icon: string; label: TranslationKey }[] = [
-  { id: "projects", icon: SECTION_GLYPH.projects, label: "mobile.tabs.projects" },
-  { id: "todo", icon: SECTION_GLYPH.todo, label: "mobile.tabs.todo" },
-  { id: "calendar", icon: SECTION_GLYPH.calendar, label: "mobile.tabs.calendar" },
-  { id: "mail", icon: SECTION_GLYPH.mail, label: "mobile.tabs.mail" },
+const TABS: { id: Tab; icon: ComponentType<IconProps>; label: TranslationKey }[] = [
+  { id: "projects", icon: SECTION_ICON.projects, label: "mobile.tabs.projects" },
+  { id: "todo", icon: SECTION_ICON.todo, label: "mobile.tabs.todo" },
+  { id: "calendar", icon: SECTION_ICON.calendar, label: "mobile.tabs.calendar" },
+  { id: "mail", icon: SECTION_ICON.mail, label: "mobile.tabs.mail" },
 ];
 /**
  * How long Tabtivity Mobile may go untouched before the local lock closes the
@@ -224,7 +225,7 @@ function TabBar({ active, open, hidden }: { active: Tab; open: (tab: Tab) => voi
       className={`mobile-tab${active === tab.id ? " active" : ""}`}
       aria-current={active === tab.id ? "page" : undefined}
       onClick={() => open(tab.id)}
-    ><span aria-hidden="true">{tab.icon}</span>{t(tab.label)}</button>)}
+    ><span aria-hidden="true"><tab.icon /></span>{t(tab.label)}</button>)}
   </nav>;
 }
 

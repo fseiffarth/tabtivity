@@ -1744,7 +1744,7 @@ export const dict: Dict = {
   "mobile.setupOpenSettings": "Abrir los ajustes de Mobile",
   "settings.usageStats": "Estadísticas de uso",
   "settings.pdfMarkup": "Marcado de PDF",
-  "settings.pdfMarkupHelp": "Lo que Marcar del visor de PDF envía al agente. Se guarda en este ordenador; el teléfono tiene el suyo (Inicio → ⚙ Este dispositivo → Prompt de marcado).",
+  "settings.pdfMarkupHelp": "Lo que Marcar del visor de PDF envía al agente. Se guarda en este ordenador; el teléfono tiene el suyo (Inicio → Este dispositivo → Prompt de marcado).",
   "settings.pdfMarkupInstruction": "Prompt de marcado",
   "settings.pdfMarkupInstructionHelp": "Va tras el archivo, la copia marcada, las capas y tus notas en cada envío. Con «Aplicar las marcas directamente» activado, por defecto el agente hace los cambios y recompila el PDF; si no — o donde no se puede guardar un deshacer — le pide que liste los cambios y no edite nada hasta que se lo digas.",
   "settings.pdfMarkupApply": "Prompt de «Aplicar estos cambios»",
@@ -4843,7 +4843,7 @@ export const dict: Dict = {
   "newTabMenu.cloudSession": "Sesión en la nube",
   "newTabMenu.cloudNew": "{agent}: nueva sesión en la nube…",
   "newTabMenu.cloudOpen": "{agent}: abrir una sesión en la nube",
-  "newTabMenu.cloudTabLabel": "{agent} ☁",
+  "newTabMenu.cloudTabLabel": "{agent} (nube)",
   "newTabMenu.signInTabLabel": "Iniciar sesión · {agent}",
   "newTabMenu.cloudTaskTitle": "Nueva sesión en la nube de {agent}",
   "newTabMenu.cloudTaskBody": "La sesión se ejecuta en la nube del proveedor sobre el repositorio de este proyecto, no en la carpeta del proyecto. Describe qué debe hacer.",
@@ -8174,7 +8174,7 @@ export const dict: Dict = {
   "tour.settingsFocusTitle": "Ajustes y modo enfoque",
   "tour.settingsFocusBody":
     "El tema, Git, los agentes, los atajos y la guía de funciones viven tras Ajustes, junto con las lecciones, donde esperan este recorrido, un recorrido por el trabajo en otras máquinas y una guía por tarea. {tip}",
-  "tour.settingsTask": "Deja el puntero sobre el engranaje ⚙ para abrir su menú: ahí están las lecciones.",
+  "tour.settingsTask": "Deja el puntero sobre el engranaje para abrir su menú: ahí están las lecciones.",
   "tour.settingsTaskHint": "El engranaje está arriba a la derecha de la cabecera. Pasar el cursor abre su menú; un clic abre los Ajustes, donde las lecciones están en Sugerencias e introducción: cualquiera de los dos vale.",
   "tour.remoteProjectsTitle": "Trabaja en máquinas remotas",
   "tour.remoteProjectsBody":

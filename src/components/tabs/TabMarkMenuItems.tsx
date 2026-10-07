@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
 
 import { useT } from "../../lib/i18n";
 import { TAB_MARKS, tabMarkGlyph } from "../../lib/tabMarks";
@@ -114,7 +115,7 @@ export function TabMarkMenuItems({
                   onDone();
                 }}
               >
-                <span className="tab-new-menu-dot tab-new-menu-dot--accent">☑</span>
+                <span className="tab-new-menu-dot tab-new-menu-dot--accent"><CheckboxIcon /></span>
                 {t("tabTodo.open")}
               </button>
             )}
@@ -126,7 +127,7 @@ export function TabMarkMenuItems({
                 onDone();
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">☐</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><SquareIcon /></span>
               {t("tabTodo.unlink")}
             </button>
           </>
@@ -141,7 +142,7 @@ export function TabMarkMenuItems({
               );
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">☑</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><CheckboxIcon /></span>
             {t("tabTodo.create")}
             <UntestedTag id="tabTodo.create" />
           </button>

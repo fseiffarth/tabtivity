@@ -81,7 +81,7 @@ import { useExperimental } from "../../lib/experimental";
 import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CommentIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -2021,7 +2021,7 @@ export function ProjectFilesView({
                     tip already carries a tag. */}
                 {!onNestedRepo && !project?.remote && gitStatus.has_remote && !gitStatus.head_tagged && unpushedCommits.length === 0 && (gitStatus.behind ?? 0) === 0 && (
                   <button className="git-action-btn git-action-btn--release" disabled={gitBusy} onClick={() => void handleRelease()} title={t("projectFilesView.releaseTitle")}>
-                    <span className="git-btn-glyph">🏷</span><span className="git-btn-label">{t("projectFilesView.release")}</span>
+                    <span className="git-btn-glyph"><TagIcon /></span><span className="git-btn-label">{t("projectFilesView.release")}</span>
                     <UntestedTag id="gitRelease" />
                   </button>
                 )}

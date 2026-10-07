@@ -1746,7 +1746,7 @@ export const dict: Dict = {
   "mobile.setupOpenSettings": "Mobile-Einstellungen öffnen",
   "settings.usageStats": "Nutzungsstatistik",
   "settings.pdfMarkup": "PDF-Markierung",
-  "settings.pdfMarkupHelp": "Was „Markieren“ im PDF-Viewer an den Agenten sendet. Auf diesem Computer gespeichert; das Handy hat eigene (Start → ⚙ Dieses Gerät → Markierungs-Prompt).",
+  "settings.pdfMarkupHelp": "Was „Markieren“ im PDF-Viewer an den Agenten sendet. Auf diesem Computer gespeichert; das Handy hat eigene (Start → Dieses Gerät → Markierungs-Prompt).",
   "settings.pdfMarkupInstruction": "Markierungs-Prompt",
   "settings.pdfMarkupInstructionHelp": "Steht bei jedem Absenden nach der Datei, der markierten Kopie, den Ebenen und deinen getippten Notizen. Mit „Markierungen direkt umsetzen“ setzt der Agent die Änderungen standardmäßig um und baut das PDF neu; sonst — oder wo kein Rückgängig gehalten werden kann — listet er die Änderungen auf und bearbeitet nichts, bis du es sagst.",
   "settings.pdfMarkupApply": "Prompt für „Änderungen umsetzen“",
@@ -4847,7 +4847,7 @@ export const dict: Dict = {
   "newTabMenu.cloudSession": "Cloud-Sitzung",
   "newTabMenu.cloudNew": "{agent}: neue Cloud-Sitzung…",
   "newTabMenu.cloudOpen": "{agent}: Cloud-Sitzung öffnen",
-  "newTabMenu.cloudTabLabel": "{agent} ☁",
+  "newTabMenu.cloudTabLabel": "{agent} (Cloud)",
   "newTabMenu.signInTabLabel": "Anmelden · {agent}",
   "newTabMenu.cloudTaskTitle": "Neue {agent}-Cloud-Sitzung",
   "newTabMenu.cloudTaskBody": "Die Sitzung läuft in der Cloud des Anbieters auf dem Repository dieses Projekts, nicht im Projektordner. Beschreibe, was sie tun soll.",
@@ -8178,7 +8178,7 @@ export const dict: Dict = {
   "tour.settingsFocusTitle": "Einstellungen und Fokusmodus",
   "tour.settingsFocusBody":
     "Theme, Git, Agenten, Tastenkürzel und der Funktionsleitfaden liegen hinter Einstellungen – zusammen mit den Lektionen, wo diese Tour, eine Tour für die Arbeit auf anderen Rechnern und je eine Anleitung pro Aufgabe warten. {tip}",
-  "tour.settingsTask": "Lass den Zeiger auf dem ⚙-Zahnrad ruhen, um sein Menü zu öffnen — dort liegen die Lektionen.",
+  "tour.settingsTask": "Lass den Zeiger auf dem Zahnrad ruhen, um sein Menü zu öffnen — dort liegen die Lektionen.",
   "tour.settingsTaskHint": "Das Zahnrad sitzt oben rechts in der Kopfleiste. Darüberfahren öffnet sein Menü; ein Klick öffnet die Einstellungen, wo die Lektionen unter Hinweise & Einführung liegen — beides zählt.",
   "tour.remoteProjectsTitle": "Auf entfernten Rechnern arbeiten",
   "tour.remoteProjectsBody":

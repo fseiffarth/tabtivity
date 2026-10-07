@@ -67,7 +67,8 @@ function inert(html: string): string {
     .replace(/<img\b[^>]*>/g, "")
     .replace(/<span class="md-img-remote"[^>]*>/g, '<span class="md-img-remote">')
     .replace(/<input type="checkbox" data-md-task( checked)? \/>/g, (_m, checked?: string) =>
-      `<span class="md-task" aria-hidden="true">${checked ? "☑" : "☐"}</span>`)
+      // Drawn by CSS, not typed: ☑ reached the colour-emoji font on phones.
+      `<span class="md-task${checked ? " md-task-done" : ""}" aria-hidden="true"></span>`)
     .replace(/<(h[1-6]) id="[^"]*">/g, "<$1>"));
 }
 

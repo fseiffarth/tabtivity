@@ -2148,6 +2148,31 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 /* A file path in the chat (`linkPathsInHtml`): the Markdown viewer's
    `a.file-link`, which has no href and so needs the pointer said. */
 .terminal-reader-md a.file-link { cursor: var(--cur-pointer, pointer); }
+/* A task list's box (`answerMarkdown` emits an empty `.md-task`): drawn, not a
+   typed ☑/☐, which a font fallback could hand to the colour-emoji font. */
+.terminal-reader-md .md-task {
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.35em;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  vertical-align: -0.08em;
+  opacity: 0.8;
+}
+.terminal-reader-md .md-task-done::after {
+  content: "";
+  position: absolute;
+  left: 0.22em;
+  top: 0.04em;
+  width: 0.2em;
+  height: 0.42em;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
 .terminal-reader-time {
   position: absolute;
   right: 10px;

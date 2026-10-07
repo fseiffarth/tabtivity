@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ArchiveIcon, FolderIcon, InboxIcon, OutboxIcon, PaperclipIcon, PencilIcon, TrashIcon, WarningIcon } from "../../../src/components/common/icons/Icon";
 import { describeFailure } from "../connection";
 import {
   MAIL_MESSAGE_TIMEOUT,
@@ -55,7 +56,7 @@ function sizeLabel(size: number) {
 /** Where a folder sits in the pickers: the inbox first, the bins last, and
  * folders of one kind in the order the desktop sent them (the sort is stable). */
 const KIND_ORDER = ["inbox", "drafts", "sent", "archive", "other", "junk", "trash"];
-const KIND_GLYPH: Record<string, string> = { inbox: "📥", drafts: "📝", sent: "📤", archive: "🗄", junk: "⚠", trash: "🗑" };
+const KIND_GLYPH: Record<string, ReactNode> = { inbox: <InboxIcon />, drafts: <PencilIcon />, sent: <OutboxIcon />, archive: <ArchiveIcon />, junk: <WarningIcon />, trash: <TrashIcon /> };
 
 function kindRank(kind: string) {
   const at = KIND_ORDER.indexOf(kind);
@@ -302,7 +303,7 @@ export function Mail() {
       <section className="mail-mobile-list">
         {folder.messages.map((item) => <button className={`mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
           <div><strong>{sender(item, t)}</strong><time>{dateLabel(item.date, lang)}</time></div>
-          <b>{safeText(item.subject) || t("mobile.mail.noSubject")}{item.has_attachments ? " 📎" : ""}</b>
+          <b>{safeText(item.subject) || t("mobile.mail.noSubject")}{item.has_attachments ? <> <PaperclipIcon /></> : null}</b>
           <span>{safeText(item.preview)}</span>
         </button>)}
         {!busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
@@ -317,7 +318,7 @@ export function Mail() {
       {account && <div className="mail-mobile-account">
         <div><strong>{safeText(account.label)}</strong><small>{safeText(account.address)}</small></div>
         <div className="mail-mobile-folders">{sortedFolders(account.folders).map((item) => <button className={item.unread > 0 ? "has-unread" : undefined} key={item.id} onClick={() => void loadFolder(item)} disabled={busy}>
-          <i aria-hidden="true">{KIND_GLYPH[item.kind] ?? "📁"}</i><span>{safeText(item.name)}</span><small>{t("mobile.mail.folderCounts", { unread: item.unread, total: item.total })}</small>
+          <i aria-hidden="true">{KIND_GLYPH[item.kind] ?? <FolderIcon />}</i><span>{safeText(item.name)}</span><small>{t("mobile.mail.folderCounts", { unread: item.unread, total: item.total })}</small>
         </button>)}</div>
       </div>}
       {accounts.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noAccounts")}</p>}

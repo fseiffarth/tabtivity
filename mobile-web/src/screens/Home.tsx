@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentType } from "react";
+import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { api, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
 import { classifyUnavailable, describeFailure, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
@@ -6,7 +7,7 @@ import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../projectOrde
 import { useRowDrag } from "../rowDrag";
 import { placeBeside } from "../tabReorder";
 import { Activity } from "./Activity";
-import { SECTION_GLYPH } from "../glyphs";
+import { SECTION_ICON } from "../glyphs";
 import { BUNDLE_VERSION } from "../buildInfo";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
@@ -55,10 +56,10 @@ function AgentCounts({ counts, tagged }: { counts: AgentCountsRow; tagged: boole
   })}</>;
 }
 
-const ALERT_ICON: Record<MobileAlertItem["kind"], string> = {
-  mail: SECTION_GLYPH.mail,
-  event: SECTION_GLYPH.calendar,
-  task: SECTION_GLYPH.todo,
+const ALERT_ICON: Record<MobileAlertItem["kind"], ComponentType<IconProps>> = {
+  mail: SECTION_ICON.mail,
+  event: SECTION_ICON.calendar,
+  task: SECTION_ICON.todo,
 };
 
 function relativeAlertTime(item: MobileAlertItem, t: Translate): string {
@@ -135,9 +136,10 @@ function AlertRows({ alerts, onAlerts, todo, mail }: {
             ? () => todo(item.task_id)
             : undefined;
         const key = item.alert_id ?? `${item.kind}-${item.at ?? ""}-${item.title}-${index}`;
+        const AlertIcon = ALERT_ICON[item.kind];
         const contents = <>
           <span className={`mobile-alert-dot ${item.severity}`} aria-hidden="true" />
-          <span className="mobile-alert-icon" aria-hidden="true">{ALERT_ICON[item.kind]}</span>
+          <span className="mobile-alert-icon" aria-hidden="true"><AlertIcon /></span>
           <span className="mobile-alert-copy"><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span>
           <time>{relativeAlertTime(item, t)}</time>
         </>;

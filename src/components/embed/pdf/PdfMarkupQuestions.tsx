@@ -20,6 +20,7 @@
  * chip scrolls the page to its pin.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { CheckboxIcon, SquareIcon } from "../../common/icons/Icon";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
@@ -186,7 +187,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
                   onClick={() => setPick(qi, toggleOption(question, pick, oi))}
                 >
                   <span className="terminal-reader-option-number">
-                    {question.multiSelect ? (chosen ? "☑" : "☐") : chosen ? "✓" : oi + 1}
+                    {question.multiSelect ? (chosen ? <CheckboxIcon /> : <SquareIcon />) : chosen ? "✓" : oi + 1}
                   </span>
                   <span className="terminal-reader-option-label">
                     <span>

@@ -227,6 +227,28 @@ export function InboxIcon(p: IconProps) {
   );
 }
 
+/** An arrow up out of a tray — the {@link InboxIcon}'s twin: sent mail. */
+export function OutboxIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 13.5v-9" />
+      <path d="M8 8.5l4-4 4 4" />
+      <path d="M4.5 14.5v4A1.5 1.5 0 006 20h12a1.5 1.5 0 001.5-1.5v-4" />
+    </Frame>
+  );
+}
+
+/** A lidded box — archived mail. */
+export function ArchiveIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="3.5" y="4.5" width="17" height="4" rx="1" />
+      <path d="M5 8.5v10A1.5 1.5 0 006.5 20h11a1.5 1.5 0 001.5-1.5v-10" />
+      <path d="M10 12.5h4" />
+    </Frame>
+  );
+}
+
 /** An arrow out of a tray's rim — submit, send up. */
 export function UploadIcon(p: IconProps) {
   return (
@@ -647,5 +669,19 @@ export function KeyboardIcon(p: IconProps) {
       <path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M6.5 13.5h.01M17.5 13.5h.01" />
       <path d="M9.5 14h5" />
     </Frame>
+  );
+}
+
+/** The working mark's ▶, filled rather than outlined ({@link PlayIcon} is the
+ *  Run button's): the tab strip's and the phone's status glyph. As a typed
+ *  character it was whatever the window's font fallback found — the U+FE0E
+ *  text-presentation pin held in the main window, but a popout's WebKitGTK and
+ *  phones still reached the colour emoji font, which ignores the state's colour.
+ *  Glyph-sized and `currentColor`, it needs no font at all. */
+export function PlayMark() {
+  return (
+    <svg viewBox="0 0 10 10" width="1em" height="1em" aria-hidden="true" focusable="false" style={{ display: "inline-block", verticalAlign: "-0.05em" }}>
+      <path d="M2 1v8l7-4z" fill="currentColor" />
+    </svg>
   );
 }

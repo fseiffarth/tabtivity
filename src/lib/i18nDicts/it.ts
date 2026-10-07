@@ -1744,7 +1744,7 @@ export const dict: Dict = {
   "mobile.setupOpenSettings": "Apri le impostazioni Mobile",
   "settings.usageStats": "Statistiche di utilizzo",
   "settings.pdfMarkup": "Annotazione PDF",
-  "settings.pdfMarkupHelp": "Ciò che Annota del visore PDF invia all’agente. Salvato su questo computer; il telefono ha il suo (Home → ⚙ Questo dispositivo → Prompt di annotazione).",
+  "settings.pdfMarkupHelp": "Ciò che Annota del visore PDF invia all’agente. Salvato su questo computer; il telefono ha il suo (Home → Questo dispositivo → Prompt di annotazione).",
   "settings.pdfMarkupInstruction": "Prompt di annotazione",
   "settings.pdfMarkupInstructionHelp": "Segue il file, la copia annotata, i livelli e le tue note a ogni invio. Con «Applica le annotazioni direttamente» attivo, per impostazione predefinita l’agente fa le modifiche e ricompila il PDF; altrimenti — o dove non si può tenere un annullamento — elenca le modifiche e non modifica nulla finché non lo dici.",
   "settings.pdfMarkupApply": "Prompt «Applica queste modifiche»",
@@ -4843,7 +4843,7 @@ export const dict: Dict = {
   "newTabMenu.cloudSession": "Sessione cloud",
   "newTabMenu.cloudNew": "{agent}: nuova sessione cloud…",
   "newTabMenu.cloudOpen": "{agent}: apri una sessione cloud",
-  "newTabMenu.cloudTabLabel": "{agent} ☁",
+  "newTabMenu.cloudTabLabel": "{agent} (cloud)",
   "newTabMenu.signInTabLabel": "Accedi · {agent}",
   "newTabMenu.cloudTaskTitle": "Nuova sessione cloud di {agent}",
   "newTabMenu.cloudTaskBody": "La sessione gira nel cloud del fornitore sul repository di questo progetto, non nella cartella del progetto. Descrivi cosa deve fare.",
@@ -8174,7 +8174,7 @@ export const dict: Dict = {
   "tour.settingsFocusTitle": "Impostazioni e modalità focus",
   "tour.settingsFocusBody":
     "Tema, Git, agenti, scorciatoie e la guida alle funzioni stanno dietro Impostazioni, insieme alle lezioni, dove ti aspettano questo tour, un tour del lavoro su altre macchine e una guida per ogni compito. {tip}",
-  "tour.settingsTask": "Appoggia il puntatore sull'ingranaggio ⚙ per aprirne il menu: le lezioni sono lì.",
+  "tour.settingsTask": "Appoggia il puntatore sull'ingranaggio per aprirne il menu: le lezioni sono lì.",
   "tour.settingsTaskHint": "L'ingranaggio è in alto a destra nell'intestazione. Passarci sopra ne apre il menu; un clic apre le Impostazioni, dove le lezioni stanno in Suggerimenti e introduzione: vale l'uno o l'altro.",
   "tour.remoteProjectsTitle": "Lavora su macchine remote",
   "tour.remoteProjectsBody":

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { UntestedTag } from "../common/UntestedTag";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor, ShortcutAction } from "../../lib/shortcuts/shortcuts";
@@ -11,8 +11,10 @@ export interface AddMenuEntry {
   /** React key — unique within the entry's group. */
   key: string;
   label: string;
-  /** Dot glyph in front of the label (defaults to "●"). */
-  dot?: string;
+  /** Dot glyph in front of the label (defaults to "●"). A shared line icon
+   *  where the glyph would be an emoji-capable symbol (☁ ⚠): a font fallback
+   *  hands those to the colour-emoji font, which ignores `color`. */
+  dot?: ReactNode;
   /** Dot color (a TAB_ACCENT value or any CSS color). */
   color: string;
   disabled?: boolean;

@@ -55,7 +55,8 @@ describe(`${BRAND.display} Mobile Focus formats an answer's Markdown`, () => {
       .toEqual(["https://example.com/x", "https://example.com/y", null]);
     expect(host.textContent).toContain("diagram");
     expect(host.textContent).toContain("local");
-    expect([...host.querySelectorAll(".md-task")].map((box) => box.textContent)).toEqual(["☑", "☐"]);
+    expect([...host.querySelectorAll(".md-task")].map((box) => box.classList.contains("md-task-done"))).toEqual([true, false]);
+    expect([...host.querySelectorAll(".md-task")].map((box) => box.textContent)).toEqual(["", ""]);
   });
 
   it("shows an answer's own HTML as text", () => {

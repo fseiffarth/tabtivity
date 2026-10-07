@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckboxIcon, ClockIcon } from "../../../src/components/common/icons/Icon";
 import { api, normalizeTodoBoard, reloadIfApplied, wasApplied, type TodoBoard, type TodoCard, type TodoColumn, type TodoTaskInput } from "../api";
 import { describeFailure, failureCode } from "../connection";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
@@ -49,7 +50,7 @@ function dueInfo(due: string, t: Translate, lang: Language, now = new Date()): {
 function priorityChip(priority: number): { label: TranslationKey; glyph: string; tone: string } | null {
   if (priority <= 0) return null;
   if (priority <= 4) return { label: "tasksView.priorityHigh", glyph: "▲", tone: "high" };
-  if (priority <= 5) return { label: "tasksView.priorityNormal", glyph: "▪", tone: "normal" };
+  if (priority <= 5) return { label: "tasksView.priorityNormal", glyph: "■", tone: "normal" };
   return { label: "tasksView.priorityLow", glyph: "▼", tone: "low" };
 }
 
@@ -274,9 +275,9 @@ function TodoMeta({ task }: { task: TodoCard }) {
   const steps = task.subtasks.length;
   if (!due && !priority && !steps && task.tags.length === 0) return null;
   return <div className="todo-mobile-meta">
-    {due && <small className={`todo-chip due ${due.tone}`}>⏰ {due.label}</small>}
+    {due && <small className={`todo-chip due ${due.tone}`}><ClockIcon /> {due.label}</small>}
     {priority && <small className={`todo-chip prio ${priority.tone}`}>{priority.glyph} {t(priority.label)}</small>}
-    {steps > 0 && <small className="todo-chip steps">☑ {task.subtasks.filter((step) => step.done).length}/{steps}</small>}
+    {steps > 0 && <small className="todo-chip steps"><CheckboxIcon /> {task.subtasks.filter((step) => step.done).length}/{steps}</small>}
     {task.tags.map((tag) => <small className="todo-chip tag" key={tag}>#{tag}</small>)}
   </div>;
 }

@@ -3,6 +3,7 @@ import { isTabMark, tabMarkGlyph } from "../../lib/tabMarks";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
 import { openTodoCard } from "./TabMarkMenuItems";
+import { CheckboxIcon } from "../common/icons/Icon";
 
 /**
  * A tab's Important / Urgent glyph and its to-do card link, on the tab itself.
@@ -29,7 +30,7 @@ export function TabMarkBadge({ tab, inPopout = false }: { tab: TabEntry; inPopou
       {todoId &&
         (inPopout ? (
           <span className="tab-todo-link" title={t("tabTodo.linked")}>
-            ☑
+            <CheckboxIcon />
           </span>
         ) : (
           <button
@@ -44,7 +45,7 @@ export function TabMarkBadge({ tab, inPopout = false }: { tab: TabEntry; inPopou
               openTodoCard(todoId);
             }}
           >
-            ☑
+            <CheckboxIcon />
           </button>
         ))}
     </>

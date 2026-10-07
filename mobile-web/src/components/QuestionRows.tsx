@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { CheckboxIcon, SquareIcon } from "../../../src/components/common/icons/Icon";
 import { useT } from "../../../src/lib/i18n";
 
 /** The mark Claude Code asks agents to put on the option they would pick. It
@@ -73,7 +74,7 @@ export function QuestionRows({ rows, disabled, sendingLabel, onPick, onType, typ
         onClick={() => row.freeText && !picked ? setTyping((open) => open === row.key ? null : row.key) : onPick(row)}>
         <span>
           <strong>
-            {row.box && <span className="question-box" aria-hidden="true">{picked ? "☑" : "☐"} </span>}
+            {row.box && <span className="question-box" aria-hidden="true">{picked ? <CheckboxIcon /> : <SquareIcon />} </span>}
             {row.title ?? (recommended ? row.label.slice(0, recommended.index) : row.label)}{recommended && <em className="question-recommended">{recommended[1]}</em>}
           </strong>
           {row.description && <small>{row.description}</small>}

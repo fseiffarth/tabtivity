@@ -1,14 +1,16 @@
+import type { ReactNode } from "react";
 import type { AgentStatus } from "../api";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
+import { PlayMark } from "../../../src/components/common/icons/Icon";
 
 /** The desktop tab strip's status glyphs (`TabStatusMark`): ▶ working,
- *  ? waiting on a decision, ■ interrupted, ✓ finished. ▶ and ■ have emoji
- *  presentations on phones, so each carries U+FE0E to stay a plain glyph in
- *  the pill's own colour — written as an escape because the selector is
- *  invisible in source. */
-const TEXT = "︎";
-export const AGENT_STATUS_GLYPH: Record<AgentStatus, string> = {
-  working: `▶${TEXT}`,
+ *  ? waiting on a decision, ■ interrupted, ✓ finished. ▶ is drawn
+ *  (`PlayMark`): phones hand the character to the colour-emoji font even with
+ *  U+FE0E, where it ignores the pill's colour. ■ and ✓ keep U+FE0E for the same
+ *  reason — written as an escape because the selector is invisible in source. */
+const TEXT = "\uFE0E";
+export const AGENT_STATUS_GLYPH: Record<AgentStatus, ReactNode> = {
+  working: <PlayMark />,
   question: `?`,
   interrupted: `■${TEXT}`,
   done: `✓${TEXT}`,

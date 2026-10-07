@@ -1745,7 +1745,7 @@ export const dict: Dict = {
   "mobile.setupOpenSettings": "Ouvrir les réglages Mobile",
   "settings.usageStats": "Statistiques d'utilisation",
   "settings.pdfMarkup": "Annotation de PDF",
-  "settings.pdfMarkupHelp": "Ce que Annoter du lecteur PDF envoie à l’agent. Conservé sur cet ordinateur ; le téléphone a le sien (Accueil → ⚙ Cet appareil → Prompt d’annotation).",
+  "settings.pdfMarkupHelp": "Ce que Annoter du lecteur PDF envoie à l’agent. Conservé sur cet ordinateur ; le téléphone a le sien (Accueil → Cet appareil → Prompt d’annotation).",
   "settings.pdfMarkupInstruction": "Prompt d’annotation",
   "settings.pdfMarkupInstructionHelp": "Placé après le fichier, la copie annotée, les calques et vos notes à chaque envoi. Avec « Appliquer les annotations directement », l’agent fait par défaut les changements et recompile le PDF ; sinon — ou là où aucune annulation ne peut être gardée — il liste les changements et ne modifie rien avant votre accord.",
   "settings.pdfMarkupApply": "Prompt « Appliquer ces changements »",
@@ -4845,7 +4845,7 @@ export const dict: Dict = {
   "newTabMenu.cloudSession": "Session cloud",
   "newTabMenu.cloudNew": "{agent} : nouvelle session cloud…",
   "newTabMenu.cloudOpen": "{agent} : ouvrir une session cloud",
-  "newTabMenu.cloudTabLabel": "{agent} ☁",
+  "newTabMenu.cloudTabLabel": "{agent} (cloud)",
   "newTabMenu.signInTabLabel": "Connexion · {agent}",
   "newTabMenu.cloudTaskTitle": "Nouvelle session cloud {agent}",
   "newTabMenu.cloudTaskBody": "La session s’exécute dans le cloud du fournisseur sur le dépôt de ce projet, pas dans le dossier du projet. Décrivez ce qu’elle doit faire.",
@@ -8176,7 +8176,7 @@ export const dict: Dict = {
   "tour.settingsFocusTitle": "Paramètres et mode concentration",
   "tour.settingsFocusBody":
     "Le thème, Git, les agents, les raccourcis et le guide des fonctionnalités sont derrière Paramètres — avec les leçons, où t'attendent cette visite, une visite du travail sur d'autres machines et une visite par tâche. {tip}",
-  "tour.settingsTask": "Posez le pointeur sur la roue dentée ⚙ pour ouvrir son menu — les leçons s'y trouvent.",
+  "tour.settingsTask": "Posez le pointeur sur la roue dentée pour ouvrir son menu — les leçons s'y trouvent.",
   "tour.settingsTaskHint": "La roue dentée est en haut à droite de l'en-tête. La survoler ouvre son menu ; un clic ouvre les Paramètres, où les leçons se trouvent sous Astuces et prise en main — les deux comptent.",
   "tour.remoteProjectsTitle": "Travaillez sur des machines distantes",
   "tour.remoteProjectsBody":

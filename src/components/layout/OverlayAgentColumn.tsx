@@ -8,7 +8,7 @@ import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
 import { AGENT_TAB_ACTIONS } from "../../lib/shortcuts/shortcuts";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
-import { SparkleIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, SparkleIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { TabScopeContext } from "../tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
@@ -184,7 +184,7 @@ export function OverlayAgentColumn({
               useRootOverlayStore.getState().show(tab.key);
             }}
           >
-            ↗
+            <ArrowUpRightIcon />
           </button>
         )}
         <button

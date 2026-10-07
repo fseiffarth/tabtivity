@@ -32,6 +32,7 @@ import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
 import { useExperimental } from "../../lib/experimental";
 import { useT } from "../../lib/i18n";
+import { WarningIcon } from "../common/icons/Icon";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 
 interface Props {
@@ -211,7 +212,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
                 entries: AGENT_ITEMS.filter((item) => enabledAgents.has(item.cmd)).map((item) => ({
                   key: `host:${item.cmd}`,
                   label: t("newTabMenu.hostSessionEntry", { label: item.label }),
-                  dot: "⚠",
+                  dot: <WarningIcon />,
                   color: "var(--danger)",
                   onPick: () => {
                     const spec = buildStaticTabSpec(item, projectCwd, "", t);

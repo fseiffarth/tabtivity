@@ -99,7 +99,7 @@ describe("buildDebugCommand", () => {
 
 describe("pyTabLabel", () => {
   it("names the tab after the file, marked by mode", () => {
-    expect(pyTabLabel("run", "/proj/pkg/main.py")).toBe("▶\uFE0E main.py");
+    expect(pyTabLabel("run", "/proj/pkg/main.py")).toBe("main.py");
     expect(pyTabLabel("debug", "/proj/pkg/main.py")).toBe("main.py (debug)");
   });
 });

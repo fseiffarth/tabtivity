@@ -3157,7 +3157,7 @@ export function FileTree({
       return;
     }
     const tab = {
-      label: `▶\uFE0E ${entry.name}`,
+      label: entry.name,
       cmd: interp,
       cwd: plan.cwd,
       kind: "shell" as const,

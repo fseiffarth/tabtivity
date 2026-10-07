@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FileImageIcon, FolderIcon } from "../../../src/components/common/icons/Icon";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
 import { GitSheet } from "./GitSheet";
@@ -492,11 +493,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           role="menuitem"
           aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}
           onClick={() => { setProjectMenu(false); setGalleryOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">🖼</span><span><strong>{t("mobile.outbox.region")}</strong></span><small className="project-menu-count">{outbox.length}</small></button>}
+        ><span aria-hidden="true" className="project-menu-icon"><FileImageIcon /></span><span><strong>{t("mobile.outbox.region")}</strong></span><small className="project-menu-count">{outbox.length}</small></button>}
         {filesOffered && <button
           role="menuitem"
           onClick={() => { setProjectMenu(false); setFilesOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">📁</span><span><strong>{t("mobile.project.files")}</strong></span></button>}
+        ><span aria-hidden="true" className="project-menu-icon"><FolderIcon /></span><span><strong>{t("mobile.project.files")}</strong></span></button>}
         {gitOffered && <button
           role="menuitem"
           onClick={() => { setProjectMenu(false); setGitOpen(true); }}

@@ -11,6 +11,8 @@ import { AGENT_TAB_ACTIONS, type AgentTabAction } from "../../lib/shortcuts/shor
 import { cloudLaunchesFor, type CloudLaunch } from "../../lib/agents/cloudSessions";
 import type { SignInLaunch } from "../../lib/agents/signInLaunch";
 import { envName } from "../../lib/brand";
+import { createElement } from "react";
+import { CloudIcon } from "../common/icons/Icon";
 
 /**
  * A static entry in the "new tab" add menu. Shared by the main-window `TabBar`
@@ -452,7 +454,7 @@ export function agentMenuEntries(opts: {
             launch.action === "new" ? "newTabMenu.cloudNew" : "newTabMenu.cloudOpen",
             { agent: item.label },
           ),
-          dot: "☁",
+          dot: createElement(CloudIcon),
           color: TAB_ACCENT[item.kind],
           onPick: () => opts.pickCloud?.(item, launch),
         })),
@@ -463,7 +465,7 @@ export function agentMenuEntries(opts: {
     ? [{
         key: CLOUD_SESSION_KEY,
         label: cloudLabel,
-        dot: "☁",
+        dot: createElement(CloudIcon),
         color: TAB_ACCENT.agent,
         moreTitle: cloudLabel,
         moreEntries: cloudEntries,

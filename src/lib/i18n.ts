@@ -1747,7 +1747,7 @@ export const enSource = {
   // Settings — usage stats.
   "settings.usageStats": "Usage stats",
   "settings.pdfMarkup": "PDF markup",
-  "settings.pdfMarkupHelp": "What the PDF viewer’s Mark up sends to the agent. Kept on this computer; the phone has its own (Home → ⚙ This device → Mark up prompt).",
+  "settings.pdfMarkupHelp": "What the PDF viewer’s Mark up sends to the agent. Kept on this computer; the phone has its own (Home → This device → Mark up prompt).",
   "settings.pdfMarkupInstruction": "Mark up prompt",
   "settings.pdfMarkupInstructionHelp": "Put after the file, the marked copy, the layers and your typed notes with each Submit. With Apply marks directly on, the default has the agent make the changes and rebuild the PDF; otherwise — or where no undo can be kept — it asks the agent to list the changes and edit nothing until told.",
   "settings.pdfMarkupApply": "“Make these changes” prompt",
@@ -5023,7 +5023,7 @@ export const enSource = {
   "newTabMenu.cloudSession": "Cloud session",
   "newTabMenu.cloudNew": "{agent}: new cloud session…",
   "newTabMenu.cloudOpen": "{agent}: open a cloud session",
-  "newTabMenu.cloudTabLabel": "{agent} ☁",
+  "newTabMenu.cloudTabLabel": "{agent} (cloud)",
   "newTabMenu.signInTabLabel": "Sign in · {agent}",
   "newTabMenu.cloudTaskTitle": "New {agent} cloud session",
   "newTabMenu.cloudTaskBody": "The session runs in the vendor's cloud on this project's repository, not in the project folder. Describe what it should do.",
@@ -8494,7 +8494,7 @@ export const enSource = {
   "tour.settingsFocusTitle": "Settings and focus mode",
   "tour.settingsFocusBody":
     "Theme, Git, agents, shortcuts, and the Feature Guide live behind Settings — along with the Lessons, where this tour, a tour of working on other machines, and one walkthrough per task wait. {tip}",
-  "tour.settingsTask": "Rest the pointer on the ⚙ gear to open its menu — Lessons are in there.",
+  "tour.settingsTask": "Rest the pointer on the gear to open its menu — Lessons are in there.",
   "tour.settingsTaskHint": "The gear is at the top right of the header. Hovering opens its menu; clicking opens Settings, where Lessons sit under Hints & onboarding — either counts.",
   "tour.remoteProjectsTitle": "Work on remote machines",
   "tour.remoteProjectsBody":

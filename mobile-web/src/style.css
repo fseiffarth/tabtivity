@@ -594,7 +594,8 @@ button.mobile-alert-row { cursor:pointer; }
 .mail-mobile-attachments div { display:flex; justify-content:space-between; gap:12px; padding:11px; border-radius:9px; background:#1b1e29; unicode-bidi:plaintext; }
 .mail-mobile-empty { padding:24px; text-align:center; color:#9498aa; }
 .mail-mobile-row.flagged b::before { content:"★ "; color:#f4c66c; }
-.mail-mobile-row.answered b::after { content:" ↩"; color:#9498aa; }
+/* Answered: the shared UndoIcon's hooked arrow as a mask — a typed ↩ reached the colour-emoji font. */
+.mail-mobile-row.answered b::after { content:""; display:inline-block; width:1em; height:1em; margin-left:.3em; vertical-align:-.15em; background:#9498aa; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 010 11H11'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 010 11H11'/%3E%3C/svg%3E") center/contain no-repeat; }
 .mail-mobile-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .mail-mobile-actions button { flex:1 1 auto; }
 .mail-mobile-reply { display:grid; gap:8px; padding:14px; border:1px solid #383c4d; border-radius:12px; background:rgba(28,31,43,.92); }
@@ -860,7 +861,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md li::marker { color:#8c84d8; }
 .transcript-md li > ul,.transcript-md li > ol { margin:.2em 0 0; }
 .transcript-md .task-item { list-style:none; margin-left:-1.1em; }
-.transcript-md .md-task { display:inline-block; width:1.1em; color:#8c84d8; }
+.transcript-md .md-task { position:relative; display:inline-block; box-sizing:border-box; width:.85em; height:.85em; margin-right:.3em; border:1.5px solid currentColor; border-radius:3px; vertical-align:-.08em; color:#8c84d8; }
+.transcript-md .md-task-done::after { content:""; position:absolute; left:.22em; top:.04em; width:.2em; height:.42em; border:solid currentColor; border-width:0 1.5px 1.5px 0; transform:rotate(45deg); }
 .transcript-md code { padding:.08em .35em; border-radius:5px; background:#2a2e42; color:#dcd6ff; font:400 .82rem/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-wrap:anywhere; }
 .transcript-md pre { margin:0 0 .6em; padding:8px 10px; overflow-x:auto; border-radius:8px; background:#12141c; -webkit-overflow-scrolling:touch; }
 .transcript-md pre code { padding:0; background:none; color:#e3e6f2; white-space:pre; overflow-wrap:normal; }
