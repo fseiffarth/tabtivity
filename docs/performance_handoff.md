@@ -1149,3 +1149,158 @@ run live.
 - Design note, not a bug: with every hidden tab silent-then-speaking at a
   staggered ≥ 500 ms cadence, the pulled ticks approach the old one-event-
   per-PTY count; continuous streams (the §7.6 case) still batch to ~2/s.
+
+## S6 — many-tabs memoisation
+
+*Written 2026-10-07 by the S6 implementer. Base `2a19c24c`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `45bcd8a9` | §5.1 pane layer: the per-tab derivation moves from `CenterPanel`'s map into a `memo`'d `PaneSlot` (`components/layout/PaneSlot.tsx`); a redundant `setActive` on the already-active tab of the focused group is a store no-op (the S3 reviewer's note); `ContainerScope.test.ts`'s source tripwire now reads `PaneSlot.tsx` |
+| `cdd2a37f` | §5.1 tab strip: a plain tab is a `memo`'d `TabItem` (in `TabBar.tsx`) with per-key activity + schedule subscriptions and a stable `TabItemBar` handler object; the bar reads the whole activity maps only while it holds a tab group |
+| `91e780de` | §5.1 file tree: a row is a `memo`'d `FileRow` (in `FileTree.tsx`) fed primitives, the entry and two stable objects (`moveTargetAttrs`, the `RowActions` dispatcher) |
+
+### What was built / choices made
+- **`PaneSlot` boundary.** `CenterPanel` keeps the positioned `.center-pane`
+  box (its `style` is the only thing a `groupRects` measure changes), the
+  `visible`/`focused` booleans, the `projects.find`/`boxes.find` lookups and
+  the per-scope `getConnect` handler; everything after that — remote hold per
+  host, mirror cwd, files dir, container flag, tmux session, the Mobile
+  first-seen map — is `PaneSlot`'s. Its props are the `TabEntry`, the pane's
+  own `ProjectEntry`/`ProjectBox` (store references), the project's primary
+  SSH lamp (a string), its worker-lamp record, the folded
+  `persist_local_sessions` boolean, the stable `onConnect` and the shared
+  `mobileAgentTmuxReady` Map (one object, mutated, never replaced — it must
+  outlive a slot, since an inactive project's slots unmount and remount).
+  `TabPane` stays `memo` underneath; `PaneSlot` renders it directly.
+- **`setActive` no-op.** Guarded on `found.group.activeKey === key &&
+  s.focusedGroupId === found.group.id`: a click on the active tab of an
+  *unfocused* group must still move focus, so that half is not short-cut.
+  `setGroupActiveInScope`/`revealTabInScope` are untouched (they take a
+  group/scope and are not the hot re-click path).
+- **`TabItem`.** Lives in `TabBar.tsx` (module level) rather than a new file:
+  it is the bar's old per-tab JSX verbatim, and the pointer drag, context
+  menu, inline rename, steering `data-tab-index`, badges and i18n all stay
+  where they were — only the closures are reached through `bar`
+  (`TabItemBar`), one object per bar built once (`useMemo([])`) whose
+  forwarders read a ref refreshed in a `useLayoutEffect` after every commit.
+  The bar's `selectOnMount` became a module function (same single identity).
+  The status ring is `useTabStateClass`: three primitive selectors on
+  `<scope>:<key>`; the pure `tabStateClassOf` is shared with the bar's
+  `tabStateClass`, which still serves `TabStackChip`'s folded members from the
+  whole maps — but those three subscriptions now return module constants
+  unless some tab in the bar has a `stack`, so a bar without a group never
+  re-renders on activity at all.
+- **Schedule indicator.** `TabItem` subscribes to its own
+  `byTarget[scheduleCacheKey(scope, scheduleTargetId)]` list and memoises the
+  enabled count + next occurrence on that list's identity (the plan's "cache
+  by schedule identity"). The "now" is the time of the last list change or
+  item mount, not of the hover: see Flagged.
+- **`FileRow`.** The derivation per row (git letter, sizes, run/compile
+  flags, sync state, `notOnRemote`, …) still runs in `renderEntry` — it is
+  cheap lookups — and ends in `<FileRow …/>` with ~27 scalar props. The eleven
+  per-row closures became `rows` (`RowActions`, same latest-ref pattern as
+  `TabItemBar`); `moveTargetAttrs` is `useMemo`'d on `(projectDir,
+  remoteListing)` because its spread is on every folder row (the
+  `FileMove.test.ts` source tripwire still finds the spread two lines under
+  each `data-move-rel`). `rel` is now computed for every row (it was `""` on
+  an unsynced tree; only the sync lookups read it and they are still gated).
+  Keyboard navigation, selection, drag, context menus, gitignored folding and
+  sync badges are byte-for-byte the old JSX.
+- **Tests** (render counts via a mocked leaf each component renders once —
+  `TabPane` for a slot, `TabMarkBadge` for an item, `FileIcon` per unique
+  extension for a row): `PaneLayerMemo.test.tsx` (60 tabs: a rect change →
+  0 slot renders and the shown box takes the new width; one `renameTab` →
+  1 slot; redundant `setActive` → `layoutByScope`/`tabsByScope` identity
+  kept and 0 renders; a real one → 2), `TabBarItemMemo.test.tsx` (60 tabs:
+  one busy flip → 1 item, one attention flip → 1 item, hover card open/close
+  → 0, activation → 2), `FileTreeRowMemo.test.tsx` (300 rows through two
+  "show more" clicks: tooltip dwell → 0 rows, one row selected → 1 row).
+
+### Gotchas for later steps
+- **S9 (`SleepingPane`):** the swap point is inside `PaneSlot`, not the
+  layer: keep `CenterPanel`'s `.center-pane` box (steering's
+  `data-steer-region`/pane class and the drag ghost's `data-tab-key` lookup
+  both hang off it, as does `onMouseDownCapture` → `focusGroup`), and let
+  `PaneSlot` return `<SleepingPane>` instead of `<TabPane>` when its tab is
+  asleep. A sleeping tab needs none of the derived props, so a `SleepingPane`
+  branch placed *before* the derivation keeps a sleeping slot's render
+  trivially cheap — but the `mobileAgentTmuxReady` first-seen write must
+  still happen on the first render (move it above the branch, or a tab that
+  sleeps before it was ever derived loses its eligibility stamp). Wake-up
+  (`visible` true, focus, steering) is a prop change on that one slot, so
+  nothing else re-renders. Add `asleep` (or `hiddenSince`) as a scalar prop;
+  don't pass a Map of sleep states or every slot re-renders on each tick.
+- **S9/S10:** `TabPane`'s props are unchanged; a `SleepingPane` for a
+  terminal tab should keep rendering through `PaneSlot` so the `tmuxSession`
+  / `sandbox` / `terminalCwd` it will need on wake are derived by the same
+  code (`TerminalView` has them in its spawn deps — a wake must hand it the
+  identical values or it respawns).
+- **`TabItemBar`/`RowActions` latest-ref pattern:** the ref is refreshed in a
+  `useLayoutEffect` with no deps, i.e. after every commit of the bar/tree. A
+  handler fired between a render and its commit is impossible, so it never
+  sees a stale closure. Anything new a `TabItem`/`FileRow` must call goes
+  through that object (one more field), never as a fresh prop.
+- **`TabAgentModeMarks`** (inside every `TabItem`) still subscribes to the
+  whole `modeByTab`/`goalByTab` maps of `useAgentModelsStore`; a mode change
+  on any agent re-renders that badge in every tab (the badge only, the item's
+  memo holds). Worth a per-key selector if it shows up.
+- **Tests that render `TabBar` with agent tabs** now pay 60 × 3 activity
+  selectors; the activity store must be reset in `beforeEach`
+  (`busyByTab`/`busyKindByTab`/`attentionByTab`) or a previous test's lamp
+  leaks into a count. `FileTreeRowMemo` runs with fake timers and the row
+  cap: `mountAll` clicks "show more" until it is gone.
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles) |
+| `npm test` | 741 files / 7576 tests (base 738 / 7568) |
+| `cargo test -q` | lib 3578 passed, 3 ignored (base 3574 + the S5 review's 4); every other target green (unchanged by S6: no Rust touched) |
+| `npm run lint` | 0 errors, 28 pre-existing warnings |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+### Flagged for user
+- **Schedule tooltip "next" is cached by schedule identity.** The ◷ title on
+  an agent tab used to compute the next occurrence from a fresh `Date` on
+  every bar render (which, with status ticks, was near-continuous). It is
+  now computed when the tab's schedule list changes or the tab mounts; after
+  the shown occurrence passes with no list change, the tooltip names the
+  past one until the next republish (a run or an edit saves the list; the
+  count is unaffected). Not a behaviour the plan asked to keep; say so if
+  it should refresh per hover instead (one `onMouseEnter` recompute, no
+  timer).
+- **`TabBar.tsx` carries uncommitted edits in the main checkout** by another
+  session: the `TabItem` extraction replaces the bar's per-tab JSX block and
+  three hook lines (activity maps, schedules, `selectOnMount`) wholesale, so
+  a merge of that session's hunks into those regions will conflict. The
+  bar's remaining 1,900 lines are untouched.
+- **Load flakes during the gates:** DeckAutosave, Autocomplete, BibCards,
+  TexViewer, the viewer auto-reload/font-size/GIF/Python/YAML files and
+  MobileIndicator timed out (20 s) under load average 23–40 in a full run
+  and passed when rerun in batches of two or three; none import the S6 files.
+- The plan's line numbers for all three files had drifted (the pane map now
+  starts near `CenterPanel.tsx:1176`, the tab map near `TabBar.tsx:1354`,
+  `renderEntry` near `FileTree.tsx:3878` before the patch); the mechanisms
+  were as described.
+
+### Live click-through (user)
+1. Open a project with many tabs (a dozen is enough): drag a split divider —
+   panes follow the divider with no visible lag; every pane's content is
+   live after the drag (nothing respawned, terminal scrollback intact).
+2. Click the already-active tab in the focused subwindow: nothing changes
+   (no flicker, no re-layout). Click the active tab of the *other* subwindow:
+   the focus frame moves to it.
+3. Start an agent turn in one tab and watch another tab's lamp — the busy
+   ring appears/clears on the right tab only; hover a tab: the hover card
+   opens, no other tab repaints.
+4. On an agent tab with a schedule, hover ◷: the tooltip names the next
+   occurrence (see Flagged if it is stale).
+5. Files panel on a big folder: click "show more" twice, then move the
+   mouse across rows and rest on one — the tooltip opens after the dwell and
+   scrolling stays smooth; click a row (selected), Ctrl-click another; drag
+   a file onto a folder; right-click a row — all as before. On a remote
+   project the sync badges and the Run ▶ on a `.sh`/main `.py` still act.
