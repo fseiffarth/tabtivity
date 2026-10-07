@@ -1,7 +1,8 @@
 # Performance — plan
 
-Status: plan only (2026-10-06, revised after two reviews the same day). No
-code changed. Findings come from five read-only code audits (frontend render
+Status: implementation in progress (plan 2026-10-06, revised after two
+reviews the same day; agent steps in §11, handoff in
+`docs/performance_handoff.md`). Findings come from five read-only code audits (frontend render
 cost; backend hot paths; startup, IPC and bundle; existing perf debt +
 terminal/viewer paths; many open tabs + PDF viewers), then a correctness
 review against the tree and a priority review. Nothing was measured live —
@@ -10,6 +11,20 @@ must be confirmed by §1 first.
 
 User request: "Tabtivity is too slow", in particular with many tabs open at
 once and with heavy PDF viewers.
+
+## Baseline (2026-10-06, `scripts/perf-numbers.sh before`, full log in `docs/performance_numbers.md`)
+
+Frozen dev build a6ed2c7a, usual tab set, app idle, machine load 72 on 24
+cores (agents running in tabs: opencode, claude).
+
+| Number | Before |
+|---|---|
+| Renderer main thread, idle | 47.3 % of one core (whole process 53.9 %); nice −10 applied, rtkit active |
+| Renderer runqueue wait | 1.95 s per 30 s |
+| App process, idle | 14.3 % of one core; main thread 4.5 %; 105 voluntary ctxt switches/s; 151 threads |
+| Renderer RSS, PDFs open → closed | 1,229 MB → 1,010 MB |
+| App RSS | 434 MB |
+| Stopwatch: agent tab / 100-page PDF | not yet recorded |
 
 ## 0. Diagnosis in one paragraph
 
@@ -69,7 +84,7 @@ mounted. And which theme is active: `fancy_dark` and `light_lavender` put a
 `tail -n 20 ~/.local/share/tabtivity/crash.log | grep -E 'renderer-watchdog|ipc-fallback'`
 for RSS context.
 
-## 2. Decisions
+## 2. Fixed decisions
 
 - Fix store churn, PDF rendering and the GTK-thread fsyncs before anything
   structural: cheap, high-confidence, and the §1 numbers tell whether they
@@ -573,3 +588,32 @@ can be compared step by step with the §1 numbers.
 
 Remaining direct `setInterval` sites after step 16 are listed here once the
 helper lands (today: 90 sites in 68 files).
+
+## 11. Agent steps (implement + review routine)
+
+Sizing rule: one implementer gets one subsystem, at most about 1.5 estimated
+days of plan effort and about three large files, so it finishes with room to
+spare (a single agent doing a whole phase once burned ~700k tokens). The 15
+code steps of §9 plus the three sections §9 never listed (§4.4, §4.5, §7.6)
+fold into 12 agent steps. Each ends in green gates and one commit per plan
+section; each gets a fresh reviewer (bugs only, §2 is not up for review).
+Order follows §9 where sections don't share files.
+
+| Agent step | Plan sections | §9 steps covered | Est. | Main files |
+|---|---|---|---|---|
+| S1 backend quick wins | §7.1, §7.3, §7.2 quick wins (Rust half) | 2, half of 11, half of 9 | 1.25 d | `storage.rs`, `commands/projects.rs`, `commands/settings.rs`, `services/agent_auth.rs`, `sysstat.rs`, `gpustat.rs`, `services/agent_transcript.rs` |
+| S2 PDF render + reload | §4.1, §4.2, §4.4 | 3 | 1.5 d | `embed/pdf/PdfViewer.tsx`, `raster.ts`, `FileViewerPane.tsx` (`onCompiled` only) |
+| S3 viewer state + hidden PDF release | §3.1, §4.3 | 4, 5 | 1.5 d | `stores/tabs.ts`, `FileViewerPane.tsx` (`useViewerState`), `PdfViewer.tsx`, `CenterPanel.tsx` (persist effect), `AppShell.tsx` (quit flush) |
+| S4 terminal frontend | §3.2, §5.2 | 6, 12 | 1 d | `stores/activity.ts`, `AppShell.tsx`, `terminalBus.ts`, `readerLive.ts`, `readableScreen.ts`, `TerminalView.tsx`, `launch_prep.rs` |
+| S5 terminal backend | §3.2b, §7.6 | 7 | 1 d | `terminal/mod.rs`, `AppShell.tsx` (activity listener) |
+| S6 many-tabs memo | §5.1 | 8 | 1 d | `CenterPanel.tsx`, `TabBar.tsx`, `FileTree.tsx` |
+| S7 pollers, git dots, launch chain | §3.3 first three sites, §3.4, §3.5 | rest of 9, 10, rest of 11 | 1.25 d | `AppResourceDisplay.tsx`, `LocalModelMenu.tsx`, `MobileIndicator.tsx`, `ProjectFilesView.tsx`, `FileTree.tsx`, `commands/git.rs`, `stores/projects.ts`, `themes.css` |
+| S8 bundle + thin LTO | §6 | 13 | 1–2 d | `TabPane.tsx`, `AppShell.tsx`, `FileViewerPane.tsx`, `vite.config.ts`, `Cargo.toml` |
+| S9 sleeping tabs I | §5.3 pane layer, `SleepingPane`, viewer kinds, setting; §4.5 stub | first half of 14 | 2 d | `CenterPanel.tsx`, new `SleepingPane`, settings + i18n + `untested.ts` |
+| S10 sleeping tabs II | §5.3 terminal kinds (no-kill mount, attach wake, kill on close, dock view, scrollback cap) | second half of 14 | 1.5 d | `TerminalView.tsx`, `TabPane.tsx`, `terminal/mod.rs`, close path in `stores/tabs.ts` |
+| S11 backend structural | §7.2 `proc_table`, §7.5, §7.7 | 15 | 1–2 d | new `services/proc_table.rs`, `agent_turn.rs`, `agent_fence.rs`, `ui_priority.rs`, `agent_transcript.rs`, Reader views, `net_usage.rs`, `hostSessions.ts` |
+| S12 poll helper + QA rows | §3.3 `usePoll` sweep, §8 | 16 | 2 d | new `lib/usePoll.ts`, poller sites, `todo/group-u-performance.md`, `untested.ts` |
+
+Not implemented by this run: §1 (the user's host-shell numbers — take them
+on the currently running build before restarting into a new dev build) and
+§10 (suggestions, not ordered steps).
