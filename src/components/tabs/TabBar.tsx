@@ -288,14 +288,24 @@ const TabItem = memo(function TabItem({
       ? s.byTarget[scheduleCacheKey(scope, tab.scheduleTargetId)]
       : undefined,
   );
+  // Recomputed against a fresh "now" on every list change, and again (via the
+  // epoch) when the indicator is hovered after the shown occurrence has
+  // passed: the title used to be worked out on every bar render, so it never
+  // named a past slot, and a cached one must refresh itself once the clock
+  // crosses it — a run or an edit republishes the list, a skipped slot does not.
+  const [scheduleEpoch, setScheduleEpoch] = useState(0);
   const schedule = useMemo(() => {
     const enabled = (schedules ?? []).filter((item) => item.enabled);
+    const now = new Date();
     const next = enabled
-      .map((item) => nextScheduleOccurrence(item, new Date())?.at)
+      .map((item) => nextScheduleOccurrence(item, now)?.at)
       .filter((at): at is Date => !!at)
       .sort((a, b) => a.getTime() - b.getTime())[0];
     return { count: enabled.length, next };
-  }, [schedules]);
+  }, [schedules, scheduleEpoch]);
+  const refreshScheduleNext = () => {
+    if (schedule.next && schedule.next.getTime() <= Date.now()) setScheduleEpoch((n) => n + 1);
+  };
   // Expose the kind colour to CSS on every tab (not just the active one)
   // so the top stripe reads as the tab-group colour consistently — plain
   // themes draw the rail above, fancy themes move it below. Inactive tabs
@@ -375,6 +385,8 @@ const TabItem = memo(function TabItem({
       {schedule.count > 0 && (
         <span
           className="tab-schedule-indicator"
+          // The hover that is about to read the title refreshes a stale one.
+          onMouseEnter={refreshScheduleNext}
           title={schedule.next
             ? t("agentSchedule.indicatorNext", { count: schedule.count, value: schedule.next.toLocaleString() })
             : t("agentSchedule.indicator", { count: schedule.count })}

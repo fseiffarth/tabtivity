@@ -4,7 +4,7 @@
  * busy flip re-renders that one item, and bar-level churn (a hover card
  * opening) re-renders no item at all.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])) }));
@@ -21,6 +21,7 @@ vi.mock("../../components/tabs/TabMarkBadge", () => ({
 
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useActivityStore } from "../../stores/activity";
+import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useDragStore } from "../../stores/drag/drag";
 import { TabBar } from "../../components/tabs/TabBar";
 
@@ -56,7 +57,12 @@ beforeEach(() => {
   renders.clear();
   useDragStore.setState({ drag: null });
   useActivityStore.setState({ busyByTab: {}, busyKindByTab: {}, attentionByTab: {} });
+  useAgentSchedulesStore.setState({ byTarget: {} });
   seed();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("tab strip memoisation (60 tabs)", () => {
@@ -112,5 +118,51 @@ describe("tab strip memoisation (60 tabs)", () => {
     });
     expect(total()).toBe(before + 2);
     expect(document.querySelector(`.tab[data-tab-index="7"]`)?.className).toContain("active");
+  });
+});
+
+describe("tab schedule indicator (cached next occurrence)", () => {
+  // The next occurrence is cached by the schedule list's identity; once the
+  // clock crosses the shown slot with no list change (a skipped run), the
+  // hover that is about to read the title must refresh it to the following
+  // slot, as the per-render computation it replaced always did.
+  it("refreshes a passed occurrence when the indicator is hovered", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 7, 10, 0, 0));
+    const tabs = useTabsStore.getState().tabs.map((tb, i) =>
+      i === 3 ? { ...tb, scheduleTargetId: "target-3" } : tb,
+    );
+    useTabsStore.setState({ tabs, tabsByScope: { p1: tabs } });
+    useAgentSchedulesStore.setState({
+      byTarget: {
+        [scheduleCacheKey("p1", "target-3")]: [
+          { id: "s1", enabled: true, message: "go", rule: { type: "daily", time: "11:00" } },
+        ],
+      },
+    });
+    render(<TabBar groupId="g1" projectCwd="/p" showGroupClose={false} />);
+    await act(async () => {});
+    const indicator = document.querySelector<HTMLElement>(
+      `.tab[data-tab-index="3"] .tab-schedule-indicator`,
+    )!;
+    const today = new Date(2026, 9, 7, 11, 0, 0);
+    const tomorrow = new Date(2026, 9, 8, 11, 0, 0);
+    expect(indicator.title).toContain(today.toLocaleString());
+
+    // The slot passes; nothing republished the list.
+    vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0));
+    await act(async () => {
+      fireEvent.mouseEnter(indicator);
+    });
+    expect(indicator.title).toContain(tomorrow.toLocaleString());
+    expect(indicator.title).not.toContain(today.toLocaleString());
+
+    // A hover while the shown slot is still ahead re-renders nothing.
+    const before = total();
+    await act(async () => {
+      fireEvent.mouseEnter(indicator);
+    });
+    expect(total()).toBe(before);
+    expect(indicator.title).toContain(tomorrow.toLocaleString());
   });
 });
