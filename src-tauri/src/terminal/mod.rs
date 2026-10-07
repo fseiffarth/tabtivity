@@ -24,6 +24,9 @@ use tauri::{AppHandle, Emitter};
 
 use crate::services::window_service::MAIN_WINDOW_LABEL;
 
+mod replay_trim;
+use replay_trim::{trim_replay, ScreenState, REPLAY_TRIM_FLOOR};
+
 // ── Constants ─────────────────────────────────────────────────────────────
 
 const BATCH_INTERVAL: Duration = Duration::from_millis(16);
@@ -66,7 +69,9 @@ const INPUT_CHANNEL_CAP: usize = 64;
 // decision prompt that arrives right before quiet is still reported.
 //
 // Showing the pane again (`pty_set_visible`) drains `pending` as ONE
-// `terminal-replay` event — a separate event name because replayed output is
+// `terminal-replay` event — cut at its last full clear with the terminal
+// state the dropped frames set re-applied in front (`replay_trim`), so a
+// long hidden spell replays a screen, not a megabyte of dead frames. It is
 // STALE output written late: the frontend must route it through its
 // stripTerminalQueries guard, never a bare `term.write` (a terminal query in
 // it would be answered on parse and typed into the shell). The drain is
@@ -143,6 +148,10 @@ struct OutputRoute {
     watchers: u32,
     /// Output accumulated while unsubscribed, replayed on the next rising edge.
     pending: String,
+    /// The terminal state set by bytes `ROUTE_PENDING_CAP` already trimmed off
+    /// the front of `pending` (a mode switch there must still reach xterm when
+    /// the pane is shown). Folded on each trim, spent by the replay.
+    carried: ScreenState,
     /// A bounded tail of everything routed for this PTY (see
     /// `ROUTE_SCROLLBACK_CAP`), so a viewer attaching to an already-running
     /// terminal can catch up instead of opening blank.
@@ -210,17 +219,29 @@ impl OutputRoute {
             self.pending_start = slice.start_offset;
         }
         self.pending.push_str(&slice.text);
-        self.pending_start += trim_with_hysteresis(&mut self.pending, ROUTE_PENDING_CAP) as u64;
+        if let Some(cut) = hysteresis_cut(&self.pending, ROUTE_PENDING_CAP) {
+            self.carried.observe(&self.pending[..cut]);
+            self.pending.drain(..cut);
+            self.pending_start += cut as u64;
+        }
     }
 
     /// Drain the hidden-spell buffer for a replay emit. Also drops the digest:
     /// its bytes are a subset of `pending` and have just been delivered.
+    ///
+    /// The slice's offsets are the stream range the replay *covers*; its text
+    /// is that range cut down to what xterm needs (`replay_trim`), so the two
+    /// no longer agree byte for byte. The only reader of replay offsets drops
+    /// a replay that ends inside its scrollback snapshot (`TerminalView`'s
+    /// `outputAfterScrollback`), which a whole-range comparison still answers.
     fn take_pending(&mut self) -> Option<OutputSlice> {
         self.digest.clear();
         if self.pending.is_empty() {
+            self.carried = ScreenState::default();
             return None;
         }
-        let text = std::mem::take(&mut self.pending);
+        let carried = std::mem::take(&mut self.carried);
+        let text = trim_replay(std::mem::take(&mut self.pending), &carried, REPLAY_TRIM_FLOOR);
         let start_offset = self.pending_start;
         self.pending_start = self.output_offset;
         Some(OutputSlice {
@@ -307,15 +328,26 @@ static ROUTE_SEQ: AtomicU64 = AtomicU64::new(0);
 /// The buffer already contains decoded text, so advance the cut to a character
 /// boundary rather than creating replacement characters during replay.
 fn trim_with_hysteresis(buf: &mut String, cap: usize) -> usize {
+    match hysteresis_cut(buf, cap) {
+        Some(cut) => {
+            buf.drain(..cut);
+            cut
+        }
+        None => 0,
+    }
+}
+
+/// Where `trim_with_hysteresis` would cut, for a caller that reads the cut-off
+/// front before dropping it.
+fn hysteresis_cut(buf: &str, cap: usize) -> Option<usize> {
     if buf.len() > cap * 2 {
         let mut cut = buf.len() - cap;
         while cut < buf.len() && !buf.is_char_boundary(cut) {
             cut += 1;
         }
-        buf.drain(..cut);
-        return cut;
+        return Some(cut);
     }
-    0
+    None
 }
 
 #[derive(Debug)]
@@ -1694,6 +1726,61 @@ mod route_tests {
             "past 2x it cuts back to the cap"
         );
         assert!(buf.ends_with('y'), "the newest bytes survive");
+    }
+
+    /// A long hidden spell replays from its last full clear, with the modes
+    /// the dropped frames switched on re-applied in front (§3.2b).
+    #[test]
+    fn showing_replays_from_the_last_clear_with_the_modes_in_front() {
+        let id = "route-t-replay-trim";
+        let seq = route_open(id);
+        set_visible(id, false);
+        let t0 = Instant::now();
+        let _ = route_chunk_at(id, b"\x1b[?1049h\x1b[?1000h\x1b[?2004h", t0, seq);
+        let dead = "dead frame ".repeat(REPLAY_TRIM_FLOOR / 10);
+        let _ = route_chunk_at(id, dead.as_bytes(), t0, seq);
+        let _ = route_chunk_at(id, b"\x1b[?1000l\x1b[2J\x1b[Hlast frame", t0, seq);
+        assert_eq!(
+            set_visible(id, true).as_deref(),
+            Some("\x1b[?1049h\x1b[?1000l\x1b[?2004h\x1b[2J\x1b[Hlast frame")
+        );
+        route_remove_view(id, "test-view", 2);
+        route_close(id, seq);
+    }
+
+    /// A short spell replays whole, even across a clear: nothing to save.
+    #[test]
+    fn a_short_hidden_spell_replays_whole() {
+        let id = "route-t-replay-short";
+        let seq = route_open(id);
+        set_visible(id, false);
+        let t0 = Instant::now();
+        let _ = route_chunk_at(id, b"\x1b[?1000hold\x1b[2J\x1b[Hnew", t0, seq);
+        assert_eq!(
+            set_visible(id, true).as_deref(),
+            Some("\x1b[?1000hold\x1b[2J\x1b[Hnew")
+        );
+        route_remove_view(id, "test-view", 2);
+        route_close(id, seq);
+    }
+
+    /// A mode switch the pending cap already trimmed off still reaches the
+    /// replay: the cut-off front is folded into the route's carried state.
+    #[test]
+    fn a_mode_trimmed_off_by_the_cap_still_replays() {
+        let mut route = OutputRoute::default();
+        let push = |route: &mut OutputRoute, text: &str| {
+            let slice = route.retain(text.to_string());
+            route.push_pending(&slice);
+        };
+        push(&mut route, "\x1b[?1049h\x1b[?2004h");
+        push(&mut route, &"x".repeat(ROUTE_PENDING_CAP * 2));
+        assert_eq!(route.pending.len(), ROUTE_PENDING_CAP, "the cap cut the front off");
+        assert!(!route.carried.is_empty(), "…and kept what it switched on");
+        push(&mut route, "\x1b[2J\x1b[Hframe");
+        let replay = route.take_pending().unwrap().text;
+        assert_eq!(replay, "\x1b[?1049h\x1b[?2004h\x1b[2J\x1b[Hframe");
+        assert!(route.carried.is_empty(), "spent by the replay");
     }
 
     #[test]
