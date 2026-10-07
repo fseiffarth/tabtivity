@@ -201,7 +201,12 @@ function nextWindowEnd(
   const onset = onsetByPty[ptyId];
   const quietFrom = Math.max(out ?? 0, bellByPty[ptyId] ?? 0) || undefined;
   if (raw !== undefined) consider(raw + BUSY_WINDOW_MS);
-  if (out !== undefined) consider(out + TEXT_GAP_MS);
+  if (out !== undefined) {
+    consider(out + TEXT_GAP_MS);
+    // The turn-end mark (`lastDoneByTab`) waits out the done silence from the
+    // last TEXT alone; a bell after it moves `quietFrom`, not this window.
+    consider(out + DONE_QUIET_MS);
+  }
   if (onset !== undefined) consider(onset + WORK_ONSET_MS);
   if (quietFrom !== undefined) {
     consider(quietFrom + DECISION_QUIET_MS);
