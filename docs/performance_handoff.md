@@ -750,3 +750,111 @@ Nothing run live.
    shown after its agent printed a sign-in link still shows the card.
 5. Drag a splitter across an agent pane: the TUI repaints once at the end
    of the drag (one resize), not continuously.
+
+### Review (S4 reviewer, 2026-10-07)
+Range reviewed: `3e1a8406..e78dd33f` (3c763604, 2447d23c, 5b84f824,
+f6ec9062, e78dd33f). Nothing run live.
+
+**Bugs fixed**
+- `aa2a6470` — `nextWindowEnd` waited out the done silence only from
+  `max(lastText, bell)`, which is what the attention lamp reads; the turn-end
+  mark (`lastDoneByTab`, read by the phone bridge's `doneAt`, the schedules
+  view and the prompt history) waits it out from the last text alone, so a
+  lone bell after the output stopped pushed that mark back by the bell gap
+  (the 300 ms clock caught it by accident). `out + DONE_QUIET_MS` is listed.
+  Test: `ActivityEventDriven` "marks the finished turn on the output's own
+  silence when a bell came later". Same commit, the transition tests the
+  brief asked for, driven off the store's own timers only: decision window
+  expiry, hook-silence retirement (and no timer left after), the 2 s bill
+  tick (≥18 of 19 silent busy seconds booked), scope switch mid-turn → done,
+  no done for a turn watched to its end, bell shortcut, quiesce re-arm keeps
+  the pending windows and `stop` clears them, ≤ 1 trail + 1 expiry timer
+  under 40 chunks, popout open/close recompute.
+
+**Checked and found sound**
+- Every `note*` schedules or recomputes: `notePtyOutput`, `noteUserInput`,
+  `notePtySpawn`, `noteBackgroundWork` (trail); `noteAgentTurn`,
+  `noteScheduleProposal`, `noteTurnCutOff`, `noteBell` (direct, which arms
+  the expiry). `clearAttention` only moves `seenAt` and sets the maps itself;
+  nothing time-gated depends on it. The popout's `detached-activity` events
+  land in those same calls. Tab list / layout / popout / scope changes come
+  through the tabs-store subscription.
+- Every time gate `recompute` reads is in `nextWindowEnd`: `BUSY_WINDOW`,
+  `TEXT_GAP`, `WORK_ONSET`, `DECISION_QUIET`, `DONE_QUIET` (both from
+  `quietFrom` and, now, from the text), `HOOK_WORK_SILENCE` on `max(raw,
+  turn.at)`. `INPUT_SUBMIT_GRACE_MS` gates only the delivery readers (polled
+  by their callers), not the maps. `armExpiry` clears before arming, the
+  trail is guarded by `trailTimer !== null`, `startActivityTicks`'s stop
+  clears both; the `+1` ms keeps a window past on the firing tick and an
+  early fire would only re-arm.
+- Quiesce: `startActivityTicks(saverInterval(300, quiesce))` re-arms on each
+  flip — the trail stretches ×3 as the interval did; the expiry is exact.
+- Bus tap order is the old listener order (the bus's `listen` registered by
+  the first pane, AppShell's second); the classifier reads only `inputByPty`,
+  which the output path never writes, so neither order changes a result.
+  An id with no tab record takes the full (agent) path, as before.
+- Lean path: `tailByPty` is read only by `tailLooksLikeDecision`
+  (agent-only `attentionFor`/`clearAttention`); no code promotes a shell tab's
+  `kind` to agent (the shim marks nothing on the tab record), so a shell's
+  tail was never read. `lastOutputByPty`/`lastRaw`/onset/`workAt`/the echo
+  gate are kept for `bytesSayWorking`, the hover card and the last-working
+  mark.
+- `readableScreen(buffer, maxRows, { plain })` is additive; the phone's two
+  callers pass one argument; `sessionStatus` and `readCodexStatus` read no
+  span style. An answer past 300 rows: `start` stays 0, the tail is the
+  window, a dialog at the bottom is still found; no throw, no re-read loop.
+- `watchTerminal`: unwatched in the Reader effect's cleanup (deps `visible,
+  ptyId, agentLabel`); a respawn's unregister → clock, register → resubscribe
+  (`subscribed.term !== term`); the clock starts only in the no-terminal
+  branch and is cleared in the first read that finds one. Disposing the write
+  subscription after `term.dispose()` is a no-op in xterm's emitter.
+- `pty_resize`: `tryOpen` sends the first size at once; `doFit` queues the
+  last of a burst (trailing, 80 ms); teardown flushes (not cancels) — right
+  for the popout move and S10's sleep, harmless for a killed PTY.
+  `pty_spawn`'s `term?.cols ?? 80` is read after its awaits, so a pane opened
+  meanwhile spawns at its fitted size.
+- Lazy xterm: every call-time `term.` use outside an `onBuild` closure is
+  guarded (`loadCanvas`, `applyRenderer`, `flushPending`, `writeTerm`, key
+  select, paste, font size, the three mouse handlers, `dispose`,
+  `unregisterTerminal`); the theme/focus/`initialInput`/trust-dialog paths
+  go through `termRef.current?.`. `terminal-exit` before build → `writeTerm`
+  → `pendingOutput` → shown on first open. A never-shown pane disposes
+  nothing and still kills its PTY (`TerminalLazyXterm`).
+- `terminalFor` consumers (`TabLocalityBadges`, `agentModels` model tag and
+  prompt-echo fallback, `terminalScroll`, `useKeyboard`, `SteeringLegend`,
+  the Reader) all take `undefined`; a never-shown pane's xterm buffer was
+  empty before (writes were buffered past an unopened pane), so they read
+  the same.
+- `launch_prep`: the three home preparations `.await` in sequence before
+  the fence wrap / env steps that need the directory; a panic is a
+  `JoinError` → the spawn's error; tests cover value, named error, panic.
+- Harness changes: the two layout stubs only make the mocked terminal exist
+  (jsdom lays nothing out); `TerminalThemeRenderer` still proves no theme
+  write reaches an unopened xterm (now: none exists to reach) and the
+  watchdog reopen; the Reader fake's write event is what a real xterm fires.
+
+**Gates after (worktree)**
+| Gate | Result |
+|---|---|
+| `npm run build` | clean (tsc + desktop + mobile bundles) |
+| `npm test` | 737 files / 7565 tests passed (+10) |
+| `cargo test -q` | lib 3557 passed, 3 ignored; every other target green |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | clean |
+| `git diff --check` | clean |
+
+**Flagged for user**
+- `SteeringLegend`'s `terminal:` flag and `useKeyboard`'s steering scroll
+  target read `terminalFor` at render/keypress: for the frame between a tab
+  becoming active and its first open, the active tab now reads as having no
+  terminal (before, it had an unopened one). Cosmetic at most.
+- The Reader over a working agent whose busy row never repaints (none
+  known) would let a sent prompt go after `PENDING_MS` — the implementer's
+  flag stands; the 1.5 s clock is gone once a terminal exists.
+- The handoff says "the phone reads the same tail" for the 300-row Reader
+  window; the phone's `readableScreen` still reads `MAX_ROWS` (1200). Not a
+  behaviour change on either side.
+- A `done` mark/bill tick after a long idle: the first busy tick's
+  `sinceLastTick` can exceed the 5 s clamp and books 0 for that one tick
+  (≤ a trail's worth); the interval never had a gap. Negligible.
