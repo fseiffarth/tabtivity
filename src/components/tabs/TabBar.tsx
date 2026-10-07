@@ -401,6 +401,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     el.scrollBy({ left: dir * Math.max(120, el.clientWidth * 0.7), behavior: "smooth" });
   }, []);
 
+  // A clicked tab cut off at either edge of the strip scrolls fully into view —
+  // just far enough, and not at all when it already shows whole.
+  const revealTab = useCallback((tabEl: HTMLElement) => {
+    const el = stripRef.current;
+    if (!el || !el.contains(tabEl)) return;
+    const strip = el.getBoundingClientRect();
+    const r = tabEl.getBoundingClientRect();
+    const delta =
+      r.left < strip.left ? r.left - strip.left
+      : r.right > strip.right ? Math.min(r.right - strip.right, r.left - strip.left)
+      : 0;
+    if (Math.abs(delta) >= 1) el.scrollBy({ left: delta, behavior: "smooth" });
+  }, []);
+
   // Continuous scroll while a chevron is hovered: rAF loop nudges the strip each
   // frame until the pointer leaves (mirrors the project switcher's pill chevrons).
   const hoverScrollRef = useRef<number | null>(null);
@@ -923,6 +937,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     // unmounts, so the capture — which on Win/mac is what keeps the terminal
     // pointerup landing on this window once the cursor leaves it — survives.
     const captureEl = document.documentElement;
+    const tabEl = e.currentTarget as HTMLElement;
     let dragging = false;
 
     // #42 (main → detached): an open popout of the current scope is a valid drop
@@ -1024,6 +1039,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       if (!dragging) {
         // Never dragged → this was a click. Clicking an inactive tab activates
         // it; clicking the already-active tab enters inline rename (#56 flow).
+        revealTab(tabEl);
         if (tab.key === activeKey) {
           focusGroup(groupId);
           setEditingKey(tab.key);
