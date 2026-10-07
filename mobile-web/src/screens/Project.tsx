@@ -202,8 +202,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
    * host with none (Windows) nothing can be opened, scheduled or sent to from
-   * here, so ＋, each card's ◷ and Mark up's Submit stay out and one line
-   * says why. An older desktop sends no field, which means tmux. */
+   * here, so the ＋ sheet keeps only its send-a-file row, each card's ◷ and
+   * Mark up's Submit stay out and one line says why. An older desktop sends
+   * no field, which means tmux. */
   const terminalsOffered = detail?.terminals !== "unsupported";
   const projectMenuOffered = outbox.length > 0 || filesOffered || gitOffered;
   /** What a right→left swipe over a card (`data-swipe-close`) does, read at
@@ -521,16 +522,17 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             thumb already is rather than under however many cards the project has
             (`NewTabSheet`). It opens without the desktop too: sending a file
             from the phone needs only this host, and the sheet holds its create
-            buttons instead — the notice below says why. */}
-        {terminalsOffered && <button
+            buttons instead — the notice below says why. On a host with no
+            tmux it stays for that file row alone, and is named after it. */}
+        <button
           className="primary new-tab"
           disabled={!detail}
           onClick={() => setNewTabOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={newTabOpen}
-          aria-label={t("mobile.newTab.title")}
-          title={t("mobile.project.newTabTitle")}
-        ><span aria-hidden="true">＋</span></button>}
+          aria-label={t(terminalsOffered ? "mobile.newTab.title" : "mobile.projectInbox.send")}
+          title={t(terminalsOffered ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+        ><span aria-hidden="true">＋</span></button>
       </div>
     </header>
     {projectMenu && projectMenuOffered && <div className="focus-menu-backdrop" role="presentation" onClick={() => setProjectMenu(false)}>
@@ -685,6 +687,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       shells={detail.shells === true}
       busy={creating}
       headless={!detail.desktop_available}
+      creates={terminalsOffered}
       onClose={() => setNewTabOpen(false)}
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
