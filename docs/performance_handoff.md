@@ -1044,7 +1044,7 @@ f6ec9062, e78dd33f). Nothing run live.
 6. Pop out an agent tab while it is hidden in the main window: the popout
    opens with the tab's current frame and keeps streaming.
 ### Review (S5 reviewer, 2026-10-07)
-Range reviewed: `c7f6149e..7c63373b` (3c745d9, f24adf80, 7c63373b). Nothing
+Range reviewed: `c7f6149e..7c63373b` (3c4745d9, f24adf80, 7c63373b). Nothing
 run live.
 
 **Bugs fixed**
