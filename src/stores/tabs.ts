@@ -2789,9 +2789,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const found = findGroupOfTab(layout, key);
     if (!found) return null;
     const nextKeyValue = nextKey(source.kind);
+    // The copy takes the reader's position as it is NOW, not as the store had it
+    // up to a flush interval ago: merge what is still staged (§3.1).
+    const spec = duplicateSpec({ ...source, viewerState: savedViewerState(source) });
     const entry: TabEntry = {
       ...withTmuxSession(
-        withRunHostDefault(get().scope, { ...duplicateSpec(source), ...overrides }),
+        withRunHostDefault(get().scope, { ...spec, ...overrides }),
         get().scope,
       ),
       key: nextKeyValue,

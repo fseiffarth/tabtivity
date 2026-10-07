@@ -244,6 +244,27 @@ describe("a hidden PDF tab releases its document", () => {
     await waitFor(() => expect(scroller()?.scrollTop).toBe(900));
   });
 
+  it("answers a forward search that arrived while asleep on the wake", async () => {
+    const view = await shown();
+    await hiddenPast(view, PDF_DOC_RELEASE_MS);
+    expect(io.docsDestroyed).toBe(1);
+    // The editor's SyncTeX reveal lands by path; no canvas is mounted to take it.
+    act(() => {
+      usePdfSyncStore.getState().requestReveal(PATH, { page: 2, x: 72, y: 100, w: 200, h: 12 });
+    });
+    expect(usePdfSyncStore.getState().byPath[PATH]).toBeDefined();
+    vi.useRealTimers();
+    view.rerender(viewer(true));
+    await waitFor(() => expect(document.querySelectorAll(".file-viewer-pdf-page").length).toBe(2));
+    // The fresh canvas consumes it and shows the highlight on the page it names.
+    await waitFor(() => expect(usePdfSyncStore.getState().byPath[PATH]).toBeUndefined());
+    await waitFor(() => expect(document.querySelector(".file-viewer-pdf-sync-highlight")).not.toBeNull());
+    const wraps = document.querySelectorAll(".file-viewer-pdf-page-wrap");
+    expect(wraps).toHaveLength(2);
+    expect(wraps[1].querySelector(".file-viewer-pdf-sync-highlight")).not.toBeNull();
+    expect(wraps[0].querySelector(".file-viewer-pdf-sync-highlight")).toBeNull();
+  });
+
   it("stays awake while a build is rewriting the file, then sleeps once it ends", async () => {
     const view = await shown();
     act(() => usePdfSyncStore.getState().applyCompile(PATH, true));

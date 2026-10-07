@@ -136,6 +136,78 @@ describe("setViewerState", () => {
     expect(after.focusedGroupByScope).toBe(before.focusedGroupByScope);
   });
 
+  it("still yields a new tree for every genuine layout change", () => {
+    // Identity preservation (§3.1) must not swallow a real change: each of these
+    // edits re-renders the shell, so each must hand it a new tree.
+    const store = useTabsStore.getState();
+    store.setScope("p");
+    const a = store.addTab({ label: "a", cmd: "bash", cwd: "/p", kind: "shell" });
+    const b = store.addTab({ label: "b", cmd: "bash", cwd: "/p", kind: "shell" });
+    const c = store.addTab({ label: "c", cmd: "bash", cwd: "/p", kind: "shell" });
+    const snap = () => {
+      const s = useTabsStore.getState();
+      return { layout: s.layout, byScope: s.layoutByScope, focus: s.focusedGroupByScope };
+    };
+    const changed = (before: ReturnType<typeof snap>) => {
+      const after = snap();
+      expect(after.layout).not.toBe(before.layout);
+      expect(after.byScope).not.toBe(before.byScope);
+    };
+    const rootGroup = () => {
+      const l = useTabsStore.getState().layout;
+      if (l?.type !== "group") throw new Error("expected a root group");
+      return l;
+    };
+
+    // Active tab.
+    let before = snap();
+    useTabsStore.getState().setActive(a.key);
+    changed(before);
+    expect(rootGroup().activeKey).toBe(a.key);
+
+    // Tab order (a reorder within the group).
+    before = snap();
+    useTabsStore.getState().moveTab(c.key, rootGroup().id, 0);
+    changed(before);
+    expect(rootGroup().tabKeys).toEqual([c.key, a.key, b.key]);
+
+    // A group added (split).
+    before = snap();
+    useTabsStore.getState().splitWithTab(b.key, rootGroup().id, "right");
+    changed(before);
+    const split = useTabsStore.getState().layout;
+    if (split?.type !== "split") throw new Error("expected a split");
+    expect(split.children).toHaveLength(2);
+
+    // Split ratio.
+    before = snap();
+    useTabsStore.getState().resizeSplit(split.id, 0, 0.3);
+    changed(before);
+    const resized = useTabsStore.getState().layout;
+    if (resized?.type !== "split") throw new Error("expected a split");
+    expect(resized.sizes[0]).toBeCloseTo(0.3);
+    expect(resized.sizes[1]).toBeCloseTo(0.7);
+
+    // Focused group: the split left the focus on b's new group; activating a
+    // tab of the other group moves it (and activating b again would not).
+    const aGroup = resized.children.find((n) => n.type === "group" && n.tabKeys.includes(a.key));
+    if (aGroup?.type !== "group") throw new Error("expected a's group");
+    before = snap();
+    useTabsStore.getState().setActive(a.key);
+    expect(snap().focus).not.toBe(before.focus);
+    expect(useTabsStore.getState().focusedGroupId).toBe(aGroup.id);
+    before = snap();
+    useTabsStore.getState().setActive(a.key);
+    expect(snap().focus).toBe(before.focus);
+
+    // A group removed (its last tab closed collapses the split).
+    before = snap();
+    useTabsStore.getState().removeTab(b.key);
+    changed(before);
+    expect(useTabsStore.getState().layout?.type).toBe("group");
+    expect(rootGroup().tabKeys).toEqual([c.key, a.key]);
+  });
+
   it("drops a staged position whose tab was closed", () => {
     const store = useTabsStore.getState();
     store.setScope("p");
