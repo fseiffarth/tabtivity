@@ -11,8 +11,9 @@ use crate::gpustat::{self, GpuProc, GpuSample};
 use crate::sysstat::{self, SystemSnapshot};
 use serde::Serialize;
 
-/// One whole-system sample. `supported` is `false` on non-Linux targets, where
-/// the pane shows a "Linux only" placeholder instead of an empty table.
+/// One whole-system sample. `supported` is `false` on every non-Linux target
+/// (`sysstat::system_snapshot` has no `/proc` to read there), where the pane
+/// shows a "not available on this system" placeholder instead of an empty table.
 ///
 /// `project_id` selects the machine, mirroring `disk_usage_scan`: when it names a
 /// project with a `remote` spec, the sample is taken on the **host** — its `/proc`

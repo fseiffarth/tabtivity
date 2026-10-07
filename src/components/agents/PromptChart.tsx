@@ -37,6 +37,7 @@ import { localOccurrenceKey, localWallClock } from "../../lib/agents/agentSchedu
 import { tagCounts } from "../../lib/agents/prompt/tags";
 import { formatLongDate, monthName, toDateStr, todayStr } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
+import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import {
   queuePromptForTab,
@@ -1064,7 +1065,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                       <button type="button" className="agent-composer-chip" onClick={clearMulti}>{t("promptChart.clearSelection")}</button>
                     </span>
                   )
-                  : <small className="agent-prompt-chart-select-hint">{t("promptChart.selectHint")}</small>}
+                  : <small className="agent-prompt-chart-select-hint">{t("promptChart.selectHint", { modifier: modifierLabel() })}</small>}
               </div>
               <PromptChartFilterBar
                 testId="prompt-chart-timeline-filter"

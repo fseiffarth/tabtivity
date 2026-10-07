@@ -151,3 +151,97 @@ manual test on Windows.
   `\` as a Windows separator; FileTree and other callers inherit the same
   blind spot for POSIX names containing `\`. Only `retargetTabs` is fixed
   here (it had a byte-exact predecessor); the rest is pre-existing.
+
+## A2 — 3.3
+
+Commit: the one that carries this section — `git log -1 --format=%h -- docs/macos_windows_completion_handoff.md` on `osfix/a2` (one commit for the step).
+
+Per file:
+- `src/lib/shortcuts/shortcuts.ts` — `modifierLabel()` (⌘ on mac, Ctrl
+  elsewhere), lifted from `FileViewerPane`'s `OPEN_MODIFIER`; the one label for
+  mouse-modifier prose. Key chords keep going through `useChordHint`.
+- `src/lib/i18n.ts` + `src/lib/i18nDicts/{de,es,fr,it}.ts` — 38 keys per file:
+  19 tooltip keys lose their literal `(Ctrl+…)`/`(Strg+…)`/`(Alt+←)` suffix
+  (the chord is appended by `useChordHint` → `shortcut.hint`); 14 prose keys
+  carry `{modifier}` where they said `Ctrl+`/`Strg+` (`mail.selectHint` keeps
+  its hyphen: `{modifier}-click`); 3 autocomplete strings carry `{altRight}`
+  (and the two editor legends `{altBrackets}`); `sysmon.linuxOnly` →
+  `sysmon.unavailable` ("not available on this system"); `settings.copilotUnsupported`
+  loses "for now".
+- `src/components/embed/FileViewerPane.tsx` — `OPEN_MODIFIER` → `modifierLabel()`;
+  `AC_KEY_LABELS` (module const, via `chordLabel`) feeds the ghost-text legend;
+  `useChordHint` in `CodeEditor`, `SaveButton`, `UndoRedoButtons`,
+  `EditorAiControls`, `FontSizeControls` — rebindable ones by action id
+  (`editorReplace`, `editorSave`, `editorUndo`, `editorRedo`,
+  `editorAutocomplete`, `zoomOut`/`zoomReset`/`zoomIn`), Replace-all as the
+  literal `Ctrl+Enter`; `syncNoPdfMsg` gets `{modifier}`.
+- `src/components/embed/pdf/PdfViewer.tsx` — `PdfCanvas` tooltips (Go to page,
+  Find, Undo, Redo, Save, Print, link Back) as literal descriptors; the handler
+  (`e.ctrlKey || e.metaKey`, `e.altKey`) is unchanged.
+- `src/components/embed/deck/DeckView.tsx` — Duplicate tooltip, literal `Ctrl+D`.
+- `src/components/agents/AgentSchedulesView.tsx` — composer Send tooltip,
+  literal `Ctrl+Enter`.
+- `src/components/agents/PromptChart.tsx`, `layout/SettingsPanel.tsx`,
+  `layout/SettingsSubPanels.tsx`, `layout/SteeringLegend.tsx`,
+  `layout/ShortcutHelpOverlay.tsx`, `layout/intro/LocalModelsPage.tsx`,
+  `terminal/TerminalPromptStrip.tsx`, `mail/MailList.tsx` — pass
+  `{ modifier: modifierLabel() }` (LocalModelsPage also `altRight`).
+- `src/lib/lessons.ts` — `bodyParams: () => ({ modifier: modifierLabel() })` on
+  the four lesson steps whose body names the modifier (the existing `TourStep`
+  hook, previously used only by the focus-mode tip).
+- `src/components/monitoring/SystemMonitorPane.tsx` — key rename.
+- `src/components/header/DevBuildIndicator.tsx` — "Open log" button hidden
+  when `IS_WINDOWS` (`followLog` itself untouched).
+- `src-tauri/src/commands/monitor.rs` — doc comment: `supported: false` on every
+  non-Linux target, placeholder wording.
+- `src/__tests__/shell/Shortcuts.test.ts` — `modifierLabel` off mac; `chordLabel`
+  + `modifierLabel` under mocked `lib/platform` for macos / windows / linux
+  (`vi.doMock` + fresh import, same pattern as `PanelToggleCopy.test.tsx`).
+- `docs/filemap_frontend.md` — `shortcuts.ts` row mentions `modifierLabel()`.
+
+Choices where the plan left room:
+- Tooltips of the editor's rebindable chords use the action id, so a rebinding
+  shows in the title; text size uses `zoomOut`/`zoomReset`/`zoomIn` because
+  that is what `zoomFor` matches in the editor keydown.
+- `fileViewer.autocompleteOnHint` moved its chord to the end ("… — click to
+  disable (Ctrl+Space)") since `shortcut.hint` is `{label} ({chord})`.
+- The "Ctrl+Shift+Tab cycles …" / "Ctrl+Shift+R" / "Ctrl+1–9" prose takes
+  `{modifier}` as the plan says, not the resolved chord: on mac it reads
+  "⌘+Shift+Tab" (prose), while tooltips render the glyph form "⇧⌘Tab".
+- Autocomplete ⌥: the legend's `Alt+→` / `Alt+[/]` are `chordLabel` output
+  (`⌥→`, `⌥[/]` on mac) rather than a second label helper; `intro.models.step6Body`
+  gets the same `{altRight}`.
+- `pdfLinks.backTitle` (Alt+←) and `mail.selectHint` (Ctrl-click, hyphen —
+  the plan's `Ctrl\+` sweep missed it) were swept too: same handlers, same rule.
+- Left literal on purpose: `mobile.keys.interruptConfirm` and
+  `lessons.runPython.runFileBody` (terminal Ctrl+C is a control character, not
+  a chord), `mobile.mode.yoloGeminiHint` (Gemini's own Ctrl+Y).
+- German dictionaries now show "Ctrl" where they said "Strg" in these strings,
+  as `fileViewer.linkOpenHint` and `chordLabel` already did.
+- No `UntestedTag`, no 🖐️ line: wording only, no new control (§3.3 names none).
+- `src-tauri/src/sysstat.rs:83` still says "Linux only" in a doc comment — left
+  for A7 (3.10 edits that file).
+
+Gotchas:
+- `IS_MAC`/`IS_WINDOWS` are import-time constants: the per-platform test must
+  `vi.resetModules()` + `vi.doMock("../../lib/platform")` + dynamic import.
+- `vitest` prints `translate()` output per key only if `shortcut.hint` holds
+  `{label} ({chord})` — a dictionary that drops the parenthesis would change
+  every tooltip at once.
+- Windows `cargo check` cross-check not run: the only `src-tauri/` change is a
+  doc comment.
+
+Gates (worktree, 2026-10-07):
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + both bundles) |
+| `npm test` | 729 files / 7524 tests passed (A1 baseline 729 / 7521) |
+| `npm run lint` | 0 errors, 28 warnings (same set as A1) |
+| `cargo test` | 3711 passed, 3 ignored |
+| `cargo clippy -D warnings` | no issues |
+| `scripts/brand-check.sh` | pass (48 allowlist entries) |
+| `git diff --check` | clean |
+
+### Flagged for user
+
+- None.

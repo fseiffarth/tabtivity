@@ -122,6 +122,7 @@ import { IconPicker } from "./IconPicker";
 import { slideStopIndex } from "../../../lib/viewers/deck/present";
 import { posterPng } from "./gifPlayback";
 import { useT } from "../../../lib/i18n";
+import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
@@ -233,6 +234,7 @@ export interface DeckViewProps {
 
 export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewProps) {
   const t = useT();
+  const chordHint = useChordHint();
   const scope = useFileScope();
   const paneVisible = usePaneVisible();
   /** The scope project's own directory — the boundary `read_file_bytes` confines
@@ -1484,7 +1486,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
           className="file-viewer-zoom-btn"
           disabled={!hasSel}
           onClick={duplicateSelection}
-          title={t("deckView.duplicateSelectionTitle")}
+          title={chordHint(t("deckView.duplicateSelectionTitle"), { key: "d", ctrl: true })}
         >
           ⧉
         </button>

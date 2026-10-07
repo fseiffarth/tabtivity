@@ -11,7 +11,7 @@
  * `navigator`, so `chordMatches` is exercised on the exact-modifier
  * (non-macOS) path only; the ⌘/⌃-collapsing mac path is untestable here.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   SHORTCUT_DEFS,
   SHORTCUT_GROUPS,
@@ -23,6 +23,7 @@ import {
   UNBOUND,
   findConflicts,
   isLoneModifier,
+  modifierLabel,
   normalizeKey,
   resolveChord,
   zoomFor,
@@ -76,6 +77,10 @@ describe("#62 shortcut helpers", () => {
     expect(chordLabel({ key: "ArrowLeft", shift: true })).toBe("Shift+←");
     expect(chordLabel({ key: "w", ctrl: true })).toBe("Ctrl+W");
     expect(chordLabel({ key: " ", ctrl: true, shift: true })).toBe("Ctrl+Shift+Space");
+  });
+
+  it("names the mouse modifier Ctrl off macOS", () => {
+    expect(modifierLabel()).toBe("Ctrl");
   });
 
   it("captures alt/meta modifiers into the descriptor", () => {
@@ -173,5 +178,47 @@ describe("the former fixed keys", () => {
     expect(chordMatches(LONE_SUPER, key({ key: "Super" }))).toBe(false);
     // Two switched-off actions are no conflict.
     expect(findConflicts({ closeTab: UNBOUND, prevTab: UNBOUND }).size).toBe(0);
+  });
+});
+
+/** `IS_MAC`/`IS_WINDOWS` are import-time constants, so the per-platform labels
+ *  are read from a fresh module graph under a mocked `lib/platform`. */
+describe("platform labels (mocked platform)", () => {
+  async function labelsOn(platform: "macos" | "windows" | "linux") {
+    vi.resetModules();
+    vi.doMock("../../lib/platform", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../lib/platform")>()),
+      IS_MAC: platform === "macos",
+      IS_WINDOWS: platform === "windows",
+      IS_LINUX: platform === "linux",
+      PLATFORM: platform,
+    }));
+    try {
+      const mod = await import("../../lib/shortcuts/shortcuts");
+      return {
+        modifier: mod.modifierLabel(),
+        cycle: mod.chordLabel({ key: "Tab", ctrl: true, shift: true }),
+        save: mod.chordLabel({ key: "s", ctrl: true }),
+        altRight: mod.chordLabel({ key: "ArrowRight", alt: true }),
+      };
+    } finally {
+      vi.doUnmock("../../lib/platform");
+      vi.resetModules();
+    }
+  }
+
+  it("renders ⌘ and the mac glyph chords on macOS", async () => {
+    expect(await labelsOn("macos")).toEqual({
+      modifier: "⌘",
+      cycle: "⇧⌘Tab",
+      save: "⌘S",
+      altRight: "⌥→",
+    });
+  });
+
+  it("keeps the textual Ctrl/Alt labels on Windows and Linux", async () => {
+    const textual = { modifier: "Ctrl", cycle: "Ctrl+Shift+Tab", save: "Ctrl+S", altRight: "Alt+→" };
+    expect(await labelsOn("windows")).toEqual(textual);
+    expect(await labelsOn("linux")).toEqual(textual);
   });
 });
