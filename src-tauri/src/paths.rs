@@ -605,14 +605,17 @@ where
 /// build keeps its tree under the old name — it holds the user's projects,
 /// and moving it is a step of its own that only the user starts — and
 /// everything else gets the current name: `~/<current>` if it exists, else
-/// `~/<old>` if that exists, else `~/<current>`.
+/// `~/<old>` if that exists, else `~/<current>`. A `~/<current>` with no file
+/// in it does not win over a `~/<old>` that has files
+/// (`brand_migration::resolve_user_tree`): a stray empty folder must not move
+/// the root workspace and orphan the root agents' conversations.
 pub fn app_home_in<F>(pair: &crate::brand::Pair, env: F, home: &Path) -> PathBuf
 where
     F: FnMut(&str) -> Option<String>,
 {
     match pair.env_in("HOME", env) {
         Some(dir) => PathBuf::from(dir),
-        None => crate::services::brand_migration::resolve_named_dir(
+        None => crate::services::brand_migration::resolve_user_tree(
             pair,
             crate::brand::Name::HOME_DIR_NAME,
             home,
@@ -985,14 +988,13 @@ mod tests {
     }
 
     /// The leaf this machine's home tree has: the current name, or the old
-    /// one where an install made before the rename still keeps its tree there.
-    fn home_tree_leaf() -> &'static str {
-        let home = home_dir();
-        if !home.join(crate::brand::HOME_DIR_NAME).exists() && home.join(crate::brand::LEGACY_HOME_DIR_NAME).exists() {
-            crate::brand::LEGACY_HOME_DIR_NAME
-        } else {
-            crate::brand::HOME_DIR_NAME
-        }
+    /// one where an install made before the rename still keeps its tree there
+    /// (the resolution rule itself is tested on a temp home below).
+    fn home_tree_leaf() -> String {
+        let tree = app_home_in(&crate::brand::PAIR, |_| None, &home_dir());
+        let leaf = tree.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        assert!(leaf == crate::brand::HOME_DIR_NAME || leaf == crate::brand::LEGACY_HOME_DIR_NAME, "{tree:?}");
+        leaf
     }
 
     #[test]
@@ -1005,7 +1007,8 @@ mod tests {
     /// A fresh machine gets the tree under the current name; an install made
     /// under the old name keeps its tree where it is (moving the user's
     /// projects is a step only the user starts); once both exist the current
-    /// one wins; and the old variable still redirects it.
+    /// one wins unless it holds no file and the old one does; and the old
+    /// variable still redirects it.
     #[test]
     fn the_home_tree_is_the_current_name_unless_only_the_old_one_exists() {
         let pair = crate::brand::PAIR;
@@ -1019,6 +1022,18 @@ mod tests {
         std::fs::create_dir(&old).unwrap();
         assert_eq!(app_home_in(&pair, |_| None, home.path()), old);
         std::fs::create_dir(&current).unwrap();
+        assert_eq!(app_home_in(&pair, |_| None, home.path()), current);
+        // A fileless current tree (a stray `mkdir`, an empty `root/`, a box
+        // farm's symlink) loses to an old tree with the user's files in it.
+        std::fs::create_dir_all(old.join("projects").join("p")).unwrap();
+        std::fs::write(old.join("projects").join("p").join("notes.md"), "x").unwrap();
+        std::fs::create_dir_all(current.join("root")).unwrap();
+        std::fs::create_dir_all(current.join("boxes")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(old.join("projects").join("p").join("notes.md"), current.join("boxes").join("p")).unwrap();
+        assert_eq!(app_home_in(&pair, |_| None, home.path()), old);
+        // One real file in it and the current tree wins again.
+        std::fs::write(current.join("root").join("todo.txt"), "x").unwrap();
         assert_eq!(app_home_in(&pair, |_| None, home.path()), current);
         let old_var = crate::brand::LEGACY.env_name("HOME");
         assert_eq!(

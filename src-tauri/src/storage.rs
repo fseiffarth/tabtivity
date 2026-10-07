@@ -781,15 +781,10 @@ mod tests {
             .unwrap_or("");
         // The home tree: the current name, or the old one where an install
         // made before the rename keeps it.
-        let home = paths::home_dir();
-        let expected = if !home.join(crate::brand::HOME_DIR_NAME).exists()
-            && home.join(crate::brand::LEGACY_HOME_DIR_NAME).exists()
-        {
-            crate::brand::LEGACY_HOME_DIR_NAME
-        } else {
-            crate::brand::HOME_DIR_NAME
-        };
-        assert_eq!(parent, expected);
+        assert!(
+            parent == crate::brand::HOME_DIR_NAME || parent == crate::brand::LEGACY_HOME_DIR_NAME,
+            "{dir:?}"
+        );
     }
 
     // ── write_json / read_json ─────────────────────────────────────────────
