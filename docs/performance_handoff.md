@@ -1304,3 +1304,41 @@ run live.
    scrolling stays smooth; click a row (selected), Ctrl-click another; drag
    a file onto a folder; right-click a row — all as before. On a remote
    project the sync badges and the Run ▶ on a `.sh`/main `.py` still act.
+
+## Resume state (paused 2026-10-07, 11:40 CEST)
+
+The run was paused by the user after S6's implementer and partway through
+S6's reviewer. Everything is on branch `perf` in worktree
+`.claude/worktrees/perf`; the main checkout is untouched (its
+`docs/performance_plan.md`, `docs/performance_numbers.md` and
+`scripts/perf-numbers.sh` are untracked copies/tools, not yet on the branch —
+add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
+
+- Done, implemented + reviewed: S1 (backend quick wins), S2 (PDF render +
+  reload), S3 (viewer state + hidden PDF release), S4 (terminal frontend),
+  S5 (terminal backend).
+- S6 (many-tabs memoisation): implemented (45bcd8a9, cdd2a37f, 91e780de,
+  handoff 78011e1c). Review STARTED, not finished: the reviewer landed
+  e10c5fe8 (schedule-occurrence cache refresh) and 3e067ec6 (PaneSlot memo
+  key tests) plus the one-line test fix committed above, then was stopped.
+  It had NOT yet: finished the `TabItem`/FileTree review items, rerun all
+  gates after its fixes, or written `### Review (S6 reviewer, …)`. Its last
+  note: the `npm run build` gate was denied by the permission classifier in
+  its session (it writes `dist/`); it meant to run `tsc --noEmit` instead.
+- Next: a fresh S6 reviewer continuing from HEAD (review range
+  2a19c24c..HEAD), then S7–S12 per plan §11, then the final whole-range
+  review, then landing on `develop` (`project_commit_amid_concurrent_sessions`
+  memory; the main checkout has other sessions' uncommitted edits in
+  `TabBar.tsx`, `TerminalView.tsx`, `TerminalReaderView.tsx`, `tabs.ts`,
+  `FileViewerPane.tsx`, `lib.rs`, `agent_auth.rs` — expect conflicts there).
+- Gates at HEAD of S6 implementer (78011e1c): build ok; vitest 741 files /
+  7576 tests; cargo lib 3578 passed; lint 0 errors / 28 pre-existing
+  warnings; clippy clean; brand ok. Not rerun after the reviewer's commits.
+- Process gotchas learned: run cargo in the FOREGROUND (background shells
+  have no cargo on PATH and die silently — S5's implementer hung on it); an
+  `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
+  hook — avoid wait loops on marker files; under machine load ≈60–90 a few
+  timing tests (`PdfZoomRaster`, `api_usage`) flake — rerun alone.
+- Baseline numbers are at the top of `docs/performance_plan.md`; take
+  `scripts/perf-numbers.sh after-<step>` from the main checkout after each
+  dev build (stopwatch lines still unfilled).
