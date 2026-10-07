@@ -858,3 +858,188 @@ f6ec9062, e78dd33f). Nothing run live.
 - A `done` mark/bill tick after a long idle: the first busy tick's
   `sinceLastTick` can exceed the 5 s clamp and books 0 for that one tick
   (≤ a trail's worth); the interval never had a gap. Negligible.
+
+## S5 — terminal backend
+
+*Written 2026-10-07 by the S5 implementer. Base `c7f6149e`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `3c4745d9` | §3.2b replay trim: new `terminal/replay_trim.rs` (cut at the last full clear, `ScreenState` re-applied in front, main-screen phases kept across an alt-screen cut, `REPLAY_TRIM_FLOOR` 128 KB); `OutputRoute.carried` folds what the pending cap trims off; route tests |
+| `f24adf80` | §7.6 batched digests: one `DigestClock` (clock → routes lock order) replaces the per-route `last_activity`/`digest_armed`; a tick drains every hidden route into one `terminal-activity-batch`; `lib/terminal/activityDigests.ts` feeds it from `AppShell`; tests both sides |
+
+### What was built / choices made
+- **The cut rule** (`replay_trim::find_cut`), from what the TUIs emit — Ink
+  (Claude, Gemini) `ESC[2J ESC[3J ESC[H`, `clear`/curses `ESC[H ESC[2J`,
+  ratatui `Clear(All)` = `ESC[2J` then absolute positioning: a cut is the
+  start of the *last* of
+  1. `ESC[2J` whose contiguous run of sequences (no text in between, ≤ 32
+     sequences) also positions the cursor absolutely (`H`/`f`);
+  2. a cursor-home (`ESC[H`, `1;1H`, `;H`, `f`) whose run also erases to the
+     end (`J`, `0J`, `2J`);
+  3. `ESC[?1049h` entering the alternate screen (which clears it) — only a
+     *real* enter: a redundant one (already on alt by the buffer's own
+     switches) is ignored, as xterm ignores it;
+  4. `ESC c` (RIS): no state from before it is re-applied.
+  A bare `2J` with text after it, a mere home, `1J`, `3J`, `2K`-style
+  line erases are not cuts. Cuts are only ever at a sequence start: the
+  buffer is tokenised (CSI / OSC / DCS-SOS-PM-APC strings / two-byte and
+  charset escapes / text), so no cut lands inside a sequence; an
+  unterminated sequence at the end is left as it is. OSC/DCS strings end at
+  BEL, ST, or a bare ESC (xterm's parser does the same), so a title without
+  a terminator cannot swallow a later clear.
+- **The state re-applied** (`ScreenState`, last value wins, first-seen
+  order, nothing untouched is mentioned): DEC private (`?`) and ANSI modes
+  (`h`/`l`, multi-param forms split — `?1049`, `?1000/1002/1003/1006`,
+  `?2004`, `?1004`, `?25`, `?7`, `?2026`, `4`, …); SGR (the sequences since
+  the last full reset, written after an `ESC[0m` only if the dropped bytes
+  touched attributes); DECSCUSR cursor shape; DECSTBM scroll region; charset
+  designations `ESC ( ) * +`; OSC title/icon (0/1/2), fg/bg/cursor colour
+  (10/11/12 and their 110/111/112 resets), palette entries (4/104). A query
+  (`OSC 10;?`) is never replayed. `ESC[!p` (DECSTR) clears modes/attributes/
+  cursor/region/charsets but keeps the title; `ESC c` clears all. Order
+  written: charsets, SGR, cursor shape, modes, scroll region, OSC.
+- **Alt-screen phases.** When the cut is on the alternate screen (including
+  a `?1049h` cut), the main-screen phases of the dropped prefix are written
+  first, raw, then the state prefix, then the tail: the program's exit
+  restores a main screen that has what the hidden spell printed there (a
+  hidden-spawned alt-screen TUI's banner, a shell before `less`). A cut on
+  the main screen after the program left drops the alt content and the
+  prefix carries `?1049l` so xterm leaves the alt screen too. Which screen
+  the buffer *starts* on is unknown (xterm's state before hiding is not
+  tracked) until its first switch; without any switch the whole buffer is
+  one screen and the cut rule needs nothing more.
+- **`REPLAY_TRIM_FLOOR` 128 KB** (a choice beyond the plan's wording): a
+  buffer under it replays whole — milliseconds of xterm work — because a
+  main-screen cut drops lines the hidden spell scrolled off before its last
+  clear (Ink's `3J` wipes them anyway; a bare `2J H` does not). Above it
+  the freeze is the cost that matters. Alt-screen TUIs lose nothing either
+  way.
+- **Carried state across the pending cap**: `push_pending` folds the bytes
+  `ROUTE_PENDING_CAP`'s hysteresis cuts off the front into
+  `OutputRoute.carried` before dropping them (`hysteresis_cut` split out of
+  `trim_with_hysteresis`); `take_pending` spends it (in front of a whole
+  replay too). Before, a mode set in the trimmed-off megabyte was lost.
+- **Replay offsets** stay the covered stream range (`pending_start` →
+  `output_offset`) though the text is shorter: the only reader
+  (`outputAfterScrollback`) drops a replay that ends inside the popout's
+  scrollback snapshot, which the whole-range comparison still answers; a
+  partial overlap cannot happen (the replay is emitted under the routes
+  lock before the snapshot is taken).
+- **`DigestClock`**: `arm(now)` returns the deadline when no tick is armed —
+  `now` if the last tick is a window or more ago (leading edge), else
+  `last + ACTIVITY_INTERVAL` (trailing); `tick(now)` marks the drain. One
+  short-lived task per armed tick (`arm_digest_tick`), none while no hidden
+  PTY streams (the zero-idle-wakeups discipline holds). The clock is a
+  separate mutex taken **before** the routes lock on every path
+  (`route_chunk_at`, `route_finish`, `route_digest_batch_take`).
+  `digest_batch_take_in` drains every unsubscribed route with a non-empty
+  digest, id-sorted, and emits nothing when the batch is empty. Payload:
+  `Vec<TerminalOutput>` (`id`, `data`, offsets `None`).
+- **Frontend**: `noteActivityDigests(batch)` (new
+  `lib/terminal/activityDigests.ts`) loops `notePtyOutput` per entry in
+  order; `AppShell` listens on `terminal-activity-batch` instead of
+  `terminal-activity`. No popout listens to either (grepped: only AppShell
+  did); `activity.ts` is untouched. `terminal-replay` is still not fed to
+  the classifier.
+- Tests: `replay_trim` 13 unit tests (every cut shape, the non-cuts, modes
+  last-value-wins, attributes/title/charset/cursor/region, DECSTR, alt
+  phases, redundant enter, mid-sequence safety incl. multi-byte and
+  unterminated tails, carried state, unterminated OSC); route-level
+  `showing_replays_from_the_last_clear_with_the_modes_in_front`,
+  `a_short_hidden_spell_replays_whole`,
+  `a_mode_trimmed_off_by_the_cap_still_replays`; `DigestClock` +
+  `one_tick_batches_every_hidden_digest_due` (private map and clock, so
+  parallel tests never drain each other's digests —
+  `route_chunk_clocked` takes the test's own clock); the `batch_output`
+  paused-clock tests are untouched and green. TS
+  `ActivityDigestBatch.test.ts`: five ticks of three digests through
+  `noteActivityDigests` leave `lastPtyOutputAt`/`busyByTab`/`attentionByTab`
+  exactly as the single `notePtyOutput` calls did; batch order; empty batch.
+
+### Gotchas for later steps
+- **S10 (sleeping terminal tabs):** the attach path replays
+  `route_scrollback` (`retained`, `ROUTE_SCROLLBACK_CAP` 256 KB) — a *whole*
+  tail, NOT trimmed: `trim_replay` is applied only to `pending` in
+  `take_pending`. A sleeping tab that wakes via `pty_scrollback` + a view
+  registration gets up to 256 KB written in one go (the snapshot) plus the
+  hidden-spell replay (trimmed) — both pass `flushPending`'s query strip.
+  If S10 wants the snapshot cut too, `trim_replay(retained.clone(),
+  &ScreenState::default(), floor)` is the call; its state prefix is then
+  computed over the snapshot's own prefix only (a mode set before the
+  256 KB tail is gone — the same as today's snapshot). Note `pty_remove_view`
+  on sleep makes the route unsubscribed, so a sleeping tab's PTY buffers
+  into `pending` and digests like a hidden one; on wake the first
+  `pty_set_visible(true)` drains `pending` as the trimmed replay *and* the
+  attach path reads the snapshot — `outputAfterScrollback` drops the replay
+  if its range ends inside the snapshot (it does, the snapshot is read
+  after). Keep that order (register view → snapshot), as `TerminalView`
+  does today.
+- A replay's `data.len()` no longer equals `end_offset − start_offset`.
+  Nothing reads it that way now; don't start.
+- `terminal-activity` (singular) no longer exists. The mobile sidecar and
+  headless owner never listened to it (grepped).
+- A PTY silent at a tick that speaks right after waits for the next tick:
+  its digests can be two windows (1 s) apart where its own clock gave
+  `≤ 500 ms + chunk gap`. A working TUI repaints every tick, so continuous
+  streams still digest every 500 ms (< `BUSY_WINDOW_MS` 800). If a hidden
+  tab with ~600–800 ms output cadence is seen flickering between working and
+  idle, that is this; the fix would be a shorter `ACTIVITY_INTERVAL` (the
+  plan fixes it at 500) — not a per-PTY clock again.
+- The final EOF digest of a PTY whose route is removed at exit (no view
+  registered, no watcher) is lost; before, it was emitted synchronously.
+  It is at most the decoder's trailing partial codepoint plus the last
+  window's tail; a pane that exists keeps the route (`seq = 0`) and the
+  armed tick still drains it.
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | clean: tsc + desktop bundle + mobile bundle |
+| `npm test` | 738 files / 7568 tests passed (base 737 / 7565; +`ActivityDigestBatch` 3) |
+| `cargo test -q` | lib 3574 passed, 3 ignored (base 3557; +13 `replay_trim`, +3 route replay, +1 digest batch); every other target green |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing, unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | clean |
+| `git diff --check` | clean |
+
+### Flagged for user
+- **Scrollback after a long hidden spell** (main-screen TUIs only — Claude,
+  Codex, Gemini): once the hidden buffer passes 128 KB, lines the agent
+  scrolled off before its last full clear are no longer written into
+  xterm's scrollback on show; what xterm had before hiding stays, and the
+  last repaint onward is replayed. Under 128 KB everything replays as
+  before. The Reader/transcript views are unaffected (they read the
+  transcript, not the pane). Alt-screen TUIs (opencode) have no scrollback
+  to lose.
+- Codex's ratatui inline viewport may never emit a full clear (it scrolls
+  history above the viewport instead); then its replay is whole and capped
+  as today — no gain, no loss. Not verifiable here.
+- The plan's line "`ESC[2J`/`ESC[H`" was taken as the *shapes above*, not
+  as "any `H`": a lone cursor-home is every frame's cell move in a TUI and
+  cannot be a cut.
+- The per-PTY digest latency change above (two windows worst case).
+- `activity.ts` was left untouched as the plan says; the batch feed is a
+  one-function module beside the bus rather than an inline loop, so it is
+  unit-tested.
+
+### Live click-through (user)
+1. Start an agent in a tab, let it work for a few minutes **hidden** (switch
+   to another tab); switch back: the pane appears at once (no freeze) with
+   the current frame drawn correctly.
+2. In that tab right after showing it: the mouse still scrolls/selects as
+   the agent set it (wheel over Claude scrolls its transcript, not xterm's
+   scrollback; no `[<35;…M` garbage typed into the input); paste a
+   multi-line snippet: it arrives as one bracketed paste, not line by line
+   executed; Ctrl+click a URL still opens it; the cursor is hidden/shown as
+   before.
+3. opencode (alt screen): hide it while it works, show it: still on its
+   full-screen UI, `q`/exit returns to the shell prompt as before.
+4. Open a shell tab, run `clear`, hide it, run something long in it from
+   the phone or let a script print, show it: the output is there.
+5. Pill check with many agents working while hidden: pills stay "working"
+   (green) without flicker; a decision prompt in a hidden tab still turns
+   the pill within ~1 s; nothing changes in the visible tab's behaviour.
+6. Pop out an agent tab while it is hidden in the main window: the popout
+   opens with the tab's current frame and keeps streaming.
