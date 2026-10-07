@@ -375,3 +375,163 @@ Nothing run live.
   anchor, but one that intersects the viewport resizes in place (unavoidable: it
   is what the reader is looking at). Only reachable through the §4.4 skip path.
 - `FileViewerPane.tsx` / `lib.rs`: untouched by the review (merge note stands).
+
+## S3 — viewer state + hidden PDF release
+
+*Written 2026-10-07 by the S3 implementer. Base `348e5ddd`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `ea5873f9` | §3.1 viewer positions staged in a module-level Map (`pendingViewerState`), folded into the store on pane hide / viewer unmount / popout seed / 5 s; every save path reads the stage; `pruneCollapseCollect` and the per-scope maps keep identity when nothing changed. Also: the S2 hidden-pages test's two timing races fixed |
+| `550af44e` | §4.3 `PdfView` sleeps a pane hidden for `PDF_DOC_RELEASE_MS` (5 min): canvas unmounted (documents destroyed, worker slot ended), remounted on show at the persisted zoom/scroll; held by unsaved marks/page edits, a Submit in flight, a running build, a popout mirror. New `lib/sleepWhenHidden.ts` (`useSleepWhenHidden`) is the seam |
+
+### What was built / choices made
+- **§3.1, the stage:** `setViewerState` splits each patch. The position-like
+  fields (`scrollTop`, `scrollLeft`, `scale`, `pdfFitted`, `offsetX`, `offsetY`,
+  `yamlScrollTop`) go to `stagedViewerState` (a `Map<tabKey, ViewerState>` in
+  `stores/tabs.ts`, next to the detached registry) and arm ONE one-shot 5 s
+  timer (`VIEWER_STATE_FLUSH_MS`; no timer while nothing is staged). Every other
+  field (`fontSize`, folds, breakpoints, `texActivePath`, …) writes through as
+  before — the shell reads those reactively and they change on a click, not on
+  a scroll. Callers are unchanged: all the plan's `FileViewerPane`/`PdfViewer`
+  persist sites keep their 200 ms timers and still call `viewPos.persist`; the
+  routing is inside the store, so no viewer needed a hunk (the brief's "write
+  the Map" is what `setViewerState` now does for them).
+- **Flush points:** `useViewerState` (in `FileViewerPane.tsx`) reads
+  `usePaneVisible()` and calls `flushViewerState(tabKey)` on the visible→hidden
+  edge and on unmount; `reseedDetached`/`answerSeed` (`stores/detached.ts`)
+  flush everything before building a popout seed; the 5 s timer flushes
+  everything. The quit path needs no flush: `toSavedTabEntry` merges the stage
+  over the store's `viewerState`, so `persistScope` (AppShell's `saveLayout`)
+  and the project-switch snapshot (`projects.ts`) both persist the latest
+  position without a store write. A flushed key whose tab is gone (closed) is
+  dropped. Persisted JSON shape: unchanged (the stage is only ever merged into
+  the same `viewerState` object).
+- **Dedup:** `queueViewerState` compares against store + stage, so a viewer
+  re-persisting its restored scale on mount arms nothing; the flush compares
+  again, so a no-op fold does not change `tabsByScope`.
+- **Popouts:** in the popout `setViewerState` still writes the detached
+  registry + `pushEdit` (unchanged). On the main side, `applyDetachedEdit`'s
+  `setViewerState` case now stages position fields the same way, so a popout
+  scroll no longer rewrites the main store per 200 ms pause either.
+- **Identity:** `pruneCollapseCollect` returns the original group node when no
+  key was pruned and the active key stands, and the original split when every
+  child came back identical (its sizes were normalized when last set).
+  `writeScope` keeps `layoutByScope`/`focusedGroupByScope` identity when the
+  scope's entry did. With the stage, a scroll touches none of this anyway; it
+  matters for the write-through fields (a `fontSize` change no longer rebuilds
+  the tree).
+- **§4.3, the seam:** `useSleepWhenHidden({hidden, afterMs, hold})` → boolean.
+  Asleep after `afterMs` hidden with no hold; awake in the render that shows
+  the pane (`asleep && hidden`); a hold cancels the countdown and restarts it
+  when lifted; a hold raised while asleep changes nothing. `PdfView` (the
+  outer component, `PdfViewer.tsx`) renders `<div data-sleeping="pdf">` in
+  place of `PdfCanvas` while asleep. The canvas's existing unmount effect does
+  the release: `loadingTask.destroy()` on every source, `PdfWorkerSlot.dispose`
+  (ends the worker after the teardown settles — never bypassing `pdfLoad.ts`).
+  The remount is a fresh `didInitialLoad`, so the load effect's first-load
+  branch restores `viewPos.initial` (store + stage) — never the hidden
+  element's `scrollTop` (0 under `display:none`).
+- **Holds:** `PdfCanvas` reports `onHoldChange(held)` with `held = (storage ===
+  "unsaved" && (hasUnsent || round !== null)) || sending || dirty`. `dirty`
+  (unsaved page-arrangement edits) was not in the plan's list but an unmount
+  would drop them — added. `PdfView` adds `compilingByPath[path] > 0`
+  (`pdfSync`) and `isTabInPopout(s, tabKey)` (new selector in `tabs.ts`: the key
+  is in some `detachedGroupsByScope` subtree).
+- **Composition with S2:** hidden < 30 s → pages painted; 30 s–5 min → canvases
+  released (S2's `PDF_PAGE_RELEASE_MS`), document alive, `catchUp` pending;
+  > 5 min → unmount clears the hold timers, `catchUp`, `zoomPreview` and the
+  200 ms persist timer with it. A `reloadByPath` nonce that arrives while asleep
+  is moot: the wake mount reads the file anyway (`!doc && !error` guard).
+
+### Gotchas for later steps
+- **S9 (`<SleepingPane>`):** reuse `useSleepWhenHidden` as is; the host's job
+  is only to unmount the body and keep a region marker. For viewer kinds the
+  body's unmount already flushes its position (`useViewerState` unmount
+  flush) and its remount seeds from stage-then-store, so a sleeping viewer
+  restores correctly without S9 doing anything about positions. Keep the two
+  gates composable: a `PdfView` inside a sleeping pane is simply unmounted
+  (its own 5 min timer never runs); a `PdfView` in an awake-but-hidden pane
+  still sleeps on its own after 5 min.
+- **What the stage guarantees:** (1) the store never lags a position by more
+  than 5 s while the tab is shown; (2) at hide, unmount, popout seed and every
+  save the latest position is in the store or merged into the saved entry;
+  (3) `pendingViewerState(key)` + the store's `viewerState` is always the
+  truth for a seed. What it does NOT do: readers of `tab.viewerState` straight
+  off the store (not via `useViewerState`) can see a position up to 5 s old —
+  no such reader of a position field exists today (grep found none); if one
+  is added, read `pendingViewerState` first or call `flushViewerState(key)`.
+- **Hold vs. `compileHeld`:** `PdfView`'s compile hold is the raw
+  `compilingByPath` count, not the canvas's 10 min bounded `compileHeld`. A
+  window that dies mid-build leaves the count stuck and the PDF never sleeps
+  (status quo for that PDF). S9 may want one bounded signal in `pdfSync`.
+- **Tests:** `PdfSleepHidden.test.tsx` is the harness for anything that needs a
+  tab in the store behind `PdfView` (tab + `viewerState` in `tabsByScope`,
+  fake timers via `advanceTimersByTimeAsync` so the worker slot's microtask
+  teardown runs). `flushViewerState()` in `beforeEach` of any test that writes
+  positions, or a stale stage from the previous test seeds the next mount.
+  S2's `PdfHiddenPages` harness now waits for the page observers to register
+  before reporting intersection and waits on the fingerprint count instead of
+  sleeping 50 ms — both raced under load (load average 14–16 during this step).
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles) |
+| `npm test` | 734 files / 7539 tests passed (S2 review: 731 / 7523; +3 files, +16 tests) |
+| `cargo test -q` | 3722 passed, 0 failed (Rust untouched) |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing, unchanged) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+### Flagged for user
+- `FileViewerPane.tsx`: one hunk only, in `useViewerState` (~line 310–345),
+  outside the 9602–10098 region the brief warned about. `stores/tabs.ts`: the
+  new block sits after `getDetachedViewerState` (~line 566), plus small hunks
+  in `toSavedTabEntry`, `pruneCollapseCollect`, `writeScope`, `setViewerState`,
+  `applyDetachedEdit` and a new `isTabInPopout` before the tree serialisers —
+  none near ~2468.
+- The plan's "`CenterPanel.tsx` persist effect must not fire for a
+  viewer-state-only change" needed no CenterPanel hunk: the store does not
+  change on a position write, so the effect's deps do not either; it fires
+  once per 5 s fold at most, and that fold is the write that persists the
+  position. `AppShell.tsx` likewise untouched: the quit `saveLayout` reads the
+  stage through `toSavedTabEntry`.
+- "The tab a popout mirrors" holds the main-window PDF awake, as instructed.
+  That mirror is exactly the second document §4.5 wants to drop; when §4.5
+  lands (a stub in the main window), the hold becomes moot and can go.
+- A PDF tab restored hidden at launch still parses its document once (the
+  load effect does not gate on visibility) and releases it 5 min later. Not
+  loading until first shown is §5.3's call (it changes what a first click
+  shows); not done here.
+- The unsaved-markup hold is not covered by a unit test (driving
+  `usePdfMarkup` into `storage === "unsaved"` with marks needs a markup
+  layer); the seam's hold semantics are (`SleepWhenHidden.test.tsx`) and the
+  compile and popout holds are (`PdfSleepHidden.test.tsx`).
+- No setting for the 5 min: there is no `settings.performance` group and no
+  sibling constant is a setting (`RENDERER_RELEASE_MS`, `PDF_PAGE_RELEASE_MS`
+  are constants), so `PDF_DOC_RELEASE_MS` is a constant as the brief allowed.
+- A forward search (`requestReveal`) aimed at a PDF center that is asleep in a
+  TeX workspace: the reveal is stored by path and the center switch wakes the
+  viewer, which then reads it on mount — by inspection only, not tested.
+
+### Live click-through (user)
+1. Open a long PDF, scroll to the middle, wait 6 s, quit Tabtivity, relaunch:
+   it reopens at that position (the 5 s fold + quit save). Repeat with a quit
+   within 2 s of the last scroll: still the latest position (the quit save
+   reads the stage).
+2. Scroll a PDF for a while with `htop` on the app: the renderer's CPU should
+   no longer spike at each scroll pause; the session file in
+   `<state_dir>/sessions/<id>/` should change at most every ~5 s.
+3. Switch away from a PDF tab for > 5 min (a terminal in front), then back: it
+   shows "Loading…" briefly and lands at the same page/zoom/scroll. Renderer
+   RSS (`ps -o rss`) drops by roughly the file size × 2 while it is asleep.
+4. With marks drawn in markup mode (unsent) or a page rotated and unsaved,
+   leave the tab hidden > 5 min: it does not reload on return, the marks/edits
+   are still there.
+5. Pop the PDF tab out into its own window and leave the main window on
+   another tab > 5 min: the popout keeps working (the main copy stayed awake),
+   and scrolling in the popout no longer makes the main window's session file
+   change on every pause.
