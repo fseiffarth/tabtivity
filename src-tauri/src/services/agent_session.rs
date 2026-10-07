@@ -166,10 +166,7 @@ where
         return opts;
     };
     if let Some(id) = live_lookup(&uid).filter(|id| {
-        codex_session_log(sessions_root, id).is_some()
-            || stores
-                .iter()
-                .any(|db| crate::services::codex_store::thread_exists(db, id))
+        codex_session_exists_in(sessions_root, stores.iter().map(PathBuf::as_path), id)
     })
     {
         opts.args = vec!["resume".to_string(), id];
@@ -184,11 +181,10 @@ where
 ///
 /// - the **rollout log** at
 ///   `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`, which is
-///   what every release up to 0.153.4 wrote (and what a *containerized* Codex
-///   still writes into the mounted `sessions/`);
-/// - the **thread store** `~/.codex/state_<n>.sqlite`, which is where 0.153.4
-///   puts it instead. Its rows still *name* a `rollout_path`, but no such file
-///   is created any more.
+///   what older releases wrote and Codex 0.160.1 writes again;
+/// - the **thread store** `~/.codex/state_<n>.sqlite`, where 0.153.4 could keep
+///   a thread without writing its named rollout. An archived row overrides a
+///   retained rollout: that conversation must not be resumed automatically.
 ///
 /// Asking only the first one is how Codex resume died silently: the hook kept
 /// recording live thread ids, the walk kept finding no file for them, and every
@@ -204,8 +200,23 @@ pub(crate) fn codex_session_exists(
     store: Option<&std::path::Path>,
     uuid: &str,
 ) -> bool {
-    codex_session_log(root, uuid).is_some()
-        || store.is_some_and(|db| crate::services::codex_store::thread_exists(db, uuid))
+    codex_session_exists_in(root, store, uuid)
+}
+
+fn codex_session_exists_in<'a>(
+    root: &std::path::Path,
+    stores: impl IntoIterator<Item = &'a std::path::Path>,
+    uuid: &str,
+) -> bool {
+    let mut live_in_store = false;
+    for db in stores {
+        match crate::services::codex_store::thread_archived(db, uuid) {
+            Some(true) => return false,
+            Some(false) => live_in_store = true,
+            None => {}
+        }
+    }
+    live_in_store || codex_session_log(root, uuid).is_some()
 }
 
 /// The rollout log behind [`codex_session_exists`], when there is one.
@@ -1415,8 +1426,9 @@ pub fn undo_clear_plan(agent: &str, project_id: Option<&str>, uid: &str) -> Opti
             ];
             let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
             let exists = |id: &str| {
-                roots.iter().any(|root| codex_session_log(root, id).is_some())
-                    || stores.iter().any(|db| crate::services::codex_store::thread_exists(db, id))
+                roots.iter().any(|root| {
+                    codex_session_exists_in(root, stores.iter().map(PathBuf::as_path), id)
+                })
             };
             if let Some(dir) = live_record_dir(project_id, uid) {
                 if let Some(cleared) = cleared_session_in(&dir, uid, exists) {
@@ -2800,6 +2812,32 @@ mod tests {
         });
         assert!(out.args.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codex_does_not_resume_an_archived_thread_with_a_rollout() {
+        let archived = "01a07c18-3a25-7fa1-9ac4-74fa84d4e12a";
+        let root = codex_sessions_with(archived);
+        let db = root.join("state_5.sqlite");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO threads (id, archived) VALUES (?1, 1)", [archived])
+            .unwrap();
+        drop(conn);
+
+        assert!(!codex_session_exists(&root, Some(&db), archived));
+        let mut opts = codex_opts();
+        opts.env
+            .insert(crate::app_env!("TAB_UID").to_string(), "tab-key".to_string());
+        let out = resolve_codex_session_impl(opts, &root, std::slice::from_ref(&db), |_| {
+            Some(archived.to_string())
+        });
+        assert!(out.args.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ── hook installer ──────────────────────────────────────────────────────

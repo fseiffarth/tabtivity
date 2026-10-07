@@ -102,7 +102,7 @@ const CATALOG: Record<string, CatalogEntry[]> = {
     { command: "/model", description: "mobile.slash.cmd.modelEffort" },
     { command: "/plan", description: "mobile.slash.cmd.plan", args: true },
     { command: "/goal", description: "mobile.slash.cmd.goal", args: true },
-    { command: "/approvals", description: "mobile.slash.cmd.approvals" },
+    { command: "/permissions", description: "mobile.slash.cmd.approvals" },
     { command: "/review", description: "mobile.slash.cmd.reviewTree" },
     { command: "/diff", description: "mobile.slash.cmd.diff" },
     { command: "/status", description: "mobile.slash.cmd.sessionConfig" },

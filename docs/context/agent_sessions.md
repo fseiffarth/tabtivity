@@ -143,10 +143,10 @@ conversation, and that question has two answers in the field:
 
 - the **rollout log** at
   `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`, which is what
-  every release up to 0.153.4 wrote;
-- the **thread store** `~/.codex/state_<n>.sqlite`, which is where 0.153.4 puts
-  it instead. Rows there still *name* a `rollout_path`, but no such file is
-  created any more — `~/.codex/sessions/` does not exist on a fresh install.
+  older releases wrote and Codex 0.160.1 writes again;
+- the **thread store** `~/.codex/state_<n>.sqlite`, where 0.153.4 could keep a
+  thread without writing its named rollout. Its archive flag is authoritative:
+  a retained rollout cannot make an archived conversation resumable.
 
 Asking only the first is how Codex resume failed silently: the hook kept
 recording live thread ids, the walk kept finding no file for any of them, and
