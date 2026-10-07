@@ -51,7 +51,8 @@ import { TerminalReaderView } from "./TerminalReaderView";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
 import { readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
 import { useAgentReaderStore, useReaderChangesOpen, useReaderOpen } from "../../stores/agents/agentReader";
-import { useTabsStore } from "../../stores/tabs";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
@@ -782,13 +783,17 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       }
     };
 
-    // Scheduler input is registered by the PTY-owning main-window view only.
-    // A detached view attaches to the same PTY but must never become a second
-    // delivery owner. Readiness waits for terminal-ready plus real TUI output and
-    // a short settle cushion, matching the initial-input gate below.
+    // Scheduler input is registered by the PTY-owning main-window view, and by
+    // a popout's view in the popout's own heap — that heap's registry serves
+    // only its Chat composer (the schedule hosts run in the main window), so
+    // it never becomes a second delivery owner. An attach-only mirror in the
+    // main window (root console, overlay column) registers nothing. Readiness
+    // waits for terminal-ready plus real TUI output and a short settle
+    // cushion, matching the initial-input gate below.
+    const takesPrompts = !attachOnly || isDetachedWindow();
     let settledOnce = false;
     const armScheduledReady = () => {
-      if (!scheduleTargetId || attachOnly || !terminalReadySeen.current || firstOutputAt.current === null) return;
+      if (!scheduleTargetId || !takesPrompts || !terminalReadySeen.current || firstOutputAt.current === null) return;
       if (scheduledSettleTimer.current) clearTimeout(scheduledSettleTimer.current);
       scheduledReady.current = false;
       // Every new output chunk restarts the cushion. This closes the short gap
@@ -840,7 +845,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
       if (!settledOnce && scheduledInputReady()) settledOnce = true;
       return settledOnce;
     };
-    const unregisterScheduled = scheduleTargetId && !attachOnly
+    const unregisterScheduled = scheduleTargetId && takesPrompts
       ? registerScheduledAgentInput(scheduleTargetId, {
           ptyId: id,
           ready: scheduledInputReady,
@@ -1397,6 +1402,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
           // An older backend has no such command — open blank, as before.
         }
         if (cancelled) return;
+        // Attached, the program is already up: the main window spawned it
+        // and saw its terminal-ready, which this view never hears.
+        terminalReadySeen.current = true;
         const live = historyOutput
           .map((chunk) => outputAfterScrollback(chunk.data, chunk.range, snapshotEnd))
           .join("");
@@ -1890,11 +1898,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, cwd, 
 
   // The Reader over an agent pane (`TerminalReaderView`): offered only for a
   // CLI whose transcript Tabtivity reads, and only in the tab's own pane.
+  // `usePaneTab`: a popout's tabs store holds no tabs.
   const readerIds = splitPtyId(id);
-  const readerTab = useTabsStore((state) => readerIds
-    ? state.tabsByScope[readerIds.scope]?.find((entry) => entry.key === readerIds.key)
-    : undefined);
-  const readerAvailable = readerOffered(readerTab) && !attachOnly;
+  const readerTab = usePaneTab(readerIds?.scope, readerIds?.key);
+  // A popout's pane is that tab's own pane in its window; the main window's
+  // attach-only mirrors of a tab shown elsewhere are not.
+  const readerAvailable = readerOffered(readerTab) && (!attachOnly || isDetachedWindow());
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerOn = useReaderOpen(readerAgent, readerAvailable);
   const changesOn = useReaderChangesOpen(readerAgent);

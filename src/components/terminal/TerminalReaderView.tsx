@@ -27,7 +27,8 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore, useReaderChangesOpen } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import type { TabEntry } from "../../stores/tabs";
+import { usePaneTab } from "../tabs/paneTabContext";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { TerminalReaderChanges, changesWidthStyle } from "./TerminalReaderChanges";
@@ -679,7 +680,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, visible, f
   focused: boolean;
 }) {
   const t = useT();
-  const tab = useTabsStore((state) => state.tabsByScope[scope]?.find((entry) => entry.key === tabKey));
+  const tab = usePaneTab(scope, tabKey);
   const [transcript, setTranscript] = useState<SessionTranscript | null>(null);
   const [limit, setLimit] = useState(READER_STEP);
   const [pending, setPending] = useState<PendingPrompt[]>([]);
