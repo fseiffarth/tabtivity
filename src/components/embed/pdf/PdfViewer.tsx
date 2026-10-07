@@ -174,6 +174,8 @@ import {
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { pdfRasterRatio } from "./raster";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
+import { useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
+import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 
@@ -266,6 +268,15 @@ export const PDF_ZOOM_COMMIT_MS = 120;
  *  near page at fit width on a 2× screen is tens of MB). Mirrors the terminal's
  *  `RENDERER_RELEASE_MS`. */
 export const PDF_PAGE_RELEASE_MS = 30_000;
+
+/** How long a PDF tab stays hidden before its viewer sleeps: the parsed document
+ *  (1.5–4× the file in the worker) and the worker itself are released, and the
+ *  tab reloads from disk on show, at the persisted page/zoom/scroll. Composes with
+ *  the page release above: hidden under 30 s the pages stay painted; up to this
+ *  long the canvases are gone but the document answers at once; past it the
+ *  document is gone too. Held off by unsaved marks or page edits, a running
+ *  build of the file, and a popout mirroring the tab. */
+export const PDF_DOC_RELEASE_MS = 5 * 60_000;
 
 /** A zoom in progress: the scale the reader has wheeled to, previewed by scaling
  *  the page stack with CSS around the point under the cursor (in the stack's own
@@ -1886,6 +1897,7 @@ function PdfCanvas({
   tabKey,
   groupId,
   onReverseSource,
+  onHoldChange,
 }: {
   path: string;
   /** When set, an "Open externally" button is shown at the end of the toolbar.
@@ -1902,6 +1914,9 @@ function PdfCanvas({
    *  Absent ⇒ today's standalone behavior (a real source tab), so the plain PDF
    *  tab and its tests are unaffected. */
   onReverseSource?: (src: SyncSource, anchor: string) => void;
+  /** Tells the host whether this canvas holds unsaved work (marks not yet
+   *  written, page edits not yet saved), which must keep it from sleeping. */
+  onHoldChange?: (held: boolean) => void;
 }) {
   const t = useT();
   const scope = useFileScope();
@@ -2694,6 +2709,17 @@ function PdfCanvas({
   });
   const markupRef = useRef(markup);
   markupRef.current = markup;
+  // Unsaved work holds the viewer awake (`PdfView`): a sleep is an unmount, and
+  // an unmount would drop unwritten marks (a layer the store could not take,
+  // while it holds marks or a round), a Submit going out, or unsaved page edits
+  // on the floor.
+  const held =
+    (markup.storage === "unsaved" && (markup.hasUnsent || markup.round !== null)) ||
+    markup.sending ||
+    dirty;
+  useEffect(() => {
+    onHoldChange?.(held);
+  }, [held, onHoldChange]);
   // The agent's questions (`markup_ask`), pinned at the words they quote.
   const questionPins = useQuestionPins(marking ? doc ?? null : null, markup.questions.asks);
   const pinnedQuestions = useMemo(
@@ -5431,18 +5457,39 @@ export function PdfView({
    *  it to keep a reverse click inside its own tab; a standalone PDF omits it. */
   onReverseSource?: (src: SyncSource, anchor: string) => void;
 }) {
+  // Sleep (§4.3): a tab hidden for `PDF_DOC_RELEASE_MS` unmounts its canvas —
+  // whose own teardown destroys the documents and ends the worker — and mounts
+  // it afresh on show, where the first load restores the persisted position
+  // (`viewPos.initial`, seeded from the §3.1 stage before the store). Never
+  // with unsaved work in the canvas, while a build is rewriting the file (its
+  // reload request would find no viewer), or for a tab a popout shows (the
+  // popout's writes land on this tab's payload; its pane here is the mirror).
+  const paneVisible = usePaneVisible();
+  const [held, setHeld] = useState(false);
+  const compiling = usePdfSyncStore((s) => (s.compilingByPath[path] ?? 0) > 0);
+  const mirrored = useTabsStore((s) => tabKey != null && isTabInPopout(s, tabKey));
+  const asleep = useSleepWhenHidden({
+    hidden: !paneVisible,
+    afterMs: PDF_DOC_RELEASE_MS,
+    hold: held || compiling || mirrored,
+  });
   // No ViewerHeader: the tab already shows the file name, so a filename row would
   // be redundant. The "Open externally" action lives in the PdfCanvas toolbar.
   return (
     <div className="file-viewer">
       <div className="file-viewer-body">
-        <PdfCanvas
-          path={path}
-          onOpenExternally={onOpenExternally}
-          tabKey={tabKey}
-          groupId={groupId}
-          onReverseSource={onReverseSource}
-        />
+        {asleep ? (
+          <div className="file-viewer-pdf-host file-viewer-sleeping" data-sleeping="pdf" />
+        ) : (
+          <PdfCanvas
+            path={path}
+            onOpenExternally={onOpenExternally}
+            tabKey={tabKey}
+            groupId={groupId}
+            onReverseSource={onReverseSource}
+            onHoldChange={setHeld}
+          />
+        )}
       </div>
     </div>
   );

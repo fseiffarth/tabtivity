@@ -2439,6 +2439,14 @@ export function findTabByKey(
   );
 }
 
+/** Whether tab `key` is shown by a popout: its node lives in one of the scope's
+ *  detached subtrees while its pane stays mounted, hidden, in the main window. */
+export function isTabInPopout(s: Pick<TabsStore, "detachedGroupsByScope">, key: string): boolean {
+  return Object.values(s.detachedGroupsByScope ?? {}).some((entries) =>
+    entries.some((d) => findGroupOfTab(d.subtree, key) != null),
+  );
+}
+
 // ── Tree (de)serialization ──────────────────────────────────────────────────
 
 export function serializeTree(node: LayoutNode | null): SavedLayoutTree | null {
