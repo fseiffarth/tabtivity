@@ -2673,6 +2673,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const { tabs, layout } = currentScopeState(s);
       const found = findGroupOfTab(layout, key);
       if (!found || !layout) return {};
+      // Already the active tab of the focused group: nothing to write. A
+      // re-click on the current tab (the bar, keyboard steering, a reveal)
+      // used to rebuild the layout tree anyway and re-render every subscriber.
+      if (found.group.activeKey === key && s.focusedGroupId === found.group.id) return {};
       // Set the active tab within its group and focus that group.
       const next = mapGroup(layout, found.group.id, (g) => ({
         ...g,
