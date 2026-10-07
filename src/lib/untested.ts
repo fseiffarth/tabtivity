@@ -45,6 +45,8 @@ export const UNTESTED = {
   "settings.showUntestedTags": { area: "settings", what: "General page · show or hide every untested tag" },
 
   // --- agents — Agent sessions, schedules and the prompt chart ------
+  "localDriver.pi": { area: "agents", what: "+ menu · Local Model → Pi: `ollama launch pi` drives the active local model" },
+  "localDriver.cline": { area: "agents", what: "+ menu · Local Model → Cline: `ollama launch cline` drives the active local model; its Ollama provider stays out of other Cline tabs" },
   "agentSchedule.title": { area: "agents", what: "AgentScheduleDialog · Scheduled prompts · {tab}" },
   "agentSchedule.in": { area: "agents", what: "AgentScheduleDialog · Recurrence In … : hours + minutes boxes send the prompt once that long after Save (stored as an ordinary one-time rule; the line under the boxes shows the resulting time)" },
   "agentSchedule.headless": { area: "agents", what: "AgentScheduleDialog · delivery note: with no window open the Mobile sidecar fires scheduled prompts (tmux send-keys into the tab, restarting a stopped session first) while no window holds the timer lease; two windows plus the sidecar fire each occurrence once (claim under the file lock)", tested: "2026-10-02" },
@@ -535,7 +537,7 @@ export const UNTESTED = {
   "mobile.headless": { area: "mobile", what: "Project/Home · With no Tabtivity window open (headless owner plan, H1b): the ＋ sheet's shell and plain agent start on the host itself (owner-minted tab, detached tmux session, attached by the next window — the row appears with its screen hidden until then); the project list's git dots; the project screen's and the Agents list's status / model / prompts / schedule summaries read off the hooks' turn records and the tabs' transcripts", tested: "2026-10-02" },
   "mobile.newTab.worktree": { area: "mobile", what: "NewTabSheet · Agents start in: project folder or a linked worktree" },
   "mobile.newTab.cloud": { area: "mobile", what: "NewTabSheet · folded “Cloud sessions” group under the agents: New session / Open existing per agent (task box for Claude/Mistral)" },
-  "mobile.newTab.local": { area: "mobile", what: "NewTabSheet · Local model group: start Mistral / Claude Code / Codex / OpenCode / Droid on the desktop's local model; the tab is listed and reattaches after a desktop restart (#31bl)" },
+  "mobile.newTab.local": { area: "mobile", what: "NewTabSheet · Local model group: start Mistral / Claude Code / Codex / OpenCode / Droid / Pi / Cline on the desktop's local model; the tab is listed and reattaches after a desktop restart (#31bl)" },
   "mobile.project.sendFile": { area: "mobile", what: "NewTabSheet · ＋ → Send a file from this phone into the project's inbox (.tabtivity/inbox/), with a Copy of its @reference" },
   "mobile.project.reorder": { area: "mobile", what: "Project · Drag to reorder the desktop's tabs" },
   "mobile.project.git": { area: "mobile", what: "Home · The desktop pill's git dot on the phone: a coloured \"unstaged changes / not committed / not pushed\" in each project row's caption, and only there (the project screen shows none); tapping it opens that project's ⎇ Git sheet instead of the project" },

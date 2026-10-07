@@ -694,9 +694,13 @@ Headless probe: `cargo run --example ollama_probe --manifest-path src-tauri/Carg
   the GitHub releases API.
 - `ollama launch <agent> --model <m>` exists since **0.15** and is the only way
   to hand Claude Code an Anthropic-compatible endpoint; sub-commands used:
-  `claude`, `codex`, `opencode`, `droid`, `openclaw`. `ollama launch --help` is
-  read to learn which agents the installed server supports. `launch` writes
-  `~/.codex/model.json` and forwards no extra flags.
+  `claude`, `codex`, `droid`, `openclaw`, `pi`, `cline` (OpenCode never goes
+  through it). `ollama launch --help` is read to learn whether the subcommand
+  exists. `launch` writes `~/.codex/model.json`, Pi's `models.json` (and
+  migrates a legacy `@mariozechner/pi-coding-agent` install with `npm -g`),
+  and Cline's `providers.json` + `globalState.json` — Cline's login file, so a
+  local-model home is receive-only in `agent_auth`. Before ~0.34 it forwarded
+  no extra flags; 0.34 passes args after `--`, which Tabtivity doesn't use yet.
 - **≥ 0.32 drops integrated GPUs** unless `OLLAMA_IGPU_ENABLE=1`; Tabtivity sets it
   on the server it spawns and offers a systemd drop-in for the unit. The flag's
   existence is read from `ollama serve --help`, not from the version.

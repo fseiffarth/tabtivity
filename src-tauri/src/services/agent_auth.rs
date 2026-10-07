@@ -296,10 +296,26 @@ impl Step {
 /// 2. Then the store's bytes go into the home, whatever it held: a refused
 ///    login is overwritten, a stale copy caught up, a hard link from an
 ///    older Tabtivity replaced by a copy of its own.
+///
+/// A local-model home ([`is_local_model_home`]) only receives: what lands
+/// there is `ollama launch`'s wiring for that CLI (Cline's `providers.json`
+/// gains `lastUsedProvider: "ollama"`), never a login to hand every other
+/// scope. It is not adopted, and the store is not placed over a copy the home
+/// changed since the store last placed it, which would pull the wiring from
+/// under a running tab.
 fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
     let home_bytes = content(copy.read());
     let store_bytes = content(std::fs::read(store).ok());
-    if let (Some(bytes), true) = (&home_bytes, step.adopts()) {
+    let receive_only = crate::services::agent_home::is_local_model_home(home);
+    if receive_only
+        && home_bytes.as_ref().is_some_and(|b| {
+            store_bytes.as_ref() != Some(b)
+                && read_placed(store_dir, home, leaf).as_deref() != Some(digest(b).as_str())
+        })
+    {
+        return;
+    }
+    if let (Some(bytes), true, false) = (&home_bytes, step.adopts(), receive_only) {
         let hash = digest(bytes);
         let placed = read_placed(store_dir, home, leaf);
         let changed = placed.as_deref() != Some(hash.as_str()) && store_bytes.as_deref() != Some(bytes.as_slice());
@@ -420,8 +436,12 @@ fn link_claude_identity(store_dir: &Path, home: &Path) {
     let home_account = claude_account_in_home(home);
     let stored_account = read_sidecar(store_dir, ACCOUNT_FILE);
     match (home_account, stored) {
-        // The home is signed in: record its identity unless it is another account.
-        (Some(account), _) if stored_account.as_deref().is_none_or(|s| s == account) => {
+        // The home is signed in: record its identity unless it is another
+        // account, or the home is a receive-only local-model one.
+        (Some(account), _)
+            if stored_account.as_deref().is_none_or(|s| s == account)
+                && !crate::services::agent_home::is_local_model_home(home) =>
+        {
             let mut keys = crate::services::agent_home::filtered_claude_json(&value, &[]);
             keys.as_object_mut().map(|o| o.remove("projects"));
             if let Ok(body) = serde_json::to_vec(&keys) {
@@ -875,6 +895,70 @@ mod tests {
         // Steady state: another pass changes nothing.
         reconcile_all_in(state);
         assert!(std::fs::read_to_string(a.join(".codex/auth.json")).unwrap().contains("t3"));
+    }
+
+    /// A local-model home only receives. `ollama launch cline` merges an
+    /// Ollama provider into Cline's login file there; adopted, every scope's
+    /// Cline would switch to the local model, and placed over, the running
+    /// local tab would lose its wiring.
+    #[test]
+    fn a_local_model_home_receives_logins_but_never_feeds_them_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let rel = ".cline/data/settings/providers.json";
+        let own = crate::services::agent_home::scope_home_in(state, "a");
+        let local = crate::services::agent_home::local_model_home_in(state, "a");
+        std::fs::create_dir_all(own.join(".cline/data/settings")).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(own.join(rel), r#"{"lastUsedProvider":"anthropic"}"#).unwrap();
+
+        // A scope's own home still feeds the store; the local home receives.
+        reconcile_all_in(state);
+        let store = store_of(state, "cline", rel);
+        assert!(std::fs::read_to_string(&store).unwrap().contains("anthropic"));
+        assert!(std::fs::read_to_string(local.join(rel)).unwrap().contains("anthropic"));
+
+        // `ollama launch cline` rewrites the local copy: neither adopted nor
+        // overwritten, on any pass.
+        write_in_place(&local.join(rel), r#"{"lastUsedProvider":"ollama"}"#);
+        reconcile_all_in(state);
+        reconcile_home_in(state, &local);
+        assert!(std::fs::read_to_string(&store).unwrap().contains("anthropic"));
+        assert!(std::fs::read_to_string(own.join(rel)).unwrap().contains("anthropic"));
+        assert!(std::fs::read_to_string(local.join(rel)).unwrap().contains("ollama"));
+
+        // A file the local home wrote before anything was placed is its own too.
+        let fresh = crate::services::agent_home::local_model_home_in(state, "b");
+        std::fs::create_dir_all(fresh.join(".cline/data/settings")).unwrap();
+        std::fs::write(fresh.join(rel), r#"{"lastUsedProvider":"ollama"}"#).unwrap();
+        reconcile_all_in(state);
+        assert!(std::fs::read_to_string(&store).unwrap().contains("anthropic"));
+        assert!(std::fs::read_to_string(fresh.join(rel)).unwrap().contains("ollama"));
+    }
+
+    #[test]
+    fn a_local_model_home_never_records_claude_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let local = crate::services::agent_home::local_model_home_in(state, "a");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(local.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"fixture@example.com"}}"#).unwrap();
+        reconcile_home_in(state, &local);
+        assert!(!store_dir_in(state, "claude").join("identity.json").exists());
+    }
+
+    #[test]
+    fn only_a_local_model_key_reads_as_a_local_model_home() {
+        let state = Path::new("/state");
+        assert!(crate::services::agent_home::is_local_model_home(
+            &crate::services::agent_home::local_model_home_in(state, "p1")
+        ));
+        assert!(!crate::services::agent_home::is_local_model_home(
+            &crate::services::agent_home::scope_home_in(state, "p1")
+        ));
+        assert!(!crate::services::agent_home::is_local_model_home(
+            &crate::services::agent_home::scope_home_in(state, crate::services::agent_home::HOST_SCOPE_KEY)
+        ));
     }
 
     /// The guard holds for every kind of write now: a login as another

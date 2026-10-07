@@ -134,7 +134,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
   const resident = !!targetInfo?.running;
 
   // Which agents can drive the target in a Local Model tab (Mistral Vibe,
-  // Claude Code / Codex / OpenCode via `ollama launch`, …).
+  // OpenCode / Pi / Claude Code / Codex via `ollama launch`, …).
   useEffect(() => {
     if (!target) {
       setDrivers(null);

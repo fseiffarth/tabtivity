@@ -60,7 +60,7 @@ import {
 } from "../tabs/newTabItems";
 import { worktreeAgentSpec } from "../tabs/agentWorktrees";
 import { probeLocalModelPlacement } from "../tabs/localModelGroup";
-import { listLocalDrivers, loadOllamaModel } from "../../lib/agents/localDrivers";
+import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import { agentWorktreeChoices, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
 import { cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
@@ -982,8 +982,9 @@ interface LocalChoice { public: MobileLocalAgent; driver?: string }
 
 /**
  * The desktop "+"'s local-model group for `scope` (`localModelMenuGroup`):
- * the "tabs" model and the agents that can drive it — Mistral when installed
- * and enabled, then every available driver. Not in the root console, whose
+ * the "tabs" model and the agents that can drive it, in the desktop's order:
+ * light-harness drivers (OpenCode), Mistral when installed and enabled, then
+ * the other available drivers. Not in the root console, whose
  * agent tabs are never tmux-wrapped and so could not be attached to.
  */
 async function localChoices(scope: MobileScope): Promise<{ model: string; ready: boolean; choices: LocalChoice[] } | null> {
@@ -997,9 +998,12 @@ async function localChoices(scope: MobileScope): Promise<{ model: string; ready:
     probeLocalModelPlacement(model),
   ]);
   const withVibe = enabledInstalledAgentBins(statuses, settings?.disabled_agents).has("vibe");
+  const row = (d: LocalDriverInfo) => ({ key: d.id, label: d.label, caution: d.heavy_harness, driver: d.id as string | undefined });
+  const available = drivers.filter((d) => d.available);
   const rows = [
+    ...available.filter((d) => !d.heavy_harness).map(row),
     ...(withVibe ? [{ key: "vibe", label: "Mistral", caution: false, driver: undefined }] : []),
-    ...drivers.filter((d) => d.available).map((d) => ({ key: d.id, label: d.label, caution: d.heavy_harness, driver: d.id })),
+    ...available.filter((d) => d.heavy_harness).map(row),
   ];
   const choices = await Promise.all(rows.map(async (row) => ({
     driver: row.driver,

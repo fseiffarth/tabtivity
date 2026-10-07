@@ -55,8 +55,8 @@ export async function vibeLocalTabSpec(
 }
 
 /**
- * `model` driven through another coding agent (Claude Code, Codex, OpenCode,
- * Droid, OpenClaw). The backend resolves the spawn line — `ollama launch
+ * `model` driven through another coding agent (`LOCAL_DRIVERS`: OpenCode, Pi,
+ * Claude Code, Codex, Droid, OpenClaw, Cline). The backend resolves the spawn line — `ollama launch
  * <agent> --model <model>` when available, else a direct fallback — so the tab
  * carries everything in cmd+args (no env to re-hydrate).
  *

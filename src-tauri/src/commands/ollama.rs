@@ -3840,7 +3840,7 @@ pub async fn ensure_vibe_ollama_model(model: String) -> Result<String, String> {
 // Beyond Mistral's `vibe` (see `prepare_local_agent`), the single active local
 // Ollama model can drive other coding agents. The preferred path is Ollama's own
 // `ollama launch <agent> --model <model>` (shipped v0.15): it wires Claude Code,
-// Codex, OpenCode and Droid to the local server — including Claude Code's
+// Codex, Droid, OpenClaw, Pi and Cline to the local server — including Claude Code's
 // Anthropic-compatible endpoint, which we can't hand-roll the way vibe gets an
 // OpenAI one. When `ollama launch` is unavailable we fall back to a direct
 // invocation for the agents that natively accept a local Ollama endpoint.
@@ -3875,9 +3875,10 @@ struct LocalDriver {
     /// agents that send a reasoning effort whether or not the model can take
     /// one. `Some` carries a second meaning that matters more than the args:
     /// this driver must **bypass `ollama launch`** on a model with no
-    /// `thinking` capability. `ollama launch <agent>` forwards nothing — it
-    /// rejects any extra flag with `unknown shorthand flag` — so the override
-    /// can only ride the direct invocation, and `launch`'s own wiring (a
+    /// `thinking` capability. An older `ollama launch <agent>` forwarded
+    /// nothing — it rejected any extra flag with `unknown shorthand flag` (0.34
+    /// passes args after `--`, which nothing here relies on yet) — so the
+    /// override rides only the direct invocation, and `launch`'s own wiring (a
     /// generated `~/.codex/model.json` + profile) does not turn reasoning off
     /// on the user's behalf. `None` means the agent sends no reasoning field
     /// and runs on a non-thinking model unchanged.
@@ -3912,17 +3913,50 @@ struct LocalDriver {
     /// machine carried both `tools` and `thinking`, so gating on it would have
     /// emptied the group entirely rather than steered anyone to a better model.
     ///
-    /// Every entry below is `true`, because every entry is a general-purpose
-    /// coding-agent CLI written against hosted frontier models. The flag is a
-    /// per-row decision anyway, so a driver added later that is built for local
-    /// models (as Mistral's `vibe` is — which is exactly why it is *not* in this
-    /// list) states that by setting it `false`.
+    /// Most entries are `true`: general-purpose coding-agent CLIs written
+    /// against hosted frontier models. OpenCode is `false` — it is
+    /// provider-agnostic and drives local models well, which is also why it
+    /// heads the picker, ahead of Mistral's `vibe` (built for local models, and
+    /// *not* in this list because it keeps its own launch path).
     heavy_harness: bool,
 }
 
-/// Registry of local-model coding agents, in picker order. `vibe` is intentionally
+/// Registry of local-model coding agents, in picker order (the light-harness
+/// ones are offered ahead of Mistral, the rest after it). `vibe` is intentionally
 /// absent — it keeps its bespoke per-model VIBE_HOME path in `prepare_local_agent`.
 const LOCAL_DRIVERS: &[LocalDriver] = &[
+    LocalDriver {
+        id: "opencode",
+        label: "OpenCode",
+        bin: "opencode",
+        // Never `ollama launch`: it sets its own `OPENCODE_CONFIG_CONTENT`
+        // (clobbering the loaded-models list `pty_spawn` hands every OpenCode —
+        // see `opencode_loaded_models_config`) and appends each launched model
+        // to the user's opencode.jsonc for good.
+        launch_sub: None,
+        // The `ollama` provider — named by the user's config or by the inline
+        // one `pty_spawn` injects; `--model ollama/<model>` selects it.
+        fallback: Some(("opencode", &["--model", "ollama/{model}"])),
+        needs_tools: true,
+        non_thinking_args: None,
+        wants_local_catalog: false,
+        heavy_harness: false,
+    },
+    LocalDriver {
+        id: "pi",
+        label: "Pi",
+        bin: "pi",
+        // `ollama launch pi` writes Pi's `models.json` provider (with
+        // `reasoning` only for a thinking model) into the tab's local-model
+        // home; no hand-rolled fallback, since none could be verified.
+        launch_sub: Some("pi"),
+        fallback: None,
+        needs_tools: true,
+        non_thinking_args: None,
+        wants_local_catalog: false,
+        // A short system prompt and four tools: built to cope with small models.
+        heavy_harness: false,
+    },
     LocalDriver {
         id: "claude",
         label: "Claude Code",
@@ -3957,23 +3991,6 @@ const LOCAL_DRIVERS: &[LocalDriver] = &[
         heavy_harness: true,
     },
     LocalDriver {
-        id: "opencode",
-        label: "OpenCode",
-        bin: "opencode",
-        // Never `ollama launch`: it sets its own `OPENCODE_CONFIG_CONTENT`
-        // (clobbering the loaded-models list `pty_spawn` hands every OpenCode —
-        // see `opencode_loaded_models_config`) and appends each launched model
-        // to the user's opencode.jsonc for good.
-        launch_sub: None,
-        // The `ollama` provider — named by the user's config or by the inline
-        // one `pty_spawn` injects; `--model ollama/<model>` selects it.
-        fallback: Some(("opencode", &["--model", "ollama/{model}"])),
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        heavy_harness: true,
-    },
-    LocalDriver {
         id: "droid",
         label: "Droid",
         bin: "droid",
@@ -3995,6 +4012,20 @@ const LOCAL_DRIVERS: &[LocalDriver] = &[
         // stands up its gateway against the local Ollama endpoint. There's no
         // documented standalone flag to point `openclaw` at a local server, so
         // no hand-rolled fallback.
+        fallback: None,
+        needs_tools: true,
+        non_thinking_args: None,
+        wants_local_catalog: false,
+        heavy_harness: true,
+    },
+    LocalDriver {
+        id: "cline",
+        label: "Cline",
+        bin: "cline",
+        // `ollama launch cline` merges an `ollama` provider into Cline's
+        // `providers.json` — its login file, which is why a local-model home
+        // never feeds the login store (`agent_auth::reconcile_file`).
+        launch_sub: Some("cline"),
         fallback: None,
         needs_tools: true,
         non_thinking_args: None,
@@ -4202,7 +4233,7 @@ pub struct LocalDriverInfo {
     pub heavy_harness: bool,
 }
 
-/// List the local-model coding agents (Claude Code, Codex, OpenCode, Droid) with
+/// List the local-model coding agents ([`LOCAL_DRIVERS`]) with
 /// their availability, so the Local Model menu can offer them alongside
 /// Mistral/vibe. Probes `ollama launch` once.
 ///
@@ -4312,7 +4343,7 @@ pub async fn prepare_local_launch(agent: String, model: String) -> Result<LocalL
                 .to_string()
         } else {
             format!(
-                "Pick one of these in the 🧠 menu instead: {}.",
+                "Pick one of these in the Models & agents menu instead: {}.",
                 usable.join(", ")
             )
         };
@@ -4330,8 +4361,8 @@ pub async fn prepare_local_launch(agent: String, model: String) -> Result<LocalL
     let extra = non_thinking_override(driver, thinking);
 
     if let Some(sub) = driver.launch_sub {
-        // `ollama launch` is preferred but forwards nothing to the agent, so it
-        // cannot carry the reasoning-off override. When one is needed, the
+        // `ollama launch` is preferred, but an older one forwards nothing to
+        // the agent, so it is not trusted to carry the reasoning-off override. When one is needed, the
         // direct invocation is the *only* working path, not a downgrade.
         if extra.is_empty() && ollama_has_launch() {
             return Ok(LocalLaunchSpec {
@@ -5022,8 +5053,8 @@ mod tests {
 
     #[test]
     fn launch_only_drivers_have_no_fallback() {
-        // Claude Code / Droid need `ollama launch`; there is no hand-rolled spec.
-        for id in ["claude", "droid"] {
+        // These need `ollama launch`; there is no hand-rolled spec.
+        for id in ["claude", "droid", "openclaw", "pi", "cline"] {
             let d = LOCAL_DRIVERS.iter().find(|d| d.id == id).unwrap();
             assert!(
                 fallback_spec(d, "any:model", &[]).is_none(),
@@ -5061,8 +5092,20 @@ mod tests {
     }
 
     #[test]
+    fn pi_leads_with_opencode_and_cline_is_cautioned() {
+        // Light-harness drivers lead the menu ahead of Mistral; Pi is built
+        // for small models, Cline's prompt for a frontier one.
+        let ids: Vec<&str> = LOCAL_DRIVERS.iter().filter(|d| !d.heavy_harness).map(|d| d.id).collect();
+        assert_eq!(ids, ["opencode", "pi"]);
+        let cline = LOCAL_DRIVERS.iter().find(|d| d.id == "cline").unwrap();
+        assert!(cline.heavy_harness);
+        assert_eq!(local_driver_bin("pi"), Some("pi"));
+        assert_eq!(local_driver_bin("cline"), Some("cline"));
+    }
+
+    #[test]
     fn an_agent_that_sends_no_reasoning_is_left_alone() {
-        for id in ["claude", "opencode", "droid", "openclaw"] {
+        for id in ["claude", "opencode", "droid", "openclaw", "pi", "cline"] {
             let d = LOCAL_DRIVERS.iter().find(|d| d.id == id).unwrap();
             assert!(
                 non_thinking_override(d, Some(false)).is_empty(),
@@ -5120,6 +5163,9 @@ mod tests {
         // `ollama launch`, for a driver that has it.
         assert!(local_launch_line_ok("claude", m, "ollama", &v(&["launch", "claude", "--model", m])));
         assert!(local_launch_line_ok("droid", m, "ollama", &v(&["launch", "droid", "--model", m])));
+        assert!(local_launch_line_ok("pi", m, "ollama", &v(&["launch", "pi", "--model", m])));
+        assert!(local_launch_line_ok("cline", m, "ollama", &v(&["launch", "cline", "--model", m])));
+        assert!(!local_launch_line_ok("pi", m, "pi", &v(&["--model", m])));
         // Direct fallbacks, with and without the reasoning-off override.
         assert!(local_launch_line_ok("opencode", m, "opencode", &v(&["--model", &format!("ollama/{m}")])));
         let codex = fallback_spec(
@@ -5156,7 +5202,7 @@ mod tests {
     #[test]
     fn only_a_driver_with_a_fallback_asks_for_a_catalog() {
         // The catalog rides the direct invocation's argv; `ollama launch`
-        // generates its own and forwards nothing, so a launch-only driver
+        // generates its own and is not trusted to forward args, so a launch-only driver
         // asking for one would silently get nothing.
         for d in LOCAL_DRIVERS {
             if d.wants_local_catalog {
@@ -5167,8 +5213,8 @@ mod tests {
 
     #[test]
     fn a_reasoning_override_requires_a_fallback_to_ride() {
-        // `ollama launch` forwards nothing — it rejects an extra flag with
-        // `unknown shorthand flag` — so a driver that needs the override and
+        // An older `ollama launch` forwards nothing — it rejects an extra flag
+        // with `unknown shorthand flag` — so a driver that needs the override and
         // has no direct invocation would report the launch-only error message,
         // which names the wrong problem and an update that wouldn't fix it.
         for d in LOCAL_DRIVERS {

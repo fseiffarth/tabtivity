@@ -56,7 +56,7 @@ pub const SOURCES: &[(&str, Source)] = &[
     ("continue", Source::Npm("@continuedev/cli")),
     ("codebuddy", Source::Npm("@tencent-ai/codebuddy-code")),
     ("goose", Source::GitHub("aaif-goose/goose")),
-    ("pi", Source::Npm("@mariozechner/pi-coding-agent")),
+    ("pi", Source::Npm("@earendil-works/pi-coding-agent")),
     ("mini-swe-agent", Source::PyPi("mini-swe-agent")),
     ("crush", Source::Npm("@charmland/crush")),
     ("amp", Source::Npm("@ampcode/cli")),

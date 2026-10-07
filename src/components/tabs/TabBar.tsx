@@ -739,8 +739,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     }
   }
 
-  // Drive the active local model through a non-vibe coding agent (Claude Code,
-  // Codex, OpenCode, Droid) — `lib/agents/localTabSpec`.
+  // Drive the active local model through a non-vibe coding agent (OpenCode,
+  // Pi, Claude Code, Codex, …) — `lib/agents/localTabSpec`.
   async function handleLocalLaunch(agentId: string, label: string, model: string) {
     setMenuPos(null);
     const place = placement();

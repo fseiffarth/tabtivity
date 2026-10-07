@@ -27,7 +27,7 @@ export interface AddTabMenuData {
    *  menus say why instead of "no local model set". */
   localModelOffInRoot: string | undefined;
   /** Coding agents that can drive the active local model besides Mistral/vibe
-   *  (Claude Code, Codex, OpenCode, Droid via `ollama launch` or a direct
+   *  (`LOCAL_DRIVERS`: OpenCode, Pi, Claude Code, … via `ollama launch` or a direct
    *  fallback). Re-probed whenever the active model changes: these are all
    *  tool-calling agents, so a completion-only model (llama3 is one) can't
    *  drive any of them and they're withheld rather than offered as a tab that
