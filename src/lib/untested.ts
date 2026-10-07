@@ -561,6 +561,7 @@ export const UNTESTED = {
   "mobile.project.turnDuration": { area: "mobile", what: "Project list · An agent tab card shows how long its current turn has run (\"4m so far\", green, counting up with each poll) or how long the last one took (\"took 12m\"); a tool call or an approval inside a turn does not restart it" },
   "mobile.project.turnFinishedAgo": { area: "mobile", what: "Project list · A finished agent tab card says when its last turn ended beside how long it took (\"took 12m · finished 3 h ago\"); the Activity list keeps its own \"finished … ago\" line and shows no second one" },
   "mobile.project.modeMarks": { area: "mobile", what: "Project/Agents lists · PLAN and GOAL pills and a tinted border on an agent tab card while its session's status line reads plan mode or a running /goal (read by the desktop)" },
+  "mobile.project.terminalsUnsupported": { area: "mobile", what: "Project · On a Windows desktop (no tmux) the header's ＋, each agent card's ◷ Schedule, the Prompts sheet's Schedule and Mark up's new-tab Submit are hidden and one line says why" },
   "mobile.project.scheduledInPrompts": { area: "mobile", what: "Project · An agent card lists its upcoming scheduled prompts (◷ + desktop time) above the last prompts; the ◷ button sits right of the model; no \"No scheduled prompts\" line", tested: "2026-09-29" },
   "inbox.menuTitle": { area: "mobile", what: "InboxIndicator · Sent from your phone (global inbox)" },
   "mobile.home.sendToDesktop": { area: "mobile", what: "Home · Send a file to the desktop (global inbox)" },

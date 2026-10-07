@@ -246,6 +246,7 @@ export const dict: Dict = {
   "mobile.project.moveFailed": "Der Tab konnte nicht verschoben werden.",
   "mobile.project.fallbackName": "Projekt",
   "mobile.project.newTabTitle": "Neuer Agent oder neue Shell",
+  "mobile.project.terminalsUnsupported": "Die Terminals und Agenten-Tabs dieses Computers lassen sich vom Telefon aus weder öffnen noch planen noch beschreiben: Sie werden über tmux angebunden, das er nicht hat.",
   "mobile.project.reorderHint": "Ziehe {grip}, um zu ordnen — das ist die Tab-Reihenfolge des Desktops selbst, das {app}-Fenster zieht also mit.",
   "mobile.project.swipeCloseHint": "Wische eine Karte von rechts nach links, um sie zu schließen.",
   "mobile.project.colorTab": "{label} einfärben",

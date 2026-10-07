@@ -317,6 +317,7 @@ export const enSource = {
   "mobile.project.moveFailed": "The tab could not be moved.",
   "mobile.project.fallbackName": "Project",
   "mobile.project.newTabTitle": "New agent or shell",
+  "mobile.project.terminalsUnsupported": "This computer's terminals and agent tabs cannot be opened, scheduled or written to from the phone: they attach through tmux, which it does not have.",
   "mobile.project.reorderHint": "Drag {grip} to arrange — this is the desktop's own tab order, so the {app} window follows.",
   "mobile.project.swipeCloseHint": "Swipe a card from right to left to close it.",
   "mobile.project.colorTab": "Colour {label}",

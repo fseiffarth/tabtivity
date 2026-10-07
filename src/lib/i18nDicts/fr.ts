@@ -246,6 +246,7 @@ export const dict: Dict = {
   "mobile.project.moveFailed": "L’onglet n’a pas pu être déplacé.",
   "mobile.project.fallbackName": "Projet",
   "mobile.project.newTabTitle": "Nouvel agent ou shell",
+  "mobile.project.terminalsUnsupported": "Les terminaux et les onglets d'agents de cet ordinateur ne peuvent être ni ouverts, ni planifiés, ni alimentés depuis le téléphone : ils passent par tmux, qu'il n'a pas.",
   "mobile.project.reorderHint": "Faites glisser {grip} pour réorganiser — c’est l’ordre des onglets de l’ordinateur lui-même, la fenêtre {app} suit donc.",
   "mobile.project.swipeCloseHint": "Balayez une carte de droite à gauche pour la fermer.",
   "mobile.project.colorTab": "Colorer {label}",

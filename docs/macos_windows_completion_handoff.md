@@ -313,3 +313,96 @@ Gates (worktree, 2026-10-07, nothing changed in code):
   `Ctrl+Y` in `mobile.keys.interruptConfirm`, `lessons.runPython.runFileBody`,
   `mobile.mode.yoloGeminiHint` are left literal by the implementer's recorded
   rule. Not changed.
+
+## A3 — 3.4
+
+Commit: the one that carries this section — `git log -1 --format=%h -- docs/macos_windows_completion_handoff.md` on `osfix/a3` (one commit for the step).
+
+Per file:
+- `src-tauri/src/services/mobile_control/discovery.rs` — `TERMINALS_TMUX` /
+  `TERMINALS_UNSUPPORTED`, pure `terminals_support_on(windows)` and
+  `terminals_support()` (= `_on(cfg!(target_os = "windows"))`), next to
+  `shells_open`; `live_tmux` now short-circuits on `terminals_support()`
+  instead of its own `cfg!`, so the field and the empty session list cannot
+  drift. Test `terminals_support_names_tmux_or_unsupported` (both values,
+  the host's own answer, a `json!` row carrying each, and on a Windows build
+  that `live_tmux()` is `Ok(empty)`).
+- `src-tauri/src/services/mobile_control/host.rs` — project-detail `json!`
+  gains `"terminals": terminals_support()` beside `"shells"`; the headless
+  detail test (`a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner`)
+  asserts the field equals `terminals_support()` and the literal for this OS.
+- `mobile-web/src/api.ts` — `ProjectDetail.terminals?: "tmux" | "unsupported"`
+  (absent ⇒ tmux, documented on the field).
+- `mobile-web/src/screens/Project.tsx` — `terminalsOffered =
+  detail?.terminals !== "unsupported"`; gates the header ＋, each agent
+  card's ◷, the Prompts sheet's `onSchedule` and `markupNewTab` (which is
+  also what `ProjectFiles.showTab` and both `OutboxViewer`s' `newTab` read,
+  so Mark up's new-tab Submit goes with it); one `.notice` line
+  (`mobile.project.terminalsUnsupported` + its pill) under the
+  desktop-unavailable notice.
+- `mobile-web/src/screens/PromptsSheet.tsx` — `onSchedule` optional; the
+  Schedule… button renders only when it is given (Send now, Edit, Delete and
+  the form stay: collected prompts are files).
+- `src/lib/i18n.ts` + `src/lib/i18nDicts/{de,es,fr,it}.ts` — one key,
+  `mobile.project.terminalsUnsupported`, after `mobile.project.newTabTitle`.
+- `src/lib/untested.ts` — row `mobile.project.terminalsUnsupported`.
+- `todo/group-h-crossplatform.md` — under 32z's "Phone-side 'no terminals on
+  Windows' copy": a built-on line, the ticked 🤖 line naming the three tests,
+  the 🖐️ line with the four ✅/❌ platform pairs (none ticked); the 32z entry
+  itself stays unticked.
+- `src/__tests__/mobile/MobileProjectTerminalsUnsupported.test.tsx` (new) —
+  `terminals: "unsupported"`: no ＋ (`New tab`), no ◷ (`Scheduled prompts for
+  Claude`), the Prompts sheet lists a prompt with Send now but no Schedule…,
+  the line is shown; a gallery picture opened through the name menu's 🖼 has
+  Save but no Mark up; field absent and `"tmux"`: ＋, ◷ and Mark up present,
+  no line.
+- `docs/filemap_backend.md` — `mobile_control/` row names the field and its
+  predicate (no frontend row exists for `screens/Project.tsx`; none added).
+
+Choices where the plan left room:
+- "Held-prompt sending" on the phone is reached two ways: the Terminal
+  composer's `holdDraft` (behind `connected`, i.e. a live PTY bridge, which a
+  tab with no tmux session never has — `tab.available` is false, the card's
+  Open is disabled) and the project screen's markup new-tab Submit, which
+  `/held`s the prompt into the tab it opens. The second is the reachable one
+  and is hidden through `markupNewTab`; `Terminal.tsx` is untouched (nothing
+  to gate that is not already behind the connection).
+- The Prompts sheet's Schedule… is hidden too (it opens the same
+  `ScheduleSheet` as a card's ◷); the sheet itself stays — collected prompts
+  are the host's files and a Send now still goes through the desktop.
+- Hiding ＋ also hides the sheet's "Send a file" row (see Flagged).
+- `TERMINALS_*` are string constants rather than an enum: the field is one
+  `json!` literal on the way out and the phone's union type on the way in;
+  `terminals_support_on(bool)` is the cfg-free core decision 4 asks for.
+- The pill sits on the notice line itself (id = the line's key), as
+  `mobile.headless.tabs` does on the desktop-unavailable notice.
+
+Gotchas:
+- `OutboxViewer`'s Mark up button is labelled `Mark up <file>`
+  (`mobile.markup.openFile`), and the Prompts sheet's Send now carries an
+  `aria-label` with the prompt text — query by `/^Mark up/` and by text.
+- `npm run mobile:bundle` writes `mobile-dist/` (untracked, `emptyOutDir`);
+  nothing under `src-tauri/` changes — nothing to commit from it.
+
+Gates (worktree, 2026-10-07):
+| Gate | Result |
+|---|---|
+| `npm run build` | green (tsc + both bundles) |
+| `npm test` | 730 files / 7527 tests passed (A2 baseline 729 / 7524) |
+| `cargo test` | 3712 passed, 3 ignored (A2 baseline 3711) |
+| `npm run lint` | 0 errors, 28 warnings (same set as A2) |
+| `cargo clippy -D warnings` | no issues |
+| `scripts/brand-check.sh` | pass (48 allowlist entries) |
+| `npm run mobile:bundle` | green |
+| `git diff --check` | clean |
+| Windows `cargo check --target x86_64-pc-windows-msvc` | green (shims) |
+
+### Flagged for user
+
+- On a tmux-less host the header ＋ is gone and with it the ＋ sheet's "Send
+  a file from this phone" row — the project inbox is file-based and would
+  work on Windows. The plan's decision 7 says hide ＋; if sending files from
+  the phone should stay on Windows, the ＋ could instead open the sheet with
+  no create rows (a `NewTabSheet` prop), ~20 lines.
+- The 32z backlog entry itself is left unticked as the plan says; the
+  automated line under it is ticked.

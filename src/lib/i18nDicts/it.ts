@@ -246,6 +246,7 @@ export const dict: Dict = {
   "mobile.project.moveFailed": "Non è stato possibile spostare la scheda.",
   "mobile.project.fallbackName": "Progetto",
   "mobile.project.newTabTitle": "Nuovo agente o shell",
+  "mobile.project.terminalsUnsupported": "I terminali e le schede degli agenti di questo computer non si possono aprire, pianificare né scrivere dal telefono: si collegano tramite tmux, che questo computer non ha.",
   "mobile.project.reorderHint": "Trascina {grip} per riordinare — è l’ordine delle schede del desktop stesso, quindi la finestra di {app} lo segue.",
   "mobile.project.swipeCloseHint": "Scorri una scheda da destra a sinistra per chiuderla.",
   "mobile.project.colorTab": "Colora {label}",

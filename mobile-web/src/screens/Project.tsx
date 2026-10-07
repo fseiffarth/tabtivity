@@ -200,6 +200,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const screenRef = useRef<HTMLElement | null>(null);
   const filesOffered = !!detail?.files;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project";
+  /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
+   * host with none (Windows) nothing can be opened, scheduled or sent to from
+   * here, so ＋, each card's ◷ and Mark up's Submit stay out and one line
+   * says why. An older desktop sends no field, which means tmux. */
+  const terminalsOffered = detail?.terminals !== "unsupported";
   const projectMenuOffered = outbox.length > 0 || filesOffered || gitOffered;
   /** What a right→left swipe over a card (`data-swipe-close`) does, read at
    * the swipe: the listener below outlives the render that installed it, and
@@ -362,8 +367,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * the desktop's default agent, which its Open tab shows — offered once
    * there is one. */
   const markupNewTab = useMemo<MarkupNewTab | undefined>(
-    () => detail?.agents.length ? { projectId: id, show: (tab: TabRow) => terminal(tab) } : undefined,
-    [detail?.agents.length, id, terminal],
+    () => detail?.agents.length && terminalsOffered ? { projectId: id, show: (tab: TabRow) => terminal(tab) } : undefined,
+    [detail?.agents.length, terminalsOffered, id, terminal],
   );
   const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
     setCreating(true); setError("");
@@ -517,7 +522,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             (`NewTabSheet`). It opens without the desktop too: sending a file
             from the phone needs only this host, and the sheet holds its create
             buttons instead — the notice below says why. */}
-        <button
+        {terminalsOffered && <button
           className="primary new-tab"
           disabled={!detail}
           onClick={() => setNewTabOpen(true)}
@@ -525,7 +530,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           aria-expanded={newTabOpen}
           aria-label={t("mobile.newTab.title")}
           title={t("mobile.project.newTabTitle")}
-        ><span aria-hidden="true">＋</span></button>
+        ><span aria-hidden="true">＋</span></button>}
       </div>
     </header>
     {projectMenu && projectMenuOffered && <div className="focus-menu-backdrop" role="presentation" onClick={() => setProjectMenu(false)}>
@@ -551,6 +556,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
     {detail && !detail.desktop_available && <p className="notice">{t("mobile.project.desktopUnavailable")} {isUntested("mobile.headless.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {/* The host has no tmux (Windows): its tabs never reach a phone, so the
+        controls that would open, schedule or send to one are not offered. */}
+    {!terminalsOffered && <p className="notice">{t("mobile.project.terminalsUnsupported")} {isUntested("mobile.project.terminalsUnsupported") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
     {projectInbox.view}
     {canReorder && <p className="reorder-hint"><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
@@ -603,7 +611,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
             {/* Scheduling lives out here beside the tab, not inside the
                 session: reaching a schedule must not mean attaching a
                 terminal. The ◷ rides right of the model; agent tabs only. */}
-            {tab.kind === "agent" && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
+            {tab.kind === "agent" && terminalsOffered && <button className="tab-card-icon accent tab-card-schedule" onClick={() => setScheduleTab({ tab })} aria-haspopup="dialog" aria-expanded={scheduleTab?.tab.id === tab.id} aria-label={t("mobile.project.scheduledFor", { label: tab.label })} title={t("agentPrompts.scheduledHeading")}><span aria-hidden="true">◷</span></button>}
             {tab.kind === "agent" && isUntested("mobile.project.scheduledInPrompts") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           </span>
         </span>
@@ -682,7 +690,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
     />}
     {subagentsTab && <SubagentsSheet tab={subagentsTab} onClose={() => setSubagentsTab(null)} onOpen={(step) => { const row = subagentsTab; setSubagentsTab(null); terminal(row, { subagent: step }); }} />}
-    {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={(tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); }} />}
+    {promptsOpen && detail && <PromptsSheet projectId={id} tabs={detail.tabs} onClose={() => setPromptsOpen(false)} onSchedule={terminalsOffered ? (tab, initialMessage) => { setPromptsOpen(false); setScheduleTab({ tab, initialMessage }); } : undefined} />}
     {colorTab && <ColorSheet
       tab={colorTab}
       onClose={() => setColorTab(null)}

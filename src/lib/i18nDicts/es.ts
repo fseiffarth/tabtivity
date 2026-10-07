@@ -246,6 +246,7 @@ export const dict: Dict = {
   "mobile.project.moveFailed": "No se pudo mover la pestaña.",
   "mobile.project.fallbackName": "Proyecto",
   "mobile.project.newTabTitle": "Nuevo agente o shell",
+  "mobile.project.terminalsUnsupported": "Los terminales y las pestañas de agentes de este equipo no se pueden abrir, programar ni escribir desde el teléfono: se conectan a través de tmux, que este equipo no tiene.",
   "mobile.project.reorderHint": "Arrastra {grip} para ordenar — es el propio orden de pestañas del escritorio, así que la ventana de {app} lo sigue.",
   "mobile.project.swipeCloseHint": "Desliza una tarjeta de derecha a izquierda para cerrarla.",
   "mobile.project.colorTab": "Colorear {label}",

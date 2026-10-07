@@ -749,7 +749,23 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
       - Windows shutdown time budget — measure teardown on hardware first.
       - Roaming `%APPDATA%` state dir — needs a migration; niche.
       - Phone-side "no terminals on Windows" copy — new mobile API field +
-        mobile-web i18n.
+        mobile-web i18n. Built 2026-10-07 (plan §3.4): the project detail
+        carries `terminals: "tmux" | "unsupported"`; the phone hides ＋,
+        Schedule and Mark up's Submit and shows one line.
+        - [x] 🤖 Automated test — `mobile/MobileProjectTerminalsUnsupported.test.tsx`,
+          `terminals_support_names_tmux_or_unsupported`,
+          `a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner`
+        - [ ] 🖐️ Manual test — Windows desktop, phone on the project screen:
+          no ＋, no ◷ on agent cards, the Prompts sheet has no Schedule, a
+          gallery picture has no Mark up, and the one line says tmux is missing
+          - [ ] ✅ Works on Linux (X11)
+          - [ ] ❌ Doesn't work on Linux (X11)
+          - [ ] ✅ Works on Linux (Wayland)
+          - [ ] ❌ Doesn't work on Linux (Wayland)
+          - [ ] ✅ Works on Windows
+          - [ ] ❌ Doesn't work on Windows
+          - [ ] ✅ Works on macOS
+          - [ ] ❌ Doesn't work on macOS
       - Job Object for ConPTY children — needs hardware to see current crash
         reaping.
       - Keychain file read for fenced Claude on macOS — security trade-off;
