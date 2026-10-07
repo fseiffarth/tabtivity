@@ -561,6 +561,9 @@ fn route_open(id: &str) -> u64 {
     let mut map = routes().lock().unwrap();
     let route = map.entry(id.to_string()).or_default();
     route.pending.clear();
+    // The state the cap trimmed off the predecessor's buffer is its, not the
+    // new program's: replaying it would put xterm on the old program's screen.
+    route.carried = ScreenState::default();
     route.digest.clear();
     // A respawn is a new program: its predecessor's screen is not this one's
     // catch-up. (Same reason the pending buffer is cleared.)
@@ -1888,6 +1891,25 @@ mod route_tests {
         let replay = route.take_pending().unwrap().text;
         assert_eq!(replay, "\x1b[?1049h\x1b[?2004h\x1b[2J\x1b[Hframe");
         assert!(route.carried.is_empty(), "spent by the replay");
+    }
+
+    /// A respawn under the same id is a new program: what the cap trimmed
+    /// off its predecessor's buffer is not its state. Replaying it put xterm
+    /// on the old program's alternate screen for the new one's output.
+    #[test]
+    fn a_respawn_drops_the_state_carried_from_its_predecessor() {
+        let id = "route-t-carried-respawn";
+        let seq = route_open(id);
+        set_visible(id, false);
+        let t0 = Instant::now();
+        let _ = route_chunk_at(id, b"\x1b[?1049h\x1b[?1000h", t0, seq);
+        let _ = route_chunk_at(id, "x".repeat(ROUTE_PENDING_CAP * 2).as_bytes(), t0, seq);
+        assert!(!routes().lock().unwrap()[id].carried.is_empty(), "the cap folded the modes");
+        let seq2 = route_open(id);
+        let _ = route_chunk_at(id, b"fresh", t0, seq2);
+        assert_eq!(set_visible(id, true).as_deref(), Some("fresh"));
+        route_remove_view(id, "test-view", 2);
+        route_close(id, seq2);
     }
 
     #[test]
