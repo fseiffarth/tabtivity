@@ -1043,3 +1043,109 @@ f6ec9062, e78dd33f). Nothing run live.
    the pill within ~1 s; nothing changes in the visible tab's behaviour.
 6. Pop out an agent tab while it is hidden in the main window: the popout
    opens with the tab's current frame and keeps streaming.
+### Review (S5 reviewer, 2026-10-07)
+Range reviewed: `c7f6149e..7c63373b` (3c745d9, f24adf80, 7c63373b). Nothing
+run live.
+
+**Bugs fixed**
+- `660b5283` — `ScreenState` dropped *every* tracked mode at a DECSTR
+  (`ESC[!p`), but xterm.js's `softReset` leaves the alternate screen and
+  mouse reporting alone (it resets `?1 ?6 ?7 ?25 ?45 ?66 ?1004 ?2004`, IRM,
+  SGR, charsets, margins, the saved cursor): a TUI soft-resetting after
+  `?1049h` replayed onto the main screen with the mouse still reporting.
+  Only what DECSTR resets is dropped now, and the `!p` itself is replayed
+  (for the saved cursor / origin mode the state does not track). Same
+  commit: a full reset (`ESC c`) *inside* the kept prefix was folded into
+  the state but never replayed, and the main-screen phases printed before
+  it were kept as live — the reset is written first, the phases after it,
+  and `find_cut` forgets the phases before a RIS. Tests:
+  `a_soft_reset_before_the_cut_keeps_the_screen_mouse_and_title`,
+  `a_reset_inside_the_prefix_is_replayed_before_what_follows_it`, and the
+  randomized `a_trimmed_replay_leaves_the_state_the_whole_buffer_would`
+  (3000 streams from a pool of what the TUIs emit — modes incl. `?47`/
+  `?1047`, SGR, DECSCUSR, DECSTBM, charsets, OSC 0/2/4/10/11/104 incl. a
+  query, DECSC/DECRC, every clear shape, RIS, DECSTR, `6n`: the cut is at
+  an ESC, the tail verbatim, no spliced sequence in the replay, and folding
+  the replay into a fresh state gives the whole buffer's).
+- `42e1b827` — `route_open` cleared `pending` but not `carried`: a tab
+  respawned under its id while hidden (mode switch, HMR) replayed the old
+  program's `?1049h`/mouse modes in front of the new program's output.
+  Test: `a_respawn_drops_the_state_carried_from_its_predecessor`.
+- `8a015b0b` — the digest-latency flag was a real regression: beside one
+  continuously repainting hidden tab (ticks at every window end), a hidden
+  tab speaking every 700 ms had its digests drained at 0 / 1000 / 1500 /
+  2500 ms — a 1 s gap > `BUSY_WINDOW_MS` 800, and `nextWindowEnd` re-reads
+  the tab exactly at `raw + 800`, so `bytesSayWorking` went false for
+  200 ms and the pill flickered; the per-PTY timers gave max(500, gap).
+  Each route now stamps `last_digest` at its drain and a chunk is due by
+  `max(last + ACTIVITY_INTERVAL, now)`; `DigestClock` holds the earliest
+  deadline, an earlier one pulls the armed tick forward (generation-tagged;
+  the superseded task wakes and drains nothing). Still one event per tick,
+  routes in the same window share it, nothing armed while nothing streams;
+  worst-case ticks equal the old per-PTY event count, typical is one per
+  window. Test: `a_pty_keeps_its_own_cadence_beside_a_continuous_one`
+  (private map + clock: leading-edge pull, window-end pull via a third
+  PTY, superseded generation drains nothing, in-window chunk arms nothing).
+  The S5 "Gotchas" paragraph on two-window latency no longer applies.
+
+**Checked and sound**
+- Cut never inside a sequence / multi-byte char: cuts are at an ESC token
+  start; `string_end` ends OSC/DCS at BEL, ST or a bare ESC exactly as
+  xterm.js's table does (`OSC_STRING` + 0x1b → `OSC_END`, then ESCAPE);
+  randomized test covers splicing.
+- `?1049h` cut: kept main phases are raw and in order; xterm.js copies the
+  main cursor into the alt buffer on `activateAltBuffer`, and the phases
+  reproduce the same main cursor the whole stream would have (alt phases
+  never move it; `1049l` restores). A redundant enter is a no-op in
+  xterm.js too (`activateAltBuffer` returns if already alt).
+- Modes: last value wins, split multi-param forms, `?1004`, `?1`, DECSCUSR,
+  DECSTBM, SGR after a reset, charsets, OSC 0/1/2/10/11/12/4/104 (queries
+  skipped) — all verified by the randomized fold. 8-bit C1 (`U+009B`) is
+  text to the tokenizer (flagged below); a cut can never land inside one.
+- Carried fold: each cap trim folds only the newly dropped front, once;
+  `take_pending` spends it; the 128 KB floor applies to the trimmed length
+  (≤ 1 MB after hysteresis, so always above the floor once the cap bit).
+- `trim_replay` runs only in `take_pending` (show / watch rising edge),
+  two linear passes (lookahead ≤ 32 tokens per clear candidate) under the
+  routes lock — milliseconds for 1 MB; `stripTerminalQueries` sees whole
+  sequences.
+- Lock order: `digest_clock()` is taken at exactly three sites
+  (`route_chunk_at`, `route_finish`, `route_digest_batch_take`), each
+  before `routes()`; no site takes the clock while holding routes.
+- Route removed between arm and tick: only when no view and no watcher
+  (`route_close`), i.e. no pane; the pill's exit comes from `terminal-exit`
+  (`terminalBus.ts:106`), so the lost EOF digest is negligible as flagged.
+- Batch: id-sorted, no event when empty, emitted globally like the old
+  event; no popout, the sidecar or the headless owner ever listened to
+  `terminal-activity`. `noteActivityDigests` loops `notePtyOutput` in
+  order; `ActivityDigestBatch.test.ts` asserts store equality with the
+  per-event path.
+
+**Gates (worktree, after fixes)**
+| Gate | Result |
+|---|---|
+| `npm run build` | clean (tsc + desktop + mobile bundles) |
+| `npm test` | 738 files / 7568 tests passed (unchanged) |
+| `cargo test -q` | lib 3578 passed, 3 ignored (S5: 3574; +4 net: +3 replay_trim, +2 route, −1 renamed); other targets green |
+| `npm run lint` | 0 errors, 28 warnings (pre-existing) |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | clean |
+| `git diff --check` | clean |
+
+**Flagged for user**
+- The pending cap (`ROUTE_PENDING_CAP`, pre-existing) still cuts at a char
+  boundary, not a sequence boundary: a mode split across the cut is lost
+  (neither `carried` nor `pending` sees it) and the kept front starts with
+  the sequence's remainder as text. Rare (one cut per megabyte); the fix
+  would be a token-boundary cut in `hysteresis_cut`.
+- 8-bit C1 controls (`U+009B` CSI, `U+009D` OSC) are text to the tokenizer
+  while xterm.js parses them; no TUI emits them in UTF-8 mode. Harmless for
+  cuts; a mode set that way would not be re-applied.
+- `?47h`/`?1047h` also clear the alt buffer in xterm.js but are not cuts
+  (conservative: whole replay, as today). `on_alt` is unknown until the
+  first switch, so a `?1049h` from a program already on the alt screen
+  before hiding (xterm ignores it) is taken as a real enter and the bytes
+  before it are kept as main-screen phases — harmless, rare.
+- Design note, not a bug: with every hidden tab silent-then-speaking at a
+  staggered ≥ 500 ms cadence, the pulled ticks approach the old one-event-
+  per-PTY count; continuous streams (the §7.6 case) still batch to ~2/s.
