@@ -359,6 +359,36 @@ describe(`${BRAND.display} Mobile side panel`, () => {
     expect(lines).toEqual(["● Done.", "", "❯ why is this shown", "", "● Because the panel shares rows.", "❯"]);
   });
 
+  it("cuts the fullscreen diff panel at the divider it draws down every row", () => {
+    // Claude Code 2.1.292: no gutter, a `│` on every row, footer included; a
+    // wide glyph left of it puts the divider one character earlier.
+    const pane = (left: string, right = "") => `${left.padEnd(30)}│${right}`;
+    const rows = [
+      pane("● Wrote the plan.", "1 file changed"),
+      pane("", "docs/plan.md (untracked)"),
+      pane("│ How should homes sync, so", "─".repeat(20)),
+      pane("│ nothing leaks?", "New file not yet staged."),
+      `${"完成 Shipped".padEnd(28)}│Run \`git add\` to see line counts.`,
+      `${"─".repeat(30)}│`,
+      pane("❯ "),
+      `${"─".repeat(30)}│`,
+      pane("  ⏵⏵ auto mode on", "+1 file edited before this session"),
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines).toEqual(["● Wrote the plan.", "", "How should homes sync, so", "nothing leaks?", "完成 Shipped", "❯", "  ⏵⏵ auto mode on"]);
+  });
+
+  it("leaves a table's columns whole: they never run through every row", () => {
+    const rows = [
+      "┌──────────────────────────┬──────────┐",
+      ...Array.from({ length: 8 }, (_, index) => `│ row ${index}                    │ value    │`),
+      "└──────────────────────────┴──────────┘",
+      "❯ ",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines[0]).toBe("row 0                    │ value");
+  });
+
   it("leaves rows whole without two rules at one column", () => {
     const rows = [
       split("● One rule is not a panel.", rule),

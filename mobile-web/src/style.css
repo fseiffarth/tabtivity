@@ -932,11 +932,14 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-bar + .readable-empty { min-height:calc(100% - 56px); }
 /* Keep the session's subagents within reach even after their cards scroll away. */
 /* The strip over the chat: the subagent index and the sent-files index side by
-   side, one list open at a time; the open one takes the room, the shut one
-   keeps to its chip. */
+   side, one list open at a time. */
 .chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
 .chat-index > nav { flex:1 1 0; min-width:0; }
-.chat-index:has(> nav.open) > nav:not(.open) { flex:0 1 auto; }
+/* An open list takes the strip's full width; the shut chip moves to a line of
+   its own above it. */
+.chat-index:has(> nav.open) { flex-wrap:wrap; }
+.chat-index > nav.open { flex:1 0 100%; }
+.chat-index:has(> nav.open) > nav:not(.open) { order:-1; }
 .chat-index .subagent-index-toggle span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subagent-index-toggle { display:flex; align-items:center; gap:8px; width:100%; padding:5px 7px; border:1px solid #343f58; border-radius:9px; background:#171e2d; color:#dbe4f6; font:600 .78rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
 .subagent-index-toggle span { flex:1; }
@@ -949,9 +952,6 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-list small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
 .subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
-.chat-index > nav.sent-index.open { flex:1 0 100%; }
-.chat-index:has(> nav.sent-index.open) { flex-wrap:wrap; }
-.chat-index:has(> nav.sent-index.open) > nav:not(.open) { flex:1 1 0; }
 .sent-index-groups { display:grid; gap:10px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
 .sent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .sent-index-head.phone { color:#a99cf0; }
