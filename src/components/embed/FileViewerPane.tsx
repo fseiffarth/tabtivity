@@ -18,7 +18,9 @@ import {
   ROOT_SCOPE,
   findGroupOfTab,
   findTabByKey,
+  flushViewerState,
   getDetachedViewerState,
+  pendingViewerState,
   useTabsStore,
   type TabEntry,
   type ViewerState,
@@ -313,10 +315,13 @@ const DeckView = lazy(() => import("./deck/DeckView").then((m) => ({ default: m.
  */
 function seedViewerState(tabKey: string | undefined): ViewerState | undefined {
   if (!tabKey) return undefined;
-  return (
+  const stored =
     findTabByKey(useTabsStore.getState(), tabKey)?.viewerState ??
-    getDetachedViewerState(tabKey)
-  );
+    getDetachedViewerState(tabKey);
+  // A position written since the last flush (performance plan §3.1) outranks
+  // the store's: a viewer remounting (a sleeping PDF waking) restores it.
+  const pending = pendingViewerState(tabKey);
+  return pending ? { ...stored, ...pending } : stored;
 }
 
 export function useViewerState(tabKey: string | undefined) {
@@ -324,6 +329,19 @@ export function useViewerState(tabKey: string | undefined) {
   const persist = useCallback(
     (patch: ViewerState) => {
       if (tabKey) useTabsStore.getState().setViewerState(tabKey, patch);
+    },
+    [tabKey],
+  );
+  // §3.1: a position is staged, not written, while the reader moves. Fold it
+  // into the store when the pane leaves the screen and when the viewer unmounts
+  // — the two moments after which nothing else would write it.
+  const visible = usePaneVisible();
+  useEffect(() => {
+    if (!visible && tabKey) flushViewerState(tabKey);
+  }, [visible, tabKey]);
+  useEffect(
+    () => () => {
+      if (tabKey) flushViewerState(tabKey);
     },
     [tabKey],
   );

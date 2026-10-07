@@ -565,6 +565,125 @@ export function getDetachedViewerState(key: string): ViewerState | undefined {
   return detachedViewerState.get(key);
 }
 
+// ── Pending viewer positions (performance plan §3.1) ───────────────────────
+// A viewer's scroll/zoom/pan lands HERE first, not in the store. A store write
+// replaces `tabsByScope`, re-renders the whole shell and wakes CenterPanel's
+// 300 ms session save — and a reader pausing a scroll did that several times a
+// second, for every open viewer. The Map holds what the store does not yet,
+// keyed by tab key; `flushViewerState` folds it in — on pane hide and viewer
+// unmount (`useViewerState`), before a popout is seeded, and at most every
+// `VIEWER_STATE_FLUSH_MS` otherwise — and every save path reads it through
+// `toSavedTabEntry`, so a quit mid-interval still persists the latest position.
+// Only the position-like fields take this route (the ones a viewer writes while
+// the reader moves); a per-tab setting such as `fontSize` or a fold set still
+// writes through, because the shell reads those reactively. The persisted JSON
+// shape is unchanged: the Map is a staging area, never a second store.
+export const VIEWER_STATE_FLUSH_MS = 5_000;
+const POSITION_FIELDS: ReadonlySet<string> = new Set<keyof ViewerState>([
+  "scrollTop",
+  "scrollLeft",
+  "scale",
+  "pdfFitted",
+  "offsetX",
+  "offsetY",
+  "yamlScrollTop",
+]);
+const stagedViewerState = new Map<string, ViewerState>();
+let viewerStateFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Whether a `viewerState` merge of `patch` over `cur` changes anything —
+ *  shallow over the union of keys; arrays/objects compare by reference, which is
+ *  right: viewers hand in a fresh ref precisely when such a field changed. */
+function viewerStateChanged(cur: ViewerState | undefined, patch: ViewerState): boolean {
+  const c = (cur ?? {}) as Record<string, unknown>;
+  const p = patch as Record<string, unknown>;
+  return Object.keys(p).some((k) => c[k] !== p[k]);
+}
+
+/** Split a patch into the part the Map stages and the part the store takes now. */
+function splitViewerPatch(patch: ViewerState): { position: ViewerState | null; rest: ViewerState | null } {
+  let position: Record<string, unknown> | null = null;
+  let rest: Record<string, unknown> | null = null;
+  for (const [k, v] of Object.entries(patch)) {
+    if (POSITION_FIELDS.has(k)) (position ??= {})[k] = v;
+    else (rest ??= {})[k] = v;
+  }
+  return { position: position as ViewerState | null, rest: rest as ViewerState | null };
+}
+
+/** What a tab's viewers have written since the last flush, or undefined. A
+ *  remounting viewer seeds from this BEFORE the store, or it restores a position
+ *  up to `VIEWER_STATE_FLUSH_MS` stale. */
+export function pendingViewerState(key: string): ViewerState | undefined {
+  return stagedViewerState.get(key);
+}
+
+/** The persisted `viewerState` of `t`: the store's, with anything still staged
+ *  merged over it. What every save path writes. */
+function savedViewerState(t: TabEntry): ViewerState | undefined {
+  const pending = stagedViewerState.get(t.key);
+  return pending ? { ...t.viewerState, ...pending } : t.viewerState;
+}
+
+function queueViewerState(key: string, position: ViewerState): void {
+  const staged = stagedViewerState.get(key);
+  // Dedup against what the store (plus the stage) already holds, so a viewer
+  // re-persisting its restored position on mount arms no flush.
+  const stored = findTabByKey(useTabsStore.getState(), key)?.viewerState;
+  if (!viewerStateChanged(staged ? { ...stored, ...staged } : stored, position)) return;
+  stagedViewerState.set(key, staged ? { ...staged, ...position } : position);
+  // One-shot, armed only while something is staged — not a standing clock.
+  viewerStateFlushTimer ??= setTimeout(() => {
+    viewerStateFlushTimer = null;
+    flushViewerState();
+  }, VIEWER_STATE_FLUSH_MS);
+}
+
+/**
+ * Fold the staged positions into the store — one tab's, or every tab's. A
+ * flushed tab the store no longer holds (closed meanwhile) is simply dropped.
+ * One store write per scope that actually changed; nothing when none did.
+ */
+export function flushViewerState(key?: string): void {
+  let entries: Array<[string, ViewerState]>;
+  if (key !== undefined) {
+    const staged = stagedViewerState.get(key);
+    if (!staged) return;
+    stagedViewerState.delete(key);
+    entries = [[key, staged]];
+  } else {
+    if (viewerStateFlushTimer != null) {
+      clearTimeout(viewerStateFlushTimer);
+      viewerStateFlushTimer = null;
+    }
+    if (stagedViewerState.size === 0) return;
+    entries = [...stagedViewerState];
+    stagedViewerState.clear();
+  }
+  useTabsStore.setState((s) => {
+    const byScope = new Map<string, Map<string, ViewerState>>();
+    for (const [k, staged] of entries) {
+      const owner = scopeOfTab(s, k);
+      let m = byScope.get(owner);
+      if (!m) byScope.set(owner, (m = new Map()));
+      m.set(k, staged);
+    }
+    let acc: TabsStore = s;
+    for (const [scope, staged] of byScope) {
+      const { tabs, layout, focusedGroupId } = scopeState(acc, scope);
+      let changed = false;
+      const nextTabs = tabs.map((t) => {
+        const patch = staged.get(t.key);
+        if (!patch || !viewerStateChanged(t.viewerState, patch)) return t;
+        changed = true;
+        return { ...t, viewerState: { ...t.viewerState, ...patch } };
+      });
+      if (changed) acc = { ...acc, ...writeScope(acc, scope, nextTabs, layout, focusedGroupId) };
+    }
+    return acc === s ? {} : acc;
+  });
+}
+
 /**
  * Fallback minimum subwindow (split pane) size in px a divider drag may shrink a
  * pane to, per axis, when `settings.min_subwindow_width/height` is unset. Mirrors
@@ -1037,7 +1156,8 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     embedPath: t.embedPath,
     embedExec: t.embedExec,
     viewer: t.viewer,
-    viewerState: t.viewerState,
+    // With any position still staged in the §3.1 Map merged over the store's.
+    viewerState: savedViewerState(t),
     // SSH-sync Phase 0: the per-tab locality.
     location: t.location,
     // A "projectfiles" tab's browsed folder.
@@ -2020,26 +2140,43 @@ function pruneCollapseCollect(
       node.activeKey && tabKeys.includes(node.activeKey)
         ? node.activeKey
         : (tabKeys[0] ?? null);
-    const next: GroupNode = { ...node, tabKeys, activeKey };
+    // Identity is preserved when nothing was pruned: `layout` must not change
+    // for a write that only touched a tab payload (performance plan §3.1) — a
+    // fresh tree per write re-rendered every group on a viewer's scroll pause.
+    const next: GroupNode =
+      tabKeys.length === node.tabKeys.length && activeKey === node.activeKey
+        ? node
+        : { ...node, tabKeys, activeKey };
     groupsOut.push(next);
     return next;
   }
   const children: LayoutNode[] = [];
   const sizes: number[] = [];
+  let same = true;
   node.children.forEach((child, i) => {
     // Collect each child's descendants into a scratch list first; only merge it
     // into groupsOut once we know the child survives (isn't an emptied group or
     // a fully-collapsed split) so groupsOut never lists a dropped group.
     const scratch: GroupNode[] = [];
     const c = pruneCollapseCollect(child, keep, scratch);
-    if (!c) return;
-    if (c.type === "group" && c.tabKeys.length === 0) return; // drop empty group
+    if (!c) {
+      same = false;
+      return;
+    }
+    if (c.type === "group" && c.tabKeys.length === 0) {
+      same = false;
+      return; // drop empty group
+    }
+    if (c !== child) same = false;
     children.push(c);
     sizes.push(node.sizes[i] ?? 1);
     for (const g of scratch) groupsOut.push(g);
   });
   if (children.length === 0) return null;
   if (children.length === 1) return children[0];
+  // Every child survived unchanged: the split itself is unchanged (its sizes
+  // were normalized when they were last set).
+  if (same && sizes.length === node.sizes.length) return node;
   const total = sizes.reduce((a, b) => a + b, 0) || 1;
   return { ...node, children, sizes: sizes.map((s) => s / total) };
 }
@@ -2242,8 +2379,16 @@ function writeScope(
       : s.fullscreenGroupId;
   return {
     tabsByScope: { ...s.tabsByScope, [scope]: tabs },
-    layoutByScope: { ...s.layoutByScope, [scope]: collapsed },
-    focusedGroupByScope: { ...s.focusedGroupByScope, [scope]: focus },
+    // The per-scope maps keep their identity when their entry did (§3.1): a
+    // payload-only write must not look like a layout change to the shell.
+    layoutByScope:
+      collapsed === s.layoutByScope[scope]
+        ? s.layoutByScope
+        : { ...s.layoutByScope, [scope]: collapsed },
+    focusedGroupByScope:
+      focus === s.focusedGroupByScope[scope]
+        ? s.focusedGroupByScope
+        : { ...s.focusedGroupByScope, [scope]: focus },
     ...(isCurrent
       ? { tabs, layout: collapsed, focusedGroupId: focus, activeKey, fullscreenGroupId }
       : {}),
@@ -3273,6 +3418,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       ctx.pushEdit({ kind: "setViewerState", key, patch });
       return;
     }
+    // §3.1: scroll/zoom/pan is staged (`pendingViewerState`) and folded into the
+    // store on hide/unmount/flush; everything else writes through as before.
+    const { position, rest } = splitViewerPatch(patch);
+    if (position) queueViewerState(key, position);
+    if (!rest) return;
+    patch = rest;
     set((s) => {
       const owner = scopeOfTab(s, key);
       const { tabs, layout, focusedGroupId } = scopeState(s, owner);
@@ -4324,11 +4475,14 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         }
         case "setViewerState": {
           // #231: viewer state written in a popout persists on the main payload,
-          // with the same shallow no-op rule `setViewerState` applies locally.
-          if (nextTabs) {
+          // with the same shallow no-op rule `setViewerState` applies locally —
+          // and, like it, its position fields are staged (§3.1), not written.
+          const { position, rest } = splitViewerPatch(edit.patch);
+          if (position) queueViewerState(edit.key, position);
+          if (rest && nextTabs) {
             nextTabs = nextTabs.map((t) => {
               if (t.key !== edit.key) return t;
-              const merged = { ...t.viewerState, ...edit.patch };
+              const merged = { ...t.viewerState, ...rest };
               const cur = (t.viewerState ?? {}) as Record<string, unknown>;
               const mergedRec = merged as Record<string, unknown>;
               const changed = [...new Set([...Object.keys(cur), ...Object.keys(mergedRec)])].some(

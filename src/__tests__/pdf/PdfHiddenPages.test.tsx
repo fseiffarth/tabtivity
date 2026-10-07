@@ -140,10 +140,16 @@ function viewer(visible: boolean) {
 async function shown() {
   const view = render(viewer(true));
   await waitFor(() => expect(canvases().length).toBe(2));
+  // The observers are registered in a passive effect, which lands after the
+  // canvases are in the DOM: a report before it reaches nobody.
+  await waitFor(() => expect(observers.flatMap((o) => o.targets).length).toBe(2));
   act(() => report(true));
   await waitFor(() => expect(io.renders).toBe(2));
   await waitFor(() => expect(painted()).toEqual([true, true]));
-  await sleep(50);
+  // The fingerprint follows the paint asynchronously; a fixed wait was too short
+  // on a loaded machine. Still exactly two: one per page, none repeated.
+  await waitFor(() => expect(io.fingerprints).toBe(2));
+  await sleep(20);
   expect(io.fingerprints).toBe(2);
   return view;
 }
