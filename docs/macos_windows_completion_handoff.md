@@ -242,6 +242,74 @@ Gates (worktree, 2026-10-07):
 | `scripts/brand-check.sh` | pass (48 allowlist entries) |
 | `git diff --check` | clean |
 
+### Reviewer
+
+Verified against the plan (§3.3), the diff `f475b244..2ddc457b` and the
+tree (nothing launched):
+- Keys: the 37 changed + 1 removed key (`sysmon.linuxOnly`) exist in
+  `i18n.ts` and all four `i18nDicts/{de,es,fr,it}.ts`; the `{…}` placeholder
+  set of every key is identical in the five files; no dictionary has a
+  duplicate key; no translation collapsed into the English string (old
+  translation ≠ old English ⇒ new translation ≠ new English, all 4 × 37);
+  `rg -n "sysmon.linuxOnly"` hits only the plan and this handoff.
+- Consumers: every `{modifier}` / `{altRight}` / `{altBrackets}` key is
+  filled at each call site (`rg` per key over `src/` and `mobile-web/src/`;
+  the steering `descKey` has two readers — `ShortcutHelpOverlay`,
+  `SteeringLegend` — both pass `modifier`; the four lessons fill it through
+  `TourStep.bodyParams`, read by `TourHost.tsx:313`); no consumer of a
+  removed key remains; `mobile-web` uses none of the 38.
+- `useChordHint`: all eight action ids (`editorReplace`, `editorSave`,
+  `editorUndo`, `editorRedo`, `editorAutocomplete`, `zoomIn`, `zoomOut`,
+  `zoomReset`) are in `ShortcutAction` and the defaults table; every call is
+  at a component's top level (`CodeEditor`, `SaveButton`, `UndoRedoButtons`,
+  `EditorAiControls`, `FontSizeControls`, `PdfCanvas`, `DeckView`,
+  `AgentTabComposer`), none conditional or in a loop. Each literal
+  descriptor matches its handler: PDF `onHostKeyDown` (`f`, `g`, `s`, `p`,
+  `z`, `⇧z`, `Alt+←`, `PdfViewer.tsx:3491–3524`), deck `mod && "d"`
+  (`DeckView.tsx:1348`), replace-all `ctrl|meta + Enter`
+  (`FileViewerPane.tsx:4144`), composer Send `ctrl|meta + Enter`.
+- `modifierLabel()` / `chordLabel`: the new mocked-platform test gives `⌘`,
+  `⇧⌘Tab`, `⌘S`, `⌥→` on macOS and `Ctrl`, `Ctrl+Shift+Tab`, `Ctrl+S`,
+  `Alt+→` on Windows/Linux; read the 14 prose strings with `⌘` substituted in
+  all five languages (`⌘+Shift+Tab`, `⌘+1–9`, `⌘+click` / `⌘-click`, `⌘+C`,
+  `⌘+Space`, `⌘+D`) — all read correctly. `IS_MAC` stays imported in
+  `FileViewerPane` (two other uses); `shortcuts.ts` gains no import, so
+  `lessons.ts → shortcuts.ts` opens no cycle.
+- `DevBuildIndicator`: only the "Open log" `<button>` is inside
+  `!IS_WINDOWS`; the chip, the relaunch, pause and build-now buttons and the
+  rest of the card render unchanged on Windows (`DevBuildIndicator.tsx:355–397`).
+- No new `any`; no `UntestedTag` owed (no new control). Rust change is a doc
+  comment only.
+- Lint set: 28 warnings, all `react-hooks/exhaustive-deps`; the five in
+  A2-touched files (`DeckView` ×3, `PdfViewer`, `SystemMonitorPane`) name
+  `t`, `viewPos.initial`, `globalMachine` — pre-existing; A2 touched no hook
+  in those files and no warning names `chordHint`/`modifierLabel`.
+
+Fixed: none.
+
+Gates (worktree, 2026-10-07, nothing changed in code):
+| Gate | Result |
+|---|---|
+| `npm test` | 729 files / 7524 tests passed |
+| `npm run lint` | 0 errors, 28 warnings (same set, see above) |
+| `scripts/brand-check.sh` | pass (48 allowlist entries) |
+| `git diff --check` | clean |
+| `npm run build` / `cargo *` | not re-run: no code change since the implementer's green run |
+
 ### Flagged for user
 
-- None.
+- `TableView` hosts the shared `SaveButton` / `UndoRedoButtons`, whose
+  tooltips now render the rebindable `editorSave` / `editorUndo` /
+  `editorRedo` chords, but `TableView.onKeyDown` (`TableView.tsx:611–626`)
+  hardcodes Ctrl/⌘+S, Z, Shift+Z, Y. At the defaults the labels are right;
+  after a rebind the table's tooltip names a chord the table ignores.
+  Pre-existing gap (the table never honoured those actions) — either route
+  its keydown through `actionMatches` or pass it literal titles. Not changed.
+- `fileViewer.redoShortcut` now shows redo's default `Ctrl+Y` where the old
+  literal said `Ctrl+Shift+Z`; both chords work (`actionChords` keeps the
+  Shift+Z alternate). Wording only.
+- Prose outside the `Ctrl+` sweep still names Alt textually on macOS:
+  `lessons.keyboardSteering.projectCycleBody` ("Alt+Shift+←"); `Ctrl+C` /
+  `Ctrl+Y` in `mobile.keys.interruptConfirm`, `lessons.runPython.runFileBody`,
+  `mobile.mode.yoloGeminiHint` are left literal by the implementer's recorded
+  rule. Not changed.
