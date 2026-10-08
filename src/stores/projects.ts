@@ -1139,9 +1139,24 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   switchGeneration: 0,
 
   load: async () => {
-    const [raw, rootDir] = await Promise.all([
-      invoke<ProjectEntry[]>("get_projects"),
+    // The active project's side-panel subfolder (below) needs only that
+    // project's `local_file`, so it is asked the moment the list lands — in
+    // the same `Promise.all` as `root_work_dir`, not after it (performance
+    // plan §3.5): startup waits for the slower of the two chains, not both.
+    const rawP = invoke<ProjectEntry[]>("get_projects");
+    const folderP = rawP
+      .then(async (list) => {
+        // The same pick as `activeId` below (first "current" by position).
+        const current = [...list].sort((a, b) => a.position - b.position).find((p) => p.status === "current");
+        if (!current?.local_file) return null;
+        const folder = await invoke<string | null>("load_side_panel_folder", { localFile: current.local_file });
+        return folder ? { id: current.id, folder } : null;
+      })
+      .catch(() => null);
+    const [raw, rootDir, savedFolder] = await Promise.all([
+      rawP,
       invoke<string>("root_work_dir").catch(() => null),
+      folderP,
     ]);
     const projects = [...raw].sort((a, b) => a.position - b.position);
     // NO project marked "current" means the root scope was open when the app was
@@ -1161,15 +1176,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     // (Switching projects already restores via switch_project_runtime; this
     // covers the initially-active project, which never triggers a switch.)
     const sidePanelFolderByProject: Record<string, string> = {};
-    const activeLocalFile = activeId
-      ? projects.find((p) => p.id === activeId)?.local_file
-      : undefined;
-    if (activeId && activeLocalFile) {
-      const folder = await invoke<string | null>("load_side_panel_folder", {
-        localFile: activeLocalFile,
-      }).catch(() => null);
-      if (folder) sidePanelFolderByProject[activeId] = folder;
-    }
+    if (activeId && savedFolder?.id === activeId) sidePanelFolderByProject[activeId] = savedFolder.folder;
     set({
       projects,
       loaded: true,

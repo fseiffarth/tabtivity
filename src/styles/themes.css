@@ -719,19 +719,21 @@
 
 /* ── Glass chrome (fancy_dark / light_lavender) ───────────────────────────
    Frosted-glass treatment for the app's outer chrome ONLY — header, right
-   file panel, tab bars, docked file sidebar, project pills, dialogs, and
-   popover menus. Reads the --glass-* tokens defined on each theme above, not
-   the shared --bg-panel/--bg-elevated (see the comment on those tokens for
-   why). Both themes share one rule set since they read the same variable
-   names with theme-appropriate values. */
+   file panel, project pills, dialogs, and popover menus. Reads the --glass-*
+   tokens defined on each theme above, not the shared --bg-panel/--bg-elevated
+   (see the comment on those tokens for why). Both themes share one rule set
+   since they read the same variable names with theme-appropriate values.
+
+   The tab bars and the docked file sidebar keep their translucent glass fills
+   (--glass-subheader, --glass-panel below) but no backdrop-filter: there is
+   one of each per subwindow, all beside live panes, and on WebKitGTK's
+   software path a backdrop-filter re-blurs its region on every repaint
+   beneath it (performance plan §3.5). What sits under them is the shell's
+   smooth ambient wash, which a blur barely changes. */
 [data-theme="fancy_dark"] .app-header,
 [data-theme="light_lavender"] .app-header,
 [data-theme="fancy_dark"] .side-panel,
-[data-theme="light_lavender"] .side-panel,
-[data-theme="fancy_dark"] .tab-bar,
-[data-theme="light_lavender"] .tab-bar,
-[data-theme="fancy_dark"] .subwindow-files,
-[data-theme="light_lavender"] .subwindow-files {
+[data-theme="light_lavender"] .side-panel {
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
