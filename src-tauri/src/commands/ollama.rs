@@ -1233,9 +1233,12 @@ fn remove_blob_files_elevated(files: &[&std::path::PathBuf]) -> Result<(), Strin
     }
 }
 
+/// No `ollama.service` / `pkexec` here: a blob this user may not delete
+/// belongs to another account or is held open (Windows locks a file Ollama
+/// still has open), so the message names that, not a system service.
 #[cfg(not(target_os = "linux"))]
 fn remove_blob_files_elevated(_files: &[&std::path::PathBuf]) -> Result<(), String> {
-    Err("permission denied: these files belong to another user (the Ollama service)".into())
+    Err("permission denied: these files belong to another account or are locked by a running Ollama; quit Ollama or remove them as their owner".into())
 }
 
 /// Forget an interrupted pull (e.g. the user dismisses it, or it finished).

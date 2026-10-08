@@ -640,3 +640,107 @@ Flagged for user:
   worst case is a missing origin, never a wrong file. Unverifiable here.
 - Windows PowerShell 5.1 writes stdout in the console's OEM code page, so
   the `→`/`—` of the report line may reach the agent as `?`. Cosmetic.
+
+## A5 — 3.6 + 3.9
+
+Commit: the one that carries this section — `git log -1 --format=%h -- docs/macos_windows_completion_handoff.md` on `osfix/a5` (one commit for the step).
+
+Per file:
+- `src-tauri/src/services/agent_session.rs` — `posix_hook_script_body(live_dir)`
+  keeps its signature and calls the new `posix_hook_script_body_with(live_dir,
+  proc_root)` with `/proc`. The `clear|resume` arm wraps the unchanged `/proc`
+  loop (now spelled with `{proc_root}`) in `if [ -r "<root>/$PPID/environ" ]`;
+  the `else` branch walks with `ps`: `e=$(ps -E -o command= -p $p)` split on
+  spaces and matched `-qx "[A-Z]*_TAB_UID=<uid>"` (any tab-id name, as the
+  `/proc` branch), a `claude` counted when the basename of `ps -o comm=` **or**
+  of argv[0] (first word of `e`) is `claude`, parent from `ps -o ppid=` with
+  spaces stripped, loop guarded by `[ "$p" -gt 1 ]`. Script comment's "Without
+  /proc nothing is counted" sentence replaced; the `hook_script_body` doc
+  comment names the `ps` fallback. New test
+  `hook_script_walks_the_chain_with_ps_where_proc_is_unreadable` (`cfg(unix)`):
+  procfs root = empty temp dir, a `ps` shim on `PATH` answering `ppid=` /
+  `comm=` / `command=` (environment only with `-E`) from a scripted chain
+  starting at the test's own pid (the hook's `$PPID`); covers alone (full-path
+  comm) → taken, nested → refused, `claude` outside the tab → taken, legacy
+  name only + retitled argv[0] → refused, another tab's id → taken, empty
+  `ps` → taken, for both `resume` and `clear`; also asserts the production
+  body equals `_with(…, "/proc")`. The existing `/proc` test is untouched.
+  Mutation-checked: dropping `-E` from the script fails the new test.
+- `src-tauri/src/commands/workspace.rs` — `network_identity_blocking`'s
+  `lan` arm calls `wired_gateway()` on every OS: Linux the old `/proc` reads
+  (moved, unchanged), macOS `route -n get default` → `gateway_from_route_get`
+  then `arp -n <ip>` → `mac_from_arp_n`, Windows `route print -4` →
+  `gateway_from_route_print` (lowest-metric `0.0.0.0 0.0.0.0 <ipv4> <if>
+  <metric>` row; headings ignored since localised; `On-link`/`Default` rows
+  fall out) then `arp -a <ip>` → `mac_from_arp_a`; all through
+  `probe_output_capped`. New `canonical_mac` pads/lower-cases macOS
+  `2:0:0:0:a:1` and Windows `02-00-…-0A-01` to the `/proc` spelling and drops
+  all-zero/broadcast. `wifi_ssid_macos` reads `interface:` through the new
+  shared `route_get_field`. `NetworkIdentity.gateway_ip` doc updated. Five
+  parser tests on captured-shape text (RFC 5737 addresses, a 02:… MAC).
+- `src-tauri/src/services/dev_build.rs` — `lock_holder_alive` →
+  `crate::commands::apps::pid_alive`; `own_exe` → `std::env::current_exe()`,
+  the ` (deleted)` strip under `cfg(target_os = "linux")`, `(exe, false)`
+  elsewhere; `spawn_relauncher` returns `"dev relaunch is Linux-only"` off
+  Linux right after the `SOURCE_ROOT` check (shown raw by the chip's
+  `ErrorNote`, like its sibling errors).
+- `src-tauri/src/commands/ollama.rs` — non-Linux `remove_blob_files_elevated`
+  says the files "belong to another account or are locked by a running
+  Ollama; quit Ollama or remove them as their owner" (no frontend matches the
+  text — checked).
+- `src/lib/window/printerNetworkDefaults.ts` — module comment only (wired id
+  now read on macOS/Windows too).
+- `todo/group-s-agents.md` — new `[~]` item right under the PowerShell guard
+  item: macOS `ps` fallback, 🤖 ticked, 🖐️ with the four platform pairs.
+  Nothing ticked on the PowerShell item.
+- `todo/group-h-crossplatform.md` — new `32q` (gateway twins, dev-build
+  chip, Ollama wording) with the four platform pairs.
+- `docs/filemap_backend.md` — `commands/workspace.rs` row names the
+  wired-gateway probes.
+
+Choices where the plan left room:
+- The fallback is chosen per walk by the first parent's `environ` being
+  unreadable (the plan's wording); Linux with `/proc` never enters it. If it
+  ever does on Linux, procps `ps -E` is an "unsupported SysV option" error →
+  nothing counted → the start is taken, exactly today's behaviour.
+- A `claude` is also counted by argv[0]'s basename, not only `ps -o comm=`
+  (the plan's wording): macOS `comm` prints the executable path, which for the
+  native installer is the versioned binary, and a node-based CLI retitles its
+  argv rather than its comm. Over-counting needs two such processes carrying
+  the tab id, so the tab's own `/clear` (one `claude`) is still taken.
+- `arp -a <ip>` / `arp -n <ip>` are called with the gateway to keep the output
+  to one entry; the parsers still check the address.
+- MACs are canonicalised so a settings file shared between a Linux and a
+  macOS/Windows machine on the same LAN maps to the same `gateway_id`.
+- No new `UntestedTag`: the per-network UI already carries
+  `printing.networkSet` / `printing.networkDefaults`; the hook has no UI.
+- `route`/`arp` are spawned bare like the sibling `netsh`/`networksetup`
+  probes; trusted-helper resolution on Windows is A6's (§3.7).
+
+Gotchas:
+- macOS `ps -E` shows the environment only for the user's own processes and
+  only as it was at exec; neither is a problem here (the tab id is set at
+  spawn, all tab processes are the user's). Read-verified only — macOS `ps`
+  output shapes (`comm` = path, leading spaces on `ppid=`) are from memory.
+- The test shim answers by the test process's pid: the hook is run as `sh
+  <script>` directly from the test, so its `$PPID` is `std::process::id()`.
+- Windows clippy cross-check (`--target x86_64-pc-windows-msvc -D warnings`)
+  ran: 14 pre-existing findings (apps.rs ×7, network.rs, screenshot.rs,
+  platform/mod.rs, platform/windows.rs ×2, project_runtime.rs, vm.rs), none
+  in the files this step touched — A9's. Windows `cargo check` passes.
+- One `npm test` run showed 2 extra failures (a markup-ask card `waitFor`
+  under load); a rerun had only the two known ones. No TS logic changed.
+
+Gates: `npm run build` ok; `npm test` 730 files / 7527 tests, 2 failed (the
+known `MobileHeldPromptStore` date bomb); `cargo test` 3720 passed (+6: one
+hook test, five parser tests); `cargo clippy --all-targets -D warnings` ok;
+`npm run lint` 0 errors / 28 warnings; `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh` ok; `git diff --check` clean; Windows `cargo
+check` ok.
+
+Flagged for user:
+- The macOS `ps` fallback and the macOS/Windows gateway parsers have never
+  run on a Mac or Windows box; first live check is §6 macOS 2–3 and the 32q
+  manual line.
+- The PowerShell nested-`claude` walk stays unbuilt (decision 5, the
+  "only with a Windows box" rule).

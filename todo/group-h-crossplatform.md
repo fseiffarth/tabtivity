@@ -733,6 +733,32 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - [x] **32q — wired-network identity, dev-build chip, Ollama wording off
+      Linux** (2026-10-08, plan §3.9, ⚠️ never run on macOS/Windows). The
+      per-network default printer keyed a wired link by its gateway only on
+      Linux (`/proc`); macOS now reads the `gateway:` of `route -n get default`
+      and `arp -n <ip>`, Windows the lowest-metric `0.0.0.0` row of `route
+      print -4` and `arp -a <ip>`, MACs canonicalised to the `/proc` spelling
+      so the id is the same on every OS. The dev-build chip's lock check uses
+      `apps::pid_alive` (no `/proc`), its own-binary check `current_exe`, and
+      "Relaunch now" says it is Linux-only elsewhere. A blob Delete refused
+      off Linux says the files belong to another account or are locked.
+      - [x] 🤖 Automated test — `macos_route_get_names_the_gateway_and_the_interface`,
+        `macos_arp_n_resolves_only_a_complete_entry`,
+        `windows_route_print_picks_the_lowest_metric_default_gateway`,
+        `windows_arp_a_resolves_the_gateway_row`, `every_os_spells_one_mac_the_same`
+      - [ ] 🖐️ Manual test — on a wired link: Print manager → set "Default on
+        this network" → the label names the gateway IP; unplug/replug or
+        relaunch → the same default is applied; on another wired network it
+        is not
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **32z — deferred from the sweep** (each needs live hardware or a
       product call first):
       - X11 backend on any X11 session — mutates the WM workspace count and
