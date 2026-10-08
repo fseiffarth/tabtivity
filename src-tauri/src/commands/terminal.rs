@@ -284,16 +284,32 @@ pub async fn pty_set_visible(
 /// the router keeps a bounded tail of everything it routed (visible or not) and
 /// hands it back here, to be written into the new terminal before its first live
 /// byte. A read, not a drain: a third window attaching later gets it too.
+///
+/// `wake`: the pane that owns this PTY is waking from sleep (performance plan
+/// §5.3) — the tail comes back cut at its last full clear and the route's
+/// sleep ends (`route_wake_scrollback`). Absent from older frontends.
 #[tauri::command]
 pub async fn pty_scrollback(
     id: String,
+    wake: Option<bool>,
 ) -> Result<crate::terminal::TerminalScrollback, String> {
+    if wake == Some(true) {
+        return Ok(crate::terminal::route_wake_scrollback(&id));
+    }
     Ok(crate::terminal::route_scrollback(&id))
 }
 
+/// A view leaves (`TerminalView` unmount). `sleeping`: its pane is going to
+/// sleep with the PTY still running (§5.3) — absent from older frontends,
+/// which never sleep a terminal.
 #[tauri::command]
-pub async fn pty_remove_view(id: String, viewer_id: String, update_seq: u64) -> Result<(), String> {
-    crate::terminal::route_remove_view(&id, &viewer_id, update_seq);
+pub async fn pty_remove_view(
+    id: String,
+    viewer_id: String,
+    update_seq: u64,
+    sleeping: Option<bool>,
+) -> Result<(), String> {
+    crate::terminal::route_remove_view(&id, &viewer_id, update_seq, sleeping == Some(true));
     Ok(())
 }
 
@@ -317,6 +333,8 @@ pub async fn pty_kill(registry: State<'_, RegistryState>, id: String) -> Result<
     // The terminal is gone, so its login marking must not outlive it and bless a
     // future PTY that reuses the id.
     crate::commands::credentials::forget_login_pty(&id);
+    // A sleeping pane's route waits for a wake that will not come now (§5.3).
+    crate::terminal::route_forget_sleep(&id);
     // Taken under the lock, torn down after it: the lock is on every
     // keystroke's path, the teardown walks the process table.
     let taken = registry.lock().unwrap().take(&id);

@@ -117,6 +117,13 @@ const ROUTE_PENDING_CAP: usize = 1_000_000;
 /// replay converges on the current screen either way.
 const ROUTE_SCROLLBACK_CAP: usize = 256_000;
 
+/// The catch-up tail of a PTY whose pane is ASLEEP (performance plan §5.3):
+/// its `TerminalView` was unmounted after a long while hidden, so no xterm
+/// holds its history any more and the wake repaints from this tail alone. A
+/// sleeping shell keeps a few screens more than a popout's catch-up needs.
+/// Applies from the sleeping `pty_remove_view` until the wake reads it back.
+const ROUTE_SLEEP_SCROLLBACK_CAP: usize = 1_000_000;
+
 /// How much tail one `terminal-activity` digest carries — enough for the
 /// activity store's 8 KB decision-prompt scan.
 const ACTIVITY_TAIL_CAP: usize = 8192;
@@ -160,6 +167,16 @@ struct OutputRoute {
     retained: String,
     /// Absolute UTF-8 byte offset of `retained[0]` in this spawn's output.
     retained_start: u64,
+    /// The PTY's pane is asleep (§5.3): its view left with `sleeping`, so no
+    /// xterm holds this terminal's history. The tail is kept to
+    /// `ROUTE_SLEEP_SCROLLBACK_CAP`, and a spawn that ends meanwhile keeps its
+    /// route (and tail) for the wake to show. Cleared by the wake's read
+    /// (`route_wake_scrollback`), by `pty_kill` (`route_forget_sleep`), and by
+    /// a respawn from a registered pane.
+    asleep: bool,
+    /// The spawn this route carried has ended (its task closed the route while
+    /// something still held it). A respawn clears it.
+    ended: bool,
     /// Absolute UTF-8 byte offset of `pending[0]`.
     pending_start: u64,
     /// Absolute UTF-8 byte offset immediately after the latest routed chunk.
@@ -213,7 +230,8 @@ impl OutputRoute {
         let start_offset = self.output_offset;
         self.output_offset += text.len() as u64;
         self.retained.push_str(&text);
-        self.retained_start += trim_with_hysteresis(&mut self.retained, ROUTE_SCROLLBACK_CAP) as u64;
+        let cap = if self.asleep { ROUTE_SLEEP_SCROLLBACK_CAP } else { ROUTE_SCROLLBACK_CAP };
+        self.retained_start += trim_with_hysteresis(&mut self.retained, cap) as u64;
         OutputSlice {
             text,
             start_offset,
@@ -607,6 +625,13 @@ fn route_open(id: &str) -> u64 {
     route.output_offset = 0;
     route.decoder = Utf8StreamDecoder::default();
     route.seq = seq;
+    route.ended = false;
+    // A pane that registered and is spawning anew is awake. A spawn with no
+    // view (a backend-side restart under a sleeping pane) keeps the flag: the
+    // pane is still asleep and its wake still needs the long tail.
+    if !route.visible_viewers.is_empty() {
+        route.asleep = false;
+    }
     seq
 }
 
@@ -620,8 +645,47 @@ pub fn route_scrollback(id: &str) -> TerminalScrollback {
             data: route.retained.clone(),
             start_offset: route.retained_start,
             end_offset: route.output_offset,
+            exited: route.ended,
         },
         None => TerminalScrollback::default(),
+    }
+}
+
+/// The catch-up for a pane WAKING from sleep (§5.3): the retained tail, cut at
+/// its last full clear like a hidden spell's replay (`trim_replay`, nothing
+/// below `REPLAY_TRIM_FLOOR` is cut), so up to a megabyte of a TUI's redraws
+/// does not reach the new xterm as one parse. Ends the route's sleep: the pane
+/// registered its view before asking, so the tail returns to the ordinary cap
+/// as output continues. `exited` says the program ended while asleep — the
+/// pane has no `terminal-exit` listener then, so the wake says it.
+pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
+    let mut map = routes().lock().unwrap();
+    let Some(route) = map.get_mut(id) else {
+        return TerminalScrollback::default();
+    };
+    route.asleep = false;
+    let data = trim_replay(route.retained.clone(), &ScreenState::default(), REPLAY_TRIM_FLOOR);
+    let snapshot = TerminalScrollback {
+        data,
+        start_offset: route.retained_start,
+        end_offset: route.output_offset,
+        exited: route.ended,
+    };
+    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+        map.remove(id);
+    }
+    snapshot
+}
+
+/// A sleeping pane's tab was closed (`pty_kill`): the route no longer waits
+/// for a wake. A route whose spawn already ended is dropped now (nothing else
+/// would); a live one closes with its spawn, as any other.
+pub fn route_forget_sleep(id: &str) {
+    let mut map = routes().lock().unwrap();
+    let Some(route) = map.get_mut(id) else { return };
+    route.asleep = false;
+    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+        map.remove(id);
     }
 }
 
@@ -634,13 +698,16 @@ fn route_close(id: &str, seq: u64) -> bool {
     if !map.get(id).is_some_and(|r| r.seq == seq) {
         return false;
     }
+    // A sleeping pane's route outlives its spawn: the wake shows what the
+    // program printed and that it ended (`route_wake_scrollback`).
     let remove = map
         .get(id)
-        .is_some_and(|r| r.visible_viewers.is_empty() && r.watchers == 0);
+        .is_some_and(|r| r.visible_viewers.is_empty() && r.watchers == 0 && !r.asleep);
     if remove {
         map.remove(id);
     } else if let Some(route) = map.get_mut(id) {
         route.seq = 0;
+        route.ended = true;
         route.decoder = Utf8StreamDecoder::default();
     }
     true
@@ -713,7 +780,12 @@ pub fn route_set_visible(
 }
 
 /// Remove a TerminalView instance without changing any sibling view's state.
-pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64) {
+///
+/// `sleeping`: the view leaves because its pane is going to sleep (§5.3), not
+/// because its tab closed. The PTY keeps running with no xterm behind it, so
+/// the route keeps the longer catch-up tail and outlives the spawn's end until
+/// the wake reads it (or the tab's `pty_kill` forgets it).
+pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64, sleeping: bool) {
     let mut map = routes().lock().unwrap();
     let Some(route) = map.get_mut(id) else { return };
     if route
@@ -724,7 +796,11 @@ pub fn route_remove_view(id: &str, viewer_id: &str, update_seq: u64) {
         return;
     }
     route.visible_viewers.remove(viewer_id);
-    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+    if sleeping {
+        route.asleep = true;
+        return;
+    }
+    if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 && !route.asleep {
         map.remove(id);
     }
 }
@@ -748,8 +824,9 @@ pub fn route_drop_window_views(window: &str) -> usize {
         route.visible_viewers.retain(|_, v| v.window != window);
         dropped += before - route.visible_viewers.len();
         // Same collection rule `route_remove_view` applies: a route whose spawn
-        // has already ended and that nothing watches any more is dead weight.
-        if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 {
+        // has already ended and that nothing watches any more is dead weight —
+        // unless a sleeping main pane still has its wake to show.
+        if route.seq == 0 && route.visible_viewers.is_empty() && route.watchers == 0 && !route.asleep {
             empty.push(id.clone());
         }
     }
@@ -889,6 +966,8 @@ pub struct TerminalScrollback {
     pub data: String,
     pub start_offset: u64,
     pub end_offset: u64,
+    /// The spawn has ended (see `OutputRoute::ended`).
+    pub exited: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1702,7 +1781,7 @@ mod route_tests {
             Routed::Data(t) if t.text == "hello"
         ));
         set_visible(id, false);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -1756,7 +1835,7 @@ mod route_tests {
             panic!("a chunk after a quiet window ticks at once");
         };
         assert_eq!(tick.deadline, t0 + ACTIVITY_INTERVAL * 2);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -1918,7 +1997,7 @@ mod route_tests {
         ));
         // No leftover digest fires after the drain.
         assert_eq!(take_digest(id, t0), None);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -1952,7 +2031,7 @@ mod route_tests {
         };
         assert!(matches!(armed, Routed::ArmDigest(t) if t.deadline == t1));
         assert_eq!(take_digest(id, t1).as_deref(), Some("after"));
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -1987,7 +2066,7 @@ mod route_tests {
             set_visible(id, true).as_deref(),
             Some("\x1b[?1049h\x1b[?1000l\x1b[?2004h\x1b[2J\x1b[Hlast frame")
         );
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -2003,7 +2082,7 @@ mod route_tests {
             set_visible(id, true).as_deref(),
             Some("\x1b[?1000hold\x1b[2J\x1b[Hnew")
         );
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -2041,7 +2120,7 @@ mod route_tests {
         let seq2 = route_open(id);
         let _ = route_chunk_at(id, b"fresh", t0, seq2);
         assert_eq!(set_visible(id, true).as_deref(), Some("fresh"));
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq2);
     }
 
@@ -2210,7 +2289,7 @@ mod route_tests {
         );
 
         set_visible(id, false);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, seq);
     }
 
@@ -2274,7 +2353,7 @@ mod route_tests {
         );
         // And the respawn kept the pane's hidden state.
         assert!(!routes().lock().unwrap().get(id).unwrap().subscribed());
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         assert!(
             route_close(id, new),
             "the current spawn closes its own route"
@@ -2317,8 +2396,137 @@ mod route_tests {
         );
 
         set_visible(id, false);
-        route_remove_view(id, "test-view", 2);
+        route_remove_view(id, "test-view", 2, false);
         route_close(id, new);
+    }
+
+    /// Sleeping tabs (§5.3): a pane put to sleep leaves with `sleeping`, and
+    /// its PTY's catch-up tail grows to the sleep cap — the wake repaints from
+    /// it alone, there being no xterm left that holds the history.
+    #[test]
+    fn a_sleeping_pane_keeps_the_longer_tail_until_it_wakes() {
+        let id = "route-t-sleep-cap";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        let chunk = "x".repeat(100_000);
+        for _ in 0..8 {
+            route_chunk_at(id, chunk.as_bytes(), Instant::now(), seq);
+        }
+        assert_eq!(
+            route_scrollback(id).data.len(),
+            800_000,
+            "past the awake bound of 2x {ROUTE_SCROLLBACK_CAP}, all of it kept"
+        );
+
+        // The wake registers its view, then reads: the whole tail (no clear in
+        // it to cut at), and the route is awake again.
+        set_visible(id, true);
+        assert_eq!(route_wake_scrollback(id).data.len(), 800_000);
+        assert!(!routes().lock().unwrap().get(id).unwrap().asleep);
+        route_chunk_at(id, b"y", Instant::now(), seq);
+        assert!(
+            route_scrollback(id).data.len() <= ROUTE_SCROLLBACK_CAP * 2,
+            "back to the ordinary cap once awake"
+        );
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
+        assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// A program that ends while its pane sleeps has nobody to tell: the route
+    /// (and its tail) outlives the spawn so the wake shows the output and that
+    /// it exited. Before, a viewless route was dropped at the spawn's end and
+    /// the woken pane came up blank.
+    #[test]
+    fn a_spawn_that_ends_asleep_keeps_its_tail_for_the_wake() {
+        let id = "route-t-sleep-exit";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_chunk_at(id, b"build done\r\n", Instant::now(), seq);
+        route_remove_view(id, "test-view", 2, true);
+        route_chunk_at(id, b"bye\r\n", Instant::now(), seq);
+        assert!(route_close(id, seq), "the current spawn ends");
+        assert!(routes().lock().unwrap().contains_key(id), "kept for the wake");
+
+        set_visible(id, true);
+        let wake = route_wake_scrollback(id);
+        assert!(wake.data.contains("build done") && wake.data.contains("bye"));
+        assert!(wake.exited, "the wake learns the program ended");
+        // The woken pane's eventual close collects the route as before.
+        route_remove_view(id, "test-view", 3, false);
+        assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// Closing a sleeping tab (`pty_kill` → `route_forget_sleep`): nothing
+    /// waits for a wake any more, so the route goes with the spawn — at once
+    /// when the spawn already ended, at its end when it is still running.
+    #[test]
+    fn closing_a_sleeping_tab_forgets_its_route() {
+        let ended = "route-t-sleep-close-ended";
+        let seq = route_open(ended);
+        set_visible(ended, true);
+        route_remove_view(ended, "test-view", 2, true);
+        route_close(ended, seq);
+        assert!(routes().lock().unwrap().contains_key(ended));
+        route_forget_sleep(ended);
+        assert!(!routes().lock().unwrap().contains_key(ended), "dropped at once");
+
+        let live = "route-t-sleep-close-live";
+        let seq = route_open(live);
+        set_visible(live, true);
+        route_remove_view(live, "test-view", 2, true);
+        route_forget_sleep(live);
+        assert!(routes().lock().unwrap().contains_key(live), "still running");
+        route_close(live, seq);
+        assert!(!routes().lock().unwrap().contains_key(live), "gone with its spawn");
+    }
+
+    /// An ordinary close (no `sleeping`) still collects an ended route, and a
+    /// popout's catch-up read leaves a sleeping route asleep.
+    #[test]
+    fn only_the_wake_read_ends_a_routes_sleep() {
+        let id = "route-t-sleep-popout-read";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        let _ = route_scrollback(id);
+        assert!(routes().lock().unwrap().get(id).unwrap().asleep);
+        let _ = route_wake_scrollback(id);
+        assert!(!routes().lock().unwrap().get(id).unwrap().asleep);
+        route_close(id, seq);
+        assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// The wake's catch-up is cut at the last full clear, as a hidden spell's
+    /// replay is: a TUI's megabyte of redraws arrives as its last frame. The
+    /// popout's read of the same tail stays whole.
+    #[test]
+    fn the_wake_tail_is_cut_at_the_last_clear() {
+        let id = "route-t-sleep-trim";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        let frame = format!("\x1b[2J\x1b[3J\x1b[H{}", "old frame ".repeat(1000));
+        for _ in 0..20 {
+            route_chunk_at(id, frame.as_bytes(), Instant::now(), seq);
+        }
+        route_chunk_at(id, b"\x1b[2J\x1b[3J\x1b[Hlast frame", Instant::now(), seq);
+        let whole = route_scrollback(id);
+        assert!(whole.data.len() > REPLAY_TRIM_FLOOR);
+
+        set_visible(id, true);
+        let wake = route_wake_scrollback(id);
+        assert!(wake.data.ends_with("last frame"));
+        assert!(!wake.data.contains("old frame"), "cut at the last clear");
+        assert_eq!(wake.end_offset, whole.end_offset, "offsets cover the same range");
+        assert!(!wake.exited);
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
     }
 }
 

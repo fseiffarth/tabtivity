@@ -224,5 +224,5 @@ back-reference on a board card; CalDAV merges preserve it beside mail/event.
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | PTY lifecycle. Visible-only streaming: hidden panes emit no `terminal-output`; output buffers in Rust (`ROUTE_PENDING_CAP`) with throttled digests batched across PTYs (`terminal-activity-batch`, `DigestClock`); show drains as one `terminal-replay`. Kill reaps the subtree. |
+| `mod.rs` | PTY lifecycle. Visible-only streaming: hidden panes emit no `terminal-output`; output buffers in Rust (`ROUTE_PENDING_CAP`) with throttled digests batched across PTYs (`terminal-activity-batch`, `DigestClock`); show drains as one `terminal-replay`. A sleeping pane's route (`pty_remove_view` `sleeping`) keeps a 1 MB catch-up tail and outlives its spawn until the wake's trimmed read (`pty_scrollback` `wake`) or `pty_kill`. Kill reaps the subtree. |
 | `replay_trim.rs` | What the show-again replay carries: a buffer past `REPLAY_TRIM_FLOOR` is cut at its last full clear (`2J`+cursor move, home+erase, `?1049h`, RIS), with the terminal state the dropped bytes set (`ScreenState`: DEC/ANSI modes, SGR, charset, cursor shape, scroll region, OSC title/colours; last value wins) re-applied in front; main-screen phases before an alt-screen cut are kept. Pure, no `AppHandle`. |
