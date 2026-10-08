@@ -422,7 +422,7 @@ fn segment_cstr(name: &str) -> std::io::Result<std::ffi::CString> {
 #[path = "files_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(super) use windows::ProjectDir;
+pub(crate) use windows::ProjectDir;
 
 fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }

@@ -826,6 +826,33 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - [x] **32t — Windows: agent mail attachments through the handle walk**
+      (2026-10-08, plan §3.11, ⚠️ never run on Windows). A root agent's
+      `attach` on a mail draft was refused outright on Windows; it now reads
+      through the phone's handle-based `files::ProjectDir` walk (one
+      `NtCreateFile` per name relative to the held folder, every reparse
+      point — junctions included — refused, the proven handle read), with
+      the same roots, caps and secret-name list as Linux/macOS. Names Windows
+      would read as another file (`a:b` streams, `GIT~1` short names, a
+      trailing dot or space) are refused before any I/O, and the state-dir
+      check ignores case.
+      - [x] 🤖 Automated test — `windows_aliases_are_refused_before_io`,
+        `the_state_check_ignores_case`, `junctions_are_refused_never_followed`
+        (Windows CI only), `content_is_pinned_at_call_time` and
+        `attach_on_update_replaces_keeps_or_clears` now also on Windows
+      - [ ] 🖐️ Manual test — Windows: in a root tab (unfenced there, so it
+        reads every project) ask the agent to draft a mail attaching a project's PDF →
+        the composer shows the file chip; make a junction in the project
+        (`mklink /J away C:\Windows`) and ask it to attach `away/win.ini` →
+        refused ("never followed"); `GIT~1/config` → refused
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **32z — deferred from the sweep** (each needs live hardware or a
       product call first):
       - X11 backend on any X11 session — mutates the WM workspace count and

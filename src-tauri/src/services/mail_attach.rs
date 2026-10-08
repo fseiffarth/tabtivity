@@ -16,6 +16,15 @@
 //! - the final open is `O_NONBLOCK` and `fstat` must say regular file, so a
 //!   FIFO cannot hang the handler; the read is capped one byte over the limit.
 //!
+//! Windows has no fence (a root tab there runs with the user's rights, so its
+//! grant is everything) but the same walk: the phone's handle-based
+//! `files::ProjectDir` opens one name at a time relative to the held folder
+//! with `NtCreateFile(FILE_OPEN_REPARSE_POINT)`, refuses every reparse point
+//! (junctions included) from the handle's own metadata, and reads the file
+//! through the handle it proved. Names Windows would read as something else —
+//! a `:` (drive or stream), an 8.3 short alias, a trailing dot or space — are
+//! refused before any I/O (`windows_part_refusal`).
+//!
 //! The secret-shaped name list below is defence in depth only: a writer in the
 //! project copies `.env` to `notes.txt`. The gates that hold are the user's —
 //! the agent never sets a recipient, and Send is bound to the reviewed set.
@@ -42,9 +51,6 @@ pub const MAX_TAB_BYTES: u64 = 100 * 1024 * 1024;
 pub const NEEDS_PROJECTS_READABLE: &str = concat!("attaching needs a root tab that can read the projects: switch on \"Root agent reads projects\" under Agent sandbox in ", crate::app_name!(), "'s Settings, then start a new root tab");
 /// Reader and local-model tabs never attach.
 pub const NOT_FOR_CALLER: &str = "`attach` is not available to this agent";
-/// No fence exists on Windows to hold the read to what the tab could see, and
-/// no `openat`; a handle-based check is a filed follow-up.
-pub const WINDOWS_REFUSED: &str = concat!("attaching project files is not available on Windows yet: there is no agent sandbox there to bound what ", crate::app_name!(), " would read");
 
 /// One `attach` item as the agent sent it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +131,33 @@ pub fn components(path: &str) -> Result<Vec<&str>, String> {
     if parts.iter().any(|c| c.eq_ignore_ascii_case(".git")) {
         return Err("files inside `.git` are never attached".into());
     }
+    if cfg!(windows) {
+        if let Some(reason) = parts.iter().find_map(|c| windows_part_refusal(c)) {
+            return Err(reason.into());
+        }
+    }
     Ok(parts)
+}
+
+/// Why one component is refused on Windows before any I/O, if it is: a name
+/// the filesystem would read as something other than itself. A `:` names a
+/// drive or an alternate data stream (`notes.txt:hidden`, `.git::$INDEX_ALLOCATION`);
+/// a `~` followed by a digit is the shape of an 8.3 short alias, which opens
+/// the long name it stands for (`GIT~1` for `.git`, `ENV~1` for `.env`) past
+/// the name checks; a trailing dot or space is dropped by Win32 when the file
+/// is made, so such a name is an alias too. Pure, so Linux runs its test.
+fn windows_part_refusal(part: &str) -> Option<&'static str> {
+    if part.contains(':') {
+        return Some("`path` may not contain `:`: on Windows it names a drive or a hidden stream");
+    }
+    let short_alias = part.as_bytes().windows(2).any(|w| w[0] == b'~' && w[1].is_ascii_digit());
+    if short_alias {
+        return Some("`path` may not use a Windows short name (`NAME~1`); give the full name");
+    }
+    if part.ends_with(['.', ' ']) {
+        return Some("`path` may not have a part ending in a dot or a space");
+    }
+    None
 }
 
 /// Why a basename is refused as secret-shaped, if it is. Defence in depth
@@ -153,14 +185,12 @@ pub const NOT_IN_GRANT: &str = "that project was not in this tab's view when it 
 /// Whether `root` lies inside a path the tab's fence exposed. `None` is an
 /// unfenced tab. Component-wise `starts_with`, so `/w/alpha2` is not inside
 /// `/w/alpha`.
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 fn within_grant(granted: Option<&[PathBuf]>, root: &Path) -> bool {
     granted.is_none_or(|g| g.iter().any(|p| root.starts_with(p)))
 }
 
 /// Why a root is not attachable from at all: `/`, `$HOME` or an ancestor of it
 /// (the fence shows neither), or a place inside Tabtivity's state (masked).
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static str> {
     let forms: Vec<PathBuf> = [Some(root.to_path_buf()), root.canonicalize().ok()].into_iter().flatten().collect();
     let homes: Vec<PathBuf> = [Some(home.to_path_buf()), home.canonicalize().ok()].into_iter().flatten().collect();
@@ -178,7 +208,6 @@ fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static s
 
 /// The name a root is shown under on the chip: the project or box that owns
 /// it, else the project asked for.
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 fn root_label(lists: &Lists, root: &Path, asked: &str) -> String {
     use super::agent_fence::{entry_directory, entry_mirror};
     let owner = lists.projects.iter().find(|p| {
@@ -222,7 +251,6 @@ pub fn resolve(lists: &Lists, project_id: &str, path: &str) -> Result<Resolved, 
     read_from_roots(lists, &roots, &parts, &asked, path)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_from_roots(lists: &Lists, roots: &[PathBuf], parts: &[&str], asked: &str, path: &str) -> Result<Resolved, String> {
     let private = super::agent_fence::private_state_paths(lists.state_dir);
     for (i, root) in roots.iter().enumerate() {
@@ -239,7 +267,7 @@ fn read_from_roots(lists: &Lists, roots: &[PathBuf], parts: &[&str], asked: &str
             continue;
         }
         let joined = parts.iter().fold(root.clone(), |p, c| p.join(c));
-        if private.iter().any(|p| joined.starts_with(p)) {
+        if private.iter().any(|p| under_any_case(&joined, p)) {
             return Err(concat!("that file lies inside ", crate::app_name!(), "'s own state, which no sandboxed tab sees").into());
         }
         match read_under(root, parts, crate::schema::mail::MAX_STAGED_BYTES) {
@@ -257,12 +285,16 @@ fn read_from_roots(lists: &Lists, roots: &[PathBuf], parts: &[&str], asked: &str
     Err(format!("no file '{path}' in that project"))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn read_from_roots(_: &Lists, _: &[PathBuf], _: &[&str], _: &str, _: &str) -> Result<Resolved, String> {
-    Err(WINDOWS_REFUSED.into())
+/// `path` at or below `prefix`, component by component, ignoring case:
+/// Windows and a default (case-insensitive) macOS volume open `STATE` as
+/// `state`, so an agent's spelling must not walk past the state check. On a
+/// case-sensitive volume this can only refuse more.
+fn under_any_case(path: &Path, prefix: &Path) -> bool {
+    let fold = |p: &Path| p.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect::<Vec<_>>();
+    let (path, prefix) = (fold(path), fold(prefix));
+    path.len() >= prefix.len() && path[..prefix.len()] == prefix[..]
 }
 
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 enum Miss {
     /// Not under this root: the next root may have it.
     NotFound,
@@ -277,7 +309,6 @@ enum Miss {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_under(root: &Path, parts: &[&str], max: u64) -> Result<Vec<u8>, Miss> {
     use std::ffi::CString;
-    use std::io::Read;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
 
@@ -320,10 +351,47 @@ fn read_under(root: &Path, parts: &[&str], max: u64) -> Result<Vec<u8>, Miss> {
     if !meta.file_type().is_file() {
         return Err(Miss::Refused(format!("'{last}' is not a regular file")));
     }
+    read_capped(file, last, max)
+}
+
+/// The Windows twin of the `openat` walk, through the phone's handle-based
+/// `files::ProjectDir`: the root opened by path (it comes from the trusted
+/// list, and its leaf may not be a reparse point), then one `NtCreateFile`
+/// per name relative to the held folder with `FILE_OPEN_REPARSE_POINT`, and
+/// the handle's own metadata deciding folder, file or refusal. A junction or
+/// a symbolic link at any component is refused, never followed, and the file
+/// read is the handle just proven.
+#[cfg(windows)]
+fn read_under(root: &Path, parts: &[&str], max: u64) -> Result<Vec<u8>, Miss> {
+    use super::mobile_control::files::ProjectDir;
+    let link = |name: &str, what: &str| {
+        Miss::Refused(format!("'{name}' is a link or {what}; links (junctions, symbolic links) are never followed, even inside the project"))
+    };
+    // A root that is gone (a mirror not synced yet) simply is not there.
+    let Ok(mut dir) = ProjectDir::open_root(root) else { return Err(Miss::NotFound) };
+    let Some((last, dirs)) = parts.split_last() else { return Err(Miss::NotFound) };
+    for name in dirs {
+        dir = match dir.lookup_dir(name) {
+            Ok(Some(next)) => next,
+            Ok(None) => return Err(Miss::NotFound),
+            Err(()) => return Err(link(name, "not a folder")),
+        };
+    }
+    match dir.lookup_file(last) {
+        Ok(Some((file, _))) => read_capped(file, last, max),
+        Ok(None) => Err(Miss::NotFound),
+        Err(()) => Err(link(last, "not a regular file")),
+    }
+}
+
+/// At most `max` bytes of a file already proven regular, read from its open
+/// handle; one byte over refuses. Shared by both walks.
+fn read_capped(file: std::fs::File, name: &str, max: u64) -> Result<Vec<u8>, Miss> {
+    use std::io::Read;
     let mut bytes = Vec::new();
     file.take(max + 1).read_to_end(&mut bytes).map_err(|e| Miss::Refused(e.to_string()))?;
     if bytes.len() as u64 > max {
-        return Err(Miss::Refused(format!("'{last}' is larger than {} MiB", max / (1024 * 1024))));
+        return Err(Miss::Refused(format!("'{name}' is larger than {} MiB", max / (1024 * 1024))));
     }
     Ok(bytes)
 }
@@ -385,8 +453,30 @@ mod tests {
         }
     }
 
+    /// The Windows arm's checks before any I/O, run on every platform: what
+    /// Windows would open as a drive, a stream or another (long) name.
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn windows_aliases_are_refused_before_io() {
+        for bad in ["notes.txt:hidden", ".git::$INDEX_ALLOCATION", "C:", "GIT~1", "ENV~1.LOC", "paper.pdf.", "paper.pdf ", ".git."] {
+            assert!(windows_part_refusal(bad).is_some(), "{bad:?}");
+        }
+        for ok in ["paper.pdf", "~notes.txt", "draft~final.md", "v1.2", ".hidden"] {
+            assert!(windows_part_refusal(ok).is_none(), "{ok:?}");
+        }
+        // Only Windows applies them: a `:` is an ordinary name on Unix.
+        assert_eq!(components("out/a:b.txt").is_err(), cfg!(windows));
+    }
+
+    #[test]
+    fn the_state_check_ignores_case() {
+        let state = Path::new("/w/state");
+        assert!(under_any_case(Path::new("/w/STATE/mail/x"), state));
+        assert!(under_any_case(Path::new("/w/state"), state));
+        assert!(!under_any_case(Path::new("/w/states/x"), state), "component-wise");
+        assert!(!under_any_case(Path::new("/w"), state));
+    }
+
+    #[test]
     fn a_project_outside_the_spawn_grant_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let (alpha, beta) = (dir.path().join("w/alpha"), dir.path().join("w/alpha2"));
@@ -419,5 +509,45 @@ mod tests {
         assert!(root_refusal(dir.path(), &home, &state).is_some(), "an ancestor of home");
         assert!(root_refusal(&state.join("remote-projects/p/mirror"), &home, &state).is_some());
         assert!(root_refusal(&home.join("work/alpha"), &home, &state).is_none());
+    }
+
+    // Junctions need neither Administrator rights nor Developer Mode, so
+    // Windows CI builds the fixture; a failed `mklink` fails the test.
+    #[cfg(windows)]
+    fn junction(target: &Path, link: &Path) {
+        use std::os::windows::process::CommandExt;
+        let output = std::process::Command::new("cmd")
+            .raw_arg(format!("/D /C mklink /J \"{}\" \"{}\"", link.display(), target.display()))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "mklink: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    /// The handle walk: a plain file attaches; a junction anywhere on the
+    /// way refuses on the spot (inside the project or out of it), and a
+    /// folder named as the file refuses too.
+    #[cfg(windows)]
+    #[test]
+    fn junctions_are_refused_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (alpha, outside) = (dir.path().join("w/alpha"), dir.path().join("outside"));
+        for d in [alpha.join("out"), outside.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(alpha.join("out/paper.pdf"), b"%PDF").unwrap();
+        std::fs::write(outside.join("secret.txt"), b"private").unwrap();
+        junction(&outside, &alpha.join("away"));
+        junction(&alpha.join("out"), &alpha.join("alias"));
+        let projects: ProjectsList = serde_json::from_value(serde_json::json!([
+            {"id":"a","name":"Alpha","status":"active","position":0,"local_file":"","directory": alpha}
+        ])).unwrap();
+        let (state, home) = (dir.path().join("state"), dir.path().join("home"));
+        let lists = Lists { projects: &projects, boxes: &Vec::new(), state_dir: &state, home: &home, granted: None };
+        assert_eq!(resolve(&lists, "a", "out/paper.pdf").unwrap().bytes, b"%PDF");
+        for path in ["away/secret.txt", "alias/paper.pdf", "away", "out"] {
+            let err = resolve(&lists, "a", path).unwrap_err();
+            assert!(err.contains("never followed"), "{path}: {err}");
+        }
+        assert!(resolve(&lists, "a", "out/missing.pdf").unwrap_err().contains("no file"));
     }
 }

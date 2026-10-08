@@ -980,9 +980,6 @@ fn attach_files(mail: &ScopedMail, caller: Caller, args: &Value, before: Option<
     if items.is_empty() {
         return Ok(Some(Staging { add: Vec::new(), remove, reply: Vec::new() }));
     }
-    if cfg!(not(any(target_os = "linux", target_os = "macos"))) {
-        return Err(attach::WINDOWS_REFUSED.into());
-    }
     // The tab's own fence, as recorded when it was spawned: with the projects
     // hidden from the tab, Tabtivity reading them for it is the widening the
     // `.ics` import rule forbids.
@@ -2192,8 +2189,8 @@ mod tests {
             std::fs::write(alpha.join(format!("f{i}.txt")), format!("file {i}")).unwrap();
         }
         std::fs::write(dir.path().join("outside/secret.txt"), b"outside").unwrap();
-        // Links and a FIFO for the Unix-only attach tests (attach reads nothing
-        // on Windows).
+        // Links and a FIFO for the Unix-only attach table (Windows junctions
+        // are `mail_attach`'s own test).
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(dir.path().join("outside/secret.txt"), alpha.join("link-out.txt")).unwrap();
@@ -2308,7 +2305,6 @@ mod tests {
 
     /// Replace semantics on update: the list given is the set; omitted keeps
     /// it; `[]` removes it.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attach_on_update_replaces_keeps_or_clears() {
         let t = tree();
@@ -2337,10 +2333,7 @@ mod tests {
         let (_, session) = super::super::root_mcp::test_session_with(Caller::Agent, tab, &t.state, None);
         let st = tree_stores(&f, &t, Caller::Agent, &session);
         let err = call(&st, "mail_draft_create", &attach("Alpha", "out/paper.pdf")).unwrap_err();
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         assert!(err.contains("Root agent reads projects"), "{err}");
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        assert!(err.contains("Windows"), "{err}");
         assert!(f.drafts.lock().unwrap().is_empty() && f.files.lock().unwrap().is_empty());
         let mut none = tree_stores(&f, &t, Caller::Agent, &session);
         none.session = None;

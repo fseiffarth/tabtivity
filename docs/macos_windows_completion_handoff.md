@@ -1177,3 +1177,96 @@ Gates (reviewer, 2026-10-08): no code change; targeted `cargo test`
 `sandbox_exec`: 15 passed); `scripts/brand-check.sh`,
 `scripts/privacy-check.sh` ok; `git diff --check` clean. The implementer's
 full gate run above stands for the unchanged code.
+
+## A8 — 3.11
+
+Range: `8736eba5..` the commit that carries this section on `osfix/a8`
+(`git log -1 --format=%h -- docs/macos_windows_completion_handoff.md`; one
+commit for the step).
+
+Per file:
+- `src-tauri/src/services/mail_attach.rs` — `WINDOWS_REFUSED` and the
+  `not(linux|macos)` `read_from_roots` stub deleted; `read_from_roots`,
+  `within_grant`, `root_refusal`, `root_label`, `Miss` are now compiled
+  everywhere (their `cfg`/`allow(dead_code)` gone). New `cfg(windows)`
+  `read_under`: `files::ProjectDir::open_root(root)` (failure → `NotFound`,
+  like the unix root `open`), `lookup_dir` per directory component,
+  `lookup_file` for the leaf; `Ok(None)` → `Miss::NotFound` (next root),
+  `Err(())` → `Miss::Refused("'x' is a link or not a folder / not a regular
+  file; links (junctions, symbolic links) are never followed …")`. The cap is
+  a shared `read_capped(file, name, max)` both arms call (unix arm behaviour
+  unchanged). New pure `windows_part_refusal` (applied in `components` under
+  `cfg!(windows)` only): `:` (drive / ADS), `~` + digit (8.3 short alias),
+  trailing `.`/space. New `under_any_case` for the joined-path state check.
+  Module docs describe the Windows walk. Tests: `windows_aliases_are_refused_before_io`
+  and `the_state_check_ignores_case` (all platforms),
+  `a_project_outside_the_spawn_grant_is_refused` widened to all platforms,
+  new `cfg(windows)` `junctions_are_refused_never_followed` (own `mklink /J`
+  helper, a copy of `files.rs`'s).
+- `src-tauri/src/services/mobile_control/files_windows.rs` — `ProjectDir`,
+  `open_root`, `lookup_dir` widened to `pub(crate)`; new `pub(crate)
+  lookup_file` (tri-state, the file twin of `lookup_dir`). `open_at` deleted:
+  `child_dir` = `lookup_dir().ok().flatten()`, `open_file` =
+  `lookup_file().ok().flatten()` — the same `NtCreateFile` flags and
+  metadata checks as before, so the phone paths are unchanged.
+- `src-tauri/src/services/mobile_control/files.rs` — the Windows re-export
+  is `pub(crate) use windows::ProjectDir` (unix `ProjectDir` untouched).
+- `src-tauri/src/services/agent_fence.rs` — `private_state_paths` lost its
+  `cfg(linux|macos|test)` (Windows `attach` needs it; pure).
+- `src-tauri/src/services/root_mcp_mail.rs` — the `cfg!(not(linux|macos))`
+  early refusal in `attach_files` deleted; `attach_needs_a_tab_that_reads_the_projects`
+  lost its Windows branch; `attach_on_update_replaces_keeps_or_clears` now
+  runs on every platform (plain files only). The big table test stays
+  unix-only (symlinks, FIFO).
+- `src-tauri/src/services/mail_store.rs` — `content_is_pinned_at_call_time`
+  now runs on every platform.
+- `docs/filemap_backend.md` — `mail_attach.rs` and `files_windows.rs` rows.
+- `todo/group-h-crossplatform.md` — new `32t` with the four platform pairs.
+
+Choices where the plan left room:
+- **Widened `ProjectDir` rather than a `read_project_file` wrapper**, and
+  through `lookup_dir` + a new `lookup_file` instead of `child_dir` /
+  `open_file`: those two answer `Option` and fold "missing" and "a junction
+  is there" together, which would let a junction fall through to the next
+  box root instead of refusing on the spot as the unix arm does. `open_at`
+  became redundant and was folded into the two lookups.
+- **Windows-only name checks before I/O** (beyond the plan's "component
+  validation"): `NtCreateFile` resolves 8.3 short names, so `GIT~1/config`
+  or `ENV~1` would have opened `.git/config` / `.env` past the `.git` and
+  secret-name checks; `:` is refused here rather than by `plain_segment`'s
+  `InvalidInput` (which would surface as the "link" sentence). Cost: a real
+  name like `backup~2.txt` cannot be attached on Windows.
+- **Case-folded state check on every platform** (`under_any_case`): the
+  joined-path check compared case-sensitively, but Windows (and a default
+  APFS volume on macOS — a sibling bug) open `STATE` as `state`. Only the
+  agent-spelled joined path uses it; `root_refusal` (trusted roots) is
+  unchanged. On Linux it can only refuse more.
+- Windows grant: a Windows root tab is unfenced, so `launch_prep` records
+  `ProjectsGrant::All` and `within_grant` passes everything; the
+  `/`-, home- and state-root refusals still apply (`root_refusal` is now
+  compiled there; `C:\` has no parent).
+
+Gotchas:
+- `cfg(windows)` tests never run here: `junctions_are_refused_never_followed`
+  and the two widened `root_mcp_mail`/`mail_store` tests first run on
+  Windows CI (`cargo check --tests` for the target is clean).
+- The Windows root is opened through `files::canonical_root` →
+  `\\?\`-prefixed path; `root_refusal` compares raw-with-raw and
+  canonical-with-canonical, so that prefix does not matter.
+
+Gates: `npm run build` ok; `npm test` 730 files / 7527 tests, 2 failed (the
+known `MobileHeldPromptStore` pair); `cargo test` 3736 passed (+2 on Linux);
+`cargo clippy --all-targets -D warnings` ok; `npm run lint` 0 errors / 28
+warnings; `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` ok; `git
+diff --check` clean; Windows `cargo check` and `cargo check --tests` ok (no
+warnings); Windows `cargo clippy` (lib, and `--all-targets`) the 14
+pre-existing findings (A9's), none in this step's files. macOS cross-check
+not run (unix arm unchanged apart from the shared `read_capped`).
+
+Flagged for user:
+- Never run on Windows: the `32t` manual line is the first live check
+  (attach a PDF from a root tab; a junction and `GIT~1` refused).
+- Windows has no fence, so this does not bound what the agent could read
+  itself — it keeps Tabtivity's read on the agent's behalf to the same
+  rules as on Linux (no links, no `.git`, no state, caps). That is the
+  reason the old refusal gave; the plan chose to lift it.

@@ -1229,7 +1229,8 @@ pub(crate) fn bwrap_args(
 
 /// Shadow the whole Tabtivity state tree, including its canonical alias. Explicit
 /// tool mounts are restored afterwards; future private files stay hidden too.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+/// Also the paths mail `attach` never reads from (`services::mail_attach`), on
+/// every platform.
 pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
     let mut paths = vec![state_dir.to_path_buf()];
     if let Ok(real) = state_dir.canonicalize() { paths.push(real); }
