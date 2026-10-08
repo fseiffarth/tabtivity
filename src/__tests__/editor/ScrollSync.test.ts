@@ -6,8 +6,13 @@
  * ratio forwarding + suppress guard, and the prune-on-stale behaviour.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 
-import { useScrollSyncStore, type ScrollHandle } from "../../stores/viewers/scrollSync";
+import {
+  useScrollSync,
+  useScrollSyncStore,
+  type ScrollHandle,
+} from "../../stores/viewers/scrollSync";
 
 function reset() {
   useScrollSyncStore.setState({ links: {}, handles: new Map() });
@@ -89,5 +94,49 @@ describe("scrollSync report", () => {
     expect(partnerReports).toEqual([0.5]);
     // The echo from B must NOT bounce back into A while suppressed.
     expect(applyA).not.toHaveBeenCalled();
+  });
+});
+
+/** A scroll container whose scrollTop the engine snaps to whole pixels, like a
+ *  real one, and whose writes are counted. */
+function pane(scrollHeight: number, clientHeight: number) {
+  let top = 0;
+  const writes: number[] = [];
+  const el = { scrollHeight, clientHeight } as unknown as HTMLElement;
+  Object.defineProperty(el, "scrollTop", {
+    get: () => top,
+    set: (v: number) => {
+      writes.push(v);
+      top = Math.round(Math.min(Math.max(v, 0), scrollHeight - clientHeight));
+    },
+  });
+  return { el, writes, scrollBy: (to: number) => (top = to) };
+}
+
+describe("useScrollSync echo", () => {
+  beforeEach(reset);
+
+  it("does not bounce the partner's own scroll event back, so linked panes never creep", () => {
+    // Heights that don't divide evenly: the partner's rounded position, read back
+    // as a ratio, lands a pixel off the originator's — the old creep.
+    const a = pane(10_000, 700);
+    const b = pane(3_337, 700);
+    const ha = renderHook(() => useScrollSync("a", { current: a.el })).result.current;
+    const hb = renderHook(() => useScrollSync("b", { current: b.el })).result.current;
+    useScrollSyncStore.getState().toggleLink("a", "b");
+
+    a.scrollBy(1_234);
+    ha(); // the reader scrolled A
+    expect(b.writes).toHaveLength(1);
+
+    // B's scroll event for that mirrored write arrives later, on its own.
+    hb();
+    expect(a.writes).toHaveLength(0);
+    expect(a.el.scrollTop).toBe(1_234);
+
+    // The reader then scrolls B for real: that one does drive A.
+    b.scrollBy(900);
+    hb();
+    expect(a.writes).toHaveLength(1);
   });
 });

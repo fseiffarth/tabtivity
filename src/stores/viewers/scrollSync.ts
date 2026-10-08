@@ -14,9 +14,14 @@ import { create } from "zustand";
  *
  * Each mounted viewer registers a `ScrollHandle` for its group id (via the
  * `useScrollSync` hook) and reports its scroll ratio; the store forwards that
- * ratio to the linked partner's handle. A module-level `suppress` flag +
- * `requestAnimationFrame` breaks the feedback loop, exactly as `CompareView`
- * guards its own sync.
+ * ratio to the linked partner's handle. Two guards break the feedback loop: a
+ * module-level `suppress` flag for a synchronous bounce, and each pane's
+ * remembered echo position for the asynchronous scroll event the mirrored write
+ * fires (see `useScrollSync`).
+ *
+ * Links survive switching projects: `CenterPanel` prunes against the syncable
+ * groups of EVERY scope's layout, so a pair in a project that is not showing
+ * stays linked until one of its subwindows really goes away.
  */
 export interface ScrollHandle {
   /** Scroll this pane to a normalized [0,1] ratio of its scrollable height. */
@@ -43,10 +48,13 @@ interface ScrollSyncState {
 // Re-entrancy guard: true while we're applying a ratio to a partner pane. A
 // handler that scrolls synchronously in response (or a test that models the
 // induced scroll inline) must NOT bounce back as a fresh `report`. Held only for
-// the synchronous span of `applyRatio` (cleared in `finally`) — the real,
-// asynchronous scroll event the mirrored write triggers is harmless on its own:
-// it re-applies the originator's *current* position, which doesn't move it, so
-// no further scroll event fires and the exchange converges without the guard.
+// the synchronous span of `applyRatio` (cleared in `finally`). The real,
+// asynchronous scroll event the mirrored write triggers is NOT harmless: it
+// reports the partner's position back as a ratio, and the partner's scrollTop
+// has been rounded to a device pixel (and a PDF's scrollHeight shifts as its
+// pages settle), so the originator is nudged by a pixel or so, which reports
+// again, and so on — both panes creep along by themselves. `useScrollSync`
+// swallows that echo instead.
 let suppress = false;
 
 export const useScrollSyncStore = create<ScrollSyncState>((set, get) => ({
@@ -117,6 +125,10 @@ export function useScrollSync(
   groupId: string | null | undefined,
   elRef: RefObject<HTMLElement>,
 ): () => void {
+  // Where the last mirrored write left this pane. The scroll event that write
+  // fires later is the partner's own movement coming back, not the reader's, so
+  // it is not reported (see the `suppress` note above).
+  const echoTop = useRef<number | null>(null);
   useEffect(() => {
     if (!groupId) return;
     const handle: ScrollHandle = {
@@ -124,7 +136,12 @@ export function useScrollSync(
         const el = elRef.current;
         if (!el) return;
         const max = el.scrollHeight - el.clientHeight;
-        if (max > 0) el.scrollTop = ratio * max;
+        if (max <= 0) return;
+        const before = el.scrollTop;
+        el.scrollTop = ratio * max;
+        // Read back: the engine clamps and rounds. An unchanged position fires
+        // no scroll event, so there is no echo to wait for.
+        echoTop.current = el.scrollTop !== before ? el.scrollTop : null;
       },
     };
     return useScrollSyncStore.getState().register(groupId, handle);
@@ -148,7 +165,10 @@ export function useScrollSync(
     // only to discover in `report` that there is nobody to forward to — which
     // is what made scrolling a large .py or a long rendered .md crawl.
     const store = useScrollSyncStore.getState();
+    const echo = echoTop.current;
+    echoTop.current = null;
     if (!store.links[gid]) return;
+    if (echo != null && Math.abs(el.scrollTop - echo) < 1) return;
     const max = el.scrollHeight - el.clientHeight;
     store.report(gid, max > 0 ? el.scrollTop / max : 0);
   });
