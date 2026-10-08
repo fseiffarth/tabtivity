@@ -15,6 +15,7 @@ import {
   useMobileHostStatusStore,
   type MobileHostRuntimeStatus,
 } from "../../stores/mobileHostStatus";
+import { usePoll } from "../../lib/usePoll";
 
 /** `translate` at the live language, for the async callbacks below (component
  *  `t` inside them would churn their identity on a language switch). */
@@ -159,12 +160,8 @@ export function MobileIndicator() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!open || !running) return;
-    void loadDevices();
-    const interval = window.setInterval(() => void loadDevices(), DEVICES_POLL_MS);
-    return () => window.clearInterval(interval);
-  }, [open, running, loadDevices]);
+  // While the menu is open; stops while the window is blurred (`usePoll`).
+  usePoll(loadDevices, DEVICES_POLL_MS, { enabled: open && running });
 
   // A half-made Disconnect is forgotten when the menu closes.
   useEffect(() => {

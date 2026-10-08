@@ -1,6 +1,6 @@
 import { HOW_TO_START_STEPS, focusModeTip } from "../../lib/shortcuts/hints";
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -97,6 +97,7 @@ import {
   ToggleRow,
 } from "./settingsUi";
 import { ErrorNote } from "../common/ErrorNote";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 
 // The workspace-layout help text. The key is the one that works here, from
 // `livePanelToggleLabel` (unless rebound): a lone Super on a Linux desktop that leaves it to the
@@ -227,25 +228,23 @@ function VmInstallSettings() {
   const [error, setError] = useState(false);
   const [installing, setInstalling] = useState(false);
 
+  const check = useCallback((stale: () => boolean) =>
+    invoke<VmDoctorReport>("vm_doctor")
+      .then((report) => {
+        if (stale()) return;
+        setDoctor(report);
+        setError(false);
+        if (!report.install_command) setInstalling(false);
+      })
+      .catch(() => { if (!stale()) setError(true); }), []);
   useEffect(() => {
     let live = true;
-    const check = () => {
-      void invoke<VmDoctorReport>("vm_doctor")
-        .then((report) => {
-          if (!live) return;
-          setDoctor(report);
-          setError(false);
-          if (!report.install_command) setInstalling(false);
-        })
-        .catch(() => { if (live) setError(true); });
-    };
-    check();
-    if (installing) {
-      const timer = window.setInterval(check, 3000);
-      return () => { live = false; window.clearInterval(timer); };
-    }
+    void check(() => !live);
     return () => { live = false; };
-  }, [installing]);
+  }, [installing, check]);
+  // While an install runs: re-check every 3 s with the window in front.
+  const pollCheck = useCallback((poll: PollRun) => check(() => poll.stopped), [check]);
+  usePoll(pollCheck, 3000, { enabled: installing, immediate: false });
 
   return (
     <SettingRow
