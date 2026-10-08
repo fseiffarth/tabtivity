@@ -797,6 +797,35 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - [x] **32s — macOS fenced push preflight, git guard, background-job tabs**
+      (2026-10-08, plan §3.8 + §3.10, ⚠️ never run on macOS). An agent
+      `git_push` from a fenced Mac tab ran no pre-push hook (refused as
+      `fence_unavailable`); it now runs it under `sandbox-exec` with a
+      narrower `preflight.sb` profile (roots read-write, allowlist read-only,
+      temp writable, git control files guarded, the whole state dir and Cargo
+      tokens hidden, no agent home). The tab fence's Seatbelt profile now
+      also write-denies the repo's git control files and pins `.git` (it had
+      no `git_guard` at all). Tabs on a Mac now get the "background job"
+      mark: the scan reads `pbi_comm`, parents and the tab id from the
+      environment half of `KERN_PROCARGS2` (that variable only). Windows
+      still reports no jobs (no environment reader).
+      - [x] 🤖 Automated test — `the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home`,
+        `procargs2_env_starts_after_the_argv_strings`,
+        `the_walk_reads_the_tab_id_from_the_environment_half_of_procargs2`
+      - [ ] 🖐️ Manual test — macOS: in a fenced Claude tab of a repo with a
+        pre-push hook, ask the agent to `git_push` → the hook runs and the
+        push card appears; in the same tab `echo x >> .git/hooks/pre-push`
+        and `git commit` both behave as on Linux (the first refused, the
+        second works); ask Claude to run `sleep 120` in the background → the
+        tab shows the background-job mark until it ends
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **32z — deferred from the sweep** (each needs live hardware or a
       product call first):
       - X11 backend on any X11 session — mutates the WM workspace count and

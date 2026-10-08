@@ -1373,8 +1373,14 @@ pub(crate) struct SeatbeltInputs {
     /// home is hidden, like the empty home tmpfs on Linux).
     pub readable: Vec<String>,
     /// Paths that must never be written even though a broader allow covers
-    /// them: the agents' hook-registration files and the hook scripts.
+    /// them: the agents' hook-registration files and the hook scripts, and the
+    /// repo's git control files (`git_guard`, #158).
     pub protected: Vec<String>,
+    /// Paths that must not be renamed, removed or replaced while what is inside
+    /// them stays writable: each guarded `.git` directory (`git_guard`'s
+    /// "pinned" — on Linux a bind mount onto itself). Denied as a `literal`,
+    /// which matches the directory entry and none of its children.
+    pub pinned: Vec<String>,
     /// Final read/write denials, after all broad toolchain/root grants.
     pub hidden: Vec<String>,
     /// The scope's own agent home, allowed last: it sits inside the hidden
@@ -1474,6 +1480,9 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
             sbpl_string(path)
         ));
     }
+    for path in &inputs.pinned {
+        p.push_str(&format!("(deny file-write* (literal {}))\n", sbpl_string(path)));
+    }
     for path in &inputs.hidden {
         p.push_str(&format!("(deny file-read* file-write* (subpath {}))\n", sbpl_string(path)));
     }
@@ -1481,6 +1490,60 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
         p.push_str(&format!("(allow file-read* file-write* (subpath {}))\n", sbpl_string(home)));
     }
     p
+}
+
+/// The Seatbelt form of `git_guard`'s re-mounts (#158): the control files
+/// join `protected`, each `.git` joins `pinned`. Seatbelt has no mount order,
+/// so both are explicit denials rendered after the root allows.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_git_guard(inputs: &mut SeatbeltInputs, guard: crate::services::git_guard::GuardPaths) {
+    let text = |p: PathBuf| p.to_string_lossy().into_owned();
+    inputs.pinned.extend(guard.pinned.into_iter().map(text));
+    inputs.protected.extend(guard.read_only.into_iter().map(text));
+}
+
+/// Temp dirs a fenced process may write: macOS gives each user a private one
+/// under `/var/folders` (`$TMPDIR`), plus the shared `/tmp`.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_temp_dirs(tmpdir: Option<String>) -> Vec<String> {
+    let mut dirs: Vec<String> = ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    dirs.extend(tmpdir);
+    dirs
+}
+
+/// The profile inputs of [`one_shot_command`] on macOS. Pure, so the Linux
+/// test run checks them. Narrower than a tab's [`sandbox_exec_inputs`] in the
+/// same way the Linux one-shot is narrower than its PTY fence: the roots
+/// read-write, the allowlist read-only, temp writable (Linux: a private
+/// `/tmp`), the git control files guarded, Cargo credentials and the **whole**
+/// state dir hidden — no tool mount has to pierce it, since no agent home,
+/// live-session record or launcher is granted (`own_home: None`).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn one_shot_seatbelt_inputs(
+    home: &str,
+    state_dir: &Path,
+    roots: &[PathBuf],
+    readable: Vec<String>,
+    guard: crate::services::git_guard::GuardPaths,
+    cargo_hidden: Vec<String>,
+    tmpdir: Option<String>,
+) -> SeatbeltInputs {
+    let mut inputs = SeatbeltInputs {
+        home: home.to_string(),
+        roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
+        writable: seatbelt_temp_dirs(tmpdir),
+        readable,
+        hidden: cargo_hidden
+            .into_iter()
+            .chain(private_state_paths(state_dir).into_iter().map(|p| p.to_string_lossy().into_owned()))
+            .collect(),
+        ..SeatbeltInputs::default()
+    };
+    seatbelt_git_guard(&mut inputs, guard);
+    inputs
 }
 
 /// Resolve the profile inputs for a scope from the same mount planners the
@@ -1515,13 +1578,9 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
         );
     }
     protected.push(crate::services::agent_bin::bin_dir().to_string_lossy().into_owned());
-    // Temp dirs: macOS gives each user a private one under /var/folders.
-    for tmp in ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"] {
-        writable.push(tmp.to_string());
-    }
-    if let Some(dir) = std::env::var_os("TMPDIR") {
-        writable.push(dir.to_string_lossy().into_owned());
-    }
+    writable.extend(seatbelt_temp_dirs(
+        std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+    ));
     readable.extend(configured_read_only_paths());
     readable.extend(root_project_read_only_paths_for(&opts.id, scope_id));
     readable.extend(crate::services::agent_install::fence_read_only_paths());
@@ -1536,12 +1595,13 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
         &visible,
     ));
     let homes_root = crate::services::agent_home::homes_root_in(&state_dir);
-    SeatbeltInputs {
+    let mut inputs = SeatbeltInputs {
         home,
         roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
         writable,
         readable,
         protected,
+        pinned: Vec::new(),
         hidden: hidden_cargo_credentials(opts).into_iter().chain(
             private_state_paths(&state_dir).into_iter().filter(|p| {
                 // Deny private children on macOS: Seatbelt cannot restore a
@@ -1550,7 +1610,13 @@ fn sandbox_exec_inputs(opts: &PtyOptions, roots: &[PathBuf], scope_id: &str, sco
             }).map(|p| p.to_string_lossy().into_owned())
         ).chain(std::iter::once(homes_root.to_string_lossy().into_owned())).collect(),
         own_home: Some(scope_home.to_string_lossy().into_owned()),
-    }
+    };
+    // The repo's git control files, as the bubblewrap fence re-mounts them.
+    seatbelt_git_guard(
+        &mut inputs,
+        crate::services::git_guard::guard_paths(roots, Some(Path::new(&opts.cwd))),
+    );
+    inputs
 }
 
 /// Rewrite a local agent spawn into its `sandbox-exec` boundary (macOS). The
@@ -1761,8 +1827,8 @@ pub fn fenced_scope_of_tab(tab_id: &str) -> Option<String> {
 /// git control files guarded, Cargo credentials and the private state masked —
 /// but *narrower*: no agent home, live-session or launcher mounts, and none of
 /// the per-tab registry state the PTY wrapper keeps. Fails closed like the
-/// rest of the fence: no working bubblewrap, no command. Linux only; other
-/// platforms answer the same refusal.
+/// rest of the fence: no working bubblewrap (macOS: `sandbox-exec`), no
+/// command. Windows has no fence and answers the same refusal.
 #[cfg(target_os = "linux")]
 pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) -> Result<std::process::Command, String> {
     if !bwrap_available() {
@@ -1798,7 +1864,40 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     Ok(command)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: the same one-shot boundary as a `sandbox-exec` profile
+/// ([`one_shot_seatbelt_inputs`]), written as `preflight.sb` beside the
+/// scope's `fence.sb` and run as `sandbox-exec -f <profile> <cmd> <args>` in
+/// `cwd`. `HOME` stays the user's (reads under it are denied except the
+/// allowlist, as the Linux one-shot's empty home shows only the allowlist).
+#[cfg(target_os = "macos")]
+pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) -> Result<std::process::Command, String> {
+    if !bwrap_available() {
+        return Err(fence_unavailable_message());
+    }
+    let roots = roots_for_scope((scope_id != ROOT_SCOPE).then_some(scope_id), false)
+        .ok_or_else(|| format!("Agent sandbox: unknown project or box scope '{scope_id}'"))?;
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
+    let inputs = one_shot_seatbelt_inputs(
+        &paths::home_dir_string(),
+        &storage::state_dir(),
+        &roots,
+        configured_read_only_paths(),
+        crate::services::git_guard::guard_paths(&roots, Some(cwd)),
+        cargo_credential_paths(&paths::home_dir(), cargo_home.as_deref(), cwd,
+            settings().agent_fence_cargo_credentials.unwrap_or(false)),
+        std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+    );
+    let stage = crate::services::sandbox::stage_dir(scope_id);
+    std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
+    let profile_path = stage.join("preflight.sb");
+    std::fs::write(&profile_path, sandbox_exec_profile(&inputs)).map_err(|e| format!("Agent sandbox: {e}"))?;
+    let mut command = crate::paths::command_no_window("/usr/bin/sandbox-exec");
+    command.arg("-f").arg(&profile_path).arg(cmd).args(args).current_dir(cwd);
+    command.env(crate::app_env!("AGENT_FENCE"), "1");
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn one_shot_command(_scope_id: &str, _cmd: &str, _args: &[String], _cwd: &Path) -> Result<std::process::Command, String> {
     Err(fence_unavailable_message())
 }
@@ -2442,6 +2541,7 @@ mod tests {
                 "/Users/a/.claude/settings.json".into(),
                 concat!("/Users/a/.local/share/", crate::app_slug!(), "/hooks").into(),
             ],
+            pinned: Vec::new(),
             hidden: Vec::new(),
             own_home: None,
         };
@@ -2477,6 +2577,63 @@ mod tests {
         assert_eq!(lines.last().unwrap(), &concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
         // Quoting: a path with a quote or backslash stays one Scheme string.
         assert_eq!(sbpl_string("/a/b\"c\\d"), "\"/a/b\\\"c\\\\d\"");
+    }
+
+    #[test]
+    fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
+        let state = Path::new("/Users/a/state");
+        let guard = crate::services::git_guard::GuardPaths {
+            pinned: vec!["/Users/a/proj/.git".into()],
+            read_only: vec!["/Users/a/proj/.git/config".into(), "/Users/a/proj/.git/hooks".into()],
+        };
+        let inputs = one_shot_seatbelt_inputs(
+            "/Users/a",
+            state,
+            &[PathBuf::from("/Users/a/proj")],
+            vec!["/Users/a/.gitconfig".into()],
+            guard,
+            vec!["/Users/a/.cargo/credentials.toml".into()],
+            Some("/var/folders/xy/T/".into()),
+        );
+        assert_eq!(inputs.own_home, None);
+        let profile = sandbox_exec_profile(&inputs);
+        let lines: Vec<&str> = profile.lines().collect();
+        let pos = |needle: &str| {
+            lines
+                .iter()
+                .position(|l| *l == needle)
+                .unwrap_or_else(|| panic!("missing: {needle}\n{profile}"))
+        };
+        let root_write = pos("(allow file-write* (subpath \"/Users/a/proj\"))");
+        assert!(pos("(deny file-write*)") < root_write);
+        assert!(pos("(allow file-read* (subpath \"/Users/a/proj\"))") > pos("(deny file-read* (subpath \"/Users/a\"))"));
+        pos("(allow file-read* (subpath \"/Users/a/.gitconfig\"))");
+        // Temp is writable, as the Linux one-shot's private /tmp.
+        assert!(pos("(allow file-write* (subpath \"/var/folders/xy/T/\"))") > pos("(deny file-write*)"));
+        pos("(allow file-write* (subpath \"/private/tmp\"))");
+        // The git control files and the pinned `.git` come after the root allow.
+        assert!(pos("(deny file-write* (subpath \"/Users/a/proj/.git/hooks\"))") > root_write);
+        assert!(pos("(deny file-write* (subpath \"/Users/a/proj/.git/config\"))") > root_write);
+        assert!(pos("(deny file-write* (literal \"/Users/a/proj/.git\"))") > root_write);
+        assert!(!profile.contains("(deny file-write* (subpath \"/Users/a/proj/.git\"))"), "only the entry, not the tree");
+        // The whole state dir and the Cargo token are hidden, and nothing is
+        // restored after them: no agent home, no tool mount.
+        pos("(deny file-read* file-write* (subpath \"/Users/a/state\"))");
+        pos("(deny file-read* file-write* (subpath \"/Users/a/state/settings.json\"))");
+        pos("(deny file-read* file-write* (subpath \"/Users/a/.cargo/credentials.toml\"))");
+        assert!(!profile.contains("(allow file-read* file-write*"), "{profile}");
+        assert!(lines.last().unwrap().starts_with("(deny file-read* file-write*"));
+
+        // A tab's profile keeps its own home, allowed after every hidden deny.
+        let tab = SeatbeltInputs {
+            own_home: Some("/Users/a/state/agent-homes/k".into()),
+            ..inputs
+        };
+        let profile = sandbox_exec_profile(&tab);
+        assert_eq!(
+            profile.lines().last(),
+            Some("(allow file-read* file-write* (subpath \"/Users/a/state/agent-homes/k\"))")
+        );
     }
 
     #[test]

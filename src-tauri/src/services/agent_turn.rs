@@ -407,7 +407,7 @@ fn refresh_jobs(except: Option<&str>) -> Vec<(String, TurnState, bool)> {
 
 /// Shells a tool call runs in. A background job is one of these, never one of
 /// the agent's other long-lived children (an MCP server, Codex's code-mode host).
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const SHELL_COMMS: &[&str] = &["bash", "sh", "dash", "zsh", "fish", "ksh", "mksh"];
 
 /// Whether a process is a shell the agent started for a tool call: a shell
@@ -415,7 +415,7 @@ const SHELL_COMMS: &[&str] = &["bash", "sh", "dash", "zsh", "fish", "ksh", "mksh
 /// snapshot), or a shell whose parent is Codex (or its sandbox helper, whose
 /// 15-byte `comm` still starts with `codex`). The tab's launcher shell
 /// (`bash -c 'claude' …`, the fence's launch script) is neither.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn is_agent_tool_shell(comm: &str, cmdline: &str, parent_comm: &str) -> bool {
     SHELL_COMMS.contains(&comm)
         && (cmdline.contains("/shell-snapshots/snapshot-") || parent_comm.starts_with("codex"))
@@ -428,7 +428,7 @@ fn is_agent_tool_shell(comm: &str, cmdline: &str, parent_comm: &str) -> bool {
 /// (2026-09-20), both jobs and tool calls, and matched as that whole seam so a
 /// `< /dev/null` INSIDE the command (which lands before the closing quote)
 /// cannot be mistaken for it.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const CLAUDE_BACKGROUND_SEAM: &str = "' < /dev/null && pwd -P >|";
 
 /// Whether a tool shell that is running is one the agent put in the BACKGROUND
@@ -444,13 +444,13 @@ const CLAUDE_BACKGROUND_SEAM: &str = "' < /dev/null && pwd -P >|";
 ///
 /// Codex has no such seam, so a background exec of its own is only seen once its
 /// turn ends. Better that than every `bash -lc` it waits on reading as a job.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn is_background_job(cmdline: &str, state: TurnState) -> bool {
     state == TurnState::Done || cmdline.contains(CLAUDE_BACKGROUND_SEAM)
 }
 
 /// The tab uid a NUL-separated environment block belongs to, if it sets one.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn environ_uid(environ: &[u8]) -> Option<String> {
     environ
         .split(|b| *b == 0)
@@ -459,51 +459,43 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Which of the tabs in `want` (uid → the state its hooks last reported) have a
-/// BACKGROUND job of their agent's running right now — one walk of `/proc` for
-/// the whole fleet, since a walk per tab is the same work repeated. What counts
-/// as backgrounded, rather than a tool call the agent is waiting on, is
-/// [`is_background_job`].
-///
-/// The PTY's process tree cannot answer this — an agent tab runs under tmux, so
-/// the agent hangs off the tmux server, not the tab's PTY — but every process
-/// under the tab inherits `TABTIVITY_TAB_UID`, fenced ones included (bubblewrap
-/// moves the pid namespace, not the owner, so the host still reads their
-/// environ). Linux reads `/proc`; elsewhere no tab ever reports a job. A
-/// contained agent's shells belong to the container's user and a remote one's
-/// live on its host, so those report none either.
-#[cfg(target_os = "linux")]
-fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
-    fn stat_of(pid: &str) -> Option<(String, String)> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        let comm = stat.get(stat.find('(')? + 1..stat.rfind(')')?)?.to_string();
-        let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.to_string();
-        Some((comm, ppid))
-    }
+/// How [`background_job_uids`] reads a process: its `comm` and parent pid, its
+/// environment block (NUL-separated, consulted only for the tab-id variable)
+/// and its command line. One per OS; a fake table in the tests.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+trait ProcProbe {
+    fn comm_ppid(&self, pid: u32) -> Option<(String, u32)>;
+    fn environ(&self, pid: u32) -> Option<Vec<u8>>;
+    fn cmdline(&self, pid: u32) -> Option<String>;
+}
+
+/// The walk behind [`tool_shell_uids`], over whatever process table `probe`
+/// reads: shells only (a `comm` read is cheap, and only shells go on to have
+/// their environment read), then the tab id from the environment, then the
+/// tool-shell and background tests.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn background_job_uids(
+    want: &HashMap<&str, TurnState>,
+    pids: impl IntoIterator<Item = u32>,
+    probe: &impl ProcProbe,
+) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     if want.is_empty() {
         return out;
     }
-    let Ok(dir) = std::fs::read_dir("/proc") else { return out };
-    for entry in dir.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name.to_str().filter(|n| n.bytes().all(|b| b.is_ascii_digit())) else {
-            continue;
-        };
-        // `comm` first: a stat read is cheap, and only shells go on to have
-        // their environment read.
-        let Some((comm, ppid)) = stat_of(pid) else { continue };
+    for pid in pids {
+        let Some((comm, ppid)) = probe.comm_ppid(pid) else { continue };
         if !SHELL_COMMS.contains(&comm.as_str()) {
             continue;
         }
-        let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else { continue };
+        let Some(environ) = probe.environ(pid) else { continue };
         let Some(uid) = environ_uid(&environ) else { continue };
         let Some(state) = want.get(uid.as_str()) else { continue };
         if out.contains(&uid) {
             continue;
         }
-        let cmdline = crate::sysstat::cmdline(pid.parse().unwrap_or(0)).unwrap_or_default();
-        let parent_comm = stat_of(&ppid).map(|(c, _)| c).unwrap_or_default();
+        let cmdline = probe.cmdline(pid).unwrap_or_default();
+        let parent_comm = probe.comm_ppid(ppid).map(|(c, _)| c).unwrap_or_default();
         if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state) {
             out.insert(uid);
         }
@@ -511,7 +503,79 @@ fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet
     out
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Which of the tabs in `want` (uid → the state its hooks last reported) have a
+/// BACKGROUND job of their agent's running right now — one walk of the process
+/// table for the whole fleet, since a walk per tab is the same work repeated.
+/// What counts as backgrounded, rather than a tool call the agent is waiting
+/// on, is [`is_background_job`].
+///
+/// The PTY's process tree cannot answer this — an agent tab runs under tmux, so
+/// the agent hangs off the tmux server, not the tab's PTY — but every process
+/// under the tab inherits `TABTIVITY_TAB_UID`, fenced ones included (bubblewrap
+/// moves the pid namespace, not the owner, so the host still reads their
+/// environ; `sandbox-exec` changes neither). Linux reads `/proc`; macOS reads
+/// the same three facts through `sysstat` (below). A contained agent's shells
+/// belong to the container's user and a remote one's live on its host, so
+/// those report none either.
+#[cfg(target_os = "linux")]
+fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
+    struct Proc;
+    impl ProcProbe for Proc {
+        fn comm_ppid(&self, pid: u32) -> Option<(String, u32)> {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let comm = stat.get(stat.find('(')? + 1..stat.rfind(')')?)?.to_string();
+            let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()?;
+            Some((comm, ppid))
+        }
+        fn environ(&self, pid: u32) -> Option<Vec<u8>> {
+            std::fs::read(format!("/proc/{pid}/environ")).ok()
+        }
+        fn cmdline(&self, pid: u32) -> Option<String> {
+            crate::sysstat::cmdline(pid)
+        }
+    }
+    if want.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let Ok(dir) = std::fs::read_dir("/proc") else { return std::collections::HashSet::new() };
+    let pids = dir.flatten().filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok());
+    background_job_uids(want, pids, &Proc)
+}
+
+/// macOS: the pid list and parents from `sysstat::parent_map` (one
+/// `proc_listallpids` walk), `comm` from `pbi_comm`, and the tab id from the
+/// environment half of the `KERN_PROCARGS2` buffer — the part
+/// `sysstat::parse_procargs2` refuses to read for the monitor. Only the one
+/// `*_TAB_UID=` match is taken from it ([`environ_uid`]); nothing else of the
+/// environment is kept, logged or surfaced. Only the user's own processes
+/// answer, which is every tab's.
+#[cfg(target_os = "macos")]
+fn tool_shell_uids(want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
+    struct Proc(HashMap<u32, u32>);
+    impl ProcProbe for Proc {
+        fn comm_ppid(&self, pid: u32) -> Option<(String, u32)> {
+            Some((crate::sysstat::comm(pid)?, *self.0.get(&pid)?))
+        }
+        fn environ(&self, pid: u32) -> Option<Vec<u8>> {
+            let raw = crate::sysstat::procargs2_raw(pid)?;
+            Some(crate::sysstat::procargs2_env(&raw).to_vec())
+        }
+        fn cmdline(&self, pid: u32) -> Option<String> {
+            crate::sysstat::cmdline(pid)
+        }
+    }
+    if want.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let probe = Proc(crate::sysstat::parent_map());
+    let pids: Vec<u32> = probe.0.keys().copied().collect();
+    background_job_uids(want, pids, &probe)
+}
+
+/// Windows: no tab ever reports a job — there is no reader of another
+/// process's environment block here (it would take `NtQueryInformationProcess`
+/// and a PEB walk), so no tool shell can be tied to its tab.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn tool_shell_uids(_want: &HashMap<&str, TurnState>) -> std::collections::HashSet<String> {
     std::collections::HashSet::new()
 }
@@ -721,6 +785,65 @@ mod tests {
         assert_eq!(environ_uid(env).as_deref(), Some("aaaa-1"));
         assert_eq!(environ_uid(concat!("X_", crate::app_env!("TAB_UID"), "=aaaa-1\0").as_bytes()), None);
         assert_eq!(environ_uid(b"HOME=/h\0"), None);
+    }
+
+    /// A process table for [`background_job_uids`]: pid → (comm, ppid, the
+    /// raw `KERN_PROCARGS2` buffer, as macOS hands it over). The command line
+    /// is the buffer's argv, as `sysstat::cmdline` reads it.
+    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>);
+    impl ProcProbe for FakeTable {
+        fn comm_ppid(&self, pid: u32) -> Option<(String, u32)> {
+            self.0.get(&pid).map(|(c, p, _, _)| (c.to_string(), *p))
+        }
+        fn environ(&self, pid: u32) -> Option<Vec<u8>> {
+            Some(crate::sysstat::procargs2_env(&self.0.get(&pid)?.2).to_vec())
+        }
+        fn cmdline(&self, pid: u32) -> Option<String> {
+            Some(self.0.get(&pid)?.3.clone())
+        }
+    }
+
+    fn entry(comm: &'static str, ppid: u32, argv: &[&str], env: &[String]) -> (&'static str, u32, Vec<u8>, String) {
+        (comm, ppid, procargs2(argv, env), argv.join(" "))
+    }
+
+    fn procargs2(argv: &[&str], env: &[String]) -> Vec<u8> {
+        let mut buf = (argv.len() as u32).to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/zsh\0\0\0");
+        for part in argv.iter().map(|a| a.to_string()).chain(env.iter().cloned()) {
+            buf.extend_from_slice(part.as_bytes());
+            buf.push(0);
+        }
+        buf.extend_from_slice(b"\0executable_path=/bin/zsh\0");
+        buf
+    }
+
+    #[test]
+    fn the_walk_reads_the_tab_id_from_the_environment_half_of_procargs2() {
+        let tab = |uid: &str| vec!["HOME=/Users/a".to_string(), format!(concat!(crate::app_env!("TAB_UID"), "={}"), uid)];
+        let bg = "source /Users/a/.claude/shell-snapshots/snapshot-zsh-1-x.sh 2>/dev/null || true && eval 'sleep 300' < /dev/null && pwd -P >| /tmp/c";
+        let fg = "source /Users/a/.claude/shell-snapshots/snapshot-zsh-1-x.sh 2>/dev/null || true && eval 'npm test' && pwd -P >| /tmp/c";
+        let mut table = HashMap::new();
+        table.insert(10, entry("claude", 1, &["claude"], &tab("t-bg")));
+        table.insert(11, entry("zsh", 10, &["/bin/zsh", "-c", bg], &tab("t-bg")));
+        table.insert(20, entry("claude", 1, &["claude"], &tab("t-fg")));
+        table.insert(21, entry("zsh", 20, &["/bin/zsh", "-c", fg], &tab("t-fg")));
+        // A tab id that sits in argv, not in the environment, is not a match.
+        let spoof = format!(concat!(crate::app_env!("TAB_UID"), "={}"), "t-argv");
+        table.insert(30, entry("claude", 1, &["claude"], &[]));
+        table.insert(31, entry("zsh", 30, &["/bin/zsh", spoof.as_str(), bg], &[]));
+        let want: HashMap<&str, TurnState> =
+            [("t-bg", TurnState::Working), ("t-fg", TurnState::Working), ("t-argv", TurnState::Working)].into();
+        let probe = FakeTable(table);
+        let mut pids: Vec<u32> = probe.0.keys().copied().collect();
+        pids.sort();
+        let found = background_job_uids(&want, pids.clone(), &probe);
+        assert_eq!(found, ["t-bg".to_string()].into());
+        // Once the foreground tab's turn is over, its shell outlived it.
+        let done: HashMap<&str, TurnState> = [("t-fg", TurnState::Done)].into();
+        assert_eq!(background_job_uids(&done, pids.clone(), &probe), ["t-fg".to_string()].into());
+        // Nobody asked: nothing is read.
+        assert!(background_job_uids(&HashMap::new(), pids, &probe).is_empty());
     }
 
     /// Force the next `refresh_jobs` to walk `/proc` rather than reuse the last

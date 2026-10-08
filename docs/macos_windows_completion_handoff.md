@@ -979,3 +979,130 @@ under load average ~28 had 39 timing failures, the rerun only the pair);
 `scripts/privacy-check.sh` ok; `git diff --check` clean; Windows `cargo
 check` ok; Windows `cargo clippy` the 14 pre-existing findings (A9's), none
 new.
+
+## A7 — 3.8 + 3.10
+
+Range: `a0772c5d..` the commit that carries this section on `osfix/a7`
+(`git log -1 --format=%h -- docs/macos_windows_completion_handoff.md`; one
+commit for the step). `a0772c5d` (`/D` on every one-shot `cmd /C`) is the
+main agent's, committed under this step at the user's request.
+
+Per file:
+- `src-tauri/src/services/agent_fence.rs` — `SeatbeltInputs` gains `pinned`
+  (rendered `(deny file-write* (literal …))` after `protected`). New pure
+  `cfg(any(macos, test))` helpers: `seatbelt_git_guard` (`GuardPaths` →
+  `protected` + `pinned`), `seatbelt_temp_dirs` (the four temp roots +
+  `$TMPDIR`, moved out of `sandbox_exec_inputs`), `one_shot_seatbelt_inputs`
+  (roots, allowlist readable, temp writable, git guard, Cargo credentials +
+  every `private_state_paths` entry hidden — the whole state dir, since no
+  tool mount must pierce it — `own_home: None`). New `cfg(macos)`
+  `one_shot_command`: fails closed on `!bwrap_available()` with
+  `fence_unavailable_message()`, unknown scope refused as on Linux, profile
+  written to `sandbox::stage_dir(scope)/preflight.sb`, returns
+  `/usr/bin/sandbox-exec -f <profile> <cmd> <args>` with `current_dir(cwd)`
+  and `AGENT_FENCE=1`. The stub is now `not(any(linux, macos))`.
+  `sandbox_exec_inputs` (the tab fence) now also applies
+  `git_guard::guard_paths(roots, cwd)` — see Choices. New test
+  `the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home`
+  (also asserts a PTY-shaped input keeps its `own_home` allow as the last
+  line).
+- `src-tauri/src/sysstat.rs` — `procargs2_args` (argc + bytes from argv[0])
+  shared by `parse_procargs2` (unchanged behaviour) and the new
+  `pub(crate) procargs2_env` (bytes after the argc argv strings; empty on a
+  malformed buffer). macOS backend: the sysctl read split into
+  `platform::procargs2_raw` (whole buffer) that `cmdline` uses, plus
+  `platform::comm` (`pbi_comm` via `bsd_info` + `decode_ansi_nul`, the same
+  call the snapshot already makes); crate-level `cfg(macos)` wrappers
+  `procargs2_raw`, `comm`. Fixed a misplaced doc comment
+  (`bsd_process_state`'s doc sat on `parse_procargs2`). New test
+  `procargs2_env_starts_after_the_argv_strings` (fixture of the existing
+  test plus an empty argv entry and the trailing `apple[]` string).
+- `src-tauri/src/services/agent_turn.rs` — the walk is now a shared
+  `background_job_uids(want, pids, &impl ProcProbe)` (trait: `comm_ppid`,
+  `environ`, `cmdline`), same order as before (comm filter → environ →
+  uid → cmdline → parent comm). Linux `tool_shell_uids` = the old `/proc`
+  reads behind the trait (ppid now parsed to `u32`; behaviour identical).
+  macOS `tool_shell_uids`: pids + parents from one `sysstat::parent_map()`,
+  comm from `sysstat::comm`, environment from
+  `procargs2_env(procargs2_raw(pid))` read only for shells, fed only to
+  `environ_uid`. Windows stub says why (no environment-block reader). The
+  five helper cfgs widened to `any(linux, macos, test)`. New test
+  `the_walk_reads_the_tab_id_from_the_environment_half_of_procargs2` (fake
+  table of macOS-shaped buffers: a background job found, a foreground tool
+  call not, a tab id in argv ignored, `Done` turns the foreground one into a
+  job, empty `want` reads nothing).
+- `src-tauri/src/services/git_push_mcp.rs` — unchanged: the
+  `FenceUnavailable` text already passes the fence's own error through
+  (`{e}`), and the Windows `PreflightFailed` sentence names the right
+  platform.
+- `docs/context/git_push_mcp.md`, `docs/context/agent_authority.md` — macOS
+  preflight and the Seatbelt git guard described.
+- `docs/filemap_backend.md` — `agent_turn.rs` and `agent_fence.rs` rows.
+- `todo/group-h-crossplatform.md` — new `32s` with the four platform pairs.
+
+Choices where the plan left room:
+- **Tab fence gained `git_guard` on macOS.** `sandbox_exec_inputs` never
+  applied it: a fenced Mac agent could write `.git/hooks/*` and
+  `.git/config` (the #158 trust handoff the threat model lists as covered).
+  The plan said to leave `sandbox_exec_inputs` alone unless a pure move; this
+  is a behaviour change, made under the "fix the sibling bug" rule because
+  the one-shot needs the same rendering. Control files → `subpath` write
+  denies; `.git` → a `literal` write deny (Seatbelt checks create/unlink on
+  the child's own path, so git's lock files and objects stay writable).
+- `writable` = temp dirs in the one-shot (the plan listed none): the Linux
+  one-shot gets a private `/tmp` tmpfs, and the tab's own profile already
+  grants the same temp dirs, so the preflight is no wider than the tab.
+- `HOME` unchanged for the one-shot (plan: `own_home: None`, `home` from
+  `home_dir_string()`); the default allowlist carries `~/.gitconfig` and
+  `~/.config/git`, so git's own config reads succeed.
+- `comm` from `pbi_comm` rather than argv[0] out of `cmdline` (plan's
+  wording): one `proc_pidinfo` like the existing `ppid`, the same 16-byte
+  executable name Linux's `comm` is, and no sysctl for non-shells.
+- `live_unfenced_by_scope` on macOS not built (plan: dropped, §5).
+
+Gotchas:
+- **macOS cross-check now works here.** `cargo check`/`clippy --target
+  aarch64-apple-darwin` stop in `objc2-exception-helper` only because `cc`
+  is GNU; check-only shims (a `cc` that touches `-o`'s file, an `ar` that
+  touches the `.a`) get past it: `CC_aarch64_apple_darwin=<shim>/cc
+  AR_aarch64_apple_darwin=<shim>/ar cargo check --target
+  aarch64-apple-darwin` → `Finished` (one pre-existing warning,
+  `screenshot.rs:783` unused `Command`). Never links, so only type/borrow
+  checking. macOS clippy (`-D warnings`, lib): 12 pre-existing findings
+  (`apps.rs` ×4, `network.rs`, `screenshot.rs`, `subwindow.rs`, `lib.rs`,
+  `platform/mod.rs`, `net_usage.rs`, `project_runtime.rs`, `vm.rs`), none in
+  this step's files — useful to A9 / the staged macOS clippy step. The
+  shims lived in this session's scratchpad (two 5-line `sh` scripts).
+  The macOS build writes an untracked `src-tauri/gen/schemas/macOS-schema.json`;
+  delete it, don't commit it.
+- Seatbelt denials answer `EPERM`, Linux's empty home `ENOENT`: a hook that
+  reads an un-allowlisted dotfile (`~/.npmrc`) or writes under `$HOME`
+  (`~/.cache`) fails on macOS where it carries on in the Linux one-shot. git
+  `die`s on `EPERM` for a config file it is told about — fine with the
+  default allowlist, not if the user removed `~/.gitconfig` from it.
+- An empty argv[0] would be eaten by `procargs2_args`'s padding skip
+  (pre-existing in `parse_procargs2`); `procargs2_env` would then start one
+  string late and could miss a tab id that is the first environment entry.
+  Not reachable for the shells it reads.
+- `procargs2_raw` hands the crate the whole buffer, environment included;
+  its doc names the one allowed use.
+
+Gates: `npm run build` ok; `npm test` 730 files / 7527 tests, 2 failed (the
+known `MobileHeldPromptStore` pair); `cargo test` 3734 passed (+3);
+`cargo clippy --all-targets -D warnings` ok; `npm run lint` 0 errors / 28
+warnings; `scripts/brand-check.sh` ok; `scripts/privacy-check.sh` ok; `git
+diff --check` clean; Windows `cargo check` ok, Windows `cargo clippy` the 14
+pre-existing findings (A9's), none new; macOS `cargo check` ok (shims, see
+Gotchas), macOS `cargo clippy` 12 pre-existing, none in this step's files.
+
+Flagged for user:
+- Never run on a Mac: §6 macOS 1 and the `32s` manual line are the first
+  live checks (fenced `git_push` with a pre-push hook; `.git/hooks` write
+  refused but `git commit` working in a fenced tab; the background-job
+  mark).
+- The tab fence's git guard on macOS is a behaviour change beyond the plan
+  (see Choices); if `git commit`/`git gc` in a fenced Mac tab breaks, the
+  `.git` `literal` deny is the first suspect.
+- `docs/threat_model.md` row for "planting in `.git/`" still says
+  "verified under real bubblewrap" only; not edited (the main checkout has
+  concurrent edits to that file).
