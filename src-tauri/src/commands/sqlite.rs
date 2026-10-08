@@ -41,10 +41,16 @@ const DEADLINE: Duration = Duration::from_secs(5);
 const PROGRESS_OPS: i32 = 1000;
 /// Largest string or blob SQLite will build or read.
 const MAX_LENGTH: i32 = 16 * 1024 * 1024;
-/// Longest SQL statement (a view's definition included).
-const MAX_SQL_LENGTH: i32 = 1024 * 1024;
-/// Deepest expression tree.
-const MAX_EXPR_DEPTH: i32 = 100;
+/// Longest SQL statement. The schema's own `CREATE` statements are parsed under
+/// it when the file opens, and one over it makes the *whole* database
+/// unreadable ("malformed database schema"), so it is no tighter than
+/// [`MAX_LENGTH`], which already bounds the `sql` text a schema row can hold.
+const MAX_SQL_LENGTH: i32 = MAX_LENGTH;
+/// Deepest expression tree: SQLite's own default (`SQLITE_MAX_EXPR_DEPTH`),
+/// set explicitly. Like [`MAX_SQL_LENGTH`] it applies to the schema parse, and
+/// an ordinary view with a long `a OR b OR …` chain nests one level per term,
+/// so a tighter value refused whole databases.
+const MAX_EXPR_DEPTH: i32 = 1000;
 /// Rows one page may ask for.
 const MAX_PAGE_ROWS: u32 = 1000;
 /// One cell's text, in bytes, as sent to the grid.
@@ -381,6 +387,37 @@ mod tests {
         text.push('é'); // straddles the cut
         let cell = stringify(ValueRef::Text(text.as_bytes()));
         assert_eq!(cell, format!("{}…", "x".repeat(MAX_CELL_BYTES - 1)));
+    }
+
+    /// The limits apply to the schema parse at open: a view an ordinary
+    /// database may well hold (a 150-term `OR` chain, a statement over 1 MiB)
+    /// must not make its plain tables unreadable.
+    #[test]
+    fn an_ordinary_deep_or_long_view_keeps_the_database_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("views.db");
+        let conn = Connection::open(&path).unwrap();
+        let ors: Vec<String> = (0..150).map(|i| format!("x = {i}")).collect();
+        let list: Vec<String> = (0..250_000).map(|i| i.to_string()).collect();
+        conn.execute_batch(&format!(
+            "CREATE TABLE t (x INTEGER);
+             INSERT INTO t VALUES (3);
+             CREATE VIEW deep AS SELECT x FROM t WHERE {};
+             CREATE VIEW long AS SELECT x FROM t WHERE x IN ({});",
+            ors.join(" OR "),
+            list.join(",")
+        ))
+        .unwrap();
+        drop(conn);
+        let path = path.to_string_lossy().into_owned();
+        assert_eq!(
+            sqlite_tables_blocking(path.clone()).unwrap(),
+            vec!["deep".to_string(), "long".to_string(), "t".to_string()]
+        );
+        for table in ["t", "deep", "long"] {
+            let page = sqlite_page_blocking(path.clone(), table.into(), 10, 0).unwrap();
+            assert_eq!(page.rows, vec![vec!["3".to_string()]], "{table}");
+        }
     }
 
     #[tokio::test]
