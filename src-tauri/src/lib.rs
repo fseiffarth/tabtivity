@@ -1254,6 +1254,15 @@ pub fn run() {
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(_app.handle().clone());
+            {
+                // The Reader's transcript watches (`services::transcript_watch`)
+                // announce a change as `transcript-changed` with the watch id.
+                use tauri::Emitter;
+                let handle = _app.handle().clone();
+                services::transcript_watch::install(move |id| {
+                    let _ = handle.emit("transcript-changed", id);
+                });
+            }
             // Install the global Claude SessionStart hook so Tabtivity can follow a
             // tab's live session id across `/clear` (see services::agent_session).
             if let Err(e) = services::agent_bin::install() {
@@ -2100,6 +2109,7 @@ pub fn run() {
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
             commands::agents::agent_tab_changes,
+            commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
             commands::ollama::ollama_is_running,
             commands::ollama::ollama_status,

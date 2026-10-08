@@ -226,6 +226,11 @@ pub struct AgentTranscript {
     /// phone's tab cards name their worktrees by. Paths, as `cwd`.
     #[serde(default, rename = "runningCwds", skip_serializing_if = "Vec::is_empty")]
     pub running_cwds: Vec<String>,
+    /// The read named a watch id and that watch is armed on what it read
+    /// (`services::transcript_watch`): a change will be announced, so the
+    /// desktop Reader needs only a slow backstop read. Never set for the phone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watched: bool,
 }
 
 /// A shell command the agent started and is waiting on.
@@ -523,6 +528,68 @@ pub(crate) fn conversation_file(
         }
         _ => None,
     }
+}
+
+/// What a Reader of this conversation watches for changes
+/// (`services::transcript_watch`): the file a read of it goes by, the folder a
+/// `/clear` writes the next transcript into, and — for Claude — the subagents
+/// folder whose `.meta.json`s are part of the read's version. OpenCode's is
+/// its store and the store's `-wal`. Empty when there is nothing on disk to
+/// watch yet (a session before its first turn, a remote tab's): the caller
+/// then reads on its own clock.
+pub fn watch_targets(
+    cmd: &str,
+    project_id: Option<&str>,
+    launch_id: &str,
+    subagent: Option<&str>,
+    local_model: bool,
+) -> Vec<crate::services::transcript_watch::Target> {
+    use crate::services::transcript_watch::{Rule, Target};
+    if subagent.is_some_and(|token| !is_subagent_token(token)) {
+        return Vec::new();
+    }
+    if cmd == "opencode" {
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return Vec::new();
+        }
+        let db = if local_model {
+            crate::services::opencode_store::local_model_db_path_for(project_id)
+        } else {
+            crate::services::opencode_store::db_path_for(project_id)
+        };
+        let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else {
+            return Vec::new();
+        };
+        if !db.is_file() {
+            return Vec::new();
+        }
+        return vec![Target { dir: dir.to_path_buf(), rule: Rule::Prefix(name.to_string()) }];
+    }
+    if !matches!(cmd, "claude" | "codex") {
+        return Vec::new();
+    }
+    match conversation_file(cmd, project_id, launch_id, subagent) {
+        Some(file) => conversation_targets(cmd, &file, subagent.is_some()),
+        None => Vec::new(),
+    }
+}
+
+/// [`watch_targets`] for a Claude or Codex conversation stored in `file`.
+fn conversation_targets(cmd: &str, file: &Path, subagent: bool) -> Vec<crate::services::transcript_watch::Target> {
+    use crate::services::transcript_watch::{Rule, Target};
+    let (Some(own), Some(dir)) = (Target::file(file), file.parent()) else {
+        return Vec::new();
+    };
+    if subagent {
+        // A Claude subagent's read is versioned by its whole folder.
+        return if cmd == "claude" { vec![Target { dir: dir.to_path_buf(), rule: Rule::Any }] } else { vec![own] };
+    }
+    let mut targets = vec![own, Target { dir: dir.to_path_buf(), rule: Rule::Created }];
+    let folder = file.with_extension("").join("subagents");
+    if cmd == "claude" && folder.is_dir() {
+        targets.push(Target { dir: folder, rule: Rule::Any });
+    }
+    targets
 }
 
 /// The subagent file in `folder` whose handle is `token`.
@@ -825,6 +892,7 @@ fn read_transcript_in(
         shells,
         cwd,
         running_cwds,
+        watched: false,
     })
 }
 
@@ -2409,6 +2477,30 @@ mod tests {
         let read = read_transcript_in(&main, TranscriptKind::Claude, &Spawns::None, false, None, DEFAULT_LIMIT).unwrap();
         assert!(read.shells.is_empty());
         assert!(serde_json::to_value(&read).unwrap().get("shells").is_none());
+    }
+
+    #[test]
+    fn a_reader_watches_its_transcript_the_folder_a_clear_writes_into_and_the_subagents() {
+        use crate::services::transcript_watch::{Rule, Target};
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("s1.jsonl");
+        std::fs::write(&main, "").unwrap();
+        let created = Target { dir: dir.path().to_path_buf(), rule: Rule::Created };
+        assert_eq!(conversation_targets("claude", &main, false), vec![Target::file(&main).unwrap(), created.clone()]);
+        // Once a subagent spawned, its folder is part of the read's version.
+        let subagents = dir.path().join("s1").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let with_sub = conversation_targets("claude", &main, false);
+        assert_eq!(with_sub.last(), Some(&Target { dir: subagents.clone(), rule: Rule::Any }));
+        // Codex has no such folder.
+        assert_eq!(conversation_targets("codex", &main, false), vec![Target::file(&main).unwrap(), created]);
+        let sub = subagents.join("agent-a.jsonl");
+        assert_eq!(conversation_targets("claude", &sub, true), vec![Target { dir: subagents, rule: Rule::Any }]);
+        assert_eq!(conversation_targets("codex", &sub, true), vec![Target::file(&sub).unwrap()]);
+        // Nothing to watch: no session, an agent not read, a bad handle.
+        assert!(watch_targets("claude", None, "../x", None, false).is_empty());
+        assert!(watch_targets("aider", None, "0f5f9b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b", None, false).is_empty());
+        assert!(watch_targets("claude", None, "0f5f9b7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b", Some("nope"), false).is_empty());
     }
 
     #[cfg(target_os = "linux")]

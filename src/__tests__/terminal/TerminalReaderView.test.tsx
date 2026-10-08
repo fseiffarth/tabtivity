@@ -956,3 +956,42 @@ describe("agentReader helpers", () => {
     expect(otherClaude.current).toBe(false);
   });
 });
+
+describe("the Reader's transcript watch", () => {
+  let host: HTMLElement;
+  beforeEach(() => {
+    localStorage.clear();
+    invoke.mockReset();
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
+    useAgentReaderStore.setState({ byAgent: {} });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+  });
+  afterEach(() => {
+    host.remove();
+    vi.useRealTimers();
+  });
+
+  it("reads on the watch's change instead of every 2 s, and disarms it when hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { _notifyTranscriptChangedForTest } = await import("../../lib/agents/transcriptWatch");
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, watched: true } : []));
+    const reads = () => invoke.mock.calls.filter((call) => call[0] === "agent_tab_transcript");
+    const view = render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
+    await screen.findByText("fix the parser");
+    const watch = (reads()[0][1] as { watch?: string }).watch;
+    expect(watch).toMatch(/^rw-/);
+    const before = reads().length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(reads().length).toBe(before);
+    await act(async () => {
+      _notifyTranscriptChangedForTest(watch!);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads().length).toBe(before + 1);
+    expect(reads()[before][1]).toEqual(expect.objectContaining({ watch, version: "v1" }));
+    view.rerender(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible={false} focused />);
+    expect(invoke).toHaveBeenCalledWith("agent_transcript_unwatch", { watchId: watch });
+  });
+});

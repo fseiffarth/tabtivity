@@ -13,6 +13,8 @@ pub mod agent_transcript;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
+// Change notifications for the transcripts the desktop Reader shows.
+pub mod transcript_watch;
 pub mod agent_bin;
 pub mod agent_tasks;
 pub mod schedule_mcp;
