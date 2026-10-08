@@ -1423,3 +1423,72 @@ cross clippy `--all-targets -D warnings` 0 findings; macOS cross clippy
 vendored `tauri-runtime-wry` warnings).
 
 Flagged for user: none beyond the implementer's.
+
+## Final review
+
+Range: `6c420e42..osfix/final` (the A1–A9 chain rebased onto develop
+`6c420e42`, plus the commits below). Nothing launched.
+
+Rebase integration:
+- `steering.project.desc` (en/de/es/fr/it): develop's longer text with
+  `{modifier}+Shift+Tab`; both readers (`ShortcutHelpOverlay`,
+  `SteeringLegend`) pass `{ modifier: modifierLabel() }`. Placeholder sets of
+  every `{modifier}`/`{altRight}`/`{altBrackets}` key match across the five
+  files (script over all 9137 keys).
+- `services/mod.rs` keeps both `pub mod private_file` / `win_links` and
+  develop's `webkit_video`; the `filemap_backend.md` rows of all three are
+  there.
+- Develop's 27 commits since `a6ed2c7a` against the chain's rules: no new
+  `Ctrl+` display text, no new frontend path split or script quoting
+  (`terminalDrop.dropText` already quotes through A1's `currentPlatform`),
+  no new `cmd /C`, private-file write or junction code. One miss, fixed
+  below: the steering prompt's chip `<kbd>`s.
+
+Fixes:
+- `1916c95e` fix(steering): develop's chip row named its keys through a
+  literal `"steering.prompt.keyAlt": "Alt+{key}"`, so macOS read "Alt+M"
+  for the Option chord its handler takes. Now `chipKeyLabel` →
+  `chordLabel({ key, alt: true })` ("⌥M" on macOS, "Alt+M" elsewhere, as
+  A2's autocomplete legends); the key is gone from all five dictionaries.
+  Regression tests in `src/__tests__/shell/SteeringPrompt.test.tsx` (the
+  rendered labels off macOS; `⌥M`…`⌥G` under a mocked `lib/platform`).
+- `c68f5320` docs(threat-model) + test helper: the owed rows — #861 (row 1)
+  gains the Windows half (admin-locked helpers, owner-only private files);
+  the `.git` planting row names the macOS Seatbelt git guard and its
+  path-matching residual. The push/CI row also said the preflight is
+  "refused on macOS" and that the macOS fence leaves `.git/config`
+  writable — both made stale by A7, so it was corrected too. Same commit:
+  `mobile_control::files`' Windows junction test helper passed `/D` twice
+  (`.arg("/D")` + `raw_arg("/D /C …")`); one dropped.
+
+Checked, no change: every 🖐️ line of the run (32p, 32q, 32r, 32s, 32t,
+32z's sub-line, the group-s `ps` item) has the four ✅/❌ pairs, none
+ticked; the one new UI pill (`mobile.project.terminalsUnsupported`) has its
+register row; no TODO/FIXME left by the run; every one-shot `cmd /C` in
+`src-tauri/` carries `/D` (the COMSPEC shell does not); every commit's
+author is `fseiffarth@users.noreply.github.com`; no hostname in the added
+lines beyond `desk.example.ts.net`.
+
+Gates (sequential, final tip, 2026-10-08):
+| Gate | Result |
+|---|---|
+| `npm run build` | green |
+| `npm test` | 737 files / 7577 tests, all passed — the `MobileHeldPromptStore` pair is fixed on develop (`b0ae0eff`, pinned clock) |
+| `cargo test` | 3753 passed, 3 ignored (14 suites) |
+| `npm run lint` | 0 errors, 28 warnings |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | pass (48 allowlist entries) |
+| `scripts/privacy-check.sh 6c420e42 HEAD` | pass (23 commits) |
+| `git diff --check 6c420e42` | clean |
+| Windows `cargo clippy --all-targets -D warnings` (shims) | 0 findings |
+| macOS `cargo clippy --all-targets -D warnings` (check-only stand-ins) | 0 findings in this crate; the 5 known vendored `tauri-runtime-wry` warnings |
+
+### Flagged for user
+
+- `shellScriptRun.shellRunCommand` types `cmd /c "<script>"` into a shell
+  tab without `/D`. By the letter of the `/D` decision it is a one-shot
+  `cmd /C`, but it runs inside the user's own interactive terminal, where
+  their AutoRun is arguably expected; left as is. Adding `/D` is a
+  one-line change plus three test expectations.
+- The push/CI row of `docs/threat_model.md` was edited beyond the two rows
+  named for this review (see `c68f5320`).
