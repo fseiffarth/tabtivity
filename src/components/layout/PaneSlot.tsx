@@ -48,6 +48,9 @@ export interface PaneSlotProps {
   /** How long a hidden viewer pane stays mounted before it sleeps (§5.3), or
    *  null when sleeping is off (the "Sleep hidden tabs" setting). */
   sleepAfterMs: number | null;
+  /** This tab sits in a popout (a detached group): its pane here is a hidden
+   *  duplicate of the popout's own, so a viewer sleeps at once (§4.5). */
+  inPopout: boolean;
 }
 
 /**
@@ -75,9 +78,11 @@ function PaneSlotImpl({
   onConnect,
   mobileAgentTmuxReady,
   sleepAfterMs,
+  inPopout,
 }: PaneSlotProps) {
-  // Sleeping tabs (performance plan §5.3, viewer kinds). A hidden viewer pane
-  // is unmounted after `sleepAfterMs` and mounted afresh the render it is
+  // Sleeping tabs (performance plan §5.3, viewer kinds; §4.5 for a popout's
+  // duplicate). A hidden viewer pane is unmounted after `sleepAfterMs` — at
+  // once while a popout shows the tab — and mounted afresh the render it is
   // shown again; its `TabEntry` (viewerState, folder) is what the remount
   // restores from. Anything in the pane that must survive (unsaved edits or
   // marks, a build, media playing) holds it awake through the context below.
@@ -94,7 +99,7 @@ function PaneSlotImpl({
   const sleepable = sleepAfterMs != null && isSleepableTab(tab);
   const hidden = sleepable && !visible;
   const timedAsleep = useSleepWhenHidden({ hidden, afterMs: sleepAfterMs ?? 0, hold: held });
-  const asleep = hidden && timedAsleep;
+  const asleep = hidden && (timedAsleep || (inPopout && !held));
   // A box scope's Mobile switch (#31aa) plays the project's part here: an
   // agent tab of the box gets tmux underneath it — the one thing that makes
   // it attachable from the phone — by the box's own switch. Stamped on the

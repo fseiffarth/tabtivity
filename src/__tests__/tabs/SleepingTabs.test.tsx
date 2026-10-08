@@ -4,7 +4,8 @@
  * `SleepingPane` in place of `TabPane` — the viewer unmounts, the store is not
  * touched — and is mounted afresh, from the same `TabEntry`, the render it is
  * shown. Terminal kinds never sleep here (S10's half). A hold raised from
- * inside the pane keeps it awake.
+ * inside the pane keeps it awake. The popout stub (§4.5): a viewer a popout
+ * shows sleeps in the main window at once.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -257,6 +258,46 @@ describe("sleeping tabs: the pane layer (30 tabs, 25 hidden viewers)", () => {
     expect(isMounted(pf)).toBe(false);
     expect(isMounted(files)).toBe(true);
     expect(isMounted(ext)).toBe(true);
+  });
+});
+
+describe("popped-out viewers (§4.5)", () => {
+  function popOut(key: string) {
+    useTabsStore.setState({
+      detachedGroupsByScope: {
+        [ROOT_SCOPE]: [
+          { id: "g9", label: "popout-g9", subtree: { type: "group", id: "g9", tabKeys: [key], activeKey: key } },
+        ],
+      },
+    });
+  }
+
+  it("never mounts the main window's copy of a viewer a popout shows", async () => {
+    const key = viewerKeys[0];
+    popOut(key);
+    await mount();
+    expect(mounts.get(key)).toBeUndefined();
+    expect(document.querySelector(`.center-pane[data-tab-key="${key}"] .sleeping-pane`)).not.toBeNull();
+    // The other viewers are on the ordinary timer.
+    expect(isMounted(viewerKeys[1])).toBe(true);
+  });
+
+  it("unloads the copy at once when its tab pops out, unless it holds unsaved work", async () => {
+    await mount();
+    const clean = viewerKeys[0];
+    const dirty = viewerKeys[1];
+    holding.add(dirty);
+    await act(async () => {
+      st().renameTab(dirty, "dirty.md");
+    });
+    await act(async () => {
+      popOut(clean);
+    });
+    expect(isMounted(clean)).toBe(false);
+    await act(async () => {
+      popOut(dirty);
+    });
+    expect(isMounted(dirty)).toBe(true);
   });
 });
 

@@ -199,6 +199,21 @@ function CenterPanelImpl() {
   // Sleeping tabs (performance plan §5.3): how long a hidden viewer pane stays
   // mounted, null when the setting turns sleeping off. A scalar per slot.
   const sleepAfterMs = useSettingsStore((s) => sleepTabsAfterMs(s.settings?.sleep_tabs_after_min));
+  // Every tab a popout shows, keyed `<scope>/<key>` (§4.5): its pane here is a
+  // hidden duplicate, which a viewer kind sleeps at once. Rebuilt only when a
+  // popout's layout changes; each slot gets a boolean.
+  const detachedGroupsByScope = useTabsStore((s) => s.detachedGroupsByScope);
+  const popoutTabKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const [scopeKey, entries] of Object.entries(detachedGroupsByScope ?? {})) {
+      for (const d of entries) {
+        for (const g of allGroups(d.subtree)) {
+          for (const k of g.tabKeys) keys.add(`${scopeKey}/${k}`);
+        }
+      }
+    }
+    return keys;
+  }, [detachedGroupsByScope]);
   // Stable per-scope connect handler. PaneSlot/TabPane are memoized, so the pane layer only
   // stays cheap to re-render (e.g. every frame of a divider drag) if its props are
   // referentially stable — a fresh `() => openRemoteMachines(scopeKey)` arrow every
@@ -1251,6 +1266,7 @@ function CenterPanelImpl() {
                 onConnect={getConnect(scopeKey)}
                 mobileAgentTmuxReady={mobileAgentTmuxReady.current}
                 sleepAfterMs={sleepAfterMs}
+                inPopout={popoutTabKeys.has(`${scopeKey}/${tab.key}`)}
               />
             </div>
           );
