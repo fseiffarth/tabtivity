@@ -1106,3 +1106,74 @@ Flagged for user:
 - `docs/threat_model.md` row for "planting in `.git/`" still says
   "verified under real bubblewrap" only; not edited (the main checkout has
   concurrent edits to that file).
+
+### Reviewer
+
+Read-verified (nothing here runs on a Mac). SBPL: last match wins, and the
+render order is right for both profiles — `(allow default)`, the `$HOME`
+read deny, then the readable/root/temp read allows, the blanket
+`(deny file-write*)`, device and root/temp write allows, then `protected`
+(now with `git_guard`'s control files, `subpath`), `pinned` (`.git` as a
+`literal`, so lock files, objects and refs inside it stay writable), the
+`hidden` denies and, for a tab only, the `own_home` allow last. The one-shot
+has no allow after its hidden denies, so the whole state dir, the
+`preflight.sb` stage dir included, stays out of reach; the stage dir is never
+writable to a fenced tab either (state dir, not temp). `sbpl_string`
+escapes `"` and `\`, the only characters special inside a Scheme string, so
+no path can leave its literal. `guard_paths` canonicalises, so the guard
+denies name `/private/...` forms, which is what Seatbelt matches; a
+non-canonical root only ever fails closed (its allow never matches).
+Fail-closed: `!bwrap_available()`, an unknown scope, a failed stage-dir
+create or profile write all return `Err` → `fence_unavailable`; a
+`sandbox-exec` that refuses the profile exits non-zero →
+`preflight_failed`. The hook is the repo's own `pre-push`, run inside the
+fence without the token, the same posture as the Linux one-shot.
+`procargs2_env`: `get(0..4)` before the slice, the exec-path scan is
+`position`-bounded, each argv skip consumes at least one byte and a missing
+NUL answers empty, so a short, truncated or junk buffer cannot panic and a
+huge `argc` cannot loop past the buffer; only `environ_uid`'s one match
+leaves the walk. Linux walk unchanged (same order of reads, pid/ppid now
+`u32`); Windows still answers no jobs.
+
+Fixes: none — no confirmed bug.
+
+Flagged for user (cannot be settled without a Mac):
+- **Hard links and case variants past the Seatbelt git guard.** Seatbelt
+  matches paths, bubblewrap mounts. On Linux `ln .git/config x` from a
+  read-only bind fails `EXDEV`; on macOS the profile denies only
+  `file-write*` on the guarded paths, and `file-link` is not part of
+  `file-write*`, so a fenced agent may be able to hard-link `.git/config`
+  (or a hook script) to an unguarded name and write through it. Likewise a
+  case-variant path (`.GIT/CONFIG` on a case-insensitive APFS volume) if
+  Seatbelt matches the looked-up spelling. The same applies to the
+  pre-existing `protected` entries (hook scripts, `settings.json`). First
+  live check: in a fenced Mac tab, `ln .git/config x && echo >> x` and
+  `echo >> .GIT/CONFIG` must both be refused. A `(deny file-link …)` rule
+  was not added blind: an operation name the profile compiler rejects would
+  stop every fenced Mac agent from starting.
+- **The implementer's tab-fence `git_guard` (kept).** Correct as rendered:
+  control files `subpath`-denied after the root allows, `.git` pinned by a
+  `literal` that covers the entry (rename/unlink/replace) and none of its
+  children. Seatbelt could also deny *creating* a missing `commondir` /
+  `hooks` / `config.worktree` (closing the residual `git_guard.rs`
+  documents for bwrap), but `guard_paths` lists only existing paths; a
+  possible follow-up, not a bug.
+- **`preflight.sb` is shared per scope and written in place.** Two box
+  members pushed at once hold different project locks, so both preflights
+  `fs::write` the same file; a reader between the truncate and the write
+  sees an empty profile. Contents are normally identical (same box roots),
+  and an empty profile should be refused by `sandbox-exec` (fail closed) —
+  unverified. A temp-file + rename write would remove the window. The tab's
+  `fence.sb` has the same, older shape, and there the contents differ per
+  CLI (`agent_state_mounts` reads the tab's env), so a Claude and a Codex
+  tab spawned together in one scope can run under each other's profile
+  (pre-existing, not this step).
+- Pre-existing, both fences: roots enter the profile uncanonicalised, so a
+  project reached through a symlinked folder is not writable at all under
+  Seatbelt (fails closed; a version-bump `pre-push` would fail).
+
+Gates (reviewer, 2026-10-08): no code change; targeted `cargo test`
+(`one_shot`, `procargs2`, `the_walk_reads`, `background`, `seatbelt`,
+`sandbox_exec`: 15 passed); `scripts/brand-check.sh`,
+`scripts/privacy-check.sh` ok; `git diff --check` clean. The implementer's
+full gate run above stands for the unchanged code.
