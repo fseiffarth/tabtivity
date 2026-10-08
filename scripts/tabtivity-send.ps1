@@ -69,6 +69,11 @@ function OriginOf($Full) {
     return $rel
 }
 
+# A directory entry by that name, a dangling link included: the sh twin's
+# `[ -e ] || [ -L ]`. `Test-Path` follows links, and a marker written through
+# a dangling one would land wherever it points.
+function Present($Path) { try { [void][IO.File]::GetAttributes($Path); return $true } catch { return $false } }
+
 # What the phone does with the first bytes: the sh twin's `od` magic table and
 # its UTF-8 check of the first 4096 bytes (no NUL, every sequence well formed;
 # a sequence cut by the 4096 limit is fine, one cut by the end of the file is not).
@@ -168,7 +173,7 @@ try {
                 # lock keeps other sends out, so the markers below are ours; they
                 # land before the file does, so the phone never lists this file
                 # unclaimed.
-                if ((Test-Path -LiteralPath $dest) -or (Test-Path -LiteralPath $marker) -or (Test-Path -LiteralPath $origin)) { $n++; $suffix = "-$n"; continue }
+                if ((Present $dest) -or (Present $marker) -or (Present $origin)) { $n++; $suffix = "-$n"; continue }
                 try {
                     if ($tab) { [IO.File]::WriteAllText($marker, $tab) }
                     # The project file this is a copy of (`OriginOf`): `.<leaf>.src`.
@@ -183,7 +188,7 @@ try {
                     if ($tab) { [IO.File]::Delete($marker) }
                     if ($originRel) { [IO.File]::Delete($origin) }
                     # Lost the leaf to a file that appeared meanwhile: the next suffix.
-                    if (Test-Path -LiteralPath $dest) { $n++; $suffix = "-$n"; continue }
+                    if (Present $dest) { $n++; $suffix = "-$n"; continue }
                     Fail 4 'Cannot publish the file.'
                 }
             }

@@ -1629,3 +1629,70 @@ mod stay_after_quit_tests {
         assert!(stays_after_quit(&config(r#","stay_after_quit":true"#)));
     }
 }
+
+#[cfg(all(test, unix))]
+mod install_phone_script_tests {
+    use super::INSTALL_PHONE_SCRIPT;
+    use std::{
+        os::unix::fs::{symlink, PermissionsExt},
+        path::{Path, PathBuf},
+        process::Command,
+    };
+
+    fn which(name: &str) -> Option<PathBuf> {
+        std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(name)).find(|path| path.is_file())
+    }
+
+    /// Run the script from `<state>/mobile-control/` with a PATH of only
+    /// `dirname`, `parser` and a `tailscale` that prints `serve_json`.
+    fn run(parser: &Path, settings: &str, serve_json: &str) -> (i32, String, String) {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let control = temp.path().join("mobile-control");
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(&control).expect("control dir");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        std::fs::write(control.join("install_phone.sh"), INSTALL_PHONE_SCRIPT).expect("script");
+        std::fs::write(temp.path().join("settings.json"), settings).expect("settings");
+        symlink(which("dirname").expect("dirname"), bin.join("dirname")).expect("dirname link");
+        symlink(parser, bin.join(parser.file_name().expect("parser name"))).expect("parser link");
+        let tailscale = bin.join("tailscale");
+        std::fs::write(&tailscale, format!("#!/bin/sh\nprintf '%s\\n' '{serve_json}'\n")).expect("tailscale");
+        std::fs::set_permissions(&tailscale, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let out = Command::new(which("bash").expect("bash"))
+            .arg(control.join("install_phone.sh"))
+            .arg("--url")
+            .env_clear()
+            .env("PATH", &bin)
+            .env("HOME", temp.path())
+            .output()
+            .expect("run the script");
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        (out.status.code().unwrap_or(-1), text(&out.stdout), text(&out.stderr))
+    }
+
+    /// python3 and jq read settings and `tailscale serve status --json` the
+    /// same — `null` (nothing served yet) included, which python3 once
+    /// answered with a traceback. Each parser runs only where it is installed.
+    #[test]
+    fn python3_and_jq_give_the_same_answers() {
+        let python = which("python3").filter(|python| {
+            Command::new(python).args(["-I", "-c", "import json"]).output().is_ok_and(|out| out.status.success())
+        });
+        let parsers: Vec<PathBuf> = python.into_iter().chain(which("jq")).collect();
+        let settings = format!(r#"{{"{}":{{"serve_origin":"https://desk.example.ts.net"}}}}"#, crate::brand::MOBILE_HOST_KEY);
+        let good = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"desk.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8742"}}}}}"#;
+        let funnel = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"desk.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8742"}}}},"AllowFunnel":{"desk.example.ts.net:443":true}}"#;
+        let unmapped = "Tailscale Serve does not have the verified private root mapping to the configured loopback port\n";
+        let unset = "No verified exact HTTPS Serve origin is configured\n";
+        for parser in &parsers {
+            let ok = (0, "https://desk.example.ts.net\n".to_string(), String::new());
+            assert_eq!(run(parser, &settings, good), ok, "{parser:?}");
+            for serve in [funnel, "null", "{}"] {
+                assert_eq!(run(parser, &settings, serve), (1, String::new(), unmapped.to_string()), "{parser:?} {serve}");
+            }
+            for settings in ["null", "{}"] {
+                assert_eq!(run(parser, settings, good), (1, String::new(), unset.to_string()), "{parser:?} {settings}");
+            }
+        }
+    }
+}

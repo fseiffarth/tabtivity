@@ -134,6 +134,15 @@ mod tests {
             assert!(sh.contains(needle), "sh lacks {needle:?}");
             assert!(ps1.contains(needle), "ps1 lacks {needle:?}");
         }
+        // The leaf loop counts a dangling link as taken (`-e || -L`); the
+        // PS1's `Present`, never `Test-Path`, which follows links.
+        for leaf in ["$leaf", ".$leaf.tab", ".$leaf.src"] {
+            assert!(sh.contains(&format!("[ -L \"$outbox/{leaf}\" ]")), "sh lacks the -L check of {leaf}");
+        }
+        for var in ["$dest", "$marker", "$origin"] {
+            assert!(ps1.contains(&format!("(Present {var})")), "ps1 lacks `(Present {var})`");
+            assert!(!ps1.contains(&format!("Test-Path -LiteralPath {var}")), "ps1 follows links at {var}");
+        }
         // `fail CODE 'message'` → `Fail CODE 'message'`.
         let quoted = |rest: &str| rest.strip_prefix('\'').and_then(|r| r.split_once('\'')).map(|(msg, _)| msg.to_string());
         let mut fails = Vec::new();

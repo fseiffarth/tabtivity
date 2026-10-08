@@ -579,3 +579,64 @@ Flagged for user:
   main checkout's fix lands on `develop`.
 - `tabtivity-send.ps1` has never been run (no PowerShell here); first run on
   Windows is 31ad's phone QA.
+
+### Reviewer
+
+Read `tabtivity-send.ps1` line by line against the sh twin for PowerShell 5.1
+and 7 (quoting, `$args`/`switch`, `exit` through `finally`, lock, wildcard
+paths, UTF-8 machine, caps, messages), `install_phone.sh` for bash 3.2, and
+the parity test. Exercised `install_phone.sh` with a fake `tailscale` and
+state dir under python3-only, jq-only and neither.
+
+Fixed (one commit, `fix(scripts): …` after f3606aca):
+- `install_phone.sh`, python3 path: `tailscale serve status --json` prints
+  `null` when nothing is served — exactly the not-set-up-yet case — and
+  `json.load` gave `None`, so the user saw a Python traceback before the
+  mapping message (jq reads `null` silently). Both python readers now take
+  `json.load(…) or {}`. Regression test
+  `commands::mobile_control::install_phone_script_tests::python3_and_jq_give_the_same_answers`
+  (unix) runs the embedded script with a PATH of only `dirname`, the parser
+  and a fake `tailscale`, for each of python3/jq that is installed: good
+  mapping → origin on stdout; Funnel, `null`, `{}` → exit 1 with only the
+  mapping message on stderr; settings `null`/`{}` → the origin message. On
+  macOS CI this is also a bash 3.2 run.
+- `tabtivity-send.ps1`: the leaf loop's `Test-Path` follows links, so a
+  dangling link planted at `.<leaf>.tab`/`.<leaf>.src` read as free and
+  `WriteAllText` then created the file wherever it pointed (the project
+  folder is attacker-controlled; the sh checks `-e || -L` and `mv`s). A
+  `Present` helper (`[IO.File]::GetAttributes`, which does not follow links)
+  replaces all four `Test-Path` checks of `$dest`/`$marker`/`$origin`. The
+  parity test now also asserts the sh's three `[ -L "$outbox/…" ]` checks
+  and the PS1's `(Present …)` with no `Test-Path -LiteralPath` on those.
+
+Checked, no change: `exit`/`Fail` inside `try` reaches the outer `finally`
+(lock removed) and no `catch` sees it; the lock is taken before that `try`,
+so a lost race never removes another send's lock; `switch -CaseSensitive`
+string clauses are exact, not wildcard; `GetUnresolvedProviderPathFromPSPath`
+does not glob `[`/`]`; the PS1 is pure ASCII; the stage dot-file is hidden
+from the phone listing (`outbox.rs` skips dot leaves) and the `.src` is only
+shape-checked there, then proved by `files::entry`; the parity test parses
+17 `fail` lines, 4 reports and 6 command literals from the sh, so a new sh
+message fails it until the PS1 has it.
+
+Gates: `npm run build` ok; `npm test` 730 files / 7527 tests, 2 failed (the
+known `MobileHeldPromptStore` date bomb, nothing else); `cargo test` 3714
+passed (+1 test); `cargo clippy --all-targets -D warnings` ok; `npm run lint`
+0 errors / 28 warnings; `scripts/brand-check.sh` ok;
+`scripts/privacy-check.sh` ok; `git diff --check` clean; `bash -n
+scripts/install_phone.sh` ok. No PowerShell here: the PS1 change is
+read-verified only.
+
+Flagged for user:
+- `install_phone.sh` probes python3 by running it. On a Mac without the
+  Command Line Tools, `/usr/bin/python3` is the xcrun stub, which may pop
+  the "install developer tools" dialog before the script falls through to
+  jq. Harmless, but a surprise window; the alternative (`xcode-select -p`
+  first) is a design call.
+- `tabtivity-send.ps1` origin path: `GetUnresolvedProviderPathFromPSPath`
+  is used without `[IO.Path]::GetFullPath` around it (§3.5 names
+  `GetFullPath`). If PowerShell leaves a `..` in an absolute source path,
+  the `.src` records `sub/../x`; `files::entry` proves the path, so the
+  worst case is a missing origin, never a wrong file. Unverifiable here.
+- Windows PowerShell 5.1 writes stdout in the console's OEM code page, so
+  the `→`/`—` of the report line may reach the agent as `?`. Cosmetic.

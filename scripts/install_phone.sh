@@ -31,7 +31,7 @@ if python3 -I -c 'import json' >/dev/null 2>&1; then
     python3 -I -c '
 import json, sys
 with open(sys.argv[1]) as f:
-    settings = json.load(f)
+    settings = json.load(f) or {}
 value = (settings.get("tabtivity_mobile_host") or {}).get(sys.argv[2])
 print(sys.argv[3] if value is None or value is False else value)
 ' "$settings" "$1" "$2"
@@ -41,7 +41,7 @@ print(sys.argv[3] if value is None or value is False else value)
   serve_mapped() {
     python3 -I -c '
 import json, sys
-serve = json.load(sys.stdin)
+serve = json.load(sys.stdin) or {}  # `null` when nothing is served, as jq reads it
 authority, needle, public_port = sys.argv[1:4]
 tcp = (serve.get("TCP") or {}).get(public_port) or {}
 web = (serve.get("Web") or {}).get(authority) or {}
