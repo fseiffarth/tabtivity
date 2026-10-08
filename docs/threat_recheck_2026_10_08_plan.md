@@ -102,9 +102,36 @@ cross-fence items; do them first.
 Final: full gates (`AGENTS.md` → Gates), `npm run backend:stale`, and every
 fixed row in `docs/threat_model.md` marked.
 
+## Run 2026-10-08 — fixed decisions and agent steps
+
+Branch `threat/1008` in `.claude/worktrees/threat1008`; handoff
+`docs/threat_recheck_2026_10_08_handoff.md`. This run does plan steps 1, 2,
+3, 6, 8, 13 and 14. Steps 4, 5, 7, 9, 10, 11 and 12 wait for their
+decisions and are out of scope.
+
+Fixed decisions (not up for review):
+- **A1 = per-scope.** `.vibe/.env`, `.aider/oauth-keys.env`,
+  `.config/mini-swe-agent/.env` and Cline's `providers.json` leave the shared
+  login set and become per-scope files, like Continue's and Crush's mixed
+  files. A user signs in to those CLIs once per scope. Login folders
+  (CodeBuddy, Kimi) reconcile only an allowlist of file names. No content
+  validator.
+- Step 2's spawn-time refusal list applies to `opts.env` entries that came
+  from a persisted layout, not to variables Tabtivity itself inserts.
+
+| Agent step | Plan step | Gaps | Main files |
+|---|---|---|---|
+| 1 | 1 | 16 | `commands/agents.rs`, `services/agent_auth.rs`, `services/agent_home.rs` |
+| 2 | 2 | 17 | `services/terminal_service.rs`, `terminal/mod.rs`, `services/launch_prep.rs` |
+| 3 | 3 | 18 | `services/git_push_mcp.rs`, `services/root_mcp.rs`, `commands/terminal.rs`, `services/agent_fence.rs` |
+| 4 | 6 | 29, 30 | `services/agent_session.rs`, `services/agent_turn.rs`, `services/git_guard.rs`, `services/agent_fence.rs`, `services/home_io.rs` |
+| 5 | 8 (backend) | 24, 37, 39 | `commands/sheets.rs`, `commands/sqlite.rs`, their callers in `SqliteView.tsx`/`TableView.tsx` |
+| 6 | 8 (frontend) | 28, 40, 41 (+ ODT #869) | `src/lib/viewers/yaml.ts`, `FileViewerPane.tsx` (error boundary), `markdown.ts`, `gif.ts`, `OdtView.tsx` |
+| 7 | 13 + 14 | 35, 36 | `services/remote_sync.rs`, `commands/sync.rs`, `commands/tex.rs`, `services/sandbox.rs:49`, `docs/threat_model.md` |
+
 ## Decisions for the user
 
-- **A1 (step 1):** per-scope logins for every env- or config-shaped file (a login is entered once per scope), or keep sharing behind a per-CLI content validator. Reviewer's recommendation: per-scope for the dotenv files and Cline.
+- **A1 (step 1) — decided 2026-10-08: per-scope.** per-scope logins for every env- or config-shaped file (a login is entered once per scope), or keep sharing behind a per-CLI content validator. Reviewer's recommendation: per-scope for the dotenv files and Cline.
 - **A2 (step 4):** gate CI reads on the confirmed push URL (CI then needs one confirmed push or a one-time "allow CI for <repo>" card), or let CI read public repos without the token until confirmed.
 - **B1/C3 (step 12):** keep the no-relaunch phone update behind an unfenced adoption step, or drop it. Keep auto-queueing dev builds from the window, or require a click. Should the launcher verify the artifact it adopts?
 - **C2 (step 11):** confirm before handing any no-viewer file to the OS, or refuse launcher types outright.
