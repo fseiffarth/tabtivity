@@ -34,14 +34,20 @@ struct AgentSpec {
     /// Where this CLI keeps its sign-in under `$HOME` (Linux survey
     /// 2026-09-25): shared across every Tabtivity agent home by
     /// `services::agent_auth`. Only files that hold a credential and can
-    /// never name a command — a config that mixes both (Continue's
-    /// `config.yaml`, Crush's `crush.json`, Aider's `.env`) stays per scope,
-    /// as does a login kept in a database beside other state (Kiro, Kilo,
-    /// OpenClaw) or in the keyring (Copilot: `services::copilot_auth`).
+    /// never name a command. A config that mixes both (Continue's
+    /// `config.yaml`, Crush's `crush.json`, Cline's `providers.json`) stays
+    /// per scope, and so does a file the CLI loads as its environment —
+    /// Vibe's `.vibe/.env`, Aider's `.aider/oauth-keys.env` and `.env`,
+    /// mini-swe-agent's `.config/mini-swe-agent/.env` — since one
+    /// `GIT_CONFIG_*` line in it runs a command (threat recheck 2026-10-08,
+    /// gap 16; `agent_auth::RETIRED`). A login kept in a database beside
+    /// other state (Kiro, Kilo, OpenClaw) or in the keyring (Copilot:
+    /// `services::copilot_auth`) is per scope too. A login folder lists the
+    /// file names it shares (`agent_auth::DirNames`).
     auth_paths: &'static [AuthPath],
 }
 
-use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath};
+use crate::services::agent_auth::{dir as auth_dir, file as auth_file, AuthPath, DirNames};
 
 /// The registry's login paths, for `services::agent_auth`.
 pub fn auth_registry() -> Vec<(&'static str, &'static [AuthPath])> {
@@ -159,7 +165,9 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("npm install -g cline"),
         extra_paths: &[],
         docs: "https://docs.cline.bot/getting-started/installing-cline",
-        auth_paths: &[auth_file(".cline/data/settings/providers.json")],
+        // `~/.cline/data/settings/providers.json` holds the login but also
+        // the provider config: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "vibe",
@@ -170,7 +178,8 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: None,
         extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
         docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
-        auth_paths: &[auth_file(".vibe/.env")],
+        // `~/.vibe/.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "aider",
@@ -187,7 +196,8 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("irm https://aider.chat/install.ps1 | iex"),
         extra_paths: &[".local/bin/aider"],
         docs: "https://aider.chat/docs/install.html",
-        auth_paths: &[auth_file(".aider/oauth-keys.env")],
+        // `~/.aider/oauth-keys.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "opencode",
@@ -322,7 +332,7 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("npm install -g @tencent-ai/codebuddy-code"),
         extra_paths: &[],
         docs: "https://www.codebuddy.ai/docs/cli/README",
-        auth_paths: &[auth_dir(".local/share/CodeBuddyExtension/Data/Public/auth")],
+        auth_paths: &[auth_dir(".local/share/CodeBuddyExtension/Data/Public/auth", DirNames::CodeBuddyInfo)],
     },
     AgentSpec {
         id: "goose",
@@ -372,7 +382,8 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("pip install mini-swe-agent"),
         extra_paths: &[".local/bin/mini"],
         docs: "https://mini-swe-agent.com/latest/quickstart/",
-        auth_paths: &[auth_file(".config/mini-swe-agent/.env")],
+        // `~/.config/mini-swe-agent/.env` is loaded as environment: per scope.
+        auth_paths: &[],
     },
     AgentSpec {
         id: "crush",
@@ -406,7 +417,7 @@ const AGENTS: &[AgentSpec] = &[
         install_cmd_windows: Some("Invoke-RestMethod https://code.kimi.com/kimi-code/install.ps1 | Invoke-Expression"),
         extra_paths: &[".kimi-code/bin/kimi", ".local/bin/kimi"],
         docs: "https://code.kimi.com/kimi-code",
-        auth_paths: &[auth_dir(".kimi-code/credentials")],
+        auth_paths: &[auth_dir(".kimi-code/credentials", DirNames::Json)],
     },
     AgentSpec {
         id: "qoder",

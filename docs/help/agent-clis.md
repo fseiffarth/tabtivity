@@ -79,8 +79,12 @@ logins** → *Import from this computer* copies just that file into Tabtivity
 (never config, skills or MCP entries). The first start of this version does
 that for you, once, for every CLI Tabtivity has no login for yet. **Sign out** there forgets it
 everywhere. A CLI that keeps its login in the system keyring or a database
-(Kiro, Kilo, OpenClaw, Copilot) signs in once per project instead — Copilot's
-case is described under the sandbox below.
+(Kiro, Kilo, OpenClaw, Copilot), or in a file it also reads as settings or
+environment (Mistral Vibe's `.env`, Aider, mini-swe-agent, Cline), signs in
+once per project instead — an agent in one project must not be able to plant
+settings that run in another. To use one Vibe, Aider or mini-swe-agent key
+everywhere, put that `.env` file into the global agent config (below).
+Copilot's case is described under the sandbox below.
 
 **API keys instead of a subscription.** If you pay per token, Settings → Agent
 sandbox → **API keys** keeps one key per provider (Anthropic, Google Gemini) in
@@ -100,7 +104,8 @@ If a tab reports an invalid key, fix or remove it there — signing in
 again does not help while the key is in use. Codex, Mistral Vibe and OpenCode
 are not offered: no environment variable points them at Tabtivity's proxy (use
 `codex login --with-api-key`, Vibe's own `.env` or `opencode auth login`
-instead; their login files are shared like any other).
+instead; Codex's and OpenCode's login files are shared like any other, Vibe's
+`.env` is per project).
 
 **Monthly spending limit.** Every key needs a monthly limit in US dollars
 (20 is proposed); Save stays greyed out without one. Tabtivity reads what each

@@ -22,13 +22,18 @@
 //! included (agent_authority reevaluation, item 4). A copy costs the guard
 //! nothing and the other running tabs one keeper pass.
 //!
-//! Directories (a CLI that keeps only its login in a folder of its own) are
-//! reconciled file by file, one level deep. Every read and write into a
+//! Directories (a CLI that keeps its login in a folder of its own) are
+//! reconciled file by file, one level deep, and only for the file names the
+//! registry's [`DirNames`] admits: a temporary, a backup or a planted file
+//! stays in its home. Every read and write into a
 //! home goes through a directory handle (`services::home_io`): the home is
 //! the agent's, and the keeper runs unfenced.
 //!
 //! Only credential files are shared — never a config that could name a
-//! command (an MCP server, a hook), which stays per scope. Where the file
+//! command (an MCP server, a hook), nor a file the CLI loads as its
+//! environment (a `.env`: `GIT_CONFIG_*` alone runs a command), which stays
+//! per scope. Until 2026-10-08 four such files were shared ([`RETIRED`],
+//! cleaned up by [`retire_shared_paths_in`]). Where the file
 //! names an account, the store records it at first adoption and a later file
 //! naming a different account is **not** adopted (the store's copy is put
 //! back over it; the tab keeps the token it already loaded); switching
@@ -68,9 +73,50 @@ const PLACED_DIR: &str = ".placed";
 pub enum AuthKind {
     /// One file; copied into every home.
     File,
-    /// A directory holding nothing but the login; its files copied into
-    /// every home.
-    Dir,
+    /// A directory holding the login; the files in it whose names
+    /// [`DirNames`] admits are copied into every home, nothing else.
+    Dir(DirNames),
+}
+
+/// Which file names in a login directory are the login, read off each CLI's
+/// published bundle (threat recheck 2026-10-08, gap 16). Anything else in
+/// the folder — a temporary caught mid-write, a logout backup, a marker, a
+/// file an agent planted — stays in the home it was written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirNames {
+    /// `<name>.json` with no leading dot (Kimi Code's `FileTokenStorage`:
+    /// `kimi-code.json`, or `<oauth key>.json`; temporaries are
+    /// `<name>.json.tmp.<pid>.<hex>`).
+    Json,
+    /// `<authId>.info` with no leading dot (CodeBuddy's `getAuthSavePath`),
+    /// minus the logout backups `<stem>.<ISO time>.<pid>.<uuid>.info`, which
+    /// would otherwise pile up in every home. The `.logged-out` marker and
+    /// the `.lock` directory stay per scope.
+    CodeBuddyInfo,
+}
+
+impl DirNames {
+    /// Whether `name`, one entry of the login directory, is shared.
+    pub fn admits(self, name: &str) -> bool {
+        let plain = !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\']);
+        match self {
+            DirNames::Json => plain && name.ends_with(".json") && name.len() > ".json".len(),
+            DirNames::CodeBuddyInfo => {
+                plain && name.ends_with(".info") && name.len() > ".info".len() && !is_codebuddy_logout_backup(name)
+            }
+        }
+    }
+}
+
+/// A CodeBuddy logout backup: `….<YYYY-MM-DD>T<digits and ->Z.<pid>.<uuid>.info`
+/// (the ISO time with `-` for `:` and `.`).
+fn is_codebuddy_logout_backup(name: &str) -> bool {
+    static BACKUP: OnceLock<regex::Regex> = OnceLock::new();
+    BACKUP
+        .get_or_init(|| {
+            regex::Regex::new(r"\.\d{4}-\d\d-\d\dT[0-9-]+Z\.\d+\.[0-9a-f-]{36}\.info$").expect("valid regex")
+        })
+        .is_match(name)
 }
 
 /// One login path of a CLI, relative to `$HOME`, forward slashes.
@@ -84,8 +130,8 @@ pub const fn file(rel: &'static str) -> AuthPath {
     AuthPath { rel, kind: AuthKind::File }
 }
 
-pub const fn dir(rel: &'static str) -> AuthPath {
-    AuthPath { rel, kind: AuthKind::Dir }
+pub const fn dir(rel: &'static str, names: DirNames) -> AuthPath {
+    AuthPath { rel, kind: AuthKind::Dir(names) }
 }
 
 /// `<state_dir>/agent-auth/`.
@@ -298,9 +344,9 @@ impl Step {
 ///    older Tabtivity replaced by a copy of its own.
 ///
 /// A local-model home ([`is_local_model_home`]) only receives: what lands
-/// there is `ollama launch`'s wiring for that CLI (Cline's `providers.json`
-/// gains `lastUsedProvider: "ollama"`), never a login to hand every other
-/// scope. It is not adopted, and the store is not placed over a copy the home
+/// there is `ollama launch`'s wiring for that CLI (it was written for Cline's
+/// `providers.json`, which gains `lastUsedProvider: "ollama"` and has been
+/// per scope since 2026-10-08), never a login to hand every other scope. It is not adopted, and the store is not placed over a copy the home
 /// changed since the store last placed it, which would pull the wiring from
 /// under a running tab.
 fn reconcile_file(cli: &str, store_dir: &Path, store: &Path, leaf: &str, home: &Path, copy: &HomeFile, step: Step) {
@@ -363,16 +409,21 @@ fn store_dir_files(store: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The login files of a store directory: the regular files `names` admits.
+fn store_dir_logins(store: &Path, names: DirNames) -> Vec<String> {
+    store_dir_files(store).into_iter().filter(|n| names.admits(n)).collect()
+}
+
 /// Reconcile a login directory file by file, one level deep: every name the
-/// store or the home holds.
-fn reconcile_dir(cli: &str, store_dir: &Path, store: &Path, rel: &str, home: &Path, step: Step) {
-    let has_store = !store_dir_files(store).is_empty();
+/// store or the home holds that `names` admits. Any other file in the folder
+/// is neither adopted nor placed.
+fn reconcile_dir(cli: &str, store_dir: &Path, store: &Path, rel: &str, names: DirNames, home: &Path, step: Step) {
+    let has_store = !store_dir_logins(store, names).is_empty();
     let home_dir = if has_store { HomeDir::open(home, rel) } else { HomeDir::open_existing(home, rel) };
     let Some(home_dir) = home_dir else { return };
-    let names: BTreeSet<String> = store_dir_files(store)
+    let names: BTreeSet<String> = store_dir_logins(store, names)
         .into_iter()
-        .chain(home_dir.names())
-        .filter(|n| !n.starts_with('.'))
+        .chain(home_dir.names().into_iter().filter(|n| names.admits(n)))
         .collect();
     for name in names {
         let Some(copy) = home_dir.file(&name) else { continue };
@@ -408,7 +459,7 @@ fn reconcile_home_step(state_dir: &Path, home: &Path, step: Step) {
                         reconcile_file(cli, &store_dir, &store, &leaf_of(path.rel), home, &copy, step);
                     }
                 }
-                AuthKind::Dir => reconcile_dir(cli, &store_dir, &store, path.rel, home, step),
+                AuthKind::Dir(names) => reconcile_dir(cli, &store_dir, &store, path.rel, names, home, step),
             }
         }
         if cli == "claude" && step.places() {
@@ -537,10 +588,16 @@ pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
                 let s = store_path_in(state_dir, cli, p);
                 match p.kind {
                     AuthKind::File => std::fs::metadata(&s).is_ok_and(|m| m.len() > 0),
-                    AuthKind::Dir => !store_dir_files(&s).is_empty(),
+                    AuthKind::Dir(names) => !store_dir_logins(&s, names).is_empty(),
                 }
             });
-            let importable = paths.iter().any(|p| home_path(user_home, p.rel).exists());
+            let importable = paths.iter().any(|p| {
+                let src = home_path(user_home, p.rel);
+                match p.kind {
+                    AuthKind::File => src.exists(),
+                    AuthKind::Dir(names) => !store_dir_logins(&src, names).is_empty(),
+                }
+            });
             let blocked = std::fs::read(store_dir.join(BLOCKED_FILE))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<Blocked>(&b).ok())
@@ -574,9 +631,9 @@ fn remove_copies(home: &Path, paths: &[AuthPath]) {
                     }
                 }
             }
-            AuthKind::Dir => {
+            AuthKind::Dir(names) => {
                 if let Some(dir) = HomeDir::open_existing(home, path.rel) {
-                    for name in dir.names() {
+                    for name in dir.names().into_iter().filter(|n| names.admits(n)) {
                         if let Some(copy) = dir.file(&name) {
                             let _ = copy.remove();
                         }
@@ -615,10 +672,11 @@ pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path, cli: &str) -
                 }
                 copied += 1;
             }
-            AuthKind::Dir if src.is_dir() => {
+            AuthKind::Dir(names) if src.is_dir() => {
                 let _ = std::fs::remove_dir_all(&store);
-                copy_dir(&src, &store).map_err(|e| format!("{}: {e}", src.display()))?;
-                copied += 1;
+                if copy_dir_logins(&src, &store, names).map_err(|e| format!("{}: {e}", src.display()))? > 0 {
+                    copied += 1;
+                }
             }
             _ => {}
         }
@@ -683,18 +741,120 @@ pub fn import_once() {
     import_once_in(&storage::state_dir(), &crate::paths::home_dir());
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> io::Result<()> {
-    crate::services::agent_home::create_private_dir(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &to)?;
-        } else if entry.file_type()?.is_file() {
-            std::fs::copy(entry.path(), &to)?;
+/// Login files that left the shared set on 2026-10-08 (threat recheck,
+/// gap 16): dotenv files and a provider config the CLIs load as their
+/// environment or configuration, so a fenced agent could plant a command in
+/// one and have it run in every other scope — and unfenced in the Host
+/// session. They are per-scope files now, like Continue's and Crush's.
+/// `(cli id, home-relative path)`; each was its CLI's only shared path.
+const RETIRED: &[(&str, &str)] = &[
+    ("vibe", ".vibe/.env"),
+    ("aider", ".aider/oauth-keys.env"),
+    ("mini-swe-agent", ".config/mini-swe-agent/.env"),
+    ("cline", ".cline/data/settings/providers.json"),
+];
+
+/// Clean up after paths that stopped being shared ([`RETIRED`], and the
+/// names a login directory no longer admits). Idempotent and marker-free:
+/// it keys on what the store still holds. Run at startup before
+/// [`import_once`] and the keeper.
+///
+/// - Every scope home and local-model home keeps its copy: the copies have
+///   been their own inodes since 2026-09-26, and the login survives in every
+///   scope that had it.
+/// - The Host home (unfenced) loses its copy of a retired file where the
+///   bytes are the store's current ones or the ones the store last placed
+///   there — that is, Tabtivity put it there, from whichever scope. A copy
+///   that differs from both is the Host session's own write and stays.
+/// - Then the CLI's store directory goes, with its records.
+/// - In a login directory, every store file the allowlist no longer admits
+///   goes, and a home's copy of such a name only where it still matches
+///   what the store placed in that home.
+///
+/// Users who want one key everywhere put the file into the Tabtivity-wide
+/// layer (`services::agent_global`); the store's copy is not moved there,
+/// since an agent may have written it.
+pub fn retire_shared_paths_in(state_dir: &Path) {
+    let host = crate::services::agent_home::host_home_in(state_dir);
+    for (cli, rel) in RETIRED {
+        let store_dir = store_dir_in(state_dir, cli);
+        if !store_dir.is_dir() {
+            continue;
+        }
+        let leaf = leaf_of(rel);
+        if let Some(copy) = HomeFile::open_existing(&host, rel) {
+            if let Some(bytes) = copy.read() {
+                let hash = digest(&bytes);
+                let ours = std::fs::read(store_dir.join(&leaf)).is_ok_and(|s| digest(&s) == hash)
+                    || read_placed(&store_dir, &host, &leaf).as_deref() == Some(hash.as_str());
+                if ours {
+                    if let Err(e) = copy.remove() {
+                        eprintln!("agent_auth: {cli}: retire the Host copy: {e}");
+                        // Keep the store so the next start can tell again.
+                        continue;
+                    }
+                }
+            }
+        }
+        if let Err(e) = std::fs::remove_dir_all(&store_dir) {
+            eprintln!("agent_auth: {cli}: retire {}: {e}", store_dir.display());
         }
     }
-    Ok(())
+    let homes = crate::services::agent_home::existing_homes_in(state_dir);
+    for (cli, paths) in registry() {
+        for path in paths {
+            let AuthKind::Dir(names) = path.kind else { continue };
+            retire_dir_names(state_dir, cli, path.rel, names, &homes);
+        }
+    }
+}
+
+pub fn retire_shared_paths() {
+    retire_shared_paths_in(&storage::state_dir());
+}
+
+/// The login-directory half of [`retire_shared_paths_in`] for one folder.
+fn retire_dir_names(state_dir: &Path, cli: &str, rel: &str, names: DirNames, homes: &[PathBuf]) {
+    let store_dir = store_dir_in(state_dir, cli);
+    let store = store_dir.join(leaf_of(rel));
+    let prefix = format!("{}_", leaf_of(rel));
+    for home in homes {
+        let Some(dir) = HomeDir::open_existing(home, rel) else { continue };
+        for name in dir.names().into_iter().filter(|n| !names.admits(n)) {
+            let Some(placed) = read_placed(&store_dir, home, &format!("{prefix}{name}")) else { continue };
+            let Some(copy) = dir.file(&name) else { continue };
+            if copy.read().is_some_and(|b| digest(&b) == placed) {
+                let _ = copy.remove();
+            }
+        }
+    }
+    for name in store_dir_files(&store).into_iter().filter(|n| !names.admits(n)) {
+        let _ = std::fs::remove_file(store.join(name));
+    }
+    let Ok(records) = std::fs::read_dir(store_dir.join(PLACED_DIR)) else { return };
+    for record_dir in records.flatten().map(|e| e.path()) {
+        for leaf in store_dir_files(&record_dir) {
+            if leaf.strip_prefix(&prefix).is_some_and(|name| !names.admits(name)) {
+                let _ = std::fs::remove_file(record_dir.join(leaf));
+            }
+        }
+    }
+}
+
+/// Copy the login files of the user's login directory `src` into the store
+/// directory `dst`: one level, regular files `names` admits, nothing else.
+/// Returns how many it copied.
+fn copy_dir_logins(src: &Path, dst: &Path, names: DirNames) -> io::Result<usize> {
+    let logins = store_dir_logins(src, names);
+    if logins.is_empty() {
+        return Ok(0);
+    }
+    crate::services::agent_home::create_private_dir(dst)?;
+    for name in &logins {
+        let bytes = std::fs::read(src.join(name))?;
+        write_store(&dst.join(name), &bytes)?;
+    }
+    Ok(logins.len())
 }
 
 /// Forget the login of `cli` everywhere: the store and every home's copy.
@@ -897,42 +1057,42 @@ mod tests {
         assert!(std::fs::read_to_string(a.join(".codex/auth.json")).unwrap().contains("t3"));
     }
 
-    /// A local-model home only receives. `ollama launch cline` merges an
-    /// Ollama provider into Cline's login file there; adopted, every scope's
-    /// Cline would switch to the local model, and placed over, the running
-    /// local tab would lose its wiring.
+    /// A local-model home only receives. `ollama launch` may rewrite a CLI's
+    /// login file there (it did Cline's `providers.json`, per scope since
+    /// 2026-10-08); adopted, every scope's CLI would switch to the local
+    /// model, and placed over, the running local tab would lose its wiring.
     #[test]
     fn a_local_model_home_receives_logins_but_never_feeds_them_back() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
-        let rel = ".cline/data/settings/providers.json";
+        let rel = ".codex/auth.json";
         let own = crate::services::agent_home::scope_home_in(state, "a");
         let local = crate::services::agent_home::local_model_home_in(state, "a");
-        std::fs::create_dir_all(own.join(".cline/data/settings")).unwrap();
+        std::fs::create_dir_all(own.join(".codex")).unwrap();
         std::fs::create_dir_all(&local).unwrap();
-        std::fs::write(own.join(rel), r#"{"lastUsedProvider":"anthropic"}"#).unwrap();
+        std::fs::write(own.join(rel), r#"{"provider":"openai"}"#).unwrap();
 
         // A scope's own home still feeds the store; the local home receives.
         reconcile_all_in(state);
-        let store = store_of(state, "cline", rel);
-        assert!(std::fs::read_to_string(&store).unwrap().contains("anthropic"));
-        assert!(std::fs::read_to_string(local.join(rel)).unwrap().contains("anthropic"));
+        let store = store_of(state, "codex", rel);
+        assert!(std::fs::read_to_string(&store).unwrap().contains("openai"));
+        assert!(std::fs::read_to_string(local.join(rel)).unwrap().contains("openai"));
 
-        // `ollama launch cline` rewrites the local copy: neither adopted nor
+        // A local-model launch rewrites the local copy: neither adopted nor
         // overwritten, on any pass.
-        write_in_place(&local.join(rel), r#"{"lastUsedProvider":"ollama"}"#);
+        write_in_place(&local.join(rel), r#"{"provider":"ollama"}"#);
         reconcile_all_in(state);
         reconcile_home_in(state, &local);
-        assert!(std::fs::read_to_string(&store).unwrap().contains("anthropic"));
-        assert!(std::fs::read_to_string(own.join(rel)).unwrap().contains("anthropic"));
+        assert!(std::fs::read_to_string(&store).unwrap().contains("openai"));
+        assert!(std::fs::read_to_string(own.join(rel)).unwrap().contains("openai"));
         assert!(std::fs::read_to_string(local.join(rel)).unwrap().contains("ollama"));
 
         // A file the local home wrote before anything was placed is its own too.
         let fresh = crate::services::agent_home::local_model_home_in(state, "b");
-        std::fs::create_dir_all(fresh.join(".cline/data/settings")).unwrap();
-        std::fs::write(fresh.join(rel), r#"{"lastUsedProvider":"ollama"}"#).unwrap();
+        std::fs::create_dir_all(fresh.join(".codex")).unwrap();
+        std::fs::write(fresh.join(rel), r#"{"provider":"ollama"}"#).unwrap();
         reconcile_all_in(state);
-        assert!(std::fs::read_to_string(&store).unwrap().contains("anthropic"));
+        assert!(std::fs::read_to_string(&store).unwrap().contains("openai"));
         assert!(std::fs::read_to_string(fresh.join(rel)).unwrap().contains("ollama"));
     }
 
@@ -1084,20 +1244,254 @@ mod tests {
         let state = tmp.path();
         let a = crate::services::agent_home::scope_home_in(state, "a");
         let b = crate::services::agent_home::scope_home_in(state, "b");
-        std::fs::create_dir_all(a.join(".kimi-code/credentials")).unwrap();
+        let creds = ".kimi-code/credentials";
+        std::fs::create_dir_all(a.join(creds)).unwrap();
         std::fs::create_dir_all(&b).unwrap();
-        std::fs::write(a.join(".kimi-code/credentials/token"), "k1").unwrap();
+        std::fs::write(a.join(creds).join("kimi-code.json"), "k1").unwrap();
         reconcile_all_in(state);
-        let store = store_path_in(state, "kimi", &dir(".kimi-code/credentials"));
-        assert_eq!(std::fs::read_to_string(store.join("token")).unwrap(), "k1");
-        assert_eq!(std::fs::read_to_string(b.join(".kimi-code/credentials/token")).unwrap(), "k1");
+        let store = store_path_in(state, "kimi", &dir(creds, DirNames::Json));
+        assert_eq!(std::fs::read_to_string(store.join("kimi-code.json")).unwrap(), "k1");
+        assert_eq!(std::fs::read_to_string(b.join(creds).join("kimi-code.json")).unwrap(), "k1");
         assert!(status_in(state, tmp.path()).iter().find(|s| s.id == "kimi").unwrap().signed_in);
-        write_in_place(&b.join(".kimi-code/credentials/token"), "k2");
+        write_in_place(&b.join(creds).join("kimi-code.json"), "k2");
         reconcile_all_in(state);
-        assert_eq!(std::fs::read_to_string(a.join(".kimi-code/credentials/token")).unwrap(), "k2");
+        assert_eq!(std::fs::read_to_string(a.join(creds).join("kimi-code.json")).unwrap(), "k2");
         sign_out_in(state, "kimi").unwrap();
-        assert!(!a.join(".kimi-code/credentials/token").exists());
+        assert!(!a.join(creds).join("kimi-code.json").exists());
         assert!(!store.exists());
+    }
+
+    /// Gap 16: a login folder shares only the names its CLI writes a login
+    /// under. A temporary caught mid-write, a dotenv file an agent planted,
+    /// CodeBuddy's logout backup and its `.logged-out` marker are neither
+    /// adopted nor placed, and do not count as signed in.
+    #[test]
+    fn a_login_directory_shares_only_allowlisted_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let a = crate::services::agent_home::scope_home_in(state, "a");
+        let b = crate::services::agent_home::scope_home_in(state, "b");
+        let host = crate::services::agent_home::host_home_in(state);
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::create_dir_all(&host).unwrap();
+
+        // Kimi.
+        let kimi = ".kimi-code/credentials";
+        std::fs::create_dir_all(a.join(kimi)).unwrap();
+        for stray in ["kimi-code.json.tmp.1.ab", "x.env"] {
+            std::fs::write(a.join(kimi).join(stray), "GIT_CONFIG_COUNT=1").unwrap();
+        }
+        reconcile_all_in(state);
+        let kimi_store = store_path_in(state, "kimi", &dir(kimi, DirNames::Json));
+        assert!(store_dir_files(&kimi_store).is_empty());
+        assert!(!status_in(state, tmp.path()).iter().find(|s| s.id == "kimi").unwrap().signed_in);
+        std::fs::write(a.join(kimi).join("kimi-code.json"), "k1").unwrap();
+        reconcile_all_in(state);
+        assert_eq!(store_dir_files(&kimi_store), vec!["kimi-code.json".to_string()]);
+        for home in [&b, &host] {
+            assert_eq!(std::fs::read_to_string(home.join(kimi).join("kimi-code.json")).unwrap(), "k1");
+            assert!(!home.join(kimi).join("kimi-code.json.tmp.1.ab").exists());
+            assert!(!home.join(kimi).join("x.env").exists());
+        }
+
+        // CodeBuddy.
+        let cb = ".local/share/CodeBuddyExtension/Data/Public/auth";
+        let login = "Tencent-Cloud.coding-copilot.info";
+        let backup = "Tencent-Cloud.coding-copilot.2026-10-08T12-34-56-789Z.4242.0f8fad5b-d9cb-469f-a165-70867728950e.info";
+        let marker = "Tencent-Cloud.coding-copilot.info.logged-out";
+        std::fs::create_dir_all(a.join(cb)).unwrap();
+        for name in [login, backup, marker] {
+            std::fs::write(a.join(cb).join(name), name).unwrap();
+        }
+        reconcile_all_in(state);
+        let cb_store = store_path_in(state, "codebuddy", &dir(cb, DirNames::CodeBuddyInfo));
+        assert_eq!(store_dir_files(&cb_store), vec![login.to_string()]);
+        for home in [&b, &host] {
+            assert!(home.join(cb).join(login).is_file());
+            assert!(!home.join(cb).join(backup).exists());
+            assert!(!home.join(cb).join(marker).exists());
+        }
+        // The home that wrote them keeps them; they are its own.
+        assert!(a.join(cb).join(backup).is_file());
+        assert!(a.join(cb).join(marker).is_file());
+    }
+
+    #[test]
+    fn dir_names_admit_only_the_login_file_shapes() {
+        for ok in ["kimi-code.json", "other-oauth.json"] {
+            assert!(DirNames::Json.admits(ok), "{ok}");
+        }
+        for no in [".json", ".kimi-code.json", "kimi-code.json.tmp.1.ab", "x.env", "token", "a/b.json", ""] {
+            assert!(!DirNames::Json.admits(no), "{no}");
+        }
+        for ok in ["Tencent-Cloud.coding-copilot.info", "Tencent-Cloud.coding-copilot-x-code.example.invalid.info"] {
+            assert!(DirNames::CodeBuddyInfo.admits(ok), "{ok}");
+        }
+        for no in [
+            "Tencent-Cloud.coding-copilot.2026-10-08T12-34-56-789Z.4242.0f8fad5b-d9cb-469f-a165-70867728950e.info",
+            "Tencent-Cloud.coding-copilot.info.logged-out",
+            ".Tencent-Cloud.coding-copilot.info.4242.0f8fad5b-d9cb-469f-a165-70867728950e.tmp",
+            "Tencent-Cloud.coding-copilot.info.lock",
+            ".info",
+            "x.env",
+        ] {
+            assert!(!DirNames::CodeBuddyInfo.admits(no), "{no}");
+        }
+    }
+
+    /// Gap 16: nothing the registry shares is a file a CLI loads as its
+    /// environment or its configuration.
+    #[test]
+    fn no_registry_row_shares_an_env_or_config_file() {
+        for (cli, paths) in registry() {
+            for path in paths {
+                let name = path.rel.rsplit('/').next().unwrap_or(path.rel);
+                assert!(!name.ends_with(".env") && name != ".env", "{cli}: {}", path.rel);
+                assert!(name != "providers.json", "{cli}: {}", path.rel);
+                assert!(!name.starts_with("config.") && !name.starts_with("settings."), "{cli}: {}", path.rel);
+                assert!(!["crush.json", "config.yaml", "config.toml"].contains(&name), "{cli}: {}", path.rel);
+            }
+            for (retired_cli, rel) in RETIRED {
+                assert!(
+                    !paths.iter().any(|p| p.rel == *rel),
+                    "{cli} shares the retired {retired_cli} path {rel}"
+                );
+            }
+        }
+    }
+
+    /// Gap 16 migration: the retired files' store goes; every fenced and
+    /// local-model home keeps its copy (the login survives there); the Host
+    /// home loses the copy Tabtivity put there and keeps one it wrote itself.
+    #[test]
+    fn retiring_a_shared_path_keeps_scope_copies_and_clears_the_hosts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let a = crate::services::agent_home::scope_home_in(state, "a");
+        let local = crate::services::agent_home::local_model_home_in(state, "a");
+        let host = crate::services::agent_home::host_home_in(state);
+        let vibe = ".vibe/.env";
+        let cline = ".cline/data/settings/providers.json";
+        let aider = ".aider/oauth-keys.env";
+        let store = |cli: &str, rel: &str| store_dir_in(state, cli).join(leaf_of(rel));
+        let put = |path: &Path, body: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        // Vibe: the Host copy equals the store's current bytes.
+        put(&store("vibe", vibe), "VIBE_FIXTURE=shared");
+        for home in [&a, &local, &host] {
+            put(&home.join(vibe), "VIBE_FIXTURE=shared");
+        }
+        // Cline: the store moved on; the Host copy is what it last placed there.
+        put(&store("cline", cline), r#"{"v":2}"#);
+        put(&host.join(cline), r#"{"v":1}"#);
+        write_placed(&store_dir_in(state, "cline"), &host, &leaf_of(cline), &digest(br#"{"v":1}"#));
+        put(&a.join(cline), r#"{"v":2}"#);
+        // Aider: the Host session wrote its own file, never adopted.
+        put(&store("aider", aider), "AIDER_FIXTURE=store");
+        put(&host.join(aider), "AIDER_FIXTURE=host");
+        // Codex is still shared and untouched by the retirement.
+        put(&store("codex", ".codex/auth.json"), r#"{"tokens":{"account_id":"me"}}"#);
+
+        retire_shared_paths_in(state);
+
+        for cli in ["vibe", "cline", "aider"] {
+            assert!(!store_dir_in(state, cli).exists(), "{cli} store");
+        }
+        assert!(store("codex", ".codex/auth.json").is_file());
+        for home in [&a, &local] {
+            assert_eq!(std::fs::read_to_string(home.join(vibe)).unwrap(), "VIBE_FIXTURE=shared");
+        }
+        assert_eq!(std::fs::read_to_string(a.join(cline)).unwrap(), r#"{"v":2}"#);
+        assert!(!host.join(vibe).exists());
+        assert!(!host.join(cline).exists());
+        assert_eq!(std::fs::read_to_string(host.join(aider)).unwrap(), "AIDER_FIXTURE=host");
+        // No longer shared: a write in one scope stays there.
+        let b = crate::services::agent_home::scope_home_in(state, "b");
+        std::fs::create_dir_all(&b).unwrap();
+        write_in_place(&a.join(vibe), "GIT_CONFIG_COUNT=1");
+        reconcile_all_in(state);
+        assert!(!b.join(vibe).exists());
+        assert!(!host.join(vibe).exists());
+        assert_eq!(std::fs::read_to_string(local.join(vibe)).unwrap(), "VIBE_FIXTURE=shared");
+        assert!(!store_dir_in(state, "vibe").exists());
+
+        // A second run is a no-op.
+        retire_shared_paths_in(state);
+        assert_eq!(std::fs::read_to_string(host.join(aider)).unwrap(), "AIDER_FIXTURE=host");
+        assert_eq!(std::fs::read_to_string(a.join(vibe)).unwrap(), "GIT_CONFIG_COUNT=1");
+        assert!(store("codex", ".codex/auth.json").is_file());
+    }
+
+    /// Gap 16 migration for login folders: a name the allowlist no longer
+    /// admits leaves the store and its records, and a home's copy of it goes
+    /// only where it is still what the store placed there.
+    #[test]
+    fn retiring_drops_unlisted_names_from_login_folders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let a = crate::services::agent_home::scope_home_in(state, "a");
+        let b = crate::services::agent_home::scope_home_in(state, "b");
+        let host = crate::services::agent_home::host_home_in(state);
+        let kimi = ".kimi-code/credentials";
+        let store_dir = store_dir_in(state, "kimi");
+        let store = store_path_in(state, "kimi", &dir(kimi, DirNames::Json));
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("kimi-code.json"), "k1").unwrap();
+        std::fs::write(store.join("x.env"), "GIT_CONFIG_COUNT=1").unwrap();
+        let leaf = |name: &str| format!("{}_{name}", leaf_of(kimi));
+        for home in [&a, &b, &host] {
+            std::fs::create_dir_all(home.join(kimi)).unwrap();
+            std::fs::write(home.join(kimi).join("kimi-code.json"), "k1").unwrap();
+            write_placed(&store_dir, home, &leaf("kimi-code.json"), &digest(b"k1"));
+            std::fs::write(home.join(kimi).join("x.env"), "GIT_CONFIG_COUNT=1").unwrap();
+            write_placed(&store_dir, home, &leaf("x.env"), &digest(b"GIT_CONFIG_COUNT=1"));
+        }
+        // b changed its copy since: its own write, kept.
+        write_in_place(&b.join(kimi).join("x.env"), "OWN=1");
+
+        retire_shared_paths_in(state);
+
+        assert_eq!(store_dir_files(&store), vec!["kimi-code.json".to_string()]);
+        for home in [&a, &host] {
+            assert!(!home.join(kimi).join("x.env").exists());
+            assert!(read_placed(&store_dir, home, &leaf("x.env")).is_none());
+        }
+        assert_eq!(std::fs::read_to_string(b.join(kimi).join("x.env")).unwrap(), "OWN=1");
+        for home in [&a, &b, &host] {
+            assert_eq!(std::fs::read_to_string(home.join(kimi).join("kimi-code.json")).unwrap(), "k1");
+            assert!(read_placed(&store_dir, home, &leaf("kimi-code.json")).is_some());
+        }
+        // A second run changes nothing.
+        retire_shared_paths_in(state);
+        assert_eq!(std::fs::read_to_string(b.join(kimi).join("x.env")).unwrap(), "OWN=1");
+        assert!(store.join("kimi-code.json").is_file());
+    }
+
+    #[test]
+    fn import_copies_only_allowlisted_names_of_a_login_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let user = tmp.path().join("user");
+        let a = crate::services::agent_home::scope_home_in(&state, "a");
+        std::fs::create_dir_all(&a).unwrap();
+        let kimi = ".kimi-code/credentials";
+        std::fs::create_dir_all(user.join(kimi).join("nested")).unwrap();
+        std::fs::write(user.join(kimi).join("nested/deep.json"), "d").unwrap();
+        std::fs::write(user.join(kimi).join("x.env"), "GIT_CONFIG_COUNT=1").unwrap();
+        // Nothing admitted: nothing to import.
+        assert!(import_from_user_home_in(&state, &user, "kimi").is_err());
+        assert!(!status_in(&state, &user).iter().find(|s| s.id == "kimi").unwrap().importable);
+        std::fs::write(user.join(kimi).join("kimi-code.json"), "k1").unwrap();
+        assert!(status_in(&state, &user).iter().find(|s| s.id == "kimi").unwrap().importable);
+        assert_eq!(import_from_user_home_in(&state, &user, "kimi"), Ok(1));
+        let store = store_path_in(&state, "kimi", &dir(kimi, DirNames::Json));
+        assert_eq!(store_dir_files(&store), vec!["kimi-code.json".to_string()]);
+        assert!(!store.join("nested").exists());
+        assert_eq!(std::fs::read_to_string(a.join(kimi).join("kimi-code.json")).unwrap(), "k1");
+        assert!(!a.join(kimi).join("x.env").exists());
+        assert!(!a.join(kimi).join("nested").exists());
     }
 
     #[test]

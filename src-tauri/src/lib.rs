@@ -1297,6 +1297,10 @@ pub fn run() {
             // logins and its ~/.claude, ~/.codex, ~/.gemini config, so no
             // agent comes back signed out or without its instructions. Before
             // the keeper and before any tab can spawn.
+            // First, drop the login paths that stopped being shared (dotenv
+            // files, Cline's provider config) from the store and the Host
+            // home, so neither the import nor the keeper sees them again.
+            services::agent_auth::retire_shared_paths();
             services::agent_auth::import_once();
             services::agent_global::import_once();
             services::agent_auth::start();

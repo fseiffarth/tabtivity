@@ -4023,8 +4023,9 @@ const LOCAL_DRIVERS: &[LocalDriver] = &[
         label: "Cline",
         bin: "cline",
         // `ollama launch cline` merges an `ollama` provider into Cline's
-        // `providers.json` — its login file, which is why a local-model home
-        // never feeds the login store (`agent_auth::reconcile_file`).
+        // `providers.json` — its login file, per scope since 2026-10-08; a
+        // local-model home still never feeds the login store
+        // (`agent_auth::reconcile_file`).
         launch_sub: Some("cline"),
         fallback: None,
         needs_tools: true,

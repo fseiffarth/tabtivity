@@ -8859,7 +8859,7 @@ export const dict: Dict = {
   "pill.agentFenceStatus": "Sandbox degli agenti: attiva",
   "pill.agentFenceReasonHostSession": "sessione host",
   "settings.agentLogins": "Accessi degli agenti",
-  "settings.agentLoginsHelp": "Un accesso per CLI, condiviso da ogni home degli agenti di {app}: accedi una volta in qualsiasi scheda e tutte le altre sono collegate. «Importa» copia in {app} il file di accesso che questo computer ha già — solo l'accesso, mai la configurazione. Una CLI che tiene l'accesso nel portachiavi o in un database non è elencata e accede una volta per progetto.",
+  "settings.agentLoginsHelp": "Un accesso per CLI, condiviso da ogni home degli agenti di {app}: accedi una volta in qualsiasi scheda e tutte le altre sono collegate. «Importa» copia in {app} il file di accesso che questo computer ha già — solo l'accesso, mai la configurazione. Una CLI che tiene l'accesso nel portachiavi, in un database o in un file che legge anche come impostazioni o ambiente (Mistral Vibe, Aider, mini-swe-agent, Cline) non è elencata e accede una volta per progetto.",
   "settings.agentGlobal": "Configurazione globale degli agenti",
   "settings.agentGlobalHelp": "Istruzioni, skill, comandi, script di hook e server MCP che ogni agente di {app} riceve, in ogni progetto e nella console root: il tuo CLAUDE.md, AGENTS.md, GEMINI.md, gli hook di settings.json e simili. «Importa» li copia da ~/.claude, ~/.codex e ~/.gemini di questo computer (mai accessi, cronologia o fiducia delle cartelle); «Apri cartella» ti permette di modificarli. Ogni scheda agente ne riceve una copia nuova all'avvio. Gli agenti non possono modificare questa cartella; ciò che un agente cambia nel suo progetto resta in quel progetto.",
   "settings.agentGlobalFiles": "{count} file",

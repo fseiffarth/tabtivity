@@ -1849,7 +1849,7 @@ export const enSource = {
   "settings.codexAutoReview": "Codex: auto-review approvals",
   "settings.codexAutoReviewHelp": "Codex sends the requests it would ask you about (running a command outside its sandbox, network access, edits outside the project) to a separate reviewer agent, which approves or refuses each one. Codex's sandbox and approval policy stay as they are. Inside {app}'s agent fence on Linux, Codex's own sandbox can't start, so without this every command asks. Each review is an extra model call. Written as approvals_reviewer = \"auto_review\" in the global Codex config; new Codex tabs pick it up.",
   "settings.agentLogins": "Agent logins",
-  "settings.agentLoginsHelp": "One login per CLI, shared by every {app} agent home: log in once in any tab and every other tab is signed in. \"Import\" copies the login file this computer already holds into {app} — only the login, never config. A CLI that keeps its login in a keyring or a database is not listed and logs in once per project.",
+  "settings.agentLoginsHelp": "One login per CLI, shared by every {app} agent home: log in once in any tab and every other tab is signed in. \"Import\" copies the login file this computer already holds into {app} — only the login, never config. A CLI that keeps its login in a keyring, a database or a file it also reads as settings or environment (Mistral Vibe, Aider, mini-swe-agent, Cline) is not listed and logs in once per project.",
   "settings.agentLoginSignedIn": "signed in",
   "settings.agentLoginSignedInAs": "signed in as {account}",
   "settings.agentLoginNotSignedIn": "not signed in — log in once in any tab, or import",

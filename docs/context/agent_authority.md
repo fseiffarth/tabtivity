@@ -138,7 +138,8 @@ The four items that review left open were closed on 2026-09-26 (tracked in
    and places into every home after, so a login made anywhere reaches every
    other home in one pass. A hard link from an older Tabtivity is replaced by
    a copy on the first pass. Login directories (Kimi, CodeBuddy) are
-   reconciled file by file and no longer bind-mounted. The cost is that a
+   reconciled file by file, only for the file names each CLI writes its
+   login under (2026-10-08), and no longer bind-mounted. The cost is that a
    token refresh reaches the other running tabs one pass later instead of
    at once. Tests cover in-place and rename rotations, the refused account
    through both, the Host home, the hard-link migration and directories.
@@ -277,10 +278,34 @@ read, so a fenced tab could have planted a command that ran in every other
 scope and unfenced in the Host session (2026-09-26). The keeper now refuses
 a Pi login whose key is not a literal (`agent_auth::names_command`) and shows
 why in the Agents view, the same way as a refused account. A config that
-mixes both (Continue's `config.yaml`, Crush's `crush.json`, Aider's `.env`),
-a login in a database beside other state (Kiro, Kilo, OpenClaw) or one in
-the keyring stays per scope. Directories that hold nothing but a login
-(Kimi, CodeBuddy) are reconciled file by file. Where a file names an account
+mixes both (Continue's `config.yaml`, Crush's `crush.json`, Cline's
+`providers.json`), a file the CLI loads as its environment (Vibe's
+`.vibe/.env`, Aider's `.aider/oauth-keys.env` and `.env`, mini-swe-agent's
+`.config/mini-swe-agent/.env`), a login in a database beside other state
+(Kiro, Kilo, OpenClaw) or one in the keyring stays per scope. The dotenv
+files and Cline's `providers.json` were shared until 2026-10-08 (threat
+recheck gap 16): a fenced agent could write `GIT_CONFIG_*` →
+`core.fsmonitor=<cmd>` into `~/.vibe/.env` and have it run in every other
+scope's fence and unfenced in the Host session. There is no content
+validator for them; they left the shared set, and those CLIs sign in once
+per scope. At startup, before the import and the keeper,
+`agent_auth::retire_shared_paths_in` drops their store dirs; every scope
+and local-model home keeps the copy it holds, and the Host home loses its
+copy where the bytes are the store's or what the store last placed there
+(a copy that differs from both is the Host session's own write and stays).
+Content planted before the fix stays in the fenced homes it already
+reached. A user who wants one key everywhere puts the file into the
+Tabtivity-wide layer (`<state_dir>/agent-global/`, "Open folder"), which no
+agent can write; the store's copy is not moved there, since an agent may
+have written it. Directories that hold a login (Kimi, CodeBuddy) are
+reconciled file by file and only for an allowlist of names
+(`agent_auth::DirNames`, read off the published bundles): Kimi's
+`<name>.json`, CodeBuddy's `<authId>.info` minus its logout backups. A
+temporary, a `.logged-out` marker, a backup or a planted file stays in the
+home it was written in; the import copies the folder one level deep under
+the same allowlist, and the startup cleanup removes unlisted names from the
+store and a home's copy where it still matches what the store placed there.
+Where a file names an account
 (Codex's `account_id`; Claude's via the `.claude.json` identity the store
 also keeps), the store records it at first adoption and a later file naming
 another account is **not** adopted — the store's copy is put back over it,
