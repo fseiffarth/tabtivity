@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { usePaneSleepHold } from "../sleepWhenHidden";
 
 /**
  * Unsaved work held in THIS window's heap — what would be lost if the window
@@ -67,12 +68,15 @@ export async function settleUnsavedWork(timeoutMs = 1800): Promise<boolean> {
  * Register a component's unsaved state. `flush` saves it when that is what the
  * component would do anyway (an autosaving view); `isDirty` reads the live flag
  * when the rendered `dirty` lags a flush (state updates land a render later).
+ * Unsaved state also keeps a sleepable pane awake (performance plan §5.3): a
+ * sleeping pane is unmounted, which would drop it.
  */
 export function useUnsavedWork(
   dirty: boolean,
   flush?: () => Promise<void>,
   isDirty?: () => boolean,
 ): void {
+  usePaneSleepHold(dirty);
   const ref = useRef({ dirty, flush, isDirty });
   ref.current = { dirty, flush, isDirty };
   useEffect(

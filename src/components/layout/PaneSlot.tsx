@@ -1,5 +1,12 @@
-import { memo } from "react";
+import { memo, useCallback, useState } from "react";
 import { TabPane } from "../tabs/TabPane";
+import { SleepingPane } from "./SleepingPane";
+import {
+  isSleepableTab,
+  PaneSleepHoldContext,
+  useSleepWhenHidden,
+  type PaneSleepHoldReporter,
+} from "../../lib/sleepWhenHidden";
 import {
   effectiveTabLocation,
   isRelaunchableLocalTab,
@@ -38,6 +45,9 @@ export interface PaneSlotProps {
   /** Shared, mutable, keyed `<scope>/<tabKey>`: whether a local agent tab was
    *  first seen while Mobile access was on (see CenterPanel). Never replaced. */
   mobileAgentTmuxReady: Map<string, boolean>;
+  /** How long a hidden viewer pane stays mounted before it sleeps (§5.3), or
+   *  null when sleeping is off (the "Sleep hidden tabs" setting). */
+  sleepAfterMs: number | null;
 }
 
 /**
@@ -48,8 +58,8 @@ export interface PaneSlotProps {
  * inputs changed — with sixty tabs open, every `projects.find`/`localTabCwd`/
  * `effectiveTabLocation` pass used to run for all of them on each of those.
  * The positioned `.center-pane` box stays in the layer (a rect change moves
- * boxes without touching a slot); this component is what a sleeping-tab
- * substitute (`SleepingPane`, plan §5.3) replaces the body of.
+ * boxes without touching a slot); a sleeping viewer slot renders
+ * `SleepingPane` in place of `TabPane` (plan §5.3).
  */
 function PaneSlotImpl({
   tab,
@@ -64,7 +74,43 @@ function PaneSlotImpl({
   localPersistEnabled,
   onConnect,
   mobileAgentTmuxReady,
+  sleepAfterMs,
 }: PaneSlotProps) {
+  // Sleeping tabs (performance plan §5.3, viewer kinds). A hidden viewer pane
+  // is unmounted after `sleepAfterMs` and mounted afresh the render it is
+  // shown again; its `TabEntry` (viewerState, folder) is what the remount
+  // restores from. Anything in the pane that must survive (unsaved edits or
+  // marks, a build, media playing) holds it awake through the context below.
+  const [holds] = useState(() => new Set<object>());
+  const [held, setHeld] = useState(false);
+  const reportHold = useCallback<PaneSleepHoldReporter>(
+    (token, on) => {
+      if (on) holds.add(token);
+      else holds.delete(token);
+      setHeld(holds.size > 0);
+    },
+    [holds],
+  );
+  const sleepable = sleepAfterMs != null && isSleepableTab(tab);
+  const hidden = sleepable && !visible;
+  const timedAsleep = useSleepWhenHidden({ hidden, afterMs: sleepAfterMs ?? 0, hold: held });
+  const asleep = hidden && timedAsleep;
+  // A box scope's Mobile switch (#31aa) plays the project's part here: an
+  // agent tab of the box gets tmux underneath it — the one thing that makes
+  // it attachable from the phone — by the box's own switch. Stamped on the
+  // slot's first render, before the sleeping branch: a tab that sleeps before
+  // it was ever derived must not lose its first-seen answer.
+  const mobileReadyKey = `${scopeKey}/${tab.key}`;
+  if (!mobileAgentTmuxReady.has(mobileReadyKey)) {
+    mobileAgentTmuxReady.set(
+      mobileReadyKey,
+      !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY],
+    );
+  }
+  // Asleep: none of the derivation below is needed, so a sleeping slot costs
+  // one element.
+  if (asleep) return <SleepingPane kind={tab.kind} />;
+
   // Mount-free remote, per-pane gating. A remote project's LOCAL panes run on
   // the mirror and work offline; only remote-I/O panes must wait for the pool.
   // Keyed by THIS pane's scope (not the active project) so a disconnected
@@ -159,16 +205,6 @@ function PaneSlotImpl({
   // (`shouldPersistLocalTab`); never the root scope. In TerminalView's spawn
   // deps, so toggling respawns the tab. Undefined ⇒ no tmux wrap.
   const localRunning = !paneRemoteProj || location === "local";
-  // A box scope's Mobile switch (#31aa) plays the project's part here: an
-  // agent tab of the box gets tmux underneath it — the one thing that makes
-  // it attachable from the phone — by the box's own switch.
-  const mobileReadyKey = `${scopeKey}/${tab.key}`;
-  if (!mobileAgentTmuxReady.has(mobileReadyKey)) {
-    mobileAgentTmuxReady.set(
-      mobileReadyKey,
-      !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY],
-    );
-  }
   const tmuxSession =
     shouldPersistTab(tab.kind, paneHostId, paneProject?.remote, tab.ephemeral) ||
     shouldPersistLocalTab(
@@ -186,21 +222,23 @@ function PaneSlotImpl({
        one every detached popout renders. The main window owns the projects
        store, so it resolves the mirror/sandbox/hold props the popout can't.
        New pane kinds/props go in TabPane so they reach both windows at once. */
-    <TabPane
-      tab={tab}
-      scope={scopeKey}
-      visible={visible}
-      focused={focused}
-      groupId={groupId}
-      onConnect={onConnect}
-      holdRemoteTerminal={holdRemoteTerminal}
-      remoteHost={paneHostLabel}
-      filesProjectDir={filesProjectDir}
-      terminalCwd={terminalCwd}
-      sandbox={sandbox}
-      tmuxSession={tmuxSession}
-      vmProject={vmProject}
-    />
+    <PaneSleepHoldContext.Provider value={reportHold}>
+      <TabPane
+        tab={tab}
+        scope={scopeKey}
+        visible={visible}
+        focused={focused}
+        groupId={groupId}
+        onConnect={onConnect}
+        holdRemoteTerminal={holdRemoteTerminal}
+        remoteHost={paneHostLabel}
+        filesProjectDir={filesProjectDir}
+        terminalCwd={terminalCwd}
+        sandbox={sandbox}
+        tmuxSession={tmuxSession}
+        vmProject={vmProject}
+      />
+    </PaneSleepHoldContext.Provider>
   );
 }
 

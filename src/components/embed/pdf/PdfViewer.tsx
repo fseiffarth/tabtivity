@@ -174,7 +174,7 @@ import {
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { pdfRasterRatio } from "./raster";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
-import { useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
+import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
 import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
@@ -5473,6 +5473,9 @@ export function PdfView({
     afterMs: PDF_DOC_RELEASE_MS,
     hold: held || compiling || mirrored,
   });
+  // The same holds keep a sleepable pane around this viewer awake (§5.3): the
+  // pane's sleep unmounts this whole component, canvas and marks with it.
+  usePaneSleepHold(held || compiling);
   // No ViewerHeader: the tab already shows the file name, so a filename row would
   // be redundant. The "Open externally" action lives in the PdfCanvas toolbar.
   return (

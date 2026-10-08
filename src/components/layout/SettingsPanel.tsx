@@ -13,6 +13,7 @@ import {
 import { RootMcpSecurity } from "./RootMcpSecurity";
 import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
+import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
 import { experimentalEnabled } from "../../lib/experimental";
 import { usePowerStore, useEnergySaver } from "../../stores/power";
 import { useProjectsStore } from "../../stores/projects";
@@ -1185,7 +1186,7 @@ const SEARCH_KEYS: Record<NavEntry, TranslationKey[]> = {
   remoteFeatures: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"],
   vm: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"],
   mobile: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"],
-  performance: ["settings.energySaver", "settings.fastMode"],
+  performance: ["settings.energySaver", "settings.fastMode", "settings.sleepTabs"],
   resourceMonitor: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"],
   experimental: ["settings.debug", "settings.terminalWebgl", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug"],
   git: ["nav.git.blurb"],
@@ -1979,6 +1980,30 @@ export function SettingsDialog({
               checked={settings?.fast_mode === true}
               onChange={(e) => void updateSettings({ fast_mode: e.target.checked })}
               help={t("settings.fastModeHelp")}
+            />
+
+            {/* Sleeping tabs (performance plan §5.3): read by CenterPanel through
+                `sleepTabsAfterMs`; unset means the default. */}
+            <SettingRow
+              label={
+                <>
+                  {t("settings.sleepTabs")} <UntestedTag id="settings.sleepTabs" />
+                </>
+              }
+              help={t("settings.sleepTabsHelp")}
+              control={
+                <Dropdown
+                  value={String(settings?.sleep_tabs_after_min ?? SLEEP_TABS_DEFAULT_MIN)}
+                  onChange={(v) => void updateSettings({ sleep_tabs_after_min: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.sleepTabsNever") },
+                    ...SLEEP_TABS_CHOICES_MIN.map((n) => ({
+                      value: String(n),
+                      label: t("settings.sleepTabsMinutes", { n }),
+                    })),
+                  ]}
+                />
+              }
             />
             </>)}
 

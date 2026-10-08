@@ -1,6 +1,7 @@
 import { PreviewImages } from "./previewImages";
 import { DraftSaver } from "./draftSaver";
 import { registerUnsavedWork } from "../../lib/window/unsavedWork";
+import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 import { lineStarts, indexedLine } from "./lineIndex";
 import { Suspense, createContext, lazy, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -1480,6 +1481,9 @@ export function useEditableFile(path: string, enabled = true) {
   const isDirty = loaded && baseline != null && draft !== baseline;
   const isDirtyRef = useRef(isDirty);
   isDirtyRef.current = isDirty;
+  // An unsaved buffer (or a save in flight) keeps the pane awake: a sleeping
+  // pane is unmounted, and the buffer lives here (performance plan §5.3).
+  usePaneSleepHold(isDirty || saving);
   // The poll's `.then` closes over the render that armed it, so the baseline is
   // read through a ref — same reason `isDirtyRef` exists beside it.
   const baselineRef = useRef(baseline);
@@ -9529,6 +9533,9 @@ function TexView({
     [onCompileOptsChange, viewPos],
   );
   const [compiling, setCompiling] = useState(false);
+  // A build in flight keeps the pane awake: its result (diagnostics, the PDF
+  // reload it asks for) lands in this component (performance plan §5.3).
+  usePaneSleepHold(compiling);
   const [compileError, setCompileError] = useState<string | null>(null);
   // True when the last compile ran with shell-escape (`\write18`) active despite
   // our args never enabling it — a system texmf.cnf / latexmkrc turned it on.

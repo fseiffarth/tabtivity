@@ -702,6 +702,11 @@ export interface Settings {
    *  off a *standing preference*, and one merged control could not say "plugged
    *  in, still want it lean" — which is the case that asks for this. */
   fast_mode?: boolean;
+  /** Sleeping tabs (performance plan §5.3): minutes a hidden viewer tab (a
+   *  file viewer, a Files (Project) tab) stays loaded before it is unloaded,
+   *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
+   *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
+  sleep_tabs_after_min?: number;
   /** When true, the side panel is docked open (reflows layout) instead of hover-revealed. */
   side_panel_pinned?: boolean;
   /** Width of the side (files/git/search/sessions) panel in px. Set by dragging the

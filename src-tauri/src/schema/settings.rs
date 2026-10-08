@@ -787,6 +787,13 @@ pub struct Settings {
     /// exact list); kept here only so it round-trips.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_mode: Option<bool>,
+    /// Sleeping tabs (performance plan §5.3): minutes a hidden viewer tab stays
+    /// loaded before the window unloads it (it reloads where it was when shown
+    /// again). Absent → 10, `0` → never. Read entirely on the frontend
+    /// (`src/lib/sleepWhenHidden.ts`, `sleepTabsAfterMs`); a named field so the
+    /// frontend type declares it and it round-trips as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep_tabs_after_min: Option<u32>,
     /// Header resource-monitor row toggles. Each defaults ON when unset so the
     /// pill shows CPU/RAM/GPU by default; flip one off to hide that row. Shown in
     /// every build (independent of `debug`).
@@ -1305,6 +1312,27 @@ mod tests {
         let back: Settings =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
         assert_eq!(back.fast_mode, Some(true));
+    }
+
+    /// The sleeping-tabs delay is absent by default (the frontend reads 10
+    /// minutes), a real field rather than an `extra` passenger, and both an
+    /// explicit `0` (never) and a chosen value survive a round trip.
+    #[test]
+    fn sleep_tabs_after_min_defaults_absent_and_round_trips() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            !raw.contains("sleep_tabs_after_min"),
+            "default settings must omit sleep_tabs_after_min: {raw}"
+        );
+        for n in [0u32, 30] {
+            let s: Settings =
+                serde_json::from_str(&format!(r#"{{"sleep_tabs_after_min":{n}}}"#)).expect("parse");
+            assert_eq!(s.sleep_tabs_after_min, Some(n));
+            assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+            let back: Settings =
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+            assert_eq!(back.sleep_tabs_after_min, Some(n));
+        }
     }
 
     /// Local-model mail reads are absent by default (off), a real field the MCP

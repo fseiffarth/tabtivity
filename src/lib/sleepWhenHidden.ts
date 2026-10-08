@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+import type { TabEntry } from "../stores/tabs";
 
 /**
  * The sleep/wake seam for a pane that releases what it holds after a while off
@@ -36,4 +37,63 @@ export function useSleepWhenHidden({
     return () => window.clearTimeout(id);
   }, [hidden, hold, afterMs]);
   return asleep && hidden;
+}
+
+/**
+ * A pane's sleep holds (performance plan §5.3). The pane layer (`PaneSlot`)
+ * provides the reporter; anything inside the pane that must not be unmounted —
+ * unsaved edits, unsaved markup, a build in flight, media playing — reports
+ * through {@link usePaneSleepHold}. Outside a sleepable pane (a popout, the
+ * side panel, the root console) there is no provider and a hold is a no-op.
+ */
+export type PaneSleepHoldReporter = (token: object, held: boolean) => void;
+
+export const PaneSleepHoldContext = createContext<PaneSleepHoldReporter | null>(null);
+
+/**
+ * Keep the surrounding pane awake while `held`. Every caller holds its own
+ * token, so two holds in one pane (an editor and its PDF) lift independently;
+ * unmounting releases the hold.
+ */
+export function usePaneSleepHold(held: boolean): void {
+  const report = useContext(PaneSleepHoldContext);
+  const [token] = useState(() => ({}));
+  useEffect(() => {
+    if (!report || !held) return;
+    report(token, true);
+    return () => report(token, false);
+  }, [report, held, token]);
+}
+
+/** Default for the "Sleep hidden tabs after" setting, in minutes (§5.3). */
+export const SLEEP_TABS_DEFAULT_MIN = 10;
+
+/** The delays the setting offers besides "never". A stored value outside the
+ *  list (edited by hand) still works; the dropdown then shows it unselected. */
+export const SLEEP_TABS_CHOICES_MIN = [5, 10, 30, 60] as const;
+
+/**
+ * The pane layer's sleep delay from the stored setting
+ * (`sleep_tabs_after_min`): absent → the default, `0` → never (null), else
+ * that many minutes. A non-finite or negative value reads as the default.
+ */
+export function sleepTabsAfterMs(minutes: number | undefined | null): number | null {
+  const m =
+    typeof minutes === "number" && Number.isFinite(minutes) && minutes >= 0
+      ? minutes
+      : SLEEP_TABS_DEFAULT_MIN;
+  return m === 0 ? null : m * 60_000;
+}
+
+/**
+ * Whether a tab's whole pane may sleep (be unmounted while hidden). Viewer
+ * kinds only: a file viewer restores its position from the tab's
+ * `viewerState` (§3.1 stage, then store) and a Files (Project) tab its folder
+ * from `TabEntry.folder`. Not the terminal kinds (their PTY must survive —
+ * plan §5.3's S10 half), not a placeholder `embed` without a viewer (its mount
+ * opens the file in an external app, so a wake would open it again), not the
+ * plain Files browser (its folder lives in component state).
+ */
+export function isSleepableTab(tab: Pick<TabEntry, "kind" | "viewer">): boolean {
+  return (tab.kind === "embed" && !!tab.viewer) || tab.kind === "projectfiles";
 }

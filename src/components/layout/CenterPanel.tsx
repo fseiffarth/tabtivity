@@ -71,6 +71,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
+import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
 
 /** Pixel coordinates of a group's pane region, relative to the center panel. */
 interface Rect {
@@ -195,6 +196,9 @@ function CenterPanelImpl() {
   const localPersistEnabled = useSettingsStore(
     (s) => !IS_WINDOWS && s.settings?.persist_local_sessions !== false,
   );
+  // Sleeping tabs (performance plan §5.3): how long a hidden viewer pane stays
+  // mounted, null when the setting turns sleeping off. A scalar per slot.
+  const sleepAfterMs = useSettingsStore((s) => sleepTabsAfterMs(s.settings?.sleep_tabs_after_min));
   // Stable per-scope connect handler. PaneSlot/TabPane are memoized, so the pane layer only
   // stays cheap to re-render (e.g. every frame of a divider drag) if its props are
   // referentially stable — a fresh `() => openRemoteMachines(scopeKey)` arrow every
@@ -1246,6 +1250,7 @@ function CenterPanelImpl() {
                 localPersistEnabled={localPersistEnabled}
                 onConnect={getConnect(scopeKey)}
                 mobileAgentTmuxReady={mobileAgentTmuxReady.current}
+                sleepAfterMs={sleepAfterMs}
               />
             </div>
           );
