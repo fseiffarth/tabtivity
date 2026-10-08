@@ -664,6 +664,16 @@ pub fn route_wake_scrollback(id: &str) -> TerminalScrollback {
         return TerminalScrollback::default();
     };
     route.asleep = false;
+    // The tail covers everything the hidden-spell buffer holds. A pane woken
+    // while still hidden (a relaunch, the setting turned off) would otherwise
+    // get that buffer again as a replay on its first show — the same output
+    // twice. Dropped only when the waking view is the only one: another view
+    // still hidden is owed its replay.
+    if route.visible_viewers.len() <= 1 {
+        route.pending.clear();
+        route.carried = ScreenState::default();
+        route.pending_start = route.output_offset;
+    }
     let data = trim_replay(route.retained.clone(), &ScreenState::default(), REPLAY_TRIM_FLOOR);
     let snapshot = TerminalScrollback {
         data,
@@ -2434,6 +2444,29 @@ mod route_tests {
         route_remove_view(id, "test-view", 3, false);
         route_close(id, seq);
         assert!(!routes().lock().unwrap().contains_key(id));
+    }
+
+    /// A pane woken while hidden reads the tail, which already holds what the
+    /// hidden-spell buffer has: its first show must not replay it again.
+    #[test]
+    fn a_hidden_wake_is_not_replayed_the_same_output_on_show() {
+        let id = "route-t-sleep-hidden-wake";
+        let seq = route_open(id);
+        set_visible(id, true);
+        route_remove_view(id, "test-view", 2, true);
+        route_chunk_at(id, b"while asleep\r\n", Instant::now(), seq);
+        // Woken hidden: the view registers hidden, then reads.
+        set_visible(id, false);
+        assert!(route_wake_scrollback(id).data.contains("while asleep"));
+        assert_eq!(set_visible(id, true), None, "nothing to replay on show");
+        route_chunk_at(id, b"later", Instant::now(), seq);
+        set_visible(id, false);
+        route_chunk_at(id, b"hidden again", Instant::now(), seq);
+        assert_eq!(set_visible(id, true).as_deref(), Some("hidden again"));
+
+        set_visible(id, false);
+        route_remove_view(id, "test-view", 3, false);
+        route_close(id, seq);
     }
 
     /// A program that ends while its pane sleeps has nobody to tell: the route
