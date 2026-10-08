@@ -1510,17 +1510,43 @@ fn claude_tasks_ended(line: &str) -> Vec<String> {
 /// holder of a running shell's output is the Bash tool's wrapper shell, so
 /// while the shells still run the look ends there; every other process is
 /// still looked at before an output is called closed (a command that
-/// `exec`ed out of its shell holds it too).
+/// `exec`ed out of its shell holds it too). The fds are read live, so only a
+/// process the table does not list yet can hold what the look missed — and a
+/// read the transcript watch fires on the record that started a shell comes
+/// within a second of that start: before an output is called closed, the
+/// processes a fresh walk adds are looked at too.
 fn running_outputs(outputs: &[&str]) -> std::collections::HashSet<String> {
+    use crate::services::proc_table;
     let mut open = std::collections::HashSet::new();
     if outputs.is_empty() || !cfg!(target_os = "linux") {
         return open;
     }
-    let table = crate::services::proc_table::snapshot();
+    let table = proc_table::snapshot();
     let is_shell = |comm: &str| matches!(comm, "bash" | "sh" | "dash" | "zsh" | "fish" | "ksh" | "mksh");
     let (shells, rest): (Vec<_>, Vec<_>) = table.procs().partition(|p| is_shell(&p.comm));
-    for proc_ in shells.into_iter().chain(rest) {
-        let Ok(fds) = std::fs::read_dir(format!("/proc/{}/fd", proc_.pid)) else {
+    if holders_of(shells.into_iter().chain(rest).map(|p| p.pid), outputs, &mut open) {
+        return open;
+    }
+    let fresh = proc_table::snapshot_within(std::time::Duration::ZERO);
+    let new = fresh
+        .procs()
+        .filter(|p| table.get(p.pid).is_none_or(|seen| seen.start != p.start))
+        .map(|p| p.pid);
+    holders_of(new, outputs, &mut open);
+    open
+}
+
+/// Add to `open` each of `outputs` one of `pids` holds open; true once all are.
+fn holders_of(
+    pids: impl Iterator<Item = u32>,
+    outputs: &[&str],
+    open: &mut std::collections::HashSet<String>,
+) -> bool {
+    for pid in pids {
+        if open.len() == outputs.len() {
+            break;
+        }
+        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
             continue;
         };
         for fd in fds.flatten() {
@@ -1530,11 +1556,8 @@ fn running_outputs(outputs: &[&str]) -> std::collections::HashSet<String> {
                 }
             }
         }
-        if open.len() == outputs.len() {
-            break;
-        }
     }
-    open
+    open.len() == outputs.len()
 }
 
 /// The tool calls a Claude `user` record carries the results of.
@@ -2528,14 +2551,15 @@ mod tests {
         // Nobody holds the output open: its CLI quit and took the shell along.
         assert!(read(None).shells.is_empty());
 
+        // The shared process table is walked now, before the shell starts: the
+        // read right after (a watch fires on the write that started it) finds
+        // a table that does not list the shell yet, and must still see it.
+        crate::services::proc_table::snapshot_within(std::time::Duration::ZERO);
         let mut child = std::process::Command::new("sleep")
             .arg("30")
             .stdout(std::fs::File::create(&output).unwrap())
             .spawn()
             .unwrap();
-        // The look goes by the shared process table, up to a second old: a
-        // shell is seen once a walk has listed it.
-        crate::services::proc_table::snapshot_within(std::time::Duration::ZERO);
         let running = read(None);
         assert_eq!(running.shells.len(), 1);
         assert_eq!(running.shells[0].command, "npm run dev");
