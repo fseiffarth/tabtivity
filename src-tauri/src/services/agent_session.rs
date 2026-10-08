@@ -2291,6 +2291,51 @@ pub fn codex_registered_events(src: &str, cmd: &str) -> std::collections::HashSe
     out
 }
 
+/// The most a Codex `SessionEnd` hook may take, in seconds: Codex (0.160.1,
+/// 0.161.0) clamps a longer one to this and warns on every start.
+const CODEX_SESSION_END_TIMEOUT: u32 = 3;
+
+/// `src` with the `timeout` of our own `[[hooks.SessionEnd.hooks]]` table
+/// (the one whose `command` is `cmd`) lowered to
+/// [`CODEX_SESSION_END_TIMEOUT`], or `None` when nothing needs lowering.
+/// Earlier builds wrote `timeout = 10` there. Codex's trust hash does not
+/// cover the timeout (checked live on 0.161.0: the lowered hook stays trusted,
+/// no review menu), so the rewrite costs no re-approval. Other tables and
+/// lines are left byte for byte.
+fn cap_codex_session_end_timeout(src: &str, cmd: &str) -> Option<String> {
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(src.len());
+    let mut changed = false;
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim() != "[[hooks.SessionEnd.hooks]]" {
+            out.push_str(lines[i]);
+            i += 1;
+            continue;
+        }
+        let end = (i + 1..lines.len())
+            .find(|&j| lines[j].trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        let table = &lines[i..end];
+        let ours = table.iter().any(|l| toml_value(l.trim(), "command").as_deref() == Some(cmd));
+        for l in table {
+            let too_long = toml_value(l.trim(), "timeout")
+                .and_then(|v| v.parse::<f64>().ok())
+                .is_some_and(|t| t > f64::from(CODEX_SESSION_END_TIMEOUT));
+            if ours && too_long {
+                let eol = if l.ends_with("\r\n") { "\r\n" } else if l.ends_with('\n') { "\n" } else { "" };
+                let indent = &l[..l.len() - l.trim_start().len()];
+                out.push_str(&format!("{indent}timeout = {CODEX_SESSION_END_TIMEOUT}{eol}"));
+                changed = true;
+            } else {
+                out.push_str(l);
+            }
+        }
+        i = end;
+    }
+    changed.then_some(out)
+}
+
 /// Testable core of [`register_codex_hook`] against an explicit config path.
 /// Appends one block per event of [`CODEX_HOOK_EVENTS`] the file does not
 /// already hold.
@@ -2304,6 +2349,11 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
+    let capped = cap_codex_session_end_timeout(&content, cmd);
+    let changed = capped.is_some();
+    if let Some(c) = capped {
+        content = c;
+    }
     let have = codex_registered_events(&content, cmd);
     let missing: Vec<&str> = CODEX_HOOK_EVENTS
         .iter()
@@ -2311,6 +2361,9 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         .filter(|ev| !have.contains(*ev))
         .collect();
     if missing.is_empty() {
+        if changed {
+            config.write(content.as_bytes())?;
+        }
         return Ok(());
     }
     if !content.is_empty() && !content.ends_with('\n') {
@@ -2330,13 +2383,14 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         } else {
             ""
         };
+        let timeout = if ev == "SessionEnd" { CODEX_SESSION_END_TIMEOUT } else { 10 };
         content.push_str(&format!(
             "[[hooks.{ev}]]\n\
              {matcher}\n\
              [[hooks.{ev}.hooks]]\n\
              type = \"command\"\n\
              command = '{cmd}'\n\
-             timeout = 10\n\n",
+             timeout = {timeout}\n\n",
         ));
     }
     config.write(content.as_bytes())?;
@@ -3540,6 +3594,50 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn codex_session_end_hook_stays_under_codexs_clamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config.toml");
+        let cmd = hook_command();
+        let timeout_of = |src: &str, ev: &str| -> Vec<String> {
+            let mut cur = String::new();
+            src.lines()
+                .filter_map(|l| {
+                    if l.starts_with('[') {
+                        cur = l.to_string();
+                    }
+                    toml_value(l, "timeout").filter(|_| cur == format!("[[hooks.{ev}.hooks]]"))
+                })
+                .collect()
+        };
+
+        // A fresh registration writes 3 on SessionEnd, 10 elsewhere.
+        register_codex_hook_in(&HomeFile::open(tmp.path(), "config.toml").unwrap()).unwrap();
+        let out = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(timeout_of(&out, "SessionEnd"), ["3"]);
+        assert_eq!(timeout_of(&out, "Stop"), ["10"]);
+
+        // An older build's `timeout = 10` on our SessionEnd is lowered in
+        // place; the user's own SessionEnd hook, the trust state and CRLF line
+        // ends survive untouched.
+        let old = format!(
+            "[[hooks.SessionEnd]]\r\n\r\n[[hooks.SessionEnd.hooks]]\r\ntype = \"command\"\r\ncommand = '/theirs.sh'\r\ntimeout = 30\r\n\r\n\
+             [[hooks.SessionEnd]]\r\n\r\n[[hooks.SessionEnd.hooks]]\r\ntype = \"command\"\r\ncommand = '{cmd}'\r\ntimeout = 10\r\n\r\n\
+             [hooks.state.\"{CFG}:session_end:1:0\"]\r\ntrusted_hash = \"sha256:d709\"\r\n"
+        );
+        let capped = cap_codex_session_end_timeout(&old, &cmd).unwrap();
+        assert_eq!(capped, old.replace("'\r\ntimeout = 10\r\n", "'\r\ntimeout = 3\r\n"));
+        assert!(capped.contains("timeout = 30\r\n"));
+        // Already low enough: nothing to do.
+        assert_eq!(cap_codex_session_end_timeout(&capped, &cmd), None);
+
+        // Registration applies it even when every event is already there.
+        std::fs::write(&config, out.replace("timeout = 3\n", "timeout = 10\n")).unwrap();
+        register_codex_hook_in(&HomeFile::open(tmp.path(), "config.toml").unwrap()).unwrap();
+        let again = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(again, out);
     }
 
     // ── Codex hook trust state ──────────────────────────────────────────────

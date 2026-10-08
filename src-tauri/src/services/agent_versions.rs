@@ -112,7 +112,7 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "claude",
-        version: "2.1.292",
+        version: "2.1.294",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
@@ -133,7 +133,7 @@ const VERIFIED: &[Verified] = &[
     Verified {
         agent: "codex",
         version: "0.161.0",
-        surface: "§1.2 — resume writer-lock markers (lifecycle last probed on 0.154.0)",
+        surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
         agent: "antigravity",
@@ -812,7 +812,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.292")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.294")).0, DriftState::Match);
         // `muse` has a recipe but no recorded check — the honest answer is
         // "nobody has verified this", not a tick.
         assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);

@@ -114,6 +114,24 @@ describe("looksLikeDecisionPrompt", () => {
     ].join("\n");
     expect(looksLikeDecisionPrompt(screen)).toBe(false);
   });
+
+  it("detects Codex's startup hook-trust menu, which has no deny option", () => {
+    // Captured live from Codex 0.161.0.
+    const screen = [
+      "  Hooks need review",
+      "  2 hooks are new or changed.",
+      "  Hooks can run outside the sandbox after you trust them.",
+      "› 1. Review hooks",
+      "  2. Trust all and continue",
+      "  3. Continue without trusting (hooks won't run)",
+      "  enter confirm · esc skip",
+    ].join("\n");
+    expect(looksLikeDecisionPrompt(screen)).toBe(true);
+    // The diff renderer's dropped spaces.
+    expect(looksLikeDecisionPrompt("Hooksneedreview\r\n› 1.Review hooks2.Trustall")).toBe(true);
+    // A numbered "Trust" item in an answer is not that menu.
+    expect(looksLikeDecisionPrompt("• Steps:\n  1. Trust the proxy\n  2. Continue the rollout")).toBe(false);
+  });
 });
 
 describe("stripAnsi", () => {
