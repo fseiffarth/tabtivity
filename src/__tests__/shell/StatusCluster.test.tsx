@@ -42,7 +42,8 @@ beforeEach(() => {
     },
   });
   useSettingsStore.setState({
-    settings: { header_status_expanded: false } as never,
+    // The Machines menu is lazily split and mounted only while its feature is on.
+    settings: { header_status_expanded: false, machines_enabled: true } as never,
     updateSettings,
   } as never);
 });
@@ -53,8 +54,9 @@ afterEach(() => {
 });
 
 describe("StatusCluster", () => {
-  it("folds failing members too while collapsed, and says so on the summary lamp", () => {
+  it("folds failing members too while collapsed, and says so on the summary lamp", async () => {
     render(<StatusCluster />);
+    await screen.findByTestId("machines");
     for (const id of ["vpn", "machines", "resources"]) expect(folded(id)).toBe("true");
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle.getAttribute("title")).toContain("VPN failed");
@@ -72,12 +74,25 @@ describe("StatusCluster", () => {
     expect(screen.getByTestId("resources").getAttribute("data-peek")).toBe("1");
   });
 
-  it("shows every member once expanded", () => {
-    useSettingsStore.setState({ settings: { header_status_expanded: true } as never } as never);
+  it("shows every member once expanded", async () => {
+    useSettingsStore.setState({
+      settings: { header_status_expanded: true, machines_enabled: true } as never,
+    } as never);
     render(<StatusCluster />);
+    await screen.findByTestId("machines");
     for (const id of ["vpn", "machines", "resources"]) expect(folded(id)).toBe("false");
     expect(screen.getByTestId("resources").getAttribute("data-folded-prop")).toBe("false");
     fireEvent.click(screen.getByRole("button", { expanded: true }));
     expect(updateSettings).toHaveBeenCalledWith({ header_status_expanded: false });
+  });
+
+  it("mounts no Machines menu while the feature is off (perf plan §6)", async () => {
+    useSettingsStore.setState({ settings: { header_status_expanded: true } as never } as never);
+    render(<StatusCluster />);
+    // The other members are eager: once they are on screen, a mounted lazy
+    // member would have had its chance to resolve too.
+    await screen.findByTestId("vpn");
+    await Promise.resolve();
+    expect(screen.queryByTestId("machines")).toBeNull();
   });
 });

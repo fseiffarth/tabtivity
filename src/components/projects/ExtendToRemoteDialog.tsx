@@ -9,7 +9,7 @@ import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { joinRemotePath, sanitizeName } from "./scaffold";
 import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
-import { targetLabel } from "../header/MachinesIndicator";
+import { targetLabel } from "../../lib/remote/machineLabel";
 import { ConnLamp } from "../common/ConnLamp";
 import { UntestedTag } from "../common/UntestedTag";
 import { hostKeyConfirmOnce } from "../../lib/remote/hostKeyOnce";

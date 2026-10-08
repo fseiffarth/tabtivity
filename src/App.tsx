@@ -1,6 +1,5 @@
 import { Suspense, lazy } from "react";
 import { AppShell } from "./components/layout/AppShell";
-import { DetachedApp } from "./components/layout/DetachedApp";
 import { parseDetachedParam } from "./stores/detached";
 import { parsePresentParam } from "./lib/viewers/deck/present";
 import { isPdfPresentLabel } from "./components/embed/pdf/present";
@@ -19,6 +18,15 @@ const PdfPresentApp = lazy(() =>
   import("./components/embed/pdf/PdfPresentApp").then((m) => ({ default: m.PdfPresentApp })),
 );
 
+// A popped-out subwindow's root (perf plan §6). The main window never renders
+// it, so its chunk (the popout's tab bars, drag-claim host and layout) stays
+// out of the main window's startup; a popout fetches it before first paint.
+// Everything it shares with the main shell (TabPane, the stores) is still one
+// shared chunk, loaded once per window either way.
+const DetachedApp = lazy(() =>
+  import("./components/layout/DetachedApp").then((m) => ({ default: m.DetachedApp })),
+);
+
 export function App() {
   // #42: when launched with `?detached=<scope>:<group>` (a popped-out subwindow),
   // render the lightweight DetachedApp instead of the full shell. DetachedApp is
@@ -26,7 +34,11 @@ export function App() {
   // the main window's project switching never drives the detached renderer.
   const detached = parseDetachedParam(window.location.search);
   if (detached) {
-    return <DetachedApp param={detached} />;
+    return (
+      <Suspense fallback={null}>
+        <DetachedApp param={detached} />
+      </Suspense>
+    );
   }
   // M#90: `?present=<label>` is a presentation window — lighter still than a
   // popout: no tabs, no layout, no store, just what it is told to show. The label

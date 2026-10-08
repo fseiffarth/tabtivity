@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { targetLabel } from "../../lib/remote/machineLabel";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -208,9 +209,7 @@ function UtilBar({ label, pct, title }: { label: string; pct: number; title: str
   );
 }
 
-export function targetLabel(m: { user?: string; host: string; port?: number }): string {
-  return `${m.user ? `${m.user}@` : ""}${m.host}${m.port ? `:${m.port}` : ""}`;
-}
+export { targetLabel };
 
 /**
  * Global worker machines, in the header — the VPN indicator's pattern applied

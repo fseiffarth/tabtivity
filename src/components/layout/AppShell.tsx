@@ -7,6 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type MutableRefObject,
+  type ReactNode,
 } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -41,10 +42,7 @@ import { SteeringLegend } from "./SteeringLegend";
 import { SteeringPromptOverlay } from "./SteeringPromptOverlay";
 import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { RemoteConnectDialog } from "../projects/RemoteConnectDialog";
-import { RemoteMachinesDialogHost } from "../projects/RemoteMachinesWindow";
 import { GlobalMachineMonitorDialogHost } from "../monitoring/GlobalMachineMonitorDialog";
-import { MachinesOverlayHost } from "../header/MachinesIndicator";
-import { HpcPipelineWizardHost } from "../projects/HpcPipelineWizard";
 import { BigFolderDialogHost } from "../projects/BigFolderExcludeDialog";
 import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
@@ -58,7 +56,6 @@ import { AgentScheduleHost } from "./AgentScheduleHost";
 import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
-import { ModelsOverlayHost } from "../models/ModelsOverlay";
 import { RootOverlayHost } from "./RootOverlay";
 import { LocalLossDialog } from "../common/LocalLossDialog";
 import {
@@ -79,9 +76,6 @@ import { QuickOpen } from "../files/QuickOpen";
 import { HintHost } from "./HintHost";
 import { TourHost } from "./TourHost";
 import { StatsRecapHost } from "../stats/StatsRecapHost";
-import { HowToStart } from "./HowToStart";
-import { RemoteFeaturesPrompt } from "./RemoteFeaturesPrompt";
-import { LessonsMenu } from "./LessonsMenu";
 import { useHintsStore } from "../../stores/hints";
 import {
   useProjectsStore,
@@ -111,6 +105,10 @@ import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { useTimerStore } from "../../stores/timer";
 import { useMailStore } from "../../stores/mail";
 import { useTodoStore } from "../../stores/todo";
+import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
+import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
+import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
+import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { useT, useI18nStore, translate, type TranslationKey } from "../../lib/i18n";
@@ -136,8 +134,8 @@ const DevPerfHost = import.meta.env.DEV
 // its first-open work (the Escape listener, `openCard`'s `focusTaskId`) runs on
 // mount exactly as it did on the closed-to-open transition: the pane was never
 // mounted while closed. The stores are eager anyway (the header indicators read
-// them). Calendar and Skills stay static on purpose: `TabPane` imports their
-// panes eagerly, so splitting their hosts would save nothing.
+// them). The calendar overlay's chrome stays static (its hooks run while
+// closed too); its pane is the same lazy chunk a calendar tab loads (`TabPane`).
 const MailOverlayHost = lazy(() =>
   import("../mail/MailOverlay").then((m) => ({ default: m.MailOverlayHost })),
 );
@@ -166,6 +164,74 @@ function LazyTodoOverlayHost() {
     <Suspense fallback={null}>
       <TodoOverlayHost />
     </Suspense>
+  );
+}
+
+// Code-split (perf plan §6), the same bargain as mail and to-do above: each of
+// these hosts renders null until its store says open, so this shell reads that
+// one flag and mounts the lazy host only then; the host keeps its own full
+// gate. Their stores live in their own modules, so reading the flag here pulls
+// in none of the host's graph. Same DOM position as before (the stacking order
+// among `.modal-backdrop`s is DOM order), and the fallback is null, the same
+// nothing a closed host renders.
+const MachinesOverlayHost = lazy(() =>
+  import("../header/MachinesIndicator").then((m) => ({ default: m.MachinesOverlayHost })),
+);
+const RemoteMachinesDialogHost = lazy(() =>
+  import("../projects/RemoteMachinesWindow").then((m) => ({ default: m.RemoteMachinesDialogHost })),
+);
+const HpcPipelineWizardHost = lazy(() =>
+  import("../projects/HpcPipelineWizard").then((m) => ({ default: m.HpcPipelineWizardHost })),
+);
+const ModelsOverlayHost = lazy(() =>
+  import("../models/ModelsOverlay").then((m) => ({ default: m.ModelsOverlayHost })),
+);
+// First-run and on-demand pages, mounted only while this shell's own state
+// shows them.
+const HowToStart = lazy(() => import("./HowToStart").then((m) => ({ default: m.HowToStart })));
+const RemoteFeaturesPrompt = lazy(() =>
+  import("./RemoteFeaturesPrompt").then((m) => ({ default: m.RemoteFeaturesPrompt })),
+);
+const LessonsMenu = lazy(() => import("./LessonsMenu").then((m) => ({ default: m.LessonsMenu })));
+
+function LazyWhen({ when, children }: { when: boolean; children: ReactNode }) {
+  if (!when) return null;
+  return <Suspense fallback={null}>{children}</Suspense>;
+}
+
+function LazyMachinesOverlayHost() {
+  const open = useMachinesOverlayStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <MachinesOverlayHost />
+    </LazyWhen>
+  );
+}
+
+function LazyRemoteMachinesDialogHost() {
+  const open = useRemoteMachinesStore((s) => !!s.projectId);
+  return (
+    <LazyWhen when={open}>
+      <RemoteMachinesDialogHost />
+    </LazyWhen>
+  );
+}
+
+function LazyHpcPipelineWizardHost() {
+  const open = useHpcPipelineStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <HpcPipelineWizardHost />
+    </LazyWhen>
+  );
+}
+
+function LazyModelsOverlayHost() {
+  const open = useModelsOverlayStore((s) => s.open);
+  return (
+    <LazyWhen when={open}>
+      <ModelsOverlayHost />
+    </LazyWhen>
   );
 }
 
@@ -1341,7 +1407,7 @@ export function AppShell() {
           because each of them is raised by a gesture made inside it and must
           land on top — and the root console (a terminal sign-in) is later
           still. */}
-      <MachinesOverlayHost />
+      <LazyMachinesOverlayHost />
       {/* "Is this the right machine?" — shown before a password is sent to a host
           whose SSH key has never been accepted here. At the shell because it can be
           raised by any connect surface (the Connect modal, a create/extend dialog,
@@ -1364,12 +1430,12 @@ export function AppShell() {
       <RemoteConnectDialog />
       {/* Multi-host remote: the "Remote machines" manager, opened from a pill's
           Runtime menu or a right-click on its remote lamp. */}
-      <RemoteMachinesDialogHost />
+      <LazyRemoteMachinesDialogHost />
       {/* The header Machines menu's "System monitor…" button, per global machine. */}
       <GlobalMachineMonitorDialogHost />
       {/* The guided HPC/SLURM pipeline wizard (login → create → load → run → watch),
           launched from the project-switcher + menu (docs/quirky-knitting-umbrella). */}
-      <HpcPipelineWizardHost />
+      <LazyHpcPipelineWizardHost />
       {/* "These folders are giant — sync them?", asked once when a project is first
           paired with a host. Lives at the shell for the same reason the manager
           above does: the project that asked may not be the active one by the time
@@ -1440,7 +1506,7 @@ export function AppShell() {
           because it is opened from a header button that sits over them, and
           before the root console so a one-click install started from one of
           its tabs opens the console on top of it. */}
-      <ModelsOverlayHost />
+      <LazyModelsOverlayHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login
@@ -1477,7 +1543,7 @@ export function AppShell() {
           <DevPerfHost />
         </Suspense>
       )}
-      {showHowToStart && (
+      <LazyWhen when={showHowToStart}>
         <HowToStart
           onClose={() => {
             setShowHowToStart(false);
@@ -1487,11 +1553,13 @@ export function AppShell() {
             }
           }}
         />
-      )}
-      {showRemoteFeaturesPrompt && (
+      </LazyWhen>
+      <LazyWhen when={showRemoteFeaturesPrompt}>
         <RemoteFeaturesPrompt onClose={() => setShowRemoteFeaturesPrompt(false)} />
-      )}
-      {showLessons && <LessonsMenu onClose={() => setShowLessons(false)} />}
+      </LazyWhen>
+      <LazyWhen when={showLessons}>
+        <LessonsMenu onClose={() => setShowLessons(false)} />
+      </LazyWhen>
     </div>
   );
 }

@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { useSettingsStore } from "../../stores/settings";
 import { dayKey } from "../../lib/usageRollup";
-import { StatsRecap } from "./StatsRecap";
+
+// Code-split (perf plan §6): the host stays in the startup chunk — it owns the
+// open event and the once-a-day launch check — but the recap itself loads only
+// when it is about to show.
+const StatsRecap = lazy(() => import("./StatsRecap").then((m) => ({ default: m.StatsRecap })));
 
 const DAY_MS = 86_400_000;
 
@@ -60,10 +64,12 @@ export function StatsRecapHost() {
 
   if (anchorMs === null) return null;
   return (
-    <StatsRecap
-      onClose={() => setAnchorMs(null)}
-      initialAnchorMs={anchorMs}
-      showAutoToggle={auto}
-    />
+    <Suspense fallback={null}>
+      <StatsRecap
+        onClose={() => setAnchorMs(null)}
+        initialAnchorMs={anchorMs}
+        showAutoToggle={auto}
+      />
+    </Suspense>
   );
 }

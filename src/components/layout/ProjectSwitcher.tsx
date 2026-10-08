@@ -1,14 +1,12 @@
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { ProjectSearch } from "../projects/ProjectSearch";
-import { ProjectDialog } from "../projects/ProjectDialog";
-import { ProjectImportBundleDialog } from "../projects/ProjectImportBundleDialog";
-import { SettingsDialog, type SettingsPanelKind } from "./SettingsPanel";
+import type { SettingsPanelKind } from "./SettingsPanel";
 import { UntestedTag } from "../common/UntestedTag";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useBigFoldersStore } from "../../stores/bigFolders";
@@ -39,6 +37,23 @@ export {
   buildScaffoldFillPrompt,
   collectScaffoldAgentFills,
 } from "../projects/scaffold";
+
+// Code-split (perf plan §6): Settings (with its sub-panels) and the project
+// dialogs are opened by a click and mounted only while open, so their module
+// graphs load on first open instead of with every window's startup chunk. The
+// fallback is nothing, the same nothing a closed dialog renders; steering's
+// settings region waits for the dialog to mount (`placeCursorSoon`).
+const SettingsDialog = lazy(() =>
+  import("./SettingsPanel").then((m) => ({ default: m.SettingsDialog })),
+);
+const ProjectDialog = lazy(() =>
+  import("../projects/ProjectDialog").then((m) => ({ default: m.ProjectDialog })),
+);
+const ProjectImportBundleDialog = lazy(() =>
+  import("../projects/ProjectImportBundleDialog").then((m) => ({
+    default: m.ProjectImportBundleDialog,
+  })),
+);
 
 /** This bar's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const ADD_MENU_ID = "project-add";
@@ -496,36 +511,44 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   return (
     <>
       {showSettings && createPortal(
-        <SettingsDialog
-          onClose={() => setShowSettings(false)}
-          initialPanel={settingsPanel}
-          initialAnchor={settingsAnchor}
-        />,
+        <Suspense fallback={null}>
+          <SettingsDialog
+            onClose={() => setShowSettings(false)}
+            initialPanel={settingsPanel}
+            initialAnchor={settingsAnchor}
+          />
+        </Suspense>,
         document.body,
       )}
 
       {dialog === "new" && createPortal(
-        <ProjectDialog
-          kind="new"
-          onClose={() => setDialog(null)}
-          onProject={(project) => void addAndAudit(project)}
-        />,
+        <Suspense fallback={null}>
+          <ProjectDialog
+            kind="new"
+            onClose={() => setDialog(null)}
+            onProject={(project) => void addAndAudit(project)}
+          />
+        </Suspense>,
         document.body,
       )}
       {(dialog === "import" || dialog === "clone") && createPortal(
-        <ProjectDialog
-          kind="import"
-          initialImportSource={dialog === "clone" ? "git" : "folder"}
-          onClose={() => setDialog(null)}
-          onProject={(project) => void addAndAudit(project)}
-        />,
+        <Suspense fallback={null}>
+          <ProjectDialog
+            kind="import"
+            initialImportSource={dialog === "clone" ? "git" : "folder"}
+            onClose={() => setDialog(null)}
+            onProject={(project) => void addAndAudit(project)}
+          />
+        </Suspense>,
         document.body,
       )}
       {dialog === "bundle" && (
-        <ProjectImportBundleDialog
-          onClose={() => setDialog(null)}
-          onProject={(project) => void addAndAudit(project)}
-        />
+        <Suspense fallback={null}>
+          <ProjectImportBundleDialog
+            onClose={() => setDialog(null)}
+            onProject={(project) => void addAndAudit(project)}
+          />
+        </Suspense>
       )}
 
       <div
