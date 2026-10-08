@@ -956,6 +956,32 @@ impl PtyRegistry {
         invalidate_proc_tree_cache();
     }
 
+    /// [`Self::insert`] for spawn `seq`, only while it is still the id's
+    /// newest spawn and not torn down (`agent_fence::is_current_spawn`).
+    /// Spawns of one id are prepared concurrently (a remount respawns while
+    /// the old mount's spawn is still in `launch_prep::prepare`) and may finish
+    /// out of order; an older one replacing a newer one's PTY left the newer
+    /// spawn's registration, tokens and turn binding with no PTY whose
+    /// teardown could end them (its own teardown is stale). Checked under the
+    /// registry lock, so a newer spawn of the id always inserts after this
+    /// one. A refused spawn hands its child back for the caller to end.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_current_spawn(
+        &mut self,
+        id: String,
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+        child: Box<dyn Child + Send + Sync>,
+        dead: Arc<AtomicBool>,
+        seq: u64,
+    ) -> Result<(), Box<dyn Child + Send + Sync>> {
+        if !crate::services::agent_fence::is_current_spawn(&id, seq) {
+            return Err(child);
+        }
+        self.insert(id, master, writer, child, dead, seq);
+        Ok(())
+    }
+
     /// Record where a file dropped onto the live tab `id` lands.
     pub fn set_drop_dir(&mut self, id: &str, dir: Option<String>) {
         if let Some(entry) = self.entries.get_mut(id) {
@@ -1095,15 +1121,21 @@ pub fn teardown_taken(taken: Vec<TakenPty>) {
     }
     for TakenPty { id, mut entry } in taken {
         let _ = entry.child.kill();
-        // The tab is gone for good, so stop watching for its Codex session.
-        crate::services::codex_bind::untrack_now(&id);
-        // Containerized tab: killing the child above only killed the
-        // `docker exec` CLIENT — TERM the process inside the container too
-        // (best-effort, no-op for tabs that never containerized).
-        crate::services::sandbox::kill_tab_process(&id);
         // This spawn's per-tab state — fence registration, proxy tokens, MCP
         // tokens, turn binding — unless a respawn of the id has begun since.
-        crate::services::launch_prep::on_tab_gone(&id, entry.seq);
+        // Then the respawn owns the id's Codex tracking and its in-container
+        // process record as well (`sandbox::register_exec_tab` already ended
+        // this spawn's in-container process when it replaced the record, and
+        // a respawn that fails first ends it in `launch_prep`), so a stale
+        // kill touches neither.
+        if crate::services::launch_prep::on_tab_gone(&id, entry.seq) {
+            // The tab is gone for good, so stop watching for its Codex session.
+            crate::services::codex_bind::untrack_now(&id);
+            // Containerized tab: killing the child above only killed the
+            // `docker exec` CLIENT — TERM the process inside the container too
+            // (best-effort, no-op for tabs that never containerized).
+            crate::services::sandbox::kill_tab_process(&id);
+        }
     }
     // The tree shrank; drop the cached descendant-pid set.
     invalidate_proc_tree_cache();
@@ -1168,9 +1200,20 @@ pub fn spawn_pty(
         .map_err(|e| format!("take writer: {e}"))?;
 
     let dead = Arc::new(AtomicBool::new(false));
-    {
-        let mut reg = registry.lock().unwrap();
-        reg.insert(opts.id.clone(), pair.master, writer, child, dead.clone(), seq);
+    let refused = registry
+        .lock()
+        .unwrap()
+        .insert_current_spawn(opts.id.clone(), pair.master, writer, child, dead.clone(), seq)
+        .err();
+    if let Some(mut child) = refused {
+        if let Some(pid) = child.process_id() {
+            reap_child_subtree(pid, ReapMode::Graceful);
+        }
+        let _ = child.kill();
+        return Err(format!(
+            "terminal '{}': a newer start of this tab replaced this one",
+            opts.id
+        ));
     }
 
     let _ = app.emit(
@@ -2049,6 +2092,77 @@ mod tests {
         drop(reg);
 
         registry.lock().unwrap().kill("test");
+    }
+
+    /// A PTY running `sleep 30`, for the registry tests.
+    #[allow(clippy::type_complexity)]
+    fn sleeper() -> (Box<dyn MasterPty + Send>, Box<dyn Write + Send>, Box<dyn Child + Send + Sync>) {
+        let pair = NativePtySystem::default()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("sleep");
+        cmd.arg("30");
+        let child = pair.slave.spawn_command(cmd).expect("spawn sleep");
+        let writer = pair.master.take_writer().expect("take writer");
+        (pair.master, writer, child)
+    }
+
+    /// Gap 18 review: a kill whose teardown lands after a remount began
+    /// respawning the id leaves the respawn's Codex resume claim (and its
+    /// tracking, removed by the same `untrack_now`).
+    #[test]
+    fn a_stale_kill_leaves_the_respawns_codex_resume_claim() {
+        use crate::services::{agent_fence, codex_bind};
+        let id = "gen-reg:codex";
+        let mut reg = PtyRegistry::default();
+        let old = agent_fence::begin_spawn(id);
+        let (master, writer, child) = sleeper();
+        assert!(reg.insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), old).is_ok());
+        assert!(agent_fence::register_tab(id, None, old));
+        // The respawn begins and claims the Codex session it resumes.
+        let new = agent_fence::begin_spawn(id);
+        let mut opts = PtyOptions {
+            id: id.into(), cmd: "codex".into(), args: vec!["resume".into(), "0199aaaa-0000-7000-8000-00000000c0de".into()],
+            env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
+            project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
+            local_model: false, schedule_target_id: None, host_session: false,
+        };
+        codex_bind::reserve_resume(&mut opts).expect("the respawn claims its session").keep();
+        let claim = codex_bind::resume_seq(id);
+        assert!(claim.is_some());
+        reg.take(id).expect("the old PTY").teardown();
+        assert_eq!(codex_bind::resume_seq(id), claim, "a stale kill released the respawn's claim");
+        // The respawn's own teardown ends it.
+        let (master, writer, child) = sleeper();
+        assert!(reg.insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), new).is_ok());
+        reg.take(id).expect("the new PTY").teardown();
+        assert_eq!(codex_bind::resume_seq(id), None);
+    }
+
+    /// Gap 18 review: two spawns of one id prepared at once can finish out of
+    /// order. The older one may not replace the newer one's PTY, whose
+    /// teardown is the only one that ends the newer spawn's grants.
+    #[test]
+    fn an_older_spawn_never_replaces_a_newer_ones_pty() {
+        use crate::services::agent_fence;
+        let id = "gen-reg:order";
+        let mut reg = PtyRegistry::default();
+        let older = agent_fence::begin_spawn(id);
+        let newer = agent_fence::begin_spawn(id);
+        // The newer spawn's prepare finished first.
+        let (master, writer, child) = sleeper();
+        let newer_pid = child.process_id();
+        assert!(reg.insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), newer).is_ok());
+        let (master, writer, child) = sleeper();
+        let mut refused = reg
+            .insert_current_spawn(id.into(), master, writer, child, Arc::new(AtomicBool::new(false)), older)
+            .expect_err("the older spawn is refused");
+        let _ = refused.kill();
+        assert_eq!(reg.pid(id), newer_pid, "the newer spawn's PTY stays");
+        assert_eq!(reg.entries.get(id).map(|e| e.seq), Some(newer));
+        // So the newer spawn's own teardown is the one that ends the tab.
+        reg.take(id).expect("the newer PTY").teardown();
+        assert!(!agent_fence::is_current_spawn(id, newer), "its teardown was current");
     }
 
     /// Closing a tab must abort the process **inside** it, not just the shell

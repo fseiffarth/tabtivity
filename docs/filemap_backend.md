@@ -225,4 +225,4 @@ back-reference on a board card; CalDAV merges preserve it beside mail/event.
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | PTY lifecycle. Visible-only streaming: hidden panes emit no `terminal-output`; output buffers in Rust (`ROUTE_PENDING_CAP`) with throttled `terminal-activity` digests; show drains as one `terminal-replay`. Kill reaps the subtree. Each `PtyEntry` and its route carry the spawn's seq (`spawn_pty(.., seq)`), which every teardown passes on (`launch_prep::on_tab_gone`). |
+| `mod.rs` | PTY lifecycle. Visible-only streaming: hidden panes emit no `terminal-output`; output buffers in Rust (`ROUTE_PENDING_CAP`) with throttled `terminal-activity` digests; show drains as one `terminal-replay`. Kill reaps the subtree. Each `PtyEntry` and its route carry the spawn's seq (`spawn_pty(.., seq)`), which every teardown passes on (`launch_prep::on_tab_gone`); `insert_current_spawn` refuses a PTY whose spawn is no longer the id's newest. |

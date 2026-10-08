@@ -1791,22 +1791,38 @@ pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
     }
 }
 
+/// Whether spawn `seq` is still the newest one begun for `tab_id` and not torn
+/// down. A spawn that is not may not put its process in the PTY registry
+/// (`PtyRegistry::insert_current_spawn`): a newer spawn of the id owns the
+/// tab's grants.
+pub fn is_current_spawn(tab_id: &str, seq: u64) -> bool {
+    tab_spawns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(tab_id)
+        .is_some_and(|s| s.latest == seq)
+}
+
 /// Spawn `seq` failed before its process existed: the id falls back to the
 /// spawn still live under it, or, with none, is gone (its proxy tokens too).
-pub fn abandon_spawn(tab_id: &str, seq: u64) {
+/// Whether the id is gone — then the caller ends its MCP tokens and turn
+/// binding as well (`launch_prep::SpawnGeneration`), as no later kill finds a
+/// PTY to tear down.
+pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
     let mut map = tab_spawns().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(spawns) = map.get_mut(tab_id) else { return };
+    let Some(spawns) = map.get_mut(tab_id) else { return false };
     if spawns.latest != seq {
-        return;
+        return false;
     }
     if let Some(live) = spawns.live.as_ref().map(|l| l.seq) {
         spawns.latest = live;
-        return;
+        return false;
     }
     map.remove(tab_id);
     drop(map);
     untrack_host_agent_tab(tab_id);
     crate::services::api_proxy::on_tab_gone(tab_id);
+    true
 }
 
 /// The scope the live spawn of a fenced tab runs in.

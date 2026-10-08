@@ -471,8 +471,15 @@ scope only for a fenced tab), and a spawn dropped uncommitted hands it back
 (`abandon_spawn`). Every teardown names the spawn it ends
 (`launch_prep::on_tab_gone(id, seq)` from `pty_kill`, `pty_kill_scope`,
 `kill_all`; `agent_fence::on_tab_gone(id, seq)` from the reader task's end).
-Only the id's newest spawn takes the shared per-tab state; a stale teardown
-forgets its own registration and nothing else. The push preflight no longer
+Only the id's newest spawn takes the shared per-tab state (the Codex
+tracking and in-container process record too); a stale teardown forgets
+its own registration and nothing else. Two spawns of one id prepared at
+once may finish out of order, so `spawn_pty` puts a PTY in the registry
+only while its spawn is still the newest (`insert_current_spawn`): an older
+one never replaces the newer one's PTY. A spawn dropped uncommitted with no
+earlier spawn live runs the rest of the tab's teardown itself (MCP tokens,
+turn binding, Codex tracking, in-container process), as no PTY is left for
+a kill to take. The push preflight no longer
 reads this registry at all: its fence scope rides on the push identity
 (`docs/context/git_push_mcp.md`).
 

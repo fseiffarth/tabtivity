@@ -340,8 +340,16 @@ impl SpawnGeneration {
 
 impl Drop for SpawnGeneration {
     fn drop(&mut self) {
-        if !self.kept {
-            crate::services::agent_fence::abandon_spawn(&self.tab_id, self.seq);
+        // The id ended with this failed spawn (no earlier one still live): no
+        // PTY exists for a kill to tear down, so the rest of a tab's teardown
+        // runs here — its MCP tokens and review sandbox, the turn binding and
+        // Codex tracking `prepare` made, and the in-container process of an
+        // earlier spawn whose kill landed stale while this one was prepared.
+        if !self.kept && crate::services::agent_fence::abandon_spawn(&self.tab_id, self.seq) {
+            crate::services::root_mcp_review::on_tab_gone(&storage::state_dir(), &self.tab_id);
+            crate::services::agent_turn::on_tab_gone(&self.tab_id);
+            crate::services::codex_bind::untrack_now(&self.tab_id);
+            crate::services::sandbox::kill_tab_process(&self.tab_id);
         }
     }
 }
@@ -1063,6 +1071,38 @@ mod tests {
         committed(tab, None, live);
         drop(SpawnGeneration::begin(tab));
         assert!(on_tab_gone(tab, live_seq), "the live spawn is the newest again");
+    }
+
+    /// Gap 18 review: a spawn that fails after `prepare` handed out its turn
+    /// binding leaves no PTY, so closing the tab (`pty_kill` takes nothing)
+    /// never tears it down. With no earlier spawn live, the dropped generation
+    /// ends the tab's MCP tokens and turn binding itself — also after a kill
+    /// of the old spawn landed stale while the failed respawn was prepared.
+    #[test]
+    fn a_failed_spawn_with_none_live_ends_the_tabs_tokens_and_turn_binding() {
+        use crate::services::{agent_turn, root_mcp};
+        let tab = "lp-gen:failed";
+        let uid = "lp-gen-failed-uid";
+        let old = SpawnGeneration::begin(tab);
+        let old_seq = old.seq;
+        committed(tab, None, old);
+        let respawn = SpawnGeneration::begin(tab);
+        assert!(!on_tab_gone(tab, old_seq), "the old spawn's kill lands stale");
+        let (mcp_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
+        agent_turn::bind_tab(uid, tab, None);
+        drop(respawn);
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {mcp_token}"))).is_none());
+        assert_eq!(agent_turn::pty_for(uid), None);
+        // A failed respawn with the earlier spawn still live leaves its state.
+        let live = SpawnGeneration::begin(tab);
+        committed(tab, None, live);
+        let (live_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
+        agent_turn::bind_tab(uid, tab, None);
+        drop(SpawnGeneration::begin(tab));
+        assert!(root_mcp::authenticate(Some(&format!("Bearer {live_token}"))).is_some());
+        assert_eq!(agent_turn::pty_for(uid).as_deref(), Some(tab));
+        agent_turn::on_tab_gone(tab);
+        root_mcp::revoke_token(&live_token);
     }
 
     #[test]
