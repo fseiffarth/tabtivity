@@ -1399,7 +1399,159 @@ live.
 - `TabAgentModeMarks` whole-map subscription stays as the implementer
   flagged (badge-only re-render in every tab on any agent's mode change).
 
-## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08)
+## S7 — pollers, git dots, launch chain
+
+*Written 2026-10-08 by the S7 implementer. Base `48b3b398`. Nothing run live.*
+
+### Commits
+| Commit | Content |
+|---|---|
+| `87b10d07` | §3.3 first three sites: header resources 2.5 s → 5 s (relaxed tree cache 4 s → 9 s); `ollama_is_installed` at mount + on reveal/overlay close, no timer; `mobile_host_status` as one refcounted store (`stores/mobileHostStatus.ts`) shared by `MobileIndicator` and every Files view |
+| `ee376977` | §3.4 (+§7.4): full git reading on `fs-change` only in the Git view, pill-dot probe elsewhere, both through `lib/coalescedRun.ts` (≤ 1/s, never overlapping); `fs-change` payload = the folder as asked, FileTree/ProjectFilesView filter on it; `git_dirty_probe` reads unpushed off the `##` header; switcher timer shares the store's probe stamps |
+| `d551f300` | §3.5: `load_side_panel_folder` chained onto `get_projects` inside the `Promise.all` with `root_work_dir`; no `backdrop-filter` on `.tab-bar` / `.subwindow-files` in the glass themes |
+
+### What was built / choices made
+- **§3.3 resources.** `RESOURCE_POLL_MS = 5_000` (still `saverInterval`, ×3
+  quiesced). S1's relaxed descendant cache was sized for 2.5 s (4 s); at a 5 s
+  poll it would never hit, so `CACHE_TTL_RELAXED` is now 9 s: every other
+  reading skips the `/proc` walk. The GPU half was already cached 10 s off
+  that path by S1 (and per S1's Flagged, the header never reached the fdinfo
+  walk).
+- **§3.3 Ollama.** `checkInstalled()` runs at mount, on each `reveal` and on
+  the overlay's open→closed edge (the overlay's Ollama tab is where it gets
+  installed), and is a no-op once `installed` is true. Trade-off: after an
+  install from a tab, the header lamp appears on the next hover / overlay
+  close instead of within 5 s.
+- **§3.3 Mobile host.** `useMobileHostStatus(enabled)` retains/releases; one
+  15 s interval + one window-focus listener while ≥ 1 surface retains; a
+  plain refresh is skipped while one is in flight. The indicator's
+  reconnect guard (`reconnectingRef` + request generation) moved into the
+  store as `beginRestart`/`endRestart` + a request counter; `publish()`
+  (pairing's fresh read) supersedes in-flight reads. Unlike `hostSessions`,
+  the reading is dropped on the last release (each surface used to start
+  from "no reading"; a stale `running` must not light a phone toggle).
+  The indicator's action error is still cleared by each status read (an
+  effect on `refreshing`), as before; a failed read shows the store's error.
+- **§3.4 Files view.** The plan's "subscribe only while the git view/bar is
+  rendered, otherwise set stale and refresh on show" taken as: the full
+  reading (`git_status` + `git_unpushed_commits`, 5 spawns) follows
+  `fs-change` only while `view === "git"` (the bar lives only there now);
+  outside it the event runs `useGitDirtyStore.refresh` (one
+  `git_dirty_probe`, deduped with the switcher's) and the Git button's flag
+  is drawn from the pill-dot level (`dotFlagColor`) — this keeps the
+  "pending git work visible from the Files view" behaviour
+  `GitBarRefresh.test.tsx` locks in, at one spawn per second at most. Nested
+  repos, remote projects, boxes or no dot reading fall back to the last
+  counts. "Refresh on show" is the existing unconditional active/entry
+  refresh, so no separate stale flag. A scope with no project (root) keeps
+  the coalesced full reading. User actions (add/commit/push) keep the
+  120 ms `refreshGit` debounce.
+- **`coalescedRun`** (not a debounce): first trigger arms a 1 s timer,
+  later ones are absorbed, a trigger during a run = one follow-up after it
+  settles. A steady agent write stream therefore refreshes once a second
+  instead of never (a trailing debounce would starve).
+- **FileTree path filter.** The backend's `fs-change` payload was the
+  *canonical* folder, which the frontend cannot compare with its own path
+  (symlinks). `watch_dir` now emits the path as the frontend passed it (the
+  state remembers that spelling; a same-dir re-watch with another spelling
+  re-creates the watcher). A tree ignores events whose payload is not its
+  `absDir`; `.git` events arrive under the same payload, so they still
+  count. ProjectFilesView ignores payloads outside its `projectDir`.
+- **Dots.** The dot probe already skipped `remote`/`tag` (earlier work);
+  the remaining extra spawns were `rev-parse @{u}` + `log` for a clean tree.
+  `GitStatus.upstream_ahead` (serde-skipped) carries the `##` header's
+  `ahead` when the branch tracks a live upstream; `unpushed_count()` uses it
+  and falls back to the namesake lookup only without one (or `[gone]`).
+  Clean tracked tree: 3 spawns → 1. The headless phone dot uses the same
+  helper. "Drive refresh from the `.git` watcher instead of the timer": the
+  watcher drives the dot through the Files view (above); `gitDotProbedAt`
+  (module map in `stores/gitDirty.ts`, stamped by `refresh` and `set`)
+  replaces the switcher's private ref, so a watched project just refreshed
+  is not probed again by the next tick. The 12 s/36 s timer stays as the
+  backstop (the one watch slot is shared by every window, so "this project
+  is watched" cannot be known reliably from one window).
+- **§3.5 launch.** `load_side_panel_folder` needs the current project's
+  `local_file`, so it cannot literally join the first `Promise.all`; it is
+  chained on `get_projects` inside it (same "first current by position"
+  pick as `activeId`). Startup waits for max(root chain, projects + folder)
+  instead of the sum. `loaded` is still set once, with the folder, so the
+  tree never opens at the root and then jumps.
+- **§3.5 glass.** Only the filter is dropped; the translucent fills
+  (`--glass-subheader`, `--glass-panel`) stay — beneath both is the shell's
+  smooth ambient wash, which the blur barely changed (saturate 130–150 %
+  is the visible part). `fillBrand` lazy fill skipped (plan: low value).
+
+### Gotchas for later steps
+- **S12 (`usePoll` sweep):** `stores/mobileHostStatus.ts`'s interval and
+  `ProjectFilesView`'s Git-view poll are direct `setInterval`s, not yet
+  quiesce-aware (the old ones weren't either). The Git-view poll now calls
+  `full.request()`, so its effective cadence is 5 s + up to 1 s. Direct
+  `setInterval(` lines in `src/` (non-test): 87 (base 89).
+- **S11 (`proc_table`):** `debug_app_resource_usage` now leans on
+  `CACHE_TTL_RELAXED` = 9 s; if the shared snapshot replaces the descendant
+  cache, keep the header reading at most every other poll.
+- `fs-change`'s payload is now the requested spelling. Anything new that
+  listens must compare with the path it passed to `watch_dir`, not a
+  canonical one. A window still running an older backend emits the
+  canonical path: a tree whose `projectDir` is a symlink spelling would
+  ignore every event until the backend is rebuilt (dev builds ship both
+  halves together; hot reload into an old backend is the exposure).
+- Tests driving `fs-change` must pass `{ payload: <dir> }` and wait past
+  `GIT_WATCH_COALESCE_MS` (1 s) — see `GitBarRefresh.test.tsx`'s `fire()`.
+- `useGitDirtyStore.set` now stamps `gitDotProbedAt`: only call it with a
+  fresh reading.
+
+### Gates (worktree)
+| Gate | Result (with test counts) |
+|---|---|
+| `npm run build` | ok (tsc + both bundles) |
+| `npm test` | 744 files / 7602 tests, 2 failing = the known `MobileHeldPromptStore.test.ts` date time-bomb (base 741 / 7583) |
+| `cargo test -q` | lib 3580 passed, 3 ignored (base 3578 + 2); every other target green |
+| `npm run lint` | 0 errors, 28 pre-existing warnings |
+| `cargo clippy --all-targets -D warnings` | clean |
+| `scripts/brand-check.sh` | ok |
+| `git diff --check` | clean |
+
+`npm run backend:stale` not run: it measures the main checkout's running
+window, which this worktree's backend edits (`commands/git.rs`,
+`fs_watch.rs`, `sysstat.rs`, `debug.rs`, `headless.rs`) cannot reach until
+landing + a dev build.
+
+### Flagged for user
+- **Git button flag outside the Git view now follows the pill dot** (one
+  `git_dirty_probe`, ≤ 1/s) instead of a full five-spawn re-read 120 ms
+  after every event. Same colours; for a nested repo the flag only updates
+  on show / entering the Git view.
+- **Ollama installed mid-session** shows on the next hover of the Models
+  button or overlay close, not within 5 s.
+- **Header resources** update every 5 s (was 2.5 s).
+- **Glass themes:** tab bars and the docked file column lose their frost
+  (saturation lift of the wash beneath); fills unchanged. Say if the look
+  should be compensated with a more opaque fill.
+- `fillBrand` lazy fill not done (plan said keep last or skip).
+
+### Live click-through (user)
+1. Header idle: `pidstat -p $(pgrep -f tabtivity | head -1) 5` — backend CPU
+   lower than before; the CPU/RAM readout ticks every ~5 s.
+2. With Ollama not installed: no `ollama` PATH probe every 5 s (e.g.
+   `strace -f -e execve -p <pid>` quiet). Hover the Models button: menu as
+   before.
+3. Mobile on: open the side panel and a Files tab on a local project; the
+   header phone lamp and the Files phone button agree; Reconnect in the
+   header menu still waits through the restart and ends green.
+4. Agent writing files in a local project, Files view open: no tree flicker,
+   the Git button's flag turns red within ~1 s and the pill dot with it;
+   `pgrep -c git` stays low (no spawn storm). Switch to the Git view: counts
+   are current; let the agent commit — "Add (N)" goes away within ~1 s.
+5. Two windows (popout) showing different folders: each tree updates only
+   for its own folder.
+6. Quit in a project whose side panel was in a subfolder; relaunch: the tree
+   opens straight in that subfolder.
+7. Theme `fancy_dark` / `light_lavender`: tab bars and the docked file
+   column look as before minus the frost; scrolling a busy terminal beside
+   them stays smooth.
+
+## Resume state (paused 2026-10-07, 11:40 CEST; S6 review done 2026-10-08; S7 implemented 2026-10-08)
 
 The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
@@ -1414,19 +1566,22 @@ add `scripts/perf-numbers.sh` and `docs/performance_numbers.md` in S12).
   S5 (terminal backend), S6 (many-tabs memoisation: 45bcd8a9, cdd2a37f,
   91e780de; review fixes e10c5fe8, 3e067ec6, 8d274703, 11bc2c3c — see
   `### Review (S6 reviewer, 2026-10-08)`).
-- Next: S7 (pollers, git dots, launch chain — plan §3.3 first three sites,
-  §3.4, §3.5) with a fresh implementer, then its reviewer, then S8–S12 per
-  plan §11, then the final whole-range review, then landing on `develop`
+- Implemented, review owed: S7 (pollers, git dots, launch chain: 87b10d07,
+  ee376977, d551f300 — see `## S7`).
+- Next: the S7 reviewer (fresh), then S8–S12 per plan §11, then the final whole-range review, then landing on `develop`
   (`project_commit_amid_concurrent_sessions` memory; the main checkout has
   other sessions' uncommitted edits in `TabBar.tsx`, `TerminalView.tsx`,
   `TerminalReaderView.tsx`, `tabs.ts`, `FileViewerPane.tsx`, `lib.rs`,
-  `agent_auth.rs` — expect conflicts there). S7 touches `FileTree.tsx`
-  again: new per-row inputs go through `FileRow` props / `RowActions`
-  (S6 Gotchas).
+  `agent_auth.rs` — expect conflicts there; S7 adds `ProjectFilesView.tsx`,
+  `FileTree.tsx`, `MobileIndicator.tsx`, `projects.ts`, `commands/git.rs`,
+  `fs_watch.rs` to the files a landing merge must check).
 - Gates at the S6 review's HEAD (11bc2c3c): build ok; vitest 741 files /
   7583 tests, 2 failing in `MobileHeldPromptStore.test.ts` (date time-bomb,
   not this run's — S6 review Flagged); cargo lib 3578 passed; lint 0 errors /
   28 pre-existing warnings; clippy clean; brand ok; diff --check clean.
+- Gates at S7's HEAD (d551f300): build ok; vitest 744 files / 7602 tests,
+  the same 2 `MobileHeldPromptStore` failures; cargo lib 3580 passed; lint
+  0 errors / 28 warnings; clippy clean; brand ok; diff --check clean.
 - Process gotchas learned: run cargo in the FOREGROUND (background shells
   have no cargo on PATH and die silently — S5's implementer hung on it); an
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
