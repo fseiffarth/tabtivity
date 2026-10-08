@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { startPoll, type Poll } from "../lib/usePoll";
 
 /**
  * The Mobile host's runtime status (`mobile_host_status`) as ONE shared
@@ -10,8 +11,9 @@ import { invoke } from "@tauri-apps/api/core";
  * (side panel, Files tabs, docked columns) each used to poll the sidecar's
  * admin socket every 15 s and on every window focus. The host is machine-wide,
  * so its status is one fact: subscribers are refcounted (`retain`/`release`,
- * via `useMobileHostStatus`), and one interval plus one focus listener exist
- * only while at least one surface is showing.
+ * via `useMobileHostStatus`), and one poll (`lib/usePoll`'s `startPoll`: it
+ * stops while the window is blurred or hidden and re-reads on every return to
+ * it) exists only while at least one surface is showing.
  *
  * Unlike the sessions list, the reading is dropped when the last subscriber
  * leaves: every surface used to start from "no reading" on mount, and a stale
@@ -61,7 +63,7 @@ interface MobileHostStatusStore {
 }
 
 let refs = 0;
-let poll: { iv: ReturnType<typeof setInterval>; onFocus: () => void } | null = null;
+let poll: Poll | null = null;
 /** Bumped per read and by `publish`/`beginRestart`/last `release`: only the
  *  newest read may write. */
 let request = 0;
@@ -82,20 +84,16 @@ export const useMobileHostStatusStore = create<MobileHostStatusStore>((set, get)
   retain: () => {
     refs += 1;
     if (refs > 1) return;
-    void get().refresh();
-    const onFocus = () => void get().refresh();
-    window.addEventListener("focus", onFocus);
-    poll = { iv: setInterval(() => void get().refresh(), MOBILE_HOST_POLL_MS), onFocus };
+    // Read now, then every MOBILE_HOST_POLL_MS while the window is in front, and
+    // again on each return to it (catch-up 0: the old focus listener's rule).
+    poll = startPoll(() => get().refresh(), MOBILE_HOST_POLL_MS, { catchUpAfterMs: 0 });
   },
 
   release: () => {
     refs = Math.max(0, refs - 1);
     if (refs > 0) return;
-    if (poll) {
-      clearInterval(poll.iv);
-      window.removeEventListener("focus", poll.onFocus);
-      poll = null;
-    }
+    poll?.stop();
+    poll = null;
     request += 1;
     set({ status: null, refreshing: false, error: null });
   },
@@ -151,11 +149,8 @@ export function useMobileHostStatus(enabled: boolean): MobileHostRuntimeStatus |
 
 /** Tests only: forget every subscriber, timer and reading. */
 export function __resetMobileHostStatusForTests(): void {
-  if (poll) {
-    clearInterval(poll.iv);
-    window.removeEventListener("focus", poll.onFocus);
-    poll = null;
-  }
+  poll?.stop();
+  poll = null;
   refs = 0;
   reading.clear();
   restarting = 0;

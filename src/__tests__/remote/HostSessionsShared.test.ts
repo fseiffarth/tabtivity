@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() =
 import { FOCUS_REFRESH_MIN_MS, HOST_SESSIONS_POLL_MS, useHostSessionsStore, sessionHostsOf } from "../../stores/remote/hostSessions";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+import { usePowerStore } from "../../stores/power";
 import type { ProjectEntry } from "../../types";
 import { BRAND } from "../../lib/brand";
 
@@ -62,6 +63,7 @@ beforeEach(() => {
     cmd === "remote_tmux_list" ? Promise.resolve([session(`${BRAND.slug}-a`)]) : Promise.resolve(null),
   );
   PID = `p${++seq}`;
+  usePowerStore.setState({ blurred: false });
   useHostSessionsStore.setState({ byProject: {}, showAll: {} });
   useProjectsStore.setState({ projects: [remoteProject()] });
   useRemoteStatusStore.getState().setSsh(PID, "connected");
@@ -214,6 +216,21 @@ describe("the shared session poll", () => {
     window.dispatchEvent(new Event("focus"));
     await settle();
     expect(listCalls()).toBe(2);
+  });
+
+  it("asks the host nothing while the window is blurred, and catches up on return (perf plan §3.3)", async () => {
+    const { retain, release } = useHostSessionsStore.getState();
+    retain(PID);
+    await settle();
+    expect(listCalls()).toBe(1);
+    usePowerStore.setState({ blurred: true });
+    await vi.advanceTimersByTimeAsync(HOST_SESSIONS_POLL_MS * 3);
+    expect(listCalls()).toBe(1);
+    usePowerStore.setState({ blurred: false });
+    window.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listCalls()).toBe(2);
+    release(PID);
   });
 
   it("re-polls the moment a host connects, rather than up to a tick later", async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { startPoll, type Poll } from "./usePoll";
 
 /**
  * **The** poll of Ollama's `stopped | idle | loaded` state — one timer for the
@@ -22,6 +23,8 @@ import { invoke } from "@tauri-apps/api/core";
  * the **shortest** one asked for, and it only exists while at least one component
  * is subscribed. A tick that lands while a request is still in flight is skipped
  * rather than queued, so a slow or wedged Ollama can never accumulate a backlog.
+ * The timer is `lib/usePoll`'s `startPoll`: it stops while the window is blurred
+ * or hidden and catches up on return.
  */
 export type OllamaStatus = "stopped" | "idle" | "loaded";
 
@@ -34,8 +37,7 @@ interface Subscriber {
 }
 
 const subscribers = new Set<Subscriber>();
-let timer: number | undefined;
-let timerInterval = 0;
+let timer: Poll | undefined;
 let inFlight = false;
 /** Last observed value, replayed to a new subscriber so it renders the known
  *  state immediately instead of flashing `stopped` until the next tick. */
@@ -61,16 +63,15 @@ async function poll(): Promise<void> {
  *  stop it entirely when the last one leaves. */
 function retime(): void {
   if (subscribers.size === 0) {
-    if (timer !== undefined) window.clearInterval(timer);
+    timer?.stop();
     timer = undefined;
-    timerInterval = 0;
     return;
   }
   const wanted = Math.min(...[...subscribers].map((s) => s.intervalMs));
-  if (timer !== undefined && timerInterval === wanted) return;
-  if (timer !== undefined) window.clearInterval(timer);
-  timerInterval = wanted;
-  timer = window.setInterval(() => void poll(), wanted);
+  // The subscriber asks straight away itself; the poll's first tick is one
+  // interval out.
+  if (timer === undefined) timer = startPoll(poll, wanted, { immediate: false });
+  else timer.setIntervalMs(wanted);
 }
 
 /**
@@ -114,9 +115,8 @@ export function useOllamaStatus(enabled = true, intervalMs = DEFAULT_INTERVAL_MS
 /** Reset the module between tests (no component is subscribed by then). */
 export function resetOllamaStatusPoller(): void {
   subscribers.clear();
-  if (timer !== undefined) window.clearInterval(timer);
+  timer?.stop();
   timer = undefined;
-  timerInterval = 0;
   inFlight = false;
   current = "stopped";
 }

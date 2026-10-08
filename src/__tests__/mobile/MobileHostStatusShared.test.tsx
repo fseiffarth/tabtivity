@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+import { usePowerStore } from "../../stores/power";
 import {
   MOBILE_HOST_POLL_MS,
   __resetMobileHostStatusForTests,
@@ -28,6 +29,7 @@ function Probe({ enabled = true }: { enabled?: boolean }) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  usePowerStore.setState({ blurred: false });
   __resetMobileHostStatusForTests();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve(running));
@@ -148,5 +150,24 @@ describe("shared Mobile host status poll", () => {
     });
     store.endRestart();
     expect(useMobileHostStatusStore.getState().status?.running).toBe(true);
+  });
+
+  it("stops while the window is blurred and re-reads once on return (perf plan §3.3)", async () => {
+    render(<Probe />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(statusCalls()).toBe(1);
+    act(() => usePowerStore.setState({ blurred: true }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MOBILE_HOST_POLL_MS * 4);
+    });
+    expect(statusCalls()).toBe(1);
+    act(() => {
+      usePowerStore.setState({ blurred: false });
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(statusCalls()).toBe(2);
+    usePowerStore.setState({ blurred: false });
   });
 });

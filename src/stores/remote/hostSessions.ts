@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { startPoll, type Poll } from "../../lib/usePoll";
 import { useProjectsStore } from "../projects";
 import { PRIMARY_HOST, sshOf, useRemoteStatusStore } from "./remoteStatus";
 import type { ProjectEntry } from "../../types";
@@ -121,9 +122,9 @@ interface HostSessionsStore {
 
 /** Subscriber count per project — the poll runs iff this is ≥ 1. */
 const refs = new Map<string, number>();
-/** The live poll handles per project (interval, the connectivity subscription,
- *  the window-focus listener). */
-const polls = new Map<string, { iv: ReturnType<typeof setInterval>; unsub: () => void; offFocus: () => void }>();
+/** The live poll handles per project (the quiesce-aware poll — it also does the
+ *  focus re-read — and the connectivity subscription). */
+const polls = new Map<string, { poll: Poll; unsub: () => void }>();
 /** When the last reading of each project started (`Date.now()`). */
 const lastRead = new Map<string, number>();
 /** In-flight request count per project, so the interval never stacks round trips. */
@@ -163,16 +164,16 @@ export const useHostSessionsStore = create<HostSessionsStore>((set, get) => ({
       lastSig = sig;
       void get().refresh(projectId, true);
     });
-    const onFocus = () => {
-      if (Date.now() - (lastRead.get(projectId) ?? 0) < FOCUS_REFRESH_MIN_MS) return;
-      void get().refresh(projectId);
-    };
-    window.addEventListener("focus", onFocus);
-    polls.set(projectId, {
-      iv: setInterval(() => void get().refresh(projectId), HOST_SESSIONS_POLL_MS),
-      unsub,
-      offFocus: () => window.removeEventListener("focus", onFocus),
+    // Every HOST_SESSIONS_POLL_MS while the window is in front (`lib/usePoll`:
+    // stopped while blurred or hidden); a return to the window re-reads at
+    // once unless any reading — this poll's or a forced one — started within
+    // FOCUS_REFRESH_MIN_MS.
+    const poll = startPoll(() => get().refresh(projectId), HOST_SESSIONS_POLL_MS, {
+      immediate: false,
+      catchUpAfterMs: FOCUS_REFRESH_MIN_MS,
+      lastRunAt: () => lastRead.get(projectId) ?? 0,
     });
+    polls.set(projectId, { poll, unsub });
   },
 
   release: (projectId) => {
@@ -184,9 +185,8 @@ export const useHostSessionsStore = create<HostSessionsStore>((set, get) => ({
     refs.delete(projectId);
     const handle = polls.get(projectId);
     if (handle) {
-      clearInterval(handle.iv);
+      handle.poll.stop();
       handle.unsub();
-      handle.offFocus();
       polls.delete(projectId);
     }
     gens.set(projectId, (gens.get(projectId) ?? 0) + 1);

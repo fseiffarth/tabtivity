@@ -32,6 +32,7 @@ import { create } from "zustand";
 import type { MailHeader, MailPriority } from "../types/mail";
 import { mailPriorityPage } from "../lib/mail";
 import { useMailStore } from "./mail";
+import { startPoll, type Poll } from "../lib/usePoll";
 import { storageKey } from "../lib/brand";
 
 /**
@@ -295,7 +296,7 @@ export const useTodoStore = create<TodoStore>((set, get) => ({
 const URGENT_MAIL_TICK_MS = 60_000;
 
 let urgentMailRefs = 0;
-let urgentMailInterval: ReturnType<typeof setInterval> | null = null;
+let urgentMailPoll: Poll | null = null;
 let urgentMailUnsub: (() => void) | null = null;
 
 /** Join (or start) the shared poll. Pair with {@link releaseUrgentMailPoll}. */
@@ -303,10 +304,11 @@ export function retainUrgentMailPoll(): void {
   urgentMailRefs += 1;
   if (urgentMailRefs > 1) return; // another surface already drives the poll
   void useTodoStore.getState().loadUrgentMail();
-  urgentMailInterval = setInterval(
-    () => void useTodoStore.getState().loadUrgentMail(),
-    URGENT_MAIL_TICK_MS,
-  );
+  // The backstop tick stops while the window is blurred or hidden and catches
+  // up on return (`lib/usePoll`); arrivals still re-read below.
+  urgentMailPoll = startPoll(() => useTodoStore.getState().loadUrgentMail(), URGENT_MAIL_TICK_MS, {
+    immediate: false,
+  });
   // `newCount` is the arrival signal (the `mail:new` listener itself belongs to
   // `MailIndicator`, mounted once per window). Re-reading on it lives HERE, once,
   // rather than in each consumer's effect deps, where a delivery re-fired the
@@ -325,10 +327,8 @@ export function retainUrgentMailPoll(): void {
 export function releaseUrgentMailPoll(): void {
   urgentMailRefs = Math.max(0, urgentMailRefs - 1);
   if (urgentMailRefs > 0) return;
-  if (urgentMailInterval !== null) {
-    clearInterval(urgentMailInterval);
-    urgentMailInterval = null;
-  }
+  urgentMailPoll?.stop();
+  urgentMailPoll = null;
   urgentMailUnsub?.();
   urgentMailUnsub = null;
 }
